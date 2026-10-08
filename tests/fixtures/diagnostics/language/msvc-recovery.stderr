@@ -1,0 +1,25 @@
+error: expected `(` in MSVC declspec specifier, found keyword `int`
+ --> <input>:1:12
+  |
+1 | __declspec int broken;
+  |            ^^^ expected `(` in MSVC declspec specifier
+
+error: expected `__except` or `__finally` after SEH body, found keyword `__leave`
+ --> <input>:4:5
+  |
+4 |     __leave
+  |     ^^^^^^^ expected `__except` or `__finally` after SEH body
+
+error: expected `;` after `__leave`, found keyword `__asm`
+ --> <input>:5:5
+  |
+5 |     __asm mov eax, [ebx
+  |     ^^^^^ expected `;` after `__leave`
+
+error: expected matching delimiter in MSVC assembly, found keyword `return`
+ --> <input>:6:5
+  |
+6 |     return 0;
+  |     ^^^^^^ expected matching delimiter in MSVC assembly
+
+4 errors generated.

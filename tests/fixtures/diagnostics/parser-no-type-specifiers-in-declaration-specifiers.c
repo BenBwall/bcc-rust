@@ -1,1 +1,1 @@
-const value;
+struct S { const value; };

@@ -16,6 +16,7 @@ use crate::{
     translation_phases::{
         ErrorSeverity,
         GetPosition,
+        GetSeverity,
         TranslationError,
         parsing::{
             declaration_syntax::{
@@ -108,7 +109,7 @@ fn strict_c99_compatibility_corpus_matches_reviewed_parser_boundaries() {
             include_str!(
                 "../../../../tests/fixtures/parser/compatibility/gnu-statement-expression.c"
             ),
-            true,
+            false,
         ),
         (
             "constraint-invalid-lvalue.c",
@@ -164,27 +165,16 @@ fn strict_c99_compatibility_corpus_matches_reviewed_parser_boundaries() {
                 | "gnu-statement-expression.c" => {
                     assert!(matches!(
                         parsed.items.as_slice(),
-                        [ExternalDeclaration::RecoveredFunctionDefinition(_)]
+                        [ExternalDeclaration::FunctionDefinition(_)]
                     ));
-                    assert!(
-                        parsed
-                            .parser
-                            .syntax
-                            .iter::<Expression<'_>>()
-                            .any(|expression| {
-                                matches!(expression.kind, ExpressionType::Error)
-                                    && expression.recovered
-                            })
-                    );
-                    assert!(
-                        parsed
-                            .parser
-                            .syntax
-                            .iter::<Expression<'_>>()
-                            .all(|expression| {
-                                !matches!(expression.kind, ExpressionType::CompoundLiteral { .. })
-                            })
-                    );
+                    assert!(parsed.errors.iter().any(|error| matches!(error, TranslationError::Extension(error) if error.severity() == ErrorSeverity::Error)));
+                    assert!(parsed.parser.syntax.iter::<Expression<'_>>().any(
+                        |expression| matches!(
+                            expression.kind,
+                            ExpressionType::StatementExpression(_)
+                        ) && !expression.recovered
+                    ));
+                    assert_eq!(parser_errors(parsed).count(), 0);
                 },
                 | "constraint-invalid-lvalue.c" => {
                     assert!(parsed.parser.syntax.iter::<Expression<'_>>().any(

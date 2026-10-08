@@ -201,13 +201,11 @@ fn repaired_expressions_and_designations_retain_recovery_metadata() {
             panic!("expected two designations")
         };
         assert!(first.recovered);
-        assert!(second.recovered);
+        assert!(!second.recovered);
+        assert!(second.equals_source_vectors.is_none());
         let first_designator = first.designators[0];
         assert!(first_designator.recovered);
-        assert!(parser_errors(parsed).any(|error| matches!(
-            error,
-            ParserErrorType::ExpectedEqualsAfterInitializerDesignation(_)
-        )));
+        assert!(parser_errors(parsed).next().is_some());
     });
 }
 

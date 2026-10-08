@@ -1,0 +1,121 @@
+warning: '__declspec' is an MSVC extension
+ --> <input>:1:1
+  |
+1 | __declspec(dllexport align(16)) unsigned __int64 wide;
+  | ^^^^^^^^^^
+
+warning: '__int64' is an MSVC extension
+ --> <input>:1:42
+  |
+1 | __declspec(dllexport align(16)) unsigned __int64 wide;
+  |                                          ^^^^^^^
+
+warning: '__w64' is an MSVC extension
+ --> <input>:2:1
+  |
+2 | __w64 int small;
+  | ^^^^^
+
+warning: '__ptr32' is an MSVC extension
+ --> <input>:3:7
+  |
+3 | int * __ptr32 __sptr narrow;
+  |       ^^^^^^^
+
+warning: '__sptr' is an MSVC extension
+ --> <input>:3:15
+  |
+3 | int * __ptr32 __sptr narrow;
+  |               ^^^^^^
+
+warning: '__unaligned' is an MSVC extension
+ --> <input>:4:1
+  |
+4 | __unaligned int * __ptr64 __uptr pointer;
+  | ^^^^^^^^^^^
+
+warning: '__ptr64' is an MSVC extension
+ --> <input>:4:19
+  |
+4 | __unaligned int * __ptr64 __uptr pointer;
+  |                   ^^^^^^^
+
+warning: '__uptr' is an MSVC extension
+ --> <input>:4:27
+  |
+4 | __unaligned int * __ptr64 __uptr pointer;
+  |                           ^^^^^^
+
+warning: '__stdcall' is an MSVC extension
+ --> <input>:5:6
+  |
+5 | int (__stdcall *callback)(int);
+  |      ^^^^^^^^^
+
+warning: '__forceinline' is an MSVC extension
+ --> <input>:6:1
+  |
+6 | __forceinline int __cdecl f(void) {
+  | ^^^^^^^^^^^^^
+
+warning: '__cdecl' is an MSVC extension
+ --> <input>:6:19
+  |
+6 | __forceinline int __cdecl f(void) {
+  |                   ^^^^^^^
+
+warning: '__try' is an MSVC extension
+ --> <input>:7:5
+  |
+7 |     __try { __leave; } __except(1) { }
+  |     ^^^^^
+
+warning: '__leave' is an MSVC extension
+ --> <input>:7:13
+  |
+7 |     __try { __leave; } __except(1) { }
+  |             ^^^^^^^
+
+warning: '__except' is an MSVC extension
+ --> <input>:7:24
+  |
+7 |     __try { __leave; } __except(1) { }
+  |                        ^^^^^^^^
+
+warning: '__try' is an MSVC extension
+ --> <input>:8:5
+  |
+8 |     __try { } __finally { }
+  |     ^^^^^
+
+warning: '__finally' is an MSVC extension
+ --> <input>:8:15
+  |
+8 |     __try { } __finally { }
+  |               ^^^^^^^^^
+
+warning: '__asm' is an MSVC extension
+  --> <input>:9:5
+   |
+ 9 |     __asm { mov eax, [ebx + (4)] }
+   |     ^^^^^
+
+warning: '_asm' is an MSVC extension
+  --> <input>:10:5
+   |
+10 |     _asm nop
+   |     ^^^^
+
+warning: 'anonymous tagged struct or union member' is an MSVC extension
+  --> <input>:14:28
+   |
+14 | struct Outer { struct Inner; union Tagged { int field; }; };
+   |                            ^
+
+warning: 'anonymous tagged struct or union member' is an MSVC extension
+  --> <input>:14:57
+   |
+14 | struct Outer { struct Inner; union Tagged { int field; }; };
+   |                                                         ^
+
+20 warnings generated.

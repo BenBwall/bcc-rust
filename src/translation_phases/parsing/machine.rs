@@ -33,7 +33,15 @@ use super::{
         PoolBox,
     },
     function_definition::FunctionDefinitionFrame,
+    gnu::{
+        GnuFrame,
+        GnuValue,
+    },
     initializer::InitializerFrame,
+    modern::{
+        ModernFrame,
+        ModernValue,
+    },
     parameter_list::ParameterListFrame,
     recovery::SynchronizationSet,
     statement::StatementFrame,
@@ -63,6 +71,9 @@ use crate::translation_phases::{
 /// implementation mechanism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ParseFrameKind {
+    Modern,
+    Gnu,
+    Msvc,
     /// Translation-unit entry for one external declaration.
     ExternalDeclaration,
     /// Declaration shell and init-declarator list.
@@ -96,6 +107,9 @@ impl ParseFrameKind {
     /// Returns the stable kebab-case label used in traces and diagnostics.
     pub(super) fn label(self) -> &'static str {
         match self {
+            | Self::Modern => "iso-construct",
+            | Self::Gnu => "gnu-construct",
+            | Self::Msvc => "msvc-construct",
             | Self::ExternalDeclaration => "external-declaration",
             | Self::Declaration => "declaration",
             | Self::DeclarationSpecifiers => "declaration-specifiers",
@@ -143,6 +157,8 @@ pub(super) enum ParseAction<'tu, 'p> {
 /// pp. 67-144; PDF pp. 79-156. Typed returns are an implementation mechanism.
 #[derive(Debug, Clone, Copy)]
 pub(super) enum ParseValue<'tu> {
+    Modern(ModernValue<'tu>),
+    Gnu(GnuValue<'tu>),
     /// Result of a declaration-specifier child.
     DeclarationSpecifiers(DeclarationSpecifiers<'tu>),
     /// Declarator result; `None` records a recoverable missing declarator.
@@ -213,6 +229,9 @@ pub(super) struct InitializerResult<'tu> {
 /// definitions, §6.5-§6.9, pp. 67-144; PDF pp. 79-156.
 #[derive(Debug)]
 pub(super) enum ParseFrame<'tu, 'p> {
+    Modern(ModernFrame<'tu, 'p>),
+    Msvc(super::msvc::MsvcFrame<'tu, 'p>),
+    Gnu(PoolBox<'p, GnuFrame<'tu, 'p>>),
     ExternalDeclaration(ExternalDeclarationFrame),
     Declaration(DeclarationFrame<'tu, 'p>),
     DeclarationSpecifiers(DeclarationSpecifiersFrame<'tu>),
@@ -262,6 +281,15 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
     /// Counts arena entries retained by a frame before their final bulk insert.
     pub(super) fn retained_node_count(&self) -> usize {
         match self {
+            | Self::Msvc(frame) => frame.tokens.len(),
+            | Self::Gnu(frame) => frame
+                .tokens
+                .len()
+                .checked_add(frame.asm_operands.len())
+                .and_then(|x| x.checked_add(frame.operands.len()))
+                .and_then(|x| x.checked_add(frame.members.len()))
+                .and_then(|x| x.checked_add(frame.labels.len()))
+                .expect("GNU retained syntax count overflows"),
             // A parenthesized declarator waiting for its `)` counts as the
             // node it becomes and the direct-declarator entry naming it.
             | Self::Declarator(frame) => frame
@@ -295,6 +323,11 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
             | Self::FunctionDefinition(frame) => frame.declaration_list.len(),
             | Self::CompoundStatement(frame) => frame.items.len(),
             | Self::Declaration(frame) => frame.init_declarators.len(),
+            | Self::Modern(frame) => frame
+                .associations
+                .len()
+                .checked_add(frame.tokens.len())
+                .expect("ISO retained node count overflows"),
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)
@@ -305,6 +338,14 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
     /// Gives a newly pushed frame spare vectors for the lists it grows.
     pub(super) fn lend_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
         match self {
+            | Self::Msvc(frame) => pools.gnu_tokens.lend(&mut frame.tokens),
+            | Self::Gnu(frame) => {
+                pools.gnu_tokens.lend(&mut frame.tokens);
+                pools.asm_operands.lend(&mut frame.asm_operands);
+                pools.builtin_operands.lend(&mut frame.operands);
+                pools.offset_members.lend(&mut frame.members);
+                pools.identifiers.lend(&mut frame.labels);
+            },
             | Self::Declaration(frame) => {
                 pools.init_declarators.lend(&mut frame.init_declarators);
                 pools.source_vectors.lend(&mut frame.source_vectors);
@@ -342,6 +383,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
                 pools.enumerators.lend(&mut frame.enumerators);
                 pools.source_vectors.lend(&mut frame.source_vectors);
             },
+            | Self::Modern(_)
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)
@@ -354,6 +396,15 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
     /// is left behind.
     pub(super) fn reclaim_pooled(self, pools: &mut FramePools<'tu, 'p>) {
         match self {
+            | Self::Msvc(mut frame) => pools.gnu_tokens.reclaim(&mut frame.tokens),
+            | Self::Gnu(mut frame) => {
+                pools.gnu_tokens.reclaim(&mut frame.tokens);
+                pools.asm_operands.reclaim(&mut frame.asm_operands);
+                pools.builtin_operands.reclaim(&mut frame.operands);
+                pools.offset_members.reclaim(&mut frame.members);
+                pools.identifiers.reclaim(&mut frame.labels);
+                pools.gnu_frames.reclaim(frame);
+            },
             | Self::Declaration(mut frame) => {
                 pools.init_declarators.reclaim(&mut frame.init_declarators);
                 pools.source_vectors.reclaim(&mut frame.source_vectors);
@@ -386,6 +437,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
                 pools.enumerators.reclaim(&mut frame.enumerators);
                 pools.source_vectors.reclaim(&mut frame.source_vectors);
             },
+            | Self::Modern(_)
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)
@@ -395,6 +447,9 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
 
     pub(super) fn kind(&self) -> ParseFrameKind {
         match self {
+            | Self::Msvc(_) => ParseFrameKind::Msvc,
+            | Self::Modern(_) => ParseFrameKind::Modern,
+            | Self::Gnu(_) => ParseFrameKind::Gnu,
             | Self::ExternalDeclaration(_) => ParseFrameKind::ExternalDeclaration,
             | Self::Declaration(_) => ParseFrameKind::Declaration,
             | Self::DeclarationSpecifiers(_) => ParseFrameKind::DeclarationSpecifiers,
@@ -422,6 +477,9 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
             return;
         };
         let destination = match self {
+            | Self::Gnu(_)
+            | Self::Msvc(_)
+            | Self::Modern(_)
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)
@@ -485,6 +543,9 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
         match self {
+            | Self::Modern(frame) => frame.step(parser, token, returned),
+            | Self::Msvc(frame) => frame.step(parser, token, returned),
+            | Self::Gnu(frame) => frame.step(parser, token, returned),
             | Self::ExternalDeclaration(frame) => frame.step(parser, token, returned),
             | Self::Declaration(frame) => frame.step(parser, token, returned),
             | Self::DeclarationSpecifiers(frame) => frame.step(parser, token, returned),

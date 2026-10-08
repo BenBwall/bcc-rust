@@ -267,7 +267,6 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `ExpectedStructOrUnionKeyword` | believed unreachable from normal dispatch | The specifier owner selects this frame only for a verified struct or union token. The frame-entry check is defensive. |
 | `StructOrUnionSpecifierWithoutNameAndBody` | rendered | [parser-struct-or-union-specifier-without-name-and-body.c](parser-struct-or-union-specifier-without-name-and-body.c) |
 | `ExpectedClosingCurlyBraceInStructDeclarationList` | rendered | [parser-expected-closing-curly-brace-in-struct-declaration-list.c](parser-expected-closing-curly-brace-in-struct-declaration-list.c) |
-| `ExpectedStructDeclarationBeforeClosingCurlyBrace` | rendered | [parser-expected-struct-declaration-before-closing-curly-brace.c](parser-expected-struct-declaration-before-closing-curly-brace.c) |
 | `ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList` | rendered | [parser-expected-semicolon-before-closing-curly-brace-in-struct-declarator-list.c](parser-expected-semicolon-before-closing-curly-brace-in-struct-declarator-list.c) |
 | `ExpectedCommaOrSemicolonInStructDeclaratorList` | rendered | [parser-expected-comma-or-semicolon-in-struct-declarator-list.c](parser-expected-comma-or-semicolon-in-struct-declarator-list.c) |
 | `ExpectedEnumKeyword` | believed unreachable from normal dispatch | The specifier owner selects this frame only for a verified enum token. The frame-entry check is defensive. |
@@ -348,3 +347,66 @@ Allow/Warn/Deny and original alternate spellings. CLI goldens under
 `language/` cover policy severity and macro-expansion provenance. Newly recognized
 unsupported keywords also have parser recovery coverage; recognition is separate
 from implementing their grammar. See the root language-standards.md matrix.
+
+## ISO phase-7 parser modes
+
+The ISO parser recognizes later-standard syntax while shared extension diagnostics
+select Allow/Warn/Deny. Grammar-only C99 extensions have exact warning/error CLI
+goldens in [language/iso-c89-warning.stderr](language/iso-c89-warning.stderr) and
+[language/iso-c89-error.stderr](language/iso-c89-error.stderr); native revision CLI
+samples produce no diagnostics. Reserved-keyword origin diagnostics remain the
+foundation's responsibility and are not duplicated by the parser.
+
+| Diagnostic surface | Status | Evidence |
+| --- | --- | --- |
+| `ExpectedIsoSyntax` attribute delimiter/component | rendered | [parser-iso-attribute.c](parser-iso-attribute.c), malformed-name and balanced-argument unit tests |
+| `ExpectedIsoSyntax` static assertion message | rendered | [parser-iso-static-assert.c](parser-iso-static-assert.c) |
+| Generic association expression | rendered | [parser-iso-generic.c](parser-iso-generic.c) |
+| Grammar-only ISO origin/severity | rendered | C89 warning/error goldens above; unit matrix exercises all policies through C2y |
+| Missing type and Unicode label | rendered | Existing missing-type fixtures now use struct members: ordinary missing declaration types are ImplicitInt extensions under the default Allow policy |
+| Atomic/BitInt operands, fixed enum types, selection headers, attribute names and EOF | parser-tested | `parsing::tests::standards`: following declarations survive, every prefix terminates with restored scopes, and deep nesting avoids native recursion |
+
+The ISO diagnostics describe the required production component instead of treating
+an attribute delimiter or static-assert message as an expression. No diagnostic
+is based on evaluating an assertion, inferring a type, applying attributes or
+resolving a named control target. The new mode suite also pins AST provenance
+through macros and compaction. Zero-global-allocation tests exercise the new ISO
+frame paths and the rendered diagnostic corpus.
+
+## GNU phase-7 parser modes
+
+Empty structures/unions, statement expressions and nested functions now retain
+complete GNU syntax. Strict modes report shared policy diagnostics rather than
+repairing supported grammar. The removed empty-aggregate syntax-error fixture is
+covered by `EmptyStructs` warning/error cases in `language/gnu-parser.c`.
+
+| Diagnostic surface | Status | Evidence |
+| --- | --- | --- |
+| Assembly required operand/delimiter | rendered | [parser-gnu-asm.c](parser-gnu-asm.c) |
+| Builtin type operand | rendered | [parser-gnu-builtin.c](parser-gnu-builtin.c) |
+| GNU attribute parentheses | rendered | [parser-gnu-attribute.c](parser-gnu-attribute.c) |
+| GNU origins and policy severity | rendered | [language/gnu-parser-warning.stderr](language/gnu-parser-warning.stderr), [language/gnu-parser-error.stderr](language/gnu-parser-error.stderr) |
+| Extension suppression and macro occurrences | parser-tested | `parsing::tests::gnu` checks scoped suppression and later diagnostics |
+| Recovery, EOF, nesting and provenance | parser-tested | every prefix, malformed children followed by a declaration, explicit AST/inspection checks and deep frame tests |
+
+Assembly target rules, builtin semantics, layout and attribute application remain
+analysis responsibilities. All three canonical diagnostic fixtures require a
+production component and preserve following valid input.
+
+## MSVC phase-7 parser modes
+
+The eight parser-owned groups have independent configuration gates. Enabled
+keywords report shared MSVC policy diagnostics; disabled spellings remain
+identifiers. The parser preserves ASTs under Deny and reports malformed vendor
+syntax with `ExpectedMsSyntax`, using the owning production's required component.
+
+| Diagnostic surface | Evidence |
+| --- | --- |
+| MSVC origins and Warn/Deny severity | [language/msvc-parser-warning.stderr](language/msvc-parser-warning.stderr), [language/msvc-parser-error.stderr](language/msvc-parser-error.stderr) |
+| Missing declspec opener, SEH handler, leave semicolon, asm delimiter | [language/msvc-recovery.stderr](language/msvc-recovery.stderr) |
+| EOF, malformed filter/body, delimiter recovery and following input | `parsing::tests::msvc` feature, prefix and recovery suites |
+
+CLI tests pass MSVC flags explicitly for these supplementary language goldens.
+The top-level default-mode golden inventory above is unchanged. Enabled/disabled
+token snapshots also pin provenance and identifier preservation. Arena allocation
+checks exercise valid and recovered MSVC syntax.

@@ -516,6 +516,54 @@ mod measurements {
         assert_no_allocations("feature source", summary, &allocations);
     }
 
+    #[test]
+    fn compiling_iso_syntax_allocates_only_from_arenas() {
+        // Reserved spellings and unambiguous grammar are extensions under the
+        // library's C99/Allow default, so this also traverses policy seams.
+        let source = "[[vendor::tag((1),[2],{3})]] _Alignas(16) _Atomic(int) object; \
+                      _Thread_local int thread; _Static_assert(1,\"message\"); unsigned \
+                      _BitInt(16) bits; enum E : unsigned { A [[deprecated]] }; int f(int) { int \
+                      a[3]; int n=_Generic(a,int*:1,default:0); n+=_Alignof(int)+_Countof a; \
+                      if(int x=1;x) n=x; switch(n){case 1 ... 3:break;} outer: for(;;){break \
+                      outer;} label: int x=(static int){}; return n; }\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::parse_source(source));
+        assert_eq!(summary.external_declarations, 6);
+        assert_no_allocations("ISO syntax source", summary, &allocations);
+    }
+
+    #[test]
+    fn compiling_gnu_syntax_allocates_only_from_arenas() {
+        let source = "__attribute__((used)) unsigned __int128 wide[0]; __typeof__(wide) copy; \
+                      __auto_type value=1; struct Empty {}; __asm__(\"nop\"); int \
+                      f(void){__label__ L; int nested(int x){return x;} int a[4]={[1 ... 3]=2}; \
+                      struct S{int x;}; struct S s={x:1}; __asm__ \
+                      volatile(\"\":[out]\"=r\"(value):\"r\"(value):\"memory\"); __asm__ \
+                      goto(\"\"::::L); void *p=&&L; goto *p; L: return __extension__ ({ \
+                      __builtin_va_arg(ap,int)+__builtin_offsetof(struct \
+                      S,x)+__builtin_types_compatible_p(int,long)+__builtin_choose_expr(1,\
+                      __real__ value,__imag__ value); }) ?: 2;}\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::parse_source(source));
+        assert_eq!(summary.external_declarations, 6);
+        assert_no_allocations("GNU syntax source", summary, &allocations);
+    }
+
+    #[test]
+    fn compiling_msvc_syntax_allocates_only_from_arenas() {
+        let source = include_str!("fixtures/diagnostics/language/msvc-parser.c");
+        let (summary, allocations) = count_compile(|| bcc_rust::parse_msvc_source(source));
+        assert_eq!(summary.external_declarations, 8);
+        assert_no_allocations("MSVC syntax source", summary, &allocations);
+        let (summary, allocations) = count_compile(|| {
+            bcc_rust::parse_msvc_source(
+                "int f(void) { __try {} __except() {} __asm mov eax, [ebx\nreturn 0; } int \
+                 following;\n",
+            )
+        });
+        assert_eq!(summary.external_declarations, 2);
+        assert!(summary.diagnostics > 0);
+        assert_eq!(allocations.calls, 0);
+    }
+
     /// Recovery paths also belong to the zero-global-allocation contract.
     #[test]
     fn compiling_malformed_sources_allocates_only_from_arenas() {

@@ -1,0 +1,229 @@
+<input>:1:1: keyword `__attribute__`
+<input>:1:14: punctuator `(`
+<input>:1:15: punctuator `(`
+<input>:1:16: identifier `used`
+<input>:1:20: punctuator `)`
+<input>:1:21: punctuator `)`
+<input>:1:23: keyword `__int128`
+<input>:1:32: identifier `wide`
+<input>:1:36: punctuator `[`
+<input>:1:37: integer constant `0` = 0 (int)
+<input>:1:38: punctuator `]`
+<input>:1:39: punctuator `;`
+<input>:2:1: keyword `__typeof__`
+<input>:2:11: punctuator `(`
+<input>:2:12: identifier `wide`
+<input>:2:16: punctuator `)`
+<input>:2:18: identifier `copy`
+<input>:2:22: punctuator `;`
+<input>:2:24: keyword `__auto_type`
+<input>:2:36: identifier `value`
+<input>:2:41: punctuator `=`
+<input>:2:42: integer constant `1` = 1 (int)
+<input>:2:43: punctuator `;`
+<input>:2:45: keyword `struct`
+<input>:2:52: identifier `Empty`
+<input>:2:58: punctuator `{`
+<input>:2:59: punctuator `}`
+<input>:2:60: punctuator `;`
+<input>:3:1: keyword `__asm__`
+<input>:3:8: punctuator `(`
+<input>:3:9: string literal "nop"
+<input>:3:14: punctuator `)`
+<input>:3:15: punctuator `;`
+<input>:3:17: keyword `int`
+<input>:3:21: identifier `symbol`
+<input>:3:28: keyword `__asm__`
+<input>:3:35: punctuator `(`
+<input>:3:36: string literal "name"
+<input>:3:42: punctuator `)`
+<input>:3:43: punctuator `;`
+<input>:4:1: keyword `union`
+<input>:4:7: identifier `U`
+<input>:4:9: punctuator `{`
+<input>:4:11: keyword `int`
+<input>:4:15: identifier `i`
+<input>:4:16: punctuator `;`
+<input>:4:18: punctuator `}`
+<input>:4:19: punctuator `;`
+<input>:4:21: keyword `int`
+<input>:4:25: identifier `ranges`
+<input>:4:31: punctuator `[`
+<input>:4:32: integer constant `4` = 4 (int)
+<input>:4:33: punctuator `]`
+<input>:4:34: punctuator `=`
+<input>:4:35: punctuator `{`
+<input>:4:36: punctuator `[`
+<input>:4:37: integer constant `1` = 1 (int)
+<input>:4:39: punctuator `...`
+<input>:4:43: integer constant `3` = 3 (int)
+<input>:4:44: punctuator `]`
+<input>:4:45: punctuator `=`
+<input>:4:46: integer constant `2` = 2 (int)
+<input>:4:47: punctuator `}`
+<input>:4:48: punctuator `;`
+<input>:5:1: keyword `int`
+<input>:5:5: identifier `f`
+<input>:5:6: punctuator `(`
+<input>:5:7: keyword `void`
+<input>:5:11: punctuator `)`
+<input>:5:13: punctuator `{`
+<input>:6:5: keyword `__label__`
+<input>:6:15: identifier `L`
+<input>:6:16: punctuator `;`
+<input>:7:5: keyword `int`
+<input>:7:9: identifier `nested`
+<input>:7:15: punctuator `(`
+<input>:7:16: keyword `int`
+<input>:7:20: identifier `x`
+<input>:7:21: punctuator `)`
+<input>:7:23: punctuator `{`
+<input>:7:25: keyword `return`
+<input>:7:32: identifier `x`
+<input>:7:33: punctuator `;`
+<input>:7:35: punctuator `}`
+<input>:8:5: keyword `__asm__`
+<input>:8:13: keyword `__volatile__`
+<input>:8:26: keyword `__inline__`
+<input>:8:36: punctuator `(`
+<input>:8:37: string literal ""
+<input>:8:40: punctuator `:`
+<input>:8:42: punctuator `[`
+<input>:8:43: identifier `out`
+<input>:8:46: punctuator `]`
+<input>:8:48: string literal "=r"
+<input>:8:52: punctuator `(`
+<input>:8:53: identifier `value`
+<input>:8:58: punctuator `)`
+<input>:8:60: punctuator `:`
+<input>:8:62: string literal "r"
+<input>:8:65: punctuator `(`
+<input>:8:66: identifier `value`
+<input>:8:71: punctuator `)`
+<input>:8:73: punctuator `:`
+<input>:8:75: string literal "memory"
+<input>:8:83: punctuator `)`
+<input>:8:84: punctuator `;`
+<input>:9:5: keyword `__asm__`
+<input>:9:13: keyword `goto`
+<input>:9:17: punctuator `(`
+<input>:9:18: string literal ""
+<input>:9:21: punctuator `:`
+<input>:9:23: punctuator `:`
+<input>:9:25: punctuator `:`
+<input>:9:27: punctuator `:`
+<input>:9:29: identifier `L`
+<input>:9:30: punctuator `)`
+<input>:9:31: punctuator `;`
+<input>:10:5: keyword `void`
+<input>:10:10: punctuator `*`
+<input>:10:11: identifier `p`
+<input>:10:12: punctuator `=`
+<input>:10:13: punctuator `&&`
+<input>:10:15: identifier `L`
+<input>:10:16: punctuator `;`
+<input>:10:18: keyword `goto`
+<input>:10:23: punctuator `*`
+<input>:10:24: identifier `p`
+<input>:10:25: punctuator `;`
+<input>:11:1: identifier `L`
+<input>:11:2: punctuator `:`
+<input>:11:4: keyword `switch`
+<input>:11:10: punctuator `(`
+<input>:11:11: integer constant `1` = 1 (int)
+<input>:11:12: punctuator `)`
+<input>:11:13: punctuator `{`
+<input>:11:14: keyword `case`
+<input>:11:19: integer constant `1` = 1 (int)
+<input>:11:21: punctuator `...`
+<input>:11:25: integer constant `3` = 3 (int)
+<input>:11:26: punctuator `:`
+<input>:11:27: keyword `break`
+<input>:11:32: punctuator `;`
+<input>:11:33: punctuator `}`
+<input>:12:5: keyword `union`
+<input>:12:11: identifier `U`
+<input>:12:13: identifier `u`
+<input>:12:14: punctuator `=`
+<input>:12:15: punctuator `(`
+<input>:12:16: keyword `union`
+<input>:12:22: identifier `U`
+<input>:12:23: punctuator `)`
+<input>:12:24: integer constant `1` = 1 (int)
+<input>:12:25: punctuator `;`
+<input>:13:5: keyword `struct`
+<input>:13:12: identifier `S`
+<input>:13:14: punctuator `{`
+<input>:13:15: keyword `int`
+<input>:13:19: identifier `x`
+<input>:13:20: punctuator `;`
+<input>:13:21: punctuator `}`
+<input>:13:22: punctuator `;`
+<input>:13:24: keyword `struct`
+<input>:13:31: identifier `S`
+<input>:13:33: identifier `s`
+<input>:13:34: punctuator `=`
+<input>:13:35: punctuator `{`
+<input>:13:36: identifier `x`
+<input>:13:37: punctuator `:`
+<input>:13:38: integer constant `1` = 1 (int)
+<input>:13:39: punctuator `}`
+<input>:13:40: punctuator `;`
+<input>:14:5: keyword `int`
+<input>:14:9: identifier `b`
+<input>:14:10: punctuator `=`
+<input>:14:11: keyword `__builtin_va_arg`
+<input>:14:27: punctuator `(`
+<input>:14:28: identifier `ap`
+<input>:14:30: punctuator `,`
+<input>:14:31: keyword `int`
+<input>:14:34: punctuator `)`
+<input>:14:35: punctuator `+`
+<input>:14:36: keyword `__builtin_offsetof`
+<input>:14:54: punctuator `(`
+<input>:14:55: keyword `struct`
+<input>:14:62: identifier `S`
+<input>:14:63: punctuator `,`
+<input>:14:64: identifier `x`
+<input>:14:65: punctuator `)`
+<input>:14:66: punctuator `;`
+<input>:15:5: identifier `b`
+<input>:15:6: punctuator `+=`
+<input>:15:8: keyword `__builtin_types_compatible_p`
+<input>:15:36: punctuator `(`
+<input>:15:37: keyword `int`
+<input>:15:40: punctuator `,`
+<input>:15:41: keyword `long`
+<input>:15:45: punctuator `)`
+<input>:15:46: punctuator `+`
+<input>:15:47: keyword `__builtin_choose_expr`
+<input>:15:68: punctuator `(`
+<input>:15:69: integer constant `1` = 1 (int)
+<input>:15:70: punctuator `,`
+<input>:15:71: integer constant `2` = 2 (int)
+<input>:15:72: punctuator `,`
+<input>:15:73: integer constant `3` = 3 (int)
+<input>:15:74: punctuator `)`
+<input>:15:75: punctuator `;`
+<input>:16:5: keyword `return`
+<input>:16:12: punctuator `(`
+<input>:16:13: punctuator `{`
+<input>:16:15: identifier `b`
+<input>:16:16: punctuator `+`
+<input>:16:17: keyword `__real__`
+<input>:16:26: identifier `u`
+<input>:16:27: punctuator `.`
+<input>:16:28: identifier `i`
+<input>:16:29: punctuator `+`
+<input>:16:30: keyword `__imag__`
+<input>:16:39: identifier `u`
+<input>:16:40: punctuator `.`
+<input>:16:41: identifier `i`
+<input>:16:42: punctuator `;`
+<input>:16:44: punctuator `}`
+<input>:16:45: punctuator `)`
+<input>:16:47: punctuator `?`
+<input>:16:48: punctuator `:`
+<input>:16:50: integer constant `2` = 2 (int)
+<input>:16:51: punctuator `;`
+<input>:17:1: punctuator `}`

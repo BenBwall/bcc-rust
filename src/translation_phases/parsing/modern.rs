@@ -1,0 +1,804 @@
+//! ISO additions to translation phase 7, expressed as resumable frames.
+//!
+//! C11: generic selections §6.5.1.1, p. 78; PDF p. 96; static assertions
+//! §6.7.10, p. 145; PDF p. 163. C99: the shared type-name and expression
+//! children are §6.7.6, p. 122; PDF p. 134 and §6.5, pp. 67-94;
+//! PDF pp. 79-106. Evaluation and type constraints belong to later analysis.
+
+use super::{
+    Parser,
+    declaration_syntax::TypeName,
+    errors::ParserErrorType,
+    expression::{
+        ExpressionBoundary,
+        ExpressionFrame,
+        ExpressionMode,
+    },
+    machine::{
+        ParseAction,
+        ParseFrame,
+        ParseValue,
+        any_expression_value,
+    },
+    syntax::Expression,
+    type_name::TypeNameFrame,
+};
+use crate::{
+    configuration::{
+        CStandard,
+        Feature,
+    },
+    translation_phases::{
+        SourceVectors,
+        preprocessing::{
+            KeywordTokenType,
+            OperatorTokenType,
+            Token,
+            TokenType,
+        },
+    },
+    util::{
+        arena_list::ArenaList,
+        bump::{
+            ArenaVec,
+            Bump,
+        },
+    },
+};
+
+/// A grammar operand distinguished before semantic analysis.
+/// C11: §6.5.1.1, p. 78; PDF p. 96. Type operands in `_Generic` are C2y.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum SyntaxOperand<'tu> {
+    Expression(&'tu Expression<'tu>),
+    Type(&'tu TypeName<'tu>),
+}
+impl SyntaxOperand<'_> {
+    pub(super) fn source(self) -> SourceVectors {
+        match self {
+            | Self::Expression(x) => x.source_vectors,
+            | Self::Type(x) => x.source_vectors,
+        }
+    }
+}
+
+/// Parameterized and newly introduced ISO type specifiers.
+/// C99: extends the type-specifier seam of §6.7.2, pp. 99-100; PDF pp. 111-112.
+/// C11: atomic type specifiers §6.7.2.4 paragraph 1, p. 121; PDF p. 139.
+/// C23: typeof specifiers §6.7.3.6 paragraph 1, p. 117; PDF p. 130.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum ExtendedType<'tu> {
+    Atomic(&'tu TypeName<'tu>),
+    Typeof {
+        operand:     SyntaxOperand<'tu>,
+        unqualified: bool,
+    },
+    BitInt {
+        width:      &'tu Expression<'tu>,
+        signedness: Option<bool>,
+    },
+    Decimal32,
+    Decimal64,
+    Decimal128,
+    Inferred,
+    Int128 {
+        signedness: Option<bool>,
+    },
+    AutoType,
+    /// MSVC fixed-width integer spelling; target layout belongs to analysis.
+    MsInteger {
+        width:      u8,
+        signedness: Option<bool>,
+    },
+}
+
+/// Specifier additions collected in reverse source order; immutable links avoid
+/// enlarging common nodes. Inspection visits the links in source order. C99:
+/// extends declaration-specifiers §6.7, p. 97; PDF p. 109. C11: alignment
+/// specifiers §6.7.5 paragraph 1, p. 127; PDF p. 145.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct SpecifierExtension<'tu> {
+    pub(crate) kind:           SpecifierExtensionKind<'tu>,
+    pub(crate) next:           Option<&'tu Self>,
+    pub(crate) source_vectors: SourceVectors,
+}
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum SpecifierExtensionKind<'tu> {
+    Alignment(SyntaxOperand<'tu>),
+    Attributes(&'tu AttributeSpecifier<'tu>),
+    ThreadLocal,
+    Constexpr,
+    ExtensionMarker,
+    /// MSVC declaration modifier, retaining exact spelling and provenance.
+    MsModifier(KeywordTokenType),
+}
+
+/// Shared attribute syntax for ISO, GNU, and MSVC grammar owners.
+/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
+/// Balanced tokens retain spelling and provenance without interpreting vendor
+/// arguments.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct AttributeSpecifier<'tu> {
+    pub(crate) syntax:         AttributeSyntax,
+    pub(crate) tokens:         ArenaList<'tu, Token>,
+    pub(crate) source_vectors: SourceVectors,
+    pub(crate) recovered:      bool,
+}
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum AttributeSyntax {
+    Standard,
+    Gnu,
+    Msvc,
+}
+
+/// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct GenericSelection<'tu> {
+    pub(crate) source_vectors: SourceVectors,
+    pub(crate) recovered:      bool,
+    pub(crate) controlling:    SyntaxOperand<'tu>,
+    pub(crate) associations:   ArenaList<'tu, GenericAssociation<'tu>>,
+}
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct GenericAssociation<'tu> {
+    pub(crate) type_name:  Option<&'tu TypeName<'tu>>,
+    pub(crate) expression: &'tu Expression<'tu>,
+}
+/// C11: §6.7.10 paragraph 1, p. 145; PDF p. 163. C23 permits no message.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct StaticAssertion<'tu> {
+    pub(crate) expression:     &'tu Expression<'tu>,
+    pub(crate) message:        Option<Token>,
+    pub(crate) source_vectors: SourceVectors,
+    pub(crate) recovered:      bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum ModernValue<'tu> {
+    Operand(SyntaxOperand<'tu>, SourceVectors),
+    Generic(&'tu GenericSelection<'tu>),
+    Assertion(&'tu StaticAssertion<'tu>),
+    Attributes(&'tu AttributeSpecifier<'tu>),
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ModernKind {
+    Operand { type_only: bool, constant: bool },
+    Generic,
+    Assertion,
+    Attributes,
+}
+#[derive(Debug, Clone, Copy)]
+enum AttributePosition {
+    Opening,
+    Name,
+    AfterName,
+    SecondColon,
+    PrefixedName,
+    AfterPrefixedName,
+    AfterArguments,
+    Closing,
+}
+#[derive(Debug, Clone, Copy)]
+enum Phase {
+    Start,
+    Open,
+    Operand,
+    AwaitOperand,
+    Separator,
+    Association,
+    AwaitAssociationType,
+    Colon,
+    AssociationExpression,
+    AwaitAssociationExpression,
+    Message,
+    Close,
+    Semicolon,
+    Finish,
+    AttributeTokens,
+    GnuAttributeOpen,
+    GnuAttributeInnerOpen,
+}
+
+/// Delimiter-owning frame, whose grammar children run on the shared machine
+/// stack. C11: §6.5.1.1 and §6.7.10, pp. 78, 145; PDF pp. 96, 163.
+#[derive(Debug)]
+pub(super) struct ModernFrame<'tu, 'p> {
+    keyword: Option<KeywordTokenType>,
+    kind: ModernKind,
+    phase: Phase,
+    attribute_position: AttributePosition,
+    attribute_syntax: AttributeSyntax,
+    pub(super) source_vectors: Option<SourceVectors>,
+    operand: Option<SyntaxOperand<'tu>>,
+    association_type: Option<&'tu TypeName<'tu>>,
+    pub(super) associations: ArenaVec<'p, GenericAssociation<'tu>>,
+    pub(super) tokens: ArenaVec<'p, Token>,
+    delimiters: ArenaVec<'p, OperatorTokenType>,
+    message: Option<Token>,
+    starting_errors: usize,
+}
+impl<'tu, 'p> ModernFrame<'tu, 'p> {
+    pub(super) fn new(arena: &'p Bump, kind: ModernKind, starting_errors: usize) -> Self {
+        Self {
+            kind,
+            keyword: None,
+            phase: Phase::Start,
+            attribute_position: AttributePosition::Opening,
+            attribute_syntax: AttributeSyntax::Standard,
+            source_vectors: None,
+            operand: None,
+            association_type: None,
+            associations: ArenaVec::new_in(arena),
+            tokens: ArenaVec::new_in(arena),
+            delimiters: ArenaVec::new_in(arena),
+            message: None,
+            starting_errors,
+        }
+    }
+
+    pub(super) fn operand_after_keyword(
+        arena: &'p Bump,
+        errors: usize,
+        source: SourceVectors,
+    ) -> Self {
+        let mut frame = Self::new(
+            arena,
+            ModernKind::Operand {
+                type_only: true,
+                constant:  false,
+            },
+            errors,
+        );
+        frame.phase = Phase::Open;
+        frame.source_vectors = Some(source);
+        frame
+    }
+
+    fn own(&mut self, parser: &mut Parser<'_, 'tu, 'p>, token: Token) {
+        if self.kind != ModernKind::Attributes {
+            parser.merge_source(&mut self.source_vectors, token);
+        }
+    }
+
+    fn attribute_outer_depth(&self) -> usize {
+        if self.attribute_syntax == AttributeSyntax::Msvc {
+            1
+        } else {
+            2
+        }
+    }
+
+    fn expected(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>, position: &'static str) {
+        parser.report(
+            ParserErrorType::ExpectedIsoSyntax(position, token.map(|x| x.kind)),
+            token,
+        );
+    }
+
+    fn attribute_expected(
+        &self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        component: &'static str,
+    ) {
+        let error = if self.attribute_syntax == AttributeSyntax::Msvc {
+            ParserErrorType::ExpectedMsSyntax(component, token.map(|x| x.kind))
+        } else if self.attribute_syntax == AttributeSyntax::Gnu {
+            ParserErrorType::ExpectedGnuSyntax(component, token.map(|x| x.kind))
+        } else {
+            ParserErrorType::ExpectedIsoSyntax(component, token.map(|x| x.kind))
+        };
+        parser.report(error, token);
+    }
+
+    fn punctuation(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        operator: OperatorTokenType,
+        position: &'static str,
+    ) -> ParseAction<'tu, 'p> {
+        if let Some(token) = token
+            && token.kind == TokenType::Operator(operator)
+        {
+            self.own(parser, token);
+            ParseAction::Consume
+        } else {
+            Self::expected(parser, token, position);
+            ParseAction::Reprocess
+        }
+    }
+
+    pub(super) fn step(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
+        match self.phase {
+            | Phase::Start =>
+                if let Some(token) = token {
+                    if let TokenType::Keyword(keyword) = token.kind {
+                        self.keyword = Some(keyword);
+                    }
+                    self.own(parser, token);
+                    if self.kind == ModernKind::Attributes {
+                        if token.kind == TokenType::Keyword(KeywordTokenType::Declspec) {
+                            self.attribute_syntax = AttributeSyntax::Msvc;
+                            self.tokens.push(token);
+                            self.phase = Phase::GnuAttributeInnerOpen;
+                            return ParseAction::Consume;
+                        }
+                        if token.kind == TokenType::Keyword(KeywordTokenType::Attribute) {
+                            self.attribute_syntax = AttributeSyntax::Gnu;
+                            self.tokens.push(token);
+                            self.phase = Phase::GnuAttributeOpen;
+                            return ParseAction::Consume;
+                        }
+                        parser.extension(Feature::Attributes, "[[...]]", token);
+                        self.tokens.push(token);
+                        self.delimiters
+                            .push(OperatorTokenType::ClosingSquareBracket);
+                        self.phase = Phase::AttributeTokens;
+                    } else {
+                        self.phase = Phase::Open;
+                    }
+                    ParseAction::Consume
+                } else {
+                    self.phase = Phase::Open;
+                    ParseAction::Continue
+                },
+            | Phase::Open => {
+                self.phase = Phase::Operand;
+                self.punctuation(
+                    parser,
+                    token,
+                    OperatorTokenType::OpeningParenthesis,
+                    "`(` in ISO construct",
+                )
+            },
+            | Phase::Operand => {
+                let type_only = matches!(
+                    self.kind,
+                    ModernKind::Operand {
+                        type_only: true,
+                        ..
+                    }
+                );
+                let is_type = type_only
+                    || self.kind != ModernKind::Assertion
+                        && self.keyword != Some(KeywordTokenType::BitInt)
+                        && token.is_some_and(|x| parser.type_name_starter(x));
+                self.phase = Phase::AwaitOperand;
+                if is_type {
+                    if self.kind == ModernKind::Generic
+                        && let Some(token) = token
+                    {
+                        parser.extension(
+                            Feature::GenericTypeOperand,
+                            "type-controlling _Generic",
+                            token,
+                        );
+                    }
+                    ParseAction::Push(ParseFrame::TypeName(TypeNameFrame::new(
+                        parser.hard_error_count,
+                    )))
+                } else {
+                    ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                        parser.arena,
+                        if self.kind == ModernKind::Assertion
+                            || matches!(self.kind, ModernKind::Operand { constant: true, .. })
+                        {
+                            ExpressionMode::ConstantExpression
+                        } else if self.kind == ModernKind::Generic {
+                            ExpressionMode::AssignmentExpression
+                        } else {
+                            ExpressionMode::Expression
+                        },
+                        if matches!(
+                            self.kind,
+                            ModernKind::Operand {
+                                constant: false,
+                                ..
+                            }
+                        ) {
+                            ExpressionBoundary::ClosingParenthesis
+                        } else {
+                            ExpressionBoundary::Argument
+                        },
+                        parser.hard_error_count,
+                    )))
+                }
+            },
+            | Phase::AwaitOperand => {
+                let operand = match returned {
+                    | Some(ParseValue::TypeName(x)) => SyntaxOperand::Type(x),
+                    | other => SyntaxOperand::Expression(any_expression_value(other)),
+                };
+                self.source_vectors = Some(
+                    parser
+                        .context
+                        .merge_vectors(self.source_vectors.unwrap_or_default(), operand.source()),
+                );
+                self.operand = Some(operand);
+                self.phase = if matches!(self.kind, ModernKind::Operand { .. }) {
+                    Phase::Close
+                } else {
+                    Phase::Separator
+                };
+                ParseAction::Continue
+            },
+            | Phase::Separator =>
+                if self.kind == ModernKind::Assertion {
+                    if token
+                        .is_some_and(|x| x.kind == TokenType::Operator(OperatorTokenType::Comma))
+                    {
+                        self.phase = Phase::Message;
+                        self.own(parser, token.expect("comma exists"));
+                        ParseAction::Consume
+                    } else {
+                        if parser.context.configuration.standard() < CStandard::C23
+                            && let Some(token) = token
+                        {
+                            parser.extension(
+                                Feature::C23Keywords,
+                                "static assertion without message",
+                                token,
+                            );
+                        }
+                        self.phase = Phase::Close;
+                        ParseAction::Continue
+                    }
+                } else {
+                    self.phase = Phase::Association;
+                    self.punctuation(
+                        parser,
+                        token,
+                        OperatorTokenType::Comma,
+                        "`,` before generic associations",
+                    )
+                },
+            | Phase::Association => {
+                if let Some(token) = token
+                    && token.kind == TokenType::Keyword(KeywordTokenType::Default)
+                {
+                    self.own(parser, token);
+                    self.association_type = None;
+                    self.phase = Phase::Colon;
+                    ParseAction::Consume
+                } else {
+                    self.phase = Phase::AwaitAssociationType;
+                    ParseAction::Push(ParseFrame::TypeName(TypeNameFrame::new(
+                        parser.hard_error_count,
+                    )))
+                }
+            },
+            | Phase::AwaitAssociationType => {
+                let Some(ParseValue::TypeName(x)) = returned else {
+                    panic!("generic association type protocol: {returned:?}")
+                };
+                self.association_type = Some(x);
+                self.source_vectors = Some(
+                    parser
+                        .context
+                        .merge_vectors(self.source_vectors.unwrap_or_default(), x.source_vectors),
+                );
+                self.phase = Phase::Colon;
+                ParseAction::Continue
+            },
+            | Phase::Colon => {
+                self.phase = Phase::AssociationExpression;
+                self.punctuation(
+                    parser,
+                    token,
+                    OperatorTokenType::Colon,
+                    "`:` in generic association",
+                )
+            },
+            | Phase::AssociationExpression => {
+                self.phase = Phase::AwaitAssociationExpression;
+                ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    parser.arena,
+                    ExpressionMode::AssignmentExpression,
+                    ExpressionBoundary::Argument,
+                    parser.hard_error_count,
+                )))
+            },
+            | Phase::AwaitAssociationExpression => {
+                let expression = any_expression_value(returned);
+                self.source_vectors = Some(parser.context.merge_vectors(
+                    self.source_vectors.unwrap_or_default(),
+                    expression.source_vectors,
+                ));
+                self.associations.push(GenericAssociation {
+                    type_name: self.association_type.take(),
+                    expression,
+                });
+                if let Some(token) = token
+                    && token.kind == TokenType::Operator(OperatorTokenType::Comma)
+                {
+                    self.own(parser, token);
+                    self.phase = Phase::Association;
+                    ParseAction::Consume
+                } else {
+                    self.phase = Phase::Close;
+                    ParseAction::Continue
+                }
+            },
+            | Phase::Message => {
+                self.phase = Phase::Close;
+                if let Some(token) = token
+                    && matches!(token.kind, TokenType::String(_))
+                {
+                    self.message = Some(token);
+                    self.own(parser, token);
+                    ParseAction::Consume
+                } else {
+                    Self::expected(parser, token, "string literal in static assertion");
+                    ParseAction::Reprocess
+                }
+            },
+            | Phase::Close => {
+                self.phase = if self.kind == ModernKind::Assertion {
+                    Phase::Semicolon
+                } else {
+                    Phase::Finish
+                };
+                self.punctuation(
+                    parser,
+                    token,
+                    OperatorTokenType::ClosingParenthesis,
+                    "`)` in ISO construct",
+                )
+            },
+            | Phase::Semicolon => {
+                self.phase = Phase::Finish;
+                self.punctuation(
+                    parser,
+                    token,
+                    OperatorTokenType::Semicolon,
+                    "`;` after static assertion",
+                )
+            },
+            | Phase::GnuAttributeOpen | Phase::GnuAttributeInnerOpen => {
+                let inner = matches!(self.phase, Phase::GnuAttributeInnerOpen);
+                self.phase = if inner {
+                    Phase::AttributeTokens
+                } else {
+                    Phase::GnuAttributeInnerOpen
+                };
+                self.attribute_position = AttributePosition::Name;
+                if let Some(token) = token
+                    && token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                {
+                    self.tokens.push(token);
+                    self.delimiters.push(OperatorTokenType::ClosingParenthesis);
+                    ParseAction::Consume
+                } else {
+                    self.attribute_expected(
+                        parser,
+                        token,
+                        if self.attribute_syntax == AttributeSyntax::Msvc {
+                            "`(` in MSVC declspec specifier"
+                        } else {
+                            "`(` in GNU attribute specifier"
+                        },
+                    );
+                    self.phase = Phase::Finish;
+                    ParseAction::Continue
+                }
+            },
+            | Phase::AttributeTokens => {
+                let Some(token) = token else {
+                    self.attribute_expected(
+                        parser,
+                        None,
+                        if self.attribute_syntax == AttributeSyntax::Msvc {
+                            "`)` in MSVC declspec specifier"
+                        } else if self.attribute_syntax == AttributeSyntax::Gnu {
+                            "`))` in GNU attribute specifier"
+                        } else {
+                            "`]]` in attribute specifier"
+                        },
+                    );
+                    self.phase = Phase::Finish;
+                    return ParseAction::Continue;
+                };
+                // At outer depth, a declaration boundary belongs to the
+                // enclosing frame.
+                if self.delimiters.len() <= self.attribute_outer_depth()
+                    && matches!(
+                        token.kind,
+                        TokenType::Operator(
+                            OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
+                        )
+                    )
+                {
+                    self.attribute_expected(
+                        parser,
+                        Some(token),
+                        if self.attribute_syntax == AttributeSyntax::Msvc {
+                            "`)` in MSVC declspec specifier"
+                        } else if self.attribute_syntax == AttributeSyntax::Gnu {
+                            "`))` in GNU attribute specifier"
+                        } else {
+                            "`]]` in attribute specifier"
+                        },
+                    );
+                    self.phase = Phase::Finish;
+                    return ParseAction::Continue;
+                }
+                if self.delimiters.len() <= self.attribute_outer_depth() {
+                    use AttributePosition::{
+                        AfterArguments,
+                        AfterName,
+                        AfterPrefixedName,
+                        Closing,
+                        Name,
+                        Opening,
+                        PrefixedName,
+                        SecondColon,
+                    };
+                    let kind = token.kind;
+                    let identifier = matches!(kind, TokenType::Identifier | TokenType::Keyword(_));
+                    let position = self.attribute_position;
+                    let valid = match position {
+                        | Opening => {
+                            self.attribute_position = Name;
+                            kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                        },
+                        | Name | PrefixedName if identifier => {
+                            self.attribute_position = if matches!(position, Name) {
+                                AfterName
+                            } else {
+                                AfterPrefixedName
+                            };
+                            true
+                        },
+                        | AfterName | AfterArguments
+                            if identifier && self.attribute_syntax == AttributeSyntax::Msvc =>
+                        {
+                            self.attribute_position = AfterName;
+                            true
+                        },
+                        | Name | AfterName | AfterPrefixedName | AfterArguments
+                            if kind == TokenType::Operator(OperatorTokenType::Comma) =>
+                        {
+                            self.attribute_position = Name;
+                            true
+                        },
+                        | Name | AfterName | AfterPrefixedName | AfterArguments
+                            if kind
+                                == TokenType::Operator(
+                                    if self.attribute_syntax == AttributeSyntax::Standard {
+                                        OperatorTokenType::ClosingSquareBracket
+                                    } else {
+                                        OperatorTokenType::ClosingParenthesis
+                                    },
+                                ) =>
+                        {
+                            self.attribute_position = Closing;
+                            true
+                        },
+                        | AfterName if kind == TokenType::Operator(OperatorTokenType::Colon) => {
+                            self.attribute_position = SecondColon;
+                            true
+                        },
+                        | SecondColon if kind == TokenType::Operator(OperatorTokenType::Colon) => {
+                            self.attribute_position = PrefixedName;
+                            true
+                        },
+                        | AfterName | AfterPrefixedName
+                            if kind
+                                == TokenType::Operator(OperatorTokenType::OpeningParenthesis) =>
+                        {
+                            self.attribute_position = AfterArguments;
+                            true
+                        },
+                        | Closing =>
+                            kind == TokenType::Operator(
+                                if self.attribute_syntax == AttributeSyntax::Standard {
+                                    OperatorTokenType::ClosingSquareBracket
+                                } else {
+                                    OperatorTokenType::ClosingParenthesis
+                                },
+                            ),
+                        | _ => false,
+                    };
+                    if !valid {
+                        self.attribute_expected(
+                            parser,
+                            Some(token),
+                            "attribute name, arguments, or separator",
+                        );
+                    }
+                }
+                if let TokenType::Operator(op) = token.kind {
+                    let closing = match op {
+                        | OperatorTokenType::OpeningParenthesis =>
+                            Some(OperatorTokenType::ClosingParenthesis),
+                        | OperatorTokenType::OpeningSquareBracket =>
+                            Some(OperatorTokenType::ClosingSquareBracket),
+                        | OperatorTokenType::OpeningCurlyBrace =>
+                            Some(OperatorTokenType::ClosingCurlyBrace),
+                        | _ => None,
+                    };
+                    if let Some(closing) = closing {
+                        self.delimiters.push(closing);
+                    } else if matches!(
+                        op,
+                        OperatorTokenType::ClosingParenthesis
+                            | OperatorTokenType::ClosingSquareBracket
+                            | OperatorTokenType::ClosingCurlyBrace
+                    ) {
+                        if self.delimiters.last() == Some(&op) {
+                            _ = self.delimiters.pop();
+                        } else {
+                            self.attribute_expected(
+                                parser,
+                                Some(token),
+                                "matching attribute argument delimiter",
+                            );
+                            self.phase = Phase::Finish;
+                            return ParseAction::Continue;
+                        }
+                    }
+                }
+                self.tokens.push(token);
+                self.own(parser, token);
+                if self.delimiters.is_empty() {
+                    self.phase = Phase::Finish;
+                }
+                ParseAction::Consume
+            },
+            | Phase::Finish => {
+                let source_vectors = if self.kind == ModernKind::Attributes {
+                    let mut sources = ArenaVec::new_in(parser.arena);
+                    sources.extend(self.tokens.iter().map(|x| x.source_vectors));
+                    parser.context.merge_vector_list(&sources)
+                } else {
+                    self.source_vectors.unwrap_or_default()
+                };
+                let recovered = parser.hard_error_count > self.starting_errors;
+                let value = match self.kind {
+                    | ModernKind::Operand { .. } => ModernValue::Operand(
+                        self.operand.expect("operand child completed"),
+                        source_vectors,
+                    ),
+                    | ModernKind::Generic => {
+                        let associations = parser.alloc_syntax_list(&mut self.associations);
+                        ModernValue::Generic(parser.alloc_syntax(GenericSelection {
+                            source_vectors,
+                            recovered,
+                            controlling: self.operand.expect("generic operand completed"),
+                            associations,
+                        }))
+                    },
+                    | ModernKind::Assertion => {
+                        let SyntaxOperand::Expression(expression) =
+                            self.operand.expect("assertion operand completed")
+                        else {
+                            unreachable!("assertion uses expressions")
+                        };
+                        ModernValue::Assertion(parser.alloc_syntax(StaticAssertion {
+                            expression,
+                            message: self.message,
+                            source_vectors,
+                            recovered,
+                        }))
+                    },
+                    | ModernKind::Attributes => {
+                        let tokens = parser.alloc_syntax_list(&mut self.tokens);
+                        ModernValue::Attributes(parser.alloc_syntax(AttributeSpecifier {
+                            syntax: self.attribute_syntax,
+                            tokens,
+                            source_vectors,
+                            recovered,
+                        }))
+                    },
+                };
+                ParseAction::Reduce(ParseValue::Modern(value))
+            },
+        }
+    }
+}

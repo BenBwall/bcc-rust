@@ -109,17 +109,17 @@ impl TokenCursor {
     }
 
     /// Returns the current token.
-    pub(super) fn current(&mut self) -> Option<Token> {
+    pub(super) fn current(&self) -> Option<Token> {
         self.at(0)
     }
 
     /// Returns the token immediately following `current` without consuming.
-    pub(super) fn following(&mut self) -> Option<Token> {
+    pub(super) fn following(&self) -> Option<Token> {
         self.lookahead(0)
     }
 
     /// Returns zero-based lookahead beyond `current` without consuming.
-    pub(super) fn lookahead(&mut self, index: usize) -> Option<Token> {
+    pub(super) fn lookahead(&self, index: usize) -> Option<Token> {
         self.at(0).and_then(|_| self.at(index.checked_add(1)?))
     }
 

@@ -1,0 +1,9 @@
+error: expected string literal in static assertion, found integer constant `42`
+ --> parser-iso-static-assert.c:1:19
+  |
+1 | _Static_assert(1, 42);
+  |                   ^^- skipped to recover
+  |                   |
+  |                   expected string literal in static assertion
+
+1 error generated.

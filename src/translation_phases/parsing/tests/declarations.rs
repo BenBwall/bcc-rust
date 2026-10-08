@@ -475,6 +475,7 @@ fn specifier_combinations_and_conflicts_keep_legacy_diagnostics() {
             assert!(TypeSpecifiers::Long.is_long());
             assert!(TypeSpecifiers::LongDouble.is_long_double());
             let structure = StructOrUnionSpecifier {
+                attributes:              None,
                 struct_or_union:         StructOrUnion::Struct,
                 identifier:              None,
                 struct_declaration_list: None,
@@ -482,6 +483,8 @@ fn specifier_combinations_and_conflicts_keep_legacy_diagnostics() {
             };
             assert!(TypeSpecifiers::StructOrUnion(&structure).is_struct_or_union());
             let enumeration = EnumSpecifier {
+                attributes:       None,
+                underlying_type:  None,
                 name:             None,
                 enumeration_list: None,
                 source_vectors:   VectorSlice::empty(),

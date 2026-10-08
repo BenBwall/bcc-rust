@@ -68,6 +68,7 @@ pub(super) struct ExternalDeclarationFrame {
 pub(super) enum ExternalDeclarationPhase {
     /// Push the declaration child without consuming its first token.
     Start,
+    AwaitAsm,
     /// Classify the completed declaration from diagnostics emitted since entry.
     AwaitDeclaration,
     /// Receive a function definition selected from the completed declaration
@@ -91,7 +92,27 @@ impl<'tu, 'p> ExternalDeclarationFrame {
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
         match self.phase {
+            | ExternalDeclarationPhase::AwaitAsm => {
+                let Some(ParseValue::Gnu(super::gnu::GnuValue::Asm(asm))) = returned else {
+                    panic!("file asm child protocol");
+                };
+                ParseAction::Reduce(ParseValue::ExternalDeclaration(ExternalDeclaration::Asm(
+                    asm,
+                )))
+            },
             | ExternalDeclarationPhase::Start => {
+                if token.is_some_and(|x| {
+                    x.kind
+                        == crate::translation_phases::preprocessing::TokenType::Keyword(
+                            crate::translation_phases::preprocessing::KeywordTokenType::Asm,
+                        )
+                }) {
+                    self.phase = ExternalDeclarationPhase::AwaitAsm;
+                    return super::gnu::GnuFrame::push(
+                        parser,
+                        super::gnu::GnuKind::Asm { label: false },
+                    );
+                }
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"

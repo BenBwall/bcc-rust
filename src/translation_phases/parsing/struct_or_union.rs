@@ -34,6 +34,7 @@ use super::{
         StructDeclarator,
         StructOrUnion,
         StructOrUnionSpecifier,
+        TypeQualifiers,
     },
     declarator::{
         DeclaratorFrame,
@@ -52,6 +53,13 @@ use super::{
         ParseFrame,
         ParseFrameKind,
         ParseValue,
+    },
+    modern::{
+        ModernFrame,
+        ModernKind,
+        ModernValue,
+        SpecifierExtension,
+        SpecifierExtensionKind,
     },
     recovery::{
         SynchronizationKind,
@@ -85,6 +93,8 @@ use crate::{
 pub(super) struct StructOrUnionSpecifierFrame<'tu, 'p> {
     /// Current tag/member transition.
     phase: StructOrUnionPhase,
+    attribute_resume: StructOrUnionPhase,
+    attributes: Option<&'tu SpecifierExtension<'tu>>,
     /// Keyword-selected aggregate kind.
     kind: Option<StructOrUnion>,
     /// Optional tag identifier.
@@ -122,6 +132,9 @@ pub(super) struct StructOrUnionSpecifierFrame<'tu, 'p> {
 pub(super) enum StructOrUnionPhase {
     /// Consume and classify the `struct` or `union` keyword.
     Start,
+    AwaitTagAttributes,
+    AwaitMemberAttributes,
+    AwaitAssertion,
     /// Parse an optional tag or anonymous opening brace.
     NameOrBody,
     /// Decide whether a named tag also has a body.
@@ -150,6 +163,8 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
     pub(super) fn new(arena: &'p Bump) -> Self {
         Self {
             phase: StructOrUnionPhase::Start,
+            attribute_resume: StructOrUnionPhase::NameOrBody,
+            attributes: None,
             kind: None,
             identifier: None,
             declarations: ArenaVec::new_in(arena),
@@ -171,7 +186,67 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
+        if matches!(self.phase, StructOrUnionPhase::FinishBody) && parser.attribute_starter(token) {
+            self.attribute_resume = self.phase;
+            self.phase = StructOrUnionPhase::AwaitTagAttributes;
+            return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                parser.arena,
+                ModernKind::Attributes,
+                parser.hard_error_count,
+            )));
+        }
         match self.phase {
+            | StructOrUnionPhase::AwaitMemberAttributes => {
+                let Some(ParseValue::Modern(ModernValue::Attributes(x))) = returned else {
+                    panic!("bit-field attribute child protocol");
+                };
+                if let Some(member) = self.member_declarators.last_mut() {
+                    member.attributes = Some(parser.alloc_syntax(SpecifierExtension {
+                        kind:           SpecifierExtensionKind::Attributes(x),
+                        next:           member.attributes,
+                        source_vectors: x.source_vectors,
+                    }));
+                    member.source_vectors = parser
+                        .context
+                        .merge_vectors(member.source_vectors, x.source_vectors);
+                }
+                self.member_source = Some(
+                    parser
+                        .context
+                        .merge_vectors(self.member_source.unwrap_or_default(), x.source_vectors),
+                );
+                self.phase = StructOrUnionPhase::AfterStructDeclarator;
+                ParseAction::Continue
+            },
+            | StructOrUnionPhase::AwaitTagAttributes => {
+                let Some(ParseValue::Modern(ModernValue::Attributes(x))) = returned else {
+                    panic!("aggregate attributes protocol: {returned:?}")
+                };
+                self.attributes = Some(parser.alloc_syntax(SpecifierExtension {
+                    kind:           SpecifierExtensionKind::Attributes(x),
+                    next:           self.attributes,
+                    source_vectors: x.source_vectors,
+                }));
+                self.source_vectors.push(x.source_vectors);
+                self.phase = self.attribute_resume;
+                ParseAction::Continue
+            },
+            | StructOrUnionPhase::AwaitAssertion => {
+                let Some(ParseValue::Modern(ModernValue::Assertion(assertion))) = returned else {
+                    panic!("member assertion protocol: {returned:?}")
+                };
+                self.declarations.push(StructDeclaration {
+                    assertion:              Some(assertion),
+                    extensions:             None,
+                    type_qualifiers:        TypeQualifiers::empty(),
+                    type_specifiers:        super::declaration_syntax::TypeSpecifiers::Empty,
+                    struct_declarator_list: crate::util::arena_list::ArenaList::empty(),
+                    source_vectors:         assertion.source_vectors,
+                });
+                self.source_vectors.push(assertion.source_vectors);
+                self.phase = StructOrUnionPhase::MemberStart;
+                ParseAction::Continue
+            },
             | StructOrUnionPhase::Start => {
                 debug_assert!(
                     returned.is_none(),
@@ -197,6 +272,15 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 ParseAction::Consume
             },
             | StructOrUnionPhase::NameOrBody => {
+                if parser.attribute_starter(token) {
+                    self.attribute_resume = StructOrUnionPhase::NameOrBody;
+                    self.phase = StructOrUnionPhase::AwaitTagAttributes;
+                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                        parser.arena,
+                        ModernKind::Attributes,
+                        parser.hard_error_count,
+                    )));
+                }
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -245,6 +329,16 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 }
             },
             | StructOrUnionPhase::MemberStart => {
+                if token
+                    .is_some_and(|x| x.kind == TokenType::Keyword(KeywordTokenType::StaticAssert))
+                {
+                    self.phase = StructOrUnionPhase::AwaitAssertion;
+                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                        parser.arena,
+                        ModernKind::Assertion,
+                        parser.hard_error_count,
+                    )));
+                }
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -256,9 +350,10 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     // C99 §6.7.2.1p1: a struct-declaration-list has at least
                     // one struct-declaration.
                     if self.declarations.is_empty() {
-                        parser.report(
-                            ParserErrorType::ExpectedStructDeclarationBeforeClosingCurlyBrace,
-                            Some(token),
+                        parser.extension(
+                            crate::configuration::Feature::EmptyStructs,
+                            "empty struct or union",
+                            token,
                         );
                     }
                     self.source_vectors.push(token.source_vectors);
@@ -299,7 +394,27 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 } else if is_operator(token, OperatorTokenType::Semicolon) {
                     // C99 §6.7.2.1p1: a struct-declaration needs a
                     // struct-declarator-list; C99 has no anonymous members.
-                    parser.report(ParserErrorType::EmptyStructDeclarator, token);
+                    let anonymous = matches!(self.member_specifiers.as_ref().map(|x|x.type_specifiers),Some(super::declaration_syntax::TypeSpecifiers::StructOrUnion(x)) if x.identifier.is_none() && x.struct_declaration_list.is_some());
+                    let ms_anonymous = matches!(specifiers.type_specifiers, super::declaration_syntax::TypeSpecifiers::StructOrUnion(x) if x.identifier.is_some())
+                        && parser
+                            .context
+                            .configuration
+                            .accepts(crate::configuration::Feature::MsAnonymousStructs);
+                    if ms_anonymous {
+                        parser.extension(
+                            crate::configuration::Feature::MsAnonymousStructs,
+                            "anonymous tagged struct or union member",
+                            token.expect("semicolon exists"),
+                        );
+                    } else if anonymous {
+                        parser.extension(
+                            crate::configuration::Feature::AnonymousAggregates,
+                            "anonymous struct or union member",
+                            token.expect("semicolon exists"),
+                        );
+                    } else {
+                        parser.report(ParserErrorType::EmptyStructDeclarator, token);
+                    }
                     let token = token.expect("semicolon token exists");
                     parser.merge_source(&mut self.member_source, token);
                     self.finish_member(parser);
@@ -366,6 +481,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                         .take()
                         .unwrap_or_default();
                     self.member_declarators.push(StructDeclarator {
+                        attributes: None,
                         declarator: self.member_declarator.take(),
                         bitfield_width: None,
                         source_vectors,
@@ -411,6 +527,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     .take()
                     .unwrap_or_default();
                 self.member_declarators.push(StructDeclarator {
+                    attributes: None,
                     declarator: self.member_declarator.take(),
                     bitfield_width: Some(index),
                     source_vectors,
@@ -419,6 +536,14 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 ParseAction::Reprocess
             },
             | StructOrUnionPhase::AfterStructDeclarator => {
+                if parser.attribute_starter(token) {
+                    self.phase = StructOrUnionPhase::AwaitMemberAttributes;
+                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                        parser.arena,
+                        ModernKind::Attributes,
+                        parser.hard_error_count,
+                    )));
+                }
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -620,6 +745,17 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
     fn finish_member(&mut self, parser: &mut Parser<'_, 'tu, 'p>) {
         // Commit all declarators for this shared specifier-qualifier-list as a
         // single member declaration with one stable arena slice.
+        for member in &self.member_declarators {
+            if let Some(declarator) = member.declarator
+                && declarator.is_unsized_array()
+            {
+                parser.extension_source(
+                    crate::configuration::Feature::FlexibleArrayMembers,
+                    "flexible array member",
+                    declarator.source_vectors,
+                );
+            }
+        }
         let start = parser.alloc_syntax_list(&mut self.member_declarators);
         let specifiers = self
             .member_specifiers
@@ -627,6 +763,8 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
             .expect("a struct member has specifiers");
         let source_vectors = self.member_source.take().unwrap_or_default();
         self.declarations.push(StructDeclaration {
+            assertion: None,
+            extensions: specifiers.extensions,
             type_qualifiers: specifiers.type_qualifiers,
             type_specifiers: specifiers.type_specifiers,
             struct_declarator_list: start,
@@ -641,6 +779,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
             .then(|| parser.alloc_syntax_list(&mut self.declarations));
         let source_vectors = parser.context.merge_vector_list(&self.source_vectors);
         let index = parser.alloc_syntax(StructOrUnionSpecifier {
+            attributes: self.attributes,
             struct_or_union: self.kind.unwrap_or(StructOrUnion::Struct),
             identifier: self.identifier,
             struct_declaration_list: declaration_list,

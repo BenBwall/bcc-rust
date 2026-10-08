@@ -353,12 +353,12 @@ fn typedef_declaration_as_substatement_is_rejected() {
 }
 
 #[test]
-fn typedef_declaration_after_label_or_if_is_one_diagnostic_each() {
+fn labeled_declarations_are_extensions_but_if_substatement_declarations_are_errors() {
     let source = "typedef int T;\nvoid f(int x) {\nL: T y;\n  if (x) T z;\n  x = 1;\n}\n";
     with_parse(source, |parsed| {
         assert_eq!(
             error_offsets(parsed),
-            [source.find("T y").unwrap(), source.find("T z").unwrap()],
+            [source.find("T z").unwrap()],
             "{:#?}",
             parsed.errors
         );

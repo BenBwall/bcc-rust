@@ -1,0 +1,560 @@
+//! GNU parser grammar regressions.
+use super::{
+    parser_errors,
+    with_parse_configuration,
+};
+use crate::{
+    configuration::{
+        CStandard,
+        CompilerConfiguration,
+        ExtensionPolicy,
+    },
+    translation_phases::GetSeverity,
+};
+#[test]
+fn gnu_surface_smoke() {
+    let samples = [
+        "int f(__attribute__((unused))); __extension__ _Static_assert(1,\"ok\");",
+        "void f(int x) { x = (__attribute__((unused)) float){2.}; }",
+        "__attribute__((unused)) int x; int * __attribute__((aligned(8))) p;",
+        "struct __attribute__((packed)) S { int x __attribute__((unused)); }; enum E { A \
+         __attribute__((unused)) };",
+        "__asm__(\"nop\"); int x __asm__(\"other\") __attribute__((used));",
+        "int f(int x) { __asm__ __volatile__ __inline__ (\"nop\" : [out] \"=r\"(x) : \"r\"(x) : \
+         \"memory\"); __asm__ goto (\"\" : : : : L); L: return x; }",
+        "__typeof__(int) x; __typeof__(x) y; __int128 a; unsigned __int128 b; __int128 unsigned \
+         c; __auto_type d=1; struct Empty {};",
+        "int f(void) { __label__ L, M; void *p=&&L; goto *p; L: M: return ({ int x=1; x; }) ?: 2; \
+         }",
+        "int f(void) { int nested(int x) { return x; } return nested(1); }",
+        "int f(void) { int nested(x) int x; { return x; } return nested(1); }",
+        "int f(void) { return __builtin_va_arg(ap, int) + __builtin_offsetof(struct S, a[1].b) + \
+         __builtin_types_compatible_p(int, long) + __builtin_choose_expr(1,2,3); }",
+        "union U { int i; }; int f(void) { union U x=(union U)1; return __real__ x.i + __imag__ \
+         x.i; }",
+        "__extension__ __int128 x; int f(void) { __extension__ ({ int x=0; x; }); return \
+         __alignof__(x); }",
+        "int a[4]={[1 ... 3]=2}; struct S {int x;}; struct S s={x: 1}; int b[3]={[1] 2};",
+        "int a[(0)]; int f(int x) { switch(x) { case 1 ... 3: return 1; } return 0; }",
+    ];
+    for source in samples {
+        with_parse_configuration(
+            &format!("{source}\n"),
+            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow),
+            |p| {
+                assert_eq!(parser_errors(p).count(), 0, "{source}\n{:?}", p.errors);
+            },
+        );
+    }
+}
+
+#[test]
+fn reserved_gnu_syntax_keeps_ast_under_every_policy_and_mode() {
+    let source = "__attribute__((used)) __int128 x[0]; __typeof__(x) y; __auto_type a=1; struct \
+                  Empty {}; int f(void) { __label__ L; __asm__(\"nop\"); void *p=&&L; goto *p; L: \
+                  switch(1){case 1 ... 3:break;} int nested(int n){return n;} return \
+                  __builtin_choose_expr(1, ({1;}), 2) ?: 3; }\n";
+    for standard in [
+        CStandard::C89,
+        CStandard::C95,
+        CStandard::C99,
+        CStandard::C11,
+        CStandard::C17,
+        CStandard::C23,
+        CStandard::C2y,
+    ] {
+        for gnu in [false, true] {
+            for policy in [
+                ExtensionPolicy::Allow,
+                ExtensionPolicy::Warn,
+                ExtensionPolicy::Deny,
+            ] {
+                with_parse_configuration(
+                    source,
+                    CompilerConfiguration::new(standard, policy).with_gnu_extensions(gnu),
+                    |p| {
+                        assert_eq!(
+                            parser_errors(p).count(),
+                            0,
+                            "{standard:?} {gnu} {policy:?}: {:?}",
+                            p.errors
+                        );
+                        assert_eq!(p.items.len(), 5);
+                        let extensions: Vec<_> = p
+                            .errors
+                            .iter()
+                            .filter_map(|x| {
+                                if let crate::translation_phases::TranslationError::Extension(x) = x
+                                {
+                                    Some(x)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        if policy == ExtensionPolicy::Allow {
+                            assert!(extensions.is_empty());
+                        } else {
+                            for spelling in [
+                                "__attribute__",
+                                "__int128",
+                                "zero-length array",
+                                "__typeof__",
+                                "__auto_type",
+                                "empty struct",
+                                "__label__",
+                                "__asm__",
+                                "label address",
+                                "computed goto",
+                                "nested function",
+                                "__builtin_choose_expr",
+                                "statement expression",
+                                "omitted conditional",
+                            ] {
+                                assert!(
+                                    extensions.iter().any(|x| x.to_string().contains(spelling)),
+                                    "{spelling}: {extensions:?}"
+                                );
+                            }
+                            assert!(extensions.iter().all(|x| x.severity()
+                                == if policy == ExtensionPolicy::Deny {
+                                    crate::translation_phases::ErrorSeverity::Error
+                                } else {
+                                    crate::translation_phases::ErrorSeverity::Warning
+                                }));
+                            assert_eq!(
+                                extensions
+                                    .iter()
+                                    .any(|x| x.to_string().contains("case range")),
+                                standard < CStandard::C2y
+                            );
+                        }
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn non_reserved_spellings_are_gated_without_stealing_identifiers() {
+    for standard in [CStandard::C89, CStandard::C99, CStandard::C17] {
+        with_parse_configuration(
+            "int asm; int typeof; int f(void){return asm+typeof;}\n",
+            CompilerConfiguration::new(standard, ExtensionPolicy::Allow),
+            |p| assert!(p.errors.is_empty(), "{:?}", p.errors),
+        );
+        with_parse_configuration(
+            "asm(\"nop\"); typeof(int) x;\n",
+            CompilerConfiguration::new(standard, ExtensionPolicy::Warn).with_gnu_extensions(true),
+            |p| assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors),
+        );
+        for source in ["asm(\"nop\");\n", "typeof(int) x;\n"] {
+            with_parse_configuration(
+                source,
+                CompilerConfiguration::new(standard, ExtensionPolicy::Warn),
+                |p| {
+                    assert!(
+                        parser_errors(p).count() > 0,
+                        "strict mode accepted {source}"
+                    );
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn attributes_cover_gcc_attachment_positions_and_share_standard_nodes() {
+    let source = "__attribute__((unused)) int a, __attribute__((used)) b; int \
+                  __attribute__((aligned(8))) c; struct __attribute__((packed)) S { int x \
+                  __attribute__((unused)); int y:3 __attribute__((unused)); } \
+                  __attribute__((aligned(8))); union __attribute__((transparent_union)) U {int \
+                  x;}; enum __attribute__((packed)) E {A __attribute__((deprecated))=1} \
+                  __attribute__((unused)); int (* __attribute__((unused)) p)(int \
+                  __attribute__((unused)) arg); int (__attribute__((unused)) *q); void f(int \
+                  a[__attribute__((unused)) const 3], int (__attribute__((unused)) *b)) { L: \
+                  __attribute__((unused)); __attribute__((fallthrough)); }\n";
+    with_parse_configuration(source, CompilerConfiguration::default(), |p| {
+        assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+        let attrs = p
+            .parser
+            .syntax
+            .iter::<super::super::modern::AttributeSpecifier<'_>>()
+            .collect::<Vec<_>>();
+        assert_eq!(attrs.len(), 18);
+        assert!(
+            attrs
+                .iter()
+                .all(|x| x.syntax == super::super::modern::AttributeSyntax::Gnu && !x.recovered)
+        );
+        let aggregate = super::declaration(p, 2)
+            .declaration_specifiers
+            .type_specifiers;
+        assert!(
+            matches!(aggregate,super::super::declaration_syntax::TypeSpecifiers::StructOrUnion(x) if x.attributes.is_some())
+        );
+    });
+}
+
+#[test]
+fn extension_marker_suppresses_only_its_operand_or_declaration() {
+    let source = "__extension__ __int128 x[0]; __int128 y; int f(void){ __extension__ ({ __int128 \
+                  z; z ?: 1; }); return ({2;}); }\n";
+    with_parse_configuration(
+        source,
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+        |p| {
+            assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+            let extensions: Vec<_> = p
+                .errors
+                .iter()
+                .filter_map(|x| {
+                    if let crate::translation_phases::TranslationError::Extension(x) = x {
+                        Some(x.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(extensions.len(), 2, "{extensions:?}");
+            assert!(extensions[0].contains("__int128"));
+            assert!(extensions[1].contains("statement expression"));
+            assert_eq!(p.parser.pedantic_suppression, 0);
+        },
+    );
+}
+
+#[test]
+fn malformed_gnu_prefixes_terminate_and_restore_machine_state() {
+    for source in [
+        "__attribute__((unused(1))) int x;",
+        "__asm__ goto(\"\": [x] \"=r\"(1): \"r\"(2): \"memory\":L);",
+        "int f(void){ __label__ L,M; goto *&&L; L: return ({int x=1;x;}) ?: 2; }",
+        "int f(void){return __builtin_va_arg(ap,int (*)[3])+__builtin_offsetof(struct \
+         S,a[1].b)+__builtin_types_compatible_p(int,long)+__builtin_choose_expr(1,2,3);}",
+        "int a[4]={[1 ... 3]=2};",
+        "__extension__ int f(void){int nested(int x){return x;} return 1;}",
+    ] {
+        for end in 0..=source.len() {
+            with_parse_configuration(
+                &format!("{}\n", &source[..end]),
+                CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+                |p| {
+                    assert_eq!(p.parser.scopes.depth(), 0, "{source} at {end}");
+                    assert!(p.parser.frames.is_empty());
+                    assert!(p.parser.returned.is_none());
+                    assert_eq!(p.parser.pedantic_suppression, 0, "{source} at {end}");
+                    assert_eq!(p.parser.switch_floor, 0);
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn malformed_gnu_children_preserve_following_declarations() {
+    for source in [
+        "__attribute__((unused);",
+        "__asm__(123);",
+        "int f(void){__asm__ goto(\"\": : : : );}",
+        "int f(void){__asm__(\"\":\"r\"());}",
+        "int f(void){return __builtin_va_arg(ap,);}",
+        "int f(void){return __builtin_offsetof(int,);}",
+        "int f(void){return __builtin_choose_expr(1,,3);}",
+        "int f(void){goto *;}",
+        "int f(void){__label__ ;}",
+        "int f(void){return ({int x=; x;});}",
+        "int a[4]={[1 ... ]=2};",
+    ] {
+        with_parse_configuration(
+            &format!("{source} int after;\n"),
+            CompilerConfiguration::default(),
+            |p| {
+                assert!(parser_errors(p).count() > 0, "{source}: {:?}", p.errors);
+                let declaration = super::declaration(p, p.items.len() - 1);
+                assert_eq!(
+                    p.parser
+                        .context
+                        .string_cache
+                        .at(declaration.init_declarators[0]
+                            .declarator
+                            .identifier()
+                            .unwrap()
+                            .name),
+                    "after"
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn nested_functions_have_separate_typedef_label_and_switch_contexts() {
+    let source = "typedef int T; int f(void){ switch(1){default:; int nested(int T){default:; \
+                  goto L; L: return T;} default:;} T x=1; return x; }\n";
+    with_parse_configuration(source, CompilerConfiguration::default(), |p| {
+        let errors: Vec<_> = parser_errors(p).collect();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(matches!(
+            errors[0],
+            super::super::errors::ParserErrorType::DuplicateDefaultLabel
+        ));
+        assert_eq!(p.parser.switch_scopes.len(), 0);
+    });
+}
+
+#[test]
+fn gnu_nodes_preserve_typed_children_and_inspection() {
+    use super::super::{
+        declaration_syntax::{
+            Designator,
+            DesignatorType,
+        },
+        gnu::{
+            Asm,
+            Builtin,
+        },
+        modern::SyntaxOperand,
+    };
+    let source = include_str!("../../../../tests/fixtures/diagnostics/language/gnu-parser.c");
+    with_parse_configuration(source, CompilerConfiguration::default(), |p| {
+        assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+        let assemblies: Vec<_> = p.parser.syntax.iter::<Asm<'_>>().collect();
+        assert_eq!(assemblies.len(), 4);
+        assert_eq!(assemblies[2].sections, 3);
+        assert_eq!(assemblies[2].operands.len(), 2);
+        assert!(assemblies[2].operands[0].output);
+        assert!(!assemblies[2].operands[1].output);
+        assert_eq!(
+            p.parser
+                .context
+                .string_cache
+                .at(assemblies[2].operands[0].name.unwrap().name),
+            "out"
+        );
+        assert_eq!(assemblies[3].sections, 4);
+        assert_eq!(assemblies[3].labels.len(), 1);
+        let builtins: Vec<_> = p.parser.syntax.iter::<Builtin<'_>>().collect();
+        assert_eq!(builtins.len(), 4);
+        assert!(matches!(
+            builtins[0].operands.as_slice(),
+            [SyntaxOperand::Expression(_), SyntaxOperand::Type(_)]
+        ));
+        assert_eq!(builtins[1].members.len(), 1);
+        assert!(
+            builtins[2]
+                .operands
+                .iter()
+                .all(|x| matches!(x, SyntaxOperand::Type(_)))
+        );
+        assert_eq!(builtins[3].operands.len(), 3);
+        let designators: Vec<_> = p.parser.syntax.iter::<Designator<'_>>().collect();
+        assert!(matches!(designators[0].kind, DesignatorType::Range(_)));
+        assert!(matches!(designators[1].kind, DesignatorType::GnuField(_)));
+    });
+    super::with_parsed(source, |unit, context| {
+        assert!(context.pop_pending_error().is_none());
+        let output = unit.inspect(
+            context.tu_arena(),
+            context,
+            super::super::InspectionOptions {
+                show_locations: true,
+            },
+        );
+        for text in [
+            "__attribute__((...))",
+            "__int128",
+            "__auto_type",
+            "asm sections=0",
+            "asm sections=3",
+            "asm sections=4",
+            "symbolic-name out",
+            "goto-label L",
+            "local-label L",
+            "nested-function",
+            "label-address L",
+            "computed-goto",
+            "case-range",
+            "cast",
+            "old-field-designator x",
+            "array-range-designator",
+            "builtin __builtin_va_arg",
+            "builtin __builtin_offsetof",
+            "builtin __builtin_types_compatible_p",
+            "builtin __builtin_choose_expr",
+            "statement-expression",
+            "omitted middle",
+            "__real__",
+            "__imag__",
+        ] {
+            assert!(output.contains(text), "missing {text}: {output}");
+        }
+    });
+}
+
+#[test]
+fn gnu_nesting_and_builtin_expression_delimiters_use_frames() {
+    let mut expression = "1".to_owned();
+    for _ in 0..256 {
+        expression = format!("({{ {expression}; }})");
+    }
+    let source = format!("int f(void){{return {expression};}}\n");
+    with_parse_configuration(&source, CompilerConfiguration::default(), |p| {
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+    });
+    let mut expression = "1".to_owned();
+    for _ in 0..256 {
+        expression = format!("__builtin_choose_expr(1,{expression},3)");
+    }
+    let source = format!("int f(void){{return {expression};}}\n");
+    with_parse_configuration(&source, CompilerConfiguration::default(), |p| {
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+    });
+    let source = "int f(int x){__asm__(\"\":\"=r\"((x,x)):\"r\"(x,x)); return \
+                  __builtin_offsetof(struct S,a[1,2].b);}\n";
+    with_parse_configuration(source, CompilerConfiguration::default(), |p| {
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+    });
+}
+
+#[test]
+fn macro_extension_suppression_preserves_unsuppressed_occurrences() {
+    let source = "#define GNU __int128\n__extension__ GNU a;\nGNU b;\n";
+    with_parse_configuration(
+        source,
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Warn),
+        |p| {
+            assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
+            assert!(p.errors[0].to_string().contains("__int128"));
+        },
+    );
+}
+
+#[test]
+fn alternate_keyword_spellings_reuse_iso_syntax_in_every_revision() {
+    let source = "__inline __inline__ int f(__const __const__ __volatile __volatile__ __signed \
+                  int * __restrict __restrict__ p){return __alignof(*p)+__alignof__(int); } \
+                  __signed__ int x;\n";
+    for standard in [CStandard::C89, CStandard::C99, CStandard::C23] {
+        with_parse_configuration(
+            source,
+            CompilerConfiguration::new(standard, ExtensionPolicy::Warn)
+                .with_repeated_specifier_warnings(false),
+            |p| {
+                assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+                assert!(p.errors.iter().any(|x| x.to_string().contains("__inline")));
+            },
+        );
+    }
+}
+
+#[test]
+fn gnu_designator_and_macro_nodes_retain_complete_provenance() {
+    with_parse_configuration(
+        "int a[4]={[1 ... 3]=2}; struct S{int x;}; struct S s={x:1};\n",
+        CompilerConfiguration::default(),
+        |p| {
+            let nodes: Vec<_> = p
+                .parser
+                .syntax
+                .iter::<super::super::declaration_syntax::Designator<'_>>()
+                .collect();
+            assert_eq!(super::sourced_text(p, nodes[0].source_vectors), "[1...3]");
+            assert_eq!(super::sourced_text(p, nodes[1].source_vectors), "x:");
+        },
+    );
+    let source = "#define GNU(expr) ({expr;})\nint f(void){return GNU(1);}\n";
+    with_parse_configuration(source, CompilerConfiguration::default(), |p| {
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+        let expression = p
+            .parser
+            .syntax
+            .iter::<super::super::syntax::Expression<'_>>()
+            .find(|x| {
+                matches!(
+                    x.kind,
+                    super::super::syntax::ExpressionType::StatementExpression(_)
+                )
+            })
+            .expect("macro statement expression survives");
+        assert!(matches!(
+            expression.kind,
+            super::super::syntax::ExpressionType::StatementExpression(_)
+        ));
+        assert_eq!(super::sourced_text(p, expression.source_vectors), "({1;})");
+    });
+}
+
+#[test]
+fn extension_marked_nested_definition_suppresses_its_head_and_body_only() {
+    let source = "int f(void){ __extension__ int nested(void){return ({1;});} return ({2;}); }\n";
+    with_parse_configuration(
+        source,
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Warn),
+        |p| {
+            assert_eq!(parser_errors(p).count(), 0);
+            assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
+            assert!(p.errors[0].to_string().contains("statement expression"));
+        },
+    );
+}
+
+#[test]
+fn allocation_fixture_has_complete_gnu_syntax() {
+    let source = "__attribute__((used)) unsigned __int128 wide[0]; __typeof__(wide) copy; \
+                  __auto_type value=1; struct Empty {}; __asm__(\"nop\"); int f(void){__label__ \
+                  L; int nested(int x){return x;} int a[4]={[1 ... 3]=2}; struct S{int x;}; \
+                  struct S s={x:1}; __asm__ \
+                  volatile(\"\":[out]\"=r\"(value):\"r\"(value):\"memory\"); __asm__ \
+                  goto(\"\"::::L); void *p=&&L; goto *p; L: return __extension__ ({ \
+                  __builtin_va_arg(ap,int)+__builtin_offsetof(struct \
+                  S,x)+__builtin_types_compatible_p(int,long)+__builtin_choose_expr(1,__real__ \
+                  value,__imag__ value); }) ?: 2;}\n";
+
+    with_parse_configuration(source, CompilerConfiguration::default(), |p| {
+        assert!(p.errors.is_empty(), "{:?}", p.errors);
+    });
+}
+
+#[test]
+fn omitted_conditional_retains_written_source_without_duplicating_condition() {
+    with_parse_configuration(
+        "int f(int a){return a ?: 2;}\n",
+        CompilerConfiguration::default(),
+        |p| {
+            let expression = p
+                .parser
+                .syntax
+                .iter::<super::super::syntax::Expression<'_>>()
+                .find(|x| {
+                    matches!(
+                        x.kind,
+                        super::super::syntax::ExpressionType::OmittedConditional(_)
+                    )
+                })
+                .unwrap();
+            assert_eq!(super::sourced_text(p, expression.source_vectors), "a?:2");
+        },
+    );
+}
+
+#[test]
+fn label_attributes_before_extension_expressions_preserve_statement_ownership() {
+    with_parse_configuration(
+        "int f(void){ L: __attribute__((unused)) __extension__ ({1;}); return 0; }\n",
+        CompilerConfiguration::default(),
+        |p| {
+            assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+            assert!(
+                p.parser
+                    .syntax
+                    .iter::<super::super::syntax::Expression<'_>>()
+                    .any(|x| matches!(
+                        x.kind,
+                        super::super::syntax::ExpressionType::StatementExpression(_)
+                    ))
+            );
+        },
+    );
+}

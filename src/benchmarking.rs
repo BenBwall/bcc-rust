@@ -362,6 +362,27 @@ pub fn parse_source(source: &str) -> ParseBenchmarkSummary {
     summarize_parse(&tu, Path::new("<input>"), source)
 }
 
+/// Runs phases 1 through 7 with all MSVC groups enabled, for allocation tests.
+#[doc(hidden)]
+#[must_use]
+pub fn parse_msvc_source(source: &str) -> ParseBenchmarkSummary {
+    let tu = Bump::new();
+    let source = tu.alloc_str(source);
+    let mut context = benchmark_context(&tu);
+    context.configuration = context.configuration.with_msvc_extensions(true);
+    let unit = crate::pipeline::parse_translation_unit(
+        &mut context,
+        Path::new("<input>"),
+        source,
+        &[],
+        &[],
+    );
+    ParseBenchmarkSummary {
+        external_declarations: unit.external_declarations().len(),
+        diagnostics:           context.pending_error_count(),
+    }
+}
+
 /// Reads `path` and runs translation phases 1 through 7 over it as the CLI
 /// does, with no include directories, and summarizes the parse.
 ///

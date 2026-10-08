@@ -1,1 +1,1 @@
-int value; λ
+struct S { const λ; };

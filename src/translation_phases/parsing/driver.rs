@@ -178,6 +178,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             binding_scan: ArenaVec::new_in(arena),
             recovery: RecoveryState::new_in(arena),
             hard_error_count: 0,
+            pedantic_suppression: 0,
+            switch_floor: 0,
             active_frame: ParseFrameKind::ExternalDeclaration,
             has_external_declaration: false,
             reported_empty_translation_unit: false,
@@ -358,7 +360,31 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
 
             match action {
                 | ParseAction::Consume =>
-                    if token.is_some() {
+                    if let Some(token) = token {
+                        if !self.context.pending_errors.is_empty()
+                            && matches!(token.kind, TokenType::Keyword(_))
+                            && (self.pedantic_suppression != 0
+                                || token.kind == TokenType::Keyword(KeywordTokenType::Extension))
+                        {
+                            let mut errors = std::mem::replace(
+                                &mut self.context.pending_errors,
+                                crate::util::bump::ArenaQueue::new_in(self.tree),
+                            );
+                            // Macro uses may share the replacement token's
+                            // source vectors.
+                            // Remove only the current occurrence's queued
+                            // keyword diagnostic.
+                            let mut removed = false;
+                            errors.retain(|error| {
+                                if !removed && matches!(error, TranslationError::Extension(x) if self.context.get_source_vectors(x.source_vectors) == self.context.get_source_vectors(token.source_vectors)) {
+                                    removed = true;
+                                    false
+                                } else {
+                                    true
+                                }
+                            });
+                            self.context.pending_errors = errors;
+                        }
                         self.cursor.consume();
                     } else {
                         self.report(
@@ -530,6 +556,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         self.scopes.clear_retained_bindings();
         self.label_scopes.exit_all();
         self.switch_scopes.clear();
+        self.switch_floor = 0;
+        self.pedantic_suppression = 0;
         Some(ExternalDeclaration::Error(source_vectors))
     }
 
@@ -860,10 +888,156 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// PDF p. 120), and `inline` (§6.7.4, p. 112; PDF p. 124); typedef-name
     /// is a type-specifier under §6.7.2, p. 99; PDF p. 111. `_Imaginary` is
     /// accepted here so the specifier frame can diagnose it.
+    /// Reports a syntax feature through the shared mode policy.
+    /// C99: §5.1.1.3, p. 11; PDF p. 23. Later ISO syntax is an extension.
+    pub(super) fn extension(
+        &mut self,
+        feature: crate::configuration::Feature,
+        spelling: &'static str,
+        token: Token,
+    ) {
+        self.extension_source(feature, spelling, token.source_vectors);
+    }
+
+    pub(super) fn extension_source(
+        &mut self,
+        feature: crate::configuration::Feature,
+        spelling: &'static str,
+        source: SourceVectors,
+    ) {
+        if self.pedantic_suppression == 0 {
+            self.context.report_extension(feature, spelling, source);
+        }
+    }
+
+    pub(super) fn extension_precedes_declaration(&self) -> bool {
+        let mut offset = 0;
+        let mut token = self.cursor.current();
+        while token.is_some_and(|x| x.kind == TokenType::Keyword(KeywordTokenType::Extension)) {
+            token = self.cursor.lookahead(offset);
+            offset += 1;
+        }
+        token.is_some_and(|x| self.declaration_starter(x))
+    }
+
+    /// Reports unambiguous C99 grammar absent from the grouped feature table.
+    /// C99: array declarators §6.7.5 paragraph 1, p. 114; PDF p. 126.
+    pub(super) fn c99_syntax_extension(&mut self, spelling: &'static str, token: Token) {
+        if self.pedantic_suppression == 0 {
+            self.context.report_extension_since(
+                spelling,
+                crate::configuration::FeatureOrigin::Standard(crate::configuration::CStandard::C99),
+                token.source_vectors,
+            );
+        }
+    }
+
+    pub(super) fn attributes_precede_declaration(&self) -> bool {
+        let mut offset = 0;
+        let mut token = self.cursor.current();
+        loop {
+            let parenthesized = token.is_some_and(|x| {
+                matches!(
+                    x.kind,
+                    TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec)
+                )
+            });
+            let mut depth = 0usize;
+            let mut opened = false;
+            while let Some(current) = token {
+                match current.kind {
+                    | TokenType::Operator(OperatorTokenType::OpeningParenthesis) if parenthesized =>
+                    {
+                        depth += 1;
+                        opened = true;
+                    },
+                    | TokenType::Operator(OperatorTokenType::ClosingParenthesis) if parenthesized =>
+                        depth = depth.saturating_sub(1),
+                    | TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                        if !parenthesized =>
+                    {
+                        depth += 1;
+                        opened = true;
+                    },
+                    | TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                        if !parenthesized =>
+                        depth = depth.saturating_sub(1),
+                    | TokenType::Operator(
+                        OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace,
+                    ) => return false,
+                    | _ => {},
+                }
+                token = self.cursor.lookahead(offset);
+                offset += 1;
+                if opened && depth == 0 {
+                    break;
+                }
+            }
+            let Some(mut current) = token else {
+                return false;
+            };
+            while current.kind == TokenType::Keyword(KeywordTokenType::Extension) {
+                token = self.cursor.lookahead(offset);
+                offset += 1;
+                let Some(next) = token else { return false };
+                current = next;
+            }
+            if matches!(
+                current.kind,
+                TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec)
+            ) || current.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                && self.cursor.lookahead(offset).is_some_and(|x| {
+                    x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                })
+            {
+                continue;
+            }
+            return self.declaration_starter(current);
+        }
+    }
+
+    pub(super) fn attribute_starter(&self, token: Option<Token>) -> bool {
+        token.is_some_and(|x| {
+            matches!(
+                x.kind,
+                TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec)
+            )
+        }) || token
+            .is_some_and(|x| x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket))
+            && self.cursor.following().is_some_and(|x| {
+                x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+            })
+    }
+
     pub(super) fn declaration_starter(&self, token: Token) -> bool {
         match token.kind {
             | TokenType::Keyword(
-                KeywordTokenType::Auto
+                KeywordTokenType::Alignas
+                | KeywordTokenType::Atomic
+                | KeywordTokenType::Noreturn
+                | KeywordTokenType::ThreadLocal
+                | KeywordTokenType::BitInt
+                | KeywordTokenType::Decimal32
+                | KeywordTokenType::Decimal64
+                | KeywordTokenType::Decimal128
+                | KeywordTokenType::Constexpr
+                | KeywordTokenType::Int128
+                | KeywordTokenType::Int8
+                | KeywordTokenType::Int16
+                | KeywordTokenType::Int32
+                | KeywordTokenType::Int64
+                | KeywordTokenType::Ptr32
+                | KeywordTokenType::Ptr64
+                | KeywordTokenType::Unaligned
+                | KeywordTokenType::W64
+                | KeywordTokenType::Sptr
+                | KeywordTokenType::Uptr
+                | KeywordTokenType::AutoType
+                | KeywordTokenType::Extension
+                | KeywordTokenType::Typeof
+                | KeywordTokenType::TypeofUnqual
+                | KeywordTokenType::StaticAssert
+                | KeywordTokenType::Auto
                 | KeywordTokenType::Char
                 | KeywordTokenType::Complex
                 | KeywordTokenType::Const
@@ -873,6 +1047,12 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Float
                 | KeywordTokenType::Imaginary
                 | KeywordTokenType::Inline
+                | KeywordTokenType::Forceinline
+                | KeywordTokenType::Cdecl
+                | KeywordTokenType::Stdcall
+                | KeywordTokenType::Fastcall
+                | KeywordTokenType::Vectorcall
+                | KeywordTokenType::Thiscall
                 | KeywordTokenType::Int
                 | KeywordTokenType::Long
                 | KeywordTokenType::Register
@@ -889,7 +1069,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Bool,
             ) => true,
             | TokenType::Identifier => self.scopes.is_typedef(token.contents),
-            | _ => false,
+            | _ => self.attribute_starter(Some(token)),
         }
     }
 
@@ -902,7 +1082,27 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     pub(super) fn type_name_starter(&self, token: Token) -> bool {
         match token.kind {
             | TokenType::Keyword(
-                KeywordTokenType::Char
+                KeywordTokenType::Alignas
+                | KeywordTokenType::Atomic
+                | KeywordTokenType::BitInt
+                | KeywordTokenType::Decimal32
+                | KeywordTokenType::Decimal64
+                | KeywordTokenType::Decimal128
+                | KeywordTokenType::Int128
+                | KeywordTokenType::Int8
+                | KeywordTokenType::Int16
+                | KeywordTokenType::Int32
+                | KeywordTokenType::Int64
+                | KeywordTokenType::Ptr32
+                | KeywordTokenType::Ptr64
+                | KeywordTokenType::Unaligned
+                | KeywordTokenType::W64
+                | KeywordTokenType::Sptr
+                | KeywordTokenType::Uptr
+                | KeywordTokenType::AutoType
+                | KeywordTokenType::Typeof
+                | KeywordTokenType::TypeofUnqual
+                | KeywordTokenType::Char
                 | KeywordTokenType::Complex
                 | KeywordTokenType::Const
                 | KeywordTokenType::Double
@@ -922,11 +1122,14 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Bool,
             ) => true,
             | TokenType::Identifier => self.scopes.is_typedef(token.contents),
-            | _ => false,
+            | _ => self.attribute_starter(Some(token)),
         }
     }
 
     pub(super) fn declaration_recovery_starts_here(&mut self, token: Token) -> bool {
+        if token.kind == TokenType::Keyword(KeywordTokenType::Extension) {
+            return self.extension_precedes_declaration();
+        }
         self.declaration_starter(token)
             && (token.kind != TokenType::Identifier || self.typedef_name_continues_specifiers())
     }
@@ -1050,11 +1253,16 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     fn expression_children_recovered(kind: &ExpressionType<'tu>) -> bool {
         let expression_recovered = |expression: &Expression<'_>| expression.recovered;
         match kind {
+            | ExpressionType::StatementExpression(x) => x.recovered,
+            | ExpressionType::Builtin(x) => x.recovered,
+            | ExpressionType::OmittedConditional(x) =>
+                x.condition_expression.recovered || x.else_expression.recovered,
             | ExpressionType::Parenthesized { expression }
             | ExpressionType::Unary {
                 operand_expression: expression,
                 ..
             }
+            | ExpressionType::AlignofExpr(expression)
             | ExpressionType::SizeofExpr(expression) => expression_recovered(expression),
             | ExpressionType::Conditional(ConditionalExpression {
                 condition_expression,
@@ -1087,12 +1295,28 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 type_name,
                 initializer,
             } => type_name.recovered || initializer.recovered,
-            | ExpressionType::SizeofType(type_name) => type_name.recovered,
+            | ExpressionType::SizeofType(type_name) | ExpressionType::AlignofType(type_name) =>
+                type_name.recovered,
+            | ExpressionType::Countof(operand) => match operand {
+                | super::modern::SyntaxOperand::Type(x) => x.recovered,
+                | super::modern::SyntaxOperand::Expression(x) => x.recovered,
+            },
+            | ExpressionType::Generic(selection) =>
+                (match selection.controlling {
+                    | super::modern::SyntaxOperand::Type(x) => x.recovered,
+                    | super::modern::SyntaxOperand::Expression(x) => x.recovered,
+                }) || selection
+                    .associations
+                    .iter()
+                    .any(|x| x.expression.recovered || x.type_name.is_some_and(|x| x.recovered)),
             | ExpressionType::Cast {
                 target_type,
                 operand_expression,
             } => target_type.recovered || expression_recovered(operand_expression),
             | ExpressionType::Error => true,
+            | ExpressionType::LabelAddress(_)
+            | ExpressionType::Boolean(_)
+            | ExpressionType::Nullptr
             | ExpressionType::Identifier(..)
             | ExpressionType::Constant(..)
             | ExpressionType::StringLiteral(..) => false,
