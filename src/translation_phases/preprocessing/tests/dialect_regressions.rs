@@ -19,14 +19,15 @@ use crate::configuration::MsvcFeature;
 /// Runs `observe_paths` on another thread and fails, rather than hanging the
 /// suite, when preprocessing does not finish.
 fn observe_terminating(
-    source: &'static str,
+    source: &str,
     config: CompilerConfiguration,
     directories: Vec<PathBuf>,
 ) -> (Vec<String>, Vec<String>) {
     let (sender, receiver) = mpsc::channel();
+    let owned = source.to_owned();
     drop(std::thread::spawn(move || {
         drop(sender.send(observe_paths(
-            source,
+            &owned,
             config,
             PathBuf::from("<test>"),
             &directories,
@@ -407,4 +408,17 @@ fn warning_directive_formats_its_message_like_error() {
             "Error: #error stop"
         ]
     );
+}
+
+/// C23 §6.7.13.2p2 lists `_Noreturn` among the standard attributes, with
+/// the value of `noreturn` (§6.7.13.7p1, p5).
+#[test]
+fn has_c_attribute_reports_noreturn_spellings() {
+    for operand in ["noreturn", "_Noreturn", "__noreturn__"] {
+        let source =
+            format!("#if __has_c_attribute({operand}) == 202311L\nyes\n#else\nno\n#endif\n");
+        let (tokens, errors) = observe(&source, mode(CStandard::C23));
+        assert!(errors.is_empty(), "{operand}: {errors:?}");
+        assert_eq!(texts(&tokens), "yes", "{operand}");
+    }
 }

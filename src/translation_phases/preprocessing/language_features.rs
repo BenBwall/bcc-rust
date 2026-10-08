@@ -497,10 +497,12 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                         return Some(self.integer_pp_token(0, token.source_vectors));
                     }
                     match (name, &*operand) {
+                        // C23 §6.7.13.2p2, p. 143; PDF p. 156: the standard
+                        // attributes, `_Noreturn` included (§6.7.13.7p1).
                         | (
                             "__has_c_attribute",
                             "deprecated" | "fallthrough" | "nodiscard" | "maybe_unused"
-                            | "noreturn" | "unsequenced" | "reproducible",
+                            | "noreturn" | "_Noreturn" | "unsequenced" | "reproducible",
                         ) => 202_311,
                         | (
                             "__has_attribute",
