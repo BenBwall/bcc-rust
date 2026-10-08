@@ -215,11 +215,9 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                         .context
                         .merge_vectors(member.source_vectors, x.source_vectors);
                 }
-                self.member_source = Some(
-                    parser
-                        .context
-                        .merge_vectors(self.member_source.unwrap_or_default(), x.source_vectors),
-                );
+                parser
+                    .context
+                    .merge_into(&mut self.member_source, x.source_vectors);
                 self.phase = StructOrUnionPhase::AfterStructDeclarator;
                 ParseAction::Continue
             },
@@ -480,10 +478,9 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 self.member_declarator = declarator;
                 if let Some(source_vectors) = declarator.map(|declarator| declarator.source_vectors)
                 {
-                    self.member_source =
-                        Some(self.member_source.map_or(source_vectors, |existing| {
-                            parser.context.merge_vectors(existing, source_vectors)
-                        }));
+                    parser
+                        .context
+                        .merge_into(&mut self.member_source, source_vectors);
                     self.current_member_declarator_source = Some(source_vectors);
                 }
                 self.phase = StructOrUnionPhase::AfterMemberDeclarator;
@@ -541,15 +538,12 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 };
                 self.width_recovered = recovered;
                 let source_vectors = index.expression().source_vectors;
-                self.member_source = Some(self.member_source.map_or(source_vectors, |existing| {
-                    parser.context.merge_vectors(existing, source_vectors)
-                }));
-                self.current_member_declarator_source = Some(
-                    self.current_member_declarator_source
-                        .map_or(source_vectors, |existing| {
-                            parser.context.merge_vectors(existing, source_vectors)
-                        }),
-                );
+                parser
+                    .context
+                    .merge_into(&mut self.member_source, source_vectors);
+                parser
+                    .context
+                    .merge_into(&mut self.current_member_declarator_source, source_vectors);
                 let source_vectors = self
                     .current_member_declarator_source
                     .take()

@@ -349,10 +349,9 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | StatementPhase::AwaitComputedGoto => {
                 let expression = super::machine::any_expression_value(returned);
                 let slot = ExpressionSlot::Parsed(expression);
-                self.source_vectors = Some(parser.context.merge_vectors(
-                    self.source_vectors.unwrap_or_default(),
-                    expression.source_vectors,
-                ));
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, expression.source_vectors);
                 self.phase = StatementPhase::ComputedGotoSemicolon(slot);
                 ParseAction::Continue
             },
@@ -1478,9 +1477,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     panic!("for declaration returned an unexpected value: {returned:?}");
                 };
                 let source = declaration.source_vectors;
-                self.source_vectors = Some(self.source_vectors.map_or(source, |existing| {
-                    parser.context.merge_vectors(existing, source)
-                }));
+                parser.context.merge_into(&mut self.source_vectors, source);
                 // A for-initializer declaration ends at the header's `)`
                 // without reporting when its own `;` is missing; that `;`
                 // belongs to the initializer, not to the condition.

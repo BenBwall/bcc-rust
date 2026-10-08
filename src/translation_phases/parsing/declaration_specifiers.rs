@@ -201,11 +201,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                     };
                     self.specifiers.type_specifiers =
                         TypeSpecifiers::Extended(parser.alloc_syntax(kind));
-                    self.source_vectors = Some(
-                        parser
-                            .context
-                            .merge_vectors(self.source_vectors.unwrap_or_default(), source),
-                    );
+                    parser.context.merge_into(&mut self.source_vectors, source);
                 }
                 self.phase = DeclarationSpecifiersPhase::Collect;
                 self.consumed = true;
@@ -228,10 +224,9 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                     .make_struct_or_union(parser, index, token);
                 {
                     let source_vectors = index.source_vectors;
-                    self.source_vectors =
-                        Some(self.source_vectors.map_or(source_vectors, |existing| {
-                            parser.context.merge_vectors(existing, source_vectors)
-                        }));
+                    parser
+                        .context
+                        .merge_into(&mut self.source_vectors, source_vectors);
                 }
                 self.consumed = true;
                 self.phase = DeclarationSpecifiersPhase::Collect;
@@ -257,10 +252,9 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                     .make_enum(parser, index, token);
                 {
                     let source_vectors = index.source_vectors;
-                    self.source_vectors =
-                        Some(self.source_vectors.map_or(source_vectors, |existing| {
-                            parser.context.merge_vectors(existing, source_vectors)
-                        }));
+                    parser
+                        .context
+                        .merge_into(&mut self.source_vectors, source_vectors);
                 }
                 self.consumed = true;
                 if stopped_before_declaration {
@@ -799,11 +793,9 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             next: self.specifiers.extensions,
             source_vectors,
         }));
-        self.source_vectors = Some(
-            parser
-                .context
-                .merge_vectors(self.source_vectors.unwrap_or_default(), source_vectors),
-        );
+        parser
+            .context
+            .merge_into(&mut self.source_vectors, source_vectors);
     }
 
     /// Diagnoses a finished list whose `_Complex` never received `float`,

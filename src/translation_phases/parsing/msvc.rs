@@ -341,10 +341,9 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
                 let Some(ParseValue::CompoundStatement(child)) = returned else {
                     panic!("SEH compound child protocol")
                 };
-                self.source_vectors = Some(parser.context.merge_vectors(
-                    self.source_vectors.unwrap_or_default(),
-                    child.source_vectors,
-                ));
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, child.source_vectors);
                 if matches!(self.phase, Phase::AwaitTryBody) {
                     self.body = Some(child);
                     self.phase = Phase::Handler;
@@ -419,10 +418,9 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
             | Phase::AwaitFilter => {
                 let expression = any_expression_value(returned);
                 self.filter = Some(expression);
-                self.source_vectors = Some(parser.context.merge_vectors(
-                    self.source_vectors.unwrap_or_default(),
-                    expression.source_vectors,
-                ));
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, expression.source_vectors);
                 self.phase = Phase::FilterClose;
                 ParseAction::Continue
             },

@@ -300,11 +300,9 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 };
                 self.direct_declarators
                     .push(DirectDeclarator::AsmLabel(asm));
-                self.source_vectors = Some(
-                    parser
-                        .context
-                        .merge_vectors(self.source_vectors.unwrap_or_default(), asm.source_vectors),
-                );
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, asm.source_vectors);
                 self.phase = DeclaratorPhase::Suffix;
                 Some(ParseAction::Continue)
             },
@@ -312,10 +310,9 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 let Some(ParseValue::Modern(ModernValue::Attributes(attributes))) = returned else {
                     panic!("declarator attributes protocol: {returned:?}")
                 };
-                self.source_vectors = Some(parser.context.merge_vectors(
-                    self.source_vectors.unwrap_or_default(),
-                    attributes.source_vectors,
-                ));
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, attributes.source_vectors);
                 if matches!(self.phase, DeclaratorPhase::AwaitPointerAttributes) {
                     // C23 §6.7.7.2p1: attributes after a `*` appertain to
                     // that pointer.
@@ -525,10 +522,9 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     return ParseAction::Reprocess;
                 };
                 let source_vectors = declarator.source_vectors;
-                self.source_vectors =
-                    Some(self.source_vectors.map_or(source_vectors, |existing| {
-                        parser.context.merge_vectors(existing, source_vectors)
-                    }));
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, source_vectors);
                 self.nested = Some(ParenthesizedDeclarator {
                     declarator,
                     delimiters: self.nested_open.take().unwrap_or_default(),
@@ -758,10 +754,9 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     let source_vectors = index.source_vectors;
                     check_array_extension(parser, index);
                     self.array_assignment_expression = Some(index);
-                    self.source_vectors =
-                        Some(self.source_vectors.map_or(source_vectors, |existing| {
-                            parser.context.merge_vectors(existing, source_vectors)
-                        }));
+                    parser
+                        .context
+                        .merge_into(&mut self.source_vectors, source_vectors);
                 }
                 if is_operator(token, OperatorTokenType::ClosingSquareBracket) {
                     let token = token.expect("closing-square-bracket token exists");
@@ -853,10 +848,9 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 else {
                     panic!("parameter list returned an unexpected value: {returned:?}");
                 };
-                self.source_vectors =
-                    Some(self.source_vectors.map_or(source_vectors, |existing| {
-                        parser.context.merge_vectors(existing, source_vectors)
-                    }));
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, source_vectors);
                 self.direct_declarators.push(direct_declarator);
                 self.has_direct_declarator = true;
                 self.phase = DeclaratorPhase::Suffix;

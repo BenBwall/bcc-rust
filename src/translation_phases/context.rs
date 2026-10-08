@@ -674,6 +674,16 @@ impl<'tu> Context<'tu> {
     /// range, or before one that starts where it points, adds nothing and is
     /// dropped. Keeping it would break adjacency, so every enclosing node of
     /// recovered syntax would copy its whole provenance again.
+    /// Appends `source` to the provenance accumulated in `existing`, which
+    /// is `None` until something has been merged into it.
+    pub(crate) fn merge_into(
+        &mut self,
+        existing: &mut Option<SourceVectors>,
+        source: SourceVectors,
+    ) {
+        *existing = Some(existing.map_or(source, |existing| self.merge_vectors(existing, source)));
+    }
+
     pub(crate) fn merge_vectors(&mut self, v1: SourceVectors, v2: SourceVectors) -> SourceVectors {
         if v1.length() == 0 {
             return v2;

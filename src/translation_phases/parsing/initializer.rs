@@ -788,9 +788,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     ) => nesting = nesting.saturating_sub(1),
                     | _ => {},
                 }
-                source = Some(source.map_or(token.source_vectors, |existing| {
-                    parser.context.merge_vectors(existing, token.source_vectors)
-                }));
+                parser.context.merge_into(&mut source, token.source_vectors);
                 self.phase = InitializerPhase::SkipMalformedElement(nesting, source);
                 ParseAction::Consume
             },
