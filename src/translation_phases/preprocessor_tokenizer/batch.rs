@@ -1036,6 +1036,7 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
     /// C99: maximal munch §6.4p4, p. 50; PDF p. 62; `preprocessing-token`
     /// §6.4p1, p. 49; PDF p. 61. Header names are deferred to `#include`
     /// handling (§6.4.7, pp. 64-65; PDF pp. 76-77).
+    #[inline(always)]
     fn lex_token(&mut self, start: usize, position: SourcePosition, byte: u8) -> Lexed {
         use PreprocessorTokenType as T;
         match byte {
@@ -1292,6 +1293,7 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
     /// Extends a `pp-number`, including exponent sign and identifier suffix.
     /// C99: §6.4.8p1-4, p. 65; PDF p. 77; maximal munch §6.4p4, p. 50;
     /// PDF p. 62.
+    #[inline(always)]
     fn lex_number(&mut self, start: usize, mut end: usize) -> Lexed {
         loop {
             let run = byte_scan::number_run(&self.bytes[end..]);

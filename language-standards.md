@@ -367,3 +367,66 @@ Allow/Warn/Deny policies, MSVC flags independently, written and expanded real
 resource paths, include-next chains, optional replacement examples from C23,
 and malformed/truncated input recovery. The diagnostic harness accepts optional
 `.args` sidecars to render the selected mode and policy.
+
+### Lexpp performance verification (8 October 2026)
+
+Baseline: foundation commit `f73b9cd`. Feature implementation: `2ee1605`, then
+named-variadic redefinition fix `d6b516a`. The final timing artifact is
+`d6b516a` plus the two `#[inline(always)]` annotations on `Lexer::lex_token`
+and `Lexer::lex_number`. The resource-header correction `228a5b9` affects
+query/resource paths absent from these three benchmark inputs. No parser-only
+performance claim is made: parser grammar and keyword classification are outside
+this workstream.
+
+Windows x86-64, Rust 1.99.0, native LLVM 23.1.1, static native C archive and
+Rust/C fat LTO; release builds with `benchmarking-internals`, without
+`portable-simd`. Both executables use the unchanged strict-C99 library benchmark
+configuration. Seven interleaved baseline/current runs alternate their order.
+Criterion parameters: 0.2 s warm-up, 0.5 s requested measurement, 10 samples;
+the preprocessor group overrides this to 20 samples and Criterion extends short
+measurement windows. Each cell below is the minimum **mean point estimate** of
+the seven runs, followed by that run's 95% bootstrap confidence interval, in ms.
+These are lexer-only and phases-1-through-6 timings, respectively.
+
+| Workload | Baseline min mean [95% CI], ms | Lexpp min mean [95% CI], ms | Change |
+| --- | ---: | ---: | ---: |
+| Lexer / one million lines | 496.22 [491.56, 501.66] | 470.93 [464.77, 479.87] | -5.1% |
+| Lexer / mixed c99 workload | 347.98 [346.38, 350.26] | 361.93 [360.26, 363.75] | +4.0% |
+| Lexer / macro-heavy workload | 109.64 [109.10, 110.25] | 116.97 [116.52, 117.42] | +6.7% |
+| Preprocessor / one million lines | 810.26 [800.85, 822.05] | 837.72 [820.95, 855.73] | +3.4% |
+| Preprocessor / mixed c99 workload | 707.33 [704.78, 710.17] | 722.01 [718.84, 725.44] | +2.1% |
+| Preprocessor / macro-heavy workload | 617.61 [614.72, 620.84] | 621.92 [620.04, 623.98] | +0.7% |
+
+An earlier seven-run comparison without the annotations measured +9.2% mixed
+and +10.8% macro-heavy lexer overhead. Symbol inspection showed that LLVM had
+outlined these two hot methods after the additional feature arms enlarged them;
+the baseline had inlined both. The annotations restore that property. The
+remaining overhead is reported above, not treated as a parser improvement.
+
+The memory harness reports identical rounded arena high-water marks for baseline
+and the optimized lexpp build: PP arenas 145.9/144.3/55.0 MiB, expansion arenas
+0.1/0.1/37.7 KiB, parse arenas 1.6/10.5/9.5 KiB, and TU arenas
+238.4/181.0/147.1 MiB for the plain/mixed/macro workloads. Peak arena commits are
+526.1/454.1/344.6 MiB; peak regions are 8/9/8 (800/900/800 GiB reserved).
+OS peak commit and working set are unchanged to within 0.1 MiB: phases 1-6 commit
+458.9/412.8/227.0 MiB and working set 480.2/434.7/233.9 MiB; phases 1-7 commit
+528.0/455.9/346.1 MiB and working set 548.0/476.7/338.3 MiB.
+
+Temporary counters in isolated benchmark copies (including the final resource
+correction) count every iteration of the preprocessor driver's outer token loop
+and sample its live preprocessing provenance before that iteration. They are not
+part of the production changes. Output token counts, driver steps, and total
+retained source segments match the baseline exactly:
+
+| Input | Output tokens | Driver steps | Steps/token | Retained segments | Peak live PP vectors, baseline → lexpp |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| one million lines | 5,000,000 | 6,000,001 | 1.200 | 5,000,001 | 1 → 1 |
+| mixed C99 workload | 5,240,000 | 5,800,001 | 1.107 | 5,240,001 | 2 → 2 |
+| macro-heavy workload | 3,260,000 | 6,100,012 | 1.871 | 3,300,001 | 194 → 311 |
+
+The extra macro-definition preprocessing provenance is bounded by setup in this
+input and does not grow across its repeated expansions. Ordered provenance,
+macro/include locations, recovery, query-depth bounds and token values are
+covered by snapshots, structured tests and rendered diagnostics. All six
+canonical checks pass, including the eight feature-enabled allocation tests;
+rendering every diagnostic golden continues to require zero global allocations.
