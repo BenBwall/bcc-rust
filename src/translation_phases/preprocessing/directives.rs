@@ -49,6 +49,7 @@ use crate::{
         SourcePosition,
         SourceVectors,
         StrExt,
+        TranslationError,
         TranslationPhase,
         preprocessor_tokenizer::{
             LogicalCharacter,
@@ -627,6 +628,21 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     ///
     /// C99: `< h-char-sequence >`, §6.4.7 paragraph 1, p. 64; PDF p. 76, and
     /// §6.10.2 paragraph 2, p. 149; PDF p. 161.
+    /// Withdraws the extension diagnostics reported since the first
+    /// `reported` while lexing a written `<...>` header name as tokens: its
+    /// characters form no tokens (C99 §6.4.7p1, p. 64; PDF p. 76), so `$`
+    /// there is no identifier character. Other diagnostics stay.
+    #[cold]
+    fn withdraw_header_name_extensions(&mut self, reported: usize) {
+        let mut kept = ArenaVec::new_in(self.scratch);
+        kept.extend(
+            self.context
+                .split_off_pending_errors(reported)
+                .filter(|error| !matches!(error, TranslationError::Extension(_))),
+        );
+        self.context.append_pending_errors(kept);
+    }
+
     fn read_written_angle_header(&mut self, directive: PreprocessorToken) -> HeaderName<'x> {
         let open = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
             .expect("the operand was peeked");
@@ -642,7 +658,15 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let mut closing = None;
         let mut extra_after_closing = None;
         loop {
-            let Some(token) = self.tokenizer.next_item(self.context) else {
+            let reported = self.context.pending_error_count();
+            let token = self.tokenizer.next_item(self.context);
+            // A comment before the new-line ends the operand's text.
+            if self.context.pending_error_count() != reported
+                && token.is_some_and(|token| token.kind != PreprocessorTokenType::Newline)
+            {
+                self.withdraw_header_name_extensions(reported);
+            }
+            let Some(token) = token else {
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing include directive",

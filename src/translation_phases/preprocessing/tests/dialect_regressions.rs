@@ -502,3 +502,24 @@ fn imaginary_suffix_does_not_turn_a_suffix_into_a_digit() {
         assert_eq!(tokens.len(), 2, "{valid}: {tokens:?}");
     }
 }
+
+/// The characters of a written `<...>` header name are not identifiers
+/// (C99 §6.4.7), so `$` in one is no extension, as in `__has_include`.
+#[test]
+fn dollar_in_an_angle_header_name_is_not_an_identifier_extension() {
+    for config in [
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+        CompilerConfiguration::new(CStandard::C89, ExtensionPolicy::Warn).with_gnu_extensions(true),
+    ] {
+        let (_, errors) = observe("#include <$sdk/x.h>\nint $a;\n", config);
+        assert_eq!(
+            errors.iter().filter(|error| error.contains("'$'")).count(),
+            1,
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| error.contains("x.h")),
+            "{errors:?}"
+        );
+    }
+}
