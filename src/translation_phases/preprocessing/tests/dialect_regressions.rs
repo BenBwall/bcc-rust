@@ -197,3 +197,46 @@ fn msvc_comma_elision_does_not_expand_unused_variadic_arguments() {
         "const char * p [ ] = { \"__has_include(\\\"a.h\\\")\" , 1 } ; f ( 1 ) f ( 2 , 3 )"
     );
 }
+
+/// A lexer extension diagnostic belongs to the source text, so it is
+/// reported once however often phase 4 reads its token: in a macro body, a
+/// prescanned argument, or after a lookahead rewinds. Skipped groups stay
+/// silent (C99 §6.10.1p6).
+#[test]
+fn lexer_extension_diagnostics_are_reported_once_per_token() {
+    for (standard, source, feature) in [
+        (
+            CStandard::C99,
+            "#define ID(x) x\nint ID($a);\nint ID(ID($b));\n",
+            "'$'",
+        ),
+        (
+            CStandard::C89,
+            "#define ONE 1 // c\nint a = ONE; int b = ONE;\n",
+            "'//'",
+        ),
+        (CStandard::C99, "#define F(x) x\nint F\n$a;\n", "'$'"),
+        (
+            CStandard::C99,
+            "#define F(x) x\nint F($c) + F($c);\n",
+            "'$'",
+        ),
+    ] {
+        let (tokens, errors) = observe(
+            source,
+            CompilerConfiguration::new(standard, ExtensionPolicy::Warn).with_gnu_extensions(true),
+        );
+        let expected = source.matches(&feature[1..feature.len() - 1]).count();
+        let reported = errors
+            .iter()
+            .filter(|error| error.contains(feature))
+            .count();
+        assert_eq!(reported, expected, "{source}: {errors:?}");
+        assert!(!texts(&tokens).is_empty(), "{source}");
+    }
+    let (_, errors) = observe(
+        "#if 0\nint $a; // c\n#elif 0\n$b\n#endif\nint after;\n",
+        CompilerConfiguration::new(CStandard::C89, ExtensionPolicy::Warn).with_gnu_extensions(true),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+}

@@ -19,7 +19,10 @@
 //! real character. Non-newline whitespace is collapsed to one space, the
 //! implementation-defined choice in §5.1.1.2p3, p. 10; PDF p. 22.
 
-use std::ops::Range;
+use std::{
+    cell::Cell,
+    ops::Range,
+};
 
 use super::{
     super::initial_processing::terminal_splice_length,
@@ -467,6 +470,12 @@ pub(super) struct LexedFile<'a> {
     eof: SourcePosition,
     /// Sorted by entry.
     diagnostics: &'a [(u32, LexDiagnostic)],
+    /// Whether each extension diagnostic, by its index in `diagnostics`, was
+    /// reported. Its spelling is written once, so however often phase 4
+    /// reads the token (in a macro body, an argument prescan, or after a
+    /// lookahead rewinds), the diagnostic is reported once; reading it in a
+    /// skipped group, with tokenizer diagnostics ignored, does not count.
+    extensions_reported: &'a [Cell<bool>],
     /// Exact character spans for Other tokens, sorted by entry. Normal token
     /// spans still use the adjacent entry boundaries above.
     other_locations: &'a [(u32, SourceVector)],
@@ -527,6 +536,8 @@ impl<'arena> LexingFile<'arena, '_> {
             end_of_tokens,
             eof,
             diagnostics: arena.alloc_slice_copy(&diagnostics),
+            extensions_reported: arena
+                .alloc_slice_fill_iter(diagnostics.iter().map(|_| Cell::new(false))),
             other_locations: arena.alloc_slice_fill_iter(other_locations),
             final_newline_entry,
             final_newline_readers: arena.alloc_slice_copy(&final_newline_readers),
@@ -585,6 +596,11 @@ impl<'a> LexedFile<'a> {
             end_of_tokens:         self.end_of_tokens,
             eof:                   self.eof,
             diagnostics:           arena.alloc_slice_copy(self.diagnostics),
+            extensions_reported:   arena.alloc_slice_fill_iter(
+                self.extensions_reported
+                    .iter()
+                    .map(|reported| Cell::new(reported.get())),
+            ),
             other_locations:       arena
                 .alloc_slice_fill_iter(self.other_locations.iter().cloned()),
             final_newline_entry:   self.final_newline_entry,
@@ -753,9 +769,10 @@ impl<'a> LexedFile<'a> {
         let first = self
             .diagnostics
             .partition_point(|(owner, _)| *owner < entry);
-        for (_, diagnostic) in self.diagnostics[first..]
+        for ((_, diagnostic), reported) in self.diagnostics[first..]
             .iter()
-            .take_while(|(owner, _)| *owner == entry)
+            .zip(&self.extensions_reported[first..])
+            .take_while(|((owner, _), _)| *owner == entry)
         {
             match *diagnostic {
                 | LexDiagnostic::Extension {
@@ -764,7 +781,7 @@ impl<'a> LexedFile<'a> {
                     mut start,
                     length,
                 } =>
-                    if !context.ignore_tokenizer_errors() {
+                    if !context.ignore_tokenizer_errors() && !reported.replace(true) {
                         start.line = start.line.wrapping_add(line_delta);
                         let vectors =
                             context.create_source_vectors(start, source_file_index, length);
