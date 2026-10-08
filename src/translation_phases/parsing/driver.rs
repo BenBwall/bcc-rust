@@ -11,6 +11,10 @@
 //! translation limits, and the remaining resource ceilings are
 //! representation bounds only.
 
+use std::cell::Cell;
+
+use rustc_hash::FxBuildHasher;
+
 #[cfg(test)]
 use super::{
     FrameTrace,
@@ -71,6 +75,7 @@ use crate::{
         GetSeverity,
         GetSourceFileIndex,
         SourcePosition,
+        SourceVector,
         SourceVectors,
         TranslationError,
         preprocessing::{
@@ -85,12 +90,38 @@ use crate::{
     util::{
         arena_list::ArenaList,
         bump::{
+            ArenaMap,
+            ArenaQueue,
             ArenaVec,
             Bump,
         },
         region_vec::RegionVec,
     },
 };
+
+/// Each spelling/provenance pair owns its FIFO of diagnostic occurrences.
+/// Macro replacements can share provenance, so occurrences must not be merged.
+/// C99: §5.1.1.3, p. 11; PDF p. 23. GNU extension markers suppress only
+/// diagnostics in their owning parser frame, without reordering the queue.
+pub(super) type TokenDiagnostics<'tu, 'p> = ArenaMap<
+    'p,
+    (&'tu str, &'p [SourceVector], Option<SourceVector>),
+    ArenaQueue<'p, &'tu Cell<bool>>,
+>;
+
+/// A borrowed lookup keeps temporary context borrows out of stored key
+/// lifetimes.
+#[derive(Hash)]
+struct DiagnosticLookup<'a> {
+    spelling: &'a str,
+    vectors:  &'a [SourceVector],
+    user_end: Option<SourceVector>,
+}
+impl hashbrown::Equivalent<(&str, &[SourceVector], Option<SourceVector>)> for DiagnosticLookup<'_> {
+    fn equivalent(&self, key: &(&str, &[SourceVector], Option<SourceVector>)) -> bool {
+        self.spelling == key.0 && self.vectors == key.1 && self.user_end == key.2
+    }
+}
 
 impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// Preprocesses the whole translation unit, then creates an idle parser
@@ -158,6 +189,26 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     }
 
     fn with_upstream(upstream: Upstream, context: &'c mut Context<'tu>, arena: &'p Bump) -> Self {
+        let mut token_diagnostics: TokenDiagnostics<'tu, 'p> =
+            ArenaMap::with_hasher_in(FxBuildHasher, arena);
+        for error in context.pending_errors.iter() {
+            if let TranslationError::Extension(error) = error {
+                let vectors = arena.alloc_slice_fill_iter(
+                    context
+                        .get_source_vectors(error.source_vectors)
+                        .iter()
+                        .cloned(),
+                );
+                token_diagnostics
+                    .entry((
+                        error.spelling(),
+                        &*vectors,
+                        context.user_source_end(error.source_vectors),
+                    ))
+                    .or_insert_with(|| ArenaQueue::new_in(arena))
+                    .push_back(error.suppressed);
+            }
+        }
         Self {
             cursor: TokenCursor::new(upstream),
             arena,
@@ -179,6 +230,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             recovery: RecoveryState::new_in(arena),
             hard_error_count: 0,
             pedantic_suppression: 0,
+            token_diagnostics,
             switch_floor: 0,
             active_frame: ParseFrameKind::ExternalDeclaration,
             has_external_declaration: false,
@@ -361,30 +413,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             match action {
                 | ParseAction::Consume =>
                     if let Some(token) = token {
-                        if !self.context.pending_errors.is_empty()
-                            && matches!(token.kind, TokenType::Keyword(_))
-                            && (self.pedantic_suppression != 0
-                                || token.kind == TokenType::Keyword(KeywordTokenType::Extension))
-                        {
-                            let mut errors = std::mem::replace(
-                                &mut self.context.pending_errors,
-                                crate::util::bump::ArenaQueue::new_in(self.tree),
-                            );
-                            // Macro uses may share the replacement token's
-                            // source vectors.
-                            // Remove only the current occurrence's queued
-                            // keyword diagnostic.
-                            let mut removed = false;
-                            errors.retain(|error| {
-                                if !removed && matches!(error, TranslationError::Extension(x) if self.context.get_source_vectors(x.source_vectors) == self.context.get_source_vectors(token.source_vectors)) {
-                                    removed = true;
-                                    false
-                                } else {
-                                    true
-                                }
-                            });
-                            self.context.pending_errors = errors;
-                        }
+                        self.suppress_token_diagnostic(token);
                         self.cursor.consume();
                     } else {
                         self.report(
@@ -427,6 +456,44 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                         .merge_recovered_sources(self.context, recovered_source_vectors);
                 },
             }
+        }
+    }
+
+    /// Advances the diagnostic occurrence cursor even on recovery skips.
+    fn suppress_token_diagnostic(&mut self, token: Token) {
+        if self.token_diagnostics.is_empty() {
+            return;
+        }
+        match token.kind {
+            | TokenType::Keyword(_) => {
+                self.suppress_diagnostic_occurrence(token, None);
+            },
+            | TokenType::Integer(_) | TokenType::Float(_) => {
+                for spelling in [
+                    "imaginary constant",
+                    "long long integer constant",
+                    "hexadecimal floating constant",
+                    "binary integer constant",
+                ] {
+                    self.suppress_diagnostic_occurrence(token, Some(spelling));
+                }
+            },
+            | _ => {},
+        }
+    }
+
+    fn suppress_diagnostic_occurrence(&mut self, token: Token, spelling: Option<&str>) {
+        let spelling = spelling.unwrap_or_else(|| self.context.string_cache.at(token.contents));
+        let vectors = self.context.get_source_vectors(token.source_vectors);
+        if let Some(occurrences) = self.token_diagnostics.get_mut(&DiagnosticLookup {
+            spelling,
+            vectors,
+            user_end: self.context.user_source_end(token.source_vectors),
+        }) && let Some(suppressed) = occurrences.pop_front()
+            && (self.pedantic_suppression != 0
+                || token.kind == TokenType::Keyword(KeywordTokenType::Extension))
+        {
+            self.context.suppress_extension(suppressed);
         }
     }
 
@@ -718,6 +785,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 depth,
             });
             self.merge_source(&mut source_vectors, token);
+            self.suppress_token_diagnostic(token);
             self.cursor.consume();
             consumed_tokens += 1;
         }

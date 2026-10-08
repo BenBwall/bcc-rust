@@ -566,6 +566,29 @@ mod measurements {
     }
 
     #[test]
+    fn compiling_pedantic_suppression_allocates_only_from_arenas() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/diagnostics/language-extension-suppression.c");
+        let mut parse_calls = None;
+        let mut report_calls = None;
+        bcc_rust::compile_file_with_arguments_measured(
+            &path,
+            &["-std=c17", "-pedantic"],
+            &mut std::io::sink(),
+            |step, run| {
+                let totals = count(false, run);
+                match step {
+                    | bcc_rust::CompileStep::Parse => parse_calls = Some(totals),
+                    | bcc_rust::CompileStep::Report => report_calls = Some(totals),
+                }
+            },
+        )
+        .expect("suppression fixture compiles and renders");
+        assert_eq!(parse_calls, Some((0, 0)));
+        assert_eq!(report_calls, Some((0, 0)));
+    }
+
+    #[test]
     fn compiling_msvc_syntax_allocates_only_from_arenas() {
         let source = include_str!("fixtures/diagnostics/language/msvc-parser.c");
         let (summary, allocations) = count_compile(|| bcc_rust::parse_msvc_source(source));

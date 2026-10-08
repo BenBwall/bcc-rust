@@ -693,13 +693,6 @@ impl<'a, T> ArenaQueue<'a, T> {
         self.len() == 0
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Only the queue's own tests read it in order so far."
-        )
-    )]
     pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
         self.data[self.read..]
             .iter()

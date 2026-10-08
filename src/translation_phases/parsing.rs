@@ -185,6 +185,8 @@ pub(crate) struct Parser<'c, 'tu, 'p> {
     /// Number of hard parser diagnostics emitted so far.
     hard_error_count: usize,
     pedantic_suppression: usize,
+    /// Token diagnostics indexed once by spelling, provenance and invocation.
+    token_diagnostics: driver::TokenDiagnostics<'tu, 'p>,
     switch_floor: usize,
     /// Frame currently executing, captured into every parser diagnostic.
     active_frame: ParseFrameKind,

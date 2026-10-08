@@ -356,6 +356,7 @@ pub(crate) struct Context<'tu> {
     expansion_sites: [ExpansionSites<'tu>; 3],
     ignore_tokenizer_errors: bool,
     pub(super) pending_errors: ArenaQueue<'tu, TranslationError<'tu>>,
+    suppressed_errors: usize,
     /// How many leading pending errors no longer refer to the preprocessor
     /// arena, so compaction relocates each error's provenance only once.
     relocated_errors: usize,
@@ -419,6 +420,7 @@ impl<'tu> Context<'tu> {
             expansion_sites: std::array::from_fn(|_| ExpansionSites::new_in(tu)),
             ignore_tokenizer_errors: false,
             pending_errors: ArenaQueue::new_in(tu),
+            suppressed_errors: 0,
             relocated_errors: 0,
             source_files: DedupArena::new(tu),
             quote_include_directories: &[],
@@ -1028,13 +1030,29 @@ impl<'tu> Context<'tu> {
     #[cold]
     #[inline(never)]
     pub(crate) fn pop_pending_error(&mut self) -> Option<TranslationError<'tu>> {
-        let error = self.pending_errors.pop_front();
-        self.relocated_errors = self.relocated_errors.saturating_sub(1);
-        error
+        loop {
+            let error = self.pending_errors.pop_front()?;
+            self.relocated_errors = self.relocated_errors.saturating_sub(1);
+            if matches!(&error, TranslationError::Extension(x) if x.suppressed.get()) {
+                self.suppressed_errors -= 1;
+            } else {
+                return Some(error);
+            }
+        }
     }
 
     pub(crate) fn pending_error_count(&self) -> usize {
-        self.pending_errors.len()
+        if self.pending_errors.is_empty() {
+            return 0;
+        }
+        self.pending_errors.len() - self.suppressed_errors
+    }
+
+    /// Marks one arena-stable occurrence without scanning the diagnostic FIFO.
+    pub(crate) fn suppress_extension(&mut self, marker: &std::cell::Cell<bool>) {
+        if !marker.replace(true) {
+            self.suppressed_errors += 1;
+        }
     }
 
     #[cfg(test)]
@@ -1044,7 +1062,7 @@ impl<'tu> Context<'tu> {
     )]
     pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError<'tu>> {
         self.relocated_errors = 0;
-        std::iter::from_fn(|| self.pending_errors.pop_front()).collect()
+        std::iter::from_fn(|| self.pop_pending_error()).collect()
     }
 
     /// Removes and yields the pending errors after the first `keep`, in

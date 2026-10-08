@@ -3,10 +3,13 @@
 //! C99: §4p6, p. 7; PDF p. 19 permits extensions that preserve conforming
 //! programs. Diagnostics follow §5.1.1.3p1, p. 11; PDF p. 23.
 
-use std::fmt::{
-    Display,
-    Formatter,
-    Result as FmtResult,
+use std::{
+    cell::Cell,
+    fmt::{
+        Display,
+        Formatter,
+        Result as FmtResult,
+    },
 };
 
 use super::{
@@ -36,10 +39,17 @@ use crate::{
 
 #[derive(Debug)]
 pub(crate) struct ExtensionDiagnostic<'tu> {
+    /// Arena-stable suppression marker; FIFO diagnostics keep their order.
+    pub(crate) suppressed:     &'tu Cell<bool>,
     spelling:                  &'tu str,
     origin:                    FeatureOrigin,
     severity:                  ErrorSeverity,
     pub(super) source_vectors: SourceVectors,
+}
+impl<'tu> ExtensionDiagnostic<'tu> {
+    pub(crate) fn spelling(&self) -> &'tu str {
+        self.spelling
+    }
 }
 impl Display for ExtensionDiagnostic<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
@@ -99,6 +109,7 @@ impl Context<'_> {
         let spelling = self.diagnostic_text(spelling);
         self.pending_errors
             .push_back(TranslationError::Extension(ExtensionDiagnostic {
+                suppressed: self.tu_arena().alloc(Cell::new(false)),
                 spelling,
                 origin,
                 severity,

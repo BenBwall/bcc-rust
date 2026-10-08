@@ -1,4 +1,6 @@
 //! GNU parser grammar regressions.
+use std::fmt::Write as _;
+
 use super::{
     parser_errors,
     with_parse_configuration,
@@ -705,4 +707,78 @@ fn imaginary_integer_components_survive_parsing_and_inspection() {
             assert!(output.contains(text), "{text}: {output}");
         }
     });
+}
+
+#[test]
+fn many_extension_markers_preserve_occurrence_order_and_later_diagnostics() {
+    let mut source = String::from("#define WIDE __int128\n");
+    for index in 0..4_096 {
+        writeln!(source, "__extension__ WIDE suppressed{index};").expect("write to String");
+    }
+    source.push_str("WIDE unsuppressed;\n__extension__ WIDE another;\nWIDE last;\n");
+    with_parse_configuration(
+        &source,
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Warn),
+        |p| {
+            assert_eq!(p.items.len(), 4_099);
+            assert_eq!(p.errors.len(), 2, "{:?}", p.errors);
+            assert!(
+                p.errors
+                    .iter()
+                    .all(|error| error.to_string().contains("__int128"))
+            );
+        },
+    );
+}
+
+#[test]
+fn extension_markers_suppress_numeric_diagnostics_per_macro_occurrence() {
+    for (standard, literal) in [
+        (CStandard::C89, "1LL"),
+        (CStandard::C89, "0x1p0"),
+        (CStandard::C17, "0b1"),
+        (CStandard::C17, "1i"),
+    ] {
+        for policy in [ExtensionPolicy::Warn, ExtensionPolicy::Deny] {
+            let source = format!(
+                "#define VALUE {literal}\n__extension__ double silent = VALUE;\ndouble loud = \
+                 VALUE;\n__extension__ double another = VALUE;\ndouble last = VALUE;\n"
+            );
+            with_parse_configuration(
+                &source,
+                CompilerConfiguration::new(standard, policy).with_gnu_extensions(true),
+                |p| {
+                    assert_eq!(p.items.len(), 4);
+                    assert_eq!(p.errors.len(), 2, "{literal}: {:?}", p.errors);
+                    assert!(p.errors.iter().all(|e| matches!(
+                        e,
+                        crate::translation_phases::TranslationError::Extension(_)
+                    )));
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn numeric_suppression_preserves_preprocessing_occurrences_and_invocation_sites() {
+    let source =
+        "#define VALUE 0b1\n#if VALUE\n#endif\n__extension__ int silent=VALUE;\nint loud=VALUE;\n";
+    with_parse_configuration(
+        source,
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Warn).with_gnu_extensions(true),
+        |p| {
+            assert_eq!(p.errors.len(), 2, "{:?}", p.errors);
+            // The parser discards completed macro-location hint metadata,
+            // but its occurrence index keeps stable invocation keys.
+            let remaining: Vec<_> = p
+                .parser
+                .token_diagnostics
+                .iter()
+                .filter(|(_, occurrences)| !occurrences.is_empty())
+                .map(|(key, occurrences)| (key.2.as_ref().unwrap().line, occurrences.len()))
+                .collect();
+            assert_eq!(remaining, [(1, 1)]);
+        },
+    );
 }
