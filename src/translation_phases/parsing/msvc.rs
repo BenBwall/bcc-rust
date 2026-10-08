@@ -430,8 +430,21 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
                                 Some(token),
                                 "matching delimiter in MSVC assembly",
                             );
-                            self.phase = Phase::Finish;
-                            return ParseAction::Continue;
+                            if !self.braced {
+                                self.phase = Phase::Finish;
+                                return ParseAction::Continue;
+                            }
+                            // A braced block owns everything up to its `}`:
+                            // a closer it opened closes the unclosed inner
+                            // delimiters too, and a stray one stays a token.
+                            if self.delimiters.contains(&op) {
+                                while self.delimiters.last() != Some(&op) {
+                                    _ = self.delimiters.pop();
+                                }
+                            } else {
+                                self.own(parser, token);
+                                return ParseAction::Consume;
+                            }
                         }
                         _ = self.delimiters.pop();
                         if self.braced && self.delimiters.is_empty() {

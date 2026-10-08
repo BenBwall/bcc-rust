@@ -483,3 +483,33 @@ fn asm_line_boundaries_use_macro_invocations_and_ignore_splices() {
         );
     }
 }
+
+#[test]
+fn braced_asm_keeps_its_closing_brace_after_an_inner_mismatch() {
+    for source in [
+        "int f(void) { __asm { mov eax, [ebx } return 0; } int g;\n",
+        "int f(void) { __asm { mov eax, ([ebx) } return 0; } int g;\n",
+        "int f(void) { __asm { mov eax, ebx) } return 0; } int g;\n",
+    ] {
+        with_parse_configuration(
+            source,
+            CompilerConfiguration::default().with_msvc_feature(MsvcFeature::Asm, true),
+            |p| {
+                assert_eq!(parser_errors(p).count(), 1, "{source}: {:?}", p.errors);
+                let nodes: Vec<_> = p.parser.syntax.iter::<MsAsm<'_>>().collect();
+                assert_eq!(nodes.len(), 1, "{source}");
+                assert!(nodes[0].braced && nodes[0].recovered, "{source}");
+                assert!(
+                    super::sourced_text(p, nodes[0].source_vectors).ends_with('}'),
+                    "{source}"
+                );
+                assert!(
+                    matches!(super::function_definition(p, 0).body.kind, StatementType::Compound { items } if items.len() == 2),
+                    "{source}"
+                );
+                assert_eq!(p.items.len(), 2, "{source}");
+                assert!(!super::declaration(p, 1).recovered, "{source}");
+            },
+        );
+    }
+}
