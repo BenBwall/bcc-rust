@@ -1088,7 +1088,9 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 following.kind == TokenType::Operator(OperatorTokenType::Colon)
             })
         {
-            return if matches!(self.phase, InitializerPhase::ElementOrClose) {
+            return if matches!(self.phase, InitializerPhase::ElementOrClose)
+                && Self::gnu_designator_element_follows(parser)
+            {
                 ListBoundary::None
             } else {
                 ListBoundary::MissingClose
@@ -1116,6 +1118,55 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
         } else {
             ListBoundary::MissingClose
         }
+    }
+
+    /// Whether the current `identifier :` begins a GNU `field: value`
+    /// element rather than a label after an unclosed list: its value ends at
+    /// a `,` or `}` before any `;` or statement keyword outside parentheses.
+    /// A scan that runs out of lookahead keeps the element, so long values
+    /// stay initializers.
+    ///
+    /// C99: labels are §6.8.1 paragraph 1, p. 131; PDF p. 143, and no
+    /// initializer contains a `;` (§6.7.8 paragraph 1, p. 125; PDF p. 137).
+    /// The `field:` designator is a GNU extension.
+    fn gnu_designator_element_follows(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
+        const SCAN_LIMIT: usize = 64;
+        let mut parentheses = 0_u32;
+        let mut braces = 0_u32;
+        // Lookahead 0 is the colon.
+        for index in 1..SCAN_LIMIT {
+            let Some(token) = parser.cursor.lookahead(index) else {
+                return false;
+            };
+            match token.kind {
+                | TokenType::Operator(
+                    OperatorTokenType::OpeningParenthesis | OperatorTokenType::OpeningSquareBracket,
+                ) => parentheses += 1,
+                | TokenType::Operator(
+                    OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
+                ) => {
+                    if parentheses == 0 {
+                        return false;
+                    }
+                    parentheses -= 1;
+                },
+                | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => braces += 1,
+                | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
+                    if braces == 0 {
+                        return parentheses == 0;
+                    }
+                    braces -= 1;
+                },
+                | TokenType::Operator(OperatorTokenType::Comma)
+                    if parentheses == 0 && braces == 0 =>
+                    return true,
+                | TokenType::Operator(OperatorTokenType::Semicolon) if parentheses == 0 =>
+                    return false,
+                | kind if is_statement_keyword(kind) => return false,
+                | _ => {},
+            }
+        }
+        true
     }
 
     /// Whether this list's `}` follows the current token before a `;`, a

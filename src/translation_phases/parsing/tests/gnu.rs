@@ -926,3 +926,51 @@ fn leading_attributes_do_not_turn_a_grouping_parenthesis_into_parameters() {
         ["function"]
     );
 }
+
+#[test]
+fn label_after_an_unclosed_initializer_list_stays_a_label() {
+    for (source, labels) in [
+        (
+            "void f(void) {\n int x;\n int a[] = { 1, 2,\n out: x = 0;\n return;\n}\nint g;\n",
+            1,
+        ),
+        (
+            "void f(void) {\n int x;\n int a[] = { 1,\n out: { x = 0; }\n return;\n}\nint g;\n",
+            1,
+        ),
+        // A complete GNU designator element keeps its meaning.
+        (
+            "struct S { int x, y; }; void f(void) { struct S s = { x: 1, y: (2) }; struct S t = { \
+             x: {1}\n}; }\nint g;\n",
+            0,
+        ),
+    ] {
+        with_parse_configuration(
+            source,
+            CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true),
+            |p| {
+                let found = p
+                    .parser
+                    .syntax
+                    .iter::<super::super::syntax::Statement<'_>>()
+                    .filter(|x| matches!(x.kind, super::super::syntax::StatementType::Label(..)))
+                    .count();
+                assert_eq!(found, labels, "{source}: {:?}", p.errors);
+                // The missing `}` and `;` are both reported at the label.
+                assert!(
+                    parser_errors(p).count() <= 2 * labels,
+                    "{source}: {:?}",
+                    p.errors
+                );
+                assert!(
+                    super::identifier_name(
+                        p,
+                        super::declaration(p, p.items.len() - 1).init_declarators[0].declarator
+                    )
+                    .is_some_and(|x| x == "g")
+                );
+            },
+        );
+    }
+}
