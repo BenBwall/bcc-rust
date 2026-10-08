@@ -4,8 +4,9 @@ bcc-rust parses C89 through C23, a listed subset of the C2y draft, GNU
 dialects, and independently enabled MSVC extensions. One configuration value,
 CLI selection, predefined macros and a shared extension-diagnostic emitter
 connect the lexer, preprocessor and explicit-frame parser. This is a
-syntax-only front end: selecting a mode is not a conformance claim, and there
-is no semantic analysis or code generation.
+front end with an initial declaration semantic pass: selecting a mode is not
+a conformance claim. [semantic-analysis.md](semantic-analysis.md) records the
+C99 semantic subset and conservative extension boundaries; code generation is absent.
 
 ## Status and known gaps
 
