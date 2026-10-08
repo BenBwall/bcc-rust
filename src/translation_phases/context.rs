@@ -1126,9 +1126,6 @@ impl<'tu> Context<'tu> {
             .alloc_slice_fill_iter(system.iter().map(|path| Self::alloc_path(self.tu, path)));
     }
 
-    /// The directories searched for a header named in a file, in order: for
-    /// a `"…"` name the including file's directory and the quote
-    /// directories, then for both forms the system directories.
     /// Configured include search entries, with stable indices for GNU
     /// `include_next`. C99: implementation-defined search, §6.10.2p2-3, pp.
     /// 149-150; PDF pp. 161-162.
@@ -1147,6 +1144,9 @@ impl<'tu> Context<'tu> {
             .filter(move |(index, _)| !system || *index >= quote_count)
     }
 
+    /// The directories searched for a header named in a file, in order: for
+    /// a `"…"` name the including file's directory and the quote
+    /// directories, then for both forms the system directories.
     pub(crate) fn include_search_directories(
         &self,
         including_file: u32,
