@@ -56,7 +56,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **234 C inputs and 234 stderr snapshots**, plus two supporting headers and five mode/policy `.args` sidecars. Dispatch targets cover **1/1 initial-processing**, **5/5 tokenizer**, **136/142 preprocessor**, and **65/74 parser** variants. The parser count includes four follow-on variants folded into an earlier diagnostic; the preprocessor count includes nineteen folded variants. Thus 61 distinct parser variants have a separately visible message in these fixtures, exceeding the requested minimum of 40. Shared extension-origin diagnostics are tracked separately below.
+There are **243 top-level C inputs and 243 stderr snapshots**, plus two supporting headers and nine mode/policy `.args` sidecars. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **129 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 110 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, and include cases may target the same variant more than once.
 
@@ -163,8 +163,8 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `ExpectedIdentifierInIfdefDirective` | rendered | [pp-expected-identifier-in-ifdef-directive.c](pp-expected-identifier-in-ifdef-directive.c) |
 | `ExpectedIdentifierInIfndefDirective` | rendered | [pp-expected-identifier-in-ifndef-directive.c](pp-expected-identifier-in-ifndef-directive.c) |
 | `ExpectedIdentifierInDefineDirective` | rendered | [pp-expected-identifier-in-define-directive.c](pp-expected-identifier-in-define-directive.c) |
-| `RedefinitionOfBuiltInMacro` | rendered | [pp-redefinition-of-built-in-macro.c](pp-redefinition-of-built-in-macro.c) |
-| `UndefinitionOfBuiltInMacro` | rendered | [pp-undefinition-of-built-in-macro.c](pp-undefinition-of-built-in-macro.c) |
+| `RedefinitionOfBuiltInMacro` | rendered | [protected ISO macro](pp-redefinition-of-built-in-macro.c), [overridable GNU builtin](lexpp-gnu-builtin-overrides.c) |
+| `UndefinitionOfBuiltInMacro` | rendered | [protected ISO macro](pp-undefinition-of-built-in-macro.c), [overridable GNU builtin](lexpp-gnu-builtin-overrides.c) |
 | `UndefinedIdentifierInPreprocessorExpression` | rendered | [pp-undefined-identifier-in-preprocessor-expression.c](pp-undefined-identifier-in-preprocessor-expression.c) |
 | `ExpectedIncludeStringOrAngleBracketString` | rendered | [pp-expected-include-string-or-angle-bracket-string.c](pp-expected-include-string-or-angle-bracket-string.c) |
 | `InvalidCharacterInHeaderName` | rendered | [pp-invalid-character-in-header-name.c](pp-invalid-character-in-header-name.c) |
@@ -194,6 +194,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `DuplicateMacroParameter` | rendered | [pp-duplicate-macro-parameter.c](pp-duplicate-macro-parameter.c) |
 | `MissingWhitespaceAfterMacroName` | rendered | [pp-missing-whitespace-after-macro-name.c](pp-missing-whitespace-after-macro-name.c) |
 | `VaArgsOutsideVariadicMacro` | rendered | [pp-va-args-outside-variadic-macro.c](pp-va-args-outside-variadic-macro.c) |
+| `VaOptOutsideVariadicMacro` | rendered | [pp-va-opt-outside-variadic-macro.c](pp-va-opt-outside-variadic-macro.c) |
 | `ExpectedCommaOrClosingParenthesisInMacroDefinition` | rendered | [pp-expected-comma-or-closing-parenthesis-in-macro-definition.c](pp-expected-comma-or-closing-parenthesis-in-macro-definition.c) |
 | `MacroRedefinedWithDifferentDefinition` | rendered | [pp-macro-redefined-with-different-definition.c](pp-macro-redefined-with-different-definition.c) |
 | `ExpectedIdentifierInUndefDirective` | rendered | [pp-expected-identifier-in-undef-directive.c](pp-expected-identifier-in-undef-directive.c) |
@@ -453,3 +454,13 @@ following declarations. Existing lexpp/parser policy and recovery goldens remain
 active. The [combined policy golden](language-integration-policy.stderr) pins GNU
 imaginary, C attribute query/grammar and MSVC pragma/declspec warnings in one
 translation unit. This integration adds no diagnostic kinds or severity exemptions.
+
+### Final language-mode review
+
+`language-extension-suppression` retains exactly one unsuppressed macro keyword
+warning while filtering declaration/function/expression marker occurrences.
+The fixture also exercises zero-global-allocation parsing and rendering.
+C23 function grammar, repeated enum-underlying-type recovery, preprocessing query
+boundaries, named GNU variadic arguments, builtin overrides and integer mode
+selection have structured unit regressions; the CLI checks numeric opaque-token
+spellings without internal NUL sentinels.

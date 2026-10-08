@@ -7,6 +7,48 @@ extensions are implemented across these phases. This is a syntax-only front end:
 mode selection is not a full conformance claim. No semantic analysis or code
 generation is added.
 
+## Status and known gaps
+
+The requested modes, aliases, policy flags, independent MSVC gates and listed
+syntax extensions are wired through the batch frontend. The final review adds
+C23 `()` prototypes and ellipsis-only parameter lists, rejects C23
+identifier-list function declarators, and preserves the first enum underlying
+type when recovering a repeated colon. It corrects C89 integer type selection,
+C23 conditional `true`/`false` and bit-precise constants, GNU named variadic
+substitution and builtin overrides, misplaced `__VA_OPT__` diagnostics, and
+malformed macro/query continuation.
+GNU `__asm` remains available when MS assembly is disabled; with MS assembly
+enabled the parser selects the grammar from its following tokens.
+
+This remains a syntax frontend, rather than complete ISO or vendor conformance:
+
+- Type checking, constant evaluation outside preprocessing, attribute meanings,
+  target assembly validation, ABI/calling-convention effects and code generation
+  remain future phases. GNU zero-length array and union-cast recognition cannot
+  establish all semantic cases from syntax alone.
+- Decimal type keywords have retained syntax, but decimal floating suffixes
+  `df`, `dd` and `dl` and decimal values are not implemented.
+- Integer literal magnitudes are limited to 64 bits. A signed `wb` literal may
+  retain a 65-bit type, but larger magnitudes are diagnosed. Preprocessing
+  expressions use the frontend's 64-bit intmax/uintmax model.
+- C2y is the explicitly listed draft subset, not a claim to implement every
+  current or future draft change. Its version macro is a documented choice.
+- The brief's unified extension policy deliberately reports reserved GNU/MSVC
+  constructs that vendors sometimes exempt from pedantic diagnostics. Later
+  policy flags win as specified here; broader GCC/Clang warning-option behavior
+  (including `-Wno-pedantic`) is not implemented.
+- `__extension__` suppresses parser grammar, keyword and numeric-token extension
+  diagnostics within its owning declaration or expression. Lexical diagnostics
+  such as dollar identifiers/comments/digraphs, and preprocessing directives or
+  macro definitions, remain outside this suppression scope.
+- Phase-7 macro extension diagnostics use definition spelling and invocation
+  endpoints for occurrence identity. Their primary underline can still point
+  to the replacement definition. Conditional-expression diagnostics may retain
+  only the definition location; a full vendor-style expansion backtrace is not
+  rendered. Preprocessing errors precede parser errors by pipeline design.
+- The feature additions increase parser time and retained syntax memory relative
+  to `main`; the final measurement section records the cost and sampling limits.
+
 ## CLI reference
 
 The CLI defaults to `gnu17`; `CompilerConfiguration::default()` remains strict
@@ -231,7 +273,9 @@ subset is implemented by parse-std.
   `_Thread_local`/`thread_local` share kinds. Aliases retain original spelling
   for policy diagnostics; token contents preserve it for parser consumers.
 - GNU alternate keywords map to existing C99 kinds when applicable. `__asm__`
-  is GNU `Asm`; `__asm`/`_asm` are MSVC `MsAsm` gated by the MS asm flag.
+  and reserved `__asm` accept GNU assembly in every mode. With MS assembly
+  enabled, `__asm` selects GNU parenthesized/qualified grammar or MSVC block/line
+  grammar at its parser owner; `_asm` stays gated by the MS assembly flag.
   GNU `__inline` remains available with MSVC inline disabled because its GNU
   spelling is independently reserved. With its flag enabled, lexpp consumes
   `__pragma` as a preprocessing operator before keyword classification.
@@ -259,7 +303,7 @@ and [zero-global-allocation coverage](tests/allocation_count.rs).
 | C89/C90/C95 | Native implicit int; C99-origin mixed blocks, for declarations, designated initializers, compound literals, flexible array members, long long, trailing enum comma, __func__, and unambiguous qualified/static/[*] array syntax follow Allow/Warn/Deny | Variable bounds need constant evaluation to distinguish VLAs from constant arrays; flexible-member position and object layout remain semantic |
 | C99 | Existing full grammar; implicit int is retained with a policy diagnostic | Type/name/control-flow constraints remain as documented in the C99 checklist |
 | C11/C17 | _Alignas expression/type operands, _Alignof types, _Atomic type/qualifier, _Generic associations, _Noreturn, _Static_assert, _Thread_local, anonymous untagged aggregates | Alignment validity, atomic eligibility, generic type compatibility/selection, assertion evaluation, storage-class combinations and aggregate layout |
-| C23 | All [[...]] attribute positions with standard/vendor names and balanced arguments; bool/true/false, nullptr, constexpr, typeof/typeof_unqual, message-optional static_assert, alignas/alignof/thread_local aliases; labels before declarations and at block end; {}; _BitInt with signedness; fixed enum underlying specifier-qualifier lists; auto inferred type; unnamed definition parameters; decimal types; compound-literal storage classes | Attribute applicability/meaning, inferred types, width values, enum type legality, decimal support, literal object lifetime and removed old-style function constraints |
+| C23 | All [[...]] attribute positions with standard/vendor names and balanced arguments; bool/true/false, nullptr, constexpr, typeof/typeof_unqual, message-optional static_assert, alignas/alignof/thread_local aliases; labels before declarations and at block end; {}; _BitInt with signedness; fixed enum underlying specifier-qualifier lists; auto inferred type; unnamed definition parameters; ellipsis-only prototypes; empty parameter lists as prototypes; rejected identifier-list declarators; decimal type keywords; compound-literal storage classes | Attribute applicability/meaning, inferred types, width values, enum type legality, decimal literal support and literal object lifetime |
 | C2y subset | _Countof unary expression or parenthesized type; type-controlling _Generic; if/switch declaration headers with optional following expression; case ranges; break/continue label | Array/type/count evaluation, selection conversion, range overlap, and named control-target resolution |
 
 Reserved keywords are diagnosed by the foundation's token classifier, so parser
@@ -311,8 +355,9 @@ type/expression operands and offset member paths. Statement expressions, local
 labels, label addresses, computed goto, omitted conditional operands, GNU
 initializers and nested definitions also have inspectable syntax nodes.
 
-`__extension__` suppresses pedantic extension diagnostics for its expression or
-declaration, including a function body. Suppression restores at the owning frame
+`__extension__` suppresses parser grammar, keyword and numeric-token pedantic
+extension diagnostics for its expression or declaration, including a function body.
+Lexical and preprocessing diagnostics remain outside this scope. Suppression restores at the owning frame
 boundary and retains diagnostics from later unsuppressed occurrences, including
 macro expansions. Nested functions isolate typedef, label and switch state.
 
@@ -464,11 +509,12 @@ reject use outside a variadic replacement, nested optional replacements,
 missing parentheses, and `##` at either inner boundary. C23 permits omitted
 variadic arguments; pre-C23 pedantic modes retain the existing omission
 diagnostic. C89 fixed and variadic empty arguments and variadic definitions
-report C99 origin. Named `args...` definitions normalize the name to the same
-variadic machinery and report GNU origin.
-Original named variadic parameter IDs remain in definition metadata so identical
-redefinitions compare normalized bodies without losing parameter-name checks,
-even when the variadic parameter is unused.
+report C99 origin. Named `args...` definitions retain the original parameter name and report GNU
+origin. Their variadic argument captures use the same machinery, but
+`__VA_ARGS__` does not denote that named argument.
+Original named variadic parameter IDs remain in definition metadata and
+replacement bodies, so identical redefinitions compare original token spellings
+and parameter names, even when the variadic parameter is unused.
 
 GNU `, ## __VA_ARGS__` elides a comma for an omitted variadic argument, preserves
 it for an explicitly empty argument, and substitutes supplied arguments without
@@ -486,7 +532,10 @@ its `#include_next` starts at the first configured directory. This follows
 [GCC's search-order description](https://gcc.gnu.org/onlinedocs/cpp/Wrapper-Headers.html).
 `#ident`/`#sccs` require a string and are consumed as metadata directives; this
 syntax-only frontend emits no object-file metadata. `__COUNTER__` starts at 0
-for each translation unit and increments only when expanded. MSVC
+for each translation unit and increments only when expanded. GNU builtins
+`__COUNTER__`, `__has_attribute`, and `__has_builtin` may be redefined or
+undefined with a warning; ISO predefined macros and C23 query names remain
+protected. MSVC
 `-fms-pragma` consumes `__pragma(...)` tokens and passes their payload to the
 existing pragma handler, retaining source provenance. It is independent of
 `-fms-va-args` and of the selected standard, consistent with the
@@ -607,3 +656,91 @@ golden. `cargo test --features benchmarking-internals --test allocation_count`
 passes all 11 tests. `cargo +nightly fmt --check`, both canonical Clippy commands
 with `-D warnings`, and `git diff --check` pass. Work remains syntax-only;
 semantic analysis and code generation are outside this integration.
+
+## Final maintainer review and performance verification
+
+The final review checks `main...HEAD`, the shared brief, all configured modes,
+and the cited grammar in the local C89/C99/C11/C17/C23 editions. Regression
+coverage adds C23 function forms, duplicate enum underlying types, conditional
+booleans and bit-precise magnitudes, GNU/MSVC assembly selection, macro identity
+and override recovery, query boundaries and inactive branches, variadic-marker
+policy, opaque numeric spelling, and suppression occurrence provenance.
+Malformed modern/GNU/MSVC prefixes and deterministic token mutations exercise
+termination, restored frames/scopes and following valid input. The golden guard
+continues to reject panics, internal representations and raw NUL bytes.
+
+Two diagnostic-heavy quadratic paths were removed: parser suppression scans
+and preprocessing relocation through an already-processed queue prefix. The
+replacement structures are arena-backed; cached counts and direct queue suffixes
+avoid repeated walks. A debug CLI probe with pedantic declaration markers has
+minimum times of 0.110/0.121/0.144/0.190 seconds for 1,000/2,000/4,000/8,000
+declarations (three runs, including process startup). The 8,000 case took
+1.23 seconds before the direct-suffix correction, with the suppression index
+already in place. These debug probes describe scaling, not release throughput.
+
+The release comparison uses `main` at `938c0c2` and measurement artifact
+`016b531`. The subsequent reserved-marker severity fix affects malformed
+variadic-marker input, which none of the benchmark workloads contain. Platform:
+Windows x86-64, Rust 1.99.0, native LLVM 23.1.1, static native C archive and
+Rust/C fat LTO, `benchmarking-internals`, without `portable-simd`. Inputs and
+library configuration are unchanged strict C99 with Allow policy. Seven
+interleaved runs alternate executable order. Criterion `--quick` is used for
+these large workloads; the table reports the minimum point estimate and its
+displayed interval, without treating the small sample set as strong statistical
+evidence.
+Concurrent work and a shared machine can affect individual runs. Full pipeline
+and parser-only results are separate below.
+
+| Workload | Main minimum [interval], ms | Branch minimum [interval], ms | Change |
+| --- | ---: | ---: | ---: |
+| Lexer / one million lines | 474.850 [458.940, 478.830] | 462.910 [458.090, 464.120] | -2.5% |
+| Lexer / mixed C99 workload | 355.270 [354.850, 355.380] | 363.870 [360.710, 376.520] | +2.4% |
+| Lexer / macro-heavy workload | 116.560 [116.510, 116.750] | 116.080 [115.970, 116.510] | -0.4% |
+| Preprocessor / one million lines | 788.360 [780.280, 820.680] | 820.280 [805.570, 823.950] | +4.0% |
+| Preprocessor / mixed C99 workload | 693.950 [691.890, 694.470] | 727.240 [726.520, 730.110] | +4.8% |
+| Preprocessor / macro-heavy workload | 617.190 [615.860, 622.530] | 623.640 [622.390, 628.660] | +1.0% |
+| Parser / one million lines | 1469.600 [1463.100, 1495.600] | 1602.500 [1595.100, 1604.300] | +9.0% |
+| Parser / mixed C99 workload | 1350.900 [1350.300, 1353.400] | 1475.500 [1474.600, 1479.300] | +9.2% |
+| Parser / macro-heavy workload | 1138.400 [1137.300, 1143.100] | 1184.300 [1183.800, 1184.400] | +4.0% |
+| Parser only / one million lines | 676.430 [675.800, 676.590] | 779.120 [776.390, 790.000] | +15.2% |
+| Parser only / mixed C99 workload | 648.410 [645.330, 649.190] | 753.700 [748.080, 755.100] | +16.2% |
+| Parser only / macro-heavy workload | 451.870 [449.750, 460.370] | 492.180 [492.060, 492.210] | +8.9% |
+| Parser only / expression-heavy workload | 96.194 [96.194, 96.195] | 105.980 [105.680, 107.160] | +10.2% |
+| Parser only / declaration-heavy workload | 169.540 [169.360, 170.270] | 194.570 [194.490, 194.590] | +14.8% |
+
+The minimum estimates show full-pipeline parsing costs of 4.0-9.2% and
+parser-only costs of 8.9-16.2%. The additional retained syntax and mode checks
+remain measurable costs; unchanged driver counts do not remove that overhead.
+
+Temporary counters in isolated copies give identical results for both revisions:
+
+| Input | Consumed tokens | Parser driver steps | Steps/token | Peak phase-7 source segments |
+| --- | ---: | ---: | ---: | ---: |
+| one million lines | 5,000,000 | 17,000,001 | 3.400 | 5,000,000 |
+| mixed C99 workload | 5,240,000 | 11,920,001 | 2.275 | 5,520,000 |
+| macro-heavy workload | 3,260,000 | 6,840,001 | 2.098 | 4,900,000 |
+
+Those counters are absent from production code and timing executables. The
+unmodified memory harness reports increased retained syntax memory:
+
+| Input | Peak commit, main → branch (MiB) | Peak working set, main → branch (MiB) | TU arena, main → branch (MiB) | Parse arena, main → branch (KiB) |
+| --- | ---: | ---: | ---: | ---: |
+| one million lines | 528.0 → 543.0 | 548.1 → 563.4 | 238.4 → 253.6 | 1.6 → 1.7 |
+| mixed C99 workload | 455.9 → 462.9 | 476.7 → 484.0 | 181.0 → 188.4 | 10.5 → 11.5 |
+| macro-heavy workload | 346.1 → 349.2 | 338.3 → 341.5 | 147.1 → 150.1 | 9.5 → 10.6 |
+
+PP arena high-water marks remain 145.9/144.3/55.0 MiB and expansion arenas
+0.1/0.1/37.7 KiB. Peak region counts remain 8/9/8, reserving 800/900/800 GiB
+of virtual address space. Peak arena commits increase from 526.1/454.1/344.6
+to 541.1/461.1/347.6 MiB. Phases 1-3 and 1-6 OS peaks remain within 0.1 MiB
+at the reported precision. These costs are part of the expanded retained syntax,
+not global-allocator leakage or increased parser scheduling/provenance growth.
+
+Final review validation (8 October 2026): `cargo test --all-targets` passes
+787 tests. `cargo test --features benchmarking-internals --test allocation_count`
+passes all 12 checks, including zero global allocations during parsing and
+diagnostic rendering. `cargo +nightly fmt --check`,
+`cargo clippy --all-targets -- -D warnings`,
+`cargo clippy --all-targets --features benchmarking-internals -- -D warnings`,
+and `git diff --check` pass. Fixes and these review notes are granular signed
+commits on `feat/language-standards`; the comparison baseline is unchanged.
