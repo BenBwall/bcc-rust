@@ -31,6 +31,7 @@ use super::{
         Declarator,
     },
     errors::ParserErrorType,
+    inspection::InspectionOptions,
     syntax::{
         BlockItem,
         ConstantExpression,
@@ -87,12 +88,35 @@ fn with_parse_limits<R>(
     )
 }
 
+/// Parses `source` as one translation unit in the default mode.
 fn with_parsed<R>(
     source: &str,
     inspect: impl FnOnce(&ParsedTranslationUnit<'_>, &mut Context<'_>) -> R,
 ) -> R {
+    with_parsed_in(source, CompilerConfiguration::default(), inspect)
+}
+
+/// Parses `source` as one translation unit under `configuration` and renders
+/// its syntax tree.
+fn syntax_tree(
+    source: &str,
+    configuration: CompilerConfiguration,
+    options: InspectionOptions,
+) -> String {
+    with_parsed_in(source, configuration, |unit, context| {
+        unit.inspect(context.tu_arena(), context, options)
+            .to_owned()
+    })
+}
+
+/// Parses `source` as one translation unit under `configuration`.
+fn with_parsed_in<R>(
+    source: &str,
+    configuration: CompilerConfiguration,
+    inspect: impl FnOnce(&ParsedTranslationUnit<'_>, &mut Context<'_>) -> R,
+) -> R {
     let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = Context::with_configuration(&tu, configuration);
     let preprocess_arena = crate::util::bump::Bump::new();
     let parse_arena = crate::util::bump::Bump::new();
     let preprocessor = Preprocessor::new(

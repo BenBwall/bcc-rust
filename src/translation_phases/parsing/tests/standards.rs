@@ -374,48 +374,37 @@ fn inspection_shows_every_iso_child_without_semantic_evaluation() {
                   int x=alignof(int); x=_Generic(x,int:1,default:2); label: int y=(static int){}; \
                   if(int n=1;n) x=n; outer: for(;;){break outer;} switch(x){case 1 ... 3: break;} \
                   return; }\n";
-    let tu = crate::util::bump::Bump::new();
-    let mut context = crate::translation_phases::Context::with_configuration(
-        &tu,
-        mode(CStandard::C2y, ExtensionPolicy::Warn),
-    );
-    let pp = crate::util::bump::Bump::new();
-    let parse = crate::util::bump::Bump::new();
-    let preprocessor = crate::translation_phases::preprocessing::Preprocessor::new(
-        &pp,
-        &mut context,
-        std::path::PathBuf::from("<iso-inspection>").into_boxed_path(),
+    super::with_parsed_in(
         source,
-        crate::util::shared::SharedVec::default(),
-        crate::util::shared::SharedVec::default(),
+        mode(CStandard::C2y, ExtensionPolicy::Warn),
+        |unit, context| {
+            let output = unit.inspect(
+                context.tu_arena(),
+                context,
+                super::super::InspectionOptions::default(),
+            );
+            for text in [
+                "attribute-specifier [[...]]",
+                "alignment",
+                "atomic-type",
+                "underlying-type",
+                "static-assert",
+                "function-specifiers=_Noreturn",
+                "alignof type",
+                "generic-selection",
+                "generic-association default",
+                "labeled-declaration",
+                "storage=static",
+                "selection-declaration",
+                "break outer",
+                "case-range",
+            ] {
+                assert!(output.contains(text), "{text}: {output}");
+            }
+            assert!(!output.contains("missing"), "{output}");
+            assert!(context.pop_pending_error().is_none());
+        },
     );
-    let unit =
-        super::super::Parser::new(preprocessor, &mut context, &parse).parse_translation_unit();
-    let output = unit.inspect(
-        context.tu_arena(),
-        &context,
-        super::super::InspectionOptions::default(),
-    );
-    for text in [
-        "attribute-specifier [[...]]",
-        "alignment",
-        "atomic-type",
-        "underlying-type",
-        "static-assert",
-        "function-specifiers=_Noreturn",
-        "alignof type",
-        "generic-selection",
-        "generic-association default",
-        "labeled-declaration",
-        "storage=static",
-        "selection-declaration",
-        "break outer",
-        "case-range",
-    ] {
-        assert!(output.contains(text), "{text}: {output}");
-    }
-    assert!(!output.contains("missing"), "{output}");
-    assert!(context.pop_pending_error().is_none());
 }
 
 #[test]
@@ -899,26 +888,11 @@ fn enum_colons_without_a_following_type_belong_to_the_enclosing_grammar() {
 }
 
 fn inspect(source: &str, configuration: CompilerConfiguration) -> String {
-    let tu = crate::util::bump::Bump::new();
-    let mut context = crate::translation_phases::Context::with_configuration(&tu, configuration);
-    let pp = crate::util::bump::Bump::new();
-    let parse = crate::util::bump::Bump::new();
-    let preprocessor = crate::translation_phases::preprocessing::Preprocessor::new(
-        &pp,
-        &mut context,
-        std::path::PathBuf::from("<pointer-attributes>").into_boxed_path(),
+    super::syntax_tree(
         source,
-        crate::util::shared::SharedVec::default(),
-        crate::util::shared::SharedVec::default(),
-    );
-    let unit =
-        super::super::Parser::new(preprocessor, &mut context, &parse).parse_translation_unit();
-    let output = unit.inspect(
-        context.tu_arena(),
-        &context,
+        configuration,
         super::super::InspectionOptions::default(),
-    );
-    output.to_owned()
+    )
 }
 
 #[test]
