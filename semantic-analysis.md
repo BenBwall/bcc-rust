@@ -1,8 +1,7 @@
 # Semantic analysis roadmap
 
-This document records the declaration semantic phase introduced on
-`feat/sema-declarations`, its retained interfaces, implementation choices and
-validation evidence. It is a staged front end, not a C99 conformance claim.
+This document records the semantic analysis phase: its retained interfaces,
+implementation choices, validation evidence and staged roadmap. It is a staged front end, not a C99 conformance claim.
 The syntax boundary remains the one in [parser-roadmap.md](parser-roadmap.md).
 
 ## Purpose and phase placement
