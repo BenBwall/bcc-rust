@@ -203,3 +203,18 @@ fn extension_marker_suppression_ends_with_its_parameter() {
         );
     }
 }
+
+#[test]
+fn local_label_declaration_is_not_a_statement_before_declarations() {
+    let source = "int f(void){ __label__ L; int x = 0; L: return x; }\n";
+    with_parse_configuration(
+        source,
+        mode(CStandard::C89, true, ExtensionPolicy::Warn),
+        |p| {
+            assert_clean_parse(p, source);
+            let extensions = extensions(p);
+            assert_eq!(extensions.len(), 1, "{extensions:?}");
+            assert!(extensions[0].contains("__label__"));
+        },
+    );
+}
