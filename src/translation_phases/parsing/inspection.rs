@@ -173,7 +173,13 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         Self::line(
                             &mut output,
                             indent + 1,
-                            format_args!("asm-token {}", context.string_cache.at(token.contents)),
+                            format_args!(
+                                "asm-token {}",
+                                context
+                                    .string_cache
+                                    .at(token.contents)
+                                    .trim_end_matches('\0')
+                            ),
                             Some(token.source_vectors),
                             context,
                             options,
@@ -272,7 +278,13 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         Self::line(
                             &mut output,
                             indent + 1,
-                            format_args!("token {}", context.string_cache.at(token.contents)),
+                            format_args!(
+                                "token {}",
+                                context
+                                    .string_cache
+                                    .at(token.contents)
+                                    .trim_end_matches('\0')
+                            ),
                             Some(token.source_vectors),
                             context,
                             options,
@@ -306,7 +318,13 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         Self::line(
                             &mut output,
                             indent + 1,
-                            format_args!("token {}", context.string_cache.at(token.contents)),
+                            format_args!(
+                                "token {}",
+                                context
+                                    .string_cache
+                                    .at(token.contents)
+                                    .trim_end_matches('\0')
+                            ),
                             Some(token.source_vectors),
                             context,
                             options,

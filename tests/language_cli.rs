@@ -315,4 +315,35 @@ mod tests {
             assert!(tree.contains("declarator following"), "{flags:?}: {tree}");
         }
     }
+
+    #[test]
+    fn opaque_syntax_tokens_do_not_print_numeric_sentinels() {
+        for (flags, source, expected) in [
+            (
+                vec!["-std=c23"],
+                "[[deprecated(\"old\")]] int x;\n",
+                "deprecated",
+            ),
+            (
+                vec!["-std=gnu17"],
+                "int (*p)(int) __attribute__((nonnull(1)));\n",
+                "token 1\n",
+            ),
+            (
+                vec!["-fms-extensions"],
+                "__declspec(align(16)) int x; int f(void){__asm { mov eax, 42 }}\n",
+                "token 42\n",
+            ),
+        ] {
+            let output = run(&flags, source);
+            let tree = clean_tree(&output);
+            assert!(
+                !tree.contains('\0'),
+                "opaque syntax leaked a sentinel: {tree:?}"
+            );
+            // Locations are requested by run(), so the token is followed by its
+            // source location.
+            assert!(tree.contains(expected.trim_end()), "{tree}");
+        }
+    }
 }
