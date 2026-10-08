@@ -250,6 +250,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         );
     }
 
+    /// Handles `#else`: the group it controls is processed only when no
+    /// earlier condition held, which reaching it here rules out.
+    ///
+    /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161.
     pub(super) fn parse_else_directive(&mut self, directive: PreprocessorToken) {
         self.skip_remaining_groups(
             directive,
@@ -257,6 +261,12 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         );
     }
 
+    /// Skips the remaining `#elif` and `#else` groups of a conditional whose
+    /// processed group has ended; an unmatched directive is diagnosed with
+    /// `unmatched_error` instead.
+    ///
+    /// C99: only the first group whose condition holds is processed,
+    /// §6.10.1 paragraph 6, p. 149; PDF p. 161.
     fn skip_remaining_groups(
         &mut self,
         directive: PreprocessorToken,
@@ -316,6 +326,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         self.resume_at_line_start();
     }
 
+    /// Handles `#endif`, which closes the innermost open conditional of the
+    /// current file.
+    ///
+    /// C99: `endif-line`, §6.10 paragraph 1, p. 145; PDF p. 157.
     pub(super) fn parse_endif_directive(&mut self, directive: PreprocessorToken) {
         if self.state.open_conditionals.len() <= self.current_file_conditional_base() {
             self.context.preprocessor_error(PreprocessorError {
@@ -328,10 +342,14 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         self.finish_conditional_directive("endif");
     }
 
+    /// C99: `# ifdef identifier new-line`, §6.10.1 paragraph 5, pp. 148-149;
+    /// PDF pp. 160-161.
     pub(super) fn parse_ifdef_directive(&mut self, directive: PreprocessorToken) {
         self.parse_macro_test_directive(directive, "ifdef");
     }
 
+    /// C99: `# ifndef identifier new-line`, §6.10.1 paragraph 5, pp. 148-149;
+    /// PDF pp. 160-161.
     pub(super) fn parse_ifndef_directive(&mut self, directive: PreprocessorToken) {
         self.parse_macro_test_directive(directive, "ifndef");
     }

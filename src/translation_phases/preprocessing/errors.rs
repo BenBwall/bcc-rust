@@ -273,7 +273,10 @@ impl GetSeverity for PreprocessorError<'_> {
 
 #[derive(Debug)]
 pub(crate) enum PreprocessorErrorType<'tu> {
-    /// Later-standard lexical/directive constraint (C99 §5.1.1.3p1).
+    /// A violated lexical or directive constraint of a later standard, with
+    /// its message.
+    ///
+    /// C99: diagnostics are required by §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
     LanguageConstraint(&'tu str),
     /// An `#embed` resource that no search place holds.
     ///
@@ -341,7 +344,9 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     // C99: a pp-number that is not an `integer-constant`, §6.4 paragraph 2,
     // p. 49; PDF p. 61, and §6.4.4.1 paragraph 1, pp. 54-55; PDF pp. 66-67.
     InvalidHexadecimalIntegerLiteral,
-    /// Binary constants are an extension (§4p6); C99 has none.
+    /// A malformed binary constant. C99 has none; they are an extension.
+    ///
+    /// C99: extensions are permitted by §4 paragraph 6, p. 7; PDF p. 19.
     InvalidBinaryIntegerLiteral,
     InvalidOctalIntegerLiteral,
     InvalidDecimalIntegerLiteral,
