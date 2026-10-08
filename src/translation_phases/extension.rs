@@ -95,8 +95,9 @@ impl ToDiagnostic for ExtensionDiagnostic<'_> {
     }
 }
 impl Context<'_> {
-    /// Shared policy emitter. GNU/MSVC extensions remain non-ISO even when
-    /// enabled; standard features cease being extensions in their native mode.
+    /// Reports syntax from `origin` under the extension policy. GNU/MSVC
+    /// extensions remain non-ISO even when enabled; standard features cease
+    /// being extensions in a revision that has them.
     pub(crate) fn report_extension_since(
         &mut self,
         spelling: &str,
@@ -127,20 +128,14 @@ impl Context<'_> {
     }
 
     /// Feature-based adapter for lexer, preprocessor, and parser consumers.
+    /// A standard feature native to the selected revision has a native
+    /// origin, so the origin check alone decides whether it is reported.
     pub(crate) fn report_extension(
         &mut self,
         feature: Feature,
         spelling: &str,
         source: SourceVectors,
     ) {
-        if self.configuration.is_native(feature)
-            && matches!(
-                feature.origin(),
-                FeatureOrigin::Standard(_) | FeatureOrigin::Removed { .. }
-            )
-        {
-            return;
-        }
         self.report_extension_since(spelling, feature.origin(), source);
     }
 
@@ -155,7 +150,7 @@ impl Context<'_> {
         };
         debug_assert!(
             matches!(slot, TranslationError::Preprocessing(_)),
-            "withdrawn diagnostics keep their queue positions"
+            "only preprocessing diagnostics are withdrawn"
         );
         *slot = TranslationError::Extension(ExtensionDiagnostic {
             suppressed,
