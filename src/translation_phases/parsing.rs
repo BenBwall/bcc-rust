@@ -44,6 +44,7 @@ mod expression_operators;
 mod external_declaration;
 mod frame_pool;
 mod function_definition;
+mod gnu;
 mod initializer;
 mod inspection;
 mod machine;
@@ -182,6 +183,8 @@ pub(crate) struct Parser<'c, 'tu, 'p> {
     recovery: RecoveryState<'p>,
     /// Number of hard parser diagnostics emitted so far.
     hard_error_count: usize,
+    pedantic_suppression: usize,
+    switch_floor: usize,
     /// Frame currently executing, captured into every parser diagnostic.
     active_frame: ParseFrameKind,
     /// Whether at least one external declaration has reduced successfully or

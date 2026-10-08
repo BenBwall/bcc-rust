@@ -1,0 +1,169 @@
+error: '__attribute__' is a GNU extension
+ --> <input>:1:1
+  |
+1 | __attribute__((used)) __int128 wide[0];
+  | ^^^^^^^^^^^^^
+
+error: '__int128' is a GNU extension
+ --> <input>:1:23
+  |
+1 | __attribute__((used)) __int128 wide[0];
+  |                       ^^^^^^^^
+
+error: '__typeof__' is a GNU extension
+ --> <input>:2:1
+  |
+2 | __typeof__(wide) copy; __auto_type value=1; struct Empty {};
+  | ^^^^^^^^^^
+
+error: '__auto_type' is a GNU extension
+ --> <input>:2:24
+  |
+2 | __typeof__(wide) copy; __auto_type value=1; struct Empty {};
+  |                        ^^^^^^^^^^^
+
+error: '__asm__' is a GNU extension
+ --> <input>:3:1
+  |
+3 | __asm__("nop"); int symbol __asm__("name");
+  | ^^^^^^^
+
+error: '__asm__' is a GNU extension
+ --> <input>:3:28
+  |
+3 | __asm__("nop"); int symbol __asm__("name");
+  |                            ^^^^^^^
+
+error: '__label__' is a GNU extension
+ --> <input>:6:5
+  |
+6 |     __label__ L;
+  |     ^^^^^^^^^
+
+error: '__asm__' is a GNU extension
+ --> <input>:8:5
+  |
+8 |     __asm__ __volatile__ __inline__("" : [out] "=r"(value) : "r"(value) : "memory");
+  |     ^^^^^^^
+
+error: '__volatile__' is a GNU extension
+ --> <input>:8:13
+  |
+8 |     __asm__ __volatile__ __inline__("" : [out] "=r"(value) : "r"(value) : "memory");
+  |             ^^^^^^^^^^^^
+
+error: '__inline__' is a GNU extension
+ --> <input>:8:26
+  |
+8 |     __asm__ __volatile__ __inline__("" : [out] "=r"(value) : "r"(value) : "memory");
+  |                          ^^^^^^^^^^
+
+error: '__asm__' is a GNU extension
+  --> <input>:9:5
+   |
+ 9 |     __asm__ goto("" : : : : L);
+   |     ^^^^^^^
+
+error: '__builtin_va_arg' is a GNU extension
+  --> <input>:14:11
+   |
+14 |     int b=__builtin_va_arg(ap,int)+__builtin_offsetof(struct S,x);
+   |           ^^^^^^^^^^^^^^^^
+
+error: '__builtin_offsetof' is a GNU extension
+  --> <input>:14:36
+   |
+14 |     int b=__builtin_va_arg(ap,int)+__builtin_offsetof(struct S,x);
+   |                                    ^^^^^^^^^^^^^^^^^^
+
+error: '__builtin_types_compatible_p' is a GNU extension
+  --> <input>:15:8
+   |
+15 |     b+=__builtin_types_compatible_p(int,long)+__builtin_choose_expr(1,2,3);
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: '__builtin_choose_expr' is a GNU extension
+  --> <input>:15:47
+   |
+15 |     b+=__builtin_types_compatible_p(int,long)+__builtin_choose_expr(1,2,3);
+   |                                               ^^^^^^^^^^^^^^^^^^^^^
+
+error: '__real__' is a GNU extension
+  --> <input>:16:17
+   |
+16 |     return ({ b+__real__ u.i+__imag__ u.i; }) ?: 2;
+   |                 ^^^^^^^^
+
+error: '__imag__' is a GNU extension
+  --> <input>:16:30
+   |
+16 |     return ({ b+__real__ u.i+__imag__ u.i; }) ?: 2;
+   |                              ^^^^^^^^
+
+error: 'zero-length array' is a GNU extension
+ --> <input>:1:37
+  |
+1 | __attribute__((used)) __int128 wide[0];
+  |                                     ^
+
+error: 'empty struct or union' is a GNU extension
+ --> <input>:2:59
+  |
+2 | __typeof__(wide) copy; __auto_type value=1; struct Empty {};
+  |                                                           ^
+
+error: 'array range designator' is a GNU extension
+ --> <input>:4:39
+  |
+4 | union U { int i; }; int ranges[4]={[1 ... 3]=2};
+  |                                       ^^^
+
+error: 'nested function definition' is a GNU extension
+ --> <input>:7:23
+  |
+7 |     int nested(int x) { return x; }
+  |                       ^
+
+error: 'label address' is a GNU extension
+  --> <input>:10:13
+   |
+10 |     void *p=&&L; goto *p;
+   |             ^^
+
+error: 'computed goto' is a GNU extension
+  --> <input>:10:23
+   |
+10 |     void *p=&&L; goto *p;
+   |                       ^
+
+error: 'case range' is a GNU extension
+  --> <input>:11:21
+   |
+11 | L: switch(1){case 1 ... 3:break;}
+   |                     ^^^
+
+error: 'cast to union' is a GNU extension
+  --> <input>:12:16
+   |
+12 |     union U u=(union U)1;
+   |                ^^^^^^^
+
+error: 'old-style field designator' is a GNU extension
+  --> <input>:13:36
+   |
+13 |     struct S {int x;}; struct S s={x:1};
+   |                                    ^
+
+error: 'statement expression' is a GNU extension
+  --> <input>:16:12
+   |
+16 |     return ({ b+__real__ u.i+__imag__ u.i; }) ?: 2;
+   |            ^
+
+error: 'omitted conditional operand' is a GNU extension
+  --> <input>:16:48
+   |
+16 |     return ({ b+__real__ u.i+__imag__ u.i; }) ?: 2;
+   |                                                ^
+
+28 errors generated.

@@ -37,7 +37,7 @@ fn body_item_is_expression(parsed: &Parsed<'_, '_>, item: usize, index: usize) -
     let body = function_definition(parsed, item).body;
     match block_items(body)[index] {
         | BlockItem::Statement(statement) => matches!(statement.kind, StatementType::Expression(_)),
-        | BlockItem::Declaration(_) => false,
+        | BlockItem::FunctionDefinition(_) | BlockItem::Declaration(_) => false,
     }
 }
 

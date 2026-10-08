@@ -9,6 +9,7 @@ mod driver_regressions;
 mod expression_recovery;
 mod expression_regressions;
 mod expressions;
+mod gnu;
 mod limits;
 mod node_sizes;
 mod parameter_regressions;
@@ -154,6 +155,7 @@ fn declaration<'tu>(parsed: &Parsed<'_, 'tu>, item: usize) -> &'tu Declaration<'
         | ExternalDeclaration::RecoveredDeclaration(declaration) => declaration,
         | ExternalDeclaration::FunctionDefinition(_)
         | ExternalDeclaration::RecoveredFunctionDefinition(_)
+        | ExternalDeclaration::Asm(_)
         | ExternalDeclaration::Error(_) => panic!("expected a declaration item"),
     }
 }

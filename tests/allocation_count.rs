@@ -531,6 +531,22 @@ mod measurements {
         assert_no_allocations("ISO syntax source", summary, &allocations);
     }
 
+    #[test]
+    fn compiling_gnu_syntax_allocates_only_from_arenas() {
+        let source = "__attribute__((used)) unsigned __int128 wide[0]; __typeof__(wide) copy; \
+                      __auto_type value=1; struct Empty {}; __asm__(\"nop\"); int \
+                      f(void){__label__ L; int nested(int x){return x;} int a[4]={[1 ... 3]=2}; \
+                      struct S{int x;}; struct S s={x:1}; __asm__ \
+                      volatile(\"\":[out]\"=r\"(value):\"r\"(value):\"memory\"); __asm__ \
+                      goto(\"\"::::L); void *p=&&L; goto *p; L: return __extension__ ({ \
+                      __builtin_va_arg(ap,int)+__builtin_offsetof(struct \
+                      S,x)+__builtin_types_compatible_p(int,long)+__builtin_choose_expr(1,\
+                      __real__ value,__imag__ value); }) ?: 2;}\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::parse_source(source));
+        assert_eq!(summary.external_declarations, 6);
+        assert_no_allocations("GNU syntax source", summary, &allocations);
+    }
+
     /// Recovery paths also belong to the zero-global-allocation contract.
     #[test]
     fn compiling_malformed_sources_allocates_only_from_arenas() {

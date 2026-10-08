@@ -44,6 +44,7 @@ use crate::{
 pub(crate) enum ExternalDeclaration<'tu> {
     /// Declaration parsed without a hard syntax diagnostic.
     Declaration(&'tu Declaration<'tu>),
+    Asm(&'tu super::gnu::Asm<'tu>),
     /// Repaired declaration produced after at least one hard syntax diagnostic.
     RecoveredDeclaration(&'tu Declaration<'tu>),
     /// Function definition parsed without a hard syntax diagnostic.
@@ -92,6 +93,7 @@ pub(crate) struct FunctionDefinition<'tu> {
 /// C99: `block-item` is §6.8.2 paragraph 1, p. 132; PDF p. 144.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum BlockItem<'tu> {
+    FunctionDefinition(&'tu FunctionDefinition<'tu>),
     Declaration(&'tu Declaration<'tu>),
     Statement(&'tu Statement<'tu>),
 }
@@ -130,6 +132,9 @@ pub(crate) struct Statement<'tu> {
 /// productions are §6.8.1-§6.8.6.4, pp. 131-139; PDF pp. 143-151.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum StatementType<'tu> {
+    Asm(&'tu super::gnu::Asm<'tu>),
+    ComputedGoto(ExpressionSlot<'tu>),
+    LocalLabels(ArenaList<'tu, Identifier>),
     Attributed(&'tu AttributedStatement<'tu>),
     Declaration(&'tu Declaration<'tu>),
     NamedBreak(Identifier),
@@ -258,6 +263,12 @@ pub(crate) struct Expression<'tu> {
 /// pp. 69-94; PDF pp. 81-106.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum ExpressionType<'tu> {
+    StatementExpression(&'tu Statement<'tu>),
+    Builtin(&'tu super::gnu::Builtin<'tu>),
+    LabelAddress(Identifier),
+    /// GNU omitted middle operand: `then_expression` aliases
+    /// `condition_expression`.
+    OmittedConditional(&'tu ConditionalExpression<'tu>),
     /// C99: `( expression )`, §6.5.1 paragraph 1, p. 69; PDF p. 81.
     Parenthesized {
         expression: &'tu Expression<'tu>,
@@ -317,6 +328,7 @@ pub(crate) enum ExpressionType<'tu> {
     /// PDF p. 92.
     SizeofExpr(&'tu Expression<'tu>),
     AlignofType(&'tu TypeName<'tu>),
+    AlignofExpr(&'tu Expression<'tu>),
     Countof(super::modern::SyntaxOperand<'tu>),
     Generic(&'tu super::modern::GenericSelection<'tu>),
     Boolean(bool),
@@ -401,6 +413,9 @@ pub(crate) enum BinaryOperator {
 /// pp. 69-81; PDF pp. 81-93.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum UnaryOperator {
+    Real,
+    Imag,
+    Extension,
     AddressOf,
     Indirection,
     Plus,

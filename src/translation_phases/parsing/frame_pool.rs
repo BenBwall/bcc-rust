@@ -36,7 +36,13 @@ use super::{
         ExpressionOperand,
     },
     expression_operators::LanguageExpressionOperator,
+    gnu::{
+        AsmOperand,
+        GnuFrame,
+        OffsetMember,
+    },
     initializer::DesignationState,
+    modern::SyntaxOperand,
     parameter_list::ParameterListFrame,
     struct_or_union::StructOrUnionSpecifierFrame,
     syntax::{
@@ -146,6 +152,11 @@ pub(super) struct FramePools<'tu, 'p> {
     pub(super) calls: BoxPool<'p, CallState<'tu, 'p>>,
     /// Designation states, reused with the capacity of their lists.
     pub(super) designations: BoxPool<'p, DesignationState<'tu, 'p>>,
+    pub(super) gnu_tokens: VecPool<'p, crate::translation_phases::preprocessing::Token>,
+    pub(super) asm_operands: VecPool<'p, AsmOperand<'tu>>,
+    pub(super) builtin_operands: VecPool<'p, SyntaxOperand<'tu>>,
+    pub(super) offset_members: VecPool<'p, OffsetMember<'tu>>,
+    pub(super) gnu_frames: BoxPool<'p, GnuFrame<'tu, 'p>>,
     pub(super) parameter_lists: BoxPool<'p, ParameterListFrame<'tu, 'p>>,
     pub(super) struct_or_union_specifiers: BoxPool<'p, StructOrUnionSpecifierFrame<'tu, 'p>>,
     /// Flags shared along a chain of parenthesized declarators.
@@ -173,6 +184,11 @@ impl<'tu, 'p> FramePools<'tu, 'p> {
             calls: BoxPool::new_in(arena),
             designations: BoxPool::new_in(arena),
             parameter_lists: BoxPool::new_in(arena),
+            gnu_frames: BoxPool::new_in(arena),
+            gnu_tokens: VecPool::new_in(arena),
+            asm_operands: VecPool::new_in(arena),
+            builtin_operands: VecPool::new_in(arena),
+            offset_members: VecPool::new_in(arena),
             struct_or_union_specifiers: BoxPool::new_in(arena),
             chain_flags: ArenaVec::new_in(arena),
         }
@@ -189,6 +205,10 @@ impl<'tu, 'p> FramePools<'tu, 'p> {
         let arena = self.arena;
         self.designations
             .take(arena, || DesignationState::new_in(arena))
+    }
+
+    pub(super) fn gnu(&mut self, frame: GnuFrame<'tu, 'p>) -> PoolBox<'p, GnuFrame<'tu, 'p>> {
+        self.gnu_frames.boxed(self.arena, frame)
     }
 
     pub(super) fn parameter_list(

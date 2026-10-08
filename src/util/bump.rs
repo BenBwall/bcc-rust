@@ -689,10 +689,6 @@ impl<'a, T> ArenaQueue<'a, T> {
         self.data.len() - self.read
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Only the queue's own tests ask this so far.")
-    )]
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }

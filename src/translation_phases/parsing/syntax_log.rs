@@ -18,11 +18,18 @@ use super::{
         InitializerElement,
         ParameterDeclaration,
         ParenthesizedDeclarator,
+        RangeDesignator,
         StructDeclaration,
         StructDeclarator,
         StructOrUnionSpecifier,
         TypeName,
         TypeQualifiers,
+    },
+    gnu::{
+        Asm,
+        AsmOperand,
+        Builtin,
+        OffsetMember,
     },
     modern::{
         AttributeSpecifier,
@@ -31,6 +38,7 @@ use super::{
         GenericSelection,
         SpecifierExtension,
         StaticAssertion,
+        SyntaxOperand,
     },
     syntax::{
         AttributedStatement,
@@ -66,6 +74,12 @@ pub(super) trait TreeNode<'tu>: Sized + 'tu {
     reason = "A test-only log of every allocated node, compiled only under `cfg(test)`."
 )]
 pub(super) struct SyntaxLog<'tu> {
+    asm:                   Vec<&'tu Asm<'tu>>,
+    asm_operands:          Vec<&'tu AsmOperand<'tu>>,
+    builtins:              Vec<&'tu Builtin<'tu>>,
+    offset_members:        Vec<&'tu OffsetMember<'tu>>,
+    syntax_operands:       Vec<&'tu SyntaxOperand<'tu>>,
+    ranges:                Vec<&'tu RangeDesignator<'tu>>,
     extended_types:        Vec<&'tu ExtendedType<'tu>>,
     specifier_extensions:  Vec<&'tu SpecifierExtension<'tu>>,
     attributes:            Vec<&'tu AttributeSpecifier<'tu>>,
@@ -124,6 +138,12 @@ macro_rules! tree_nodes {
 }
 
 tree_nodes! {
+    RangeDesignator => ranges,
+    Asm => asm,
+    AsmOperand => asm_operands,
+    Builtin => builtins,
+    OffsetMember => offset_members,
+    SyntaxOperand => syntax_operands,
     ExtendedType => extended_types,
     SpecifierExtension => specifier_extensions,
     AttributeSpecifier => attributes,

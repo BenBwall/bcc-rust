@@ -81,6 +81,10 @@ pub(crate) enum ExtendedType<'tu> {
     Decimal64,
     Decimal128,
     Inferred,
+    Int128 {
+        signedness: Option<bool>,
+    },
+    AutoType,
 }
 
 /// Specifier additions collected in reverse source order; immutable links avoid
@@ -99,6 +103,7 @@ pub(crate) enum SpecifierExtensionKind<'tu> {
     Attributes(&'tu AttributeSpecifier<'tu>),
     ThreadLocal,
     Constexpr,
+    ExtensionMarker,
 }
 
 /// Shared attribute syntax for ISO, GNU, and MSVC grammar owners.
@@ -115,6 +120,7 @@ pub(crate) struct AttributeSpecifier<'tu> {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum AttributeSyntax {
     Standard,
+    Gnu,
 }
 
 /// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
@@ -181,6 +187,8 @@ enum Phase {
     Semicolon,
     Finish,
     AttributeTokens,
+    GnuAttributeOpen,
+    GnuAttributeInnerOpen,
 }
 
 /// Delimiter-owning frame, whose grammar children run on the shared machine
@@ -191,6 +199,7 @@ pub(super) struct ModernFrame<'tu, 'p> {
     kind: ModernKind,
     phase: Phase,
     attribute_position: AttributePosition,
+    attribute_syntax: AttributeSyntax,
     pub(super) source_vectors: Option<SourceVectors>,
     operand: Option<SyntaxOperand<'tu>>,
     association_type: Option<&'tu TypeName<'tu>>,
@@ -207,6 +216,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
             keyword: None,
             phase: Phase::Start,
             attribute_position: AttributePosition::Opening,
+            attribute_syntax: AttributeSyntax::Standard,
             source_vectors: None,
             operand: None,
             association_type: None,
@@ -249,6 +259,20 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         );
     }
 
+    fn attribute_expected(
+        &self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        component: &'static str,
+    ) {
+        let error = if self.attribute_syntax == AttributeSyntax::Gnu {
+            ParserErrorType::ExpectedGnuSyntax(component, token.map(|x| x.kind))
+        } else {
+            ParserErrorType::ExpectedIsoSyntax(component, token.map(|x| x.kind))
+        };
+        parser.report(error, token);
+    }
+
     fn punctuation(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
@@ -281,6 +305,12 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     }
                     self.own(parser, token);
                     if self.kind == ModernKind::Attributes {
+                        if token.kind == TokenType::Keyword(KeywordTokenType::Attribute) {
+                            self.attribute_syntax = AttributeSyntax::Gnu;
+                            self.tokens.push(token);
+                            self.phase = Phase::GnuAttributeOpen;
+                            return ParseAction::Consume;
+                        }
                         parser.extension(Feature::Attributes, "[[...]]", token);
                         self.tokens.push(token);
                         self.delimiters
@@ -506,9 +536,37 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     "`;` after static assertion",
                 )
             },
+            | Phase::GnuAttributeOpen | Phase::GnuAttributeInnerOpen => {
+                let inner = matches!(self.phase, Phase::GnuAttributeInnerOpen);
+                self.phase = if inner {
+                    Phase::AttributeTokens
+                } else {
+                    Phase::GnuAttributeInnerOpen
+                };
+                self.attribute_position = AttributePosition::Name;
+                if let Some(token) = token
+                    && token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                {
+                    self.tokens.push(token);
+                    self.delimiters.push(OperatorTokenType::ClosingParenthesis);
+                    ParseAction::Consume
+                } else {
+                    self.attribute_expected(parser, token, "`(` in GNU attribute specifier");
+                    self.phase = Phase::Finish;
+                    ParseAction::Continue
+                }
+            },
             | Phase::AttributeTokens => {
                 let Some(token) = token else {
-                    Self::expected(parser, None, "`]]` in attribute specifier");
+                    self.attribute_expected(
+                        parser,
+                        None,
+                        if self.attribute_syntax == AttributeSyntax::Gnu {
+                            "`))` in GNU attribute specifier"
+                        } else {
+                            "`]]` in attribute specifier"
+                        },
+                    );
                     self.phase = Phase::Finish;
                     return ParseAction::Continue;
                 };
@@ -522,7 +580,15 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                         )
                     )
                 {
-                    Self::expected(parser, Some(token), "`]]` in attribute specifier");
+                    self.attribute_expected(
+                        parser,
+                        Some(token),
+                        if self.attribute_syntax == AttributeSyntax::Gnu {
+                            "`))` in GNU attribute specifier"
+                        } else {
+                            "`]]` in attribute specifier"
+                        },
+                    );
                     self.phase = Phase::Finish;
                     return ParseAction::Continue;
                 }
@@ -561,7 +627,13 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                         },
                         | Name | AfterName | AfterPrefixedName | AfterArguments
                             if kind
-                                == TokenType::Operator(OperatorTokenType::ClosingSquareBracket) =>
+                                == TokenType::Operator(
+                                    if self.attribute_syntax == AttributeSyntax::Gnu {
+                                        OperatorTokenType::ClosingParenthesis
+                                    } else {
+                                        OperatorTokenType::ClosingSquareBracket
+                                    },
+                                ) =>
                         {
                             self.attribute_position = Closing;
                             true
@@ -582,11 +654,17 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                             true
                         },
                         | Closing =>
-                            kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket),
+                            kind == TokenType::Operator(
+                                if self.attribute_syntax == AttributeSyntax::Gnu {
+                                    OperatorTokenType::ClosingParenthesis
+                                } else {
+                                    OperatorTokenType::ClosingSquareBracket
+                                },
+                            ),
                         | _ => false,
                     };
                     if !valid {
-                        Self::expected(
+                        self.attribute_expected(
                             parser,
                             Some(token),
                             "attribute name, arguments, or separator",
@@ -614,7 +692,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                         if self.delimiters.last() == Some(&op) {
                             _ = self.delimiters.pop();
                         } else {
-                            Self::expected(
+                            self.attribute_expected(
                                 parser,
                                 Some(token),
                                 "matching attribute argument delimiter",
@@ -670,7 +748,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     | ModernKind::Attributes => {
                         let tokens = parser.alloc_syntax_list(&mut self.tokens);
                         ModernValue::Attributes(parser.alloc_syntax(AttributeSpecifier {
-                            syntax: AttributeSyntax::Standard,
+                            syntax: self.attribute_syntax,
                             tokens,
                             source_vectors,
                             recovered,

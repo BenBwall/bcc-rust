@@ -88,7 +88,7 @@ fn compound_blocks_preserve_mixed_items_and_every_statement_family() {
                 .iter()
                 .filter_map(|item| match item {
                     | BlockItem::Statement(index) => Some(index.kind),
-                    | BlockItem::Declaration(_) => None,
+                    | BlockItem::FunctionDefinition(_) | BlockItem::Declaration(_) => None,
                 })
                 .collect::<Vec<_>>();
             assert!(kinds.iter().any(|kind| matches!(kind, StatementType::Null)));
@@ -274,7 +274,8 @@ fn function_definition_publishes_identifier_bound_parameters() {
                     nested,
                     match items[0] {
                         | BlockItem::Declaration(index) => index,
-                        | BlockItem::Statement(_) => unreachable!(),
+                        | BlockItem::FunctionDefinition(_) | BlockItem::Statement(_) =>
+                            unreachable!(),
                     }
                     .init_declarators[0]
                         .declarator,

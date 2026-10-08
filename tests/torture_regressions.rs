@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn torture_malformed_call_initializer_recovers_to_following_input() {
-        for initializer in ["(int){x: 0}", "(struct {int x;}){x: 0}"] {
+        for initializer in ["(int){x: + }", "(struct {int x;}){x: + }"] {
             let source = format!("void f(void) {{ g({initializer}); }} int after;\n");
             let output = run(&source);
             let stderr = String::from_utf8_lossy(&output.stderr);

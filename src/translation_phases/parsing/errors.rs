@@ -95,6 +95,8 @@ pub(crate) enum ExpectedSyntax {
     OwnedDelimiter,
     /// A required component of a later ISO grammar production.
     IsoSyntax,
+    /// A required component of a GNU grammar production.
+    GnuSyntax,
     None,
 }
 
@@ -413,6 +415,10 @@ pub(crate) enum ParserErrorType<'tu> {
     /// absent. C11: §6.5.1.1p1, p. 78; PDF p. 96; §6.7.10p1, p. 145; PDF p.
     /// 163. C23: §6.7.13.2p1, pp. 142-143; PDF pp. 155-156.
     ExpectedIsoSyntax(&'static str, Option<TokenType>),
+    /// A required component of a GNU assembly, builtin or local-label
+    /// production. C99: vendor extension to §6.5 and §6.8, pp. 67-139; PDF
+    /// pp. 79-151.
+    ExpectedGnuSyntax(&'static str, Option<TokenType>),
     /// `.` or `->` was not followed by a member identifier.
     /// C99: `postfix-expression . identifier` is §6.5.2 paragraph 1, p. 69;
     /// PDF p. 81; member access is §6.5.2.3, pp. 72-73; PDF pp. 84-85.
@@ -522,7 +528,6 @@ pub(crate) enum ParserErrorType<'tu> {
     /// A struct or union definition had no member declaration.
     /// C99: struct-declaration-list is nonempty in §6.7.2.1, p. 101;
     /// PDF p. 113.
-    ExpectedStructDeclarationBeforeClosingCurlyBrace,
     /// Struct member declaration reached `}` without its semicolon.
     /// C99: struct-declaration is §6.7.2.1, p. 101; PDF p. 113.
     ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList,
@@ -674,6 +679,7 @@ impl GetSeverity for ParserErrorType<'_> {
             | Self::ExpectedStatement(..)
             | Self::ExpectedGotoLabel(..)
             | Self::ExpectedStatementExpression(..)
+            | Self::ExpectedGnuSyntax(..)
             | Self::ExpectedIsoSyntax(..)
             | Self::ExpectedMemberIdentifier(..)
             | Self::ExpectedClosingSquareBracketInSubscript(..)
@@ -704,7 +710,6 @@ impl GetSeverity for ParserErrorType<'_> {
             | Self::ExpectedStructOrUnionKeyword(..)
             | Self::StructOrUnionSpecifierWithoutNameAndBody(..)
             | Self::ExpectedClosingCurlyBraceInStructDeclarationList(..)
-            | Self::ExpectedStructDeclarationBeforeClosingCurlyBrace
             | Self::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList
             | Self::ExpectedCommaOrSemicolonInStructDeclaratorList(..)
             | Self::ExpectedEnumKeyword(..)
@@ -889,6 +894,7 @@ impl ParserErrorType<'_> {
             | Self::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator(..) =>
                 ExpectedSyntax::Declarator,
             | Self::ExpectedStatement(..) => ExpectedSyntax::Statement,
+            | Self::ExpectedGnuSyntax(..) => ExpectedSyntax::GnuSyntax,
             | Self::ExpectedIsoSyntax(..) => ExpectedSyntax::IsoSyntax,
             | Self::ExpectedStatementExpression(..)
             | Self::ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator =>
@@ -936,7 +942,6 @@ impl ParserErrorType<'_> {
             | Self::DeclarationListAfterParameterTypeList
             | Self::ExpectedStructOrUnionKeyword(..)
             | Self::StructOrUnionSpecifierWithoutNameAndBody(..)
-            | Self::ExpectedStructDeclarationBeforeClosingCurlyBrace
             | Self::ExpectedEnumKeyword(..)
             | Self::EnumSpecifierWithoutNameAndBody(..)
             | Self::ExpectedEnumeratorBeforeClosingCurlyBrace
@@ -1081,6 +1086,7 @@ impl ParserErrorType<'_> {
                 "expected an expression",
                 *token,
             ),
+            | Self::ExpectedGnuSyntax(component, token)
             | Self::ExpectedIsoSyntax(component, token) => expected(component, *token),
             | Self::ExpectedMemberIdentifier(token) => expected_with_label(
                 "a member name after `.` or `->`",
@@ -1221,13 +1227,6 @@ impl ParserErrorType<'_> {
             ),
             | Self::ExpectedClosingCurlyBraceInStructDeclarationList(token) =>
                 expected_with_label("`}` to close the member list", "expected `}`", *token),
-            | Self::ExpectedStructDeclarationBeforeClosingCurlyBrace =>
-                new("struct or union has no members")
-                    .label("expected a member declaration before `}`")
-                    .note(
-                        "C99 §6.7.2.1: the member list of a struct or union contains at least one \
-                         declaration",
-                    ),
             | Self::ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList =>
                 new("expected `;` after the last member declaration, found `}`")
                     .label("expected `;`")

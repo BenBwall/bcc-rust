@@ -88,6 +88,7 @@ pub(super) struct InitializerFrame<'tu, 'p> {
     /// frame is pushed and take it back, reset, when the frame pops.
     pub(super) designation: Option<PoolBox<'p, DesignationState<'tu, 'p>>>,
     starting_error_count: usize,
+    range_lower: Option<ConstantExpression<'tu>>,
     /// Whether `)` belongs to an enclosing expression or `for` header.
     closing_parenthesis_is_caller_boundary: bool,
     /// Whether `]` belongs to an enclosing expression.
@@ -160,6 +161,7 @@ pub(super) enum InitializerPhase<'tu> {
     ElementOrClose,
     Designation,
     FieldDesignator,
+    OldFieldColon,
     PushArrayDesignator,
     AwaitArrayDesignator,
     CloseArrayDesignator(ConstantExpression<'tu>, bool),
@@ -203,9 +205,143 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             closing_brace_source_vectors: None,
             designation: None,
             starting_error_count,
+            range_lower: None,
             closing_parenthesis_is_caller_boundary,
             closing_square_bracket_is_caller_boundary,
         }
+    }
+
+    /// Designation starts: ISO paths and GNU colon/range forms.
+    /// C99: extension to §6.7.8, p. 125; PDF p. 137.
+    fn continue_range(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        index: ConstantExpression<'tu>,
+    ) -> Option<ParseAction<'tu, 'p>> {
+        if let Some(token) = token
+            && token.kind == TokenType::Operator(OperatorTokenType::Ellipsis)
+        {
+            if self.range_lower.is_some() {
+                parser.report(
+                    ParserErrorType::ExpectedGnuSyntax(
+                        "one range per designator",
+                        Some(token.kind),
+                    ),
+                    Some(token),
+                );
+            } else {
+                self.range_lower = Some(index);
+            }
+            parser.extension(
+                crate::configuration::Feature::GnuDesignators,
+                "array range designator",
+                token,
+            );
+            self.merge_designation_source(parser.context, index.expression().source_vectors);
+            self.merge_designation_source(parser.context, token.source_vectors);
+            let opening = self
+                .designation_state()
+                .current_designator_source
+                .unwrap_or_default();
+            let lower = parser
+                .context
+                .merge_vectors(opening, index.expression().source_vectors);
+            self.designation_state().current_designator_source =
+                Some(parser.context.merge_vectors(lower, token.source_vectors));
+            self.phase = InitializerPhase::PushArrayDesignator;
+            return Some(ParseAction::Consume);
+        }
+        None
+    }
+
+    fn finish_old_field(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+    ) -> ParseAction<'tu, 'p> {
+        if let Some(token) = token {
+            self.merge_designation_source(parser.context, token.source_vectors);
+            let designator = self
+                .designation_state()
+                .current_designators
+                .last_mut()
+                .expect("old field has a designator");
+            designator.source_vectors = parser
+                .context
+                .merge_vectors(designator.source_vectors, token.source_vectors);
+        }
+        self.finish_designation(parser);
+        self.phase = InitializerPhase::PushElement;
+        ParseAction::Consume
+    }
+
+    fn step_designation(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+    ) -> ParseAction<'tu, 'p> {
+        if let Some(token) = token
+            && token.kind == TokenType::Identifier
+            && parser
+                .cursor
+                .following()
+                .is_some_and(|x| x.kind == TokenType::Operator(OperatorTokenType::Colon))
+        {
+            parser.extension(
+                crate::configuration::Feature::GnuDesignators,
+                "old-style field designator",
+                token,
+            );
+            self.merge_designation_source(parser.context, token.source_vectors);
+            self.designation_state()
+                .current_designators
+                .push(Designator {
+                    kind: DesignatorType::GnuField(Identifier::from_token(token)),
+                    operator_source_vectors: token.source_vectors,
+                    closing_bracket_source_vectors: None,
+                    source_vectors: token.source_vectors,
+                    recovered: false,
+                });
+            self.phase = InitializerPhase::OldFieldColon;
+            return ParseAction::Consume;
+        }
+        if let Some(designator) = token
+            && designator.kind == TokenType::Operator(OperatorTokenType::Period)
+        {
+            parser.extension(
+                crate::configuration::Feature::DesignatedInitializers,
+                "designated initializer",
+                designator,
+            );
+            self.merge_designation_source(parser.context, designator.source_vectors);
+            self.designation_state().current_designator_source = Some(designator.source_vectors);
+            self.phase = InitializerPhase::FieldDesignator;
+            return ParseAction::Consume;
+        }
+        if let Some(designator) = token
+            && designator.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+        {
+            parser.extension(
+                crate::configuration::Feature::DesignatedInitializers,
+                "designated initializer",
+                designator,
+            );
+            self.merge_designation_source(parser.context, designator.source_vectors);
+            self.designation_state().current_designator_source = Some(designator.source_vectors);
+            self.phase = InitializerPhase::PushArrayDesignator;
+            return ParseAction::Consume;
+        }
+        self.phase = if self
+            .designation
+            .as_ref()
+            .is_none_or(|designation| designation.current_designators.is_empty())
+        {
+            InitializerPhase::PushElement
+        } else {
+            InitializerPhase::DesignationEquals
+        };
+        ParseAction::Reprocess
     }
 
     #[expect(
@@ -319,48 +455,8 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 self.phase = InitializerPhase::Designation;
                 ParseAction::Continue
             },
-            | InitializerPhase::Designation => {
-                debug_assert!(returned.is_none());
-                if let Some(designator) = token
-                    && designator.kind == TokenType::Operator(OperatorTokenType::Period)
-                {
-                    parser.extension(
-                        crate::configuration::Feature::DesignatedInitializers,
-                        "designated initializer",
-                        designator,
-                    );
-                    self.merge_designation_source(parser.context, designator.source_vectors);
-                    self.designation_state().current_designator_source =
-                        Some(designator.source_vectors);
-                    self.phase = InitializerPhase::FieldDesignator;
-                    return ParseAction::Consume;
-                }
-                if let Some(designator) = token
-                    && designator.kind
-                        == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
-                {
-                    parser.extension(
-                        crate::configuration::Feature::DesignatedInitializers,
-                        "designated initializer",
-                        designator,
-                    );
-                    self.merge_designation_source(parser.context, designator.source_vectors);
-                    self.designation_state().current_designator_source =
-                        Some(designator.source_vectors);
-                    self.phase = InitializerPhase::PushArrayDesignator;
-                    return ParseAction::Consume;
-                }
-                self.phase = if self
-                    .designation
-                    .as_ref()
-                    .is_none_or(|designation| designation.current_designators.is_empty())
-                {
-                    InitializerPhase::PushElement
-                } else {
-                    InitializerPhase::DesignationEquals
-                };
-                ParseAction::Reprocess
-            },
+            | InitializerPhase::OldFieldColon => self.finish_old_field(parser, token),
+            | InitializerPhase::Designation => self.step_designation(parser, token),
             | InitializerPhase::FieldDesignator => {
                 debug_assert!(returned.is_none());
                 let Some(identifier) = token.filter(|token| token.kind == TokenType::Identifier)
@@ -430,6 +526,9 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 else {
                     panic!("array designator returned an unexpected value: {returned:?}");
                 };
+                if let Some(action) = self.continue_range(parser, token, index) {
+                    return action;
+                }
                 self.phase = InitializerPhase::CloseArrayDesignator(index, recovered);
                 ParseAction::Reprocess
             },
@@ -452,6 +551,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                         .merge_vectors(source_vectors, close.source_vectors);
                     self.merge_designation_source(parser.context, close.source_vectors);
                     self.push_array_designator(
+                        parser,
                         expression,
                         source_vectors,
                         Some(close.source_vectors),
@@ -503,6 +603,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     self.merge_designation_source(parser.context, token.source_vectors);
                     if depth.brackets == 0 {
                         self.push_array_designator(
+                            parser,
                             expression,
                             source_vectors,
                             Some(token.source_vectors),
@@ -533,12 +634,12 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     depth,
                     closing_bracket_follows,
                 ) {
-                    self.push_array_designator(expression, source_vectors, None, true);
+                    self.push_array_designator(parser, expression, source_vectors, None, true);
                     self.phase = InitializerPhase::Designation;
                     return ParseAction::Reprocess;
                 }
                 let Some(token) = token else {
-                    self.push_array_designator(expression, source_vectors, None, true);
+                    self.push_array_designator(parser, expression, source_vectors, None, true);
                     self.phase = InitializerPhase::Designation;
                     return ParseAction::Reprocess;
                 };
@@ -587,6 +688,16 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                         Some(equals.source_vectors);
                     self.merge_designation_source(parser.context, equals.source_vectors);
                     true
+                } else if token.is_some_and(|x| {
+                    super::expression_operators::is_expression_operand_starter(x.kind)
+                        || x.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                }) {
+                    parser.extension(
+                        crate::configuration::Feature::GnuDesignators,
+                        "designator without equals",
+                        token.expect("initializer exists"),
+                    );
+                    false
                 } else {
                     parser.report(
                         ParserErrorType::ExpectedEqualsAfterInitializerDesignation(
@@ -794,14 +905,25 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
 
     fn push_array_designator(
         &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
         expression: ConstantExpression<'tu>,
         source_vectors: SourceVectors,
         closing_bracket_source_vectors: Option<SourceVectors>,
         recovered: bool,
     ) {
+        let kind = if let Some(lower) = self.range_lower.take() {
+            DesignatorType::Range(
+                parser.alloc_syntax(super::declaration_syntax::RangeDesignator {
+                    lower,
+                    upper: expression,
+                }),
+            )
+        } else {
+            DesignatorType::Array(expression)
+        };
         let designation = self.designation_state();
         designation.current_designators.push(Designator {
-            kind: DesignatorType::Array(expression),
+            kind,
             operator_source_vectors: designation
                 .current_designator_source
                 .take()
@@ -966,7 +1088,11 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 following.kind == TokenType::Operator(OperatorTokenType::Colon)
             })
         {
-            return ListBoundary::MissingClose;
+            return if matches!(self.phase, InitializerPhase::ElementOrClose) {
+                ListBoundary::None
+            } else {
+                ListBoundary::MissingClose
+            };
         }
         let identifier_continues_initializer = token.kind == TokenType::Identifier
             && parser.cursor.following().is_some_and(|following| {

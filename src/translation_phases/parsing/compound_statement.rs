@@ -74,6 +74,7 @@ pub(super) enum CompoundStatementPhase {
     Start,
     ItemOrClose,
     AwaitDeclaration,
+    AwaitFunctionDefinition,
     AwaitStatement,
     Finish,
 }
@@ -151,6 +152,7 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                         && is_operator(parser.cursor.following(), OperatorTokenType::Colon);
                     if !is_label
                         && token.is_some_and(|token| parser.declaration_starter(token))
+                        && parser.extension_precedes_declaration()
                         && (!parser.attribute_starter(token)
                             || parser.attributes_precede_declaration())
                     {
@@ -180,9 +182,42 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     panic!("block declaration returned an unexpected value: {returned:?}");
                 };
+                if declaration.is_definition_head() {
+                    let mut extension = declaration.declaration_specifiers.extensions;
+                    let mut suppressed = false;
+                    while let Some(item) = extension {
+                        suppressed |=
+                            item.kind == super::modern::SpecifierExtensionKind::ExtensionMarker;
+                        extension = item.next;
+                    }
+                    if !suppressed && let Some(token) = token {
+                        parser.extension(
+                            crate::configuration::Feature::NestedFunctions,
+                            "nested function definition",
+                            token,
+                        );
+                    }
+                    self.phase = CompoundStatementPhase::AwaitFunctionDefinition;
+                    return ParseAction::Push(ParseFrame::FunctionDefinition(
+                        super::function_definition::FunctionDefinitionFrame::new(
+                            parser.arena,
+                            declaration,
+                            parser.hard_error_count,
+                        ),
+                    ));
+                }
                 let source = declaration.source_vectors;
                 self.source_vectors.push(source);
                 self.items.push(BlockItem::Declaration(declaration));
+                self.phase = CompoundStatementPhase::ItemOrClose;
+                ParseAction::Continue
+            },
+            | CompoundStatementPhase::AwaitFunctionDefinition => {
+                let Some(ParseValue::FunctionDefinition(definition)) = returned else {
+                    panic!("nested function child protocol");
+                };
+                self.source_vectors.push(definition.source_vectors);
+                self.items.push(BlockItem::FunctionDefinition(definition));
                 self.phase = CompoundStatementPhase::ItemOrClose;
                 ParseAction::Continue
             },

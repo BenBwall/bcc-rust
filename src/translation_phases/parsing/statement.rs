@@ -140,6 +140,10 @@ pub(super) enum SimpleJump {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum StatementPhase<'tu> {
     Start,
+    AwaitGnu,
+    ComputedGotoExpression,
+    AwaitComputedGoto,
+    ComputedGotoSemicolon(ExpressionSlot<'tu>),
     AwaitAttributes,
     AwaitAttributedStatement(&'tu AttributeSpecifier<'tu>),
     AwaitLabeledDeclaration(LabelPrefix<'tu>),
@@ -315,6 +319,45 @@ impl<'tu, 'p> StatementFrame<'tu> {
         }
 
         match self.phase {
+            | StatementPhase::AwaitGnu => match returned {
+                | Some(ParseValue::Gnu(super::gnu::GnuValue::Asm(x))) => {
+                    self.source_vectors = Some(x.source_vectors);
+                    self.finish(parser, StatementType::Asm(x))
+                },
+                | Some(ParseValue::Gnu(super::gnu::GnuValue::LocalLabels(labels, source))) => {
+                    self.source_vectors = Some(source);
+                    self.finish(parser, StatementType::LocalLabels(labels))
+                },
+                | _ => panic!("GNU statement child protocol"),
+            },
+            | StatementPhase::ComputedGotoExpression => {
+                self.phase = StatementPhase::AwaitComputedGoto;
+                ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    parser.arena,
+                    ExpressionMode::Expression,
+                    ExpressionBoundary::Statement(ExpressionTerminator::Semicolon),
+                    parser.hard_error_count,
+                )))
+            },
+            | StatementPhase::AwaitComputedGoto => {
+                let expression = super::machine::any_expression_value(returned);
+                let slot = ExpressionSlot::Parsed(expression);
+                self.source_vectors = Some(parser.context.merge_vectors(
+                    self.source_vectors.unwrap_or_default(),
+                    expression.source_vectors,
+                ));
+                self.phase = StatementPhase::ComputedGotoSemicolon(slot);
+                ParseAction::Continue
+            },
+            | StatementPhase::ComputedGotoSemicolon(slot) => {
+                self.own_semicolon_or_report(parser, token, "computed goto");
+                self.phase = StatementPhase::Finish(StatementType::ComputedGoto(slot));
+                if is_operator(token, OperatorTokenType::Semicolon) {
+                    ParseAction::Consume
+                } else {
+                    ParseAction::Reprocess
+                }
+            },
             | StatementPhase::AwaitAttributes => {
                 let Some(ParseValue::Modern(ModernValue::Attributes(x))) = returned else {
                     panic!("statement attributes protocol: {returned:?}")
@@ -441,6 +484,19 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 }
             },
             | StatementPhase::Start => {
+                if let Some(token) = token {
+                    let kind = match token.kind {
+                        | TokenType::Keyword(KeywordTokenType::Asm) =>
+                            Some(super::gnu::GnuKind::Asm { label: false }),
+                        | TokenType::Keyword(KeywordTokenType::LocalLabel) =>
+                            Some(super::gnu::GnuKind::LocalLabels),
+                        | _ => None,
+                    };
+                    if let Some(kind) = kind {
+                        self.phase = StatementPhase::AwaitGnu;
+                        return super::gnu::GnuFrame::push(parser, kind);
+                    }
+                }
                 debug_assert!(returned.is_none());
                 if parser.attribute_starter(token) {
                     self.phase = StatementPhase::AwaitAttributes;
@@ -512,13 +568,16 @@ impl<'tu, 'p> StatementFrame<'tu> {
                             // so the diagnostic
                             // belongs on its keyword rather than
                             // on whatever token follows it.
-                            if parser
-                                .switch_scopes
-                                .last()
-                                .is_some_and(|switch| switch.has_default)
+                            if parser.switch_scopes.len() > parser.switch_floor
+                                && parser
+                                    .switch_scopes
+                                    .last()
+                                    .is_some_and(|switch| switch.has_default)
                             {
                                 parser.report(ParserErrorType::DuplicateDefaultLabel, Some(token));
-                            } else if let Some(switch) = parser.switch_scopes.last_mut() {
+                            } else if parser.switch_scopes.len() > parser.switch_floor
+                                && let Some(switch) = parser.switch_scopes.last_mut()
+                            {
                                 switch.has_default = true;
                             }
                             self.merge_token(parser, token);
@@ -557,7 +616,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                             self.phase = StatementPhase::ForOpening;
                             return ParseAction::Consume;
                         },
-                        | KeywordTokenType::Sizeof => {},
+                        | KeywordTokenType::Sizeof | KeywordTokenType::Extension => {},
                         | _ if parser.declaration_starter(token) => {
                             parser.report(
                                 ParserErrorType::ExpectedStatement(Some(token.kind)),
@@ -738,6 +797,18 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 }
             },
             | StatementPhase::GotoIdentifier => {
+                if let Some(token) = token
+                    && token.kind == TokenType::Operator(OperatorTokenType::Asterisk)
+                {
+                    parser.extension(
+                        crate::configuration::Feature::LabelsAsValues,
+                        "computed goto",
+                        token,
+                    );
+                    self.merge_token(parser, token);
+                    self.phase = StatementPhase::ComputedGotoExpression;
+                    return ParseAction::Consume;
+                }
                 debug_assert!(returned.is_none());
                 let identifier = if let Some(token) = token
                     && token.kind == TokenType::Identifier
@@ -813,11 +884,16 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 self.merge_constant_slot(parser.context, slot);
                 if is_operator(token, OperatorTokenType::Ellipsis) {
                     let token = token.expect("ellipsis exists");
-                    parser.extension(
-                        crate::configuration::Feature::CaseRanges,
-                        "case range",
-                        token,
-                    );
+                    if parser.pedantic_suppression == 0
+                        && parser.context.configuration.standard()
+                            < crate::configuration::CStandard::C2y
+                    {
+                        parser.context.report_extension_since(
+                            "case range",
+                            crate::configuration::FeatureOrigin::Gnu,
+                            token.source_vectors,
+                        );
+                    }
                     self.merge_token(parser, token);
                     self.phase = StatementPhase::PushCaseRange(slot);
                     return ParseAction::Consume;
@@ -907,6 +983,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     return self.finish(parser, kind);
                 }
                 if token.is_some_and(|x| parser.declaration_starter(x))
+                    && parser.extension_precedes_declaration()
                     && (!parser.attribute_starter(token) || parser.attributes_precede_declaration())
                 {
                     if !self.block_item {

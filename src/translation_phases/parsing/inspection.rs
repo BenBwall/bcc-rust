@@ -85,6 +85,9 @@ pub(crate) struct InspectionOptions {
 }
 
 enum Work<'tu> {
+    Asm(&'tu super::gnu::Asm<'tu>, usize),
+    AsmOperand(super::gnu::AsmOperand<'tu>, usize),
+    OffsetMember(super::gnu::OffsetMember<'tu>, usize),
     SpecifierExtensionItem(&'tu super::modern::SpecifierExtension<'tu>, usize),
     GenericAssociation(super::modern::GenericAssociation<'tu>, usize),
     Attributes(&'tu super::modern::AttributeSpecifier<'tu>, usize),
@@ -146,7 +149,66 @@ impl<'tu> ParsedTranslationUnit<'tu> {
 
         while let Some(item) = work.pop() {
             match item {
+                | Work::Asm(asm, indent) => {
+                    Self::line(
+                        &mut output,
+                        indent,
+                        format_args!(
+                            "asm sections={}{}",
+                            asm.sections,
+                            if asm.recovered { " recovered" } else { "" }
+                        ),
+                        Some(asm.source_vectors),
+                        context,
+                        options,
+                    );
+                    for label in asm.labels.iter().rev() {
+                        work.push(Work::Identifier(*label, indent + 1, "goto-label"));
+                    }
+                    for operand in asm.operands.iter().rev() {
+                        work.push(Work::AsmOperand(*operand, indent + 1));
+                    }
+                    for token in &asm.tokens {
+                        Self::line(
+                            &mut output,
+                            indent + 1,
+                            format_args!("asm-token {}", context.string_cache.at(token.contents)),
+                            Some(token.source_vectors),
+                            context,
+                            options,
+                        );
+                    }
+                },
+                | Work::AsmOperand(operand, indent) => {
+                    Self::line(
+                        &mut output,
+                        indent,
+                        format_args!(
+                            "{} constraint {}",
+                            if operand.output { "output" } else { "input" },
+                            context.string_cache.at(operand.constraint.contents)
+                        ),
+                        Some(operand.constraint.source_vectors),
+                        context,
+                        options,
+                    );
+                    work.push(Work::Expression(
+                        operand.expression,
+                        indent + 1,
+                        "expression",
+                    ));
+                    if let Some(name) = operand.name {
+                        work.push(Work::Identifier(name, indent + 1, "symbolic-name"));
+                    }
+                },
+                | Work::OffsetMember(member, indent) => match member {
+                    | super::gnu::OffsetMember::Field(x) =>
+                        work.push(Work::Identifier(x, indent, "offset-field")),
+                    | super::gnu::OffsetMember::Index(x) =>
+                        work.push(Work::Expression(x, indent, "offset-index")),
+                },
                 | Work::Root(root, ordinal) => match root {
+                    | ExternalDeclaration::Asm(x) => work.push(Work::Asm(x, 0)),
                     | ExternalDeclaration::Declaration(index) => {
                         work.push(Work::Declaration(index, 0, "declaration"));
                     },
@@ -197,7 +259,12 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         &mut output,
                         indent,
                         format_args!(
-                            "attribute-specifier [[...]]{}",
+                            "attribute-specifier {}{}",
+                            if attributes.syntax == super::modern::AttributeSyntax::Gnu {
+                                "__attribute__((...))"
+                            } else {
+                                "[[...]]"
+                            },
                             if attributes.recovered {
                                 " recovered"
                             } else {
@@ -280,6 +347,8 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                                 | super::modern::SpecifierExtensionKind::ThreadLocal =>
                                     "thread_local",
                                 | super::modern::SpecifierExtensionKind::Constexpr => "constexpr",
+                                | super::modern::SpecifierExtensionKind::ExtensionMarker =>
+                                    "__extension__",
                                 | _ => unreachable!("other extension kinds have children"),
                             }
                         ),
@@ -469,6 +538,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     }
                 },
                 | Work::DirectDeclarator(direct, indent) => match direct {
+                    | DirectDeclarator::AsmLabel(x) => work.push(Work::Asm(x, indent)),
                     | DirectDeclarator::Attributes(x) => work.push(Work::Attributes(x, indent)),
                     | DirectDeclarator::Identifier(identifier) => {
                         work.push(Work::Identifier(identifier, indent, "identifier"));
@@ -635,6 +705,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::push_type_details(&mut work, declaration.type_specifiers, indent + 1);
                 },
                 | Work::StructDeclarator(declarator, indent) => {
+                    if let Some(attributes) = declarator.attributes {
+                        work.push(Work::SpecifierExtension(attributes, indent + 1));
+                    }
                     Self::line(
                         &mut output,
                         indent,
@@ -856,6 +929,12 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                 | Work::Designator(designator, indent) => {
                     let label = fmt::from_fn(|f| match designator.kind {
                         | DesignatorType::Array(_) => f.write_str("array-designator"),
+                        | DesignatorType::Range(_) => f.write_str("array-range-designator"),
+                        | DesignatorType::GnuField(identifier) => write!(
+                            f,
+                            "old-field-designator {}",
+                            context.string_cache.at(identifier.name)
+                        ),
                         | DesignatorType::Field(identifier) => write!(
                             f,
                             "field-designator .{}",
@@ -878,6 +957,18 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         context,
                         options,
                     );
+                    if let DesignatorType::Range(range) = designator.kind {
+                        work.push(Work::Expression(
+                            range.upper.expression(),
+                            indent + 1,
+                            "upper",
+                        ));
+                        work.push(Work::Expression(
+                            range.lower.expression(),
+                            indent + 1,
+                            "lower",
+                        ));
+                    }
                     if let DesignatorType::Array(expression) = designator.kind {
                         work.push(Work::Expression(expression.into(), indent + 1, "index"));
                     }
@@ -994,6 +1085,12 @@ impl<'tu> ParsedTranslationUnit<'tu> {
         indent: usize,
     ) {
         match *kind {
+            | StatementType::Asm(x) => work.push(Work::Asm(x, indent)),
+            | StatementType::ComputedGoto(x) => Self::push_slot(work, x, indent, "target"),
+            | StatementType::LocalLabels(labels) =>
+                for label in labels.iter().rev() {
+                    work.push(Work::Identifier(*label, indent, "local-label"));
+                },
             | StatementType::Attributed(x) => {
                 work.push(Work::Statement(x.statement, indent, "statement"));
                 work.push(Work::Attributes(x.attributes, indent));
@@ -1008,6 +1105,8 @@ impl<'tu> ParsedTranslationUnit<'tu> {
             | StatementType::Compound { items } =>
                 for item in items.iter().rev() {
                     match *item {
+                        | BlockItem::FunctionDefinition(x) =>
+                            work.push(Work::Function(x, indent, "nested-function")),
                         | BlockItem::Declaration(index) => {
                             work.push(Work::Declaration(index, indent, "block-item"));
                         },
@@ -1127,6 +1226,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     return write!(f, "break {}", context.string_cache.at(x.name)),
                 | StatementType::NamedContinue(x) =>
                     return write!(f, "continue {}", context.string_cache.at(x.name)),
+                | StatementType::Asm(_) => "asm",
+                | StatementType::ComputedGoto(_) => "computed-goto",
+                | StatementType::LocalLabels(_) => "local-labels",
                 | StatementType::Null => "null",
             })
         })
@@ -1180,11 +1282,18 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                 | ExpressionType::SizeofExpr(..) => "sizeof expression",
                 | ExpressionType::Cast { .. } => "cast",
                 | ExpressionType::AlignofType(_) => "alignof type",
+                | ExpressionType::AlignofExpr(_) => "alignof expression",
                 | ExpressionType::Countof(_) => "countof",
                 | ExpressionType::Generic(_) => "generic-selection",
                 | ExpressionType::Boolean(true) => "true",
                 | ExpressionType::Boolean(false) => "false",
                 | ExpressionType::Nullptr => "nullptr",
+                | ExpressionType::StatementExpression(_) => "statement-expression",
+                | ExpressionType::Builtin(x) =>
+                    return write!(f, "builtin {}", x.keyword.spelling()),
+                | ExpressionType::LabelAddress(x) =>
+                    return write!(f, "label-address {}", context.string_cache.at(x.name)),
+                | ExpressionType::OmittedConditional(_) => "conditional ?: (omitted middle)",
                 | ExpressionType::Error => "error-expression",
             })
         })
@@ -1244,11 +1353,31 @@ impl<'tu> ParsedTranslationUnit<'tu> {
         indent: usize,
     ) {
         match kind {
+            | ExpressionType::StatementExpression(x) =>
+                work.push(Work::Statement(x, indent, "body")),
+            | ExpressionType::Builtin(x) => {
+                for member in x.members.iter().rev() {
+                    work.push(Work::OffsetMember(*member, indent));
+                }
+                for operand in x.operands.iter().rev() {
+                    Self::push_operand(work, *operand, indent);
+                }
+            },
+            | ExpressionType::LabelAddress(x) => work.push(Work::Identifier(*x, indent, "label")),
+            | ExpressionType::OmittedConditional(x) => {
+                work.push(Work::Expression(x.else_expression, indent, "else"));
+                work.push(Work::Expression(
+                    x.condition_expression,
+                    indent,
+                    "condition",
+                ));
+            },
             | ExpressionType::Parenthesized { expression }
             | ExpressionType::Unary {
                 operand_expression: expression,
                 ..
             }
+            | ExpressionType::AlignofExpr(expression)
             | ExpressionType::SizeofExpr(expression) => {
                 work.push(Work::Expression(expression, indent, "operand"));
             },
@@ -1451,6 +1580,9 @@ fn binary_operator_spelling(operator: BinaryOperator) -> &'static str {
 
 fn unary_operator_spelling(operator: UnaryOperator) -> &'static str {
     match operator {
+        | UnaryOperator::Real => "__real__",
+        | UnaryOperator::Imag => "__imag__",
+        | UnaryOperator::Extension => "__extension__",
         | UnaryOperator::AddressOf => "&",
         | UnaryOperator::Indirection => "*",
         | UnaryOperator::Plus => "+",

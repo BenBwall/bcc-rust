@@ -1,9 +1,0 @@
-error: struct or union has no members
- --> parser-expected-struct-declaration-before-closing-curly-brace.c:1:11
-  |
-1 | struct S {};
-  |           ^ expected a member declaration before `}`
-  |
-  = note: C99 §6.7.2.1: the member list of a struct or union contains at least one declaration
-
-1 error generated.

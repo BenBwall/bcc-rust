@@ -84,6 +84,7 @@ use crate::{
 pub(super) struct EnumSpecifierFrame<'tu, 'p> {
     /// Current tag/enumerator transition.
     phase: EnumPhase,
+    attribute_resume: EnumPhase,
     attributes: Option<&'tu SpecifierExtension<'tu>>,
     enumerator_attributes: Option<&'tu SpecifierExtension<'tu>>,
     underlying_type: Option<&'tu super::declaration_syntax::TypeName<'tu>>,
@@ -142,6 +143,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
     pub(super) fn new(arena: &'p Bump) -> Self {
         Self {
             phase: EnumPhase::Start,
+            attribute_resume: EnumPhase::NameOrBody,
             attributes: None,
             enumerator_attributes: None,
             underlying_type: None,
@@ -163,6 +165,15 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
+        if matches!(self.phase, EnumPhase::FinishBody) && parser.attribute_starter(token) {
+            self.attribute_resume = self.phase;
+            self.phase = EnumPhase::AwaitTagAttributes;
+            return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                parser.arena,
+                ModernKind::Attributes,
+                parser.hard_error_count,
+            )));
+        }
         match self.phase {
             | EnumPhase::PushUnderlyingType => {
                 self.body_starting_error_count = parser.hard_error_count;
@@ -214,7 +225,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     self.phase = EnumPhase::AfterEnumeratorName;
                 } else {
                     self.attributes = attributes;
-                    self.phase = EnumPhase::NameOrBody;
+                    self.phase = self.attribute_resume;
                 }
                 ParseAction::Continue
             },
@@ -243,6 +254,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     "this frame phase cannot receive a child value"
                 );
                 if parser.attribute_starter(token) {
+                    self.attribute_resume = EnumPhase::NameOrBody;
                     self.phase = EnumPhase::AwaitTagAttributes;
                     return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
                         parser.arena,

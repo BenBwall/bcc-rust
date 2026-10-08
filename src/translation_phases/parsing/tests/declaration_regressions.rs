@@ -301,7 +301,7 @@ fn declaration_continuation_expectations_follow_the_context() {
         "int f(a) int a {}\n",
         "int x\nint main(void) { return 0; }\n",
         "int x, h(void) { return 0; }\n",
-        "void f(void) { int g(void) { return 1; } }\n",
+        "void f(void) { int g = 1 { return 1; } }\n",
         "void f(void) { for (int g(void) { return 1; } }\n",
     ] {
         let (message, label) = continuation_explanation(source);

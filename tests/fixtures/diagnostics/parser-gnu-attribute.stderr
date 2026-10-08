@@ -1,0 +1,7 @@
+error: expected `))` in GNU attribute specifier, found `;`
+ --> parser-gnu-attribute.c:1:23
+  |
+1 | __attribute__((unused);
+  |                       ^ expected `))` in GNU attribute specifier
+
+1 error generated.

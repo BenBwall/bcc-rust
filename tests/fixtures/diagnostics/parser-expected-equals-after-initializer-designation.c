@@ -1,1 +1,1 @@
-int array[] = { [1] 2 };
+int array[] = { [1] };

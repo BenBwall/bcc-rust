@@ -21,10 +21,17 @@ use super::super::{
         InitializerElement,
         ParameterDeclaration,
         ParenthesizedDeclarator,
+        RangeDesignator,
         StructDeclaration,
         StructDeclarator,
         StructOrUnionSpecifier,
         TypeName,
+    },
+    gnu::{
+        Asm,
+        AsmOperand,
+        Builtin,
+        OffsetMember,
     },
     modern::{
         AttributeSpecifier,
@@ -33,6 +40,7 @@ use super::super::{
         GenericSelection,
         SpecifierExtension,
         StaticAssertion,
+        SyntaxOperand,
     },
     syntax::{
         AttributedStatement,
@@ -59,6 +67,12 @@ macro_rules! sizes {
 #[test]
 fn syntax_nodes_keep_their_sizes() {
     let sizes = sizes![
+        Asm<'_> => 40,
+        AsmOperand<'_> => 56,
+        Builtin<'_> => 32,
+        OffsetMember<'_> => 16,
+        RangeDesignator<'_> => 16,
+        SyntaxOperand<'_> => 16,
         ExtendedType<'_> => 24,
         SpecifierExtension<'_> => 32,
         AttributeSpecifier<'_> => 24,
@@ -84,7 +98,7 @@ fn syntax_nodes_keep_their_sizes() {
         DirectDeclarator<'_> => 16,
         ParameterDeclaration<'_> => 72,
         StructDeclaration<'_> => 56,
-        StructDeclarator<'_> => 40,
+        StructDeclarator<'_> => 48,
         StructOrUnionSpecifier<'_> => 40,
         EnumSpecifier<'_> => 48,
         Enumerator<'_> => 40,

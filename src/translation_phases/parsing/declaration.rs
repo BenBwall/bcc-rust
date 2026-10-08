@@ -94,6 +94,8 @@ pub(super) struct DeclarationFrame<'tu, 'p> {
     /// Provenance accumulated across specifiers, declarators, and separators.
     pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
     /// Hard-error count on entry, used to scope recovery to this declaration.
+    suppression_entry: Option<usize>,
+    leading_extension: Option<SourceVectors>,
     starting_error_count: usize,
     /// Provenance of `=` retained while the initializer child runs.
     initializer_source: Option<SourceVectors>,
@@ -162,6 +164,8 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
             init_declarators: ArenaVec::new_in(arena),
             source_vectors: ArenaVec::new_in(arena),
             starting_error_count,
+            suppression_entry: None,
+            leading_extension: None,
             initializer_source: None,
             context,
             is_function_definition_head: false,
@@ -208,8 +212,14 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
+        _ = self
+            .suppression_entry
+            .get_or_insert(parser.pedantic_suppression);
         match self.phase {
             | DeclarationPhase::AwaitAssertion => {
+                parser.pedantic_suppression = self
+                    .suppression_entry
+                    .expect("declaration suppression entry");
                 let Some(ParseValue::Modern(ModernValue::Assertion(assertion))) = returned else {
                     panic!("assertion declaration protocol: {returned:?}")
                 };
@@ -223,6 +233,14 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 })))
             },
             | DeclarationPhase::Start => {
+                if let Some(token) = token
+                    && token.kind == TokenType::Keyword(KeywordTokenType::Extension)
+                {
+                    parser.pedantic_suppression += 1;
+                    parser.merge_source(&mut self.leading_extension, token);
+                    self.source_vectors.push(token.source_vectors);
+                    return ParseAction::Consume;
+                }
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -249,6 +267,18 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
                     panic!("specifier frame returned an unexpected value: {returned:?}");
                 };
+                let mut specifiers = specifiers;
+                if let Some(source_vectors) = self.leading_extension {
+                    specifiers.extensions =
+                        Some(parser.alloc_syntax(super::modern::SpecifierExtension {
+                            kind: super::modern::SpecifierExtensionKind::ExtensionMarker,
+                            next: specifiers.extensions,
+                            source_vectors,
+                        }));
+                    specifiers.source_vectors = parser
+                        .context
+                        .merge_vectors(source_vectors, specifiers.source_vectors);
+                }
                 self.declaration_specifiers = Some(specifiers);
                 self.source_vectors.push(specifiers.source_vectors);
                 // A bare `;` completes the grammar's optional
@@ -397,7 +427,12 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     && old_style_parameters.is_some_and(|parameters| {
                         parser.next_declaration_declares_one_of(parameters.as_slice())
                     });
-                let starts_function_definition = self.context == DeclarationContext::External
+                let starts_function_definition = (self.context == DeclarationContext::External
+                    || self.context == DeclarationContext::Block
+                        && self
+                            .init_declarators
+                            .first()
+                            .is_some_and(|x| x.declarator.function_suffix().is_some()))
                     && has_sole_uninitialized_declarator
                     && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
                         || parser.hard_error_count == self.starting_error_count
@@ -582,6 +617,9 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 )))
             },
             | DeclarationPhase::Finish => {
+                parser.pedantic_suppression = self
+                    .suppression_entry
+                    .expect("declaration suppression entry");
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"

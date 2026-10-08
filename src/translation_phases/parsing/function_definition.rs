@@ -79,6 +79,8 @@ pub(super) struct FunctionDefinitionFrame<'tu, 'p> {
     body: Option<&'tu Statement<'tu>>,
     pub(super) source_vectors: Option<SourceVectors>,
     starting_error_count: usize,
+    suppression_entry: Option<usize>,
+    switch_floor_entry: usize,
     entry_scope_depth: Option<usize>,
     diagnosed_prototype_declaration_list: bool,
     /// Whether a declaration-list diagnostic already explained a probable
@@ -116,6 +118,8 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
             body: None,
             source_vectors: None,
             starting_error_count,
+            suppression_entry: None,
+            switch_floor_entry: 0,
             entry_scope_depth: None,
             diagnosed_prototype_declaration_list: false,
             suggested_missing_semicolon: false,
@@ -131,6 +135,16 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
         match self.phase {
             | FunctionDefinitionPhase::Start => {
                 debug_assert!(returned.is_none());
+                self.suppression_entry = Some(parser.pedantic_suppression);
+                let mut extension = self.head.declaration_specifiers.extensions;
+                while let Some(item) = extension {
+                    if item.kind == super::modern::SpecifierExtensionKind::ExtensionMarker {
+                        parser.pedantic_suppression += 1;
+                    }
+                    extension = item.next;
+                }
+                self.switch_floor_entry = parser.switch_floor;
+                parser.switch_floor = parser.switch_scopes.len();
                 let declaration = *self.head;
                 let declarator = self
                     .head
@@ -155,7 +169,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                                         .and_then(Declarator::identifier)
                                         .is_none()
                                 {
-                                    parser.context.report_extension(
+                                    parser.extension_source(
                                         crate::configuration::Feature::C23Keywords,
                                         "unnamed parameter in function definition",
                                         parameter.source_vectors,
@@ -342,6 +356,9 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                 ParseAction::Reprocess
             },
             | FunctionDefinitionPhase::Finish => {
+                parser.pedantic_suppression =
+                    self.suppression_entry.expect("function suppression entry");
+                parser.switch_floor = self.switch_floor_entry;
                 debug_assert!(returned.is_none());
                 let head = *self.head;
                 let declarator = self

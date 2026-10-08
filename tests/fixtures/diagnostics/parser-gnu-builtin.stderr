@@ -1,0 +1,7 @@
+error: expected a declaration, found `)`
+ --> parser-gnu-builtin.c:1:42
+  |
+1 | int f(void) { return __builtin_va_arg(ap,); }
+  |                                          ^ expected a type or storage class
+
+1 error generated.

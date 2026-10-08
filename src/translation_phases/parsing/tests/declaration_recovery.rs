@@ -1477,18 +1477,6 @@ fn malformed_and_eof_paths_terminate_with_source_backed_diagnostics() {
                 ParserErrorType::ExpectedClosingCurlyBraceInStructDeclarationList(..)
             )
         }),
-        ("struct S {};\n", |error| {
-            matches!(
-                error,
-                ParserErrorType::ExpectedStructDeclarationBeforeClosingCurlyBrace
-            )
-        }),
-        ("union U {};\n", |error| {
-            matches!(
-                error,
-                ParserErrorType::ExpectedStructDeclarationBeforeClosingCurlyBrace
-            )
-        }),
         ("enum E { A\n", |error| {
             matches!(
                 error,
@@ -1543,12 +1531,10 @@ fn malformed_and_eof_paths_terminate_with_source_backed_diagnostics() {
         });
     }
 
-    for source in ["struct S {};\n", "union U {};\n", "enum E {};\n"] {
-        with_parse(source, |parsed| {
-            assert!(matches!(
-                parsed.items.first(),
-                Some(ExternalDeclaration::RecoveredDeclaration(_))
-            ));
-        });
-    }
+    with_parse("enum E {};\n", |parsed| {
+        assert!(matches!(
+            parsed.items.first(),
+            Some(ExternalDeclaration::RecoveredDeclaration(_))
+        ));
+    });
 }

@@ -116,6 +116,7 @@ pub(super) enum DeclaratorMode {
 pub(super) struct DeclaratorFrame<'tu, 'p> {
     /// Current pointer/base/suffix transition.
     phase: DeclaratorPhase,
+    attribute_resume: DeclaratorPhase,
     /// Whether the declarator requires or permits an identifier.
     mode: DeclaratorMode,
     /// Qualifiers for completed pointer levels, outermost first.
@@ -167,6 +168,7 @@ pub(super) struct DeclaratorFrame<'tu, 'p> {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum DeclaratorPhase {
     AwaitAttributes,
+    AwaitAsm,
     AwaitPointerAttributes,
     /// Decide whether the declarator begins with a pointer or direct base.
     PointerOrBase,
@@ -214,6 +216,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
     pub(super) fn new(arena: &'p Bump, mode: DeclaratorMode) -> Self {
         Self {
             phase: DeclaratorPhase::PointerOrBase,
+            attribute_resume: DeclaratorPhase::PointerOrBase,
             mode,
             pointer_qualifiers: ArenaVec::new_in(arena),
             direct_declarators: ArenaVec::new_in(arena),
@@ -234,13 +237,42 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
         }
     }
 
-    pub(super) fn step(
+    /// GNU declarator labels and shared attribute attachment points.
+    /// C99: vendor extension to §6.7.5, p. 114; PDF p. 126.
+    fn step_extension(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
-    ) -> ParseAction<'tu, 'p> {
+    ) -> Option<ParseAction<'tu, 'p>> {
+        if matches!(
+            self.phase,
+            DeclaratorPhase::PointerOrBase | DeclaratorPhase::Base | DeclaratorPhase::Array
+        ) && parser.attribute_starter(token)
+        {
+            self.attribute_resume = self.phase;
+            self.phase = DeclaratorPhase::AwaitAttributes;
+            return Some(ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+                parser.arena,
+                ModernKind::Attributes,
+                parser.hard_error_count,
+            ))));
+        }
         match self.phase {
+            | DeclaratorPhase::AwaitAsm => {
+                let Some(ParseValue::Gnu(super::gnu::GnuValue::Asm(asm))) = returned else {
+                    panic!("asm label child protocol");
+                };
+                self.direct_declarators
+                    .push(DirectDeclarator::AsmLabel(asm));
+                self.source_vectors = Some(
+                    parser
+                        .context
+                        .merge_vectors(self.source_vectors.unwrap_or_default(), asm.source_vectors),
+                );
+                self.phase = DeclaratorPhase::Suffix;
+                Some(ParseAction::Continue)
+            },
             | DeclaratorPhase::AwaitPointerAttributes | DeclaratorPhase::AwaitAttributes => {
                 let Some(ParseValue::Modern(ModernValue::Attributes(attributes))) = returned else {
                     panic!("declarator attributes protocol: {returned:?}")
@@ -254,10 +286,27 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 self.phase = if matches!(self.phase, DeclaratorPhase::AwaitPointerAttributes) {
                     DeclaratorPhase::PointerQualifiers
                 } else {
-                    DeclaratorPhase::Suffix
+                    self.attribute_resume
                 };
-                ParseAction::Continue
+                Some(ParseAction::Continue)
             },
+            | _ => None,
+        }
+    }
+
+    pub(super) fn step(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
+        if let Some(action) = self.step_extension(parser, token, returned) {
+            return action;
+        }
+        match self.phase {
+            | DeclaratorPhase::AwaitAsm
+            | DeclaratorPhase::AwaitPointerAttributes
+            | DeclaratorPhase::AwaitAttributes => unreachable!("extension phases handled above"),
             | DeclaratorPhase::PointerOrBase => {
                 debug_assert!(
                     returned.is_none(),
@@ -446,11 +495,19 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 self.close_nested(parser, token)
             },
             | DeclaratorPhase::Suffix => {
+                if token.is_some_and(|x| x.kind == TokenType::Keyword(KeywordTokenType::Asm)) {
+                    self.phase = DeclaratorPhase::AwaitAsm;
+                    return super::gnu::GnuFrame::push(
+                        parser,
+                        super::gnu::GnuKind::Asm { label: true },
+                    );
+                }
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
                 if parser.attribute_starter(token) {
+                    self.attribute_resume = DeclaratorPhase::Suffix;
                     self.phase = DeclaratorPhase::AwaitAttributes;
                     return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
                         parser.arena,
@@ -645,6 +702,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                         panic!("array-bound frame returned an unexpected value: {returned:?}");
                     };
                     let source_vectors = index.source_vectors;
+                    check_array_extension(parser, index);
                     self.array_assignment_expression = Some(index);
                     self.source_vectors =
                         Some(self.source_vectors.map_or(source_vectors, |existing| {
@@ -888,5 +946,21 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
             self.owns_chain_named = false;
             pools.reclaim_chain_flag(chain_named);
         }
+    }
+}
+fn check_array_extension<'tu>(parser: &mut Parser<'_, 'tu, '_>, index: &'tu Expression<'tu>) {
+    let mut operand = index;
+    while let super::syntax::ExpressionType::Parenthesized { expression, .. } = operand.kind {
+        operand = expression;
+    }
+    if let super::syntax::ExpressionType::Constant(super::syntax::Constant::Integer(value)) =
+        operand.kind
+        && i128::from(value) == 0
+    {
+        parser.extension_source(
+            crate::configuration::Feature::ZeroLengthArrays,
+            "zero-length array",
+            index.source_vectors,
+        );
     }
 }

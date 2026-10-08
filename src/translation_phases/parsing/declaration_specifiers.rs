@@ -298,6 +298,52 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             return ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers));
         };
 
+        if token.kind == TokenType::Keyword(KeywordTokenType::Extension)
+            && self.mode == SpecifierMode::Declaration
+        {
+            parser.pedantic_suppression += 1;
+            self.add_extension(
+                parser,
+                SpecifierExtensionKind::ExtensionMarker,
+                token.source_vectors,
+            );
+            self.consumed = true;
+            parser.merge_source(&mut self.source_vectors, token);
+            return ParseAction::Consume;
+        }
+        if let TokenType::Keyword(
+            keyword @ (KeywordTokenType::Int128 | KeywordTokenType::AutoType),
+        ) = token.kind
+        {
+            let extended = if keyword == KeywordTokenType::Int128 {
+                let signedness = match self.specifiers.type_specifiers {
+                    | TypeSpecifiers::Signed => Some(true),
+                    | TypeSpecifiers::Unsigned => Some(false),
+                    | _ => None,
+                };
+                if !matches!(
+                    self.specifiers.type_specifiers,
+                    TypeSpecifiers::Empty | TypeSpecifiers::Signed | TypeSpecifiers::Unsigned
+                ) {
+                    self.specifiers
+                        .type_specifiers
+                        .report_conflict(parser, token.contents, token);
+                }
+                ExtendedType::Int128 { signedness }
+            } else {
+                if self.specifiers.type_specifiers != TypeSpecifiers::Empty {
+                    self.specifiers
+                        .type_specifiers
+                        .report_conflict(parser, token.contents, token);
+                }
+                ExtendedType::AutoType
+            };
+            self.specifiers.type_specifiers =
+                TypeSpecifiers::Extended(parser.alloc_syntax(extended));
+            self.consumed = true;
+            parser.merge_source(&mut self.source_vectors, token);
+            return ParseAction::Consume;
+        }
         if parser.attribute_starter(Some(token)) {
             self.phase = DeclarationSpecifiersPhase::AwaitAttributes;
             return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
@@ -698,6 +744,25 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         token: Token,
         specifier: PrimitiveTypeSpecifier,
     ) {
+        if let TypeSpecifiers::Extended(ExtendedType::Int128 { signedness }) =
+            self.specifiers.type_specifiers
+            && matches!(
+                specifier,
+                PrimitiveTypeSpecifier::Signed | PrimitiveTypeSpecifier::Unsigned
+            )
+        {
+            if signedness.is_some() {
+                self.specifiers
+                    .type_specifiers
+                    .report_conflict(parser, token.contents, token);
+            } else {
+                self.specifiers.type_specifiers =
+                    TypeSpecifiers::Extended(parser.alloc_syntax(ExtendedType::Int128 {
+                        signedness: Some(matches!(specifier, PrimitiveTypeSpecifier::Signed)),
+                    }));
+            }
+            return;
+        }
         if let TypeSpecifiers::Extended(ExtendedType::BitInt { width, signedness }) =
             self.specifiers.type_specifiers
             && matches!(

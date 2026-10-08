@@ -46,7 +46,7 @@ pub(super) enum LanguageExpressionOperator<'tu> {
         source_vectors: SourceVectors,
     },
     Conditional {
-        middle:          &'tu Expression<'tu>,
+        middle:          Option<&'tu Expression<'tu>>,
         question_source: SourceVectors,
         colon_source:    Option<SourceVectors>,
     },
@@ -195,6 +195,12 @@ pub(super) fn binary_operator(token: TokenType) -> Option<BinaryOperator> {
 /// C99: §6.5.3 paragraph 1, p. 78; PDF p. 90.
 pub(super) fn prefix_operator(token: TokenType) -> Option<(UnaryOperator, ExpressionMode)> {
     let (operator, mode) = match token {
+        | TokenType::Keyword(KeywordTokenType::Real) =>
+            (UnaryOperator::Real, ExpressionMode::CastExpression),
+        | TokenType::Keyword(KeywordTokenType::Imag) =>
+            (UnaryOperator::Imag, ExpressionMode::CastExpression),
+        | TokenType::Keyword(KeywordTokenType::Extension) =>
+            (UnaryOperator::Extension, ExpressionMode::CastExpression),
         | TokenType::Operator(OperatorTokenType::PlusPlus) =>
             (UnaryOperator::PreIncrement, ExpressionMode::UnaryExpression),
         | TokenType::Operator(OperatorTokenType::MinusMinus) =>
@@ -229,8 +235,22 @@ pub(super) fn is_expression_operand_starter(token: TokenType) -> bool {
             | TokenType::Float(_)
             | TokenType::Character(_)
             | TokenType::String(_)
-            | TokenType::Keyword(KeywordTokenType::Sizeof)
-            | TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+            | TokenType::Keyword(
+                KeywordTokenType::Sizeof
+                    | KeywordTokenType::Alignof
+                    | KeywordTokenType::Generic
+                    | KeywordTokenType::Countof
+                    | KeywordTokenType::True
+                    | KeywordTokenType::False
+                    | KeywordTokenType::Nullptr
+                    | KeywordTokenType::BuiltinVaArg
+                    | KeywordTokenType::BuiltinOffsetof
+                    | KeywordTokenType::BuiltinTypesCompatible
+                    | KeywordTokenType::BuiltinChooseExpr
+            )
+            | TokenType::Operator(
+                OperatorTokenType::OpeningParenthesis | OperatorTokenType::AmpersandAmpersand
+            )
     ) || prefix_operator(token).is_some()
 }
 

@@ -458,7 +458,9 @@ fn mixed_declarator_translation_floor_uses_the_typed_tree() {
                 | DirectDeclarator::Array { .. } => counts.1 += 1,
                 | DirectDeclarator::Function { .. }
                 | DirectDeclarator::KAndRStyleFunction { .. } => counts.2 += 1,
-                | DirectDeclarator::Identifier(_) | DirectDeclarator::Attributes(_) => {},
+                | DirectDeclarator::AsmLabel(_)
+                | DirectDeclarator::Identifier(_)
+                | DirectDeclarator::Attributes(_) => {},
             }
         }
         counts

@@ -261,6 +261,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn gnu_parser_policy_diagnostics_match_goldens() {
+        let source = include_str!("fixtures/diagnostics/language/gnu-parser.c");
+        for (flag, expected) in [
+            (
+                "-pedantic",
+                include_str!("fixtures/diagnostics/language/gnu-parser-warning.stderr"),
+            ),
+            (
+                "-pedantic-errors",
+                include_str!("fixtures/diagnostics/language/gnu-parser-error.stderr"),
+            ),
+        ] {
+            let output = run(&["-std=c17", flag, "--input", source]);
+            assert!(output.stdout.is_empty(), "{output:?}");
+            assert_eq!(String::from_utf8_lossy(&output.stderr), expected);
+        }
+        for mode in ["-std=c17", "-std=gnu17"] {
+            let output = run(&[mode, "--syntax-tree", "--input", source]);
+            let tree = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !tree.contains("error:")
+                    && !tree.contains("warning:")
+                    && !tree.contains("recovered"),
+                "{mode}: {tree}"
+            );
+            assert!(
+                tree.contains("nested-function") && tree.contains("builtin __builtin_va_arg"),
+                "{tree}"
+            );
+        }
+    }
+
+    #[test]
+    fn gnu_grammar_token_seam_matches_its_snapshot() {
+        let source = include_str!("fixtures/diagnostics/language/gnu-parser.c");
+        let output = run(&["-std=gnu17", "--tokens", "--input", source]);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            include_str!("fixtures/lexing/gnu_parser_token_seam.snap")
+        );
+    }
+
     fn run(arguments: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
             .args(arguments)

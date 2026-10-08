@@ -169,6 +169,8 @@ pub(crate) struct Designator<'tu> {
 /// left to semantic analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum DesignatorType<'tu> {
+    GnuField(Identifier),
+    Range(&'tu RangeDesignator<'tu>),
     Array(ConstantExpression<'tu>),
     Field(Identifier),
     Error,
@@ -289,6 +291,11 @@ impl Display for TypeSpecifiers<'_> {
                 | super::modern::ExtendedType::Decimal64 => "_Decimal64",
                 | super::modern::ExtendedType::Decimal128 => "_Decimal128",
                 | super::modern::ExtendedType::Inferred => "<inferred>",
+                | super::modern::ExtendedType::AutoType => "__auto_type",
+                | super::modern::ExtendedType::Int128 {
+                    signedness: Some(false),
+                } => "unsigned __int128",
+                | super::modern::ExtendedType::Int128 { .. } => "__int128",
             }),
             | TypeSpecifiers::Empty => write!(f, "<no type specifier>"),
             | TypeSpecifiers::Char => write!(f, "char"),
@@ -736,6 +743,7 @@ pub(crate) struct StructDeclaration<'tu> {
 /// semantic analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct StructDeclarator<'tu> {
+    pub(crate) attributes:     Option<&'tu super::modern::SpecifierExtension<'tu>>,
     pub(crate) declarator:     Option<Declarator<'tu>>,
     pub(crate) bitfield_width: Option<ConstantExpression<'tu>>,
     pub(crate) source_vectors: SourceVectors,
@@ -899,6 +907,7 @@ pub(crate) struct Declarator<'tu> {
 /// Direct abstract declarators are §6.7.6, p. 122; PDF p. 134.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum DirectDeclarator<'tu> {
+    AsmLabel(&'tu super::gnu::Asm<'tu>),
     Attributes(&'tu super::modern::AttributeSpecifier<'tu>),
     Identifier(Identifier),
     Parenthesized(&'tu ParenthesizedDeclarator<'tu>),
@@ -1145,4 +1154,12 @@ impl TypeSpecifiers<'_> {
             }
         }
     }
+}
+
+/// GNU inclusive array designator range; evaluation belongs to later analysis.
+/// C99: extension to §6.7.8, p. 125; PDF p. 137.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct RangeDesignator<'tu> {
+    pub(crate) lower: ConstantExpression<'tu>,
+    pub(crate) upper: ConstantExpression<'tu>,
 }
