@@ -150,3 +150,31 @@ fn stringified_va_opt_is_not_rescanned() {
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(texts(&tokens), "\"G (1)\"");
 }
+
+/// C23 §6.10.5p5: `__VA_OPT__` outside a variadic macro is reported once, at
+/// its definition, under the extension policy.
+#[test]
+fn va_opt_in_a_non_variadic_macro_is_reported_once() {
+    for policy in [
+        ExtensionPolicy::Allow,
+        ExtensionPolicy::Warn,
+        ExtensionPolicy::Deny,
+    ] {
+        let source = "#define F(x) __VA_OPT__(x)\nF(1) F(2)\nint z;\n";
+        let (tokens, errors) = observe(source, CompilerConfiguration::new(CStandard::C23, policy));
+        assert_eq!(errors.len(), 1, "{policy:?}: {errors:?}");
+        assert!(
+            errors[0].contains("`__VA_OPT__` can only appear"),
+            "{errors:?}"
+        );
+        assert!(
+            errors[0].starts_with(if policy == ExtensionPolicy::Deny {
+                "Error:"
+            } else {
+                "Warning:"
+            }),
+            "{errors:?}"
+        );
+        assert!(texts(&tokens).ends_with("int z ;"), "{tokens:?}");
+    }
+}

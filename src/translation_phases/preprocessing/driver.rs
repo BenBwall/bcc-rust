@@ -618,8 +618,17 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                 break 'base Some(token);
             }
             // C23: §6.10.5p5, p. 178; PDF p. 191. Valid optional
-            // replacements have already been consumed by prepare_variadic_body.
-            if token.identifier_id(self.context) == self.state.va_opt_name {
+            // replacements have already been consumed by prepare_variadic_body,
+            // and a replacement list was checked where it was defined.
+            if token.identifier_id(self.context) == self.state.va_opt_name
+                && !matches!(
+                    self.tokenizer_stack.last().map(|frame| &frame.frame_type),
+                    Some(
+                        TokenizerFrameType::ObjectLikeMacroInvocation { .. }
+                            | TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                    )
+                )
+            {
                 self.check_va_args_use(token);
             }
             // C99 §6.10.3.1: parameters are replaced before the replacement

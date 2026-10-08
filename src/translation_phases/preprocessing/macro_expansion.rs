@@ -439,7 +439,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             {
                 continue;
             }
-            if !variadic || !self.context.configuration.accepts(Feature::VaOpt) {
+            // Outside a variadic macro, the replacement-list reader already
+            // reported the name, which then remains an identifier.
+            if !variadic {
+                continue;
+            }
+            if !self.context.configuration.accepts(Feature::VaOpt) {
                 self.language_error(
                     "__VA_OPT__ requires an enabled variadic macro replacement",
                     token.source_vectors,
