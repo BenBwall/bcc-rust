@@ -148,7 +148,8 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                     // C99 §6.8.1p1: `identifier :` begins a labeled
                     // statement even when the identifier names a typedef;
                     // labels have their own name space (§6.2.3p1).
-                    let is_label = token.is_some_and(|token| token.kind == TokenType::Identifier)
+                    let is_label = token
+                        .is_some_and(|token| matches!(token.kind, TokenType::Identifier))
                         && is_operator(parser.cursor.following(), OperatorTokenType::Colon);
                     if !is_label
                         && token.is_some_and(|token| parser.declaration_starter(token))

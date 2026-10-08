@@ -78,11 +78,29 @@ pub(crate) enum IntegerSuffix {
 /// A phase-7 `token`, with its spelling and provenance.
 ///
 /// C99: §6.4 paragraph 1, p. 49; PDF p. 61.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Token {
     pub(crate) kind:           TokenType,
     pub(crate) source_vectors: SourceVectors,
     pub(crate) contents:       StringCacheId,
+}
+
+// Syntax and diagnostic structures compare complete tokens; parser dispatch
+// compares the scalar kind directly instead of invoking this full comparison.
+impl PartialEq for Token {
+    fn eq(&self, other: &Self) -> bool {
+        let same_kind = match (self.kind, other.kind) {
+            | (TokenType::Integer(left), TokenType::Integer(right)) => left == right,
+            | (TokenType::Float(left), TokenType::Float(right)) => left == right,
+            | (TokenType::Identifier, TokenType::Identifier) => true,
+            | (TokenType::Keyword(left), TokenType::Keyword(right)) => left == right,
+            | (TokenType::Operator(left), TokenType::Operator(right)) => left == right,
+            | (TokenType::String(left), TokenType::String(right)) => left == right,
+            | (TokenType::Character(left), TokenType::Character(right)) => left == right,
+            | _ => false,
+        };
+        same_kind && self.source_vectors == other.source_vectors && self.contents == other.contents
+    }
 }
 
 impl GetPosition for Token {
@@ -439,7 +457,10 @@ impl From<CharacterTokenType> for i64 {
 ///
 /// C99: §6.4 paragraph 3, p. 49; PDF p. 61. An `enumeration-constant` is an
 /// identifier until declarations are analyzed (§6.4.4.3, p. 59; PDF p. 71).
-#[derive(Debug, PartialEq, Clone, Copy)]
+// Structural equality remains available to unit tests, but production parser
+// code must name the particular category and payload it needs to inspect.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq))]
 pub(crate) enum TokenType {
     Integer(IntegerTokenType),
     Float(FloatTokenType),

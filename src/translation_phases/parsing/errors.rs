@@ -170,7 +170,10 @@ impl DeclarationContinuation {
     /// Explains why a found `{` cannot begin a function body here.
     fn function_body_note(self, found: Option<TokenType>) -> Option<&'static str> {
         if self.function_body
-            || found != Some(TokenType::Operator(OperatorTokenType::OpeningCurlyBrace))
+            || !matches!(
+                found,
+                Some(TokenType::Operator(OperatorTokenType::OpeningCurlyBrace))
+            )
         {
             return None;
         }
@@ -191,20 +194,42 @@ pub(crate) struct RelatedParserDiagnostic {
     pub(crate) source_vectors: SourceVectors,
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq))]
 pub(crate) struct RecoverySummary {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Retained in structured recovery metadata")
+    )]
     pub(crate) owner:            ParseFrameKind,
     pub(crate) discarded:        Option<SourceVectors>,
     pub(crate) discarded_tokens: usize,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Retained in structured recovery metadata")
+    )]
     pub(crate) stopped_at:       Option<TokenType>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq))]
 pub(crate) struct ParserError<'tu> {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Retained in structured parser diagnostics")
+    )]
     pub(crate) code:              ParserDiagnosticCode,
     pub(crate) severity:          ErrorSeverity,
     pub(crate) warning_group:     Option<ParserWarningGroup>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Retained in structured parser diagnostics")
+    )]
     pub(crate) frame:             ParseFrameKind,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Retained in structured parser diagnostics")
+    )]
     pub(crate) expected:          ExpectedSyntax,
     pub(crate) found:             Option<TokenType>,
     /// Source spelling of the found token, captured when the diagnostic is
@@ -372,7 +397,8 @@ impl std::error::Error for ParserError<'_> {}
 /// C99: the obligation to diagnose syntax and constraint violations is
 /// §5.1.1.3, p. 11; PDF p. 23. Each variant below also cites the production,
 /// constraint, or semantic rule it concerns.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub(crate) enum ParserErrorType<'tu> {
     /// The preprocessed token stream contained no external declaration.
     /// C99: §6.9, p. 140; PDF p. 152.
@@ -618,7 +644,13 @@ pub(crate) enum ParserErrorType<'tu> {
     EmptyDeclarationSpecifiers(TokenType),
     /// A specifier sequence ended without a C99 type specifier.
     /// C99: §6.7.2 paragraph 2, p. 99; PDF p. 111.
-    NoTypeSpecifiersInDeclarationSpecifiers(TokenType),
+    NoTypeSpecifiersInDeclarationSpecifiers(
+        #[cfg_attr(
+            not(test),
+            expect(dead_code, reason = "Retained for diagnostic assertions")
+        )]
+        TokenType,
+    ),
     /// An identifier that is not a visible typedef-name stood in the type
     /// specifier slot, directly before another declarator.
     /// C99: typedef-name is §6.7.7, pp. 123-124; PDF pp. 135-136.
@@ -1340,7 +1372,7 @@ impl ParserErrorType<'_> {
                     "expected a type or storage class",
                     Some(*token),
                 );
-                if *token == TokenType::Operator(OperatorTokenType::Semicolon) {
+                if matches!(*token, TokenType::Operator(OperatorTokenType::Semicolon)) {
                     explanation
                         .note("C99 §6.7p2: a declaration must declare something")
                         .help("remove this `;`")

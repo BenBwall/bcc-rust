@@ -179,11 +179,11 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
         if matches!(self.phase, EnumPhase::FinishBody) && parser.attribute_starter(token) {
             self.attribute_resume = self.phase;
             self.phase = EnumPhase::AwaitTagAttributes;
-            return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+            return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(ModernFrame::new(
                 parser.arena,
                 ModernKind::Attributes,
                 parser.hard_error_count,
-            )));
+            ))));
         }
         match self.phase {
             | EnumPhase::PushUnderlyingType => {
@@ -254,7 +254,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     parser.report(ParserErrorType::ExpectedEnumKeyword(None), None);
                     return self.finish(parser);
                 };
-                if token.kind != TokenType::Keyword(KeywordTokenType::Enum) {
+                if !matches!(token.kind, TokenType::Keyword(KeywordTokenType::Enum)) {
                     parser.report(
                         ParserErrorType::ExpectedEnumKeyword(Some(token.kind)),
                         Some(token),
@@ -272,10 +272,12 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                 if parser.attribute_starter(token) {
                     self.attribute_resume = EnumPhase::NameOrBody;
                     self.phase = EnumPhase::AwaitTagAttributes;
-                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
-                        parser.arena,
-                        ModernKind::Attributes,
-                        parser.hard_error_count,
+                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
+                        ModernFrame::new(
+                            parser.arena,
+                            ModernKind::Attributes,
+                            parser.hard_error_count,
+                        ),
                     )));
                 }
                 if is_operator(token, OperatorTokenType::Colon)
@@ -294,7 +296,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                 // Like tag specifiers for aggregates, an enum can be a tagged
                 // reference, tagged definition, or anonymous definition.
                 if let Some(token) = token
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                 {
                     self.name = Some(Identifier::from_token(token));
                     self.source_vectors.push(token.source_vectors);
@@ -379,7 +381,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Consume
                 } else if let Some(token) = token
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                 {
                     self.current_enumerator = Some(Identifier::from_token(token));
                     self.current_enumerator_source = Some(token.source_vectors);
@@ -457,10 +459,12 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                 );
                 if parser.attribute_starter(token) {
                     self.phase = EnumPhase::AwaitEnumeratorAttributes;
-                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
-                        parser.arena,
-                        ModernKind::Attributes,
-                        parser.hard_error_count,
+                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
+                        ModernFrame::new(
+                            parser.arena,
+                            ModernKind::Attributes,
+                            parser.hard_error_count,
+                        ),
                     )));
                 }
                 // The constant-expression is optional. Finalize immediately
@@ -567,7 +571,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     }
                     self.phase = EnumPhase::FinishBody;
                     ParseAction::Reprocess
-                } else if token.is_some_and(|token| token.kind == TokenType::Identifier) {
+                } else if token.is_some_and(|token| matches!(token.kind, TokenType::Identifier)) {
                     parser.report(
                         ParserErrorType::ExpectedCommaOrClosingCurlyInEnumeratorList(
                             token.map(|token| token.kind),
@@ -637,7 +641,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
     /// `,`, `=`, or `}`. Anything else keeps the malformed-body recovery that
     /// stops before a following declaration.
     fn misplaced_enumerator(parser: &mut Parser<'_, 'tu, 'p>, token: Token) -> bool {
-        token.kind != TokenType::Identifier
+        !matches!(token.kind, TokenType::Identifier)
             && !matches!(
                 token.kind,
                 TokenType::Operator(
@@ -703,7 +707,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                 | TokenType::Operator(OperatorTokenType::Semicolon) => return false,
                 | kind if is_statement_keyword(kind)
                     || nesting == 0
-                        && kind != TokenType::Identifier
+                        && !matches!(kind, TokenType::Identifier)
                         && parser.declaration_starter(token) =>
                 {
                     return false;

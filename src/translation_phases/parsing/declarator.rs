@@ -290,10 +290,12 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
         {
             self.attribute_resume = self.phase;
             self.phase = DeclaratorPhase::AwaitAttributes;
-            return Some(ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
-                parser.arena,
-                ModernKind::Attributes,
-                parser.hard_error_count,
+            return Some(ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
+                ModernFrame::new(
+                    parser.arena,
+                    ModernKind::Attributes,
+                    parser.hard_error_count,
+                ),
             ))));
         }
         match self.phase {
@@ -379,10 +381,12 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
             | DeclaratorPhase::PointerQualifiers => {
                 if parser.attribute_starter(token) {
                     self.phase = DeclaratorPhase::AwaitPointerAttributes;
-                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
-                        parser.arena,
-                        ModernKind::Attributes,
-                        parser.hard_error_count,
+                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
+                        ModernFrame::new(
+                            parser.arena,
+                            ModernKind::Attributes,
+                            parser.hard_error_count,
+                        ),
                     )));
                 }
                 debug_assert!(
@@ -428,7 +432,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     "this frame phase cannot receive a child value"
                 );
                 if let Some(token) = token
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                     && self.mode != DeclaratorMode::Abstract
                 {
                     parser.merge_source(&mut self.source_vectors, token);
@@ -557,8 +561,8 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
             },
             | DeclaratorPhase::Suffix => {
                 if token.is_some_and(|x| {
-                    x.kind == TokenType::Keyword(KeywordTokenType::Asm)
-                        || x.kind == TokenType::Keyword(KeywordTokenType::MsAsm)
+                    matches!(x.kind, TokenType::Keyword(KeywordTokenType::Asm))
+                        || matches!(x.kind, TokenType::Keyword(KeywordTokenType::MsAsm))
                             && x.contents == KeywordTokenType::MsAsm.cache_id()
                 }) {
                     self.phase = DeclaratorPhase::AwaitAsm;
@@ -574,10 +578,12 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 if parser.attribute_starter(token) {
                     self.attribute_resume = DeclaratorPhase::Suffix;
                     self.phase = DeclaratorPhase::AwaitAttributes;
-                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
-                        parser.arena,
-                        ModernKind::Attributes,
-                        parser.hard_error_count,
+                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
+                        ModernFrame::new(
+                            parser.arena,
+                            ModernKind::Attributes,
+                            parser.hard_error_count,
+                        ),
                     )));
                 }
                 // Direct-declarator suffixes repeat left-to-right.
@@ -640,9 +646,9 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     parser.merge_source(&mut self.source_vectors, token);
                     return ParseAction::Consume;
                 }
-                if token
-                    .is_some_and(|token| token.kind == TokenType::Keyword(KeywordTokenType::Static))
-                {
+                if token.is_some_and(|token| {
+                    matches!(token.kind, TokenType::Keyword(KeywordTokenType::Static))
+                }) {
                     let token = token.expect("static token exists");
                     parser.c99_syntax_extension("static array parameter", token);
                     if self.array_is_static {

@@ -262,7 +262,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 }
                 if self.allow_k_and_r
                     && token.is_some_and(|token| {
-                        token.kind == TokenType::Identifier
+                        matches!(token.kind, TokenType::Identifier)
                             && !parser.scopes.is_typedef(token.contents)
                     })
                     && !Self::unknown_type_name_starts_prototype(parser)
@@ -334,7 +334,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     return ParseAction::Consume;
                 }
                 // Typedef names are declaration starters, handled above.
-                if token.kind != TokenType::Identifier {
+                if !matches!(token.kind, TokenType::Identifier) {
                     parser.report(
                         ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(
                             Some(token.kind),
@@ -418,7 +418,8 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     self.phase = ParameterListPhase::FinishKAndR;
                     ParseAction::Reprocess
                 } else if token.is_some_and(|token| {
-                    token.kind == TokenType::Identifier && !parser.scopes.is_typedef(token.contents)
+                    matches!(token.kind, TokenType::Identifier)
+                        && !parser.scopes.is_typedef(token.contents)
                 }) {
                     // Repair an omitted comma without discarding the
                     // next parameter name:

@@ -102,17 +102,19 @@ impl<'tu, 'p> ExternalDeclarationFrame {
             },
             | ExternalDeclarationPhase::Start => {
                 if token.is_some_and(|x| {
-                    x.kind
-                        == crate::translation_phases::preprocessing::TokenType::Keyword(
+                    matches!(
+                        x.kind,
+                        crate::translation_phases::preprocessing::TokenType::Keyword(
                             crate::translation_phases::preprocessing::KeywordTokenType::Asm,
                         )
-                        || x.kind
-                            == crate::translation_phases::preprocessing::TokenType::Keyword(
-                                crate::translation_phases::preprocessing::KeywordTokenType::MsAsm,
-                            )
-                            && x.contents
-                                == crate::translation_phases::preprocessing::KeywordTokenType::MsAsm
-                                    .cache_id()
+                    ) || matches!(
+                        x.kind,
+                        crate::translation_phases::preprocessing::TokenType::Keyword(
+                            crate::translation_phases::preprocessing::KeywordTokenType::MsAsm,
+                        )
+                    ) && x.contents
+                        == crate::translation_phases::preprocessing::KeywordTokenType::MsAsm
+                            .cache_id()
                 }) {
                     self.phase = ExternalDeclarationPhase::AwaitAsm;
                     return super::gnu::GnuFrame::push(

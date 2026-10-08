@@ -14,6 +14,7 @@ use super::{
         ExpressionFrame,
         ExpressionMode,
     },
+    frame_pool::FramePools,
     machine::{
         ParseAction,
         ParseFrame,
@@ -166,6 +167,16 @@ pub(super) struct MsvcFrame<'tu, 'p> {
 }
 
 impl<'tu, 'p> MsvcFrame<'tu, 'p> {
+    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
+        pools.opaque_tokens.lend(&mut self.tokens);
+        pools.delimiters.lend(&mut self.delimiters);
+    }
+
+    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
+        pools.opaque_tokens.reclaim(&mut self.tokens);
+        pools.delimiters.reclaim(&mut self.delimiters);
+    }
+
     pub(super) fn new(arena: &'p Bump, keyword: KeywordTokenType, errors: usize) -> Self {
         Self {
             keyword,
@@ -298,7 +309,10 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
             | Phase::TryBody | Phase::HandlerBody => {
                 let body = matches!(self.phase, Phase::TryBody);
                 if token.is_some_and(|x| {
-                    x.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                    matches!(
+                        x.kind,
+                        TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                    )
                 }) {
                     self.phase = if body {
                         Phase::AwaitTryBody
@@ -348,11 +362,12 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
                     )
                 {
                     self.handler_keyword = Some(token);
-                    self.phase = if token.kind == TokenType::Keyword(KeywordTokenType::Except) {
-                        Phase::FilterOpen
-                    } else {
-                        Phase::HandlerBody
-                    };
+                    self.phase =
+                        if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Except)) {
+                            Phase::FilterOpen
+                        } else {
+                            Phase::HandlerBody
+                        };
                     self.own(parser, token);
                     ParseAction::Consume
                 } else {
@@ -375,7 +390,7 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
                     OperatorTokenType::ClosingParenthesis
                 };
                 if let Some(token) = token
-                    && token.kind == TokenType::Operator(op)
+                    && matches!(token.kind, TokenType::Operator(actual) if actual == op)
                 {
                     self.own(parser, token);
                     ParseAction::Consume
@@ -414,7 +429,10 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
             | Phase::LeaveSemicolon => {
                 self.phase = Phase::Finish;
                 if let Some(token) = token
-                    && token.kind == TokenType::Operator(OperatorTokenType::Semicolon)
+                    && matches!(
+                        token.kind,
+                        TokenType::Operator(OperatorTokenType::Semicolon)
+                    )
                 {
                     self.own(parser, token);
                     ParseAction::Consume
@@ -425,7 +443,10 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
             },
             | Phase::AsmOpen => {
                 self.braced = token.is_some_and(|x| {
-                    x.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                    matches!(
+                        x.kind,
+                        TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                    )
                 });
                 self.phase = Phase::AsmTokens;
                 // Assembly operands are not C syntax, so C extension
@@ -444,9 +465,11 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
                     if self.braced {
                         return false;
                     }
-                    if next.kind == TokenType::Keyword(KeywordTokenType::MsAsm)
-                        || next.kind == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
-                            && self.delimiters.is_empty()
+                    if matches!(next.kind, TokenType::Keyword(KeywordTokenType::MsAsm))
+                        || matches!(
+                            next.kind,
+                            TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+                        ) && self.delimiters.is_empty()
                     {
                         return true;
                     }

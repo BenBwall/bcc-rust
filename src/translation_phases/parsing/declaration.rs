@@ -234,7 +234,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
             },
             | DeclarationPhase::Start => {
                 if let Some(token) = token
-                    && token.kind == TokenType::Keyword(KeywordTokenType::Extension)
+                    && matches!(token.kind, TokenType::Keyword(KeywordTokenType::Extension))
                 {
                     parser.pedantic_suppression += 1;
                     parser.merge_source(&mut self.leading_extension, token);
@@ -245,14 +245,16 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
-                if token
-                    .is_some_and(|x| x.kind == TokenType::Keyword(KeywordTokenType::StaticAssert))
-                {
+                if token.is_some_and(|x| {
+                    matches!(x.kind, TokenType::Keyword(KeywordTokenType::StaticAssert))
+                }) {
                     self.phase = DeclarationPhase::AwaitAssertion;
-                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
-                        parser.arena,
-                        ModernKind::Assertion,
-                        parser.hard_error_count,
+                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
+                        ModernFrame::new(
+                            parser.arena,
+                            ModernKind::Assertion,
+                            parser.hard_error_count,
+                        ),
                     )));
                 }
                 // Specifiers are a child production because tag
@@ -549,7 +551,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     self.context,
                     DeclarationContext::Block | DeclarationContext::ForInitializer
                 ) && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
-                    || token.is_some_and(|token| token.kind == TokenType::Identifier)
+                    || token.is_some_and(|token| matches!(token.kind, TokenType::Identifier))
                         && is_operator(parser.cursor.following(), OperatorTokenType::Colon))
                 {
                     parser.report(

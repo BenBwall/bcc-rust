@@ -229,8 +229,9 @@ pub(super) struct InitializerResult<'tu> {
 /// definitions, §6.5-§6.9, pp. 67-144; PDF pp. 79-156.
 #[derive(Debug)]
 pub(super) enum ParseFrame<'tu, 'p> {
-    Modern(ModernFrame<'tu, 'p>),
-    Msvc(super::msvc::MsvcFrame<'tu, 'p>),
+    // Keep rare extension frames out of the common frame/action payload.
+    Modern(PoolBox<'p, ModernFrame<'tu, 'p>>),
+    Msvc(PoolBox<'p, super::msvc::MsvcFrame<'tu, 'p>>),
     Gnu(PoolBox<'p, GnuFrame<'tu, 'p>>),
     ExternalDeclaration(ExternalDeclarationFrame),
     Declaration(DeclarationFrame<'tu, 'p>),
@@ -338,9 +339,10 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
     /// Gives a newly pushed frame spare vectors for the lists it grows.
     pub(super) fn lend_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
         match self {
-            | Self::Msvc(frame) => pools.gnu_tokens.lend(&mut frame.tokens),
+            | Self::Msvc(frame) => frame.lend_pooled(pools),
+            | Self::Modern(frame) => frame.lend_pooled(pools),
             | Self::Gnu(frame) => {
-                pools.gnu_tokens.lend(&mut frame.tokens);
+                pools.opaque_tokens.lend(&mut frame.tokens);
                 pools.asm_operands.lend(&mut frame.asm_operands);
                 pools.builtin_operands.lend(&mut frame.operands);
                 pools.offset_members.lend(&mut frame.members);
@@ -383,7 +385,6 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
                 pools.enumerators.lend(&mut frame.enumerators);
                 pools.source_vectors.lend(&mut frame.source_vectors);
             },
-            | Self::Modern(_)
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)
@@ -396,9 +397,16 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
     /// is left behind.
     pub(super) fn reclaim_pooled(self, pools: &mut FramePools<'tu, 'p>) {
         match self {
-            | Self::Msvc(mut frame) => pools.gnu_tokens.reclaim(&mut frame.tokens),
+            | Self::Msvc(mut frame) => {
+                frame.reclaim_pooled(pools);
+                pools.msvc_frames.reclaim(frame);
+            },
+            | Self::Modern(mut frame) => {
+                frame.reclaim_pooled(pools);
+                pools.modern_frames.reclaim(frame);
+            },
             | Self::Gnu(mut frame) => {
-                pools.gnu_tokens.reclaim(&mut frame.tokens);
+                pools.opaque_tokens.reclaim(&mut frame.tokens);
                 pools.asm_operands.reclaim(&mut frame.asm_operands);
                 pools.builtin_operands.reclaim(&mut frame.operands);
                 pools.offset_members.reclaim(&mut frame.members);
@@ -437,7 +445,6 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
                 pools.enumerators.reclaim(&mut frame.enumerators);
                 pools.source_vectors.reclaim(&mut frame.source_vectors);
             },
-            | Self::Modern(_)
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
             | Self::TypeName(_)

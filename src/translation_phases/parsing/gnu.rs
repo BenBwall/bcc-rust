@@ -199,7 +199,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
         position: &'static str,
     ) -> ParseAction<'tu, 'p> {
         if let Some(token) = token
-            && token.kind == TokenType::Operator(op)
+            && matches!(token.kind, TokenType::Operator(actual) if actual == op)
         {
             self.own(parser, token);
             ParseAction::Consume
@@ -226,7 +226,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                     // Reserved `__asm` has a deferred GNU/MSVC origin when
                     // both grammars are enabled; this owner chose GNU syntax.
                     if token.contents == KeywordTokenType::MsAsm.cache_id()
-                        && token.kind == TokenType::Keyword(KeywordTokenType::MsAsm)
+                        && matches!(token.kind, TokenType::Keyword(KeywordTokenType::MsAsm))
                     {
                         parser.extension(crate::configuration::Feature::GnuAsm, "__asm", token);
                     }
@@ -283,7 +283,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
             },
             | Phase::Section => {
                 if let Some(token) = token
-                    && token.kind == TokenType::Operator(OperatorTokenType::Colon)
+                    && matches!(token.kind, TokenType::Operator(OperatorTokenType::Colon))
                 {
                     self.sections = self.sections.saturating_add(1);
                     if self.sections > 4 || self.kind == (GnuKind::Asm { label: true }) {
@@ -321,7 +321,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                 if self.sections >= 4 {
                     self.phase = Phase::AsmSeparator;
                     if let Some(token) = token
-                        && token.kind == TokenType::Identifier
+                        && matches!(token.kind, TokenType::Identifier)
                     {
                         self.labels.push(Identifier::from_token(token));
                         self.own(parser, token);
@@ -345,7 +345,10 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                         ParseAction::Continue
                     }
                 } else if let Some(token) = token
-                    && token.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                    && matches!(
+                        token.kind,
+                        TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                    )
                 {
                     self.own(parser, token);
                     self.phase = Phase::OperandNameClose;
@@ -358,7 +361,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
             | Phase::OperandNameClose => {
                 if self.name.is_none()
                     && let Some(token) = token
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                 {
                     self.name = Some(Identifier::from_token(token));
                     self.own(parser, token);
@@ -392,7 +395,10 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
             | Phase::OperandOpen => {
                 self.phase = Phase::AwaitAsmExpression;
                 if token.is_some_and(|x| {
-                    x.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                    matches!(
+                        x.kind,
+                        TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                    )
                 }) {
                     self.own(parser, token.expect("parenthesis exists"));
                     // Child must start after the parent consumes its delimiter.
@@ -439,7 +445,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
             },
             | Phase::AsmSeparator => {
                 if let Some(token) = token
-                    && token.kind == TokenType::Operator(OperatorTokenType::Comma)
+                    && matches!(token.kind, TokenType::Operator(OperatorTokenType::Comma))
                 {
                     self.own(parser, token);
                     self.requires_operand = true;
@@ -523,7 +529,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
             | Phase::OffsetField => {
                 self.phase = Phase::OffsetSuffix;
                 if let Some(token) = token
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                 {
                     self.members
                         .push(OffsetMember::Field(Identifier::from_token(token)));
@@ -537,13 +543,16 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
             },
             | Phase::OffsetSuffix => {
                 if let Some(token) = token
-                    && token.kind == TokenType::Operator(OperatorTokenType::Period)
+                    && matches!(token.kind, TokenType::Operator(OperatorTokenType::Period))
                 {
                     self.own(parser, token);
                     self.phase = Phase::OffsetField;
                     ParseAction::Consume
                 } else if let Some(token) = token
-                    && token.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                    && matches!(
+                        token.kind,
+                        TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                    )
                 {
                     self.own(parser, token);
                     self.phase = Phase::AwaitOffsetIndex;
@@ -583,7 +592,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
             | Phase::LocalName => {
                 self.phase = Phase::LocalSeparator;
                 if let Some(token) = token
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                 {
                     self.labels.push(Identifier::from_token(token));
                     self.own(parser, token);
@@ -596,7 +605,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
             },
             | Phase::LocalSeparator => {
                 if let Some(token) = token
-                    && token.kind == TokenType::Operator(OperatorTokenType::Comma)
+                    && matches!(token.kind, TokenType::Operator(OperatorTokenType::Comma))
                 {
                     self.own(parser, token);
                     self.phase = Phase::LocalName;

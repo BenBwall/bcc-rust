@@ -220,7 +220,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
         index: ConstantExpression<'tu>,
     ) -> Option<ParseAction<'tu, 'p>> {
         if let Some(token) = token
-            && token.kind == TokenType::Operator(OperatorTokenType::Ellipsis)
+            && matches!(token.kind, TokenType::Operator(OperatorTokenType::Ellipsis))
         {
             if self.range_lower.is_some() {
                 parser.report(
@@ -282,11 +282,11 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
         token: Option<Token>,
     ) -> ParseAction<'tu, 'p> {
         if let Some(token) = token
-            && token.kind == TokenType::Identifier
+            && matches!(token.kind, TokenType::Identifier)
             && parser
                 .cursor
                 .following()
-                .is_some_and(|x| x.kind == TokenType::Operator(OperatorTokenType::Colon))
+                .is_some_and(|x| matches!(x.kind, TokenType::Operator(OperatorTokenType::Colon)))
         {
             parser.extension(
                 crate::configuration::Feature::GnuDesignators,
@@ -307,7 +307,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             return ParseAction::Consume;
         }
         if let Some(designator) = token
-            && designator.kind == TokenType::Operator(OperatorTokenType::Period)
+            && matches!(
+                designator.kind,
+                TokenType::Operator(OperatorTokenType::Period)
+            )
         {
             parser.extension(
                 crate::configuration::Feature::DesignatedInitializers,
@@ -320,7 +323,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             return ParseAction::Consume;
         }
         if let Some(designator) = token
-            && designator.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+            && matches!(
+                designator.kind,
+                TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+            )
         {
             parser.extension(
                 crate::configuration::Feature::DesignatedInitializers,
@@ -358,7 +364,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             | InitializerPhase::Start => {
                 debug_assert!(returned.is_none());
                 if let Some(opening) = token
-                    && opening.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                    && matches!(
+                        opening.kind,
+                        TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                    )
                 {
                     self.opening_brace_source_vectors = Some(opening.source_vectors);
                     self.source_vectors.push((opening).source_vectors);
@@ -395,7 +404,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             | InitializerPhase::ElementOrClose => {
                 debug_assert!(returned.is_none());
                 if let Some(close) = token
-                    && close.kind == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+                    && matches!(
+                        close.kind,
+                        TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+                    )
                 {
                     // C99 §6.7.8p1: an initializer-list has at least one
                     // initializer; `{}` is not C99.
@@ -459,7 +471,8 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             | InitializerPhase::Designation => self.step_designation(parser, token),
             | InitializerPhase::FieldDesignator => {
                 debug_assert!(returned.is_none());
-                let Some(identifier) = token.filter(|token| token.kind == TokenType::Identifier)
+                let Some(identifier) =
+                    token.filter(|token| matches!(token.kind, TokenType::Identifier))
                 else {
                     // C99 §6.7.8p1: designator `. identifier`.
                     parser.report(
@@ -544,7 +557,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     .merge_vectors(operator_source_vectors, expression_source);
                 self.merge_designation_source(parser.context, expression_source);
                 if let Some(close) = token
-                    && close.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    && matches!(
+                        close.kind,
+                        TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    )
                 {
                     source_vectors = parser
                         .context
@@ -595,7 +611,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     .take()
                     .expect("array-designator synchronization retains its state");
                 if let Some(token) = token
-                    && token.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    && matches!(
+                        token.kind,
+                        TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    )
                 {
                     source_vectors = parser
                         .context
@@ -681,7 +700,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             | InitializerPhase::DesignationEquals => {
                 debug_assert!(returned.is_none());
                 let consume = if let Some(equals) = token
-                    && equals.kind == TokenType::Operator(OperatorTokenType::Equals)
+                    && matches!(equals.kind, TokenType::Operator(OperatorTokenType::Equals))
                 {
                     // C99 §6.7.8p1: designation is `designator-list =`.
                     self.designation_state().designation_equals_source_vectors =
@@ -690,7 +709,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     true
                 } else if token.is_some_and(|x| {
                     super::expression_operators::is_expression_operand_starter(x.kind)
-                        || x.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                        || matches!(
+                            x.kind,
+                            TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                        )
                 }) {
                     parser.extension(
                         crate::configuration::Feature::GnuDesignators,
@@ -783,7 +805,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 // C99 §6.7.8p1: `,` continues the list, and a `,` before `}`
                 // is the trailing-comma form.
                 if let Some(comma) = token
-                    && comma.kind == TokenType::Operator(OperatorTokenType::Comma)
+                    && matches!(comma.kind, TokenType::Operator(OperatorTokenType::Comma))
                 {
                     self.elements
                         .last_mut()
@@ -794,7 +816,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     return ParseAction::Consume;
                 }
                 if let Some(close) = token
-                    && close.kind == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+                    && matches!(
+                        close.kind,
+                        TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+                    )
                 {
                     self.closing_brace_source_vectors = Some(close.source_vectors);
                     self.source_vectors.push((close).source_vectors);
@@ -960,7 +985,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             )
             || self.closing_parenthesis_is_caller_boundary
                 && depth.parentheses == 0
-                && token.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                && matches!(
+                    token.kind,
+                    TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                )
             || at_top_level
                 && (is_statement_keyword(token.kind)
                     || ExpressionFrame::is_strong_grammar_boundary_for(
@@ -1022,7 +1050,8 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 | TokenType::Operator(OperatorTokenType::Semicolon) => return false,
                 | kind if at_top_level
                     && (is_statement_keyword(kind)
-                        || kind != TokenType::Identifier && parser.declaration_starter(token)) =>
+                        || !matches!(kind, TokenType::Identifier)
+                            && parser.declaration_starter(token)) =>
                 {
                     return false;
                 },
@@ -1055,20 +1084,34 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
 
     fn at_caller_boundary(&self, token: Option<Token>) -> bool {
         token.is_none_or(|token| {
-            token.kind == TokenType::Operator(OperatorTokenType::Semicolon)
-                || self.closing_parenthesis_is_caller_boundary
-                    && token.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+            matches!(
+                token.kind,
+                TokenType::Operator(OperatorTokenType::Semicolon)
+            ) || self.closing_parenthesis_is_caller_boundary
+                && matches!(
+                    token.kind,
+                    TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                )
                 || self.closing_square_bracket_is_caller_boundary
-                    && token.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    && matches!(
+                        token.kind,
+                        TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    )
         })
     }
 
     fn is_unowned_closing_delimiter(&self, token: Option<Token>) -> bool {
         token.is_some_and(|token| {
             !self.closing_parenthesis_is_caller_boundary
-                && token.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                && matches!(
+                    token.kind,
+                    TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                )
                 || !self.closing_square_bracket_is_caller_boundary
-                    && token.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    && matches!(
+                        token.kind,
+                        TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    )
         })
     }
 
@@ -1083,9 +1126,12 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
         let Some(token) = token else {
             return ListBoundary::MissingClose;
         };
-        if token.kind == TokenType::Identifier
+        if matches!(token.kind, TokenType::Identifier)
             && parser.cursor.following().is_some_and(|following| {
-                following.kind == TokenType::Operator(OperatorTokenType::Colon)
+                matches!(
+                    following.kind,
+                    TokenType::Operator(OperatorTokenType::Colon)
+                )
             })
         {
             return if matches!(self.phase, InitializerPhase::ElementOrClose)
@@ -1096,7 +1142,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 ListBoundary::MissingClose
             };
         }
-        let identifier_continues_initializer = token.kind == TokenType::Identifier
+        let identifier_continues_initializer = matches!(token.kind, TokenType::Identifier)
             && parser.cursor.following().is_some_and(|following| {
                 binary_operator(following.kind).is_some() || is_postfix_starter(following.kind)
             });

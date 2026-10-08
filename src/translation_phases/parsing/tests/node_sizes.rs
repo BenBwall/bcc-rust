@@ -117,7 +117,7 @@ fn syntax_nodes_keep_their_sizes() {
         BlockItem<'_> => 16,
         ExternalDeclaration<'_> => 16,
         ParseValue<'_> => 40,
-        ParseFrame<'_, '_> => 176,
+        ParseFrame<'_, '_> => 152,
     ];
     let changed: Vec<_> = sizes
         .into_iter()

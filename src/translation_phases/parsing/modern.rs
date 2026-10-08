@@ -14,6 +14,7 @@ use super::{
         ExpressionFrame,
         ExpressionMode,
     },
+    frame_pool::FramePools,
     machine::{
         ParseAction,
         ParseFrame,
@@ -218,6 +219,18 @@ pub(super) struct ModernFrame<'tu, 'p> {
     starting_errors: usize,
 }
 impl<'tu, 'p> ModernFrame<'tu, 'p> {
+    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
+        pools.modern_associations.lend(&mut self.associations);
+        pools.opaque_tokens.lend(&mut self.tokens);
+        pools.delimiters.lend(&mut self.delimiters);
+    }
+
+    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
+        pools.modern_associations.reclaim(&mut self.associations);
+        pools.opaque_tokens.reclaim(&mut self.tokens);
+        pools.delimiters.reclaim(&mut self.delimiters);
+    }
+
     pub(super) fn new(arena: &'p Bump, kind: ModernKind, starting_errors: usize) -> Self {
         Self {
             kind,
@@ -327,7 +340,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         position: &'static str,
     ) -> ParseAction<'tu, 'p> {
         if let Some(token) = token
-            && token.kind == TokenType::Operator(operator)
+            && matches!(token.kind, TokenType::Operator(actual) if actual == operator)
         {
             self.own(parser, token);
             ParseAction::Consume
@@ -351,13 +364,13 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     }
                     self.own(parser, token);
                     if self.kind == ModernKind::Attributes {
-                        if token.kind == TokenType::Keyword(KeywordTokenType::Declspec) {
+                        if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Declspec)) {
                             self.attribute_syntax = AttributeSyntax::Msvc;
                             self.tokens.push(token);
                             self.phase = Phase::GnuAttributeInnerOpen;
                             return ParseAction::Consume;
                         }
-                        if token.kind == TokenType::Keyword(KeywordTokenType::Attribute) {
+                        if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Attribute)) {
                             self.attribute_syntax = AttributeSyntax::Gnu;
                             self.tokens.push(token);
                             self.phase = Phase::GnuAttributeOpen;
@@ -458,9 +471,9 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
             },
             | Phase::Separator =>
                 if self.kind == ModernKind::Assertion {
-                    if token
-                        .is_some_and(|x| x.kind == TokenType::Operator(OperatorTokenType::Comma))
-                    {
+                    if token.is_some_and(|x| {
+                        matches!(x.kind, TokenType::Operator(OperatorTokenType::Comma))
+                    }) {
                         self.phase = Phase::Message;
                         self.own(parser, token.expect("comma exists"));
                         ParseAction::Consume
@@ -488,7 +501,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                 },
             | Phase::Association => {
                 if let Some(token) = token
-                    && token.kind == TokenType::Keyword(KeywordTokenType::Default)
+                    && matches!(token.kind, TokenType::Keyword(KeywordTokenType::Default))
                 {
                     self.own(parser, token);
                     self.association_type = None;
@@ -543,7 +556,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     expression,
                 });
                 if let Some(token) = token
-                    && token.kind == TokenType::Operator(OperatorTokenType::Comma)
+                    && matches!(token.kind, TokenType::Operator(OperatorTokenType::Comma))
                 {
                     self.own(parser, token);
                     self.phase = Phase::Association;
@@ -597,7 +610,10 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                 };
                 self.attribute_position = AttributePosition::Name;
                 if let Some(token) = token
-                    && token.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                    && matches!(
+                        token.kind,
+                        TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                    )
                 {
                     self.tokens.push(token);
                     self.delimiters.push(OperatorTokenType::ClosingParenthesis);
@@ -647,7 +663,10 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     let valid = match position {
                         | Opening => {
                             self.attribute_position = Name;
-                            kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                            matches!(
+                                kind,
+                                TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                            )
                         },
                         | Name | PrefixedName if identifier => {
                             self.attribute_position = if matches!(position, Name) {
@@ -664,48 +683,52 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                             true
                         },
                         | Name | AfterName | AfterPrefixedName | AfterArguments
-                            if kind == TokenType::Operator(OperatorTokenType::Comma) =>
+                            if matches!(kind, TokenType::Operator(OperatorTokenType::Comma)) =>
                         {
                             self.attribute_position = Name;
                             true
                         },
                         | Name | AfterName | AfterPrefixedName | AfterArguments
-                            if kind
-                                == TokenType::Operator(
-                                    if self.attribute_syntax == AttributeSyntax::Standard {
-                                        OperatorTokenType::ClosingSquareBracket
-                                    } else {
-                                        OperatorTokenType::ClosingParenthesis
-                                    },
-                                ) =>
+                            if matches!(kind, TokenType::Operator(actual) if actual ==
+                                if self.attribute_syntax == AttributeSyntax::Standard {
+                                    OperatorTokenType::ClosingSquareBracket
+                                } else {
+                                    OperatorTokenType::ClosingParenthesis
+                                }
+                            ) =>
                         {
                             self.attribute_position = Closing;
                             true
                         },
-                        | AfterName if kind == TokenType::Operator(OperatorTokenType::Colon) => {
+                        | AfterName
+                            if matches!(kind, TokenType::Operator(OperatorTokenType::Colon)) =>
+                        {
                             self.attribute_position = SecondColon;
                             true
                         },
-                        | SecondColon if kind == TokenType::Operator(OperatorTokenType::Colon) => {
+                        | SecondColon
+                            if matches!(kind, TokenType::Operator(OperatorTokenType::Colon)) =>
+                        {
                             self.attribute_position = PrefixedName;
                             true
                         },
                         | AfterName | AfterPrefixedName
-                            if kind
-                                == TokenType::Operator(OperatorTokenType::OpeningParenthesis) =>
+                            if matches!(
+                                kind,
+                                TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                            ) =>
                         {
                             self.attribute_position = AfterArguments;
                             true
                         },
                         | Closing
-                            if kind
-                                == TokenType::Operator(
-                                    if self.attribute_syntax == AttributeSyntax::Standard {
-                                        OperatorTokenType::ClosingSquareBracket
-                                    } else {
-                                        OperatorTokenType::ClosingParenthesis
-                                    },
-                                ) =>
+                            if matches!(kind, TokenType::Operator(actual) if actual ==
+                                if self.attribute_syntax == AttributeSyntax::Standard {
+                                    OperatorTokenType::ClosingSquareBracket
+                                } else {
+                                    OperatorTokenType::ClosingParenthesis
+                                }
+                            ) =>
                             true,
                         | Closing => {
                             // Only the second closer can follow the first;

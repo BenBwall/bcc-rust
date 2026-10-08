@@ -89,7 +89,9 @@ impl LanguageExpressionOperator<'_> {
 ///
 /// C99: punctuators are §6.4.6, pp. 63-64; PDF pp. 75-76.
 pub(super) fn is_operator(token: Option<Token>, operator: OperatorTokenType) -> bool {
-    token.is_some_and(|token| token.kind == TokenType::Operator(operator))
+    token.is_some_and(
+        |token| matches!(token.kind, TokenType::Operator(actual) if actual == operator),
+    )
 }
 
 /// Binding level of each binary operator, lower binding tighter, numbered

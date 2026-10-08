@@ -519,10 +519,8 @@ impl<'tu, 'p> StatementFrame<'tu> {
                         );
                     }
                     self.phase = StatementPhase::AwaitMsvc;
-                    return ParseAction::Push(ParseFrame::Msvc(super::msvc::MsvcFrame::new(
-                        parser.arena,
-                        keyword,
-                        parser.hard_error_count,
+                    return ParseAction::Push(ParseFrame::Msvc(parser.pools.msvc(
+                        super::msvc::MsvcFrame::new(parser.arena, keyword, parser.hard_error_count),
                     )));
                 }
                 if let Some(token) = token {
@@ -541,10 +539,12 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 debug_assert!(returned.is_none());
                 if parser.attribute_starter(token) {
                     self.phase = StatementPhase::AwaitAttributes;
-                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
-                        parser.arena,
-                        ModernKind::Attributes,
-                        parser.hard_error_count,
+                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
+                        ModernFrame::new(
+                            parser.arena,
+                            ModernKind::Attributes,
+                            parser.hard_error_count,
+                        ),
                     )));
                 }
                 if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
@@ -563,7 +563,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 // function scope (§6.2.1p3). Uniqueness (§6.8.1p3) is a
                 // semantic check.
                 if let Some(token) = token
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                     && is_operator(parser.cursor.following(), OperatorTokenType::Colon)
                 {
                     let identifier = Identifier::from_token(token);
@@ -679,7 +679,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 // frame before a statement frame starts, so
                 // only substatements reach this point.
                 if let Some(token) = token
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                     && parser.declaration_recovery_starts_here(token)
                 {
                     parser.report(
@@ -713,8 +713,9 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     self.phase = StatementPhase::Finish(StatementType::Null);
                     return ParseAction::Consume;
                 }
-                let stray_else = token
-                    .is_some_and(|token| token.kind == TokenType::Keyword(KeywordTokenType::Else));
+                let stray_else = token.is_some_and(|token| {
+                    matches!(token.kind, TokenType::Keyword(KeywordTokenType::Else))
+                });
                 if token.is_none()
                     || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
                     || stray_else
@@ -766,10 +767,12 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 // C99 §6.8.6p1: `return expression(opt) ;`.
                 debug_assert!(returned.is_none());
                 let identifier_continues_expression = token
-                    .is_some_and(|token| token.kind == TokenType::Identifier)
+                    .is_some_and(|token| matches!(token.kind, TokenType::Identifier))
                     && parser.cursor.following().is_some_and(|following| {
-                        following.kind == TokenType::Operator(OperatorTokenType::Asterisk)
-                            || is_postfix_starter(following.kind)
+                        matches!(
+                            following.kind,
+                            TokenType::Operator(OperatorTokenType::Asterisk)
+                        ) || is_postfix_starter(following.kind)
                     });
                 if is_operator(token, OperatorTokenType::Semicolon) {
                     self.merge_token(parser, token.expect("semicolon exists"));
@@ -780,7 +783,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                         !identifier_continues_expression
                             && parser.declaration_recovery_starts_here(token)
                     })
-                    || token.is_some_and(|token| token.kind == TokenType::Identifier)
+                    || token.is_some_and(|token| matches!(token.kind, TokenType::Identifier))
                         && is_operator(parser.cursor.following(), OperatorTokenType::Colon)
                 {
                     self.phase = StatementPhase::ReturnSemicolon(None);
@@ -816,7 +819,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 // the identifier more likely starts the next statement after
                 // a `break` missing its own.
                 if let Some(token) = token
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                     && is_operator(parser.cursor.following(), OperatorTokenType::Semicolon)
                 {
                     parser.extension(
@@ -843,7 +846,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::GotoIdentifier => {
                 if let Some(token) = token
-                    && token.kind == TokenType::Operator(OperatorTokenType::Asterisk)
+                    && matches!(token.kind, TokenType::Operator(OperatorTokenType::Asterisk))
                 {
                     parser.extension(
                         crate::configuration::Feature::LabelsAsValues,
@@ -856,7 +859,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 }
                 debug_assert!(returned.is_none());
                 let identifier = if let Some(token) = token
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                 {
                     let identifier = Identifier::from_token(token);
                     // C99 §6.8.6.1p1: the target is checked against the
@@ -961,7 +964,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     && !is_operator(token, OperatorTokenType::Colon)
                     && super::expression::closer_follows_stray_run(
                         parser,
-                        |token| token == TokenType::Operator(OperatorTokenType::Colon),
+                        |token| matches!(token, TokenType::Operator(OperatorTokenType::Colon)),
                         true,
                     )
                     .is_some()
@@ -1225,9 +1228,9 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | StatementPhase::IfAfterThen(expression, then_statement) => {
                 // C99 §6.8.4.1p3: `else` binds to the nearest `if`.
                 debug_assert!(returned.is_none());
-                if token
-                    .is_some_and(|token| token.kind == TokenType::Keyword(KeywordTokenType::Else))
-                {
+                if token.is_some_and(|token| {
+                    matches!(token.kind, TokenType::Keyword(KeywordTokenType::Else))
+                }) {
                     self.merge_token(parser, token.expect("else token exists"));
                     self.phase = StatementPhase::PushElse(expression, then_statement);
                     ParseAction::Consume
@@ -1284,9 +1287,9 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::DoWhileKeyword(body) => {
                 debug_assert!(returned.is_none());
-                if token
-                    .is_some_and(|token| token.kind == TokenType::Keyword(KeywordTokenType::While))
-                {
+                if token.is_some_and(|token| {
+                    matches!(token.kind, TokenType::Keyword(KeywordTokenType::While))
+                }) {
                     self.merge_token(parser, token.expect("while token exists"));
                     self.phase = StatementPhase::DoOpening(body);
                     ParseAction::Consume

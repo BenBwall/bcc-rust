@@ -194,11 +194,11 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
         if matches!(self.phase, StructOrUnionPhase::FinishBody) && parser.attribute_starter(token) {
             self.attribute_resume = self.phase;
             self.phase = StructOrUnionPhase::AwaitTagAttributes;
-            return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+            return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(ModernFrame::new(
                 parser.arena,
                 ModernKind::Attributes,
                 parser.hard_error_count,
-            )));
+            ))));
         }
         match self.phase {
             | StructOrUnionPhase::AwaitMemberAttributes => {
@@ -281,10 +281,12 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 if parser.attribute_starter(token) {
                     self.attribute_resume = StructOrUnionPhase::NameOrBody;
                     self.phase = StructOrUnionPhase::AwaitTagAttributes;
-                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
-                        parser.arena,
-                        ModernKind::Attributes,
-                        parser.hard_error_count,
+                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
+                        ModernFrame::new(
+                            parser.arena,
+                            ModernKind::Attributes,
+                            parser.hard_error_count,
+                        ),
                     )));
                 }
                 debug_assert!(
@@ -295,7 +297,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 // definition, or an anonymous definition. Record the tag
                 // first and decide whether a body follows in a separate phase.
                 if let Some(token) = token
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                 {
                     self.identifier = Some(Identifier::from_token(token));
                     self.source_vectors.push(token.source_vectors);
@@ -335,14 +337,16 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 }
             },
             | StructOrUnionPhase::MemberStart => {
-                if token
-                    .is_some_and(|x| x.kind == TokenType::Keyword(KeywordTokenType::StaticAssert))
-                {
+                if token.is_some_and(|x| {
+                    matches!(x.kind, TokenType::Keyword(KeywordTokenType::StaticAssert))
+                }) {
                     self.phase = StructOrUnionPhase::AwaitAssertion;
-                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
-                        parser.arena,
-                        ModernKind::Assertion,
-                        parser.hard_error_count,
+                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
+                        ModernFrame::new(
+                            parser.arena,
+                            ModernKind::Assertion,
+                            parser.hard_error_count,
+                        ),
                     )));
                 }
                 debug_assert!(
@@ -554,10 +558,12 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
             | StructOrUnionPhase::AfterStructDeclarator => {
                 if parser.attribute_starter(token) {
                     self.phase = StructOrUnionPhase::AwaitMemberAttributes;
-                    return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
-                        parser.arena,
-                        ModernKind::Attributes,
-                        parser.hard_error_count,
+                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
+                        ModernFrame::new(
+                            parser.arena,
+                            ModernKind::Attributes,
+                            parser.hard_error_count,
+                        ),
                     )));
                 }
                 debug_assert!(
@@ -732,7 +738,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     };
                     if groups == 0
                         && !(opens_tag_body(previous)
-                            || previous == Some(TokenType::Identifier)
+                            || matches!(previous, Some(TokenType::Identifier))
                                 && opens_tag_body(before_previous))
                     {
                         return false;

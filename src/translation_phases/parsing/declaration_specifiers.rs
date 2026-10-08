@@ -301,7 +301,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         // GNU extension: `__extension__` may lead a declaration or a member
         // declaration. Its owner (the declaration, parameter, or member)
         // restores the suppression depth when it ends.
-        if token.kind == TokenType::Keyword(KeywordTokenType::Extension)
+        if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Extension))
             && matches!(
                 self.mode,
                 SpecifierMode::Declaration | SpecifierMode::StructMember
@@ -355,11 +355,11 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         }
         if parser.attribute_starter(Some(token)) {
             self.phase = DeclarationSpecifiersPhase::AwaitAttributes;
-            return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
+            return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(ModernFrame::new(
                 parser.arena,
                 ModernKind::Attributes,
                 parser.hard_error_count,
-            )));
+            ))));
         }
         if let TokenType::Keyword(keyword) = token.kind {
             if matches!(
@@ -370,7 +370,10 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                     | KeywordTokenType::TypeofUnqual
             ) || keyword == KeywordTokenType::Atomic
                 && parser.cursor.following().is_some_and(|x| {
-                    x.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                    matches!(
+                        x.kind,
+                        TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                    )
                 })
             {
                 // C17 §6.7.5p2 (C23 (N3220) §6.7.6p2): an alignment specifier
@@ -395,16 +398,18 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                         .report_conflict(parser, token.contents, token);
                 }
                 self.phase = DeclarationSpecifiersPhase::AwaitModern(keyword);
-                return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
-                    parser.arena,
-                    ModernKind::Operand {
-                        type_only: keyword == KeywordTokenType::Atomic,
-                        constant:  matches!(
-                            keyword,
-                            KeywordTokenType::Alignas | KeywordTokenType::BitInt
-                        ),
-                    },
-                    parser.hard_error_count,
+                return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
+                    ModernFrame::new(
+                        parser.arena,
+                        ModernKind::Operand {
+                            type_only: keyword == KeywordTokenType::Atomic,
+                            constant:  matches!(
+                                keyword,
+                                KeywordTokenType::Alignas | KeywordTokenType::BitInt
+                            ),
+                        },
+                        parser.hard_error_count,
+                    ),
                 )));
             }
             if matches!(
@@ -484,7 +489,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                 parser.pools.struct_or_union_specifier(frame),
             ));
         }
-        if token.kind == TokenType::Keyword(KeywordTokenType::Enum) {
+        if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Enum)) {
             self.pending_type_specifier = Some(token);
             self.phase = DeclarationSpecifiersPhase::AwaitEnum;
             return ParseAction::Push(ParseFrame::EnumSpecifier(EnumSpecifierFrame::new(
@@ -574,7 +579,10 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             token.kind,
             TokenType::Keyword(KeywordTokenType::Inline | KeywordTokenType::Forceinline)
         ) {
-            if token.kind == TokenType::Keyword(KeywordTokenType::Forceinline) {
+            if matches!(
+                token.kind,
+                TokenType::Keyword(KeywordTokenType::Forceinline)
+            ) {
                 self.add_extension(
                     parser,
                     SpecifierExtensionKind::MsModifier(match token.kind {
@@ -610,7 +618,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         // specifier beside it, so once a type is present the identifier is
         // normally the declarator, which may redeclare the name in an inner
         // scope (§6.2.1p4).
-        if token.kind == TokenType::Identifier
+        if matches!(token.kind, TokenType::Identifier)
             && parser.scopes.is_typedef(token.contents)
             && (self.mode == SpecifierMode::TypeName
                 || self.specifiers.type_specifiers == TypeSpecifiers::Empty
@@ -637,14 +645,17 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         // rest of the declaration follow, instead of misreading it as an
         // implicit-`int` name and then rejecting what comes after it.
         // C99 has no implicit `int` (§6.7.2p2).
-        if token.kind == TokenType::Identifier
+        if matches!(token.kind, TokenType::Identifier)
             && self.mode != SpecifierMode::TypeName
             && self.specifiers.type_specifiers == TypeSpecifiers::Empty
             && !self.invalid_type_seen
             && !parser.scopes.is_typedef(token.contents)
             && parser.cursor.following().is_some_and(|following| {
-                following.kind == TokenType::Identifier
-                    || following.kind == TokenType::Operator(OperatorTokenType::Asterisk)
+                matches!(following.kind, TokenType::Identifier)
+                    || matches!(
+                        following.kind,
+                        TokenType::Operator(OperatorTokenType::Asterisk)
+                    )
                     || parser.declaration_starter(following)
             })
         {
@@ -681,7 +692,10 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         {
             if self.mode == SpecifierMode::Declaration
                 && self.has_only_attributes()
-                && token.kind == TokenType::Operator(OperatorTokenType::Semicolon)
+                && matches!(
+                    token.kind,
+                    TokenType::Operator(OperatorTokenType::Semicolon)
+                )
                 && self.specifiers.storage_class.is_none()
             {
             } else if self.mode == SpecifierMode::Declaration

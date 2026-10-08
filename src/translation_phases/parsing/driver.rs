@@ -524,7 +524,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         match occurrence {
             | Some(TokenDiagnostic::Extension(suppressed))
                 if self.pedantic_suppression != 0
-                    || token.kind == TokenType::Keyword(KeywordTokenType::Extension) =>
+                    || matches!(token.kind, TokenType::Keyword(KeywordTokenType::Extension)) =>
                 self.context.suppress_extension(suppressed),
             | Some(TokenDiagnostic::Constant(index)) if self.active_frame == ParseFrameKind::Msvc =>
                 self.context.withdraw_pending_error(index),
@@ -687,13 +687,13 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 brackets:    state.brackets,
                 braces:      state.braces,
             };
-            let colon_matches_conditional = token.kind
-                == TokenType::Operator(OperatorTokenType::Colon)
-                && state
-                    .questions
-                    .iter()
-                    .rev()
-                    .any(|question| *question == delimiter_depth);
+            let colon_matches_conditional =
+                matches!(token.kind, TokenType::Operator(OperatorTokenType::Colon))
+                    && state
+                        .questions
+                        .iter()
+                        .rev()
+                        .any(|question| *question == delimiter_depth);
             let at_unambiguous_owning_delimiter = !colon_matches_conditional
                 && recovery_set.kind.stops_before_despite_unbalanced_child(
                     token.kind,
@@ -729,7 +729,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 || consumed_tokens > 0 && stops_at_declaration_after_malformed_prefix)
                 && at_top_level
                 && self.declaration_starter(token)
-                && !(token.kind == TokenType::Identifier
+                && !(matches!(token.kind, TokenType::Identifier)
                     && matches!(
                         state.last_token,
                         Some(TokenType::Operator(
@@ -739,13 +739,13 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             let at_next_k_and_r_identifier =
                 matches!(recovery_set.kind, SynchronizationKind::KAndRParameter)
                     && at_top_level
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                     && !self.scopes.is_typedef(token.contents);
             let at_next_enumerator =
                 matches!(recovery_set.kind, SynchronizationKind::EnumeratorValue)
                     && at_top_level
                     && recovery_set.target == ParseFrameKind::EnumSpecifier
-                    && token.kind == TokenType::Identifier;
+                    && matches!(token.kind, TokenType::Identifier);
             let has_pending_conditional_at_depth = state.questions.contains(&delimiter_depth);
             let at_next_identifier_label =
                 (matches!(
@@ -756,7 +756,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                         && consumed_tokens > 0)
                     && at_top_level
                     && !has_pending_conditional_at_depth
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                     && is_operator(self.cursor.following(), OperatorTokenType::Colon);
             let at_statement_body_brace = (matches!(
                 recovery_set.kind,
@@ -767,14 +767,18 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 recovery_set.kind,
                 SynchronizationKind::BlockDeclaration | SynchronizationKind::ForInitializer
             )) && at_top_level
-                && token.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
-                && (state.last_token
-                    != Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
-                    || !state.last_closed_parenthesis_was_type_name
+                && matches!(
+                    token.kind,
+                    TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                )
+                && (!matches!(
+                    state.last_token,
+                    Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
+                ) || !state.last_closed_parenthesis_was_type_name
                     || state.last_closed_parenthesis_was_sizeof_type_name
                         && self.cursor.following().is_some_and(|following| {
                             is_statement_keyword(following.kind)
-                                || following.kind != TokenType::Identifier
+                                || !matches!(following.kind, TokenType::Identifier)
                                     && self.declaration_starter(following)
                                 || matches!(
                                     following.kind,
@@ -804,12 +808,13 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 break;
             }
 
-            let opens_type_name = token.kind
-                == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
-                && self
-                    .cursor
-                    .following()
-                    .is_some_and(|following| self.declaration_starter(following));
+            let opens_type_name = matches!(
+                token.kind,
+                TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+            ) && self
+                .cursor
+                .following()
+                .is_some_and(|following| self.declaration_starter(following));
             self.recovery.consume(token.kind, opens_type_name);
 
             #[cfg(test)]
@@ -1010,7 +1015,9 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     pub(super) fn extension_precedes_declaration(&self) -> bool {
         let mut offset = 0;
         let mut token = self.cursor.current();
-        while token.is_some_and(|x| x.kind == TokenType::Keyword(KeywordTokenType::Extension)) {
+        while token
+            .is_some_and(|x| matches!(x.kind, TokenType::Keyword(KeywordTokenType::Extension)))
+        {
             token = self.cursor.lookahead(offset);
             offset += 1;
         }
@@ -1075,7 +1082,10 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             let Some(mut current) = token else {
                 return false;
             };
-            while current.kind == TokenType::Keyword(KeywordTokenType::Extension) {
+            while matches!(
+                current.kind,
+                TokenType::Keyword(KeywordTokenType::Extension)
+            ) {
                 token = self.cursor.lookahead(offset);
                 offset += 1;
                 let Some(next) = token else { return false };
@@ -1084,11 +1094,15 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             if matches!(
                 current.kind,
                 TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec)
-            ) || current.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
-                && self.cursor.lookahead(offset).is_some_and(|x| {
-                    x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
-                })
-            {
+            ) || matches!(
+                current.kind,
+                TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+            ) && self.cursor.lookahead(offset).is_some_and(|x| {
+                matches!(
+                    x.kind,
+                    TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                )
+            }) {
                 continue;
             }
             return self.declaration_starter(current);
@@ -1112,7 +1126,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             | TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec) => true,
             | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) =>
                 next.is_some_and(|next| {
-                    next.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                    matches!(next.kind, TokenType::Operator(OperatorTokenType::OpeningSquareBracket))
                 }),
             | _ => false,
         }
@@ -1123,7 +1137,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// the current token or the one following it; at any later position the
     /// `[` is not taken as an attribute start.
     fn attribute_starter_in_lookahead(&self, token: Token) -> bool {
-        if token.kind != TokenType::Operator(OperatorTokenType::OpeningSquareBracket) {
+        if !matches!(token.kind, TokenType::Operator(OperatorTokenType::OpeningSquareBracket)) {
             return Self::attribute_starter_before(token, None);
         }
         let next = if Some(token) == self.cursor.current() {
@@ -1266,11 +1280,12 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     }
 
     pub(super) fn declaration_recovery_starts_here(&mut self, token: Token) -> bool {
-        if token.kind == TokenType::Keyword(KeywordTokenType::Extension) {
+        if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Extension)) {
             return self.extension_precedes_declaration();
         }
         self.declaration_starter(token)
-            && (token.kind != TokenType::Identifier || self.typedef_name_continues_specifiers())
+            && (!matches!(token.kind, TokenType::Identifier)
+                || self.typedef_name_continues_specifiers())
     }
 
     /// Returns whether the declaration starting at the current token
@@ -1332,7 +1347,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         let Some(following) = self.cursor.following() else {
             return false;
         };
-        following.kind == TokenType::Identifier
+        matches!(following.kind, TokenType::Identifier)
             || is_operator(Some(following), OperatorTokenType::Asterisk)
             || self.parenthesized_declarator_follows_typedef()
             || self.declaration_starter(following)
