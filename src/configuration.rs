@@ -717,216 +717,61 @@ mod tests {
     }
     #[test]
     fn dialect_aliases_are_complete() {
-        assert_eq!(
-            LanguageMode::parse("c89"),
-            Some(LanguageMode {
-                standard: CStandard::C89,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("c90"),
-            Some(LanguageMode {
-                standard: CStandard::C89,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("iso9899:1990"),
-            Some(LanguageMode {
-                standard: CStandard::C89,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("iso9899:199409"),
-            Some(LanguageMode {
-                standard: CStandard::C95,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("gnu89"),
-            Some(LanguageMode {
-                standard: CStandard::C89,
-                gnu:      true,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("gnu90"),
-            Some(LanguageMode {
-                standard: CStandard::C89,
-                gnu:      true,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("c99"),
-            Some(LanguageMode {
-                standard: CStandard::C99,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("c9x"),
-            Some(LanguageMode {
-                standard: CStandard::C99,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("iso9899:1999"),
-            Some(LanguageMode {
-                standard: CStandard::C99,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("iso9899:199x"),
-            Some(LanguageMode {
-                standard: CStandard::C99,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("gnu99"),
-            Some(LanguageMode {
-                standard: CStandard::C99,
-                gnu:      true,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("gnu9x"),
-            Some(LanguageMode {
-                standard: CStandard::C99,
-                gnu:      true,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("c11"),
-            Some(LanguageMode {
-                standard: CStandard::C11,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("c1x"),
-            Some(LanguageMode {
-                standard: CStandard::C11,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("iso9899:2011"),
-            Some(LanguageMode {
-                standard: CStandard::C11,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("gnu11"),
-            Some(LanguageMode {
-                standard: CStandard::C11,
-                gnu:      true,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("gnu1x"),
-            Some(LanguageMode {
-                standard: CStandard::C11,
-                gnu:      true,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("c17"),
-            Some(LanguageMode {
-                standard: CStandard::C17,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("c18"),
-            Some(LanguageMode {
-                standard: CStandard::C17,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("iso9899:2017"),
-            Some(LanguageMode {
-                standard: CStandard::C17,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("iso9899:2018"),
-            Some(LanguageMode {
-                standard: CStandard::C17,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("gnu17"),
-            Some(LanguageMode {
-                standard: CStandard::C17,
-                gnu:      true,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("gnu18"),
-            Some(LanguageMode {
-                standard: CStandard::C17,
-                gnu:      true,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("c23"),
-            Some(LanguageMode {
-                standard: CStandard::C23,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("c2x"),
-            Some(LanguageMode {
-                standard: CStandard::C23,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("iso9899:2024"),
-            Some(LanguageMode {
-                standard: CStandard::C23,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("gnu23"),
-            Some(LanguageMode {
-                standard: CStandard::C23,
-                gnu:      true,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("gnu2x"),
-            Some(LanguageMode {
-                standard: CStandard::C23,
-                gnu:      true,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("c2y"),
-            Some(LanguageMode {
-                standard: CStandard::C2y,
-                gnu:      false,
-            })
-        );
-        assert_eq!(
-            LanguageMode::parse("gnu2y"),
-            Some(LanguageMode {
-                standard: CStandard::C2y,
-                gnu:      true,
-            })
-        );
+        for (alias, standard, gnu) in [
+            ("c89", CStandard::C89, false),
+            ("c90", CStandard::C89, false),
+            ("iso9899:1990", CStandard::C89, false),
+            ("iso9899:199409", CStandard::C95, false),
+            ("gnu89", CStandard::C89, true),
+            ("gnu90", CStandard::C89, true),
+            ("c99", CStandard::C99, false),
+            ("c9x", CStandard::C99, false),
+            ("iso9899:1999", CStandard::C99, false),
+            ("iso9899:199x", CStandard::C99, false),
+            ("gnu99", CStandard::C99, true),
+            ("gnu9x", CStandard::C99, true),
+            ("c11", CStandard::C11, false),
+            ("c1x", CStandard::C11, false),
+            ("iso9899:2011", CStandard::C11, false),
+            ("gnu11", CStandard::C11, true),
+            ("gnu1x", CStandard::C11, true),
+            ("c17", CStandard::C17, false),
+            ("c18", CStandard::C17, false),
+            ("iso9899:2017", CStandard::C17, false),
+            ("iso9899:2018", CStandard::C17, false),
+            ("gnu17", CStandard::C17, true),
+            ("gnu18", CStandard::C17, true),
+            ("c23", CStandard::C23, false),
+            ("c2x", CStandard::C23, false),
+            ("iso9899:2024", CStandard::C23, false),
+            ("gnu23", CStandard::C23, true),
+            ("gnu2x", CStandard::C23, true),
+            ("c2y", CStandard::C2y, false),
+            ("gnu2y", CStandard::C2y, true),
+        ] {
+            assert_eq!(
+                LanguageMode::parse(alias),
+                Some(LanguageMode { standard, gnu }),
+                "{alias}"
+            );
+        }
         assert_eq!(LanguageMode::parse("c98"), None);
+    }
+
+    /// `derive_features` walks `Feature::ALL`, so a variant missing from it
+    /// would never be accepted. Each entry sits at its discriminant.
+    #[test]
+    fn feature_lists_name_every_variant_in_order() {
+        for (index, feature) in Feature::ALL.iter().enumerate() {
+            assert_eq!(*feature as usize, index, "{feature:?}");
+        }
+        assert_eq!(
+            Feature::ALL.last().map(|feature| *feature as usize),
+            Some(Feature::MsVaArgs as usize)
+        );
+        for (index, feature) in MsvcFeature::ALL.iter().enumerate() {
+            assert_eq!(*feature as usize, index, "{feature:?}");
+        }
+        assert_eq!(MsvcFeature::ALL.last(), Some(&MsvcFeature::VaArgs));
     }
 }
