@@ -1,7 +1,8 @@
 //! BCC C compiler
 //!
 //! It connects translation phases 1-7 (§5.1.1.2, pp. 9-10; PDF pp. 21-22);
-//! semantic analysis and code generation are not yet in this pipeline.
+//! Declaration semantic analysis follows parsing; full expression/statement
+//! semantics and code generation remain later work.
 #![cfg_attr(feature = "portable-simd", feature(portable_simd))]
 
 #[cfg(test)]
@@ -23,6 +24,7 @@ pub(crate) mod configuration;
 pub(crate) mod diagnostics;
 pub(crate) mod float_parsing;
 mod pipeline;
+mod target;
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -49,6 +51,8 @@ pub use benchmarking::{
     parse_source,
     preprocess,
     preprocess_one_million,
+    sema,
+    sema_source,
     with_prepared_parse,
 };
 pub use cli::{

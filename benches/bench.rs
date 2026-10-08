@@ -122,6 +122,34 @@ fn bench_parser_only(c: &mut Criterion) {
     group.finish();
 }
 
+/// Translation phases 1-7 followed by declaration semantic analysis; compare
+/// with the `Parser` group for the cost of analysis.
+fn bench_semantic_analysis(c: &mut Criterion) {
+    let mut group = c.benchmark_group("Semantic analysis");
+    _ = group.sample_size(20);
+    for input in BenchmarkInput::ALL
+        .into_iter()
+        .chain(BenchmarkInput::PARSER_STRESS)
+    {
+        _ = group.throughput(throughput(input));
+        let summary = bcc_rust::sema(input);
+        assert_eq!(
+            summary.diagnostics,
+            0,
+            "{} must analyze cleanly",
+            input.name()
+        );
+        _ = group.bench_with_input(
+            BenchmarkId::new(PIPELINE, input.name()),
+            &input,
+            |b, &input| {
+                b.iter(|| bcc_rust::sema(input));
+            },
+        );
+    }
+    group.finish();
+}
+
 fn bench_preprocessor_allocations(c: &mut Criterion) {
     let mut group = c.benchmark_group("Preprocessor allocations");
     _ = group.sample_size(30);
@@ -142,6 +170,7 @@ criterion_group!(
     bench_preprocessor,
     bench_parser,
     bench_parser_only,
+    bench_semantic_analysis,
     bench_preprocessor_allocations
 );
 criterion_main!(benches);

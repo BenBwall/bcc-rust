@@ -34,7 +34,7 @@
 mod compound_statement;
 mod declaration;
 mod declaration_specifiers;
-mod declaration_syntax;
+pub(crate) mod declaration_syntax;
 mod declarator;
 mod driver;
 mod enum_specifier;
@@ -49,13 +49,18 @@ mod initializer;
 mod inspection;
 mod machine;
 mod modern;
+pub(crate) use modern::{
+    ExtendedType,
+    SpecifierExtensionKind,
+    SyntaxOperand,
+};
 mod msvc;
 mod parameter_list;
 mod recovery;
 mod scope;
 mod statement;
 mod struct_or_union;
-mod syntax;
+pub(crate) mod syntax;
 mod syntax_log;
 #[cfg(test)]
 #[expect(
@@ -269,13 +274,6 @@ pub(crate) struct ParsedTranslationUnit<'tu> {
 }
 
 impl<'tu> ParsedTranslationUnit<'tu> {
-    #[cfg_attr(
-        not(any(test, feature = "benchmarking-internals")),
-        expect(
-            dead_code,
-            reason = "The CLI reads roots through inspection; tests and benchmarks read them here."
-        )
-    )]
     pub(crate) fn external_declarations(&self) -> &[ExternalDeclaration<'tu>] {
         &self.roots
     }
