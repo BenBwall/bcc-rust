@@ -964,6 +964,12 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         let spelling = contents.trim_end_matches('\0');
         let imaginary = match spelling.as_bytes() {
             | [.., b'i' | b'I' | b'j' | b'J'] => Some(spelling.len() - 1),
+            // Joined to a hexadecimal integer, an `f` suffix would read as a
+            // digit; an integer takes no `f` suffix (C99 §6.4.4.1p1).
+            | [.., b'i' | b'I' | b'j' | b'J', b'f' | b'F']
+                if (spelling.starts_with("0x") || spelling.starts_with("0X"))
+                    && !spelling.contains(['p', 'P']) =>
+                None,
             | [.., b'i' | b'I' | b'j' | b'J', b'f' | b'F' | b'l' | b'L'] =>
                 Some(spelling.len() - 2),
             | _ => None,

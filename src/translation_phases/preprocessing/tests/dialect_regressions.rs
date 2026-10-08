@@ -477,3 +477,28 @@ fn strict_ansi_may_be_undefined() {
     let (_, errors) = observe("#undef __STDC__\n", mode(CStandard::C99));
     assert_eq!(errors.len(), 1, "{errors:?}");
 }
+
+/// The GNU imaginary suffix comes off a constant without changing its other
+/// characters: in `0x1if` the `f` is a suffix, not a hexadecimal digit, and
+/// an integer takes no `f` suffix (C99 §6.4.4.1p1).
+#[test]
+fn imaginary_suffix_does_not_turn_a_suffix_into_a_digit() {
+    let config = mode(CStandard::C17).with_gnu_extensions(true);
+    for invalid in ["0x1if", "0X1IF", "0x1Fif", "1if"] {
+        let (_, errors) = observe(&format!("{invalid};\n"), config);
+        assert_eq!(errors.len(), 1, "{invalid}: {errors:?}");
+    }
+    for valid in [
+        "0x1i",
+        "0x1fi",
+        "0x1p0if",
+        "0x1.8p1Fi",
+        "1.0if",
+        "1i",
+        "0x1il",
+    ] {
+        let (tokens, errors) = observe(&format!("{valid};\n"), config);
+        assert!(errors.is_empty(), "{valid}: {errors:?}");
+        assert_eq!(tokens.len(), 2, "{valid}: {tokens:?}");
+    }
+}
