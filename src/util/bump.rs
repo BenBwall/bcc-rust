@@ -700,7 +700,13 @@ impl<'a, T> ArenaQueue<'a, T> {
     }
 
     pub(crate) fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> {
-        self.data[self.read..]
+        self.iter_mut_from(0)
+    }
+
+    /// Starts at an unread suffix without walking already-processed entries.
+    pub(crate) fn iter_mut_from(&mut self, skip: usize) -> impl DoubleEndedIterator<Item = &mut T> {
+        let start = self.read + skip.min(self.len());
+        self.data[start..]
             .iter_mut()
             .map(|item| item.as_mut().expect("unread queue item"))
     }
@@ -1007,6 +1013,19 @@ mod tests {
         assert_eq!(queue.back(), None);
         queue.push_back(9);
         assert_eq!(queue.pop_front(), Some(9));
+    }
+
+    #[test]
+    fn queue_suffix_mutation_skips_processed_unread_values() {
+        let arena = Bump::new();
+        let mut queue = ArenaQueue::new_in(&arena);
+        queue.extend([1, 2, 3, 4]);
+        assert_eq!(queue.pop_front(), Some(1));
+        for value in queue.iter_mut_from(1) {
+            *value += 10;
+        }
+        assert_eq!(queue.iter().copied().collect::<Vec<_>>(), [2, 13, 14]);
+        assert!(queue.iter_mut_from(usize::MAX).next().is_none());
     }
 
     #[test]

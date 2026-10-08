@@ -814,7 +814,7 @@ impl<'tu> Context<'tu> {
         }
         let mut pending_errors =
             std::mem::replace(&mut self.pending_errors, ArenaQueue::new_in(self.tu));
-        for error in pending_errors.iter_mut().skip(self.relocated_errors) {
+        for error in pending_errors.iter_mut_from(self.relocated_errors) {
             error.for_each_source_vectors_mut(&mut |source_vectors| {
                 *source_vectors = self.retain_preprocessor_range(*source_vectors);
             });
