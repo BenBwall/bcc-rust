@@ -132,6 +132,9 @@ pub(crate) struct Statement<'tu> {
 /// productions are §6.8.1-§6.8.6.4, pp. 131-139; PDF pp. 143-151.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum StatementType<'tu> {
+    MsAsm(&'tu super::msvc::MsAsm<'tu>),
+    Seh(&'tu super::msvc::Seh<'tu>),
+    SehLeave,
     Asm(&'tu super::gnu::Asm<'tu>),
     ComputedGoto(ExpressionSlot<'tu>),
     LocalLabels(ArenaList<'tu, Identifier>),

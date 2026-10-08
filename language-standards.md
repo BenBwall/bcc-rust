@@ -4,8 +4,8 @@ The foundation provides configuration, CLI selection, predefined version macros,
 keyword classification, and shared extension diagnostics. The ISO parser now
 implements phase-7 syntax through C23 and the C2y subset listed below, including
 policy diagnostics for earlier modes. GNU phase-7 syntax is also implemented.
-Lexical/preprocessing additions and MSVC grammar remain assigned to their
-workstreams. This is a syntax-only front end;
+MSVC phase-7 syntax is also implemented. Lexical/preprocessing additions remain
+assigned to their workstream. This is a syntax-only front end;
 mode selection is not a full conformance claim. No semantic analysis or code
 generation is added.
 
@@ -109,7 +109,7 @@ necessary. Workstream owners update their own rows as behavior lands.
 
 The foundation's mode/flags, version macros, complete keyword spelling recognition,
 and shared policy diagnostic plumbing are **implemented** for all modes. All
-ISO parser additions are implemented; lexical, preprocessing, and vendor parser
+ISO, GNU, and MSVC parser additions are implemented; lexical and preprocessing
 behavior below remains delegated.
 
 | Feature (`Feature` variant) | C89 | C95 | C99 | C11 | C17 | C23 | C2y | Acceptance | Status / owner |
@@ -200,15 +200,15 @@ behavior below remains delegated.
 | Counter | - | - | - | - | - | - | - | extension (GNU native) | pending (lexpp) |
 | HasAttribute | - | - | - | - | - | - | - | extension (GNU native) | pending (lexpp) |
 | HasBuiltin | - | - | - | - | - | - | - | extension (GNU native) | pending (lexpp) |
-| MsDeclspec | - | - | - | - | - | - | - | MS flag | pending (parse-msvc) |
-| MsIntTypes | - | - | - | - | - | - | - | MS flag | pending (parse-msvc) |
-| MsCallingConventions | - | - | - | - | - | - | - | MS flag | pending (parse-msvc) |
-| MsTypeQualifiers | - | - | - | - | - | - | - | MS flag | pending (parse-msvc) |
-| MsInline | - | - | - | - | - | - | - | MS flag | pending (parse-msvc) |
-| MsSeh | - | - | - | - | - | - | - | MS flag | pending (parse-msvc) |
-| MsAsm | - | - | - | - | - | - | - | MS flag | pending (parse-msvc) |
+| MsDeclspec | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
+| MsIntTypes | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
+| MsCallingConventions | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
+| MsTypeQualifiers | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
+| MsInline | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
+| MsSeh | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
+| MsAsm | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
 | MsPragma | - | - | - | - | - | - | - | MS flag | pending (lexpp) |
-| MsAnonymousStructs | - | - | - | - | - | - | - | MS flag | pending (parse-msvc) |
+| MsAnonymousStructs | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
 | MsVaArgs | - | - | - | - | - | - | - | MS flag | pending (lexpp) |
 
 The lexical workstream also owns exact prefix/suffix recognition, `//` treatment
@@ -332,3 +332,56 @@ Allow/Warn/Deny across all revisions, every input prefix, following-declaration
 recovery and deep nesting. CLI diagnostic goldens and the GNU token-seam snapshot
 pin rendering and the unchanged phase-7 input. Allocation tests exercise the new
 frame paths without global allocations.
+
+## MSVC phase-7 parser handoff
+
+All eight parser-owned groups are independently opt-in, regardless of ISO/GNU
+mode. Disabled keyword spellings remain identifiers. Enabled reserved keywords
+use the existing classifier's MSVC Allow/Warn/Deny diagnostics and retain their
+syntax under Deny. Anonymous tagged members are a grammar-only extension and
+report through the same policy emitter. `pragma` and `va-args` remain lexpp-owned.
+No lexer/preprocessor behavior or keyword classification changed: all needed
+parser-visible MSVC token kinds were already present.
+
+- `__declspec(...)` shares `AttributeSpecifier`, attachment points and balanced
+  argument tokens with ISO/GNU attributes; `AttributeSyntax::Msvc` distinguishes
+  its single outer parenthesis. Space-separated and comma-separated modifiers,
+  nested argument delimiters, spelling and provenance are retained.
+- `__int8/16/32/64` retain their explicit width and optional signedness, including
+  signed/unsigned on either side. Declaration and pointer qualifiers retain
+  `__ptr32`, `__ptr64`, `__unaligned`, `__w64`, `__sptr` and `__uptr`; each pointer
+  level owns its qualifier set. Calling conventions retain their source-backed
+  declaration or declarator position, including nested function pointers,
+  parameters and abstract declarators. `__forceinline` retains its modifier and
+  inline property; GNU-reserved `__inline` stays available independently with
+  the MS inline flag disabled, as established by the foundation.
+- SEH owns `__try` guarded compounds, `__except` expression filters,
+  `__finally` compounds and `__leave;`. Children use the existing machine's
+  compound/expression frames and ordinary scope restoration. Missing handlers,
+  bodies, filters and delimiters produce recovered syntax and preserve following
+  input. Placement of `__leave` and handler semantics are later analysis.
+- `__asm` / `_asm` brace blocks and single-line instructions have opaque arena
+  token lists with balanced parentheses/brackets/braces. A repeated asm keyword
+  separates single-line instructions. The enclosing C brace remains unconsumed.
+  Line boundaries use macro invocation provenance and original source text,
+  ignoring phase-2 backslash/trigraph splices, without changing lexing. Assembly
+  semicolons remain opaque tokens; target instruction/comment interpretation is
+  deferred. EOF and mismatched delimiters mark the assembly node recovered.
+- Anonymous tagged struct/union definitions and references are accepted only
+  with `-fms-anonymous-structs`. ISO untagged anonymous members retain their
+  independent C11 status; resolving typedefs and promoting members are analysis.
+
+Microsoft primary grammar references: [declspec](https://learn.microsoft.com/en-us/cpp/cpp/declspec),
+[inline assembly](https://learn.microsoft.com/en-us/cpp/assembler/inline/asm),
+[try-except](https://learn.microsoft.com/en-us/cpp/cpp/try-except-statement),
+[try-finally](https://learn.microsoft.com/en-us/cpp/cpp/try-finally-statement), and
+[anonymous class types](https://learn.microsoft.com/en-us/cpp/cpp/anonymous-class-types).
+ABI selection, fixed-width target types, qualifier applicability, attributes,
+SEH control transfer and assembly meaning remain outside this syntax workstream.
+
+Evidence: `parsing::tests::msvc` covers each feature enabled alone and disabled
+under the umbrella, ISO/GNU modes, all policy severities, immutable nodes,
+provenance, every input prefix, recovery and deep SEH nesting. CLI tests pin all
+sub-flags, inspection, enabled/disabled token snapshots and diagnostic goldens.
+`node_sizes` pins the new arena nodes; the benchmarking-only MSVC parse seam
+exercises valid and recovered paths under the zero-global-allocation check.

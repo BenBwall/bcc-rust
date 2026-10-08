@@ -189,11 +189,17 @@ bitflags::bitflags! {
     /// repeated qualifier behaves as if it appeared once (paragraph 4,
     /// p. 108; PDF p. 120). The `restrict` constraint of paragraph 2,
     /// p. 108; PDF p. 120, is left to semantic analysis.
-    pub(crate) struct TypeQualifiers: u8 {
+    pub(crate) struct TypeQualifiers: u16 {
         const CONST = 1 << 0;
         const VOLATILE = 1 << 1;
         const RESTRICT = 1 << 2;
         const ATOMIC = 1 << 3;
+        const PTR32 = 1 << 4;
+        const PTR64 = 1 << 5;
+        const UNALIGNED = 1 << 6;
+        const W64 = 1 << 7;
+        const SPTR = 1 << 8;
+        const UPTR = 1 << 9;
     }
 }
 
@@ -292,6 +298,18 @@ impl Display for TypeSpecifiers<'_> {
                 | super::modern::ExtendedType::Decimal128 => "_Decimal128",
                 | super::modern::ExtendedType::Inferred => "<inferred>",
                 | super::modern::ExtendedType::AutoType => "__auto_type",
+                | super::modern::ExtendedType::MsInteger { width, signedness } =>
+                    return write!(
+                        f,
+                        "{}__int{width}",
+                        if *signedness == Some(false) {
+                            "unsigned "
+                        } else if *signedness == Some(true) {
+                            "signed "
+                        } else {
+                            ""
+                        }
+                    ),
                 | super::modern::ExtendedType::Int128 {
                     signedness: Some(false),
                 } => "unsigned __int128",
@@ -907,6 +925,11 @@ pub(crate) struct Declarator<'tu> {
 /// Direct abstract declarators are §6.7.6, p. 122; PDF p. 134.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum DirectDeclarator<'tu> {
+    /// MSVC calling convention / modifier at this declarator position.
+    MsModifier(
+        crate::translation_phases::preprocessing::KeywordTokenType,
+        SourceVectors,
+    ),
     AsmLabel(&'tu super::gnu::Asm<'tu>),
     Attributes(&'tu super::modern::AttributeSpecifier<'tu>),
     Identifier(Identifier),
@@ -1046,10 +1069,12 @@ impl<'tu> Declarator<'tu> {
         let mut declarator = self;
         let mut suffix = None;
         loop {
-            let mut direct = declarator
-                .kind
-                .iter()
-                .filter(|x| !matches!(x, DirectDeclarator::Attributes(_)));
+            let mut direct = declarator.kind.iter().filter(|x| {
+                !matches!(
+                    x,
+                    DirectDeclarator::Attributes(_) | DirectDeclarator::MsModifier(..)
+                )
+            });
             let first = direct.next();
             if let Some(candidate) = direct.next() {
                 suffix = Some(*candidate);
@@ -1079,10 +1104,12 @@ impl<'tu> Declarator<'tu> {
         let mut declarator = self;
         let mut suffix = None;
         loop {
-            let mut direct = declarator
-                .kind
-                .iter()
-                .filter(|x| !matches!(x, DirectDeclarator::Attributes(_)));
+            let mut direct = declarator.kind.iter().filter(|x| {
+                !matches!(
+                    x,
+                    DirectDeclarator::Attributes(_) | DirectDeclarator::MsModifier(..)
+                )
+            });
             let first = direct.next();
             if let Some(candidate) = direct.next().copied()
                 && matches!(

@@ -936,23 +936,31 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         let mut offset = 0;
         let mut token = self.cursor.current();
         loop {
-            let gnu =
-                token.is_some_and(|x| x.kind == TokenType::Keyword(KeywordTokenType::Attribute));
+            let parenthesized = token.is_some_and(|x| {
+                matches!(
+                    x.kind,
+                    TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec)
+                )
+            });
             let mut depth = 0usize;
             let mut opened = false;
             while let Some(current) = token {
                 match current.kind {
-                    | TokenType::Operator(OperatorTokenType::OpeningParenthesis) if gnu => {
+                    | TokenType::Operator(OperatorTokenType::OpeningParenthesis) if parenthesized =>
+                    {
                         depth += 1;
                         opened = true;
                     },
-                    | TokenType::Operator(OperatorTokenType::ClosingParenthesis) if gnu =>
+                    | TokenType::Operator(OperatorTokenType::ClosingParenthesis) if parenthesized =>
                         depth = depth.saturating_sub(1),
-                    | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) if !gnu => {
+                    | TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                        if !parenthesized =>
+                    {
                         depth += 1;
                         opened = true;
                     },
-                    | TokenType::Operator(OperatorTokenType::ClosingSquareBracket) if !gnu =>
+                    | TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                        if !parenthesized =>
                         depth = depth.saturating_sub(1),
                     | TokenType::Operator(
                         OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace,
@@ -974,11 +982,13 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 let Some(next) = token else { return false };
                 current = next;
             }
-            if current.kind == TokenType::Keyword(KeywordTokenType::Attribute)
-                || current.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
-                    && self.cursor.lookahead(offset).is_some_and(|x| {
-                        x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
-                    })
+            if matches!(
+                current.kind,
+                TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec)
+            ) || current.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                && self.cursor.lookahead(offset).is_some_and(|x| {
+                    x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                })
             {
                 continue;
             }
@@ -987,10 +997,14 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     }
 
     pub(super) fn attribute_starter(&self, token: Option<Token>) -> bool {
-        token.is_some_and(|x| x.kind == TokenType::Keyword(KeywordTokenType::Attribute))
-            || token.is_some_and(|x| {
-                x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
-            }) && self.cursor.following().is_some_and(|x| {
+        token.is_some_and(|x| {
+            matches!(
+                x.kind,
+                TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec)
+            )
+        }) || token
+            .is_some_and(|x| x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket))
+            && self.cursor.following().is_some_and(|x| {
                 x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
             })
     }
@@ -1008,6 +1022,16 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Decimal128
                 | KeywordTokenType::Constexpr
                 | KeywordTokenType::Int128
+                | KeywordTokenType::Int8
+                | KeywordTokenType::Int16
+                | KeywordTokenType::Int32
+                | KeywordTokenType::Int64
+                | KeywordTokenType::Ptr32
+                | KeywordTokenType::Ptr64
+                | KeywordTokenType::Unaligned
+                | KeywordTokenType::W64
+                | KeywordTokenType::Sptr
+                | KeywordTokenType::Uptr
                 | KeywordTokenType::AutoType
                 | KeywordTokenType::Extension
                 | KeywordTokenType::Typeof
@@ -1023,6 +1047,12 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Float
                 | KeywordTokenType::Imaginary
                 | KeywordTokenType::Inline
+                | KeywordTokenType::Forceinline
+                | KeywordTokenType::Cdecl
+                | KeywordTokenType::Stdcall
+                | KeywordTokenType::Fastcall
+                | KeywordTokenType::Vectorcall
+                | KeywordTokenType::Thiscall
                 | KeywordTokenType::Int
                 | KeywordTokenType::Long
                 | KeywordTokenType::Register
@@ -1059,6 +1089,16 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Decimal64
                 | KeywordTokenType::Decimal128
                 | KeywordTokenType::Int128
+                | KeywordTokenType::Int8
+                | KeywordTokenType::Int16
+                | KeywordTokenType::Int32
+                | KeywordTokenType::Int64
+                | KeywordTokenType::Ptr32
+                | KeywordTokenType::Ptr64
+                | KeywordTokenType::Unaligned
+                | KeywordTokenType::W64
+                | KeywordTokenType::Sptr
+                | KeywordTokenType::Uptr
                 | KeywordTokenType::AutoType
                 | KeywordTokenType::Typeof
                 | KeywordTokenType::TypeofUnqual

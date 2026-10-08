@@ -395,7 +395,18 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     // C99 §6.7.2.1p1: a struct-declaration needs a
                     // struct-declarator-list; C99 has no anonymous members.
                     let anonymous = matches!(self.member_specifiers.as_ref().map(|x|x.type_specifiers),Some(super::declaration_syntax::TypeSpecifiers::StructOrUnion(x)) if x.identifier.is_none() && x.struct_declaration_list.is_some());
-                    if anonymous {
+                    let ms_anonymous = matches!(specifiers.type_specifiers, super::declaration_syntax::TypeSpecifiers::StructOrUnion(x) if x.identifier.is_some())
+                        && parser
+                            .context
+                            .configuration
+                            .accepts(crate::configuration::Feature::MsAnonymousStructs);
+                    if ms_anonymous {
+                        parser.extension(
+                            crate::configuration::Feature::MsAnonymousStructs,
+                            "anonymous tagged struct or union member",
+                            token.expect("semicolon exists"),
+                        );
+                    } else if anonymous {
                         parser.extension(
                             crate::configuration::Feature::AnonymousAggregates,
                             "anonymous struct or union member",

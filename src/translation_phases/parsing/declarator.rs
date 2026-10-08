@@ -247,6 +247,27 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
     ) -> Option<ParseAction<'tu, 'p>> {
         if matches!(
             self.phase,
+            DeclaratorPhase::PointerOrBase
+                | DeclaratorPhase::Base
+                | DeclaratorPhase::PointerQualifiers
+                | DeclaratorPhase::Suffix
+        ) && let Some(token) = token
+            && let TokenType::Keyword(keyword) = token.kind
+            && (super::msvc::calling_convention(keyword)
+                || matches!(
+                    self.phase,
+                    DeclaratorPhase::Suffix
+                        | DeclaratorPhase::Base
+                        | DeclaratorPhase::PointerOrBase
+                ) && super::msvc::type_modifier(keyword))
+        {
+            self.direct_declarators
+                .push(DirectDeclarator::MsModifier(keyword, token.source_vectors));
+            parser.merge_source(&mut self.source_vectors, token);
+            return Some(ParseAction::Consume);
+        }
+        if matches!(
+            self.phase,
             DeclaratorPhase::PointerOrBase | DeclaratorPhase::Base | DeclaratorPhase::Array
         ) && parser.attribute_starter(token)
         {
@@ -448,7 +469,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     parser.merge_source(&mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
-                } else if token.is_some_and(|token| parser.declaration_starter(token)) {
+                } else if token.is_some_and(|token| parser.declaration_starter(token) && !matches!(token.kind, TokenType::Keyword(k) if super::msvc::calling_convention(k) || super::msvc::type_modifier(k))) {
                     self.phase = DeclaratorPhase::AwaitParameterList;
                     Self::push_parameter_list(parser, false)
                 } else {

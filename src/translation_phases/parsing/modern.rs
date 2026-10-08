@@ -85,6 +85,11 @@ pub(crate) enum ExtendedType<'tu> {
         signedness: Option<bool>,
     },
     AutoType,
+    /// MSVC fixed-width integer spelling; target layout belongs to analysis.
+    MsInteger {
+        width:      u8,
+        signedness: Option<bool>,
+    },
 }
 
 /// Specifier additions collected in reverse source order; immutable links avoid
@@ -104,6 +109,8 @@ pub(crate) enum SpecifierExtensionKind<'tu> {
     ThreadLocal,
     Constexpr,
     ExtensionMarker,
+    /// MSVC declaration modifier, retaining exact spelling and provenance.
+    MsModifier(KeywordTokenType),
 }
 
 /// Shared attribute syntax for ISO, GNU, and MSVC grammar owners.
@@ -121,6 +128,7 @@ pub(crate) struct AttributeSpecifier<'tu> {
 pub(crate) enum AttributeSyntax {
     Standard,
     Gnu,
+    Msvc,
 }
 
 /// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
@@ -252,6 +260,14 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         }
     }
 
+    fn attribute_outer_depth(&self) -> usize {
+        if self.attribute_syntax == AttributeSyntax::Msvc {
+            1
+        } else {
+            2
+        }
+    }
+
     fn expected(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>, position: &'static str) {
         parser.report(
             ParserErrorType::ExpectedIsoSyntax(position, token.map(|x| x.kind)),
@@ -265,7 +281,9 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         token: Option<Token>,
         component: &'static str,
     ) {
-        let error = if self.attribute_syntax == AttributeSyntax::Gnu {
+        let error = if self.attribute_syntax == AttributeSyntax::Msvc {
+            ParserErrorType::ExpectedMsSyntax(component, token.map(|x| x.kind))
+        } else if self.attribute_syntax == AttributeSyntax::Gnu {
             ParserErrorType::ExpectedGnuSyntax(component, token.map(|x| x.kind))
         } else {
             ParserErrorType::ExpectedIsoSyntax(component, token.map(|x| x.kind))
@@ -305,6 +323,12 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     }
                     self.own(parser, token);
                     if self.kind == ModernKind::Attributes {
+                        if token.kind == TokenType::Keyword(KeywordTokenType::Declspec) {
+                            self.attribute_syntax = AttributeSyntax::Msvc;
+                            self.tokens.push(token);
+                            self.phase = Phase::GnuAttributeInnerOpen;
+                            return ParseAction::Consume;
+                        }
                         if token.kind == TokenType::Keyword(KeywordTokenType::Attribute) {
                             self.attribute_syntax = AttributeSyntax::Gnu;
                             self.tokens.push(token);
@@ -551,7 +575,15 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     self.delimiters.push(OperatorTokenType::ClosingParenthesis);
                     ParseAction::Consume
                 } else {
-                    self.attribute_expected(parser, token, "`(` in GNU attribute specifier");
+                    self.attribute_expected(
+                        parser,
+                        token,
+                        if self.attribute_syntax == AttributeSyntax::Msvc {
+                            "`(` in MSVC declspec specifier"
+                        } else {
+                            "`(` in GNU attribute specifier"
+                        },
+                    );
                     self.phase = Phase::Finish;
                     ParseAction::Continue
                 }
@@ -561,7 +593,9 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     self.attribute_expected(
                         parser,
                         None,
-                        if self.attribute_syntax == AttributeSyntax::Gnu {
+                        if self.attribute_syntax == AttributeSyntax::Msvc {
+                            "`)` in MSVC declspec specifier"
+                        } else if self.attribute_syntax == AttributeSyntax::Gnu {
                             "`))` in GNU attribute specifier"
                         } else {
                             "`]]` in attribute specifier"
@@ -572,7 +606,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                 };
                 // At outer depth, a declaration boundary belongs to the
                 // enclosing frame.
-                if self.delimiters.len() <= 2
+                if self.delimiters.len() <= self.attribute_outer_depth()
                     && matches!(
                         token.kind,
                         TokenType::Operator(
@@ -583,7 +617,9 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     self.attribute_expected(
                         parser,
                         Some(token),
-                        if self.attribute_syntax == AttributeSyntax::Gnu {
+                        if self.attribute_syntax == AttributeSyntax::Msvc {
+                            "`)` in MSVC declspec specifier"
+                        } else if self.attribute_syntax == AttributeSyntax::Gnu {
                             "`))` in GNU attribute specifier"
                         } else {
                             "`]]` in attribute specifier"
@@ -592,7 +628,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     self.phase = Phase::Finish;
                     return ParseAction::Continue;
                 }
-                if self.delimiters.len() <= 2 {
+                if self.delimiters.len() <= self.attribute_outer_depth() {
                     use AttributePosition::{
                         AfterArguments,
                         AfterName,
@@ -619,6 +655,12 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                             };
                             true
                         },
+                        | AfterName | AfterArguments
+                            if identifier && self.attribute_syntax == AttributeSyntax::Msvc =>
+                        {
+                            self.attribute_position = AfterName;
+                            true
+                        },
                         | Name | AfterName | AfterPrefixedName | AfterArguments
                             if kind == TokenType::Operator(OperatorTokenType::Comma) =>
                         {
@@ -628,10 +670,10 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                         | Name | AfterName | AfterPrefixedName | AfterArguments
                             if kind
                                 == TokenType::Operator(
-                                    if self.attribute_syntax == AttributeSyntax::Gnu {
-                                        OperatorTokenType::ClosingParenthesis
-                                    } else {
+                                    if self.attribute_syntax == AttributeSyntax::Standard {
                                         OperatorTokenType::ClosingSquareBracket
+                                    } else {
+                                        OperatorTokenType::ClosingParenthesis
                                     },
                                 ) =>
                         {
@@ -655,10 +697,10 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                         },
                         | Closing =>
                             kind == TokenType::Operator(
-                                if self.attribute_syntax == AttributeSyntax::Gnu {
-                                    OperatorTokenType::ClosingParenthesis
-                                } else {
+                                if self.attribute_syntax == AttributeSyntax::Standard {
                                     OperatorTokenType::ClosingSquareBracket
+                                } else {
+                                    OperatorTokenType::ClosingParenthesis
                                 },
                             ),
                         | _ => false,

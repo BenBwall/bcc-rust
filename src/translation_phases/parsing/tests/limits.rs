@@ -460,7 +460,8 @@ fn mixed_declarator_translation_floor_uses_the_typed_tree() {
                 | DirectDeclarator::KAndRStyleFunction { .. } => counts.2 += 1,
                 | DirectDeclarator::AsmLabel(_)
                 | DirectDeclarator::Identifier(_)
-                | DirectDeclarator::Attributes(_) => {},
+                | DirectDeclarator::Attributes(_)
+                | DirectDeclarator::MsModifier(..) => {},
             }
         }
         counts

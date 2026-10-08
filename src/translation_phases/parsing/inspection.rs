@@ -86,6 +86,7 @@ pub(crate) struct InspectionOptions {
 
 enum Work<'tu> {
     Asm(&'tu super::gnu::Asm<'tu>, usize),
+    MsAsm(&'tu super::msvc::MsAsm<'tu>, usize),
     AsmOperand(super::gnu::AsmOperand<'tu>, usize),
     OffsetMember(super::gnu::OffsetMember<'tu>, usize),
     SpecifierExtensionItem(&'tu super::modern::SpecifierExtension<'tu>, usize),
@@ -254,13 +255,39 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         work.push(Work::TypeName(x, indent + 1, "type"));
                     }
                 },
+                | Work::MsAsm(asm, indent) => {
+                    Self::line(
+                        &mut output,
+                        indent,
+                        format_args!(
+                            "ms-asm {}{}",
+                            if asm.braced { "block" } else { "line" },
+                            if asm.recovered { " recovered" } else { "" }
+                        ),
+                        Some(asm.source_vectors),
+                        context,
+                        options,
+                    );
+                    for token in asm.tokens {
+                        Self::line(
+                            &mut output,
+                            indent + 1,
+                            format_args!("token {}", context.string_cache.at(token.contents)),
+                            Some(token.source_vectors),
+                            context,
+                            options,
+                        );
+                    }
+                },
                 | Work::Attributes(attributes, indent) => {
                     Self::line(
                         &mut output,
                         indent,
                         format_args!(
                             "attribute-specifier {}{}",
-                            if attributes.syntax == super::modern::AttributeSyntax::Gnu {
+                            if attributes.syntax == super::modern::AttributeSyntax::Msvc {
+                                "__declspec(...)"
+                            } else if attributes.syntax == super::modern::AttributeSyntax::Gnu {
                                 "__attribute__((...))"
                             } else {
                                 "[[...]]"
@@ -327,6 +354,14 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                 | Work::SpecifierExtensionItem(extension, indent) => match extension.kind {
                     | super::modern::SpecifierExtensionKind::Attributes(x) =>
                         work.push(Work::Attributes(x, indent)),
+                    | super::modern::SpecifierExtensionKind::MsModifier(keyword) => Self::line(
+                        &mut output,
+                        indent,
+                        format_args!("modifier {}", keyword.spelling()),
+                        Some(extension.source_vectors),
+                        context,
+                        options,
+                    ),
                     | super::modern::SpecifierExtensionKind::Alignment(x) => {
                         Self::line(
                             &mut output,
@@ -538,6 +573,14 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     }
                 },
                 | Work::DirectDeclarator(direct, indent) => match direct {
+                    | DirectDeclarator::MsModifier(keyword, source) => Self::line(
+                        &mut output,
+                        indent,
+                        format_args!("modifier {}", keyword.spelling()),
+                        Some(source),
+                        context,
+                        options,
+                    ),
                     | DirectDeclarator::AsmLabel(x) => work.push(Work::Asm(x, indent)),
                     | DirectDeclarator::Attributes(x) => work.push(Work::Attributes(x, indent)),
                     | DirectDeclarator::Identifier(identifier) => {
@@ -1085,6 +1128,24 @@ impl<'tu> ParsedTranslationUnit<'tu> {
         indent: usize,
     ) {
         match *kind {
+            | StatementType::MsAsm(x) => work.push(Work::MsAsm(x, indent)),
+            | StatementType::Seh(x) => {
+                work.push(Work::Statement(
+                    x.handler,
+                    indent,
+                    match x.handler_keyword.map(|token| token.kind) {
+                        | Some(crate::translation_phases::preprocessing::TokenType::Keyword(
+                            crate::translation_phases::preprocessing::KeywordTokenType::Except,
+                        )) => "except",
+                        | Some(_) => "finally",
+                        | None => "missing-handler",
+                    },
+                ));
+                if let Some(filter) = x.filter {
+                    work.push(Work::Expression(filter, indent, "filter"));
+                }
+                work.push(Work::Statement(x.body, indent, "guarded"));
+            },
             | StatementType::Asm(x) => work.push(Work::Asm(x, indent)),
             | StatementType::ComputedGoto(x) => Self::push_slot(work, x, indent, "target"),
             | StatementType::LocalLabels(labels) =>
@@ -1188,6 +1249,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     },
                 }
             },
+            | StatementType::SehLeave
             | StatementType::NamedBreak(_)
             | StatementType::NamedContinue(_)
             | StatementType::Return(None)
@@ -1226,6 +1288,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     return write!(f, "break {}", context.string_cache.at(x.name)),
                 | StatementType::NamedContinue(x) =>
                     return write!(f, "continue {}", context.string_cache.at(x.name)),
+                | StatementType::MsAsm(_) => "ms-asm",
+                | StatementType::Seh(_) => "seh",
+                | StatementType::SehLeave => "__leave",
                 | StatementType::Asm(_) => "asm",
                 | StatementType::ComputedGoto(_) => "computed-goto",
                 | StatementType::LocalLabels(_) => "local-labels",
@@ -1527,6 +1592,12 @@ fn qualifier_list(qualifiers: TypeQualifiers) -> impl Display {
             (TypeQualifiers::VOLATILE, "volatile"),
             (TypeQualifiers::RESTRICT, "restrict"),
             (TypeQualifiers::ATOMIC, "_Atomic"),
+            (TypeQualifiers::PTR32, "__ptr32"),
+            (TypeQualifiers::PTR64, "__ptr64"),
+            (TypeQualifiers::UNALIGNED, "__unaligned"),
+            (TypeQualifiers::W64, "__w64"),
+            (TypeQualifiers::SPTR, "__sptr"),
+            (TypeQualifiers::UPTR, "__uptr"),
         ]
         .into_iter()
         .filter(|&(flag, _)| qualifiers.contains(flag))

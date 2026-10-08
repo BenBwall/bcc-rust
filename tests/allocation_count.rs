@@ -547,6 +547,23 @@ mod measurements {
         assert_no_allocations("GNU syntax source", summary, &allocations);
     }
 
+    #[test]
+    fn compiling_msvc_syntax_allocates_only_from_arenas() {
+        let source = include_str!("fixtures/diagnostics/language/msvc-parser.c");
+        let (summary, allocations) = count_compile(|| bcc_rust::parse_msvc_source(source));
+        assert_eq!(summary.external_declarations, 8);
+        assert_no_allocations("MSVC syntax source", summary, &allocations);
+        let (summary, allocations) = count_compile(|| {
+            bcc_rust::parse_msvc_source(
+                "int f(void) { __try {} __except() {} __asm mov eax, [ebx\nreturn 0; } int \
+                 following;\n",
+            )
+        });
+        assert_eq!(summary.external_declarations, 2);
+        assert!(summary.diagnostics > 0);
+        assert_eq!(allocations.calls, 0);
+    }
+
     /// Recovery paths also belong to the zero-global-allocation contract.
     #[test]
     fn compiling_malformed_sources_allocates_only_from_arenas() {

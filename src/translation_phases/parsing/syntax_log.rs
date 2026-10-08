@@ -40,6 +40,10 @@ use super::{
         StaticAssertion,
         SyntaxOperand,
     },
+    msvc::{
+        MsAsm,
+        Seh,
+    },
     syntax::{
         AttributedStatement,
         BlockItem,
@@ -74,6 +78,8 @@ pub(super) trait TreeNode<'tu>: Sized + 'tu {
     reason = "A test-only log of every allocated node, compiled only under `cfg(test)`."
 )]
 pub(super) struct SyntaxLog<'tu> {
+    ms_asm:                Vec<&'tu MsAsm<'tu>>,
+    seh:                   Vec<&'tu Seh<'tu>>,
     asm:                   Vec<&'tu Asm<'tu>>,
     asm_operands:          Vec<&'tu AsmOperand<'tu>>,
     builtins:              Vec<&'tu Builtin<'tu>>,
@@ -140,6 +146,8 @@ macro_rules! tree_nodes {
 tree_nodes! {
     RangeDesignator => ranges,
     Asm => asm,
+    MsAsm => ms_asm,
+    Seh => seh,
     AsmOperand => asm_operands,
     Builtin => builtins,
     OffsetMember => offset_members,

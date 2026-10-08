@@ -392,3 +392,21 @@ covered by `EmptyStructs` warning/error cases in `language/gnu-parser.c`.
 Assembly target rules, builtin semantics, layout and attribute application remain
 analysis responsibilities. All three canonical diagnostic fixtures require a
 production component and preserve following valid input.
+
+## MSVC phase-7 parser modes
+
+The eight parser-owned groups have independent configuration gates. Enabled
+keywords report shared MSVC policy diagnostics; disabled spellings remain
+identifiers. The parser preserves ASTs under Deny and reports malformed vendor
+syntax with `ExpectedMsSyntax`, using the owning production's required component.
+
+| Diagnostic surface | Evidence |
+| --- | --- |
+| MSVC origins and Warn/Deny severity | [language/msvc-parser-warning.stderr](language/msvc-parser-warning.stderr), [language/msvc-parser-error.stderr](language/msvc-parser-error.stderr) |
+| Missing declspec opener, SEH handler, leave semicolon, asm delimiter | [language/msvc-recovery.stderr](language/msvc-recovery.stderr) |
+| EOF, malformed filter/body, delimiter recovery and following input | `parsing::tests::msvc` feature, prefix and recovery suites |
+
+CLI tests pass MSVC flags explicitly for these supplementary language goldens.
+The top-level default-mode golden inventory above is unchanged. Enabled/disabled
+token snapshots also pin provenance and identifier preservation. Arena allocation
+checks exercise valid and recovered MSVC syntax.

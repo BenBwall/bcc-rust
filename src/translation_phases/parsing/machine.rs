@@ -73,6 +73,7 @@ use crate::translation_phases::{
 pub(crate) enum ParseFrameKind {
     Modern,
     Gnu,
+    Msvc,
     /// Translation-unit entry for one external declaration.
     ExternalDeclaration,
     /// Declaration shell and init-declarator list.
@@ -108,6 +109,7 @@ impl ParseFrameKind {
         match self {
             | Self::Modern => "iso-construct",
             | Self::Gnu => "gnu-construct",
+            | Self::Msvc => "msvc-construct",
             | Self::ExternalDeclaration => "external-declaration",
             | Self::Declaration => "declaration",
             | Self::DeclarationSpecifiers => "declaration-specifiers",
@@ -228,6 +230,7 @@ pub(super) struct InitializerResult<'tu> {
 #[derive(Debug)]
 pub(super) enum ParseFrame<'tu, 'p> {
     Modern(ModernFrame<'tu, 'p>),
+    Msvc(super::msvc::MsvcFrame<'tu, 'p>),
     Gnu(PoolBox<'p, GnuFrame<'tu, 'p>>),
     ExternalDeclaration(ExternalDeclarationFrame),
     Declaration(DeclarationFrame<'tu, 'p>),
@@ -278,6 +281,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
     /// Counts arena entries retained by a frame before their final bulk insert.
     pub(super) fn retained_node_count(&self) -> usize {
         match self {
+            | Self::Msvc(frame) => frame.tokens.len(),
             | Self::Gnu(frame) => frame
                 .tokens
                 .len()
@@ -334,6 +338,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
     /// Gives a newly pushed frame spare vectors for the lists it grows.
     pub(super) fn lend_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
         match self {
+            | Self::Msvc(frame) => pools.gnu_tokens.lend(&mut frame.tokens),
             | Self::Gnu(frame) => {
                 pools.gnu_tokens.lend(&mut frame.tokens);
                 pools.asm_operands.lend(&mut frame.asm_operands);
@@ -391,6 +396,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
     /// is left behind.
     pub(super) fn reclaim_pooled(self, pools: &mut FramePools<'tu, 'p>) {
         match self {
+            | Self::Msvc(mut frame) => pools.gnu_tokens.reclaim(&mut frame.tokens),
             | Self::Gnu(mut frame) => {
                 pools.gnu_tokens.reclaim(&mut frame.tokens);
                 pools.asm_operands.reclaim(&mut frame.asm_operands);
@@ -441,6 +447,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
 
     pub(super) fn kind(&self) -> ParseFrameKind {
         match self {
+            | Self::Msvc(_) => ParseFrameKind::Msvc,
             | Self::Modern(_) => ParseFrameKind::Modern,
             | Self::Gnu(_) => ParseFrameKind::Gnu,
             | Self::ExternalDeclaration(_) => ParseFrameKind::ExternalDeclaration,
@@ -471,6 +478,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
         };
         let destination = match self {
             | Self::Gnu(_)
+            | Self::Msvc(_)
             | Self::Modern(_)
             | Self::ExternalDeclaration(_)
             | Self::DeclarationSpecifiers(_)
@@ -536,6 +544,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
     ) -> ParseAction<'tu, 'p> {
         match self {
             | Self::Modern(frame) => frame.step(parser, token, returned),
+            | Self::Msvc(frame) => frame.step(parser, token, returned),
             | Self::Gnu(frame) => frame.step(parser, token, returned),
             | Self::ExternalDeclaration(frame) => frame.step(parser, token, returned),
             | Self::Declaration(frame) => frame.step(parser, token, returned),

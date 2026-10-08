@@ -42,6 +42,10 @@ use super::super::{
         StaticAssertion,
         SyntaxOperand,
     },
+    msvc::{
+        MsAsm,
+        Seh,
+    },
     syntax::{
         AttributedStatement,
         BlockItem,
@@ -68,6 +72,8 @@ macro_rules! sizes {
 fn syntax_nodes_keep_their_sizes() {
     let sizes = sizes![
         Asm<'_> => 40,
+        MsAsm<'_> => 24,
+        Seh<'_> => 56,
         AsmOperand<'_> => 56,
         Builtin<'_> => 32,
         OffsetMember<'_> => 16,

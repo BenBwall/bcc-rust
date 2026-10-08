@@ -141,6 +141,7 @@ pub(super) enum SimpleJump {
 pub(super) enum StatementPhase<'tu> {
     Start,
     AwaitGnu,
+    AwaitMsvc,
     ComputedGotoExpression,
     AwaitComputedGoto,
     ComputedGotoSemicolon(ExpressionSlot<'tu>),
@@ -319,6 +320,12 @@ impl<'tu, 'p> StatementFrame<'tu> {
         }
 
         match self.phase {
+            | StatementPhase::AwaitMsvc => {
+                let Some(ParseValue::Statement(child)) = returned else {
+                    panic!("MSVC statement child protocol")
+                };
+                self.finish_existing(parser, child)
+            },
             | StatementPhase::AwaitGnu => match returned {
                 | Some(ParseValue::Gnu(super::gnu::GnuValue::Asm(x))) => {
                     self.source_vectors = Some(x.source_vectors);
@@ -484,6 +491,20 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 }
             },
             | StatementPhase::Start => {
+                if let Some(token) = token
+                    && let TokenType::Keyword(
+                        keyword @ (KeywordTokenType::MsAsm
+                        | KeywordTokenType::Try
+                        | KeywordTokenType::Leave),
+                    ) = token.kind
+                {
+                    self.phase = StatementPhase::AwaitMsvc;
+                    return ParseAction::Push(ParseFrame::Msvc(super::msvc::MsvcFrame::new(
+                        parser.arena,
+                        keyword,
+                        parser.hard_error_count,
+                    )));
+                }
                 if let Some(token) = token {
                     let kind = match token.kind {
                         | TokenType::Keyword(KeywordTokenType::Asm) =>

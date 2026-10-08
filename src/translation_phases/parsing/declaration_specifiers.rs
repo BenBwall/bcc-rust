@@ -344,6 +344,9 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             parser.merge_source(&mut self.source_vectors, token);
             return ParseAction::Consume;
         }
+        if let Some(action) = self.step_msvc(parser, token) {
+            return action;
+        }
         if parser.attribute_starter(Some(token)) {
             self.phase = DeclarationSpecifiersPhase::AwaitAttributes;
             return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
@@ -543,7 +546,20 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             return ParseAction::Consume;
         }
 
-        if token.kind == TokenType::Keyword(KeywordTokenType::Inline) {
+        if matches!(
+            token.kind,
+            TokenType::Keyword(KeywordTokenType::Inline | KeywordTokenType::Forceinline)
+        ) {
+            if token.kind == TokenType::Keyword(KeywordTokenType::Forceinline) {
+                self.add_extension(
+                    parser,
+                    SpecifierExtensionKind::MsModifier(match token.kind {
+                        | TokenType::Keyword(k) => k,
+                        | _ => unreachable!("modifier is keyword"),
+                    }),
+                    token.source_vectors,
+                );
+            }
             if !matches!(
                 self.mode,
                 SpecifierMode::Declaration | SpecifierMode::CompoundLiteral
@@ -674,6 +690,58 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers))
     }
 
+    /// MSVC extensions to C99 §6.7.2, pp. 99-100; PDF pp. 111-112 and
+    /// §6.7.5, p. 114; PDF p. 126. Width and ABI interpretation are deferred.
+    fn step_msvc(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Token,
+    ) -> Option<ParseAction<'tu, 'p>> {
+        if let TokenType::Keyword(
+            keyword @ (KeywordTokenType::Int8
+            | KeywordTokenType::Int16
+            | KeywordTokenType::Int32
+            | KeywordTokenType::Int64),
+        ) = token.kind
+        {
+            let signedness = match self.specifiers.type_specifiers {
+                | TypeSpecifiers::Signed => Some(true),
+                | TypeSpecifiers::Unsigned => Some(false),
+                | TypeSpecifiers::Empty => None,
+                | _ => {
+                    self.specifiers
+                        .type_specifiers
+                        .report_conflict(parser, token.contents, token);
+                    None
+                },
+            };
+            let width = match keyword {
+                | KeywordTokenType::Int8 => 8,
+                | KeywordTokenType::Int16 => 16,
+                | KeywordTokenType::Int32 => 32,
+                | _ => 64,
+            };
+            self.specifiers.type_specifiers = TypeSpecifiers::Extended(
+                parser.alloc_syntax(ExtendedType::MsInteger { width, signedness }),
+            );
+            self.consumed = true;
+            parser.merge_source(&mut self.source_vectors, token);
+            return Some(ParseAction::Consume);
+        }
+        if let TokenType::Keyword(keyword) = token.kind
+            && super::msvc::calling_convention(keyword)
+        {
+            self.add_extension(
+                parser,
+                SpecifierExtensionKind::MsModifier(keyword),
+                token.source_vectors,
+            );
+            self.consumed = true;
+            return Some(ParseAction::Consume);
+        }
+        None
+    }
+
     fn has_only_attributes(&self) -> bool {
         if self.specifiers.storage_class.is_some()
             || !self.specifiers.type_qualifiers.is_empty()
@@ -744,6 +812,26 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         token: Token,
         specifier: PrimitiveTypeSpecifier,
     ) {
+        if let TypeSpecifiers::Extended(ExtendedType::MsInteger { width, signedness }) =
+            self.specifiers.type_specifiers
+            && matches!(
+                specifier,
+                PrimitiveTypeSpecifier::Signed | PrimitiveTypeSpecifier::Unsigned
+            )
+        {
+            if signedness.is_some() {
+                self.specifiers
+                    .type_specifiers
+                    .report_conflict(parser, token.contents, token);
+            } else {
+                self.specifiers.type_specifiers =
+                    TypeSpecifiers::Extended(parser.alloc_syntax(ExtendedType::MsInteger {
+                        width:      *width,
+                        signedness: Some(matches!(specifier, PrimitiveTypeSpecifier::Signed)),
+                    }));
+            }
+            return;
+        }
         if let TypeSpecifiers::Extended(ExtendedType::Int128 { signedness }) =
             self.specifiers.type_specifiers
             && matches!(
@@ -871,6 +959,12 @@ pub(super) fn storage_class(token: TokenType) -> Option<StorageClass> {
 /// C99: §6.7.3 paragraph 1, p. 108; PDF p. 120.
 pub(super) fn type_qualifier(token: TokenType) -> Option<TypeQualifiers> {
     match token {
+        | TokenType::Keyword(KeywordTokenType::Ptr32) => Some(TypeQualifiers::PTR32),
+        | TokenType::Keyword(KeywordTokenType::Ptr64) => Some(TypeQualifiers::PTR64),
+        | TokenType::Keyword(KeywordTokenType::Unaligned) => Some(TypeQualifiers::UNALIGNED),
+        | TokenType::Keyword(KeywordTokenType::W64) => Some(TypeQualifiers::W64),
+        | TokenType::Keyword(KeywordTokenType::Sptr) => Some(TypeQualifiers::SPTR),
+        | TokenType::Keyword(KeywordTokenType::Uptr) => Some(TypeQualifiers::UPTR),
         | TokenType::Keyword(KeywordTokenType::Atomic) => Some(TypeQualifiers::ATOMIC),
         | TokenType::Keyword(KeywordTokenType::Const) => Some(TypeQualifiers::CONST),
         | TokenType::Keyword(KeywordTokenType::Volatile) => Some(TypeQualifiers::VOLATILE),
@@ -891,7 +985,13 @@ pub(super) fn report_duplicate_type_qualifier(
         | TypeQualifiers::CONST => ParserErrorType::ConstSpecifiedTwice,
         | TypeQualifiers::VOLATILE => ParserErrorType::VolatileSpecifiedTwice,
         | TypeQualifiers::RESTRICT => ParserErrorType::RestrictSpecifiedTwice,
-        | TypeQualifiers::ATOMIC => return,
+        | TypeQualifiers::ATOMIC
+        | TypeQualifiers::PTR32
+        | TypeQualifiers::PTR64
+        | TypeQualifiers::UNALIGNED
+        | TypeQualifiers::W64
+        | TypeQualifiers::SPTR
+        | TypeQualifiers::UPTR => return,
         | _ => unreachable!("one type qualifier is handled at a time"),
     };
     parser.report(error_type, Some(token));

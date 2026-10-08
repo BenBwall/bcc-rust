@@ -49,6 +49,7 @@ mod initializer;
 mod inspection;
 mod machine;
 mod modern;
+mod msvc;
 mod parameter_list;
 mod recovery;
 mod scope;

@@ -97,6 +97,8 @@ pub(crate) enum ExpectedSyntax {
     IsoSyntax,
     /// A required component of a GNU grammar production.
     GnuSyntax,
+    /// A required component of an MSVC grammar production.
+    MsSyntax,
     None,
 }
 
@@ -419,6 +421,9 @@ pub(crate) enum ParserErrorType<'tu> {
     /// production. C99: vendor extension to §6.5 and §6.8, pp. 67-139; PDF
     /// pp. 79-151.
     ExpectedGnuSyntax(&'static str, Option<TokenType>),
+    /// A missing MSVC attribute, SEH or assembly component. C99: vendor
+    /// extension to §6.7.5, p. 114; PDF p. 126 and §6.8, p. 131; PDF p. 143.
+    ExpectedMsSyntax(&'static str, Option<TokenType>),
     /// `.` or `->` was not followed by a member identifier.
     /// C99: `postfix-expression . identifier` is §6.5.2 paragraph 1, p. 69;
     /// PDF p. 81; member access is §6.5.2.3, pp. 72-73; PDF pp. 84-85.
@@ -679,6 +684,7 @@ impl GetSeverity for ParserErrorType<'_> {
             | Self::ExpectedStatement(..)
             | Self::ExpectedGotoLabel(..)
             | Self::ExpectedStatementExpression(..)
+            | Self::ExpectedMsSyntax(..)
             | Self::ExpectedGnuSyntax(..)
             | Self::ExpectedIsoSyntax(..)
             | Self::ExpectedMemberIdentifier(..)
@@ -894,6 +900,7 @@ impl ParserErrorType<'_> {
             | Self::ExpectedDeclaratorAfterOpeningParenthesisInDirectDeclarator(..) =>
                 ExpectedSyntax::Declarator,
             | Self::ExpectedStatement(..) => ExpectedSyntax::Statement,
+            | Self::ExpectedMsSyntax(..) => ExpectedSyntax::MsSyntax,
             | Self::ExpectedGnuSyntax(..) => ExpectedSyntax::GnuSyntax,
             | Self::ExpectedIsoSyntax(..) => ExpectedSyntax::IsoSyntax,
             | Self::ExpectedStatementExpression(..)
@@ -1086,6 +1093,7 @@ impl ParserErrorType<'_> {
                 "expected an expression",
                 *token,
             ),
+            | Self::ExpectedMsSyntax(component, token)
             | Self::ExpectedGnuSyntax(component, token)
             | Self::ExpectedIsoSyntax(component, token) => expected(component, *token),
             | Self::ExpectedMemberIdentifier(token) => expected_with_label(

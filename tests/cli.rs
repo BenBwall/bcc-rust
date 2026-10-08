@@ -305,6 +305,146 @@ mod tests {
         );
     }
 
+    #[test]
+    fn msvc_parser_flags_are_independent_and_later_disables_win() {
+        for (name, source) in [
+            ("declspec", "__declspec(dllexport) int x;\n"),
+            ("int-types", "__int64 x;\n"),
+            ("calling-conventions", "int (__stdcall *p)(int);\n"),
+            ("type-qualifiers", "int * __ptr64 p;\n"),
+            ("inline", "__forceinline int f(void){return 1;}\n"),
+            ("seh", "int f(void){__try {} __except(1) {}}\n"),
+            ("asm", "int f(void){__asm { nop }}\n"),
+            (
+                "anonymous-structs",
+                "struct T {int x;}; struct S {struct T;};\n",
+            ),
+        ] {
+            let enable = format!("-fms-{name}");
+            let disable = format!("-fno-ms-{name}");
+            let enabled = run(&["-std=c17", &enable, "--syntax-tree", "--input", source]);
+            let tree = String::from_utf8_lossy(&enabled.stderr);
+            assert!(
+                enabled.status.success() && !tree.contains("error:") && !tree.contains("recovered"),
+                "{name}: {tree}"
+            );
+            for flags in [
+                vec!["-std=c17"],
+                vec!["-std=c17", "-fms-extensions", &disable],
+            ] {
+                let mut args = flags;
+                args.extend(["--input", source]);
+                let disabled = run(&args);
+                assert!(
+                    String::from_utf8_lossy(&disabled.stderr).contains("error:"),
+                    "{name}: {disabled:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn msvc_parser_policy_diagnostics_and_token_seam_match_goldens() {
+        let source = include_str!("fixtures/diagnostics/language/msvc-parser.c");
+        for (flag, expected) in [
+            (
+                "-pedantic",
+                include_str!("fixtures/diagnostics/language/msvc-parser-warning.stderr"),
+            ),
+            (
+                "-pedantic-errors",
+                include_str!("fixtures/diagnostics/language/msvc-parser-error.stderr"),
+            ),
+        ] {
+            let output = run(&["-std=c17", "-fms-extensions", flag, "--input", source]);
+            assert!(output.stdout.is_empty(), "{output:?}");
+            assert_eq!(String::from_utf8_lossy(&output.stderr), expected);
+        }
+        for enabled in [true, false] {
+            let output = run(&[
+                "-std=c17",
+                if enabled {
+                    "-fms-extensions"
+                } else {
+                    "-fno-ms-extensions"
+                },
+                "--tokens",
+                "--input",
+                source,
+            ]);
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stderr),
+                if enabled {
+                    include_str!("fixtures/lexing/msvc_parser_enabled.snap")
+                } else {
+                    include_str!("fixtures/lexing/msvc_parser_disabled.snap")
+                }
+            );
+        }
+        let output = run(&[
+            "-std=c17",
+            "-fms-extensions",
+            "--syntax-tree",
+            "--input",
+            source,
+        ]);
+        let tree = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success()
+                && !tree.contains("error:")
+                && !tree.contains("warning:")
+                && !tree.contains("recovered"),
+            "{tree}"
+        );
+        for text in [
+            "__declspec(...)",
+            "unsigned __int64",
+            "__w64",
+            "__ptr32",
+            "__ptr64",
+            "__sptr",
+            "__uptr",
+            "__unaligned",
+            "__stdcall",
+            "__cdecl",
+            "__forceinline",
+            "seh",
+            "guarded",
+            "except",
+            "finally",
+            "filter",
+            "__leave",
+            "ms-asm block",
+            "ms-asm line",
+            "token mov",
+        ] {
+            assert!(tree.contains(text), "missing {text}: {tree}");
+        }
+    }
+
+    #[test]
+    fn malformed_msvc_syntax_matches_its_recovery_golden() {
+        let source = include_str!("fixtures/diagnostics/language/msvc-recovery.c");
+        let output = run(&["-std=c17", "-fms-extensions", "--input", source]);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            include_str!("fixtures/diagnostics/language/msvc-recovery.stderr")
+        );
+        let output = run(&[
+            "-std=c17",
+            "-fms-extensions",
+            "--syntax-tree",
+            "--input",
+            source,
+        ]);
+        let tree = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            tree.contains("recovered") && tree.contains("following"),
+            "{tree}"
+        );
+    }
+
     fn run(arguments: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
             .args(arguments)
