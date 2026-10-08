@@ -825,3 +825,31 @@ fn c23_empty_named_and_abstract_function_declarators_are_prototypes() {
         );
     }
 }
+
+#[test]
+fn enum_colons_without_a_following_type_belong_to_the_enclosing_grammar() {
+    for standard in [CStandard::C11, CStandard::C17, CStandard::C23, CStandard::C2y] {
+        for source in [
+            "enum E {A}; int f(enum E e){ return _Generic(e, enum E: 1, default: 0); }",
+            "enum E {A}; int f(enum E e){ return _Generic(e, enum E : e, default: 0); }",
+            "enum E {A}; struct S { enum E : 3; enum E named : 2; };",
+        ] {
+            with_parse_configuration(source, mode(standard, ExtensionPolicy::Deny), |p| {
+                assert!(p.errors.is_empty(), "{standard:?} {source}\n{:?}", p.errors);
+            });
+        }
+    }
+    with_parse_configuration(
+        "enum E : unsigned char {A}; int x;",
+        mode(CStandard::C23, ExtensionPolicy::Deny),
+        |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+            let TypeSpecifiers::Enum(enumeration) =
+                declaration(p, 0).declaration_specifiers.type_specifiers
+            else {
+                panic!("expected enum");
+            };
+            assert!(enumeration.underlying_type.is_some());
+        },
+    );
+}
