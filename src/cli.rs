@@ -328,7 +328,14 @@ struct CliOutput {
 }
 
 #[derive(Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Clap owns independent inspection flags with explicit conflicts."
+)]
 struct ParserOutput {
+    /// Print resolved declarations, types, linkage and storage duration.
+    #[clap(long, conflicts_with_all = ["tokens", "syntax_tree", "raw_syntax"])]
+    semantic_types:   bool,
     /// Print a deterministic, source-oriented C syntax tree.
     #[clap(long, conflicts_with = "tokens")]
     syntax_tree:      bool,
@@ -659,6 +666,8 @@ fn print_parser_output<'tu>(
         quote_include,
         system_include,
     );
+    let semantic = (output.semantic_types || (!output.syntax_tree && !output.raw_syntax))
+        .then(|| crate::pipeline::analyze_translation_unit(context, &unit));
     let reporter_arena = Bump::new();
     let mut reporter = DiagnosticReporter::new(
         &reporter_arena,
@@ -683,6 +692,12 @@ fn print_parser_output<'tu>(
     }
     if output.raw_syntax {
         print_raw_syntax(&unit);
+    }
+    if let Some(semantic) = semantic
+        && output.semantic_types
+    {
+        let inspection = Bump::new();
+        eprint!("{}", semantic.inspect(context, &inspection));
     }
     expect_stderr(reporter.finish(context, stderr));
 }
@@ -752,7 +767,8 @@ fn compile_file_configured_measured(
     let source = tu.read_to_str_lossy(path)?;
     let mut context = Context::with_configuration(&tu, configuration);
     measure(CompileStep::Parse, &mut || {
-        drop(parse_translation_unit(&mut context, path, source, &[], &[]));
+        let unit = parse_translation_unit(&mut context, path, source, &[], &[]);
+        let _semantic = crate::pipeline::analyze_translation_unit(&mut context, &unit);
     });
     let mut result = Ok(());
     measure(CompileStep::Report, &mut || {

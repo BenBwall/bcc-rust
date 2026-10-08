@@ -161,11 +161,23 @@ impl IntegerConstantType {
 
     /// The largest value this type holds under `representation`.
     fn max(self, representation: IntegerRepresentation) -> u64 {
-        match (self, representation) {
-            | (Self::Int, IntegerRepresentation::Lp64) => i32::MAX.unsigned_abs().into(),
-            | (Self::UnsignedInt, IntegerRepresentation::Lp64) => u32::MAX.into(),
-            | (Self::Int | Self::Long | Self::LongLong, _) => i64::MAX.unsigned_abs(),
-            | (Self::UnsignedInt | Self::UnsignedLong | Self::UnsignedLongLong, _) => u64::MAX,
+        if representation == IntegerRepresentation::Lp64 {
+            let scalar = match self {
+                | Self::Int => crate::target::Scalar::Int,
+                | Self::UnsignedInt => crate::target::Scalar::UnsignedInt,
+                | Self::Long => crate::target::Scalar::Long,
+                | Self::UnsignedLong => crate::target::Scalar::UnsignedLong,
+                | Self::LongLong => crate::target::Scalar::LongLong,
+                | Self::UnsignedLongLong => crate::target::Scalar::UnsignedLongLong,
+            };
+            let (bits, signed) = crate::target::TargetLayout::LP64
+                .integer(scalar)
+                .expect("integer literal candidate is an integer type");
+            return u64::MAX >> (64 - bits + u32::from(signed));
+        }
+        match self {
+            | Self::Int | Self::Long | Self::LongLong => i64::MAX.unsigned_abs(),
+            | Self::UnsignedInt | Self::UnsignedLong | Self::UnsignedLongLong => u64::MAX,
         }
     }
 
