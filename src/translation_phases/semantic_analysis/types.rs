@@ -129,27 +129,38 @@ pub(crate) struct Types<'tu> {
 }
 
 impl Types<'_> {
-    /// Iteratively strips array derivations and multiplies their extents.
     /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
-    pub(crate) fn layout(&self, mut ty: TypeId) -> Option<Layout> {
-        let mut count = 1_u64;
-        let layout = loop {
-            match self.nodes[ty.index] {
-                | TypeKind::Scalar(scalar) => break self.target.scalar(scalar)?,
-                | TypeKind::Pointer(_) => break self.target.pointer,
-                | TypeKind::Tag(id) => break self.tags[id].layout.get()?,
-                | TypeKind::Array(element, ArrayBound::Constant(n)) => {
-                    count = count.checked_mul(n)?;
-                    ty = element;
-                },
-                | _ => return None,
-            }
-        };
-        Some(Layout {
-            size: layout.size.checked_mul(count)?,
-            ..layout
-        })
+    pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
+        layout(self.nodes, self.tags, self.target, ty)
     }
+}
+
+/// Iteratively strips array derivations and multiplies their extents; the
+/// retained graph and the working interner share this one definition.
+/// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
+fn layout(
+    nodes: &[TypeKind<'_>],
+    tags: &[&Tag<'_>],
+    target: TargetLayout,
+    mut ty: TypeId,
+) -> Option<Layout> {
+    let mut count = 1_u64;
+    let layout = loop {
+        match nodes[ty.index] {
+            | TypeKind::Scalar(scalar) => break target.scalar(scalar)?,
+            | TypeKind::Pointer(_) => break target.pointer,
+            | TypeKind::Tag(id) => break tags[id].layout.get()?,
+            | TypeKind::Array(element, ArrayBound::Constant(n)) => {
+                count = count.checked_mul(n)?;
+                ty = element;
+            },
+            | _ => return None,
+        }
+    };
+    Some(Layout {
+        size: layout.size.checked_mul(count)?,
+        ..layout
+    })
 }
 
 /// Working hash-cons table; only its immutable graph escapes into `'tu`.
@@ -210,24 +221,8 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     }
 
     /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
-    pub(crate) fn layout(&self, mut ty: TypeId) -> Option<Layout> {
-        let mut count = 1_u64;
-        let layout = loop {
-            match self.nodes[ty.index] {
-                | TypeKind::Scalar(s) => break self.target.scalar(s)?,
-                | TypeKind::Pointer(_) => break self.target.pointer,
-                | TypeKind::Tag(id) => break self.tags[id].layout.get()?,
-                | TypeKind::Array(element, ArrayBound::Constant(n)) => {
-                    count = count.checked_mul(n)?;
-                    ty = element;
-                },
-                | _ => return None,
-            }
-        };
-        Some(Layout {
-            size: layout.size.checked_mul(count)?,
-            ..layout
-        })
+    pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
+        layout(&self.nodes, &self.tags, self.target, ty)
     }
 
     pub(crate) fn finish(self) -> Types<'tu> {
