@@ -294,7 +294,9 @@ elements, sharing include search paths, and implements `limit`, `prefix`,
 `suffix`, `if_empty`, and their double-underscore aliases. Limits use the existing
 integer preprocessor evaluator and reject negative values and `defined`.
 Written quoted/angle names are read before macro replacement inside their
-boundaries; macro-produced names are expanded normally. Resource queries
+boundaries, including digraph-looking punctuation and dollar signs as header
+characters; macro-produced names and builtin strings such as `__FILE__` are
+expanded normally. Missing operands and missing closing quotes diagnose. Resource queries
 return 0 for missing resources, 1 for found resources, and `__has_embed` returns
 2 for an empty effective resource, including `limit(0)`. The three
 `__STDC_EMBED_*__` constants are predefined when resource inclusion is enabled.

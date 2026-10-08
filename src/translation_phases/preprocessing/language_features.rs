@@ -126,8 +126,27 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             self.language_error("unterminated resource query", operator.source_vectors);
             return None;
         }
+        let resource_query = matches!(
+            self.context.string_cache.at(operator.contents),
+            "__has_include" | "__has_embed"
+        );
+        let mut resource_started = tokens.iter().any(|t| t.kind != T::Whitespace);
+        let mut in_header = false;
         let mut depth = 1usize;
         while let Some(token) = self.next_preprocessor_token::<false>() {
+            if resource_query && !resource_started && token.kind != T::Whitespace {
+                resource_started = true;
+                in_header = self
+                    .context
+                    .string_cache
+                    .at(token.contents)
+                    .starts_with('<');
+            }
+            if in_header && token.kind != T::Newline {
+                in_header = !self.context.string_cache.at(token.contents).contains('>');
+                tokens.push(token);
+                continue;
+            }
             match token.kind {
                 | T::OpeningParenthesis => depth += 1,
                 | T::ClosingParenthesis => {
@@ -167,18 +186,22 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         let first = Self::next_ignore_whitespace(&mut self.tokenizer, self.context);
         self.context.set_ignore_tokenizer_errors(ignored);
         self.set_position(position);
-        let Some(first) = first.filter(|t| t.kind == T::String || t.kind == T::LessThan) else {
+        let Some(first) = first.filter(|t| {
+            t.kind == T::String || self.context.string_cache.at(t.contents).starts_with('<')
+        }) else {
             return;
         };
+        self.context.set_ignore_tokenizer_errors(true);
         while let Some(token) = self.tokenizer.next_item(self.context) {
             tokens.push(token);
             if token.kind == T::Newline
                 || (first.kind == T::String && token.kind == T::String)
-                || token.kind == T::GreaterThan
+                || self.context.string_cache.at(token.contents).contains('>')
             {
                 break;
             }
         }
+        self.context.set_ignore_tokenizer_errors(ignored);
     }
 
     /// Reads the macro-expanded header operand common to queries and embedding.
@@ -192,14 +215,27 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         while tokens.get(index).is_some_and(|t| t.kind == T::Whitespace) {
             index += 1;
         }
-        let first = *tokens.get(index)?;
+        let Some(&first) = tokens.get(index) else {
+            self.language_error("expected a quoted or angle-bracket resource name", source);
+            return None;
+        };
+        let spelling = self.context.string_cache.at(first.contents);
         let mut name = ArenaString::new_in(self.scratch);
-        let system = first.kind == T::LessThan;
-        if system {
+        if let Some(rest) = spelling.strip_prefix('<') {
+            name.push_str(rest);
             index += 1;
             while let Some(token) = tokens.get(index) {
                 index += 1;
-                if token.kind == T::GreaterThan {
+                let spelling = self.context.string_cache.at(token.contents);
+                if let Some(end) = spelling.find('>') {
+                    if end + 1 != spelling.len() {
+                        self.language_error(
+                            "extra tokens after resource header name",
+                            token.source_vectors,
+                        );
+                        return None;
+                    }
+                    name.push_str(&spelling[..end]);
                     if let ([open], [close]) = (
                         self.context.get_source_vectors(first.source_vectors),
                         self.context.get_source_vectors(token.source_vectors),
@@ -207,33 +243,62 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                         && open.index < close.index
                         && let Some(text) = self.context.source_text(open.source_file_index)
                         && text.as_bytes().get(open.index as usize) == Some(&b'<')
-                        && text.as_bytes().get(close.index as usize) == Some(&b'>')
+                        && let Some(closing) =
+                            text.get(close.index as usize..(close.index + close.length) as usize)
+                        && let Some(offset) = closing.find('>')
                     {
                         name.clear();
                         for c in
                             crate::translation_phases::preprocessor_tokenizer::logical_characters(
                                 self.scratch,
                                 text,
-                                open.index as usize + 1..close.index as usize,
+                                open.index as usize + 1..close.index as usize + offset,
                                 self.context.configuration.accepts(Feature::Trigraphs),
                             )
                         {
                             name.push(c.character);
                         }
                     }
+                    if name.is_empty() {
+                        self.language_error("resource name must not be empty", source);
+                        return None;
+                    }
                     return Some((name.into_str(), true, index));
                 }
-                name.push_str(
-                    self.context
-                        .string_cache
-                        .at(token.contents)
-                        .trim_end_matches('\0'),
-                );
+                name.push_str(spelling.trim_end_matches('\0'));
             }
-        } else if first.kind == T::String {
-            let spelling = self.context.string_cache.at(first.contents);
-            if spelling.starts_with('"') && spelling.ends_with('"') && spelling.len() > 2 {
+        } else if first.kind == T::GeneratedString {
+            if !spelling.is_empty() {
+                name.push_str(spelling);
+                return Some((name.into_str(), false, index + 1));
+            }
+        } else if first.kind == T::String && spelling.starts_with('"') {
+            if let [location] = self.context.get_source_vectors(first.source_vectors)
+                && let Some(text) = self.context.source_text(location.source_file_index)
+                && text.as_bytes().get(location.index as usize) == Some(&b'"')
+            {
+                let characters =
+                    crate::translation_phases::preprocessor_tokenizer::logical_characters(
+                        self.scratch,
+                        text,
+                        location.index as usize + 1..(location.index + location.length) as usize,
+                        self.context.configuration.accepts(Feature::Trigraphs),
+                    );
+                let Some(end) = characters.iter().position(|c| c.character == '"') else {
+                    self.language_error("unterminated quoted resource name", source);
+                    return None;
+                };
+                if end + 1 != characters.len() {
+                    self.language_error("extra tokens after resource header name", source);
+                    return None;
+                }
+                for c in &characters[..end] {
+                    name.push(c.character);
+                }
+            } else if spelling.ends_with('"') && spelling.len() > 2 {
                 name.push_str(&spelling[1..spelling.len() - 1]);
+            }
+            if !name.is_empty() {
                 return Some((name.into_str(), false, index + 1));
             }
         }

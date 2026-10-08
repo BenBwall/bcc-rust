@@ -504,6 +504,10 @@ fn resource_queries_embed_parameters_and_include_next_use_real_search_paths() {
     std::fs::write(a.join("data.bin"), [0, 255, 65]).unwrap();
     std::fs::write(a.join("empty.bin"), []).unwrap();
     std::fs::write(a.join("literal-name.h"), "").unwrap();
+    std::fs::write(a.join("%data%"), [77]).unwrap();
+    std::fs::write(a.join("$header.h"), []).unwrap();
+    std::fs::write(a.join("open("), []).unwrap();
+    std::fs::write(temp.path().join("main.c"), []).unwrap();
     let source =
         "#define literal wrong\n#include <wrapper.h>\n#if __has_include(<wrapper.h>) && \
          !__has_include(<missing.h>)\nfound\n#endif\n#if __has_embed(<data.bin>) == \
@@ -512,12 +516,17 @@ fn resource_queries_embed_parameters_and_include_next_use_real_search_paths() {
          suffix(,end)\n#embed <empty.bin> if_empty(empty)\n#embed <data.bin> limit(0) \
          if_empty(zero)\n#if (5 + __has_embed(<data.bin> limit(1+1))) == 6\nnested\n#endif\n#if \
          __has_include(<literal-name.h>)\nliteral_header\n#endif\n#if __has_embed(<data.bin> \
-         vendor::unsupported(1)) == __STDC_EMBED_NOT_FOUND__\nunsupported\n#endif\nafter\n";
+         vendor::unsupported(1)) == __STDC_EMBED_NOT_FOUND__\nunsupported\n#endif\n#if \
+         __has_embed(<%data%>) == __STDC_EMBED_FOUND__ && \
+         __has_include(<$header.h>)\nspecial_header\n#endif\n#embed <%data%>\n#define RH \
+         <%data%>\n#if __has_embed(RH) == __STDC_EMBED_FOUND__\nmacro_header\n#endif\n#define PH \
+         <open(>\n#if __has_include(PH)\nparen_header\n#endif\n#if \
+         __has_include(__FILE__)\ncurrent_file\n#endif\nafter\n";
     let (tokens, errors) = observe_paths(
         source,
         mode(CStandard::C23),
         temp.path().join("main.c"),
-        &[a, b],
+        &[a.clone(), b],
     );
     assert!(errors.is_empty(), "{errors:?}");
     let tokens = spellings(&tokens);
@@ -534,11 +543,35 @@ fn resource_queries_embed_parameters_and_include_next_use_real_search_paths() {
         "nested",
         "literal_header",
         "unsupported",
+        "special_header",
+        "macro_header",
+        "paren_header",
+        "current_file",
     ] {
         assert!(tokens.contains(&format!("identifier `{word}`")), "{tokens}");
     }
     assert!(tokens.contains("= 255"));
+    assert!(tokens.contains("= 77"));
     assert!(!tokens.contains("= 65"));
+    let (_, errors) = observe_paths(
+        "#if __has_include(<$header.h>)\n#endif\n",
+        CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Warn),
+        temp.path().join("main.c"),
+        &[a],
+    );
+    assert!(
+        errors.is_empty(),
+        "header characters are not identifiers: {errors:?}"
+    );
+    for source in [
+        "#embed\nafter\n",
+        "#embed \"unterminated\nafter\n",
+        "#if __has_include(<missing>>)\n#endif\nafter\n",
+    ] {
+        let (tokens, errors) = observe(source, mode(CStandard::C23));
+        assert!(!errors.is_empty(), "{source}");
+        assert!(spellings(&tokens).contains("identifier `after`"));
+    }
 }
 
 #[test]

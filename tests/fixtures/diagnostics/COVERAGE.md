@@ -370,7 +370,9 @@ seven-revision strict/GNU snapshot in
 [`language_modes_lexpp.snap`](../lexing/language_modes_lexpp.snap). Structured
 preprocessor tests cover Allow/Warn/Deny, C89/C95 lexical boundaries, all modern
 literal gates and values, GNU suffix orders, native and extension directives,
-query results, real include-next/resource paths, every standard optional-paste
+query results, real include-next/resource paths (including punctuation and dollar
+header characters, macro-generated names, and missing operand/quote recovery),
+every standard optional-paste
 example, independent MSVC comma elision, and malformed/truncated input. The
 allocation harness reads the same `.args` before its measured compiler/reporting
 intervals; it still requires every golden fixture to produce diagnostics and
