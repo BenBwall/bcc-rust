@@ -106,6 +106,13 @@ impl<'tu, 'p> ExternalDeclarationFrame {
                         == crate::translation_phases::preprocessing::TokenType::Keyword(
                             crate::translation_phases::preprocessing::KeywordTokenType::Asm,
                         )
+                        || x.kind
+                            == crate::translation_phases::preprocessing::TokenType::Keyword(
+                                crate::translation_phases::preprocessing::KeywordTokenType::MsAsm,
+                            )
+                            && x.contents
+                                == crate::translation_phases::preprocessing::KeywordTokenType::MsAsm
+                                    .cache_id()
                 }) {
                     self.phase = ExternalDeclarationPhase::AwaitAsm;
                     return super::gnu::GnuFrame::push(

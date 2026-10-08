@@ -70,6 +70,61 @@ const FEATURES: &[(MsvcFeature, &str)] = &[
 ];
 
 #[test]
+fn asm_alias_selects_gnu_parentheses_and_msvc_blocks_or_instructions() {
+    let source = "int f(void){ __asm(\"nop\"); __asm { nop }\n__asm mov eax, 1\n_asm { nop \
+                  }\n_asm mov eax, 2\nreturn 0; }\n";
+    for gnu in [false, true] {
+        for policy in [
+            ExtensionPolicy::Allow,
+            ExtensionPolicy::Warn,
+            ExtensionPolicy::Deny,
+        ] {
+            with_parse_configuration(
+                source,
+                CompilerConfiguration::new(CStandard::C17, policy)
+                    .with_gnu_extensions(gnu)
+                    .with_msvc_feature(MsvcFeature::Asm, true),
+                |p| {
+                    assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+                    assert_eq!(
+                        p.parser.syntax.iter::<super::super::gnu::Asm<'_>>().count(),
+                        1
+                    );
+                    assert_eq!(p.parser.syntax.iter::<MsAsm<'_>>().count(), 4);
+                    let extensions: Vec<_> = p
+                        .errors
+                        .iter()
+                        .filter_map(|x| match x {
+                            | crate::translation_phases::TranslationError::Extension(x) =>
+                                Some(x.to_string()),
+                            | _ => None,
+                        })
+                        .collect();
+                    if policy == ExtensionPolicy::Allow {
+                        assert_eq!(extensions.len(), 0, "{extensions:?}");
+                    } else {
+                        assert_eq!(
+                            extensions
+                                .iter()
+                                .filter(|x| x.contains("GNU extension"))
+                                .count(),
+                            1
+                        );
+                        assert_eq!(
+                            extensions
+                                .iter()
+                                .filter(|x| x.contains("MSVC extension"))
+                                .count(),
+                            4
+                        );
+                    }
+                },
+            );
+        }
+    }
+}
+
+#[test]
 fn each_parser_feature_requires_only_its_own_flag() {
     for &(feature, source) in FEATURES {
         for standard in [
@@ -132,7 +187,7 @@ fn enabled_features_keep_the_ast_under_all_extension_policies() {
                         })
                         .collect();
                     if policy == ExtensionPolicy::Allow {
-                        assert!(extensions.is_empty());
+                        assert_eq!(extensions.len(), 0, "{extensions:?}");
                     } else {
                         assert!(!extensions.is_empty(), "{feature:?}");
                         assert!(
@@ -158,8 +213,7 @@ fn enabled_features_keep_the_ast_under_all_extension_policies() {
 fn disabled_keyword_spellings_remain_identifiers_and_gnu_inline_is_independent() {
     let source = "int __declspec, __int8, __int16, __int32, __int64, __cdecl, __stdcall, \
                   __fastcall, __vectorcall, __thiscall, __ptr32, __ptr64, __unaligned, __w64, \
-                  __sptr, __uptr, __forceinline, __try, __except, __finally, __leave, __asm, \
-                  _asm;\n";
+                  __sptr, __uptr, __forceinline, __try, __except, __finally, __leave, _asm;\n";
     with_parse_configuration(source, CompilerConfiguration::default(), |p| {
         assert!(p.errors.is_empty(), "{:?}", p.errors);
     });

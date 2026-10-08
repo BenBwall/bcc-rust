@@ -11,6 +11,70 @@ use crate::{
     },
     translation_phases::GetSeverity,
 };
+
+#[test]
+fn reserved_asm_alias_remains_gnu_with_or_without_msvc_assembly() {
+    let source = "__asm(\"file\"); int label __asm(\"external\"); int f(void){ __asm(\"nop\"); \
+                  __asm __volatile__ __inline__ (\"nop\"); __asm goto(\"\" : : : : L); L: return \
+                  0; }\n";
+    for standard in [CStandard::C89, CStandard::C17, CStandard::C23] {
+        for gnu in [false, true] {
+            for msvc in [false, true] {
+                for policy in [
+                    ExtensionPolicy::Allow,
+                    ExtensionPolicy::Warn,
+                    ExtensionPolicy::Deny,
+                ] {
+                    with_parse_configuration(
+                        source,
+                        CompilerConfiguration::new(standard, policy)
+                            .with_gnu_extensions(gnu)
+                            .with_msvc_feature(crate::configuration::MsvcFeature::Asm, msvc),
+                        |p| {
+                            assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+                            assert_eq!(
+                                p.parser.syntax.iter::<super::super::gnu::Asm<'_>>().count(),
+                                5
+                            );
+                            assert_eq!(
+                                p.parser
+                                    .syntax
+                                    .iter::<super::super::msvc::MsAsm<'_>>()
+                                    .count(),
+                                0
+                            );
+                            let extensions: Vec<_> = p
+                                .errors
+                                .iter()
+                                .filter_map(|x| match x {
+                                    | crate::translation_phases::TranslationError::Extension(x) =>
+                                        Some(x),
+                                    | _ => None,
+                                })
+                                .collect();
+                            if policy == ExtensionPolicy::Allow {
+                                assert!(extensions.is_empty());
+                            } else {
+                                assert_eq!(
+                                    extensions
+                                        .iter()
+                                        .filter(|x| x.to_string() == "'__asm' is a GNU extension")
+                                        .count(),
+                                    5
+                                );
+                                assert!(
+                                    extensions
+                                        .iter()
+                                        .all(|x| x.to_string().contains("GNU extension"))
+                                );
+                            }
+                        },
+                    );
+                }
+            }
+        }
+    }
+}
 #[test]
 fn gnu_surface_smoke() {
     let samples = [
@@ -248,6 +312,29 @@ fn malformed_gnu_prefixes_terminate_and_restore_machine_state() {
                     assert_eq!(p.parser.switch_floor, 0);
                 },
             );
+        }
+    }
+}
+
+#[test]
+fn ambiguous_asm_prefixes_restore_frames_and_scopes() {
+    for msvc in [false, true] {
+        for source in [
+            "int f(void){__asm __volatile__(\"\" : \"r\"(1));}",
+            "int f(void){__asm { mov eax, [ebx+(1)] }}",
+        ] {
+            for end in 0..=source.len() {
+                with_parse_configuration(
+                    &format!("{}\n", &source[..end]),
+                    CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Deny)
+                        .with_msvc_feature(crate::configuration::MsvcFeature::Asm, msvc),
+                    |p| {
+                        assert_eq!(p.parser.scopes.depth(), 0, "{source} at {end}");
+                        assert!(p.parser.frames.is_empty());
+                        assert!(p.parser.returned.is_none());
+                    },
+                );
+            }
         }
     }
 }

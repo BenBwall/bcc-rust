@@ -209,6 +209,13 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                     | _ => Phase::Open,
                 };
                 if let Some(token) = token {
+                    // Reserved `__asm` has a deferred GNU/MSVC origin when
+                    // both grammars are enabled; this owner chose GNU syntax.
+                    if token.contents == KeywordTokenType::MsAsm.cache_id()
+                        && token.kind == TokenType::Keyword(KeywordTokenType::MsAsm)
+                    {
+                        parser.extension(crate::configuration::Feature::GnuAsm, "__asm", token);
+                    }
                     self.own(parser, token);
                     ParseAction::Consume
                 } else {

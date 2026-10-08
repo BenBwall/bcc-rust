@@ -62,7 +62,7 @@
 <input>:8:15: identifier `__finally`
 <input>:8:25: punctuator `{`
 <input>:8:27: punctuator `}`
-<input>:9:5: identifier `__asm`
+<input>:9:5: keyword `__asm`
 <input>:9:11: punctuator `{`
 <input>:9:13: identifier `mov`
 <input>:9:17: identifier `eax`

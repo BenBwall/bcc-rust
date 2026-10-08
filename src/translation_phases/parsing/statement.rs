@@ -498,6 +498,26 @@ impl<'tu, 'p> StatementFrame<'tu> {
                         | KeywordTokenType::Leave),
                     ) = token.kind
                 {
+                    if keyword == KeywordTokenType::MsAsm
+                        && token.contents == KeywordTokenType::MsAsm.cache_id()
+                        && parser.cursor.following().is_some_and(|next| {
+                            matches!(
+                                next.kind,
+                                TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                                    | TokenType::Keyword(
+                                        KeywordTokenType::Volatile
+                                            | KeywordTokenType::Inline
+                                            | KeywordTokenType::Goto
+                                    )
+                            )
+                        })
+                    {
+                        self.phase = StatementPhase::AwaitGnu;
+                        return super::gnu::GnuFrame::push(
+                            parser,
+                            super::gnu::GnuKind::Asm { label: false },
+                        );
+                    }
                     self.phase = StatementPhase::AwaitMsvc;
                     return ParseAction::Push(ParseFrame::Msvc(super::msvc::MsvcFrame::new(
                         parser.arena,

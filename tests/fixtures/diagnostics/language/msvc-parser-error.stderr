@@ -94,17 +94,17 @@ error: '__finally' is an MSVC extension
 8 |     __try { } __finally { }
   |               ^^^^^^^^^
 
-error: '__asm' is an MSVC extension
-  --> <input>:9:5
-   |
- 9 |     __asm { mov eax, [ebx + (4)] }
-   |     ^^^^^
-
 error: '_asm' is an MSVC extension
   --> <input>:10:5
    |
 10 |     _asm nop
    |     ^^^^
+
+error: '__asm' is an MSVC extension
+  --> <input>:9:5
+   |
+ 9 |     __asm { mov eax, [ebx + (4)] }
+   |     ^^^^^
 
 error: 'anonymous tagged struct or union member' is an MSVC extension
   --> <input>:14:28

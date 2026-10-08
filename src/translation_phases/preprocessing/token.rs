@@ -587,6 +587,16 @@ impl KeywordTokenType {
     ) -> Option<KeywordClassification> {
         let index = id.to_u32().checked_sub(1)? as usize;
         if let Some(&kind) = Self::ALL.get(index) {
+            // The reserved GNU alias overlaps MSVC's statement introducer.
+            // With MS assembly enabled, its grammar owner selects the origin.
+            if kind == Self::MsAsm {
+                let msvc = configuration.accepts(Feature::MsAsm);
+                return Some(KeywordClassification {
+                    kind:     if msvc { Self::MsAsm } else { Self::Asm },
+                    origin:   if msvc { None } else { Some(FeatureOrigin::Gnu) },
+                    spelling: kind.spelling(),
+                });
+            }
             let (enabled, origin) = match kind {
                 | Self::Inline => (
                     configuration.accepts(Feature::Inline),

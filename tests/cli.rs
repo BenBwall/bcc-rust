@@ -204,7 +204,7 @@ mod tests {
             ("type-qualifiers", "__ptr32"),
             ("inline", "__forceinline"),
             ("seh", "__try"),
-            ("asm", "__asm"),
+            ("asm", "_asm"),
             ("pragma", "__pragma"),
         ] {
             let source = if feature == "pragma" {

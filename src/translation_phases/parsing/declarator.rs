@@ -531,7 +531,11 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 self.close_nested(parser, token)
             },
             | DeclaratorPhase::Suffix => {
-                if token.is_some_and(|x| x.kind == TokenType::Keyword(KeywordTokenType::Asm)) {
+                if token.is_some_and(|x| {
+                    x.kind == TokenType::Keyword(KeywordTokenType::Asm)
+                        || x.kind == TokenType::Keyword(KeywordTokenType::MsAsm)
+                            && x.contents == KeywordTokenType::MsAsm.cache_id()
+                }) {
                     self.phase = DeclaratorPhase::AwaitAsm;
                     return super::gnu::GnuFrame::push(
                         parser,

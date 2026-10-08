@@ -229,6 +229,11 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
                     | _ => Phase::AsmOpen,
                 };
                 if let Some(token) = token {
+                    // The reserved `__asm` alias defers its origin until the
+                    // statement owner distinguishes GNU and MSVC grammar.
+                    if token.contents == KeywordTokenType::MsAsm.cache_id() {
+                        parser.extension(crate::configuration::Feature::MsAsm, "__asm", token);
+                    }
                     self.own(parser, token);
                     ParseAction::Consume
                 } else {
