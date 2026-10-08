@@ -88,9 +88,9 @@ use their own origin independently of their canonical parser kind.
 reserved interner prefix. `KeywordClassification` returns the canonical kind,
 original static spelling, and optional origin. Existing C99 keyword IDs remain
 stable. Adding parser grammar should consume these kinds and should not add a
-second spelling classifier. ISO parser consumers use the canonical kinds and
-retain original tokens for spelling and provenance. Unsupported vendor kinds
-continue through diagnostic and synchronization paths until their owners land.
+second spelling classifier. ISO/GNU/MSVC parser consumers use the canonical kinds
+and retain original tokens for spelling and provenance. Unsupported or malformed
+syntax follows the structured diagnostic and synchronization paths.
 
 ## Feature matrix
 
@@ -101,9 +101,9 @@ when their flag is enabled. The acceptance column describes extensions/gates sep
 `extension` accepts reserved or unambiguous syntax in older modes, `native` gates
 the spelling, `GNU earlier` also accepts it in older GNU modes, and `MS flag`
 requires its independent flag. `Trigraphs` is a special gate: only strict C89–C17.
-Rows describe intended availability; pending behavior must not be inferred from
-a `Y`. Existing C99 behavior is marked implemented with pending mode work where
-necessary. Workstream owners update their own rows as behavior lands.
+Rows describe native availability and extension gates. Implementation status is
+syntax-only: a `Y` does not promise semantic checks, target support, or code
+generation. The sections below describe limits and handoffs for implemented rows.
 
 The foundation's mode/flags, version macros, complete keyword spelling recognition,
 and shared policy diagnostics are **implemented** for all modes. The lexical,
@@ -336,7 +336,8 @@ All eight parser-owned groups are independently opt-in, regardless of ISO/GNU
 mode. Disabled keyword spellings remain identifiers. Enabled reserved keywords
 use the existing classifier's MSVC Allow/Warn/Deny diagnostics and retain their
 syntax under Deny. Anonymous tagged members are a grammar-only extension and
-report through the same policy emitter. `pragma` and `va-args` remain lexpp-owned.
+report through the same policy emitter. The preprocessor implements `pragma` and
+`va-args` before the parser consumes the resulting tokens.
 No lexer/preprocessor behavior or keyword classification changed: all needed
 parser-visible MSVC token kinds were already present.
 
@@ -567,3 +568,42 @@ macro/include locations, recovery, query-depth bounds and token values are
 covered by snapshots, structured tests and rendered diagnostics. All six
 canonical checks pass, including the eight feature-enabled allocation tests;
 rendering every diagnostic golden continues to require zero global allocations.
+
+## Integrated CLI verification
+
+The integration branch merges `std/parse` before `std/lexpp`, preserving each
+workstream's implementation and diagnostic coverage. The only textual merge
+conflicts were this document's status matrix/implementation sections and the
+diagnostic coverage document; both sets of completed behavior were retained.
+
+[End-to-end tests](tests/language_cli.rs) run the compiled CLI through preprocessing,
+parsing and syntax inspection for every accepted standard spelling. Representative
+strict programs use native syntax under `-pedantic-errors`; GNU programs combine
+named variadic macros, dollar identifiers, keyword aliases, inline, asm,
+statement expressions and imaginary constants. MSVC programs combine macro-produced
+`__pragma`, declspec, integer types, calling conventions, pointer qualifiers, SEH,
+assembly and empty variadic comma elision in every ISO revision. Tests cover later
+flag overrides, disabled gates, older-mode identifier preservation and malformed
+cross-phase inputs with a following declaration.
+
+C attribute queries report the syntax-recognized subset: all seven names can
+reach retained `[[...]]` nodes, while unknown/vendor queries return zero.
+Attribute meaning and applicability remain later analysis. `#embed` and
+`__has_embed` use the same real resource; emitted bytes, prefix/suffix, limits and
+empty-resource replacement reach ordinary initializer elements. Numeric and
+character literal variants, including C23 bit-precise and C2y literals, reach
+expression nodes without introducing semantic evaluation.
+
+GNU imaginary integer values previously displayed only their component magnitude,
+while floating imaginary values displayed `i`. Both the token dump and syntax
+inspection now retain `i` consistently, including unsigned and long components.
+The verified lexical snapshot and parser AST/inspection regression pin this
+behavior. No feature gate, diagnostic severity, arena rule or canonical check
+was relaxed during integration.
+
+Integration validation (8 October 2026): `cargo test --all-targets` passes 763
+tests, including all seven new CLI integration tests and the combined diagnostic
+golden. `cargo test --features benchmarking-internals --test allocation_count`
+passes all 11 tests. `cargo +nightly fmt --check`, both canonical Clippy commands
+with `-D warnings`, and `git diff --check` pass. Work remains syntax-only;
+semantic analysis and code generation are outside this integration.

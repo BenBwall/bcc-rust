@@ -1,12 +1,17 @@
 # bcc-rust
 
 `bcc-rust` is an experimental Rust implementation of a C compiler front end
-targeting C99 syntax. Its non-recursive language parser is complete for the
-declared syntax scope, but semantic analysis and code generation are not yet
-implemented.
+supporting C89/C90, C95, C99, C11, C17/C18, C23 and a documented C2y draft
+subset, plus GNU and opt-in MSVC extensions. Its non-recursive language parser
+builds syntax trees; semantic analysis and code generation are not implemented.
 
 See [language-standards.md](language-standards.md) for language modes, extension
-flags, shared configuration, and the implementation matrix.
+flags, shared configuration, implementation details and remaining semantic
+boundaries. The CLI defaults to `gnu17`; library configuration defaults to strict
+C99. Pass `-std=c23`, `-std=c2y`, or any documented GCC standard alias to select a
+mode. `-pedantic`/`-Wpedantic` warn on extensions; `-pedantic-errors` makes them
+errors. MSVC syntax is independently enabled with `-fms-extensions` or its ten
+individual feature flags; later flags win.
 
 ## Current status
 
@@ -43,14 +48,17 @@ Malformed input retains repaired syntax where meaningful, produces a
 provenance-only external error node for pure top-level garbage, and emits
 structured FIFO diagnostics with recovery context.
 
-Parser resource accounting includes source provenance, with a default budget
-of 40 million stored segments per translation unit. Extreme nesting can
-produce a `SourceSegments` resource diagnostic; flat syntax lists collect
-their provenance once instead of repeatedly copying their growing prefix.
+Parser resource limits follow representation bounds: `usize` for root and
+syntax-node counts, `u32` for frame/scope depth, and each provenance arena's
+`u32` index space. There is no fixed aggregate source-segment budget. Flat syntax
+lists collect provenance once instead of repeatedly copying their growing prefix.
 
 Phase 05 is complete. The parser meets the parser-relevant C99 minimum
-translation floors, diagnoses excluded extensions and invalid phase-7 input,
-and has deterministic truncation/property coverage. Semantic analysis—including
+translation floors, diagnoses invalid phase-7 input, and has deterministic
+truncation/property coverage. The integrated language modes also cover C23
+attributes and feature queries, resource embedding into initializers, modern
+literals, GNU macros/keywords/imaginary constants, and MSVC macro pragmas and
+empty variadic calls through the CLI. Semantic analysis—including
 type/lvalue constraints, constant-expression evaluation, initializer
 current-object rules, and linkage—and code generation remain unimplemented.
 This is not yet a production-ready or conforming C99 compiler.
