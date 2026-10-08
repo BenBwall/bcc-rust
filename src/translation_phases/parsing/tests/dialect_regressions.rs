@@ -4,6 +4,7 @@
 
 use super::{
     Parsed,
+    declaration,
     parser_errors,
     with_parse_configuration,
 };
@@ -45,8 +46,8 @@ fn assert_clean_parse(parsed: &Parsed<'_, '_>, source: &str) {
 fn extension_marker_before_a_member_terminates_and_suppresses_only_that_member() {
     // glibc's `bits/atomic_wide_counter.h` shape.
     let glibc = "typedef union { __extension__ unsigned long long int __value64; struct { \
-                 unsigned int __low, __high; } __value32; } W;\nstruct S { __extension__ union \
-                 { int a; float b; }; int c; };\n";
+                 unsigned int __low, __high; } __value32; } W;\nstruct S { __extension__ union { \
+                 int a; float b; }; int c; };\n";
     for (standard, gnu) in [
         (CStandard::C89, false),
         (CStandard::C99, false),
@@ -71,3 +72,21 @@ fn extension_marker_before_a_member_terminates_and_suppresses_only_that_member()
     );
 }
 
+#[test]
+fn bracket_after_an_identifier_is_not_an_attribute() {
+    let source = "typedef int T;\nstruct S { char T[16]; };\nvoid g(void) { long T[3]; }\n";
+    for standard in [CStandard::C99, CStandard::C23] {
+        with_parse_configuration(source, mode(standard, false, ExtensionPolicy::Warn), |p| {
+            assert_clean_parse(p, source);
+        });
+    }
+    let implicit = "static buf[10];\n";
+    with_parse_configuration(
+        implicit,
+        mode(CStandard::C89, false, ExtensionPolicy::Warn),
+        |p| {
+            assert_clean_parse(p, implicit);
+            assert!(declaration(p, 0).declaration_specifiers.implicit_int);
+        },
+    );
+}

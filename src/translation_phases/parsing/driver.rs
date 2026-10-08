@@ -1064,17 +1064,45 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         }
     }
 
+    /// Reports whether `token`, the current token, begins an attribute
+    /// specifier: `__attribute__`, `__declspec`, or `[[`.
+    ///
+    /// C23 (N3220): attribute-specifier is §6.7.13.2 paragraph 1,
+    /// pp. 142-143; PDF pp. 155-156. `__attribute__` and `__declspec` are GNU
+    /// and MSVC extensions.
     pub(super) fn attribute_starter(&self, token: Option<Token>) -> bool {
-        token.is_some_and(|x| {
-            matches!(
-                x.kind,
-                TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec)
-            )
-        }) || token
-            .is_some_and(|x| x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket))
-            && self.cursor.following().is_some_and(|x| {
-                x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
-            })
+        token.is_some_and(|token| Self::attribute_starter_before(token, self.cursor.following()))
+    }
+
+    /// Reports whether `token`, followed by `next`, begins an attribute
+    /// specifier. A `[` starts one only when another `[` follows it.
+    fn attribute_starter_before(token: Token, next: Option<Token>) -> bool {
+        match token.kind {
+            | TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec) => true,
+            | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) =>
+                next.is_some_and(|next| {
+                    next.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                }),
+            | _ => false,
+        }
+    }
+
+    /// [`Self::attribute_starter_before`] for a token the caller may have
+    /// read by lookahead. The token after a `[` is known only when the `[` is
+    /// the current token or the one following it; at any later position the
+    /// `[` is not taken as an attribute start.
+    fn attribute_starter_in_lookahead(&self, token: Token) -> bool {
+        if token.kind != TokenType::Operator(OperatorTokenType::OpeningSquareBracket) {
+            return Self::attribute_starter_before(token, None);
+        }
+        let next = if Some(token) == self.cursor.current() {
+            self.cursor.following()
+        } else if Some(token) == self.cursor.following() {
+            self.cursor.lookahead(1)
+        } else {
+            None
+        };
+        Self::attribute_starter_before(token, next)
     }
 
     pub(super) fn declaration_starter(&self, token: Token) -> bool {
@@ -1137,7 +1165,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Bool,
             ) => true,
             | TokenType::Identifier => self.scopes.is_typedef(token.contents),
-            | _ => self.attribute_starter(Some(token)),
+            | _ => self.attribute_starter_in_lookahead(token),
         }
     }
 
@@ -1190,7 +1218,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Bool,
             ) => true,
             | TokenType::Identifier => self.scopes.is_typedef(token.contents),
-            | _ => self.attribute_starter(Some(token)),
+            | _ => self.attribute_starter_in_lookahead(token),
         }
     }
 
