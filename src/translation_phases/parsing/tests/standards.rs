@@ -828,7 +828,12 @@ fn c23_empty_named_and_abstract_function_declarators_are_prototypes() {
 
 #[test]
 fn enum_colons_without_a_following_type_belong_to_the_enclosing_grammar() {
-    for standard in [CStandard::C11, CStandard::C17, CStandard::C23, CStandard::C2y] {
+    for standard in [
+        CStandard::C11,
+        CStandard::C17,
+        CStandard::C23,
+        CStandard::C2y,
+    ] {
         for source in [
             "enum E {A}; int f(enum E e){ return _Generic(e, enum E: 1, default: 0); }",
             "enum E {A}; int f(enum E e){ return _Generic(e, enum E : e, default: 0); }",

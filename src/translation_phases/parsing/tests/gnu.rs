@@ -11,7 +11,10 @@ use crate::{
         CompilerConfiguration,
         ExtensionPolicy,
     },
-    translation_phases::GetSeverity,
+    translation_phases::{
+        GetSeverity,
+        parsing::errors::ParserErrorType,
+    },
 };
 
 #[test]
@@ -385,10 +388,7 @@ fn nested_functions_have_separate_typedef_label_and_switch_contexts() {
     with_parse_configuration(source, CompilerConfiguration::default(), |p| {
         let errors: Vec<_> = parser_errors(p).collect();
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(matches!(
-            errors[0],
-            super::super::errors::ParserErrorType::DuplicateDefaultLabel
-        ));
+        assert!(matches!(errors[0], ParserErrorType::DuplicateDefaultLabel));
         assert_eq!(p.parser.switch_scopes.len(), 0);
     });
 }
@@ -781,4 +781,91 @@ fn numeric_suppression_preserves_preprocessing_occurrences_and_invocation_sites(
             assert_eq!(remaining, [(1, 1)]);
         },
     );
+}
+
+/// Names declared by clean (unrecovered) top-level declarations.
+fn clean_declared_names(p: &super::Parsed<'_, '_>) -> Vec<String> {
+    p.items
+        .iter()
+        .filter_map(|x| match x {
+            | super::super::syntax::ExternalDeclaration::Declaration(x) => Some(x),
+            | _ => None,
+        })
+        .flat_map(|x| x.init_declarators.iter())
+        .filter_map(|x| super::identifier_name(p, x.declarator))
+        .collect()
+}
+
+#[test]
+fn unclosed_attribute_arguments_leave_semicolons_and_braces_to_the_declaration() {
+    for source in [
+        "int x __attribute__((aligned(8; int after; int more;",
+        "int x __attribute__((aligned((8; int after; int more;",
+        "[[gnu::aligned(8; int after; int more;",
+        "[[gnu::aligned([8; int after; int more;",
+        "__declspec(align(8 ; int after; int more;",
+        "void f(void) { int x __attribute__((aligned(8) } int after; int more;",
+        "void f(void) __attribute__((noinline(1 { return; } int after; int more;",
+        "void f(void) { [[vendor::tag(1)] } int after; int more;",
+    ] {
+        with_parse_configuration(
+            &format!("{source}\n"),
+            CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true)
+                .with_msvc_extensions(true),
+            |p| {
+                // The attribute reports its missing closer at the boundary
+                // it leaves to its owner, and nothing reaches end of input.
+                let errors: Vec<_> = parser_errors(p).collect();
+                assert!(
+                    matches!(
+                        errors.first(),
+                        Some(
+                            ParserErrorType::ExpectedGnuSyntax(closer, Some(_))
+                                | ParserErrorType::ExpectedIsoSyntax(closer, Some(_))
+                                | ParserErrorType::ExpectedMsSyntax(closer, Some(_))
+                        ) if closer.contains(" in ")
+                    ),
+                    "{source}: {errors:?}"
+                );
+                assert!(errors.len() <= 2, "{source}: {errors:?}");
+                let names = clean_declared_names(p);
+                assert!(
+                    names.ends_with(&["after".to_owned(), "more".to_owned()]),
+                    "{source}: {names:?}"
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn attribute_missing_its_second_closer_finishes_before_the_declaration() {
+    for source in [
+        "__attribute__((noreturn) void die(void);\nint following;",
+        "[[noreturn] void die(void);\nint following;",
+    ] {
+        with_parse_configuration(
+            &format!("{source}\n"),
+            CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true),
+            |p| {
+                assert_eq!(parser_errors(p).count(), 1, "{source}: {:?}", p.errors);
+                let names = clean_declared_names(p);
+                assert_eq!(names.last().map(String::as_str), Some("following"));
+                assert!(
+                    p.items.iter().any(|x| match x {
+                        | super::super::syntax::ExternalDeclaration::Declaration(x)
+                        | super::super::syntax::ExternalDeclaration::RecoveredDeclaration(x) =>
+                            x.init_declarators.iter().any(|x| {
+                                super::identifier_name(p, x.declarator).as_deref() == Some("die")
+                            }),
+                        | _ => false,
+                    }),
+                    "{source}: {:?}",
+                    p.items
+                );
+            },
+        );
+    }
 }
