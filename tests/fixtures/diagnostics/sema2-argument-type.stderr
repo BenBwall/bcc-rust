@@ -1,0 +1,9 @@
+error: function argument cannot be converted to its parameter type
+ --> sema2-argument-type.c:1:31
+  |
+1 | int f(int *); void g(void) {f(1);}
+  |                               ^ expression or initializer constraint violated
+  |
+  = note: C99 §6.5.2.2p2: each argument has a type assignable to its corresponding parameter
+
+1 error generated.

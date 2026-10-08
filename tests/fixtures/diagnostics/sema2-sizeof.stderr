@@ -1,0 +1,9 @@
+error: size query requires a complete object type and no bit-field
+ --> sema2-sizeof.c:1:20
+  |
+1 | int f(void); int n=sizeof f;
+  |                    ^^^^^^ expression or initializer constraint violated
+  |
+  = note: C99 §6.5.3.4p1: sizeof cannot be applied to function, incomplete or bit-field types
+
+1 error generated.

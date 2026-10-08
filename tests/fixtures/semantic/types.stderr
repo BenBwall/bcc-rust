@@ -17,3 +17,23 @@ scope 5 (Block): count: const unsigned long [size=8, align=8]; Object, None, Aut
 scope 5 (Block): values: int [vla]; Object, None, Automatic
 scope 6 (Block): i: int [size=4, align=4]; Object, None, Automatic
 scope 7 (Block): node: struct Node * [size=8, align=8]; Object, None, Automatic
+expressions: 12
+expression 0: int; Rvalue; integer=4; ICE=true, constant=Arithmetic
+expression 1: int; Rvalue; integer=3; ICE=true, constant=Arithmetic
+expression 2: int; Rvalue; integer=4; ICE=true, constant=Arithmetic
+expression 3: int; Rvalue; integer=2; ICE=true, constant=Arithmetic
+expression 4: const unsigned long; Lvalue; ICE=false, constant=None
+expression 5: int; Rvalue; integer=0; ICE=true, constant=Arithmetic
+expression 6: int; ModifiableLvalue; ICE=false, constant=None
+expression 7: int; Rvalue; integer=3; ICE=true, constant=Arithmetic
+expression 8: int; Rvalue; ICE=false, constant=None
+expression 9: int; ModifiableLvalue; ICE=false, constant=None
+expression 10: int; Rvalue; ICE=false, constant=None
+expression 11: int; ModifiableLvalue; ICE=false, constant=None
+convert expression 3: Assignment to unsigned long
+convert expression 5: Assignment to int
+convert expression 6: Lvalue to int
+convert expression 6: Arithmetic to int
+convert expression 7: Arithmetic to int
+convert expression 9: Lvalue to int
+convert expression 11: Lvalue to int

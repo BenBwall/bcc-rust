@@ -1,0 +1,7 @@
+warning: 'implicit function declaration' is a C89 feature removed in C99
+ --> sema2-implicit-function.c:1:22
+  |
+1 | int f(void) { return undeclared(1); }
+  |                      ^^^^^^^^^^
+
+1 warning generated.

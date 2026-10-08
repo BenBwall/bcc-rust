@@ -1,0 +1,9 @@
+error: static assertion failed: `failed`
+ --> sema2-assertion.c:1:16
+  |
+1 | _Static_assert(0, "failed");
+  |                ^ expression or initializer constraint violated
+  |
+  = note: C11 §6.7.10p2-3: the assertion requires a nonzero integer constant expression
+
+1 error generated.

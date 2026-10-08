@@ -1,0 +1,9 @@
+error: invalid operand type for unary operator
+ --> sema2-unary.c:1:24
+  |
+1 | void f(void) { int *p; +p; }
+  |                        ^ expression or initializer constraint violated
+  |
+  = note: C99 §6.5.3p1: unary operators require their specified arithmetic, scalar or pointer operands
+
+1 error generated.

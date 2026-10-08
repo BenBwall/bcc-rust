@@ -1,0 +1,9 @@
+error: operator requires integer operands
+ --> sema2-integer-operator.c:1:27
+  |
+1 | void f(void) { double x; x<<1; }
+  |                           ^^ expression or initializer constraint violated
+  |
+  = note: C99 §6.5.7p2: shift and bitwise operators require integer operands
+
+1 error generated.

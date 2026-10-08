@@ -1,0 +1,9 @@
+error: initializer cannot initialize this object
+ --> sema2-initializer.c:1:8
+  |
+1 | int *p=1;
+  |        ^ expression or initializer constraint violated
+  |
+  = note: C99 §6.7.8p2-3: initialization requires an appropriate complete object or incomplete array and compatible scalar values
+
+1 error generated.

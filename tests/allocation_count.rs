@@ -502,6 +502,12 @@ mod measurements {
         {
             _ = input.bytes();
             let (summary, allocations) = count_compile(|| bcc_rust::sema(input));
+            assert_eq!(
+                summary.diagnostics,
+                0,
+                "{} must analyze cleanly",
+                input.name()
+            );
             assert_no_allocations(input.name(), summary, &allocations);
         }
         let source = "enum E {A=1, B=(A<<3)+sizeof(long), C=B?B:1/0}; typedef const int I; struct \
@@ -511,6 +517,23 @@ mod measurements {
         let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
         assert_no_allocations("declaration and layout paths", summary, &allocations);
         assert_eq!(summary.diagnostics, 0, "valid semantic input");
+    }
+
+    #[test]
+    fn expressions_and_initializers_allocate_only_from_arenas() {
+        let source = "struct S {int a[2]; int b;}; struct S s={1,2,3}; int a[][2]={[2][1]=3,4,5}; \
+                      char c[]=\"abc\"; int *p=&s.a[1]; double d=1.5*2.0; int fun(const int \
+                      *,int,...); void f(int n) {int v[n]; int x=sizeof s; const int *q=p; \
+                      x+=fun(q,(short)1,(float)2); x=n?x:2L; ((struct S){.b=1}).b; sizeof v; \
+                      switch(x) {case sizeof s:break;} }\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("expression and current-object paths", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0, "valid stage-2 source");
+        let source =
+            "void f(void) { int *p; const int *q; p=q; missing+1; p[1.0]; } int a[2]={1,2,3};\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(allocations.calls, 0, "expression diagnostic paths");
+        assert!(summary.diagnostics >= 4, "invalid stage-2 source");
     }
 
     /// Reaches the paths the generated inputs leave out.
