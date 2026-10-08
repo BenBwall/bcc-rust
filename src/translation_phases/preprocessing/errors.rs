@@ -219,6 +219,14 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(..)
             | PreprocessorErrorType::UnexpectedTokenAtPhase7(..)
             | PreprocessorErrorType::LanguageConstraint(..)
+            | PreprocessorErrorType::EmbeddedResourceNotFound(..)
+            | PreprocessorErrorType::EmbeddedResourceUnreadable { .. }
+            | PreprocessorErrorType::EmbeddedResourceTooLarge(..)
+            | PreprocessorErrorType::VaOptUnavailable
+            | PreprocessorErrorType::MissingOpeningParenthesisAfterVaOpt
+            | PreprocessorErrorType::NestedVaOpt
+            | PreprocessorErrorType::UnterminatedVaOpt
+            | PreprocessorErrorType::HashHashAtVaOptBoundary
             | PreprocessorErrorType::ErrorDirective(..)
              => ErrorSeverity::Error,
             | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(policy)
@@ -267,6 +275,48 @@ impl GetSeverity for PreprocessorError<'_> {
 pub(crate) enum PreprocessorErrorType<'tu> {
     /// Later-standard lexical/directive constraint (C99 §5.1.1.3p1).
     LanguageConstraint(&'tu str),
+    /// An `#embed` resource that no search place holds.
+    ///
+    /// C23: §6.10.4.1 paragraph 3, p. 171; PDF p. 184.
+    EmbeddedResourceNotFound(&'tu str),
+    /// An `#embed` resource that was found but could not be opened, sized,
+    /// or read, with the system's reason.
+    ///
+    /// C23: §6.10.4.1 paragraph 3, p. 171; PDF p. 184.
+    EmbeddedResourceUnreadable {
+        name:   &'tu str,
+        reason: &'tu str,
+    },
+    /// An `#embed` resource larger than the host can address.
+    ///
+    /// C23: §6.10.4.1 paragraph 3, p. 171; PDF p. 184.
+    EmbeddedResourceTooLarge(&'tu str),
+    /// `__VA_OPT__` in a variadic macro's replacement list in a mode that
+    /// lacks it. The definition is discarded.
+    ///
+    /// C23: §6.10.5.1 paragraph 1, p. 179; PDF p. 192.
+    VaOptUnavailable,
+    /// `__VA_OPT__` without its parenthesized replacement. The definition is
+    /// discarded.
+    ///
+    /// C23: §6.10.5.1 paragraphs 1 and 3, p. 179; PDF p. 192.
+    MissingOpeningParenthesisAfterVaOpt,
+    /// `__VA_OPT__` within another's replacement. The definition is
+    /// discarded.
+    ///
+    /// C23: §6.10.5.1 paragraph 3, p. 179; PDF p. 192.
+    NestedVaOpt,
+    /// A `__VA_OPT__` replacement without its closing parenthesis. The
+    /// definition is discarded.
+    ///
+    /// C23: §6.10.5.1 paragraph 3, p. 179; PDF p. 192.
+    UnterminatedVaOpt,
+    /// `##` first or last in a `__VA_OPT__` replacement, which must form a
+    /// valid replacement list. The definition is discarded.
+    ///
+    /// C23: §6.10.5.1 paragraph 3, p. 179; PDF p. 192, and §6.10.5.3
+    /// paragraph 1, p. 181; PDF p. 194.
+    HashHashAtVaOptBoundary,
     /// A `#warning` and its message, reported like `#error` but without
     /// failing translation. C23: §6.10.7 paragraph 1, p. 186; PDF p. 199;
     /// a GNU extension in earlier modes.
@@ -1354,6 +1404,42 @@ impl PreprocessorErrorType<'_> {
             | Self::PragmaOnceInNonHeader =>
                 new("`#pragma once` in main file").label("only affects files that are included"),
             | Self::LanguageConstraint(message) => new(format_in!(arena, "{message}")),
+            | Self::EmbeddedResourceNotFound(name) =>
+                new(format_in!(arena, "cannot find embedded resource `{name}`"))
+                    .label("not found in any search directory")
+                    .note("C23 §6.10.4.1p3: `#embed` must identify a resource it can process"),
+            | Self::EmbeddedResourceUnreadable { name, reason } => new(format_in!(
+                arena,
+                "cannot read embedded resource `{name}`: {reason}"
+            ))
+            .label("embedded here")
+            .note("C23 §6.10.4.1p3: `#embed` must identify a resource it can process"),
+            | Self::EmbeddedResourceTooLarge(name) =>
+                new(format_in!(arena, "embedded resource `{name}` is too large"))
+                    .label("its size exceeds the host's address space")
+                    .help("add a `limit` parameter to embed a prefix of the resource"),
+            | Self::VaOptUnavailable => new("`__VA_OPT__` is not available in this mode")
+                .label("the macro is not defined")
+                .help("select C23 or a GNU mode for `__VA_OPT__`"),
+            | Self::MissingOpeningParenthesisAfterVaOpt => new("expected `(` after `__VA_OPT__`")
+                .label("the macro is not defined")
+                .note("C23 §6.10.5.1p1: the form is `__VA_OPT__ ( pp-tokens(opt) )`"),
+            | Self::NestedVaOpt => new("`__VA_OPT__` cannot be nested")
+                .label("inside another `__VA_OPT__` replacement")
+                .note(
+                    "C23 §6.10.5.1p3: the pp-tokens of a `__VA_OPT__` replacement shall not \
+                     contain `__VA_OPT__`; the macro is not defined",
+                ),
+            | Self::UnterminatedVaOpt => new("unterminated `__VA_OPT__` replacement")
+                .label("no matching `)` before the end of the definition")
+                .note("C23 §6.10.5.1p3: the macro is not defined"),
+            | Self::HashHashAtVaOptBoundary =>
+                new("`##` cannot begin or end a `__VA_OPT__` replacement")
+                    .label("the macro is not defined")
+                    .note(
+                        "C23 §6.10.5.1p3: the replacement must form a valid replacement list, \
+                         which `##` cannot begin or end (§6.10.5.3p1)",
+                    ),
             | Self::WarningDirective(message) => {
                 let message = message.trim();
                 new(if message.is_empty() {

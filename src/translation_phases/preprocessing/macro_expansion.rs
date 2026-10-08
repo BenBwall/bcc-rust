@@ -419,6 +419,17 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         result
     }
 
+    fn va_opt_error(
+        &mut self,
+        error_type: PreprocessorErrorType<'static>,
+        token: PreprocessorToken,
+    ) {
+        self.context.preprocessor_error(PreprocessorError {
+            error_type,
+            source_vectors: token.source_vectors,
+        });
+    }
+
     /// Validates the optional variadic replacement at definition time.
     /// C23: §6.10.5.1p3, p. 179; PDF p. 192.
     pub(super) fn validate_variadic_body(
@@ -445,10 +456,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 continue;
             }
             if !self.context.configuration.accepts(Feature::VaOpt) {
-                self.language_error(
-                    "__VA_OPT__ requires an enabled variadic macro replacement",
-                    token.source_vectors,
-                );
+                self.va_opt_error(PreprocessorErrorType::VaOptUnavailable, token);
                 valid = false;
                 continue;
             }
@@ -456,7 +464,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 .report_extension(Feature::VaOpt, "__VA_OPT__", token.source_vectors);
             let open = Self::next_ignore_whitespace(&mut body, self.context);
             if open.is_none_or(|t| t.kind != T::OpeningParenthesis) {
-                self.language_error("expected '(' after __VA_OPT__", token.source_vectors);
+                self.va_opt_error(
+                    PreprocessorErrorType::MissingOpeningParenthesisAfterVaOpt,
+                    token,
+                );
                 valid = false;
                 continue;
             }
@@ -482,21 +493,18 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 if inner.kind.is_identifier()
                     && self.context.string_cache.at(inner.contents) == "__VA_OPT__"
                 {
-                    self.language_error("__VA_OPT__ cannot be nested", inner.source_vectors);
+                    self.va_opt_error(PreprocessorErrorType::NestedVaOpt, inner);
                     valid = false;
                 }
                 _ = first.get_or_insert(inner.kind);
                 last = Some(inner.kind);
             }
             if depth != 0 {
-                self.language_error("unterminated __VA_OPT__ replacement", token.source_vectors);
+                self.va_opt_error(PreprocessorErrorType::UnterminatedVaOpt, token);
                 valid = false;
             }
             if first == Some(T::HashHash) || last == Some(T::HashHash) {
-                self.language_error(
-                    "## cannot begin or end a __VA_OPT__ replacement",
-                    token.source_vectors,
-                );
+                self.va_opt_error(PreprocessorErrorType::HashHashAtVaOptBoundary, token);
                 valid = false;
             }
         }

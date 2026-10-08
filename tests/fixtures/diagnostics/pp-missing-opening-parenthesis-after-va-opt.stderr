@@ -1,0 +1,9 @@
+error: expected `(` after `__VA_OPT__`
+ --> pp-missing-opening-parenthesis-after-va-opt.c:1:16
+  |
+1 | #define V(...) __VA_OPT__ x
+  |                ^^^^^^^^^^ the macro is not defined
+  |
+  = note: C23 §6.10.5.1p1: the form is `__VA_OPT__ ( pp-tokens(opt) )`
+
+1 error generated.

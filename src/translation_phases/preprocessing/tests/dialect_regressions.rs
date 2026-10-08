@@ -564,3 +564,44 @@ fn typeof_before_c23_is_a_gnu_extension() {
     let (_, errors) = observe("typeof(int) x; typeof_unqual(int) y;\n", config);
     assert!(errors.is_empty(), "{errors:?}");
 }
+
+/// File-system and definition-time constraints of the C23 directives have
+/// their own diagnostics, which name what failed.
+#[test]
+fn embed_and_va_opt_constraints_have_specific_diagnostics() {
+    for (source, expected) in [
+        (
+            "#embed \"missing.bin\"\n",
+            "Error: cannot find embedded resource `missing.bin`",
+        ),
+        (
+            "#embed <missing.bin> limit(1)\n",
+            "Error: cannot find embedded resource `missing.bin`",
+        ),
+        (
+            "#define V(...) __VA_OPT__ x\n",
+            "Error: expected `(` after `__VA_OPT__`",
+        ),
+        (
+            "#define V(...) __VA_OPT__(__VA_OPT__(x))\n",
+            "Error: `__VA_OPT__` cannot be nested",
+        ),
+        (
+            "#define V(...) __VA_OPT__(x\n",
+            "Error: unterminated `__VA_OPT__` replacement",
+        ),
+        (
+            "#define V(...) __VA_OPT__(x ##)\n",
+            "Error: `##` cannot begin or end a `__VA_OPT__` replacement",
+        ),
+    ] {
+        let (tokens, errors) = observe(&format!("{source}int after;\n"), mode(CStandard::C23));
+        assert_eq!(errors, [expected], "{source}");
+        assert_eq!(texts(&tokens), "int after ;", "{source}");
+    }
+    let (_, errors) = observe("#define V(...) __VA_OPT__(x)\n", mode(CStandard::C17));
+    assert_eq!(
+        errors,
+        ["Error: `__VA_OPT__` is not available in this mode"]
+    );
+}

@@ -699,7 +699,7 @@ fn c23_queries_and_resource_directives_are_gated_in_earlier_strict_modes() {
         let (_, errors) = observe("#embed \"missing.bin\"\nafter\n", config);
         assert!(
             errors.iter().any(|e| e.contains(if enabled {
-                "embedded resource not found"
+                "cannot find embedded resource `missing.bin`"
             } else {
                 "unknown preprocessing directive"
             })),

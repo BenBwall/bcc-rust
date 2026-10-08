@@ -228,3 +228,9 @@ tokenizer	UnterminatedCharacter	tokenizer-unterminated-character.c	rendered
 tokenizer	UnterminatedString	tokenizer-unterminated-string.c	rendered
 parser	ExpectedGnuSyntax	parser-gnu-asm.c	rendered
 pp	VaOptOutsideVariadicMacro	pp-va-opt-outside-variadic-macro.c	rendered
+pp	EmbeddedResourceNotFound	pp-embedded-resource-not-found.c	rendered
+pp	VaOptUnavailable	pp-va-opt-unavailable.c	rendered
+pp	MissingOpeningParenthesisAfterVaOpt	pp-missing-opening-parenthesis-after-va-opt.c	rendered
+pp	NestedVaOpt	pp-nested-va-opt.c	rendered
+pp	UnterminatedVaOpt	pp-unterminated-va-opt.c	rendered
+pp	HashHashAtVaOptBoundary	pp-hash-hash-at-va-opt-boundary.c	rendered

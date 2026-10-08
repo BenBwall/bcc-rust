@@ -292,7 +292,7 @@ mod tests {
             (
                 vec!["-std=c23"],
                 "unsigned char bytes[]={\n#embed \"missing.bin\"\n};\nint following;\n",
-                "embedded resource not found",
+                "cannot find embedded resource `missing.bin`",
             ),
             (
                 vec!["-std=c17", "-fms-extensions"],

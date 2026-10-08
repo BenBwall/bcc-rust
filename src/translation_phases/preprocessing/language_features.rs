@@ -64,7 +64,7 @@ pub(super) fn overridable_gnu_builtin(name: &str) -> bool {
     })
 }
 
-impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
+impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
     /// C99 §6.10.3p4 permits empty arguments, unlike C89 §3.8.3.
     pub(super) fn report_empty_macro_argument(&mut self, source: SourceVectors) {
         self.context
@@ -696,6 +696,33 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         value
     }
 
+    fn embed_error(
+        &mut self,
+        error_type: PreprocessorErrorType<'tu>,
+        directive: PreprocessorToken,
+    ) {
+        self.context.preprocessor_error(PreprocessorError {
+            error_type,
+            source_vectors: directive.source_vectors,
+        });
+    }
+
+    #[cold]
+    fn embed_unreadable(
+        &mut self,
+        name: &str,
+        error: &std::io::Error,
+        directive: PreprocessorToken,
+    ) {
+        let mut reason = ArenaString::new_in(self.scratch);
+        _ = write!(reason, "{error}");
+        let error_type = PreprocessorErrorType::EmbeddedResourceUnreadable {
+            name:   self.context.diagnostic_text(name),
+            reason: self.context.diagnostic_text(&reason),
+        };
+        self.embed_error(error_type, directive);
+    }
+
     /// Replaces resource inclusion with ordinary integer preprocessing tokens.
     /// C23: §6.10.4.1p7, p. 171; PDF p. 184, and §6.10.4.2p4,
     /// p. 174; PDF p. 187.
@@ -726,33 +753,36 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             return;
         };
         let Some(path) = self.find_resource(name, system) else {
-            self.language_error("embedded resource not found", directive.source_vectors);
-            return;
-        };
-        let Ok(mut file) = std::fs::File::open(self.context.get_source_file(path)) else {
-            self.language_error(
-                "embedded resource is inaccessible",
-                directive.source_vectors,
+            self.embed_error(
+                PreprocessorErrorType::EmbeddedResourceNotFound(self.context.diagnostic_text(name)),
+                directive,
             );
             return;
         };
-        let Ok(metadata) = file.metadata() else {
-            self.language_error(
-                "cannot determine embedded resource size",
-                directive.source_vectors,
-            );
-            return;
+        let read = std::fs::File::open(self.context.get_source_file(path)).and_then(|file| {
+            let length = file.metadata()?.len();
+            Ok((file, length))
+        });
+        let (mut file, length) = match read {
+            | Ok(opened) => opened,
+            | Err(error) => {
+                self.embed_unreadable(name, &error, directive);
+                return;
+            },
         };
-        let length = metadata.len().min(params.limit.unwrap_or(u64::MAX));
+        let length = length.min(params.limit.unwrap_or(u64::MAX));
         let Ok(length) = usize::try_from(length) else {
-            self.language_error("embedded resource is too large", directive.source_vectors);
+            self.embed_error(
+                PreprocessorErrorType::EmbeddedResourceTooLarge(self.context.diagnostic_text(name)),
+                directive,
+            );
             return;
         };
         let bytes = self
             .scratch
             .alloc_slice_fill_iter(std::iter::repeat_n(0u8, length));
-        if file.read_exact(bytes).is_err() {
-            self.language_error("cannot read embedded resource", directive.source_vectors);
+        if let Err(error) = file.read_exact(bytes) {
+            self.embed_unreadable(name, &error, directive);
             return;
         }
         let mut output = ArenaVec::new_in(self.scratch);
