@@ -250,6 +250,14 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             .unwrap_or_else(|| self.source_file_index())
     }
 
+    /// Marks the reader as at the start of a line, where a `#` begins a
+    /// directive: a directive's line has been read through its new-line, or
+    /// a group was skipped up to the next line.
+    pub(super) fn resume_at_line_start(&mut self) {
+        self.last_was_newline = true;
+        self.current_is_newline = true;
+    }
+
     pub(super) fn skip_until_newline(&mut self) {
         loop {
             if matches!(
@@ -259,8 +267,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     ..
                 }) | None
             ) {
-                self.last_was_newline = true;
-                self.current_is_newline = true;
+                self.resume_at_line_start();
                 return;
             }
         }
@@ -275,8 +282,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     ..
                 }) | None
             ) {
-                self.last_was_newline = true;
-                self.current_is_newline = true;
+                self.resume_at_line_start();
                 return;
             }
         }

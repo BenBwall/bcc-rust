@@ -320,8 +320,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         match directive.kind {
             // Null directive (C99 §6.10.7p1).
             | PreprocessorTokenType::Newline => {
-                self.last_was_newline = true;
-                self.current_is_newline = true;
+                self.resume_at_line_start();
                 return;
             },
             // This is the general case. We handle it in the function body.
@@ -386,8 +385,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 if operand.is_none_or(|t| t.kind != PreprocessorTokenType::Newline) {
                     self.skip_until_newline();
                 }
-                self.last_was_newline = true;
-                self.current_is_newline = true;
+                self.resume_at_line_start();
             },
             | "define" => self.parse_define_directive(),
             | "undef" => self.parse_undef_directive(),
@@ -405,15 +403,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     directive.source_vectors,
                 );
                 self.parse_error_directive(directive);
-                self.last_was_newline = true;
-                self.current_is_newline = true;
+                self.resume_at_line_start();
             },
             | "pragma" => {
                 if !self.parse_pragma_directive() {
                     self.skip_until_newline();
                 }
-                self.last_was_newline = true;
-                self.current_is_newline = true;
+                self.resume_at_line_start();
             },
             | _ => {
                 self.context.preprocessor_error(PreprocessorError {
@@ -1201,8 +1197,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             },
             tokenizer,
         });
-        self.last_was_newline = true;
-        self.current_is_newline = true;
+        self.resume_at_line_start();
     }
 
     /// Defines an object-like or function-like macro.
@@ -1453,8 +1448,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             old_tokenizer.as_mut(),
         );
         if !(is_valid && list_is_valid) {
-            self.last_was_newline = true;
-            self.current_is_newline = true;
+            self.resume_at_line_start();
             return;
         }
         // C99 §6.10.3p2: a redefinition repeats the parameters and the
@@ -1488,8 +1482,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             );
         }
         if !self.validate_variadic_body(body.clone(), is_variadic) {
-            self.last_was_newline = true;
-            self.current_is_newline = true;
+            self.resume_at_line_start();
             return;
         }
         let tokenizer = self.state.lexed_files.persist(&body);
@@ -1507,8 +1500,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             .state
             .macro_definitions
             .insert(name.identifier_id(self.context), definition);
-        self.last_was_newline = true;
-        self.current_is_newline = true;
+        self.resume_at_line_start();
     }
 
     /// Reads a `#define` directive's replacement list through its new-line,
@@ -1676,8 +1668,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         {
             self.skip_until_newline();
         }
-        self.last_was_newline = true;
-        self.current_is_newline = true;
+        self.resume_at_line_start();
     }
 
     /// Sets the presumed line number, and with a string literal the presumed

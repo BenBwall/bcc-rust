@@ -169,8 +169,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         PreprocessorErrorType::NoConditionInElifDirective,
                     );
                     if taken {
-                        self.last_was_newline = true;
-                        self.current_is_newline = true;
+                        self.resume_at_line_start();
                         return;
                     }
                     self.context.set_ignore_tokenizer_errors(true);
@@ -196,8 +195,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     let taken = self.eval_macro_test(directive);
                     at_line_start = true;
                     if taken {
-                        self.last_was_newline = true;
-                        self.current_is_newline = true;
+                        self.resume_at_line_start();
                         return;
                     }
                     self.context.set_ignore_tokenizer_errors(true);
@@ -219,8 +217,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         if !at_line_start {
             self.skip_until_newline();
         }
-        self.last_was_newline = true;
-        self.current_is_newline = true;
+        self.resume_at_line_start();
     }
 
     /// Opens a conditional and processes its group when the controlling
@@ -234,8 +231,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             directive,
         ));
         if self.eval_preprocessor_expression(PreprocessorErrorType::NoConditionInIfDirective) {
-            self.last_was_newline = true;
-            self.current_is_newline = true;
+            self.resume_at_line_start();
         } else {
             self.skip_over_dead_code(true, SkipMode::FalseGroup);
         }
@@ -317,8 +313,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             });
             self.skip_until_newline();
         }
-        self.last_was_newline = true;
-        self.current_is_newline = true;
+        self.resume_at_line_start();
     }
 
     pub(super) fn parse_endif_directive(&mut self, directive: PreprocessorToken) {
@@ -353,8 +348,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             directive,
         ));
         if self.eval_macro_test(name) {
-            self.last_was_newline = true;
-            self.current_is_newline = true;
+            self.resume_at_line_start();
         } else {
             self.skip_over_dead_code(true, SkipMode::FalseGroup);
         }

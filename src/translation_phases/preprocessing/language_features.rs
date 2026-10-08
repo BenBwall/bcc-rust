@@ -732,8 +732,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             }
             tokens.push(token);
         }
-        self.last_was_newline = true;
-        self.current_is_newline = true;
+        self.resume_at_line_start();
         let tokens = tokens.leak();
         let Some((name, system, end)) = self.resource_operand(tokens, directive.source_vectors)
         else {
@@ -809,8 +808,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             frame_type: TokenizerFrameType::Rescan,
             tokenizer,
         });
-        self.last_was_newline = true;
-        self.current_is_newline = true;
+        self.resume_at_line_start();
     }
 }
 
