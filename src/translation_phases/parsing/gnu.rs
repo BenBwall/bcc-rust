@@ -147,7 +147,7 @@ pub(super) struct GnuFrame<'tu, 'p> {
     pub(super) members:      ArenaVec<'p, OffsetMember<'tu>>,
     pub(super) labels:       ArenaVec<'p, Identifier>,
     sections:                u8,
-    qualifiers:              u8,
+    qualifiers:              AsmQualifiers,
     requires_operand:        bool,
     name:                    Option<Identifier>,
     constraint:              Option<Token>,
@@ -167,7 +167,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
             members: ArenaVec::new_in(arena),
             labels: ArenaVec::new_in(arena),
             sections: 0,
-            qualifiers: 0,
+            qualifiers: AsmQualifiers::default(),
             requires_operand: false,
             name: None,
             constraint: None,
@@ -237,17 +237,20 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                 }
             },
             | Phase::Qualifiers => {
-                let bit = match token.map(|x| x.kind) {
-                    | Some(TokenType::Keyword(KeywordTokenType::Volatile)) => 1,
-                    | Some(TokenType::Keyword(KeywordTokenType::Inline)) => 2,
-                    | Some(TokenType::Keyword(KeywordTokenType::Goto)) => 4,
-                    | _ => 0,
+                let qualifier = match token.map(|x| x.kind) {
+                    | Some(TokenType::Keyword(KeywordTokenType::Volatile)) =>
+                        Some(&mut self.qualifiers.volatile),
+                    | Some(TokenType::Keyword(KeywordTokenType::Inline)) =>
+                        Some(&mut self.qualifiers.inline),
+                    | Some(TokenType::Keyword(KeywordTokenType::Goto)) =>
+                        Some(&mut self.qualifiers.goto),
+                    | _ => None,
                 };
-                if bit != 0 {
-                    if self.qualifiers & bit != 0 {
+                if let Some(qualifier) = qualifier {
+                    let repeated = std::mem::replace(qualifier, true);
+                    if repeated {
                         Self::expected(parser, token, "distinct asm qualifier");
                     }
-                    self.qualifiers |= bit;
                     self.own(parser, token.expect("qualifier exists"));
                     ParseAction::Consume
                 } else {
@@ -616,11 +619,11 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
             },
             | Phase::Close => {
                 if matches!(self.kind, GnuKind::Asm { label: false })
-                    && (self.qualifiers & 4 != 0) != (self.sections == 4)
+                    && self.qualifiers.goto != (self.sections == 4)
                 {
                     Self::expected(parser, token, "four asm goto sections with goto qualifier");
                 }
-                if self.qualifiers & 4 != 0 && self.sections == 4 && self.labels.is_empty() {
+                if self.qualifiers.goto && self.sections == 4 && self.labels.is_empty() {
                     Self::expected(parser, token, "label in asm goto section");
                 }
                 self.phase = if self.kind == (GnuKind::Asm { label: false }) {
@@ -653,11 +656,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                         let operands = parser.alloc_syntax_list(&mut self.asm_operands);
                         let labels = parser.alloc_syntax_list(&mut self.labels);
                         GnuValue::Asm(parser.alloc_syntax(Asm {
-                            qualifiers: AsmQualifiers {
-                                volatile: self.qualifiers & 1 != 0,
-                                inline:   self.qualifiers & 2 != 0,
-                                goto:     self.qualifiers & 4 != 0,
-                            },
+                            qualifiers: self.qualifiers,
                             template: self.template,
                             operands,
                             clobbers,
