@@ -293,7 +293,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
             // A parenthesized declarator waiting for its `)` counts as the
             // node it becomes and the direct-declarator entry naming it.
             | Self::Declarator(frame) => frame
-                .pointer_qualifiers
+                .pointer_levels
                 .len()
                 .checked_add(frame.direct_declarators.len())
                 .and_then(|count| count.checked_add(if frame.nested.is_some() { 2 } else { 0 }))
@@ -351,7 +351,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
                 pools.source_vectors.lend(&mut frame.source_vectors);
             },
             | Self::Declarator(frame) => {
-                pools.pointer_qualifiers.lend(&mut frame.pointer_qualifiers);
+                pools.pointer_levels.lend(&mut frame.pointer_levels);
                 pools.direct_declarators.lend(&mut frame.direct_declarators);
             },
             | Self::Expression(frame) => frame.lend_pooled(pools),

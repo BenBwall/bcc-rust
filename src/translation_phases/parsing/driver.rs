@@ -106,8 +106,19 @@ use crate::{
 pub(super) type TokenDiagnostics<'tu, 'p> = ArenaMap<
     'p,
     (&'tu str, &'p [SourceVector], Option<SourceVector>),
-    ArenaQueue<'p, &'tu Cell<bool>>,
+    ArenaQueue<'p, TokenDiagnostic<'tu>>,
 >;
+
+/// One pending diagnostic that the frame consuming its token may withdraw.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum TokenDiagnostic<'tu> {
+    /// An extension diagnostic, suppressed through its marker.
+    Extension(&'tu Cell<bool>),
+    /// A phase-7 constant-conversion error at its pending-queue position,
+    /// which MSVC assembly withdraws (see
+    /// [`super::msvc::constant_diagnostic`]).
+    Constant(usize),
+}
 
 /// A borrowed lookup keeps temporary context borrows out of stored key
 /// lifetimes.
@@ -191,23 +202,31 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     fn with_upstream(upstream: Upstream, context: &'c mut Context<'tu>, arena: &'p Bump) -> Self {
         let mut token_diagnostics: TokenDiagnostics<'tu, 'p> =
             ArenaMap::with_hasher_in(FxBuildHasher, arena);
-        for error in context.pending_errors.iter() {
-            if let TranslationError::Extension(error) = error {
-                let vectors = arena.alloc_slice_fill_iter(
-                    context
-                        .get_source_vectors(error.source_vectors)
-                        .iter()
-                        .cloned(),
-                );
-                token_diagnostics
-                    .entry((
-                        error.spelling(),
-                        &*vectors,
-                        context.user_source_end(error.source_vectors),
-                    ))
-                    .or_insert_with(|| ArenaQueue::new_in(arena))
-                    .push_back(error.suppressed);
-            }
+        for (index, error) in context.pending_errors.iter().enumerate() {
+            let (spelling, source, occurrence) = match error {
+                | TranslationError::Extension(error) => (
+                    error.spelling(),
+                    error.source_vectors,
+                    TokenDiagnostic::Extension(error.suppressed),
+                ),
+                | TranslationError::Preprocessing(error) => {
+                    let Some(spelling) = super::msvc::constant_diagnostic(&error.error_type) else {
+                        continue;
+                    };
+                    (
+                        spelling,
+                        error.source_vectors,
+                        TokenDiagnostic::Constant(index),
+                    )
+                },
+                | _ => continue,
+            };
+            let vectors =
+                arena.alloc_slice_fill_iter(context.get_source_vectors(source).iter().cloned());
+            token_diagnostics
+                .entry((spelling, &*vectors, context.user_source_end(source)))
+                .or_insert_with(|| ArenaQueue::new_in(arena))
+                .push_back(occurrence);
         }
         Self {
             cursor: TokenCursor::new(upstream),
@@ -474,7 +493,10 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                     "long long integer constant",
                     "hexadecimal floating constant",
                     "binary integer constant",
-                ] {
+                ]
+                .into_iter()
+                .chain(super::msvc::CONSTANT_DIAGNOSTICS)
+                {
                     self.suppress_diagnostic_occurrence(token, Some(spelling));
                 }
             },
@@ -485,15 +507,28 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     fn suppress_diagnostic_occurrence(&mut self, token: Token, spelling: Option<&str>) {
         let spelling = spelling.unwrap_or_else(|| self.context.string_cache.at(token.contents));
         let vectors = self.context.get_source_vectors(token.source_vectors);
-        if let Some(occurrences) = self.token_diagnostics.get_mut(&DiagnosticLookup {
-            spelling,
-            vectors,
-            user_end: self.context.user_source_end(token.source_vectors),
-        }) && let Some(suppressed) = occurrences.pop_front()
-            && (self.pedantic_suppression != 0
-                || token.kind == TokenType::Keyword(KeywordTokenType::Extension))
-        {
-            self.context.suppress_extension(suppressed);
+        let user_end = self.context.user_source_end(token.source_vectors);
+        // A diagnostic about a macro argument can lack the invocation that
+        // the token carries; the argument's spelling already places it.
+        let occurrence = [user_end, vectors.last().cloned()]
+            .into_iter()
+            .find_map(|user_end| {
+                self.token_diagnostics
+                    .get_mut(&DiagnosticLookup {
+                        spelling,
+                        vectors,
+                        user_end,
+                    })
+                    .and_then(ArenaQueue::pop_front)
+            });
+        match occurrence {
+            | Some(TokenDiagnostic::Extension(suppressed))
+                if self.pedantic_suppression != 0
+                    || token.kind == TokenType::Keyword(KeywordTokenType::Extension) =>
+                self.context.suppress_extension(suppressed),
+            | Some(TokenDiagnostic::Constant(index)) if self.active_frame == ParseFrameKind::Msvc =>
+                self.context.withdraw_pending_error(index),
+            | _ => {},
         }
     }
 

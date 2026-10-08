@@ -268,6 +268,34 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         }
     }
 
+    fn closer_component(&self) -> &'static str {
+        match self.attribute_syntax {
+            | AttributeSyntax::Msvc => "`)` in MSVC declspec specifier",
+            | AttributeSyntax::Gnu => "`))` in GNU attribute specifier",
+            | AttributeSyntax::Standard => "`]]` in attribute specifier",
+        }
+    }
+
+    /// Whether `token` ends the enclosing declaration rather than continuing
+    /// the attribute: a `;` or `}` outside braces the attribute opened, or a
+    /// `{` that cannot be an argument token. Standard balanced tokens may be
+    /// braces, while GNU and MSVC arguments are expressions.
+    /// C23: balanced-token §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
+    fn caller_owns(&self, token: Token) -> bool {
+        let TokenType::Operator(op) = token.kind else {
+            return false;
+        };
+        match op {
+            | OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace => !self
+                .delimiters
+                .contains(&OperatorTokenType::ClosingCurlyBrace),
+            | OperatorTokenType::OpeningCurlyBrace =>
+                self.attribute_syntax != AttributeSyntax::Standard
+                    || self.delimiters.len() <= self.attribute_outer_depth(),
+            | _ => false,
+        }
+    }
+
     fn expected(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>, position: &'static str) {
         parser.report(
             ParserErrorType::ExpectedIsoSyntax(position, token.map(|x| x.kind)),
@@ -590,41 +618,15 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
             },
             | Phase::AttributeTokens => {
                 let Some(token) = token else {
-                    self.attribute_expected(
-                        parser,
-                        None,
-                        if self.attribute_syntax == AttributeSyntax::Msvc {
-                            "`)` in MSVC declspec specifier"
-                        } else if self.attribute_syntax == AttributeSyntax::Gnu {
-                            "`))` in GNU attribute specifier"
-                        } else {
-                            "`]]` in attribute specifier"
-                        },
-                    );
+                    self.attribute_expected(parser, None, self.closer_component());
                     self.phase = Phase::Finish;
                     return ParseAction::Continue;
                 };
-                // At outer depth, a declaration boundary belongs to the
-                // enclosing frame.
-                if self.delimiters.len() <= self.attribute_outer_depth()
-                    && matches!(
-                        token.kind,
-                        TokenType::Operator(
-                            OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace
-                        )
-                    )
-                {
-                    self.attribute_expected(
-                        parser,
-                        Some(token),
-                        if self.attribute_syntax == AttributeSyntax::Msvc {
-                            "`)` in MSVC declspec specifier"
-                        } else if self.attribute_syntax == AttributeSyntax::Gnu {
-                            "`))` in GNU attribute specifier"
-                        } else {
-                            "`]]` in attribute specifier"
-                        },
-                    );
+                // A declaration boundary belongs to the enclosing frame at
+                // every argument depth, so an unclosed argument cannot
+                // swallow the declarations that follow it.
+                if self.caller_owns(token) {
+                    self.attribute_expected(parser, Some(token), self.closer_component());
                     self.phase = Phase::Finish;
                     return ParseAction::Continue;
                 }
@@ -695,14 +697,23 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                             self.attribute_position = AfterArguments;
                             true
                         },
-                        | Closing =>
-                            kind == TokenType::Operator(
-                                if self.attribute_syntax == AttributeSyntax::Standard {
-                                    OperatorTokenType::ClosingSquareBracket
-                                } else {
-                                    OperatorTokenType::ClosingParenthesis
-                                },
-                            ),
+                        | Closing
+                            if kind
+                                == TokenType::Operator(
+                                    if self.attribute_syntax == AttributeSyntax::Standard {
+                                        OperatorTokenType::ClosingSquareBracket
+                                    } else {
+                                        OperatorTokenType::ClosingParenthesis
+                                    },
+                                ) =>
+                            true,
+                        | Closing => {
+                            // Only the second closer can follow the first;
+                            // anything else starts the attributed syntax.
+                            self.attribute_expected(parser, Some(token), self.closer_component());
+                            self.phase = Phase::Finish;
+                            return ParseAction::Continue;
+                        },
                         | _ => false,
                     };
                     if !valid {

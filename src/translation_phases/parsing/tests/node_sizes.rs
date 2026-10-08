@@ -21,6 +21,7 @@ use super::super::{
         InitializerElement,
         ParameterDeclaration,
         ParenthesizedDeclarator,
+        PointerLevel,
         RangeDesignator,
         StructDeclaration,
         StructDeclarator,
@@ -30,6 +31,7 @@ use super::super::{
     gnu::{
         Asm,
         AsmOperand,
+        AsmQualifiers,
         Builtin,
         OffsetMember,
     },
@@ -71,7 +73,8 @@ macro_rules! sizes {
 #[test]
 fn syntax_nodes_keep_their_sizes() {
     let sizes = sizes![
-        Asm<'_> => 40,
+        Asm<'_> => 72,
+        AsmQualifiers => 3,
         MsAsm<'_> => 24,
         Seh<'_> => 56,
         AsmOperand<'_> => 56,
@@ -101,6 +104,7 @@ fn syntax_nodes_keep_their_sizes() {
         Designator<'_> => 48,
         TypeName<'_> => 80,
         Declarator<'_> => 24,
+        PointerLevel<'_> => 16,
         DirectDeclarator<'_> => 16,
         ParameterDeclaration<'_> => 72,
         StructDeclaration<'_> => 56,

@@ -331,8 +331,12 @@ fn pointer_modifiers_belong_to_their_pointer_level() {
                 .declarator
                 .pointer;
             assert_eq!(
-                pointer.type_qualifiers_list.as_slice(),
-                &[
+                pointer
+                    .levels
+                    .iter()
+                    .map(|x| x.qualifiers)
+                    .collect::<Vec<_>>(),
+                [
                     TypeQualifiers::PTR32 | TypeQualifiers::SPTR,
                     TypeQualifiers::PTR64 | TypeQualifiers::UPTR
                 ]
@@ -479,6 +483,128 @@ fn asm_line_boundaries_use_macro_invocations_and_ignore_splices() {
                 assert!(
                     matches!(super::function_definition(p,0).body.kind, StatementType::Compound { items } if items.len() == 2)
                 );
+            },
+        );
+    }
+}
+
+#[test]
+fn braced_asm_keeps_its_closing_brace_after_an_inner_mismatch() {
+    for source in [
+        "int f(void) { __asm { mov eax, [ebx } return 0; } int g;\n",
+        "int f(void) { __asm { mov eax, ([ebx) } return 0; } int g;\n",
+        "int f(void) { __asm { mov eax, ebx) } return 0; } int g;\n",
+    ] {
+        with_parse_configuration(
+            source,
+            CompilerConfiguration::default().with_msvc_feature(MsvcFeature::Asm, true),
+            |p| {
+                assert_eq!(parser_errors(p).count(), 1, "{source}: {:?}", p.errors);
+                let nodes: Vec<_> = p.parser.syntax.iter::<MsAsm<'_>>().collect();
+                assert_eq!(nodes.len(), 1, "{source}");
+                assert!(nodes[0].braced && nodes[0].recovered, "{source}");
+                assert!(
+                    super::sourced_text(p, nodes[0].source_vectors).ends_with('}'),
+                    "{source}"
+                );
+                assert!(
+                    matches!(super::function_definition(p, 0).body.kind, StatementType::Compound { items } if items.len() == 2),
+                    "{source}"
+                );
+                assert_eq!(p.items.len(), 2, "{source}");
+                assert!(!super::declaration(p, 1).recovered, "{source}");
+            },
+        );
+    }
+}
+
+#[test]
+fn masm_numbers_in_asm_do_not_raise_c_constant_diagnostics() {
+    let asm = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+        .with_msvc_feature(MsvcFeature::Asm, true);
+    for (source, expected) in [
+        (
+            "int f(void){ __asm mov eax, 0FFh\n__asm { mov al, 10h } return 0; }\n",
+            0,
+        ),
+        (
+            "int f(void){ __asm { mov eax, 08h\n mov ebx, 1e\n mov ecx, 99999999999999999999 } \
+             return 0; }\n",
+            0,
+        ),
+        (
+            "#define HEX 0FFh\nint a = 1; int g(void){ return 0; }\nint f(void){ __asm mov eax, \
+             HEX\n return 0; }\n",
+            0,
+        ),
+        // The same spellings outside the assembly stay C constants.
+        (
+            "int x = 0FFh; int f(void){ __asm mov eax, 0FFh\n return 0; }\n",
+            1,
+        ),
+        (
+            "#define HEX 0FFh\nint f(void){ __asm mov eax, HEX\n return 0; } int y = HEX;\n",
+            1,
+        ),
+        (
+            "#define BOTH(x) int y = x; int f(void){ __asm { mov eax, x } return 0; \
+             }\nBOTH(0FFh)\n",
+            1,
+        ),
+    ] {
+        with_parse_configuration(source, asm, |p| {
+            assert_eq!(p.errors.len(), expected, "{source}: {:?}", p.errors);
+            assert_eq!(
+                p.parser.syntax.iter::<MsAsm<'_>>().count(),
+                source.matches("__asm").count()
+            );
+        });
+    }
+    // Pedantic diagnostics about C constant syntax do not apply either.
+    with_parse_configuration(
+        "int f(void){ __asm mov eax, 0bh\n__asm mov ebx, 1LL\n return 0; }\n",
+        CompilerConfiguration::new(CStandard::C89, ExtensionPolicy::Warn)
+            .with_gnu_extensions(true)
+            .with_msvc_feature(MsvcFeature::Asm, true),
+        |p| {
+            assert!(
+                p.errors.iter().all(|x| x.to_string().contains("'__asm'")),
+                "{:?}",
+                p.errors
+            );
+        },
+    );
+}
+
+#[test]
+fn asm_line_boundaries_start_at_a_macro_invocation() {
+    for (source, tokens) in [
+        (
+            "#define OFF(a,b) a + b\nint f(void){ __asm mov eax, OFF(1,\n2)\n return 0; }\n",
+            7,
+        ),
+        (
+            "#define ONE 1\nint f(void){ __asm mov eax, ONE /* c */\n return 0; }\n",
+            5,
+        ),
+        (
+            "#define ONE 1\nint f(void){ __asm mov eax, 2 // c\nONE;\n return 0; }\n",
+            5,
+        ),
+        (
+            "#define OFF(a,b) a + b\nint f(void){ __asm mov eax, 1 /* c\n */ OFF(1,\n2);\n return \
+             0; }\n",
+            5,
+        ),
+    ] {
+        with_parse_configuration(
+            source,
+            CompilerConfiguration::default().with_msvc_feature(MsvcFeature::Asm, true),
+            |p| {
+                let nodes: Vec<_> = p.parser.syntax.iter::<MsAsm<'_>>().collect();
+                assert_eq!(nodes.len(), 1, "{source}");
+                assert_eq!(nodes[0].tokens.len(), tokens, "{source}");
+                assert!(p.errors.is_empty(), "{source}: {:?}", p.errors);
             },
         );
     }

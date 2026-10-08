@@ -46,17 +46,29 @@ use crate::{
     },
 };
 
-/// GNU assembly grammar. Original qualifier, template, constraint and clobber
-/// tokens retain provenance; C operands are parsed syntax children.
+/// GNU assembly grammar: `asm qualifiers ( template : outputs : inputs :
+/// clobbers : labels )`, or a declarator's `asm ( template )` label. The
+/// template, constraint and clobber string literals keep their provenance;
+/// C operands are parsed syntax children. `sections` counts the colons.
 /// C99: extension to §6.8, p. 131; PDF p. 143 and §6.7.5, p. 114; PDF p. 126.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Asm<'tu> {
-    pub(crate) tokens:         ArenaList<'tu, Token>,
+    pub(crate) qualifiers:     AsmQualifiers,
+    /// `None` when the template literal is missing.
+    pub(crate) template:       Option<Token>,
     pub(crate) operands:       ArenaList<'tu, AsmOperand<'tu>>,
+    pub(crate) clobbers:       ArenaList<'tu, Token>,
     pub(crate) labels:         ArenaList<'tu, Identifier>,
     pub(crate) sections:       u8,
     pub(crate) source_vectors: SourceVectors,
     pub(crate) recovered:      bool,
+}
+/// The qualifiers written before a GNU assembly statement's `(`.
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
+pub(crate) struct AsmQualifiers {
+    pub(crate) volatile: bool,
+    pub(crate) inline:   bool,
+    pub(crate) goto:     bool,
 }
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct AsmOperand<'tu> {
@@ -127,7 +139,9 @@ pub(super) struct GnuFrame<'tu, 'p> {
     phase:                   Phase,
     source_vectors:          Option<SourceVectors>,
     starting_errors:         usize,
+    /// Clobber literals of an assembly statement.
     pub(super) tokens:       ArenaVec<'p, Token>,
+    template:                Option<Token>,
     pub(super) asm_operands: ArenaVec<'p, AsmOperand<'tu>>,
     pub(super) operands:     ArenaVec<'p, SyntaxOperand<'tu>>,
     pub(super) members:      ArenaVec<'p, OffsetMember<'tu>>,
@@ -147,6 +161,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
             source_vectors: None,
             starting_errors: errors,
             tokens: ArenaVec::new_in(arena),
+            template: None,
             asm_operands: ArenaVec::new_in(arena),
             operands: ArenaVec::new_in(arena),
             members: ArenaVec::new_in(arena),
@@ -166,7 +181,6 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
     }
 
     fn own(&mut self, parser: &mut Parser<'_, 'tu, 'p>, token: Token) {
-        self.tokens.push(token);
         parser.merge_source(&mut self.source_vectors, token);
     }
 
@@ -259,6 +273,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                 if let Some(token) = token
                     && matches!(token.kind, TokenType::String(_))
                 {
+                    self.template = Some(token);
                     self.own(parser, token);
                     ParseAction::Consume
                 } else {
@@ -321,6 +336,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                     if let Some(token) = token
                         && matches!(token.kind, TokenType::String(_))
                     {
+                        self.tokens.push(token);
                         self.own(parser, token);
                         ParseAction::Consume
                     } else {
@@ -625,12 +641,18 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                 let recovered = parser.hard_error_count > self.starting_errors;
                 let value = match self.kind {
                     | GnuKind::Asm { .. } => {
-                        let tokens = parser.alloc_syntax_list(&mut self.tokens);
+                        let clobbers = parser.alloc_syntax_list(&mut self.tokens);
                         let operands = parser.alloc_syntax_list(&mut self.asm_operands);
                         let labels = parser.alloc_syntax_list(&mut self.labels);
                         GnuValue::Asm(parser.alloc_syntax(Asm {
-                            tokens,
+                            qualifiers: AsmQualifiers {
+                                volatile: self.qualifiers & 1 != 0,
+                                inline:   self.qualifiers & 2 != 0,
+                                goto:     self.qualifiers & 4 != 0,
+                            },
+                            template: self.template,
                             operands,
+                            clobbers,
                             labels,
                             sections: self.sections,
                             source_vectors,

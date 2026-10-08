@@ -87,6 +87,11 @@ enum Work<'tu> {
     Asm(&'tu super::gnu::Asm<'tu>, usize),
     MsAsm(&'tu super::msvc::MsAsm<'tu>, usize),
     AsmOperand(super::gnu::AsmOperand<'tu>, usize),
+    AsmString(
+        crate::translation_phases::preprocessing::Token,
+        usize,
+        &'static str,
+    ),
     OffsetMember(super::gnu::OffsetMember<'tu>, usize),
     SpecifierExtensionItem(&'tu super::modern::SpecifierExtension<'tu>, usize),
     GenericAssociation(super::modern::GenericAssociation<'tu>, usize),
@@ -99,6 +104,7 @@ enum Work<'tu> {
     Function(&'tu FunctionDefinition<'tu>, usize, &'static str),
     Declarator(Declarator<'tu>, usize, &'static str),
     DirectDeclarator(DirectDeclarator<'tu>, usize),
+    PointerLevel(usize, super::declaration_syntax::PointerLevel<'tu>, usize),
     Identifier(Identifier, usize, &'static str),
     Parameter(ParameterDeclaration<'tu>, usize),
     StructOrUnion(&'tu StructOrUnionSpecifier<'tu>, usize),
@@ -154,8 +160,15 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         &mut output,
                         indent,
                         format_args!(
-                            "asm sections={}{}",
+                            "asm sections={}{}{}{}{}",
                             asm.sections,
+                            if asm.qualifiers.volatile {
+                                " volatile"
+                            } else {
+                                ""
+                            },
+                            if asm.qualifiers.inline { " inline" } else { "" },
+                            if asm.qualifiers.goto { " goto" } else { "" },
                             if asm.recovered { " recovered" } else { "" }
                         ),
                         Some(asm.source_vectors),
@@ -165,26 +178,43 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     for label in asm.labels.iter().rev() {
                         work.push(Work::Identifier(*label, indent + 1, "goto-label"));
                     }
+                    for clobber in asm.clobbers.iter().rev() {
+                        work.push(Work::AsmString(*clobber, indent + 1, "clobber"));
+                    }
                     for operand in asm.operands.iter().rev() {
                         work.push(Work::AsmOperand(*operand, indent + 1));
                     }
-                    for token in &asm.tokens {
+                    if let Some(template) = asm.template {
                         Self::line(
                             &mut output,
                             indent + 1,
                             format_args!(
-                                "asm-token {}",
+                                "template {}",
                                 context
                                     .string_cache
-                                    .at(token.contents)
+                                    .at(template.contents)
                                     .trim_end_matches('\0')
                             ),
-                            Some(token.source_vectors),
+                            Some(template.source_vectors),
                             context,
                             options,
                         );
                     }
                 },
+                | Work::AsmString(token, indent, role) => Self::line(
+                    &mut output,
+                    indent,
+                    format_args!(
+                        "{role} {}",
+                        context
+                            .string_cache
+                            .at(token.contents)
+                            .trim_end_matches('\0')
+                    ),
+                    Some(token.source_vectors),
+                    context,
+                    options,
+                ),
                 | Work::AsmOperand(operand, indent) => {
                     Self::line(
                         &mut output,
@@ -557,7 +587,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         );
                         continue;
                     }
-                    let pointers = declarator.pointer.type_qualifiers_list;
+                    let pointers = declarator.pointer.levels;
                     Self::line(
                         &mut output,
                         indent,
@@ -566,21 +596,27 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         context,
                         options,
                     );
-                    for (level, qualifiers) in pointers.iter().enumerate() {
-                        Self::line(
-                            &mut output,
-                            indent + 1,
-                            format_args!(
-                                "pointer {level} qualifiers={}",
-                                qualifier_list(*qualifiers)
-                            ),
-                            None,
-                            context,
-                            options,
-                        );
-                    }
                     for direct in declarator.kind.iter().rev() {
                         work.push(Work::DirectDeclarator(*direct, indent + 1));
+                    }
+                    for (level, pointer) in pointers.iter().enumerate().rev() {
+                        work.push(Work::PointerLevel(level, *pointer, indent + 1));
+                    }
+                },
+                | Work::PointerLevel(level, pointer, indent) => {
+                    Self::line(
+                        &mut output,
+                        indent,
+                        format_args!(
+                            "pointer {level} qualifiers={}",
+                            qualifier_list(pointer.qualifiers)
+                        ),
+                        None,
+                        context,
+                        options,
+                    );
+                    if let Some(attributes) = pointer.attributes {
+                        work.push(Work::SpecifierExtension(attributes, indent + 1));
                     }
                 },
                 | Work::DirectDeclarator(direct, indent) => match direct {
@@ -1760,7 +1796,7 @@ fn declarator_key(declarator: Declarator<'_>) -> (usize, usize, usize, usize) {
     (
         declarator.kind.as_ptr().addr(),
         declarator.kind.len(),
-        declarator.pointer.type_qualifiers_list.as_ptr().addr(),
-        declarator.pointer.type_qualifiers_list.len(),
+        declarator.pointer.levels.as_ptr().addr(),
+        declarator.pointer.levels.len(),
     )
 }

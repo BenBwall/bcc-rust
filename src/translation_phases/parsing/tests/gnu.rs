@@ -11,7 +11,10 @@ use crate::{
         CompilerConfiguration,
         ExtensionPolicy,
     },
-    translation_phases::GetSeverity,
+    translation_phases::{
+        GetSeverity,
+        parsing::errors::ParserErrorType,
+    },
 };
 
 #[test]
@@ -385,10 +388,7 @@ fn nested_functions_have_separate_typedef_label_and_switch_contexts() {
     with_parse_configuration(source, CompilerConfiguration::default(), |p| {
         let errors: Vec<_> = parser_errors(p).collect();
         assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(matches!(
-            errors[0],
-            super::super::errors::ParserErrorType::DuplicateDefaultLabel
-        ));
+        assert!(matches!(errors[0], ParserErrorType::DuplicateDefaultLabel));
         assert_eq!(p.parser.switch_scopes.len(), 0);
     });
 }
@@ -779,6 +779,248 @@ fn numeric_suppression_preserves_preprocessing_occurrences_and_invocation_sites(
                 .map(|(key, occurrences)| (key.2.as_ref().unwrap().line, occurrences.len()))
                 .collect();
             assert_eq!(remaining, [(1, 1)]);
+        },
+    );
+}
+
+/// Names declared by clean (unrecovered) top-level declarations.
+fn clean_declared_names(p: &super::Parsed<'_, '_>) -> Vec<String> {
+    p.items
+        .iter()
+        .filter_map(|x| match x {
+            | super::super::syntax::ExternalDeclaration::Declaration(x) => Some(x),
+            | _ => None,
+        })
+        .flat_map(|x| x.init_declarators.iter())
+        .filter_map(|x| super::identifier_name(p, x.declarator))
+        .collect()
+}
+
+#[test]
+fn unclosed_attribute_arguments_leave_semicolons_and_braces_to_the_declaration() {
+    for source in [
+        "int x __attribute__((aligned(8; int after; int more;",
+        "int x __attribute__((aligned((8; int after; int more;",
+        "[[gnu::aligned(8; int after; int more;",
+        "[[gnu::aligned([8; int after; int more;",
+        "__declspec(align(8 ; int after; int more;",
+        "void f(void) { int x __attribute__((aligned(8) } int after; int more;",
+        "void f(void) __attribute__((noinline(1 { return; } int after; int more;",
+        "void f(void) { [[vendor::tag(1)] } int after; int more;",
+    ] {
+        with_parse_configuration(
+            &format!("{source}\n"),
+            CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true)
+                .with_msvc_extensions(true),
+            |p| {
+                // The attribute reports its missing closer at the boundary
+                // it leaves to its owner, and nothing reaches end of input.
+                let errors: Vec<_> = parser_errors(p).collect();
+                assert!(
+                    matches!(
+                        errors.first(),
+                        Some(
+                            ParserErrorType::ExpectedGnuSyntax(closer, Some(_))
+                                | ParserErrorType::ExpectedIsoSyntax(closer, Some(_))
+                                | ParserErrorType::ExpectedMsSyntax(closer, Some(_))
+                        ) if closer.contains(" in ")
+                    ),
+                    "{source}: {errors:?}"
+                );
+                assert!(errors.len() <= 2, "{source}: {errors:?}");
+                let names = clean_declared_names(p);
+                assert!(
+                    names.ends_with(&["after".to_owned(), "more".to_owned()]),
+                    "{source}: {names:?}"
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn attribute_missing_its_second_closer_finishes_before_the_declaration() {
+    for source in [
+        "__attribute__((noreturn) void die(void);\nint following;",
+        "[[noreturn] void die(void);\nint following;",
+    ] {
+        with_parse_configuration(
+            &format!("{source}\n"),
+            CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true),
+            |p| {
+                assert_eq!(parser_errors(p).count(), 1, "{source}: {:?}", p.errors);
+                let names = clean_declared_names(p);
+                assert_eq!(names.last().map(String::as_str), Some("following"));
+                assert!(
+                    p.items.iter().any(|x| match x {
+                        | super::super::syntax::ExternalDeclaration::Declaration(x)
+                        | super::super::syntax::ExternalDeclaration::RecoveredDeclaration(x) =>
+                            x.init_declarators.iter().any(|x| {
+                                super::identifier_name(p, x.declarator).as_deref() == Some("die")
+                            }),
+                        | _ => false,
+                    }),
+                    "{source}: {:?}",
+                    p.items
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn leading_attributes_do_not_turn_a_grouping_parenthesis_into_parameters() {
+    use super::super::declaration_syntax::DirectDeclarator;
+    let parameter_shape = |source: &str| {
+        with_parse_configuration(
+            &format!("{source}\n"),
+            CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Warn)
+                .with_gnu_extensions(true),
+            |p| {
+                assert_eq!(parser_errors(p).count(), 0, "{source}: {:?}", p.errors);
+                assert!(
+                    !p.errors
+                        .iter()
+                        .any(|x| x.to_string().contains("implicit int")),
+                    "{source}: {:?}",
+                    p.errors
+                );
+                let DirectDeclarator::Function { parameter_list, .. } =
+                    super::declaration(p, 0).init_declarators[0].declarator.kind[1]
+                else {
+                    panic!("{source}: expected a function declarator");
+                };
+                let declarator = parameter_list[0].declarator.expect("parameter declarator");
+                declarator
+                    .kind
+                    .iter()
+                    .map(|x| match x {
+                        | DirectDeclarator::Parenthesized(x) => format!(
+                            "grouped({} {:?})",
+                            x.declarator.pointer.levels.len(),
+                            super::identifier_name(p, x.declarator)
+                        ),
+                        | DirectDeclarator::Function { .. } => "function".to_owned(),
+                        | other => format!("{other:?}"),
+                    })
+                    .collect::<Vec<_>>()
+            },
+        )
+    };
+    assert_eq!(
+        parameter_shape("void f(int (__attribute__((unused)) *b));"),
+        ["grouped(1 Some(\"b\"))"]
+    );
+    assert_eq!(
+        parameter_shape("void f(int (__attribute__((unused)) __attribute__((x)) *));"),
+        ["grouped(1 None)"]
+    );
+    assert_eq!(
+        parameter_shape("void f(int (__attribute__((unused)) int x));"),
+        ["function"]
+    );
+    assert_eq!(
+        parameter_shape("void f(int ([[maybe_unused]] int x));"),
+        ["function"]
+    );
+}
+
+#[test]
+fn label_after_an_unclosed_initializer_list_stays_a_label() {
+    for (source, labels) in [
+        (
+            "void f(void) {\n int x;\n int a[] = { 1, 2,\n out: x = 0;\n return;\n}\nint g;\n",
+            1,
+        ),
+        (
+            "void f(void) {\n int x;\n int a[] = { 1,\n out: { x = 0; }\n return;\n}\nint g;\n",
+            1,
+        ),
+        // A complete GNU designator element keeps its meaning.
+        (
+            "struct S { int x, y; }; void f(void) { struct S s = { x: 1, y: (2) }; struct S t = { \
+             x: {1}\n}; }\nint g;\n",
+            0,
+        ),
+    ] {
+        with_parse_configuration(
+            source,
+            CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true),
+            |p| {
+                let found = p
+                    .parser
+                    .syntax
+                    .iter::<super::super::syntax::Statement<'_>>()
+                    .filter(|x| matches!(x.kind, super::super::syntax::StatementType::Label(..)))
+                    .count();
+                assert_eq!(found, labels, "{source}: {:?}", p.errors);
+                // The missing `}` and `;` are both reported at the label.
+                assert!(
+                    parser_errors(p).count() <= 2 * labels,
+                    "{source}: {:?}",
+                    p.errors
+                );
+                assert!(
+                    super::identifier_name(
+                        p,
+                        super::declaration(p, p.items.len() - 1).init_declarators[0].declarator
+                    )
+                    .is_some_and(|x| x == "g")
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn gnu_asm_keeps_template_qualifiers_and_clobbers_as_typed_fields() {
+    use super::super::gnu::{
+        Asm,
+        AsmQualifiers,
+    };
+    let source = "int f(int x) { __asm__ volatile goto (\"jmp %l0\" : : \"r\"(x) : \"memory\", \
+                  \"cc\" : L); __asm__ __inline__ (\"nop\"); L: return x; }\n";
+    with_parse_configuration(
+        source,
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+            .with_gnu_extensions(true),
+        |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+            let assemblies: Vec<_> = p.parser.syntax.iter::<Asm<'_>>().collect();
+            assert_eq!(assemblies.len(), 2);
+            let text = |token: Option<crate::translation_phases::preprocessing::Token>| {
+                super::sourced_text(p, token.expect("token").source_vectors)
+            };
+            assert_eq!(
+                assemblies[0].qualifiers,
+                AsmQualifiers {
+                    volatile: true,
+                    inline:   false,
+                    goto:     true,
+                }
+            );
+            assert_eq!(text(assemblies[0].template), "\"jmp %l0\"");
+            assert_eq!(assemblies[0].operands.len(), 1);
+            let clobbers: Vec<_> = assemblies[0]
+                .clobbers
+                .iter()
+                .map(|x| text(Some(*x)))
+                .collect();
+            assert_eq!(clobbers, ["\"memory\"", "\"cc\""]);
+            assert_eq!(assemblies[0].labels.len(), 1);
+            assert_eq!(
+                assemblies[1].qualifiers,
+                AsmQualifiers {
+                    volatile: false,
+                    inline:   true,
+                    goto:     false,
+                }
+            );
+            assert_eq!(text(assemblies[1].template), "\"nop\"");
+            assert!(assemblies[1].clobbers.is_empty());
         },
     );
 }

@@ -32,6 +32,7 @@ use crate::{
         preprocessing::{
             KeywordTokenType,
             OperatorTokenType,
+            PreprocessorErrorType,
             Token,
             TokenType,
         },
@@ -67,6 +68,46 @@ pub(crate) struct Seh<'tu> {
     pub(crate) handler_keyword: Option<Token>,
 }
 
+/// Keys for the phase-7 constant-conversion errors that MSVC assembly
+/// withdraws, one per error kind, since one conversion reports each kind at
+/// most once.
+pub(super) const CONSTANT_DIAGNOSTICS: [&str; 11] = [
+    "invalid hexadecimal floating constant",
+    "invalid decimal floating constant",
+    "invalid hexadecimal integer constant",
+    "invalid binary integer constant",
+    "invalid octal integer constant",
+    "invalid decimal integer constant",
+    "integer constant overflow",
+    "floating constant out of range",
+    "signed constant forced to unsigned",
+    "unsigned constant promoted",
+    "signed constant promoted",
+];
+
+/// The key of a phase-7 constant-conversion error. An assembler operand such
+/// as MASM's `0FFh` is a pp-number that is not a C constant, so the MSVC
+/// assembly owning it withdraws these errors.
+/// C99: pp-numbers §6.4.8, p. 65; PDF p. 77 become constants in phase 7
+/// (§5.1.1.2 paragraph 1, p. 10; PDF p. 22), under §6.4.4.1-§6.4.4.2,
+/// pp. 54-58; PDF pp. 66-70. MSVC assembly is an extension.
+pub(super) fn constant_diagnostic(error: &PreprocessorErrorType<'_>) -> Option<&'static str> {
+    let index = match error {
+        | PreprocessorErrorType::InvalidHexadecimalFloatLiteral => 0,
+        | PreprocessorErrorType::InvalidDecimalFloatLiteral => 1,
+        | PreprocessorErrorType::InvalidHexadecimalIntegerLiteral => 2,
+        | PreprocessorErrorType::InvalidBinaryIntegerLiteral => 3,
+        | PreprocessorErrorType::InvalidOctalIntegerLiteral => 4,
+        | PreprocessorErrorType::InvalidDecimalIntegerLiteral => 5,
+        | PreprocessorErrorType::IntegerLiteralOverflow => 6,
+        | PreprocessorErrorType::FloatConstantOutOfRange { .. } => 7,
+        | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. } => 8,
+        | PreprocessorErrorType::ForcedUnsignedPromotion { .. } => 9,
+        | PreprocessorErrorType::ForcedSignedPromotion { .. } => 10,
+        | _ => return None,
+    };
+    Some(CONSTANT_DIAGNOSTICS[index])
+}
 pub(super) fn calling_convention(keyword: KeywordTokenType) -> bool {
     matches!(
         keyword,
@@ -165,8 +206,14 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
         })
     }
 
-    /// Uses invocation endpoints for macros and ignores phase-2 splices.
-    /// C99: phase 2 is §5.1.1.2 paragraph 1, p. 10; PDF p. 22.
+    /// Whether a source line ends between `previous` and `next`. Macro tokens
+    /// stand at their invocation: `previous` at its end, and `next` at the
+    /// invocation's start, which is the first character after `previous`
+    /// that is neither white space nor a comment, so an invocation whose
+    /// arguments span lines stays on the line where it starts. Phase-2
+    /// splices join lines, while a comment's new-line ends one, as in the
+    /// text of the line.
+    /// C99: phases 2-3 are §5.1.1.2 paragraph 1, p. 10; PDF p. 22.
     fn new_line(parser: &Parser<'_, 'tu, 'p>, previous: Token, next: Token) -> bool {
         let Some(a) = parser.context.user_source_end(previous.source_vectors) else {
             return false;
@@ -184,33 +231,41 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
             return true;
         };
         let bytes = text.as_bytes();
-        let end = b.index as usize;
-        for index in a.end()..end {
-            if bytes[index] != b'\n' && bytes[index] != b'\r' {
-                continue;
+        let trigraphs = parser
+            .context
+            .configuration
+            .accepts(crate::configuration::Feature::Trigraphs);
+        let spliced = |index: usize| {
+            let before = if bytes[index] == b'\n' && index > 0 && bytes[index - 1] == b'\r' {
+                index - 1
+            } else {
+                index
+            };
+            before > 0 && bytes[before - 1] == b'\\'
+                || trigraphs && before >= 3 && &bytes[before - 3..before] == b"??/"
+        };
+        let mut index = a.end();
+        let mut comment = false;
+        while index < b.index as usize {
+            match bytes[index] {
+                | b'\r' if bytes.get(index + 1) == Some(&b'\n') => {},
+                | b'\n' | b'\r' if !spliced(index) => return true,
+                | b'\n' | b'\r' | b' ' | b'\t' | b'\x0b' | b'\x0c' | b'\\' => {},
+                | b'?' if trigraphs && bytes[index..].starts_with(b"??/") => index += 2,
+                | b'*' if comment && bytes.get(index + 1) == Some(&b'/') => {
+                    comment = false;
+                    index += 1;
+                },
+                | _ if comment => {},
+                | b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                    comment = true;
+                    index += 1;
+                },
+                // A line comment runs to the new-line that ends the line.
+                | b'/' if bytes.get(index + 1) == Some(&b'/') => return true,
+                | _ => return false,
             }
-            if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
-                continue;
-            }
-            let before =
-                if bytes[index] == b'\n' && bytes.get(index.wrapping_sub(1)) == Some(&b'\r') {
-                    index - 1
-                } else {
-                    index
-                };
-            if before > 0 && bytes[before - 1] == b'\\' {
-                continue;
-            }
-            if before >= 3
-                && &bytes[before - 3..before] == b"??/"
-                && parser
-                    .context
-                    .configuration
-                    .accepts(crate::configuration::Feature::Trigraphs)
-            {
-                continue;
-            }
-            return true;
+            index += 1;
         }
         false
     }
@@ -373,6 +428,9 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
                     x.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
                 });
                 self.phase = Phase::AsmTokens;
+                // Assembly operands are not C syntax, so C extension
+                // diagnostics about their spelling do not apply.
+                parser.pedantic_suppression += 1;
                 if self.braced {
                     self.delimiters.push(OperatorTokenType::ClosingCurlyBrace);
                     self.own(parser, token.expect("asm brace exists"));
@@ -430,8 +488,21 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
                                 Some(token),
                                 "matching delimiter in MSVC assembly",
                             );
-                            self.phase = Phase::Finish;
-                            return ParseAction::Continue;
+                            if !self.braced {
+                                self.phase = Phase::Finish;
+                                return ParseAction::Continue;
+                            }
+                            // A braced block owns everything up to its `}`:
+                            // a closer it opened closes the unclosed inner
+                            // delimiters too, and a stray one stays a token.
+                            if self.delimiters.contains(&op) {
+                                while self.delimiters.last() != Some(&op) {
+                                    _ = self.delimiters.pop();
+                                }
+                            } else {
+                                self.own(parser, token);
+                                return ParseAction::Consume;
+                            }
                         }
                         _ = self.delimiters.pop();
                         if self.braced && self.delimiters.is_empty() {
@@ -447,6 +518,8 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
                 let recovered = parser.hard_error_count > self.starting_errors;
                 let kind = match self.keyword {
                     | KeywordTokenType::MsAsm => {
+                        // Raised in `AsmOpen` for the assembly tokens.
+                        parser.pedantic_suppression -= 1;
                         let tokens = parser.alloc_syntax_list(&mut self.tokens);
                         StatementType::MsAsm(parser.alloc_syntax(MsAsm {
                             tokens,

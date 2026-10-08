@@ -18,12 +18,12 @@ use super::{
         InitializerElement,
         ParameterDeclaration,
         ParenthesizedDeclarator,
+        PointerLevel,
         RangeDesignator,
         StructDeclaration,
         StructDeclarator,
         StructOrUnionSpecifier,
         TypeName,
-        TypeQualifiers,
     },
     gnu::{
         Asm,
@@ -112,7 +112,7 @@ pub(super) struct SyntaxLog<'tu> {
     struct_declarators:    Vec<&'tu StructDeclarator<'tu>>,
     enum_specifiers:       Vec<&'tu EnumSpecifier<'tu>>,
     enumerators:           Vec<&'tu Enumerator<'tu>>,
-    type_qualifiers:       Vec<&'tu TypeQualifiers>,
+    pointer_levels:        Vec<&'tu PointerLevel<'tu>>,
     identifiers:           Vec<&'tu Identifier>,
     statements:            Vec<&'tu Statement<'tu>>,
     block_items:           Vec<&'tu BlockItem<'tu>>,
@@ -170,6 +170,7 @@ tree_nodes! {
     Declaration => declarations,
     InitDeclarator => init_declarators,
     DirectDeclarator => direct_declarators,
+    PointerLevel => pointer_levels,
     ParenthesizedDeclarator => parenthesized,
     ParameterDeclaration => parameters,
     StructOrUnionSpecifier => struct_or_unions,
@@ -205,7 +206,6 @@ macro_rules! plain_tree_nodes {
 }
 
 plain_tree_nodes! {
-    TypeQualifiers => type_qualifiers,
     Identifier => identifiers,
 }
 

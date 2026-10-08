@@ -140,6 +140,17 @@ pub(super) enum EnumPhase {
 }
 
 impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
+    /// Whether the current `:` opens an enum-type-specifier, whose
+    /// specifier-qualifier-list must follow it. Any other colon belongs to
+    /// the enclosing grammar: a generic association or an unnamed bit-field.
+    /// C23: §6.7.3.3 paragraph 1, p. 109; PDF p. 122.
+    fn underlying_type_follows(parser: &Parser<'_, 'tu, 'p>) -> bool {
+        parser
+            .cursor
+            .following()
+            .is_some_and(|token| parser.type_name_starter(token))
+    }
+
     pub(super) fn new(arena: &'p Bump) -> Self {
         Self {
             phase: EnumPhase::Start,
@@ -267,7 +278,9 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                         parser.hard_error_count,
                     )));
                 }
-                if is_operator(token, OperatorTokenType::Colon) {
+                if is_operator(token, OperatorTokenType::Colon)
+                    && Self::underlying_type_follows(parser)
+                {
                     let token = token.expect("colon exists");
                     parser.extension(
                         crate::configuration::Feature::EnumUnderlyingType,
@@ -306,7 +319,9 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                 }
             },
             | EnumPhase::AfterName => {
-                if is_operator(token, OperatorTokenType::Colon) {
+                if is_operator(token, OperatorTokenType::Colon)
+                    && Self::underlying_type_follows(parser)
+                {
                     let token = token.expect("colon exists");
                     if self.underlying_type.is_some() {
                         parser.report(

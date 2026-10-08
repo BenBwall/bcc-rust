@@ -250,9 +250,10 @@ fn attributes_cover_iso_grammar_positions_and_balanced_vendor_arguments() {
         mode(CStandard::C23, ExtensionPolicy::Warn),
         |p| {
             assert!(p.errors.is_empty(), "{:?}", p.errors);
+            let declarator = declaration(p, 0).init_declarators[0].declarator;
+            assert!(declarator.pointer.levels[0].attributes.is_some());
             assert!(
-                declaration(p, 0).init_declarators[0]
-                    .declarator
+                !declarator
                     .kind
                     .iter()
                     .any(|x| matches!(x, DirectDeclarator::Attributes(_)))
@@ -824,4 +825,226 @@ fn c23_empty_named_and_abstract_function_declarators_are_prototypes() {
             },
         );
     }
+}
+
+#[test]
+fn enum_colons_without_a_following_type_belong_to_the_enclosing_grammar() {
+    for standard in [
+        CStandard::C11,
+        CStandard::C17,
+        CStandard::C23,
+        CStandard::C2y,
+    ] {
+        for source in [
+            "enum E {A}; int f(enum E e){ return _Generic(e, enum E: 1, default: 0); }",
+            "enum E {A}; int f(enum E e){ return _Generic(e, enum E : e, default: 0); }",
+            "enum E {A}; struct S { enum E : 3; enum E named : 2; };",
+        ] {
+            with_parse_configuration(source, mode(standard, ExtensionPolicy::Deny), |p| {
+                assert!(p.errors.is_empty(), "{standard:?} {source}\n{:?}", p.errors);
+            });
+        }
+    }
+    with_parse_configuration(
+        "enum E : unsigned char {A}; int x;",
+        mode(CStandard::C23, ExtensionPolicy::Deny),
+        |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+            let TypeSpecifiers::Enum(enumeration) =
+                declaration(p, 0).declaration_specifiers.type_specifiers
+            else {
+                panic!("expected enum");
+            };
+            assert!(enumeration.underlying_type.is_some());
+        },
+    );
+}
+
+fn inspect(source: &str, configuration: CompilerConfiguration) -> String {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = crate::translation_phases::Context::with_configuration(&tu, configuration);
+    let pp = crate::util::bump::Bump::new();
+    let parse = crate::util::bump::Bump::new();
+    let preprocessor = crate::translation_phases::preprocessing::Preprocessor::new(
+        &pp,
+        &mut context,
+        std::path::PathBuf::from("<pointer-attributes>").into_boxed_path(),
+        source,
+        crate::util::shared::SharedVec::default(),
+        crate::util::shared::SharedVec::default(),
+    );
+    let unit =
+        super::super::Parser::new(preprocessor, &mut context, &parse).parse_translation_unit();
+    let output = unit.inspect(
+        context.tu_arena(),
+        &context,
+        super::super::InspectionOptions::default(),
+    );
+    output.to_owned()
+}
+
+#[test]
+fn pointer_attributes_belong_to_the_pointer_level_they_follow() {
+    let output = inspect(
+        "int * [[a]] * const [[b]] [[c]] p;\n",
+        mode(CStandard::C23, ExtensionPolicy::Deny),
+    );
+    let lines: Vec<_> = output
+        .lines()
+        .map(str::trim)
+        .filter(|x| !x.starts_with("token [") && !x.starts_with("token ]"))
+        .collect();
+    let start = lines
+        .iter()
+        .position(|x| x.starts_with("pointer 0"))
+        .expect("pointer level");
+    assert_eq!(
+        lines[start..],
+        [
+            "pointer 0 qualifiers=none",
+            "attribute-specifier [[...]]",
+            "token a",
+            "pointer 1 qualifiers=const",
+            "attribute-specifier [[...]]",
+            "token b",
+            "attribute-specifier [[...]]",
+            "token c",
+            "identifier p",
+        ],
+        "{output}"
+    );
+}
+
+#[test]
+fn pointer_levels_keep_gnu_and_iso_attribute_chains_in_place() {
+    with_parse_configuration(
+        "int * __attribute__((a)) * const __attribute__((b)) [[c]] p, q;",
+        mode(CStandard::C23, ExtensionPolicy::Allow).with_gnu_extensions(true),
+        |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+            let declarator = declaration(p, 0).init_declarators[0].declarator;
+            let chain = |level: usize| {
+                let mut names = Vec::new();
+                let mut link = declarator.pointer.levels[level].attributes;
+                while let Some(x) = link {
+                    let super::super::modern::SpecifierExtensionKind::Attributes(attributes) =
+                        x.kind
+                    else {
+                        panic!("pointer attributes");
+                    };
+                    names.push(super::sourced_text(p, attributes.source_vectors));
+                    link = x.next;
+                }
+                names.reverse();
+                names
+            };
+            assert_eq!(chain(0), ["__attribute__((a))"]);
+            assert_eq!(chain(1), ["__attribute__((b))", "[[c]]"]);
+            assert!(
+                declarator
+                    .kind
+                    .iter()
+                    .all(|x| !matches!(x, DirectDeclarator::Attributes(_)))
+            );
+            let plain = declaration(p, 0).init_declarators[1].declarator;
+            assert!(plain.pointer.levels.is_empty());
+        },
+    );
+}
+
+#[test]
+fn countof_takes_a_compound_literal_operand() {
+    with_parse_configuration(
+        "int n = _Countof (int[]){1, 2, 3}; int m = _Countof(int[4]); int k = _Countof (int[]){1} \
+         + 1;",
+        mode(CStandard::C2y, ExtensionPolicy::Deny),
+        |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+            let operands: Vec<_> = p
+                .parser
+                .syntax
+                .iter::<super::super::syntax::Expression<'_>>()
+                .filter_map(|x| match x.kind {
+                    | ExpressionType::Countof(operand) => Some(operand),
+                    | _ => None,
+                })
+                .collect();
+            assert_eq!(operands.len(), 3);
+            assert!(
+                matches!(operands[0], SyntaxOperand::Expression(x) if matches!(x.kind, ExpressionType::CompoundLiteral { .. }))
+            );
+            assert!(matches!(operands[1], SyntaxOperand::Type(_)));
+            assert!(
+                matches!(operands[2], SyntaxOperand::Expression(x) if matches!(x.kind, ExpressionType::CompoundLiteral { .. }))
+            );
+        },
+    );
+}
+
+#[test]
+fn constexpr_and_thread_local_compound_literals_are_recognized() {
+    for source in [
+        "int f(void){ return (constexpr int){1}; }",
+        "int *f(void){ return &(thread_local int){1}; }",
+        "int *f(void){ return &(static thread_local int){1}; }",
+        "int f(void){ return (constexpr static int){1}; }",
+    ] {
+        with_parse_configuration(source, mode(CStandard::C23, ExtensionPolicy::Deny), |p| {
+            assert!(p.errors.is_empty(), "{source}: {:?}", p.errors);
+            assert!(
+                p.parser
+                    .syntax
+                    .iter::<super::super::syntax::Expression<'_>>()
+                    .any(|x| matches!(x.kind, ExpressionType::CompoundLiteral { .. })),
+                "{source}"
+            );
+        });
+    }
+}
+
+#[test]
+fn alignof_expression_is_accepted_as_a_gnu_extension() {
+    for policy in [
+        ExtensionPolicy::Allow,
+        ExtensionPolicy::Warn,
+        ExtensionPolicy::Deny,
+    ] {
+        for (source, keyword) in [
+            (
+                "int x; int a = _Alignof(x); int b = _Alignof((x));",
+                "_Alignof",
+            ),
+            ("int x; int a = alignof(x[0] + 1);", "alignof"),
+        ] {
+            let standard = if keyword == "alignof" {
+                CStandard::C23
+            } else {
+                CStandard::C11
+            };
+            with_parse_configuration(source, mode(standard, policy), |p| {
+                assert_eq!(parser_errors(p).count(), 0, "{source}: {:?}", p.errors);
+                assert!(
+                    p.parser
+                        .syntax
+                        .iter::<super::super::syntax::Expression<'_>>()
+                        .any(|x| matches!(x.kind, ExpressionType::AlignofExpr(_))),
+                    "{source}"
+                );
+                let found = extensions(p);
+                if policy == ExtensionPolicy::Allow {
+                    assert!(found.is_empty(), "{found:?}");
+                } else {
+                    assert!(
+                        !found.is_empty() && found.iter().all(|x| x.contains("GNU extension")),
+                        "{source}: {found:?}"
+                    );
+                }
+            });
+        }
+    }
+    with_parse_configuration(
+        "int a = _Alignof(int);",
+        mode(CStandard::C11, ExtensionPolicy::Deny),
+        |p| assert!(p.errors.is_empty(), "{:?}", p.errors),
+    );
 }
