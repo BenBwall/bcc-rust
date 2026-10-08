@@ -176,3 +176,30 @@ fn c23_auto_accompanies_another_storage_class_and_infers_the_type() {
         });
     }
 }
+
+#[test]
+fn extension_marker_suppression_ends_with_its_parameter() {
+    for (source, expected) in [
+        ("void f(__extension__ long long a, long long b);\n", 1),
+        (
+            "void g(void *q) { void (*p)(long long); p = (void (*)(__extension__ long long))q; { \
+             long long y; } }\n",
+            2,
+        ),
+        (
+            "void h(a, b) __extension__ long long a; long long b; { }\n",
+            1,
+        ),
+    ] {
+        with_parse_configuration(
+            source,
+            mode(CStandard::C89, false, ExtensionPolicy::Warn),
+            |p| {
+                assert_clean_parse(p, source);
+                let extensions = extensions(p);
+                assert_eq!(extensions.len(), expected, "{source}: {extensions:?}");
+                assert!(extensions.iter().all(|x| x.contains("long long")));
+            },
+        );
+    }
+}

@@ -111,6 +111,10 @@ pub(super) struct ParameterListFrame<'tu, 'p> {
     /// Whether a prototype parameter inside this identifier list was already
     /// diagnosed, so a trailing `...` is part of the same mistake.
     diagnosed_mixed_parameter: bool,
+    /// `__extension__` suppression depth on entry. Every separator and exit
+    /// restores it, so a marker covers only the parameter it begins (GNU
+    /// extension; C99 §5.1.1.3, p. 11; PDF p. 23).
+    suppression_entry: usize,
 }
 
 /// State transitions for prototype and K&R parameter-list forms.
@@ -168,6 +172,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
             entry_scope_depth: None,
             parameter_name_bindings: 0,
             diagnosed_mixed_parameter: false,
+            suppression_entry: 0,
         }
     }
 
@@ -239,6 +244,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 // identifier can select the legacy identifier-list
                 // branch.
                 self.entry_scope_depth = Some(parser.scopes.depth());
+                self.suppression_entry = parser.pedantic_suppression;
                 parser.scopes.enter_scope(ScopeKind::FunctionPrototype);
                 // C23: §6.7.7.1 paragraph 1, pp. 126-127; PDF pp. 139-140
                 // permits an ellipsis without a preceding parameter-list.
@@ -375,6 +381,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 ParseAction::Continue
             },
             | ParameterListPhase::KAndRSeparator => {
+                parser.pedantic_suppression = self.suppression_entry;
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -531,6 +538,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 ParseAction::Continue
             },
             | ParameterListPhase::PrototypeSeparator => {
+                parser.pedantic_suppression = self.suppression_entry;
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -701,6 +709,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 }
             },
             | ParameterListPhase::FinishKAndR => {
+                parser.pedantic_suppression = self.suppression_entry;
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -719,6 +728,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 }))
             },
             | ParameterListPhase::FinishPrototype => {
+                parser.pedantic_suppression = self.suppression_entry;
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
