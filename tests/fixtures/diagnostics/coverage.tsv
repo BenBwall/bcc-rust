@@ -54,7 +54,6 @@ parser	ExpectedStatementExpression	parser-expected-statement-expression-operand.
 parser	ExpectedStatementExpression	parser-expected-statement-expression-operator.c	rendered
 parser	ExpectedStatementExpression	parser-expected-statement-expression.c	rendered
 parser	ExpectedStatement	parser-expected-statement.c	rendered
-parser	ExpectedStructDeclarationBeforeClosingCurlyBrace	parser-expected-struct-declaration-before-closing-curly-brace.c	rendered
 parser	ExpectedWhileAfterDoBody	parser-expected-while-after-do-body.c	rendered
 parser	InlineSpecifiedTwice	parser-inline-specified-twice.c	rendered
 parser	KAndRFunctionDeclaratorMixedWithModernDeclarator	parser-k-and-r-function-declarator-mixed-with-modern-declarator.c	rendered
@@ -227,3 +226,4 @@ tokenizer	UnknownToken	tokenizer-unknown-token-nul.c	rendered
 tokenizer	UnknownToken	tokenizer-unknown-token.c	rendered
 tokenizer	UnterminatedCharacter	tokenizer-unterminated-character.c	rendered
 tokenizer	UnterminatedString	tokenizer-unterminated-string.c	rendered
+parser	ExpectedGnuSyntax	parser-gnu-asm.c	rendered

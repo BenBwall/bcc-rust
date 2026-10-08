@@ -19,7 +19,7 @@ Normalized profiles:
 | --- | --- | --- | --- | --- | --- |
 | `repeated-specifiers.c` | valid; repetition behaves as one occurrence (§6.7.3p4, §6.7.4p5) | accept with suppressible quality warnings | accept | accept | agreement; warning defaults may differ |
 | `imaginary-type.c` | invalid core type grammar; `_Imaginary` remains reserved | diagnose, recovered syntax | diagnose | diagnose | agreement |
-| `gnu-statement-expression.c` | excluded GNU extension | diagnose, no valid C99 expression node | diagnose | diagnose | extension |
+| `gnu-statement-expression.c` | excluded GNU extension | pedantic extension diagnostic, complete GNU syntax node | diagnose | diagnose | extension |
 | `constraint-invalid-lvalue.c` | grammatical, constraint-invalid | retain complete syntax for semantic analysis | diagnose | diagnose | intentional parser/semantic phase boundary |
 | `typedef-parameter-preference.c` | valid; typedef-name interpretation is mandatory (§6.7.5.3p11) | accept | accept | accept | agreement |
 

@@ -3,8 +3,9 @@
 The foundation provides configuration, CLI selection, predefined version macros,
 keyword classification, and shared extension diagnostics. The ISO parser now
 implements phase-7 syntax through C23 and the C2y subset listed below, including
-policy diagnostics for earlier modes. Lexical/preprocessing additions and GNU/MSVC
-grammar remain assigned to their workstreams. This is a syntax-only front end;
+policy diagnostics for earlier modes. GNU phase-7 syntax is also implemented.
+Lexical/preprocessing additions and MSVC grammar remain assigned to their
+workstreams. This is a syntax-only front end;
 mode selection is not a full conformance claim. No semantic analysis or code
 generation is added.
 
@@ -168,28 +169,28 @@ behavior below remains delegated.
 | IfSwitchDeclarations | - | - | - | - | - | - | Y | extension | implemented syntax and mode diagnostics (parse-std) |
 | NamedLoops | - | - | - | - | - | - | Y | extension | implemented syntax and mode diagnostics (parse-std) |
 | GenericTypeOperand | - | - | - | - | - | - | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| CaseRanges | - | - | - | - | - | - | Y | extension | implemented ISO syntax (parse-std); GNU-origin policy pending (parse-gnu) |
-| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| StatementExpressions | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| BuiltinVaArg | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| BuiltinOffsetof | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| BuiltinTypesCompatible | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| BuiltinChooseExpr | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| LabelsAsValues | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| LocalLabels | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| OmittedConditionalOperand | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| ZeroLengthArrays | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| Int128 | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| AutoType | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| GnuAlternateKeywords | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| RealImag | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| GnuDesignators | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| UnionCasts | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| EmptyStructs | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
-| NestedFunctions | - | - | - | - | - | - | - | extension (GNU native) | pending (parse-gnu) |
+| CaseRanges | - | - | - | - | - | - | Y | extension | implemented ISO/GNU syntax and origin policy (parse-std, parse-gnu) |
+| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| StatementExpressions | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| BuiltinVaArg | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| BuiltinOffsetof | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| BuiltinTypesCompatible | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| BuiltinChooseExpr | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| LabelsAsValues | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| LocalLabels | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| OmittedConditionalOperand | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| ZeroLengthArrays | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| Int128 | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| AutoType | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| GnuAlternateKeywords | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| RealImag | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| GnuDesignators | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| UnionCasts | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| EmptyStructs | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
+| NestedFunctions | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
 | ImaginaryConstants | - | - | - | - | - | - | - | extension (GNU native) | pending (lexpp) |
 | DollarIdentifiers | - | - | - | - | - | - | - | extension (GNU native) | pending (lexpp) |
 | NamedVariadicMacros | - | - | - | - | - | - | - | extension (GNU native) | pending (lexpp) |
@@ -277,10 +278,9 @@ Node sizes are pinned. Inspection visits every new child, including compound-
 literal storage, generic default arms, and fixed enum underlying types.
 
 `AttributeSpecifier` retains a syntax discriminator, balanced original tokens,
-provenance and recovery state. GNU `__attribute__` and MSVC `__declspec` owners
-can add discriminator variants and delimiter entry paths while sharing its
-immutable representation and declarator/specifier/statement attachment points.
-Neither vendor grammar is implemented in this workstream.
+provenance and recovery state. The GNU workstream adds `__attribute__` delimiter
+entry paths while sharing its immutable representation and attachment points.
+MSVC `__declspec` can add a further discriminator variant in its own workstream.
 
 C2y grammar follows WG14 [N3388 selection declarations](https://open-std.org/jtc1/sc22/wg14/www/docs/n3388.htm),
 [N3355 named loops](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n3355.htm),
@@ -289,3 +289,46 @@ C2y grammar follows WG14 [N3388 selection declarations](https://open-std.org/jtc
 [GCC primary implementation patch](https://gcc.gnu.org/pipermail/gcc-patches/2025-May/683845.html).
 The C2y subset intentionally excludes draft semantic analysis and lexer-owned
 octal prefixes/delimited escapes.
+
+## GNU phase-7 parser handoff
+
+Reserved GNU spellings parse in every configured mode; the shared extension
+policy chooses Allow/Warn/Deny without discarding the AST. Non-reserved `asm`,
+`typeof`, and alternate keywords retain the foundation's mode gates. C23 `typeof`
+and C2y case ranges retain their ISO status. Lexer and preprocessor behavior is
+unchanged by this workstream.
+
+GNU attributes use the same `AttributeSpecifier` and linked specifier-extension
+representation as C23 attributes, distinguished by `AttributeSyntax::Gnu`.
+Balanced argument tokens and original spellings remain available to analysis.
+The parser accepts declaration, aggregate, enumerator, pointer, parameter,
+nested declarator, array, bit-field, function and label attribute positions from
+[GCC Attribute Syntax](https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html).
+
+[GNU C Extensions](https://gcc.gnu.org/onlinedocs/gcc/C-Extensions.html) and
+[GCC Extended Asm](https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html) specify the
+vendor grammar. Assembly nodes preserve qualifiers/templates/constraints/clobbers
+and parsed expression operands, symbolic names and goto labels. File assembly and
+declarator assembly labels have explicit AST variants. Builtins preserve their
+type/expression operands and offset member paths. Statement expressions, local
+labels, label addresses, computed goto, omitted conditional operands, GNU
+initializers and nested definitions also have inspectable syntax nodes.
+
+`__extension__` suppresses pedantic extension diagnostics for its expression or
+declaration, including a function body. Suppression restores at the owning frame
+boundary and retains diagnostics from later unsuppressed occurrences, including
+macro expansions. Nested functions isolate typedef, label and switch state.
+
+These are syntax guarantees. Attribute application, target assembly constraints,
+builtin evaluation, inferred types, label/control-target resolution, closure or
+trampoline generation and object layout remain semantic/lowering work. Zero-length
+array policy is diagnosed for literal zero bounds (including parentheses); general
+constant-expression evaluation is deferred. Union-cast policy is diagnosed for
+explicit union type names; resolving a typedef to a union is deferred. GNU empty
+structures/unions remain complete syntax under all policies.
+
+Evidence: `parsing::tests::gnu` covers grammar, AST ownership, provenance,
+Allow/Warn/Deny across all revisions, every input prefix, following-declaration
+recovery and deep nesting. CLI diagnostic goldens and the GNU token-seam snapshot
+pin rendering and the unchanged phase-7 input. Allocation tests exercise the new
+frame paths without global allocations.

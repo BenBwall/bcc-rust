@@ -258,3 +258,26 @@ _Avoid_: Syntax parsing
 **Backend**:
 The post-front-end work that lowers validated program meaning into an executable target representation.
 _Avoid_: Parser
+
+## GNU syntax ownership
+
+**GNU assembly node**:
+Syntax for a GNU assembly statement, file assembly or declarator assembly label.
+Original template, qualifier, constraint and clobber tokens accompany parsed C
+operand expressions and label identifiers; target validation belongs to analysis.
+
+**GNU builtin node**:
+A reserved builtin production with typed expression/type operands and, for
+`__builtin_offsetof`, a member path. It is distinct from an ordinary function call.
+
+**Statement expression**:
+The GNU `({ block-items })` expression. Its compound child owns block scope;
+its expression owner retains the enclosing parentheses. Value/type analysis is deferred.
+
+**Nested function definition**:
+A GNU block item containing a complete function definition. Its parser frames
+isolate function-local label/switch state while preserving enclosing typedef visibility.
+
+**Extension marker**:
+GNU `__extension__` syntax wrapping an expression or declaration and suppressing
+pedantic extension diagnostics within that owner. It does not repair malformed syntax.

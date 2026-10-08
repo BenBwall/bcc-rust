@@ -267,7 +267,6 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `ExpectedStructOrUnionKeyword` | believed unreachable from normal dispatch | The specifier owner selects this frame only for a verified struct or union token. The frame-entry check is defensive. |
 | `StructOrUnionSpecifierWithoutNameAndBody` | rendered | [parser-struct-or-union-specifier-without-name-and-body.c](parser-struct-or-union-specifier-without-name-and-body.c) |
 | `ExpectedClosingCurlyBraceInStructDeclarationList` | rendered | [parser-expected-closing-curly-brace-in-struct-declaration-list.c](parser-expected-closing-curly-brace-in-struct-declaration-list.c) |
-| `ExpectedStructDeclarationBeforeClosingCurlyBrace` | rendered | [parser-expected-struct-declaration-before-closing-curly-brace.c](parser-expected-struct-declaration-before-closing-curly-brace.c) |
 | `ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList` | rendered | [parser-expected-semicolon-before-closing-curly-brace-in-struct-declarator-list.c](parser-expected-semicolon-before-closing-curly-brace-in-struct-declarator-list.c) |
 | `ExpectedCommaOrSemicolonInStructDeclaratorList` | rendered | [parser-expected-comma-or-semicolon-in-struct-declarator-list.c](parser-expected-comma-or-semicolon-in-struct-declarator-list.c) |
 | `ExpectedEnumKeyword` | believed unreachable from normal dispatch | The specifier owner selects this frame only for a verified enum token. The frame-entry check is defensive. |
@@ -373,3 +372,23 @@ is based on evaluating an assertion, inferring a type, applying attributes or
 resolving a named control target. The new mode suite also pins AST provenance
 through macros and compaction. Zero-global-allocation tests exercise the new ISO
 frame paths and the rendered diagnostic corpus.
+
+## GNU phase-7 parser modes
+
+Empty structures/unions, statement expressions and nested functions now retain
+complete GNU syntax. Strict modes report shared policy diagnostics rather than
+repairing supported grammar. The removed empty-aggregate syntax-error fixture is
+covered by `EmptyStructs` warning/error cases in `language/gnu-parser.c`.
+
+| Diagnostic surface | Status | Evidence |
+| --- | --- | --- |
+| Assembly required operand/delimiter | rendered | [parser-gnu-asm.c](parser-gnu-asm.c) |
+| Builtin type operand | rendered | [parser-gnu-builtin.c](parser-gnu-builtin.c) |
+| GNU attribute parentheses | rendered | [parser-gnu-attribute.c](parser-gnu-attribute.c) |
+| GNU origins and policy severity | rendered | [language/gnu-parser-warning.stderr](language/gnu-parser-warning.stderr), [language/gnu-parser-error.stderr](language/gnu-parser-error.stderr) |
+| Extension suppression and macro occurrences | parser-tested | `parsing::tests::gnu` checks scoped suppression and later diagnostics |
+| Recovery, EOF, nesting and provenance | parser-tested | every prefix, malformed children followed by a declaration, explicit AST/inspection checks and deep frame tests |
+
+Assembly target rules, builtin semantics, layout and attribute application remain
+analysis responsibilities. All three canonical diagnostic fixtures require a
+production component and preserve following valid input.
