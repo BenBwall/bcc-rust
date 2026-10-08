@@ -427,17 +427,39 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     && old_style_parameters.is_some_and(|parameters| {
                         parser.next_declaration_declares_one_of(parameters.as_slice())
                     });
-                let starts_function_definition = (self.context == DeclarationContext::External
-                    || self.context == DeclarationContext::Block
-                        && self
+                // A GNU nested function (block context) starts at `{` after a
+                // function declarator, or at a declaration-list that declares
+                // one of its identifier-list parameters. A prototype head
+                // followed by a declaration is a block declaration missing
+                // its `;`, not a definition swallowing the rest of the block.
+                let starts_function_definition = has_sole_uninitialized_declarator
+                    && match self.context {
+                        | DeclarationContext::External =>
+                            is_operator(token, OperatorTokenType::OpeningCurlyBrace)
+                                || parser.hard_error_count == self.starting_error_count
+                                    && token.is_some_and(|token| parser.declaration_starter(token))
+                                || continues_old_style_definition,
+                        | DeclarationContext::Block => match self
                             .init_declarators
                             .first()
-                            .is_some_and(|x| x.declarator.function_suffix().is_some()))
-                    && has_sole_uninitialized_declarator
-                    && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
-                        || parser.hard_error_count == self.starting_error_count
-                            && token.is_some_and(|token| parser.declaration_starter(token))
-                        || continues_old_style_definition);
+                            .and_then(|init| init.declarator.function_suffix())
+                        {
+                            | Some(DirectDeclarator::KAndRStyleFunction { parameters })
+                                if !parameters.is_empty()
+                                    && !is_operator(
+                                        token,
+                                        OperatorTokenType::OpeningCurlyBrace,
+                                    ) =>
+                                token.is_some_and(|token| parser.declaration_starter(token))
+                                    && parser
+                                        .next_declaration_declares_one_of(parameters.as_slice()),
+                            | Some(_) => is_operator(token, OperatorTokenType::OpeningCurlyBrace),
+                            | None => false,
+                        },
+                        | DeclarationContext::ForInitializer
+                        | DeclarationContext::SelectionHeader
+                        | DeclarationContext::OldStyleParameter => false,
+                    };
                 // The same prefix can continue as another
                 // init-declarator, an
                 // initializer, a completed declaration, or a function

@@ -14,7 +14,10 @@ use crate::{
         CompilerConfiguration,
         ExtensionPolicy,
     },
-    translation_phases::TranslationError,
+    translation_phases::{
+        TranslationError,
+        parsing::syntax::ExternalDeclaration,
+    },
 };
 fn mode(standard: CStandard, gnu: bool, policy: ExtensionPolicy) -> CompilerConfiguration {
     CompilerConfiguration::new(standard, policy).with_gnu_extensions(gnu)
@@ -101,6 +104,23 @@ fn extension_operand_in_control_headers_is_an_expression() {
         mode(CStandard::C17, true, ExtensionPolicy::Warn),
         |p| {
             assert_clean_parse(p, source);
+        },
+    );
+}
+
+#[test]
+fn block_scope_function_definition_requires_its_body() {
+    let source = "void g(void) {\n int f(void)\n int x;\n x = 0;\n}\nint h(void) { return 0; }\n";
+    with_parse_configuration(
+        source,
+        mode(CStandard::C99, false, ExtensionPolicy::Allow),
+        |p| {
+            assert_eq!(parser_errors(p).count(), 1, "{:?}", p.errors);
+            assert_eq!(p.items.len(), 2);
+            assert!(matches!(
+                p.items[1],
+                ExternalDeclaration::FunctionDefinition(_)
+            ));
         },
     );
 }
