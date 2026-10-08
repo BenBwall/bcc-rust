@@ -1,0 +1,9 @@
+error: invalid bit-field type or width: `x`
+ --> sema-bit-field.c:2:17
+  |
+2 | struct Bad {int x:33;};
+  |                 ^^^^ declaration constraint violated
+  |
+  = note: C99 §6.7.2.1p3-4: bit-fields require an integer type, a fitting nonnegative width, and no name at width zero
+
+1 error generated.

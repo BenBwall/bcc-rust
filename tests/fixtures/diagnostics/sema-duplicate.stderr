@@ -1,0 +1,21 @@
+error: identifier with no linkage is declared more than once: `x`
+ --> sema-duplicate.c:1:26
+  |
+1 | void f(void) {int x; int x;}
+  |                   -      ^ declaration constraint violated
+  |                   |
+  |                   previous declaration is here
+  |
+  = note: C99 §6.7p3: a no-linkage identifier has at most one declaration in the same scope
+
+error: identifier with no linkage is declared more than once: `x`
+ --> sema-duplicate.c:2:33
+  |
+2 | void g(void) {int x; extern int x;}
+  |                   -             ^ declaration constraint violated
+  |                   |
+  |                   previous declaration is here
+  |
+  = note: C99 §6.7p3: a no-linkage identifier has at most one declaration in the same scope
+
+2 errors generated.

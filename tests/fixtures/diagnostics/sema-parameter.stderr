@@ -1,0 +1,17 @@
+error: invalid function parameter declaration: `x`
+ --> sema-parameter.c:1:7
+  |
+1 | int f(static int x);
+  |       ^^^^^^^^^^^^ declaration constraint violated
+  |
+  = note: C99 §6.7.5.3p2 and p10: only register storage is allowed; void must be the sole unnamed parameter; §6.7.5.2p1 limits qualifiers/static to the outermost array
+
+error: invalid function parameter declaration
+ --> sema-parameter.c:2:17
+  |
+2 | void nested(int a[3][static 4]);
+  |                 ^^^^^^^^^^^^^^ declaration constraint violated
+  |
+  = note: C99 §6.7.5.3p2 and p10: only register storage is allowed; void must be the sole unnamed parameter; §6.7.5.2p1 limits qualifiers/static to the outermost array
+
+2 errors generated.

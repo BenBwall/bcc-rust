@@ -1,0 +1,17 @@
+error: member requires a complete object type: `x`
+ --> sema-member.c:1:16
+  |
+1 | struct S {void x;};
+  |                ^ declaration constraint violated
+  |
+  = note: C99 §6.7.2.1p2: members cannot have incomplete or function type except a final flexible array member
+
+error: member requires a complete object type: `invalid`
+ --> sema-member.c:3:35
+  |
+3 | struct Container {struct Flexible invalid;};
+  |                                   ^^^^^^^ declaration constraint violated
+  |
+  = note: C99 §6.7.2.1p2: members cannot have incomplete or function type except a final flexible array member
+
+2 errors generated.

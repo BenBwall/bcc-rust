@@ -1,0 +1,9 @@
+error: variably modified type is not permitted here: `a`
+ --> sema-file-vla.c:2:5
+  |
+2 | int a[n];
+  |     ^^^^ declaration constraint violated
+  |
+  = note: C99 §6.7.5.2p2: variably modified types require block or prototype scope and no linkage
+
+1 error generated.

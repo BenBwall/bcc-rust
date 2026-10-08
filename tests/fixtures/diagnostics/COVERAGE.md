@@ -472,3 +472,49 @@ C23 function grammar, repeated enum-underlying-type recovery, preprocessing quer
 boundaries, named GNU variadic arguments, builtin overrides and integer mode
 selection have structured unit regressions; the CLI checks numeric opaque-token
 spellings without internal NUL sentinels.
+
+## Declaration semantic diagnostics
+
+The default CLI appends declaration-semantic diagnostics after preprocessing and
+syntax diagnostics. Syntax/token inspection remains a syntax-only path. Each
+fixture below runs with `-std=c99`; each `.stderr` pins the source range, source
+spelling, previous-declaration label where applicable, and C99 note. Positive
+counterparts live in `semantic_analysis/tests.rs` and the semantic inspection
+snapshot at `tests/fixtures/semantic/types.stderr`.
+
+| Symbolic kind | Golden | Constraint |
+| --- | --- | --- |
+| `InvalidStorage` | [storage](sema-storage.c) | File auto/register, function storage, block extern initializer. |
+| `InvalidRestrict` | [restrict](sema-restrict.c) | Restrict needs an object/incomplete-target pointer. |
+| `QualifiedFunction` | [function qualifier](sema-function-qualifier.c) | Warning for undefined behavior from qualifying a function typedef; qualifiers are ignored. |
+| `InvalidInline` | [inline](sema-inline.c) | Inline objects, typedef names and main. |
+| `InvalidDerivedType` | [derived](sema-derived.c) | Invalid array elements/function results. |
+| `InvalidArrayBound` | [bound](sema-array-bound.c) | Negative constant and non-integer bounds. Zero bounds use shared extension policy. |
+| `FileScopeVariableType` | [VLA](sema-file-vla.c) | Runtime file bound and linked/static VLA constraints. |
+| `IncompatibleDeclaration` | [incompatible](sema-incompatible.c) | Incompatible redeclaration and previous source. |
+| `DuplicateDeclaration` | [duplicate](sema-duplicate.c) | Repeated no-linkage declarations, including local then extern. |
+| `ConflictingLinkage` | [linkage](sema-linkage.c) | Internal/external linkage mix. Positive extern-after-static is in unit tests. |
+| `TagKindMismatch` | [tag kind](sema-tag-kind.c) | Tag namespace kind conflicts. |
+| `TagRedefinition` | [tag definition](sema-tag-redefinition.c) | Completing an already complete tag. |
+| `IncompleteEnum` | [enum declaration](sema-enum-incomplete.c) | Strict C99 enum tag without a prior completion. |
+| `InvalidConstant` | [constant](sema-constant.c) | Runtime enumerator operand, including unselected conditional/logical arms. |
+| `ConstantOverflow` | [overflow](sema-overflow.c) | Exceptional ICE evaluation; no dependent enumerator cascade. |
+| `EnumeratorRange` | [enum range](sema-enum-range.c) | Enumerator not representable in int. |
+| `InvalidMember` | [member](sema-member.c) | Incomplete/function member and flexible-array nesting. |
+| `DuplicateMember` | [member name](sema-duplicate-member.c) | Duplicate names in a record member namespace. |
+| `InvalidBitField` | [bit-field](sema-bit-field.c) | Width/type/zero-width-name constraints. |
+| `InvalidParameter` | [parameter](sema-parameter.c) | Parameter storage and non-outermost array static/qualifiers. |
+| `IncompleteObject` | [object](sema-incomplete-object.c) | Automatic incomplete record and defined void object. |
+
+`UnknownTypedef` is a defensive semantic binding check for a typedef-classified
+syntax node without a semantic binding. Ordinary source cannot deliberately
+reach it through the parser's validated typedef classification; recovery taint
+suppresses already-diagnosed malformed declarations. It is covered with a
+constructed semantic-resolution unit test rather than a misleading source golden.
+
+Layout/type identities, old-style promoted parameter compatibility, conditional
+integer conversions, floating-to-integer constant casts, function-prototype
+visibility and deep non-recursive traversal have positive unit regressions.
+Unmodeled extensions carry unknown/tainted types and suppress dependent errors.
+The allocation harness additionally compiles generated C inputs through sema
+and renders this same golden corpus with the default semantic CLI path.

@@ -1,0 +1,27 @@
+// Checked by Clang targeting Linux rather than the host Windows ABI.
+#define CHECK(c) _Static_assert(c, #c)
+struct Basic { char c; int i; short s; };
+struct Nested { char c; struct Basic s; double d; };
+union Choice { char c[9]; long l; double d; };
+struct Bits { char c; unsigned a:3; unsigned b:5; unsigned :0; short s; };
+struct Mixed { unsigned char a:4; unsigned b:4; char c; };
+struct Flexible { char c; long n; int tail[]; };
+CHECK(sizeof(long)==8);
+CHECK(sizeof(void*)==8);
+CHECK(sizeof(long double)==16);
+CHECK(_Alignof(long double)==16);
+CHECK(sizeof(struct Basic)==12);
+CHECK(_Alignof(struct Basic)==4);
+CHECK(__builtin_offsetof(struct Basic,i)==4);
+CHECK(__builtin_offsetof(struct Basic,s)==8);
+CHECK(sizeof(struct Nested)==24);
+CHECK(__builtin_offsetof(struct Nested,s)==4);
+CHECK(__builtin_offsetof(struct Nested,d)==16);
+CHECK(sizeof(union Choice)==16);
+CHECK(_Alignof(union Choice)==8);
+CHECK(sizeof(struct Bits)==8);
+CHECK(__builtin_offsetof(struct Bits,s)==4);
+CHECK(sizeof(struct Mixed)==4);
+CHECK(__builtin_offsetof(struct Mixed,c)==1);
+CHECK(sizeof(struct Flexible)==16);
+CHECK(__builtin_offsetof(struct Flexible,tail)==16);

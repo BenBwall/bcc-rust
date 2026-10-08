@@ -1,0 +1,17 @@
+error: object requires a complete type: `object`
+ --> sema-incomplete-object.c:1:34
+  |
+1 | void f(void) {struct S; struct S object;}
+  |                                  ^^^^^^ declaration constraint violated
+  |
+  = note: C99 §6.7p7: an object with no linkage has complete type by the end of its declarator or initializer
+
+error: object requires a complete type: `object`
+ --> sema-incomplete-object.c:2:6
+  |
+2 | void object;
+  |      ^^^^^^ declaration constraint violated
+  |
+  = note: C99 §6.7p7: an object with no linkage has complete type by the end of its declarator or initializer
+
+2 errors generated.

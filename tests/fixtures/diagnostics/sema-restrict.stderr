@@ -1,0 +1,9 @@
+error: restrict requires a pointer to an object or incomplete type
+ --> sema-restrict.c:1:1
+  |
+1 | restrict int object;
+  | ^^^^^^^^^^^^ declaration constraint violated
+  |
+  = note: C99 §6.7.3p2: restrict qualifies only pointers to object or incomplete types
+
+1 error generated.

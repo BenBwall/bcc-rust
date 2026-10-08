@@ -1,0 +1,11 @@
+error: tag is used with a different kind: `S`
+ --> sema-tag-kind.c:2:1
+  |
+1 | struct S;
+  |        - previous declaration is here
+2 | union S *p;
+  | ^^^^^^^ declaration constraint violated
+  |
+  = note: C99 §6.7.2.3p2: declarations of a tag shall use the same struct, union or enum kind
+
+1 error generated.
