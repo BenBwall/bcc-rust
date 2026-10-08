@@ -2062,7 +2062,10 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 ) => groups += 1,
                 | TokenType::Operator(OperatorTokenType::ClosingParenthesis) if groups == 0 =>
                     return parser.cursor.lookahead(index).is_some_and(|x| {
-                        x.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                        matches!(
+                            x.kind,
+                            TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                        )
                     }),
                 | TokenType::Operator(
                     OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
@@ -2084,13 +2087,15 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         let gnu_spelling =
             KeywordTokenType::classify(keyword.contents, parser.context.configuration)
                 .is_some_and(|x| x.origin == Some(crate::configuration::FeatureOrigin::Gnu));
-        let expression =
-            parser.cursor.following().is_some_and(|x| {
-                x.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
-            }) && parser
-                .cursor
-                .lookahead(1)
-                .is_some_and(|x| !parser.type_name_starter(x));
+        let expression = parser.cursor.following().is_some_and(|x| {
+            matches!(
+                x.kind,
+                TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+            )
+        }) && parser
+            .cursor
+            .lookahead(1)
+            .is_some_and(|x| !parser.type_name_starter(x));
         if gnu_spelling || !expression || parser.pedantic_suppression != 0 {
             return;
         }

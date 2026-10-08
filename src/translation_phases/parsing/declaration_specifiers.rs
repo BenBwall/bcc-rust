@@ -38,7 +38,6 @@ use super::{
     },
     modern::{
         ExtendedType,
-        ModernFrame,
         ModernKind,
         ModernValue,
         SpecifierExtension,
@@ -355,11 +354,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         }
         if parser.attribute_starter(Some(token)) {
             self.phase = DeclarationSpecifiersPhase::AwaitAttributes;
-            return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(ModernFrame::new(
-                parser.arena,
-                ModernKind::Attributes,
-                parser.hard_error_count,
-            ))));
+            return ParseAction::Push(parser.pooled_modern_frame(ModernKind::Attributes));
         }
         if let TokenType::Keyword(keyword) = token.kind {
             if matches!(
@@ -398,19 +393,13 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                         .report_conflict(parser, token.contents, token);
                 }
                 self.phase = DeclarationSpecifiersPhase::AwaitModern(keyword);
-                return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
-                    ModernFrame::new(
-                        parser.arena,
-                        ModernKind::Operand {
-                            type_only: keyword == KeywordTokenType::Atomic,
-                            constant:  matches!(
-                                keyword,
-                                KeywordTokenType::Alignas | KeywordTokenType::BitInt
-                            ),
-                        },
-                        parser.hard_error_count,
+                return ParseAction::Push(parser.pooled_modern_frame(ModernKind::Operand {
+                    type_only: keyword == KeywordTokenType::Atomic,
+                    constant:  matches!(
+                        keyword,
+                        KeywordTokenType::Alignas | KeywordTokenType::BitInt
                     ),
-                )));
+                }));
             }
             if matches!(
                 keyword,

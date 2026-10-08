@@ -58,7 +58,6 @@ use super::{
         ParseValue,
     },
     modern::{
-        ModernFrame,
         ModernKind,
         ModernValue,
         SpecifierExtension,
@@ -290,13 +289,9 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
         {
             self.attribute_resume = self.phase;
             self.phase = DeclaratorPhase::AwaitAttributes;
-            return Some(ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
-                ModernFrame::new(
-                    parser.arena,
-                    ModernKind::Attributes,
-                    parser.hard_error_count,
-                ),
-            ))));
+            return Some(ParseAction::Push(
+                parser.pooled_modern_frame(ModernKind::Attributes),
+            ));
         }
         match self.phase {
             | DeclaratorPhase::AwaitAsm => {
@@ -381,13 +376,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
             | DeclaratorPhase::PointerQualifiers => {
                 if parser.attribute_starter(token) {
                     self.phase = DeclaratorPhase::AwaitPointerAttributes;
-                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
-                        ModernFrame::new(
-                            parser.arena,
-                            ModernKind::Attributes,
-                            parser.hard_error_count,
-                        ),
-                    )));
+                    return ParseAction::Push(parser.pooled_modern_frame(ModernKind::Attributes));
                 }
                 debug_assert!(
                     returned.is_none(),
@@ -578,13 +567,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 if parser.attribute_starter(token) {
                     self.attribute_resume = DeclaratorPhase::Suffix;
                     self.phase = DeclaratorPhase::AwaitAttributes;
-                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
-                        ModernFrame::new(
-                            parser.arena,
-                            ModernKind::Attributes,
-                            parser.hard_error_count,
-                        ),
-                    )));
+                    return ParseAction::Push(parser.pooled_modern_frame(ModernKind::Attributes));
                 }
                 // Direct-declarator suffixes repeat left-to-right.
                 // Re-enter this phase after

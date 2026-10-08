@@ -1033,7 +1033,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 // C99 §6.8.1p1: `identifier :` is another label even when the
                 // identifier names a typedef; labels have their own name
                 // space (§6.2.3p1).
-                let is_label = token.is_some_and(|x| x.kind == TokenType::Identifier)
+                let is_label = token.is_some_and(|x| matches!(x.kind, TokenType::Identifier))
                     && is_operator(parser.cursor.following(), OperatorTokenType::Colon);
                 if !is_label
                     && token.is_some_and(|x| parser.declaration_starter(x))

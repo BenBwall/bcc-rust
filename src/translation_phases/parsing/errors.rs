@@ -1317,13 +1317,15 @@ impl ParserErrorType<'_> {
                 token_spelling(*token)
             ))
             .label("only type specifiers and qualifiers may appear here")
-            .note(if *token == TokenType::Keyword(KeywordTokenType::Alignas) {
-                "C17 §6.7.5p2: an alignment specifier appears only in a declaration, a member \
-                 declaration, or the type name of a compound literal"
-            } else {
-                "C99 §6.7.2.1 and §6.7.6: member declarations and type names use a \
-                 specifier-qualifier list, which excludes storage classes and `inline`"
-            }),
+            .note(
+                if matches!(token, TokenType::Keyword(KeywordTokenType::Alignas)) {
+                    "C17 §6.7.5p2: an alignment specifier appears only in a declaration, a member \
+                     declaration, or the type name of a compound literal"
+                } else {
+                    "C99 §6.7.2.1 and §6.7.6: member declarations and type names use a \
+                     specifier-qualifier list, which excludes storage classes and `inline`"
+                },
+            ),
             | Self::ConstSpecifiedTwice => new("duplicate `const`")
                 .label("`const` was already specified")
                 .note("C99 §6.7.3p4: repeating a qualifier has no effect"),

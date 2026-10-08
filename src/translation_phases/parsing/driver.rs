@@ -42,6 +42,10 @@ use super::{
         ParseFrameKind,
         ParseValue,
     },
+    modern::{
+        ModernFrame,
+        ModernKind,
+    },
     recovery::{
         DelimiterDepth,
         ExpressionTerminator,
@@ -135,6 +139,15 @@ impl hashbrown::Equivalent<(&str, &[SourceVector], Option<SourceVector>)> for Di
 }
 
 impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
+    /// Reuses the parser arena's pooled storage for a modern syntax frame.
+    pub(super) fn pooled_modern_frame(&mut self, kind: ModernKind) -> ParseFrame<'tu, 'p> {
+        ParseFrame::Modern(self.pools.modern(ModernFrame::new(
+            self.arena,
+            kind,
+            self.hard_error_count,
+        )))
+    }
+
     /// Preprocesses the whole translation unit, then creates an idle parser
     /// over the result. Every preprocessing diagnostic is pending in
     /// `context` before any parser diagnostic.
@@ -1126,7 +1139,10 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             | TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec) => true,
             | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) =>
                 next.is_some_and(|next| {
-                    matches!(next.kind, TokenType::Operator(OperatorTokenType::OpeningSquareBracket))
+                    matches!(
+                        next.kind,
+                        TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                    )
                 }),
             | _ => false,
         }
@@ -1137,7 +1153,10 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// the current token or the one following it; at any later position the
     /// `[` is not taken as an attribute start.
     fn attribute_starter_in_lookahead(&self, token: Token) -> bool {
-        if !matches!(token.kind, TokenType::Operator(OperatorTokenType::OpeningSquareBracket)) {
+        if !matches!(
+            token.kind,
+            TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+        ) {
             return Self::attribute_starter_before(token, None);
         }
         let next = if Some(token) == self.cursor.current() {
