@@ -517,3 +517,61 @@ fn braced_asm_keeps_its_closing_brace_after_an_inner_mismatch() {
         );
     }
 }
+
+#[test]
+fn masm_numbers_in_asm_do_not_raise_c_constant_diagnostics() {
+    let asm = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+        .with_msvc_feature(MsvcFeature::Asm, true);
+    for (source, expected) in [
+        (
+            "int f(void){ __asm mov eax, 0FFh\n__asm { mov al, 10h } return 0; }\n",
+            0,
+        ),
+        (
+            "int f(void){ __asm { mov eax, 08h\n mov ebx, 1e\n mov ecx, 99999999999999999999 } \
+             return 0; }\n",
+            0,
+        ),
+        (
+            "#define HEX 0FFh\nint a = 1; int g(void){ return 0; }\nint f(void){ __asm mov eax, \
+             HEX\n return 0; }\n",
+            0,
+        ),
+        // The same spellings outside the assembly stay C constants.
+        (
+            "int x = 0FFh; int f(void){ __asm mov eax, 0FFh\n return 0; }\n",
+            1,
+        ),
+        (
+            "#define HEX 0FFh\nint f(void){ __asm mov eax, HEX\n return 0; } int y = HEX;\n",
+            1,
+        ),
+        (
+            "#define BOTH(x) int y = x; int f(void){ __asm { mov eax, x } return 0; \
+             }\nBOTH(0FFh)\n",
+            1,
+        ),
+    ] {
+        with_parse_configuration(source, asm, |p| {
+            assert_eq!(p.errors.len(), expected, "{source}: {:?}", p.errors);
+            assert_eq!(
+                p.parser.syntax.iter::<MsAsm<'_>>().count(),
+                source.matches("__asm").count()
+            );
+        });
+    }
+    // Pedantic diagnostics about C constant syntax do not apply either.
+    with_parse_configuration(
+        "int f(void){ __asm mov eax, 0bh\n__asm mov ebx, 1LL\n return 0; }\n",
+        CompilerConfiguration::new(CStandard::C89, ExtensionPolicy::Warn)
+            .with_gnu_extensions(true)
+            .with_msvc_feature(MsvcFeature::Asm, true),
+        |p| {
+            assert!(
+                p.errors.iter().all(|x| x.to_string().contains("'__asm'")),
+                "{:?}",
+                p.errors
+            );
+        },
+    );
+}

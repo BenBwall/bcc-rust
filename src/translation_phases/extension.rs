@@ -132,6 +132,29 @@ impl Context<'_> {
         }
         self.report_extension_since(spelling, feature.origin(), source);
     }
+
+    /// Withdraws the pending preprocessing diagnostic at `index`. An already
+    /// suppressed placeholder takes its place, so every other pending
+    /// diagnostic keeps its queue position, which the parser records while
+    /// it runs.
+    pub(crate) fn withdraw_pending_error(&mut self, index: usize) {
+        let suppressed = self.tu_arena().alloc(Cell::new(false));
+        let Some(slot) = self.pending_errors.iter_mut().nth(index) else {
+            return;
+        };
+        debug_assert!(
+            matches!(slot, TranslationError::Preprocessing(_)),
+            "withdrawn diagnostics keep their queue positions"
+        );
+        *slot = TranslationError::Extension(ExtensionDiagnostic {
+            suppressed,
+            spelling: "",
+            origin: FeatureOrigin::Gnu,
+            severity: ErrorSeverity::Warning,
+            source_vectors: SourceVectors::default(),
+        });
+        self.suppress_extension(suppressed);
+    }
 }
 
 #[cfg(test)]

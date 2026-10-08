@@ -32,6 +32,7 @@ use crate::{
         preprocessing::{
             KeywordTokenType,
             OperatorTokenType,
+            PreprocessorErrorType,
             Token,
             TokenType,
         },
@@ -67,6 +68,46 @@ pub(crate) struct Seh<'tu> {
     pub(crate) handler_keyword: Option<Token>,
 }
 
+/// Keys for the phase-7 constant-conversion errors that MSVC assembly
+/// withdraws, one per error kind, since one conversion reports each kind at
+/// most once.
+pub(super) const CONSTANT_DIAGNOSTICS: [&str; 11] = [
+    "invalid hexadecimal floating constant",
+    "invalid decimal floating constant",
+    "invalid hexadecimal integer constant",
+    "invalid binary integer constant",
+    "invalid octal integer constant",
+    "invalid decimal integer constant",
+    "integer constant overflow",
+    "floating constant out of range",
+    "signed constant forced to unsigned",
+    "unsigned constant promoted",
+    "signed constant promoted",
+];
+
+/// The key of a phase-7 constant-conversion error. An assembler operand such
+/// as MASM's `0FFh` is a pp-number that is not a C constant, so the MSVC
+/// assembly owning it withdraws these errors.
+/// C99: pp-numbers §6.4.8, p. 65; PDF p. 77 become constants in phase 7
+/// (§5.1.1.2 paragraph 1, p. 10; PDF p. 22), under §6.4.4.1-§6.4.4.2,
+/// pp. 54-58; PDF pp. 66-70. MSVC assembly is an extension.
+pub(super) fn constant_diagnostic(error: &PreprocessorErrorType<'_>) -> Option<&'static str> {
+    let index = match error {
+        | PreprocessorErrorType::InvalidHexadecimalFloatLiteral => 0,
+        | PreprocessorErrorType::InvalidDecimalFloatLiteral => 1,
+        | PreprocessorErrorType::InvalidHexadecimalIntegerLiteral => 2,
+        | PreprocessorErrorType::InvalidBinaryIntegerLiteral => 3,
+        | PreprocessorErrorType::InvalidOctalIntegerLiteral => 4,
+        | PreprocessorErrorType::InvalidDecimalIntegerLiteral => 5,
+        | PreprocessorErrorType::IntegerLiteralOverflow => 6,
+        | PreprocessorErrorType::FloatConstantOutOfRange { .. } => 7,
+        | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. } => 8,
+        | PreprocessorErrorType::ForcedUnsignedPromotion { .. } => 9,
+        | PreprocessorErrorType::ForcedSignedPromotion { .. } => 10,
+        | _ => return None,
+    };
+    Some(CONSTANT_DIAGNOSTICS[index])
+}
 pub(super) fn calling_convention(keyword: KeywordTokenType) -> bool {
     matches!(
         keyword,
@@ -373,6 +414,9 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
                     x.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
                 });
                 self.phase = Phase::AsmTokens;
+                // Assembly operands are not C syntax, so C extension
+                // diagnostics about their spelling do not apply.
+                parser.pedantic_suppression += 1;
                 if self.braced {
                     self.delimiters.push(OperatorTokenType::ClosingCurlyBrace);
                     self.own(parser, token.expect("asm brace exists"));
@@ -460,6 +504,8 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
                 let recovered = parser.hard_error_count > self.starting_errors;
                 let kind = match self.keyword {
                     | KeywordTokenType::MsAsm => {
+                        // Raised in `AsmOpen` for the assembly tokens.
+                        parser.pedantic_suppression -= 1;
                         let tokens = parser.alloc_syntax_list(&mut self.tokens);
                         StatementType::MsAsm(parser.alloc_syntax(MsAsm {
                             tokens,
