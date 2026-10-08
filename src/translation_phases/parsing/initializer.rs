@@ -588,11 +588,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                         Some(SynchronizedDesignator {
                             expression,
                             source_vectors,
-                            depth: DelimiterDepth {
-                                parentheses: 0,
-                                brackets:    0,
-                                braces:      0,
-                            },
+                            depth: DelimiterDepth::default(),
                             closing_bracket_follows,
                         });
                     self.phase = InitializerPhase::SynchronizeArrayDesignator;
@@ -648,17 +644,14 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 // surrounding initializer. Owning
                 // outer boundaries still stop the scan despite an
                 // unmatched sibling delimiter.
-                if self.at_array_designator_sync_boundary(
-                    parser,
-                    token,
-                    depth,
-                    closing_bracket_follows,
-                ) {
-                    self.push_array_designator(parser, expression, source_vectors, None, true);
-                    self.phase = InitializerPhase::Designation;
-                    return ParseAction::Reprocess;
-                }
-                let Some(token) = token else {
+                let Some(token) = token.filter(|&token| {
+                    !self.at_array_designator_sync_boundary(
+                        parser,
+                        token,
+                        depth,
+                        closing_bracket_follows,
+                    )
+                }) else {
                     self.push_array_designator(parser, expression, source_vectors, None, true);
                     self.phase = InitializerPhase::Designation;
                     return ParseAction::Reprocess;
@@ -964,14 +957,11 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
     fn at_array_designator_sync_boundary(
         &self,
         parser: &mut Parser<'_, 'tu, 'p>,
-        token: Option<Token>,
+        token: Token,
         depth: DelimiterDepth,
         closing_bracket_follows: bool,
     ) -> bool {
-        let Some(token) = token else {
-            return true;
-        };
-        let at_top_level = depth.parentheses == 0 && depth.brackets == 0 && depth.braces == 0;
+        let at_top_level = depth.is_top_level();
         at_top_level
             && !closing_bracket_follows
             && matches!(
@@ -1009,17 +999,13 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
     /// scan is bounded so repeated errors in one long list stay linear.
     fn closing_bracket_follows(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>) -> bool {
         const SCAN_LIMIT: usize = 32;
-        let mut depth = DelimiterDepth {
-            parentheses: 0,
-            brackets:    0,
-            braces:      0,
-        };
+        let mut depth = DelimiterDepth::default();
         let mut next = token;
         for index in 0..SCAN_LIMIT {
             let Some(token) = next else {
                 return false;
             };
-            let at_top_level = depth.parentheses == 0 && depth.brackets == 0 && depth.braces == 0;
+            let at_top_level = depth.is_top_level();
             match token.kind {
                 | TokenType::Operator(OperatorTokenType::ClosingSquareBracket) => {
                     if depth.brackets == 0 {

@@ -393,7 +393,6 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                 }
             },
             | Phase::OperandOpen => {
-                self.phase = Phase::AwaitAsmExpression;
                 if token.is_some_and(|x| {
                     matches!(
                         x.kind,

@@ -397,7 +397,8 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     self.source_vectors.push(token.source_vectors);
                     self.phase = ParameterListPhase::FinishKAndR;
                     ParseAction::Consume
-                } else if is_operator(token, OperatorTokenType::Semicolon)
+                } else if token.is_none()
+                    || is_operator(token, OperatorTokenType::Semicolon)
                     || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
                 {
                     parser.report(
@@ -405,15 +406,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     token.map(|token| token.kind),
                 ),
                 token,
-            );
-                    self.phase = ParameterListPhase::FinishKAndR;
-                    ParseAction::Reprocess
-                } else if token.is_none() {
-                    parser.report(
-                ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
-                    None,
-                ),
-                None,
             );
                     self.phase = ParameterListPhase::FinishKAndR;
                     ParseAction::Reprocess
@@ -555,7 +547,8 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     }
                     self.phase = ParameterListPhase::AfterComma;
                     ParseAction::Consume
-                } else if is_operator(token, OperatorTokenType::Semicolon)
+                } else if token.is_none()
+                    || is_operator(token, OperatorTokenType::Semicolon)
                     || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
                 {
                     parser.report(
@@ -563,15 +556,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     token.map(|token| token.kind),
                 ),
                 token,
-            );
-                    self.phase = ParameterListPhase::FinishPrototype;
-                    ParseAction::Reprocess
-                } else if token.is_none() {
-                    parser.report(
-                ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
-                    None,
-                ),
-                None,
             );
                     self.phase = ParameterListPhase::FinishPrototype;
                     ParseAction::Reprocess
@@ -657,21 +641,10 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     self.source_vectors.push(token.source_vectors);
                     self.phase = ParameterListPhase::FinishPrototype;
                     ParseAction::Consume
-                } else if is_operator(token, OperatorTokenType::Semicolon)
-                    || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
-                {
-                    let token = token.expect("unwind token exists");
-                    parser.report(
-                ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
-                    token.kind,
-                ),
-                Some(token),
-            );
-                    self.phase = ParameterListPhase::FinishPrototype;
-                    ParseAction::Reprocess
                 } else if let Some(token) = token
-                    && self.can_unwind_variadic_recovery
-                    && parser.declaration_starter(token)
+                    && (is_operator(Some(token), OperatorTokenType::Semicolon)
+                        || is_operator(Some(token), OperatorTokenType::ClosingCurlyBrace)
+                        || self.can_unwind_variadic_recovery && parser.declaration_starter(token))
                 {
                     parser.report(
                 ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
@@ -679,13 +652,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 ),
                 Some(token),
             );
-                    self.phase = ParameterListPhase::FinishPrototype;
-                    ParseAction::Reprocess
-                } else if token.is_none() {
-                    parser.report(
-                        ParserErrorType::UnexpectedEndOfVariadicFunctionDeclaratorParameterList,
-                        None,
-                    );
                     self.phase = ParameterListPhase::FinishPrototype;
                     ParseAction::Reprocess
                 } else if let Some(token) = token {
@@ -706,7 +672,12 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                         target: ParseFrameKind::ParameterList,
                     })
                 } else {
-                    unreachable!("EOF is handled before malformed variadic tokens")
+                    parser.report(
+                        ParserErrorType::UnexpectedEndOfVariadicFunctionDeclaratorParameterList,
+                        None,
+                    );
+                    self.phase = ParameterListPhase::FinishPrototype;
+                    ParseAction::Reprocess
                 }
             },
             | ParameterListPhase::FinishKAndR => {

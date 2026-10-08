@@ -401,10 +401,19 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     self.member_declarator = None;
                     self.phase = StructOrUnionPhase::PushBitFieldWidth;
                     ParseAction::Consume
-                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                } else if let Some(token) = token
+                    && matches!(
+                        token.kind,
+                        TokenType::Operator(OperatorTokenType::Semicolon)
+                    )
+                {
                     // C99 §6.7.2.1p1: a struct-declaration needs a
                     // struct-declarator-list; C99 has no anonymous members.
-                    let anonymous = matches!(self.member_specifiers.as_ref().map(|x|x.type_specifiers),Some(super::declaration_syntax::TypeSpecifiers::StructOrUnion(x)) if x.identifier.is_none() && x.struct_declaration_list.is_some());
+                    let anonymous = matches!(
+                        specifiers.type_specifiers,
+                        super::declaration_syntax::TypeSpecifiers::StructOrUnion(x)
+                            if x.identifier.is_none() && x.struct_declaration_list.is_some()
+                    );
                     // MSVC also accepts a typedef name of a structure or
                     // union; whether the typedef names one is semantic.
                     let ms_anonymous = matches!(
@@ -424,18 +433,17 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                         parser.extension(
                             crate::configuration::Feature::MsAnonymousStructs,
                             "anonymous tagged struct or union member",
-                            token.expect("semicolon exists"),
+                            token,
                         );
                     } else if anonymous {
                         parser.extension(
                             crate::configuration::Feature::AnonymousAggregates,
                             "anonymous struct or union member",
-                            token.expect("semicolon exists"),
+                            token,
                         );
                     } else {
-                        parser.report(ParserErrorType::EmptyStructDeclarator, token);
+                        parser.report(ParserErrorType::EmptyStructDeclarator, Some(token));
                     }
-                    let token = token.expect("semicolon token exists");
                     parser.merge_source(&mut self.member_source, token);
                     self.finish_member(parser);
                     self.phase = StructOrUnionPhase::MemberStart;

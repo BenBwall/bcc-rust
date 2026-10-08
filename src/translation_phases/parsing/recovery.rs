@@ -108,11 +108,18 @@ pub(super) struct RecoveryState<'p> {
 /// Delimiter depth at which a conditional question mark was consumed, so a
 /// scan does not mistake the `:` of `? :` (§6.5.15 paragraph 1, p. 90;
 /// PDF p. 102) for a label or `case` colon.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct DelimiterDepth {
     pub(super) parentheses: usize,
     pub(super) brackets:    usize,
     pub(super) braces:      usize,
+}
+
+impl DelimiterDepth {
+    /// Whether no delimiter is open.
+    pub(super) fn is_top_level(self) -> bool {
+        self.parentheses == 0 && self.brackets == 0 && self.braces == 0
+    }
 }
 
 /// Delimiter depth and policy for one active recovery scan.

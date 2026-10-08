@@ -574,10 +574,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             ) {
                 self.add_extension(
                     parser,
-                    SpecifierExtensionKind::MsModifier(match token.kind {
-                        | TokenType::Keyword(k) => k,
-                        | _ => unreachable!("modifier is keyword"),
-                    }),
+                    SpecifierExtensionKind::MsModifier(KeywordTokenType::Forceinline),
                     token.source_vectors,
                 );
             }
