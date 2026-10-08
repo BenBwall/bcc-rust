@@ -16,9 +16,18 @@ use crate::{
     },
     translation_phases::{
         TranslationError,
-        parsing::syntax::ExternalDeclaration,
+        parsing::{
+            declaration_syntax::TypeSpecifiers,
+            errors::ParserErrorType,
+            modern::ExtendedType,
+            syntax::{
+                ExternalDeclaration,
+                StorageClass,
+            },
+        },
     },
 };
+
 fn mode(standard: CStandard, gnu: bool, policy: ExtensionPolicy) -> CompilerConfiguration {
     CompilerConfiguration::new(standard, policy).with_gnu_extensions(gnu)
 }
@@ -123,4 +132,47 @@ fn block_scope_function_definition_requires_its_body() {
             ));
         },
     );
+}
+
+#[test]
+fn c23_auto_accompanies_another_storage_class_and_infers_the_type() {
+    let source = "static auto a = 3.5;\nauto static b = 3.5;\nextern auto int c;\n";
+    with_parse_configuration(
+        source,
+        mode(CStandard::C23, false, ExtensionPolicy::Warn),
+        |p| {
+            assert_clean_parse(p, source);
+            for item in 0..2 {
+                let specifiers = declaration(p, item).declaration_specifiers;
+                assert_eq!(specifiers.storage_class, Some(StorageClass::Static));
+                assert!(specifiers.auto_with_storage_class);
+                assert!(
+                    matches!(
+                        specifiers.type_specifiers,
+                        TypeSpecifiers::Extended(ExtendedType::Inferred)
+                    ),
+                    "{:?}",
+                    specifiers.type_specifiers
+                );
+            }
+            let explicit = declaration(p, 2).declaration_specifiers;
+            assert_eq!(explicit.storage_class, Some(StorageClass::Extern));
+            assert!(explicit.auto_with_storage_class);
+            assert_eq!(explicit.type_specifiers, TypeSpecifiers::Int);
+        },
+    );
+    for (source, standard) in [
+        ("typedef auto t = 1;\n", CStandard::C23),
+        ("static auto a = 1;\n", CStandard::C17),
+        ("auto auto a = 1;\n", CStandard::C23),
+    ] {
+        with_parse_configuration(source, mode(standard, false, ExtensionPolicy::Warn), |p| {
+            assert!(
+                parser_errors(p)
+                    .any(|error| matches!(error, ParserErrorType::StorageClassRedefinition(..))),
+                "{source}: {:?}",
+                p.errors
+            );
+        });
+    }
 }
