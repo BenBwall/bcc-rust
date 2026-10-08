@@ -298,8 +298,14 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             return ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers));
         };
 
+        // GNU extension: `__extension__` may lead a declaration or a member
+        // declaration. Its owner (the declaration, parameter, or member)
+        // restores the suppression depth when it ends.
         if token.kind == TokenType::Keyword(KeywordTokenType::Extension)
-            && self.mode == SpecifierMode::Declaration
+            && matches!(
+                self.mode,
+                SpecifierMode::Declaration | SpecifierMode::StructMember
+            )
         {
             parser.pedantic_suppression += 1;
             self.add_extension(
