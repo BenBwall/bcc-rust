@@ -122,6 +122,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.types.tags[tag].tainted.set(true);
                 }
                 if define && let Some(list) = s.struct_declaration_list {
+                    _ = self.defining.insert(tag, ());
                     let members = self.scratch.alloc(Collection::new());
                     self.work.push(Work::RecordMembers(tag, list, 0, members));
                 }
@@ -138,6 +139,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let ty = self.types.intern(TypeKind::Tag(tag));
                 self.values.push(ty);
                 if define && let Some(list) = s.enumeration_list {
+                    _ = self.defining.insert(tag, ());
                     self.work.push(Work::EnumMembers(tag, list, 0, None));
                 }
                 if s.attributes.is_some() || s.underlying_type.is_some() {
@@ -201,16 +203,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     name.map(|n| n.name),
                     Some(entry.name.source_vectors),
                 );
-                return (entry.binding, false);
+                return if body {
+                    (self.rejected_tag(kind, name), true)
+                } else {
+                    (entry.binding, false)
+                };
             }
-            if body && tag.complete.get() {
+            // A nested list redefines a tag whose own list is still open: its
+            // type is incomplete until the closing brace (§6.7.2.3p1 and p4).
+            if body && (tag.complete.get() || self.defining.contains_key(&entry.binding)) {
                 self.error(
                     SemanticErrorKind::TagRedefinition,
                     source,
                     name.map(|n| n.name),
                     Some(entry.name.source_vectors),
                 );
-                return (entry.binding, false);
+                return (self.rejected_tag(kind, name), true);
             }
             return (entry.binding, body);
         }
@@ -226,6 +234,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             );
         }
+        let index = self.new_tag(kind, name);
+        self.tag_declarations.push((index, self.scope));
+        if let Some(name) = name {
+            self.install(name, Namespace::Tag, index);
+        }
+        (index, body)
+    }
+
+    fn new_tag(&mut self, kind: TagKind, name: Option<Identifier>) -> usize {
         let index = self.types.tags.len();
         let tag = self.types.tu.alloc(Tag {
             name: name.map(|n| n.name),
@@ -237,11 +254,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             contains_flexible: Cell::new(false),
         });
         self.types.tags.push(tag);
-        self.tag_declarations.push((index, self.scope));
-        if let Some(name) = name {
-            self.install(name, Namespace::Tag, index);
-        }
-        (index, body)
+        index
+    }
+
+    /// A rejected definition still declares the tags, enumerators and
+    /// members inside its list, so later uses of them do not cascade. Its
+    /// uninstalled tag is unanalyzed: neither the rejected nor the original
+    /// contents is a trustworthy type for the declaration.
+    fn rejected_tag(&mut self, kind: TagKind, name: Option<Identifier>) -> usize {
+        let index = self.new_tag(kind, name);
+        self.types.tags[index].tainted.set(true);
+        index
     }
 
     /// Checks `restrict` after typedef expansion as well as after pointer
@@ -802,6 +825,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             output.push(resolved);
         }
+        _ = self.defining.remove(&id);
         tag.members.set(output.leak());
         for (index, member) in tag.members.get().iter().enumerate() {
             if let Some(name) = member.name {

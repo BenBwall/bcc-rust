@@ -132,8 +132,11 @@ rejected; identical repeated typedefs are accepted in C11 and later modes and GN
 
 Recovered declarations/functions retain useful bindings/types but suppress new
 semantic diagnostics while their recovered subtree is analyzed. Error roots and
-missing expression slots are skipped. Tag redefinition/kind errors retain the
-original tag rather than attempting a second completion. Later valid declarations
+missing expression slots are skipped. A nested list for a tag whose own list is
+still open is a redefinition. A rejected definition (redefinition or kind
+conflict) keeps the original tag's single completion and walks its list against
+a fresh, uninstalled, unanalyzed tag, so the tags and enumerators it declares
+remain visible and later uses do not cascade. Later valid declarations
 continue. This favors avoiding cascades over diagnosing every constraint inside
 repaired syntax; narrower recovery taint is a possible future refinement.
 
