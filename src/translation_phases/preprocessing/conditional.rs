@@ -74,7 +74,7 @@ fn conditional_directive_name(context: &Context<'_>, directive: PreprocessorToke
 /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161: only the first group whose
 /// condition is true is processed, else the `#else` group if any.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SkipMode {
+enum SkipMode {
     /// A group whose condition was false: stop at the matching `#elif` whose
     /// condition holds, at `#else`, or at `#endif`.
     FalseGroup,

@@ -114,7 +114,7 @@ pub(super) struct EnumSpecifierFrame<'tu, 'p> {
 ///
 /// C99: §6.7.2.2 paragraph 1, p. 105; PDF p. 117.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum EnumPhase {
+enum EnumPhase {
     /// Consume the `enum` keyword.
     Start,
     AwaitTagAttributes,

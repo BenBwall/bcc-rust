@@ -116,7 +116,7 @@ pub(super) struct DesignationState<'tu, 'p> {
 /// C99: the designator form is `[ constant-expression ]`, §6.7.8
 /// paragraph 1, p. 125; PDF p. 137.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct SynchronizedDesignator<'tu> {
+struct SynchronizedDesignator<'tu> {
     expression:              ConstantExpression<'tu>,
     source_vectors:          SourceVectors,
     depth:                   DelimiterDepth,
@@ -154,7 +154,7 @@ impl<'p> DesignationState<'_, 'p> {
 ///
 /// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum InitializerPhase<'tu> {
+enum InitializerPhase<'tu> {
     Start,
     PushScalar,
     AwaitScalar,

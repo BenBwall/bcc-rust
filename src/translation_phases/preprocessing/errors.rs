@@ -693,11 +693,7 @@ impl PreprocessorErrorType<'_> {
         clippy::too_many_lines,
         reason = "One exhaustive table keeps every preprocessor message reviewable in one place."
     )]
-    pub(crate) fn explain_in<'d>(
-        &self,
-        arena: &'d Bump,
-        spelling: Option<&str>,
-    ) -> Explanation<'d> {
+    fn explain_in<'d>(&self, arena: &'d Bump, spelling: Option<&str>) -> Explanation<'d> {
         let new = |message: &'d str| Explanation::new(arena, message);
         let titled = |title: &'static str| match spelling {
             | Some(spelling) => format_in!(arena, "{title} {}", quote_spelling(spelling)),

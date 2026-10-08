@@ -228,14 +228,14 @@ impl Debug for Preprocessor<'_, '_> {
 
 /// The preprocessor while it reads input: its long-lived state plus the
 /// expansion state, whose memory comes from the expansion arena `'x`.
-pub(crate) struct Expander<'c, 'tu, 'pp: 'x, 'x> {
+struct Expander<'c, 'tu, 'pp: 'x, 'x> {
     /// The translation context, borrowed while this expander runs.
-    pub(crate) context:    &'c mut Context<'tu>,
+    context:               &'c mut Context<'tu>,
     state:                 PreprocessorState<'pp>,
     /// Source and include frames remain between expansions. Macro frames
     /// share this stack until the current expansion finishes.
     tokenizer_stack:       ArenaVec<'x, TokenizerFrame<'x>>,
-    pub(crate) tokenizer:  TokenSource<'x>,
+    tokenizer:             TokenSource<'x>,
     /// Expansion working memory, reset between top-level expansions.
     scratch:               &'x Bump,
     hash_hash_stack:       ArenaVec<'x, HashHash>,
@@ -454,7 +454,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
     ///
     /// When `step` breaks inside an expansion, that expansion's state is
     /// released with its arena and preprocessing cannot resume.
-    pub(crate) fn run<B>(
+    fn run<B>(
         &mut self,
         context: &mut Context<'tu>,
         mut step: impl for<'c, 'x> FnMut(&mut Expander<'c, 'tu, 'pp, 'x>) -> ControlFlow<B>,
@@ -725,7 +725,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
     /// Adjacent-string concatenation may already have mapped a later token or
     /// EOF diagnostic. Source-vector compaction therefore belongs to the
     /// producer that owns that buffered work, not to each iterator consumer.
-    pub(crate) fn next_iterator_item(&mut self) -> Option<Token> {
+    fn next_iterator_item(&mut self) -> Option<Token> {
         if self.next_iterator_item_compacts() {
             self.context.compact_preprocessor_vectors();
         }
@@ -738,7 +738,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
     ///
     /// A `##` operand held while the other operand's argument expands still
     /// refers to the arena, so compaction waits until every paste completes.
-    pub(crate) fn next_iterator_item_compacts(&self) -> bool {
+    fn next_iterator_item_compacts(&self) -> bool {
         self.pending_parser_token.is_none()
             && self.pending_parser_errors.is_empty()
             && self
@@ -753,7 +753,7 @@ impl Expander<'_, '_, '_, '_> {
     /// concatenated.
     ///
     /// C99: §5.1.1.2 paragraph 1 item 6, p. 10; PDF p. 22.
-    pub(crate) fn next_item(&mut self) -> Option<Token> {
+    fn next_item(&mut self) -> Option<Token> {
         let token = self.next_parser_token()?;
         Some(self.concatenate_adjacent_strings(token))
     }

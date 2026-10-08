@@ -66,7 +66,7 @@ pub(super) struct ExternalDeclarationFrame {
 ///
 /// C99: §6.9, p. 140; PDF p. 152. The phase split is an implementation detail.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum ExternalDeclarationPhase {
+enum ExternalDeclarationPhase {
     /// Push the declaration child without consuming its first token.
     Start,
     AwaitAsm,

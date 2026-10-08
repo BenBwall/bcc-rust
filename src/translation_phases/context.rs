@@ -360,7 +360,7 @@ pub(crate) struct Context<'tu> {
     /// How many leading pending errors no longer refer to the preprocessor
     /// arena, so compaction relocates each error's provenance only once.
     relocated_errors: usize,
-    pub(crate) source_files: DedupArena<'tu, &'tu Path, FxBuildHasher>,
+    source_files: DedupArena<'tu, &'tu Path, FxBuildHasher>,
     quote_include_directories: &'tu [&'tu Path],
     system_include_directories: &'tu [&'tu Path],
     /// Original text of each source file, indexed like `source_files`, kept
@@ -381,9 +381,7 @@ impl<'tu> Context<'tu> {
 
     /// Formats diagnostic text straight into the translation-unit arena.
     pub(crate) fn diagnostic_format(&self, arguments: std::fmt::Arguments<'_>) -> &'tu str {
-        let mut text = ArenaString::new_in(self.tu);
-        std::fmt::Write::write_fmt(&mut text, arguments).expect("arena formatting cannot fail");
-        text.into_str()
+        crate::diagnostics::format_arguments_in(self.tu, arguments)
     }
 
     pub(crate) fn diagnostic_slice<T: Copy>(&self, values: &[T]) -> &'tu mut [T] {

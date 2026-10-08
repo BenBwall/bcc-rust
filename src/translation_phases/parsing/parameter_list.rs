@@ -121,7 +121,7 @@ pub(super) struct ParameterListFrame<'tu, 'p> {
 ///
 /// C99: §6.7.5 and §6.7.5.3, pp. 114 and 118-121; PDF pp. 126 and 130-133.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum ParameterListPhase {
+enum ParameterListPhase {
     /// Enter prototype scope and select K&R versus prototype syntax.
     ///
     /// C99: a visible typedef name selects a parameter declaration

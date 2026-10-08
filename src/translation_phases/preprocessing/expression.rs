@@ -57,7 +57,7 @@ use crate::{
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(super) enum PreprocessorExpressionParserState {
+enum PreprocessorExpressionParserState {
     Unary,
     Binary,
 }
@@ -104,7 +104,7 @@ pub(crate) enum PreprocessorExpressionOperator {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(super) enum PreprocessorExpressionAssociativity {
+enum PreprocessorExpressionAssociativity {
     Left,
     Right,
 }
@@ -283,7 +283,7 @@ pub(crate) struct PreprocessorExpressionParser<'pp> {
 ///
 /// C99: §6.10.1 paragraph 4, p. 148; PDF p. 160.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum PreprocessorExpressionOperand {
+enum PreprocessorExpressionOperand {
     Signed(i64),
     Unsigned(u64),
 }
@@ -337,7 +337,7 @@ impl PreprocessorExpressionOperand {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(super) struct EvaluatedPreprocessorExpressionOperand {
+struct EvaluatedPreprocessorExpressionOperand {
     value:                    PreprocessorExpressionOperand,
     contains_evaluated_comma: bool,
     arithmetic_faults:        Option<NonZeroU32>,
@@ -397,7 +397,7 @@ impl EvaluatedPreprocessorExpressionOperand {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(super) struct PreprocessorExpressionOperandStack<'pp> {
+struct PreprocessorExpressionOperandStack<'pp> {
     values:                    ArenaVec<'pp, EvaluatedPreprocessorExpressionOperand>,
     floor:                     usize,
     pending_evaluated_comma:   bool,

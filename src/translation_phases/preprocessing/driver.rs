@@ -64,7 +64,7 @@ use crate::{
 
 /// What a frame of the tokenizer stack reads.
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum TokenizerFrameType<'a> {
+pub(super) enum TokenizerFrameType<'a> {
     /// Tokens replayed ahead of the frame below: the remainder of a
     /// boundary-crossing macro call, rejected lookahead, or the output of a
     /// builtin query or `#embed`.
@@ -110,7 +110,7 @@ pub(crate) enum TokenizerFrameType<'a> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) struct TokenizerFrame<'a> {
+pub(super) struct TokenizerFrame<'a> {
     pub(super) frame_type: TokenizerFrameType<'a>,
     pub(super) tokenizer:  TokenSource<'a>,
 }
@@ -1029,7 +1029,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             // token spelled as C source, located at the invocation.
             | "__FILE__" => {
                 let invocation = self.invocation_location(token);
-                let file: &Path = self.context.source_files[invocation.source_file_index];
+                let file = self.context.get_source_file(invocation.source_file_index);
                 let contents =
                     intern_string_literal(self.context, self.scratch, &file.to_string_lossy());
                 Some(PreprocessorToken {

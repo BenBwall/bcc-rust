@@ -93,7 +93,7 @@ pub(super) struct FunctionDefinitionFrame<'tu, 'p> {
 ///
 /// C99: §6.9.1 paragraph 1, p. 141; PDF p. 153.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum FunctionDefinitionPhase {
+enum FunctionDefinitionPhase {
     Start,
     DeclarationOrBody,
     AwaitDeclaration,

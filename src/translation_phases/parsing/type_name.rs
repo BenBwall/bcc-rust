@@ -53,7 +53,7 @@ pub(super) struct TypeNameFrame<'tu> {
 ///
 /// C99: §6.7.6 paragraph 1, p. 122; PDF p. 134.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum TypeNamePhase<'tu> {
+enum TypeNamePhase<'tu> {
     Start,
     AwaitSpecifiers,
     AwaitDeclarator,

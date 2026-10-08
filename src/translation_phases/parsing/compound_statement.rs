@@ -70,7 +70,7 @@ pub(super) struct CompoundStatementFrame<'tu, 'p> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum CompoundStatementPhase {
+enum CompoundStatementPhase {
     Start,
     ItemOrClose,
     AwaitDeclaration,

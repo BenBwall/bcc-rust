@@ -115,7 +115,7 @@ pub(super) enum ExpressionMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ExpressionParserState {
+enum ExpressionParserState {
     Operand,
     Operator,
 }
@@ -207,7 +207,7 @@ impl<'p> CallState<'_, 'p> {
 /// parenthesized `type-name` (§6.5.2.5, §6.5.3, §6.5.4); `*Conditional*`
 /// is `? :` (§6.5.15).
 #[derive(Debug, Clone, Copy)]
-pub(super) enum ExpressionPhase<'tu> {
+enum ExpressionPhase<'tu> {
     Parse,
     AwaitModern(KeywordTokenType, SourceVectors),
     AwaitGnu,
@@ -261,7 +261,7 @@ pub(super) enum ExpressionPhase<'tu> {
 /// cast and so must be a compound literal (§6.5.2 paragraph 1, p. 69;
 /// PDF p. 81).
 #[derive(Debug, Clone, Copy)]
-pub(super) enum TypeNameUse {
+enum TypeNameUse {
     Cast,
     Sizeof(SourceVectors),
     UnaryCompoundLiteral,

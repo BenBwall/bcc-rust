@@ -209,7 +209,7 @@ pub(super) struct LiteralScratch<'pp> {
 }
 
 /// One concatenation of adjacent string literals in progress.
-pub(super) struct LiteralBuilder<'pp> {
+struct LiteralBuilder<'pp> {
     units:    ArenaVec<'pp, LiteralUnit>,
     sources:  ArenaVec<'pp, SourceVectors>,
     spelling: ArenaString<'pp>,

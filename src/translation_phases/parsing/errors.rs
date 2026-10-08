@@ -1013,11 +1013,7 @@ impl ParserErrorType<'_> {
 
     /// Describes the error; `spelling` is the source spelling of the token
     /// the parser found, when there was one.
-    pub(crate) fn explain_in<'d>(
-        &self,
-        arena: &'d Bump,
-        spelling: Option<&str>,
-    ) -> Explanation<'d> {
+    fn explain_in<'d>(&self, arena: &'d Bump, spelling: Option<&str>) -> Explanation<'d> {
         let new = |message: &'d str| Explanation::new(arena, message);
         let found = |token: Option<TokenType>| found_token(token, spelling);
         // "expected X, found Y", labelled with what was expected.
@@ -1449,7 +1445,7 @@ impl ParserErrorType<'_> {
 impl ParserErrorType<'_> {
     /// The explanation with owned text, for tests to inspect.
     #[cfg(test)]
-    pub(crate) fn explain(&self, spelling: Option<&str>) -> crate::diagnostics::OwnedExplanation {
+    pub(super) fn explain(&self, spelling: Option<&str>) -> crate::diagnostics::OwnedExplanation {
         let arena = Bump::new();
         self.explain_in(&arena, spelling).to_owned_explanation()
     }

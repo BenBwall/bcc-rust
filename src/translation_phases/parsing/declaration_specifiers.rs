@@ -119,7 +119,7 @@ pub(super) struct DeclarationSpecifiersFrame<'tu> {
 /// `enum-specifier` type specifiers of §6.7.2 paragraph 1, p. 99;
 /// PDF p. 111.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum DeclarationSpecifiersPhase {
+enum DeclarationSpecifiersPhase {
     /// Consume primitive, storage, qualifier, function, and typedef specifiers.
     Collect,
     AwaitModern(KeywordTokenType),
@@ -1030,7 +1030,7 @@ pub(super) fn report_duplicate_type_qualifier(
 /// for imaginary types (§6.4.1 paragraph 2, p. 50; PDF p. 62), which only
 /// informative annex G specifies; the frame rejects it.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum PrimitiveTypeSpecifier {
+enum PrimitiveTypeSpecifier {
     Signed,
     Unsigned,
     Int,

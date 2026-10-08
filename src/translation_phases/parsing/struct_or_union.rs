@@ -133,7 +133,7 @@ pub(super) struct StructOrUnionSpecifierFrame<'tu, 'p> {
 ///
 /// C99: §6.7.2.1, pp. 101-104; PDF pp. 113-116.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum StructOrUnionPhase {
+enum StructOrUnionPhase {
     /// Consume and classify the `struct` or `union` keyword.
     Start,
     AwaitTagAttributes,

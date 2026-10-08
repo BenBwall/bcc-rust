@@ -130,7 +130,7 @@ pub(super) enum DeclarationContext {
 /// C99: §6.7, p. 97; PDF p. 109. The phases encode that production
 /// iteratively.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum DeclarationPhase {
+enum DeclarationPhase {
     AwaitAssertion,
     /// Push declaration specifiers.
     Start,

@@ -167,7 +167,7 @@ pub(super) struct DeclaratorFrame<'tu, 'p> {
 /// C99: pointer, array, and function-derived declarator productions are
 /// §6.7.5.1-§6.7.5.3, pp. 115-121; PDF pp. 127-133.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum DeclaratorPhase {
+enum DeclaratorPhase {
     AwaitAttributes,
     AwaitAsm,
     AwaitPointerAttributes,

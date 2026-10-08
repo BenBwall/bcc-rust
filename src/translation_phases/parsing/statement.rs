@@ -107,7 +107,7 @@ const HEADER_RECOVERY_LOOKAHEAD: u16 = 256;
 /// C99: `if` and `switch` are §6.8.4, p. 133; PDF p. 145; `while` is
 /// §6.8.5, p. 135; PDF p. 147.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum HeaderKind {
+enum HeaderKind {
     If,
     Switch,
     While,
@@ -118,7 +118,7 @@ pub(super) enum HeaderKind {
 ///
 /// C99: §6.8.1 paragraph 1, p. 131; PDF p. 143.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum LabelPrefix<'tu> {
+enum LabelPrefix<'tu> {
     Identifier(Identifier),
     Case(ConstantExpressionSlot<'tu>),
     Range(ConstantExpressionSlot<'tu>, ConstantExpressionSlot<'tu>),
@@ -129,7 +129,7 @@ pub(super) enum LabelPrefix<'tu> {
 ///
 /// C99: §6.8.6 paragraph 1, p. 136; PDF p. 148.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum SimpleJump {
+enum SimpleJump {
     Break,
     Continue,
 }
@@ -138,7 +138,7 @@ pub(super) enum SimpleJump {
 /// `If*` phases cover the parenthesized-header statements, `Do*` the `do`
 /// statement, and `For*` the `for` statement of §6.8.5, p. 135; PDF p. 147.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum StatementPhase<'tu> {
+enum StatementPhase<'tu> {
     Start,
     AwaitGnu,
     AwaitMsvc,
