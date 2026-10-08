@@ -111,9 +111,9 @@ the spelling/construct may be consumed, including extensions. `is_native(feature
 is a second bit test describing native availability. Both describe the target
 contract, **not implementation completion**. Constructors/builders recompute the
 bitsets once; there is no per-token string matching or global configuration.
-`ImplicitInt` is native before C99 and remains an extension candidate afterward;
-`Trigraphs` ceases to be native in C23. These removed features have dedicated
-derivation cases rather than monotone introduction checks.
+`ImplicitInt` has a `FeatureOrigin::Removed` origin: native before C99 and
+reported afterward as a C89 feature removed in C99. `Trigraphs` ceases to be
+native in C23 through a dedicated derivation case.
 
 `Context::report_extension(feature, spelling, source_vectors)` is the normal
 shared emitter. `report_extension_since(spelling, FeatureOrigin, source_vectors)`

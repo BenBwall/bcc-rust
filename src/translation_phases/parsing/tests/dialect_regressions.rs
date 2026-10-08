@@ -321,3 +321,29 @@ fn alignment_specifier_belongs_only_to_declarations_and_compound_literals() {
         },
     );
 }
+
+#[test]
+fn implicit_int_after_c89_is_a_removed_feature() {
+    let source = "static x = 1;\n";
+    for gnu in [false, true] {
+        with_parse_configuration(
+            source,
+            mode(CStandard::C99, gnu, ExtensionPolicy::Warn),
+            |p| {
+                assert_clean_parse(p, source);
+                assert_eq!(
+                    extensions(p),
+                    ["'implicit int' is a C89 feature removed in C99"]
+                );
+            },
+        );
+    }
+    with_parse_configuration(
+        source,
+        mode(CStandard::C89, false, ExtensionPolicy::Warn),
+        |p| {
+            assert_clean_parse(p, source);
+            assert!(extensions(p).is_empty(), "{:?}", p.errors);
+        },
+    );
+}
