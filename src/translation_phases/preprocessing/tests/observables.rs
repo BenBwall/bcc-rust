@@ -6,10 +6,7 @@
 
 use std::{
     fmt::Write,
-    path::{
-        Path,
-        PathBuf,
-    },
+    path::PathBuf,
 };
 
 use proptest::prelude::*;
@@ -103,16 +100,10 @@ fn edge_cases_preserve_tokens_diagnostics_and_provenance() {
             snapshot.push('\n');
         }
     }
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/lexing/preprocessing_edge_cases.snap");
-    if std::env::var_os("BLESS").is_some_and(|value| value == "1") {
-        std::fs::write(&path, &snapshot).unwrap();
-        return;
-    }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!("{}: {error}; run with BLESS=1 to create it", path.display())
-    });
-    pretty_assertions::assert_eq!(expected, snapshot);
+    crate::test_support::assert_snapshot(
+        "tests/fixtures/lexing/preprocessing_edge_cases.snap",
+        &snapshot,
+    );
 }
 
 #[test]

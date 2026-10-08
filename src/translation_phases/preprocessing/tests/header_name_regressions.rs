@@ -2,15 +2,9 @@
 //! taken from the source text, the C99 §6.4.7p3 sequences, missing closing
 //! delimiters, and the backslash extension.
 
-use std::{
-    path::{
-        Path,
-        PathBuf,
-    },
-    sync::atomic::{
-        AtomicU64,
-        Ordering,
-    },
+use std::path::{
+    Path,
+    PathBuf,
 };
 
 use super::{
@@ -28,6 +22,7 @@ use crate::{
         CompilerConfiguration,
         ExtensionPolicy,
     },
+    test_support::TempDir,
     translation_phases::{
         ErrorSeverity,
         GetSeverity,
@@ -35,37 +30,6 @@ use crate::{
         SourceVector,
     },
 };
-
-/// A temporary directory holding a main file's headers.
-struct Headers(PathBuf);
-
-impl Headers {
-    fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let directory = std::env::temp_dir().join(format!(
-            "bcc-header-names-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        drop(std::fs::remove_dir_all(&directory));
-        std::fs::create_dir_all(&directory).unwrap();
-        Self(directory)
-    }
-
-    /// Writes a header that defines `name` as an identifier, at `path`
-    /// relative to the directory.
-    fn write(&self, path: &Path, name: &str) {
-        let path = self.0.join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, format!("{name}\n")).unwrap();
-    }
-}
-
-impl Drop for Headers {
-    fn drop(&mut self) {
-        drop(std::fs::remove_dir_all(&self.0));
-    }
-}
 
 /// The header `"dir\file.h"` names: a file in `dir` where backslash separates
 /// directories, otherwise a file whose name contains the backslash.
@@ -110,7 +74,7 @@ impl Outcome<'_, '_> {
 }
 
 fn with_preprocess<R>(
-    headers: &Headers,
+    headers: &TempDir,
     source: &str,
     inspect: impl FnOnce(Outcome<'_, '_>) -> R,
 ) -> R {
@@ -118,7 +82,7 @@ fn with_preprocess<R>(
 }
 
 fn with_preprocess_in<R>(
-    headers: &Headers,
+    headers: &TempDir,
     source: &str,
     policy: ExtensionPolicy,
     inspect: impl FnOnce(Outcome<'_, '_>) -> R,
@@ -127,7 +91,7 @@ fn with_preprocess_in<R>(
 }
 
 fn with_preprocess_directories<R>(
-    headers: &Headers,
+    headers: &TempDir,
     source: &str,
     policy: ExtensionPolicy,
     system_directories: SharedVec<PathBuf>,
@@ -140,7 +104,7 @@ fn with_preprocess_directories<R>(
     let mut preprocessor = Preprocessor::new(
         &preprocess_arena,
         &mut context,
-        headers.0.join("main.c").into_boxed_path(),
+        headers.join("main.c").into_boxed_path(),
         source,
         SharedVec::default(),
         system_directories,
@@ -161,9 +125,9 @@ fn with_preprocess_directories<R>(
 
 #[test]
 fn written_header_names_keep_their_source_text() {
-    let headers = Headers::new();
-    headers.write(Path::new("a b.h"), "spaced");
-    headers.write(Path::new("plain.h"), "plain");
+    let headers = TempDir::new("header-names");
+    headers.write(Path::new("a b.h"), "spaced\n");
+    headers.write(Path::new("plain.h"), "plain\n");
     for (source, expected_header) in [
         ("#include \"a b.h\"\nafter\n", "spaced"),
         ("#include <a b.h>\nafter\n", "spaced"),
@@ -172,14 +136,14 @@ fn written_header_names_keep_their_source_text() {
         ("#include <pl\\\nain.h>\nafter\n", "plain"),
         ("??=include \"plain.h\"\nafter\n", "plain"),
     ] {
-        let directory = SharedVec::from(vec![headers.0.clone()]);
+        let directory = SharedVec::from(vec![headers.path().to_path_buf()]);
         let tu = crate::util::bump::Bump::new();
         let mut context = Context::new(&tu);
         let preprocess_arena = crate::util::bump::Bump::new();
         let mut preprocessor = Preprocessor::new(
             &preprocess_arena,
             &mut context,
-            headers.0.join("main.c").into_boxed_path(),
+            headers.join("main.c").into_boxed_path(),
             source,
             SharedVec::default(),
             directory,
@@ -198,14 +162,14 @@ fn written_header_names_keep_their_source_text() {
 
 #[test]
 fn characters_glued_to_angle_header_closing_are_extra_tokens() {
-    let headers = Headers::new();
-    headers.write(Path::new("plain.h"), "plain");
+    let headers = TempDir::new("header-names");
+    headers.write(Path::new("plain.h"), "plain\n");
     let preprocess_header = |source: &str, inspect: &mut dyn FnMut(Outcome<'_, '_>)| {
         with_preprocess_directories(
             &headers,
             source,
             ExtensionPolicy::Allow,
-            SharedVec::from(vec![headers.0.clone()]),
+            SharedVec::from(vec![headers.path().to_path_buf()]),
             inspect,
         );
     };
@@ -233,7 +197,7 @@ fn characters_glued_to_angle_header_closing_are_extra_tokens() {
         });
     }
 
-    std::fs::write(headers.0.join("middle.h"), "#include <plain.h>>").unwrap();
+    std::fs::write(headers.join("middle.h"), "#include <plain.h>>").unwrap();
     preprocess_header("#include \"middle.h\"\nafter\n", &mut |outcome| {
         assert_eq!(outcome.identifiers, ["plain", "after"]);
         assert_eq!(
@@ -254,8 +218,8 @@ fn characters_glued_to_angle_header_closing_are_extra_tokens() {
 
 #[test]
 fn macro_operands_combine_token_spellings() {
-    let headers = Headers::new();
-    headers.write(Path::new("plain.h"), "plain");
+    let headers = TempDir::new("header-names");
+    headers.write(Path::new("plain.h"), "plain\n");
     with_preprocess(
         &headers,
         "#define Q \"plain.h\"\n#include Q\n#define NAME plain\n#define S(x) #x\n#include \
@@ -269,7 +233,7 @@ fn macro_operands_combine_token_spellings() {
 
 #[test]
 fn skipped_include_lines_are_ordinary_tokens() {
-    let headers = Headers::new();
+    let headers = TempDir::new("header-names");
     for source in [
         "#if 0\n#include <it's.h>\n#include \"unterminated\n#include <a//b.h>\n#endif\nafter\n",
         "#ifdef NOPE\n#include <a\\b.h>\n#else\nafter\n#endif\n",
@@ -287,7 +251,7 @@ fn skipped_include_lines_are_ordinary_tokens() {
 
 #[test]
 fn undefined_sequences_are_reported_once_at_their_position() {
-    let headers = Headers::new();
+    let headers = TempDir::new("header-names");
     for (source, sequence, column) in [
         ("#include <it's.h>\n", "'", 13),
         ("#include \"it's.h\"\n", "'", 13),
@@ -339,7 +303,7 @@ fn undefined_sequences_are_reported_once_at_their_position() {
 
 #[test]
 fn expanded_header_errors_keep_the_lookup_failure() {
-    let headers = Headers::new();
+    let headers = TempDir::new("header-names");
     for source in [
         "#define H <it's.h>\n#include H\nafter\n",
         "#define H \"it's.h\"\n#include H\nafter\n",
@@ -371,7 +335,7 @@ fn expanded_header_errors_keep_the_lookup_failure() {
 
 #[test]
 fn missing_closing_delimiters_are_reported_before_lookup() {
-    let headers = Headers::new();
+    let headers = TempDir::new("header-names");
     for (source, delimiter, column) in [
         ("#include <stdio.h\nafter\n", '>', 18),
         ("#include <stdio.h", '>', 18),
@@ -415,7 +379,7 @@ fn missing_closing_delimiters_are_reported_before_lookup() {
 
 #[test]
 fn a_backslash_before_the_first_quote_uses_the_quoted_header_extension() {
-    let headers = Headers::new();
+    let headers = TempDir::new("header-names");
     for source in ["#include \"dir\\\"", "#include \"dir\\\"\nafter\n"] {
         for policy in [ExtensionPolicy::Allow, ExtensionPolicy::Warn] {
             with_preprocess_in(&headers, source, policy, |outcome| {
@@ -465,7 +429,7 @@ fn a_backslash_before_the_first_quote_uses_the_quoted_header_extension() {
 
 #[test]
 fn text_after_an_escaped_closing_quote_is_extra_tokens() {
-    let headers = Headers::new();
+    let headers = TempDir::new("header-names");
     let extra_tokens = |error: &PreprocessorErrorType<'_>| {
         matches!(
             error,
@@ -551,8 +515,8 @@ fn text_after_an_escaped_closing_quote_is_extra_tokens() {
 
 #[test]
 fn quoted_backslashes_follow_the_extension_policy() {
-    let headers = Headers::new();
-    headers.write(&backslash_header(), "found");
+    let headers = TempDir::new("header-names");
+    headers.write(backslash_header(), "found\n");
     let source = "#include \"dir\\file.h\"\nafter\n";
 
     with_preprocess_in(&headers, source, ExtensionPolicy::Allow, |outcome| {
@@ -596,7 +560,7 @@ fn quoted_backslashes_follow_the_extension_policy() {
 
 #[test]
 fn angle_backslashes_are_errors_under_every_policy() {
-    let headers = Headers::new();
+    let headers = TempDir::new("header-names");
     for policy in [
         ExtensionPolicy::Allow,
         ExtensionPolicy::Warn,
@@ -624,8 +588,8 @@ fn angle_backslashes_are_errors_under_every_policy() {
 
 #[test]
 fn renamed_files_read_header_names_from_the_physical_file() {
-    let headers = Headers::new();
-    headers.write(Path::new("plain.h"), "plain");
+    let headers = TempDir::new("header-names");
+    headers.write(Path::new("plain.h"), "plain\n");
     with_preprocess(
         &headers,
         "#line 7 \"renamed.c\"\n#include \"plain.h\"\n#include <it's.h>\n",

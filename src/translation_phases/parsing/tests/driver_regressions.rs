@@ -38,17 +38,10 @@ fn recovered_nodes_keep_their_locations() {
         snapshot.push_str(&located_tree(source));
     }
     // Recorded while the streaming and batch pipelines still had to agree.
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/inspection/recovered_locations.snap");
-    if std::env::var_os("BLESS").is_some_and(|value| value == "1") {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, &snapshot).unwrap();
-        return;
-    }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!("{}: {error}; run with BLESS=1 to create it", path.display())
-    });
-    pretty_assertions::assert_eq!(expected, snapshot);
+    crate::test_support::assert_snapshot(
+        "tests/fixtures/inspection/recovered_locations.snap",
+        &snapshot,
+    );
 }
 
 #[test]

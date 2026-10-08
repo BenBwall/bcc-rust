@@ -740,20 +740,7 @@ fn c23_allows_basic_and_control_universal_characters_inside_literals() {
 
 #[test]
 fn resource_queries_embed_parameters_and_include_next_use_real_search_paths() {
-    struct Directory(PathBuf);
-    impl Directory {
-        fn path(&self) -> &std::path::Path {
-            &self.0
-        }
-    }
-    impl Drop for Directory {
-        fn drop(&mut self) {
-            drop(std::fs::remove_dir_all(&self.0));
-        }
-    }
-    let temp =
-        Directory(std::env::temp_dir().join(format!("bcc-lexpp-resources-{}", std::process::id())));
-    std::fs::create_dir_all(temp.path()).unwrap();
+    let temp = crate::test_support::TempDir::new("lexpp-resources");
     let a = temp.path().join("a");
     let b = temp.path().join("b");
     std::fs::create_dir(&a).unwrap();
@@ -860,13 +847,10 @@ fn mode_snapshot_preserves_token_values_spellings_and_extension_diagnostics() {
             }
         }
     }
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/lexing/language_modes_lexpp.snap");
-    if std::env::var_os("BLESS").is_some_and(|v| v == "1") {
-        std::fs::write(path, snapshot).unwrap();
-        return;
-    }
-    pretty_assertions::assert_eq!(std::fs::read_to_string(path).unwrap(), snapshot);
+    crate::test_support::assert_snapshot(
+        "tests/fixtures/lexing/language_modes_lexpp.snap",
+        &snapshot,
+    );
 }
 
 #[test]
