@@ -137,12 +137,9 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         if matches!(
             self.context.string_cache.at(operator.contents),
             "__has_include" | "__has_embed"
-        ) {
-            self.collect_written_resource(&mut tokens);
-        }
-        if tokens.last().is_some_and(|t| t.kind == T::Newline) {
+        ) && !self.collect_written_resource(&mut tokens)
+        {
             self.language_error("unterminated resource query", operator.source_vectors);
-            self.replay_query_boundary(tokens.pop().expect("collected newline"));
             return None;
         }
         let resource_query = matches!(
@@ -198,8 +195,11 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
     }
 
     /// A written header name is not macro-replaced inside its delimiters.
+    /// Returns false when a new-line ends the line, or the replacement list,
+    /// before the name does; the new-line is left unread for the frame that
+    /// owns it.
     /// C99: §6.10.2p2-4, pp. 149-150; PDF pp. 161-162.
-    fn collect_written_resource(&mut self, tokens: &mut ArenaVec<'x, PreprocessorToken>) {
+    fn collect_written_resource(&mut self, tokens: &mut ArenaVec<'x, PreprocessorToken>) -> bool {
         let position = self.position();
         let ignored = self.context.ignore_tokenizer_errors();
         self.context.set_ignore_tokenizer_errors(true);
@@ -209,19 +209,29 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         let Some(first) = first.filter(|t| {
             t.kind == T::String || self.context.string_cache.at(t.contents).starts_with('<')
         }) else {
-            return;
+            return true;
         };
         self.context.set_ignore_tokenizer_errors(true);
-        while let Some(token) = self.tokenizer.next_item(self.context) {
+        let mut terminated = true;
+        loop {
+            let position = self.position();
+            let Some(token) = self.tokenizer.next_item(self.context) else {
+                break;
+            };
+            if token.kind == T::Newline {
+                self.set_position(position);
+                terminated = false;
+                break;
+            }
             tokens.push(token);
-            if token.kind == T::Newline
-                || (first.kind == T::String && token.kind == T::String)
+            if (first.kind == T::String && token.kind == T::String)
                 || self.context.string_cache.at(token.contents).contains('>')
             {
                 break;
             }
         }
         self.context.set_ignore_tokenizer_errors(ignored);
+        terminated
     }
 
     /// Reads the macro-expanded header operand common to queries and embedding.
@@ -676,15 +686,18 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         self.context
             .report_extension(Feature::Embed, "#embed", directive.source_vectors);
         let mut tokens = ArenaVec::new_in(self.scratch);
-        self.collect_written_resource(&mut tokens);
-        while tokens.last().is_none_or(|t| t.kind != T::Newline)
-            && let Some(token) = self.next_preprocessor_token::<false>()
-        {
+        _ = self.collect_written_resource(&mut tokens);
+        // The rest of the line, through its new-line, belongs to the
+        // directive whether or not the resource is valid. C99: §6.10p2,
+        // pp. 145-146; PDF pp. 157-158.
+        while let Some(token) = self.next_preprocessor_token::<false>() {
             if token.kind == T::Newline {
                 break;
             }
             tokens.push(token);
         }
+        self.last_was_newline = true;
+        self.current_is_newline = true;
         let tokens = tokens.leak();
         let Some((name, system, end)) = self.resource_operand(tokens, directive.source_vectors)
         else {

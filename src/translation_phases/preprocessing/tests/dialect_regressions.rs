@@ -240,3 +240,44 @@ fn lexer_extension_diagnostics_are_reported_once_per_token() {
     );
     assert!(errors.is_empty(), "{errors:?}");
 }
+
+/// A header-name operand read from a replacement list ends with that list:
+/// its new-line belongs to the macro's frame, and the conditional that
+/// follows still selects its groups (C99 §6.10p2, C23 §6.10.2p7).
+#[test]
+fn unterminated_macro_resource_operand_stops_at_its_replacement_list() {
+    for operand in [
+        "__has_include(<foo.h",
+        "__has_embed(<foo.bin",
+        "__has_include(\"foo.h",
+    ] {
+        let source = format!("#define HI {operand}\n#if HI\na\n#else\nb\n#endif\nint after;\n");
+        let (tokens, errors) = observe(&source, mode(CStandard::C23));
+        assert!(!errors.is_empty(), "{source}");
+        assert!(
+            errors
+                .iter()
+                .all(|error| !error.contains("#endif") && !error.contains("#else")),
+            "{source}: {errors:?}"
+        );
+        assert_eq!(texts(&tokens), "b int after ;", "{source}: {errors:?}");
+    }
+}
+
+/// A failed `#embed` still ends at its new-line, so the next line starts a
+/// directive (C99 §6.10p2).
+#[test]
+fn failed_embed_header_name_restores_the_line_start() {
+    for directive in [
+        "#embed <missing",
+        "#embed \"missing",
+        "#embed <missing> limit(",
+        "#embed",
+    ] {
+        let source = format!("{directive}\n#define X 1\nint z = X;\n");
+        let (tokens, errors) = observe(&source, mode(CStandard::C23));
+        assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+        assert!(!errors[0].contains("stray"), "{source}: {errors:?}");
+        assert_eq!(texts(&tokens), "int z = 1 ;", "{source}");
+    }
+}
