@@ -383,12 +383,14 @@ pub(crate) fn analyze<'tu>(
 ) -> SemanticTranslationUnit<'tu> {
     let scratch = Bump::new();
     let mut analyzer = Analyzer::new(context, &scratch);
-    for &root in unit.external_declarations().iter().rev() {
+    for &root in unit.external_declarations() {
+        analyzer.assert_balanced();
         analyzer.work.push(Work::Root(root));
+        while let Some(work) = analyzer.work.pop() {
+            analyzer.step(work);
+        }
     }
-    while let Some(work) = analyzer.work.pop() {
-        analyzer.step(work);
-    }
+    analyzer.assert_balanced();
     analyzer.finish_translation_unit();
     SemanticTranslationUnit {
         expressions:      analyzer.expressions.leak(),
@@ -526,7 +528,19 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
     }
 
     fn take_type(&mut self) -> TypeId {
+        debug_assert!(!self.values.is_empty(), "a type continuation has a value");
         self.values.pop().unwrap_or_else(|| self.types.unknown())
+    }
+
+    /// Every external declaration starts and ends with empty continuation and
+    /// value stacks, so an unbalanced task cannot silently feed the next root.
+    fn assert_balanced(&self) {
+        debug_assert!(self.work.is_empty(), "no continuation outlives its root");
+        debug_assert!(self.values.is_empty(), "no type value outlives its root");
+        debug_assert!(
+            self.integers.is_empty(),
+            "no integer value outlives its root"
+        );
     }
 
     fn taint(&mut self, recovered: bool) {
