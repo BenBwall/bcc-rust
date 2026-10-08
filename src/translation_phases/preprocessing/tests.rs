@@ -702,7 +702,7 @@ fn quoted_includes_search_beside_the_including_file_not_the_working_directory() 
 
 /// Preprocesses `source`, spelling each token as written in C source with a
 /// space between tokens.
-fn expansion_of<R>(source: &str, inspect: impl FnOnce(String, &[TranslationError<'_>]) -> R) -> R {
+fn expansion_of<R>(source: &str, inspect: impl FnOnce(&str, &[TranslationError<'_>]) -> R) -> R {
     with_tokens_of(source, "<test>", |tokens, context| {
         let spellings: Vec<String> = tokens
             .iter()
@@ -721,7 +721,7 @@ fn expansion_of<R>(source: &str, inspect: impl FnOnce(String, &[TranslationError
             })
             .collect();
         let errors = context.take_pending_errors();
-        inspect(spellings.join(" "), &errors)
+        inspect(&spellings.join(" "), &errors)
     })
 }
 

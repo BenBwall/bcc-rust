@@ -1,66 +1,18 @@
 //! C99 macro replacement regressions.
 
-use std::{
-    fmt::Write,
-    path::PathBuf,
-};
+use std::fmt::Write;
 
-use super::Preprocessor;
-use crate::{
-    translation_phases::{
-        Context,
-        TranslationError,
-        preprocessing::{
-            PreprocessorError,
-            PreprocessorErrorType,
-            StringTokenType,
-            TokenType,
-        },
+use super::{
+    assert_expansion,
+    expansion_of,
+};
+use crate::translation_phases::{
+    TranslationError,
+    preprocessing::{
+        PreprocessorError,
+        PreprocessorErrorType,
     },
-    util::shared::SharedVec,
 };
-
-fn with_expansion<R>(source: &str, inspect: impl FnOnce(&str, &[TranslationError<'_>]) -> R) -> R {
-    let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
-    let preprocess_arena = crate::util::bump::Bump::new();
-    let mut preprocessor = Preprocessor::new(
-        &preprocess_arena,
-        &mut context,
-        PathBuf::from("<macro regression>").into_boxed_path(),
-        source,
-        SharedVec::default(),
-        SharedVec::default(),
-    );
-    let tokens = preprocessor.preprocess_all(&mut context);
-    let spellings: Vec<_> = tokens
-        .iter()
-        .map(|token| match token.kind {
-            | TokenType::String(StringTokenType::String(contents)) => format!(
-                "{:?}",
-                context
-                    .literal_text_in(context.tu_arena(), contents, false)
-                    .expect("UTF-8 test literal")
-            ),
-            | _ => context
-                .string_cache
-                .at(token.contents)
-                .trim_end_matches('\0')
-                .to_owned(),
-        })
-        .collect();
-    let spelling = spellings.join(" ");
-    let errors = context.take_pending_errors();
-    inspect(&spelling, &errors)
-}
-
-#[track_caller]
-fn assert_expansion(source: &str, expected: &str) {
-    with_expansion(source, |actual, errors| {
-        assert_eq!(actual, expected, "{source}");
-        assert!(errors.is_empty(), "{source}: {errors:#?}");
-    });
-}
 
 #[test]
 fn stringification_discards_trailing_argument_whitespace() {
@@ -95,7 +47,7 @@ fn arity_diagnostics_count_every_supplied_argument() {
         ("#define F(x) marker\nF(a,b,c)\n", 1, 3),
         ("#define F(x,y) marker\nF(a,b,c,d,e)\n", 2, 5),
     ] {
-        with_expansion(source, |actual, errors| {
+        expansion_of(source, |actual, errors| {
             assert_eq!(actual, "marker", "{source}");
             assert!(
                 matches!(
@@ -163,7 +115,7 @@ fn pasted_hash_hash_is_a_token_in_later_stringification() {
 
 #[test]
 fn mixed_hash_spellings_do_not_form_a_single_pasted_token() {
-    with_expansion("#define CAT(a,b) a##b\nCAT(#,%:)\n", |_, errors| {
+    expansion_of("#define CAT(a,b) a##b\nCAT(#,%:)\n", |_, errors| {
         assert!(
             errors.iter().any(|error| matches!(
                 error,
@@ -274,7 +226,7 @@ fn repeated_alias_calls_preserve_locations_through_compaction() {
 #[test]
 fn unterminated_alias_call_reports_a_clean_diagnostic() {
     let source = "#define g(x) [x]\n#define G g\nG(0";
-    with_expansion(source, |_, errors| {
+    expansion_of(source, |_, errors| {
         assert!(
             errors.iter().any(|error| matches!(
                 error,
@@ -397,7 +349,7 @@ fn nested_calls_receive_stringified_parent_arguments() {
 #[test]
 fn failed_cross_frame_lookahead_prescans_each_argument_once() {
     let source = "#define F(x) x\n#define BAD(a,b) a\n#define H(x) F x\nH(BAD(1)) after\n";
-    with_expansion(source, |tokens, errors| {
+    expansion_of(source, |tokens, errors| {
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(tokens, "F 1 after");
     });
@@ -409,7 +361,7 @@ fn assert_only_error(
     expected: &str,
     is_expected: impl Fn(&PreprocessorErrorType<'_>) -> bool,
 ) {
-    with_expansion(source, |actual, errors| {
+    expansion_of(source, |actual, errors| {
         assert_eq!(actual, expected, "{source:?}");
         assert!(
             matches!(
@@ -504,7 +456,7 @@ fn definition_on_an_unterminated_last_line_reports_the_missing_newline_once() {
         "#define F(x) x\n#define F(x) x",
         "#define A ##",
     ] {
-        with_expansion(source, |_, errors| {
+        expansion_of(source, |_, errors| {
             let missing_newlines = errors
                 .iter()
                 .filter(|error| matches!(error, TranslationError::InitialProcessing(_)))
