@@ -408,33 +408,10 @@ const PARENTHESIZED_BRACE_GROUP_LOOKAHEAD: usize = 4096;
 /// so the whole group is skipped as one diagnosed operand (§5.1.1.3, p. 11;
 /// PDF p. 23).
 fn brace_group_closes_before_parenthesis(parser: &mut Parser<'_, '_, '_>) -> bool {
-    let mut depth = 0_usize;
-    for index in 0..PARENTHESIZED_BRACE_GROUP_LOOKAHEAD {
-        let token = if index == 0 {
-            parser.cursor.current()
-        } else {
-            parser.cursor.lookahead(index - 1)
-        };
-        let Some(token) = token else {
-            return false;
-        };
-        match token.kind {
-            | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => depth += 1,
-            | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return parser.cursor.lookahead(index).is_some_and(|next| {
-                        matches!(
-                            next.kind,
-                            TokenType::Operator(OperatorTokenType::ClosingParenthesis)
-                        )
-                    });
-                }
-            },
-            | _ => {},
-        }
-    }
-    false
+    matches!(
+        token_after_brace_group(parser),
+        Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
+    )
 }
 
 /// Returns whether the brace group starting at the current `{` closes within
@@ -442,37 +419,39 @@ fn brace_group_closes_before_parenthesis(parser: &mut Parser<'_, '_, '_>) -> boo
 /// expression, as in `if (x == {}) ...`, rather than being a statement body
 /// left after a missing `)`.
 fn brace_group_continues_expression(parser: &mut Parser<'_, '_, '_>) -> bool {
+    matches!(
+        token_after_brace_group(parser),
+        Some(TokenType::Operator(
+            OperatorTokenType::ClosingParenthesis
+                | OperatorTokenType::ClosingSquareBracket
+                | OperatorTokenType::Comma
+        ))
+    )
+}
+
+/// The kind of the token after the `}` that closes the brace group starting
+/// at the current `{`, or `None` when the group does not close within
+/// [`PARENTHESIZED_BRACE_GROUP_LOOKAHEAD`] tokens or nothing follows it.
+fn token_after_brace_group(parser: &mut Parser<'_, '_, '_>) -> Option<TokenType> {
     let mut depth = 0_usize;
     for index in 0..PARENTHESIZED_BRACE_GROUP_LOOKAHEAD {
         let token = if index == 0 {
             parser.cursor.current()
         } else {
             parser.cursor.lookahead(index - 1)
-        };
-        let Some(token) = token else {
-            return false;
-        };
+        }?;
         match token.kind {
             | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => depth += 1,
             | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
-                    return parser.cursor.lookahead(index).is_some_and(|next| {
-                        matches!(
-                            next.kind,
-                            TokenType::Operator(
-                                OperatorTokenType::ClosingParenthesis
-                                    | OperatorTokenType::ClosingSquareBracket
-                                    | OperatorTokenType::Comma
-                            )
-                        )
-                    });
+                    return parser.cursor.lookahead(index).map(|next| next.kind);
                 }
             },
             | _ => {},
         }
     }
-    false
+    None
 }
 
 impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
@@ -1283,18 +1262,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                         "omitted conditional operand",
                         token,
                     );
-                    let Some(LanguageExpressionOperator::Question { source_vectors }) =
-                        self.operators.pop()
-                    else {
-                        panic!("conditional question marker");
-                    };
-                    self.operators
-                        .push(LanguageExpressionOperator::Conditional {
-                            middle:          None,
-                            question_source: source_vectors,
-                            colon_source:    Some(token.source_vectors),
-                        });
-                    self.phase = ExpressionPhase::PushConditionalElse;
+                    self.complete_conditional_marker(None, Some(token.source_vectors));
                     return ParseAction::Consume;
                 }
                 // C99 §6.5.15p1: the middle operand is a full `expression`.
@@ -1317,18 +1285,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 if let Some(colon) = token
                     && matches!(colon.kind, TokenType::Operator(OperatorTokenType::Colon))
                 {
-                    let Some(LanguageExpressionOperator::Question { source_vectors }) =
-                        self.operators.pop()
-                    else {
-                        panic!("conditional middle must retain its question marker");
-                    };
-                    self.operators
-                        .push(LanguageExpressionOperator::Conditional {
-                            middle:          Some(middle),
-                            question_source: source_vectors,
-                            colon_source:    Some(colon.source_vectors),
-                        });
-                    self.phase = ExpressionPhase::PushConditionalElse;
+                    self.complete_conditional_marker(Some(middle), Some(colon.source_vectors));
                     return ParseAction::Consume;
                 }
                 parser.report(
@@ -1338,18 +1295,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                     ),
                     token,
                 );
-                let Some(LanguageExpressionOperator::Question { source_vectors }) =
-                    self.operators.pop()
-                else {
-                    panic!("conditional middle must retain its question marker");
-                };
-                self.operators
-                    .push(LanguageExpressionOperator::Conditional {
-                        middle:          Some(middle),
-                        question_source: source_vectors,
-                        colon_source:    None,
-                    });
-                self.phase = ExpressionPhase::PushConditionalElse;
+                self.complete_conditional_marker(Some(middle), None);
                 return ParseAction::Reprocess;
             },
             | ExpressionPhase::PushConditionalElse => {
@@ -2138,6 +2084,27 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             .expect("operator state has an expression operand")
     }
 
+    /// Replaces the pending `?` marker with the conditional operator it
+    /// begins, now that its middle operand and `:` are known, and goes on to
+    /// the last operand.
+    fn complete_conditional_marker(
+        &mut self,
+        middle: Option<&'tu Expression<'tu>>,
+        colon_source: Option<SourceVectors>,
+    ) {
+        let Some(LanguageExpressionOperator::Question { source_vectors }) = self.operators.pop()
+        else {
+            panic!("a conditional's middle operand follows its question marker");
+        };
+        self.operators
+            .push(LanguageExpressionOperator::Conditional {
+                middle,
+                question_source: source_vectors,
+                colon_source,
+            });
+        self.phase = ExpressionPhase::PushConditionalElse;
+    }
+
     fn pop_operand_or_error(&mut self, parser: &mut Parser<'_, 'tu, 'p>) -> ExpressionOperand<'tu> {
         if let Some(operand) = self.operands.pop() {
             return operand;
@@ -2516,13 +2483,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         );
         // An error operand stands for whatever was meant, so operators that
         // need a unary or postfix operand do not diagnose it a second time.
-        self.operands.push(ExpressionOperand {
-            expression:         index,
-            unary_expression:   true,
-            postfix_expression: true,
-        });
-        self.state = ExpressionParserState::Operator;
-        self.stray_error_operand = false;
+        self.push_operand(index, true, true);
     }
 
     /// Reduces every pending operator and returns the expression, typed as a
@@ -2533,12 +2494,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         while !self.operators.is_empty() {
             self.reduce_one(parser);
         }
-        let operand = self.operands.pop().unwrap_or_else(|| {
-            self.push_error(parser, None);
-            self.operands
-                .pop()
-                .expect("error expression supplies one operand")
-        });
+        let operand = self.pop_operand_or_error(parser);
         let recovered = parser.hard_error_count > self.starting_error_count;
         let expression = if recovered {
             parser.mark_expression_recovered(operand.expression)
