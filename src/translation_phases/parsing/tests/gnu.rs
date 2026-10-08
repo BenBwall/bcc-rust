@@ -974,3 +974,53 @@ fn label_after_an_unclosed_initializer_list_stays_a_label() {
         );
     }
 }
+
+#[test]
+fn gnu_asm_keeps_template_qualifiers_and_clobbers_as_typed_fields() {
+    use super::super::gnu::{
+        Asm,
+        AsmQualifiers,
+    };
+    let source = "int f(int x) { __asm__ volatile goto (\"jmp %l0\" : : \"r\"(x) : \"memory\", \
+                  \"cc\" : L); __asm__ __inline__ (\"nop\"); L: return x; }\n";
+    with_parse_configuration(
+        source,
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+            .with_gnu_extensions(true),
+        |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+            let assemblies: Vec<_> = p.parser.syntax.iter::<Asm<'_>>().collect();
+            assert_eq!(assemblies.len(), 2);
+            let text = |token: Option<crate::translation_phases::preprocessing::Token>| {
+                super::sourced_text(p, token.expect("token").source_vectors)
+            };
+            assert_eq!(
+                assemblies[0].qualifiers,
+                AsmQualifiers {
+                    volatile: true,
+                    inline:   false,
+                    goto:     true,
+                }
+            );
+            assert_eq!(text(assemblies[0].template), "\"jmp %l0\"");
+            assert_eq!(assemblies[0].operands.len(), 1);
+            let clobbers: Vec<_> = assemblies[0]
+                .clobbers
+                .iter()
+                .map(|x| text(Some(*x)))
+                .collect();
+            assert_eq!(clobbers, ["\"memory\"", "\"cc\""]);
+            assert_eq!(assemblies[0].labels.len(), 1);
+            assert_eq!(
+                assemblies[1].qualifiers,
+                AsmQualifiers {
+                    volatile: false,
+                    inline:   true,
+                    goto:     false,
+                }
+            );
+            assert_eq!(text(assemblies[1].template), "\"nop\"");
+            assert!(assemblies[1].clobbers.is_empty());
+        },
+    );
+}

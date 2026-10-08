@@ -31,6 +31,7 @@ use super::super::{
     gnu::{
         Asm,
         AsmOperand,
+        AsmQualifiers,
         Builtin,
         OffsetMember,
     },
@@ -72,7 +73,8 @@ macro_rules! sizes {
 #[test]
 fn syntax_nodes_keep_their_sizes() {
     let sizes = sizes![
-        Asm<'_> => 40,
+        Asm<'_> => 72,
+        AsmQualifiers => 3,
         MsAsm<'_> => 24,
         Seh<'_> => 56,
         AsmOperand<'_> => 56,

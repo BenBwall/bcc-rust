@@ -88,6 +88,11 @@ enum Work<'tu> {
     Asm(&'tu super::gnu::Asm<'tu>, usize),
     MsAsm(&'tu super::msvc::MsAsm<'tu>, usize),
     AsmOperand(super::gnu::AsmOperand<'tu>, usize),
+    AsmString(
+        crate::translation_phases::preprocessing::Token,
+        usize,
+        &'static str,
+    ),
     OffsetMember(super::gnu::OffsetMember<'tu>, usize),
     SpecifierExtensionItem(&'tu super::modern::SpecifierExtension<'tu>, usize),
     GenericAssociation(super::modern::GenericAssociation<'tu>, usize),
@@ -156,8 +161,15 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         &mut output,
                         indent,
                         format_args!(
-                            "asm sections={}{}",
+                            "asm sections={}{}{}{}{}",
                             asm.sections,
+                            if asm.qualifiers.volatile {
+                                " volatile"
+                            } else {
+                                ""
+                            },
+                            if asm.qualifiers.inline { " inline" } else { "" },
+                            if asm.qualifiers.goto { " goto" } else { "" },
                             if asm.recovered { " recovered" } else { "" }
                         ),
                         Some(asm.source_vectors),
@@ -167,26 +179,43 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     for label in asm.labels.iter().rev() {
                         work.push(Work::Identifier(*label, indent + 1, "goto-label"));
                     }
+                    for clobber in asm.clobbers.iter().rev() {
+                        work.push(Work::AsmString(*clobber, indent + 1, "clobber"));
+                    }
                     for operand in asm.operands.iter().rev() {
                         work.push(Work::AsmOperand(*operand, indent + 1));
                     }
-                    for token in &asm.tokens {
+                    if let Some(template) = asm.template {
                         Self::line(
                             &mut output,
                             indent + 1,
                             format_args!(
-                                "asm-token {}",
+                                "template {}",
                                 context
                                     .string_cache
-                                    .at(token.contents)
+                                    .at(template.contents)
                                     .trim_end_matches('\0')
                             ),
-                            Some(token.source_vectors),
+                            Some(template.source_vectors),
                             context,
                             options,
                         );
                     }
                 },
+                | Work::AsmString(token, indent, role) => Self::line(
+                    &mut output,
+                    indent,
+                    format_args!(
+                        "{role} {}",
+                        context
+                            .string_cache
+                            .at(token.contents)
+                            .trim_end_matches('\0')
+                    ),
+                    Some(token.source_vectors),
+                    context,
+                    options,
+                ),
                 | Work::AsmOperand(operand, indent) => {
                     Self::line(
                         &mut output,
