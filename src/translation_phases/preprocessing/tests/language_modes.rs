@@ -987,3 +987,43 @@ fn va_opt_is_reserved_for_variadic_replacement_lists() {
         "named variadic optional replacement: {errors:?}"
     );
 }
+
+#[test]
+fn reserved_variadic_marker_diagnostics_follow_pedantic_policy() {
+    for standard in [
+        CStandard::C89,
+        CStandard::C95,
+        CStandard::C99,
+        CStandard::C11,
+        CStandard::C17,
+        CStandard::C23,
+        CStandard::C2y,
+    ] {
+        for gnu in [false, true] {
+            for policy in [
+                ExtensionPolicy::Allow,
+                ExtensionPolicy::Warn,
+                ExtensionPolicy::Deny,
+            ] {
+                let config = CompilerConfiguration::new(standard, policy).with_gnu_extensions(gnu);
+                for marker in ["__VA_ARGS__", "__VA_OPT__"] {
+                    let source = format!("#define {marker} 83\nint after = {marker};\n");
+                    let (tokens, errors) = observe(&source, config);
+                    assert!(!errors.is_empty(), "{source}");
+                    let expected = if policy == ExtensionPolicy::Deny {
+                        "Error:"
+                    } else {
+                        "Warning:"
+                    };
+                    assert!(
+                        errors.iter().all(|error| error.starts_with(expected)),
+                        "{standard:?} GNU={gnu} {policy:?}: {errors:?}"
+                    );
+                    let tokens = spellings(&tokens);
+                    assert!(tokens.contains("identifier `after`"), "{tokens}");
+                    assert!(tokens.contains("= 83 (int)"), "{tokens}");
+                }
+            }
+        }
+    }
+}

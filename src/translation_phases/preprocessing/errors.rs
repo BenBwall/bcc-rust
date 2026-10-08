@@ -231,11 +231,14 @@ impl GetSeverity for PreprocessorError<'_> {
                     | ExtensionPolicy::Warn => ErrorSeverity::Warning,
                     | ExtensionPolicy::Deny => ErrorSeverity::Error,
                 },
+            | PreprocessorErrorType::VaArgsOutsideVariadicMacro(policy)
+            | PreprocessorErrorType::VaOptOutsideVariadicMacro(policy) => match policy {
+                | ExtensionPolicy::Allow | ExtensionPolicy::Warn => ErrorSeverity::Warning,
+                | ExtensionPolicy::Deny => ErrorSeverity::Error,
+            },
             | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::UndefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::MissingWhitespaceAfterMacroName(..)
-            | PreprocessorErrorType::VaArgsOutsideVariadicMacro
-            | PreprocessorErrorType::VaOptOutsideVariadicMacro
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(..)
             | PreprocessorErrorType::FloatConstantOutOfRange { .. }
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -447,14 +450,15 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     MissingWhitespaceAfterMacroName(&'tu str),
     /// `__VA_ARGS__` in a `#define` other than in the replacement list of a
     /// variadic macro. It is kept as an ordinary identifier, so this is a
-    /// warning, as in GCC.
+    /// warning promoted to an error by pedantic-errors, as in GCC and Clang.
     ///
     /// C99: §6.10.3 paragraph 5, p. 151; PDF p. 163.
-    VaArgsOutsideVariadicMacro,
+    VaArgsOutsideVariadicMacro(ExtensionPolicy),
     /// `__VA_OPT__` outside a variadic macro replacement list, retained
-    /// as an identifier with a warning, like GCC and Clang.
+    /// as an identifier with a warning promoted to an error by pedantic-errors,
+    /// like GCC and Clang.
     /// C23: §6.10.5p5, p. 178; PDF p. 191.
-    VaOptOutsideVariadicMacro,
+    VaOptOutsideVariadicMacro(ExtensionPolicy),
     /// A function-like macro that names one parameter twice. The definition
     /// is discarded.
     ///
@@ -986,14 +990,14 @@ impl PreprocessorErrorType<'_> {
                 "C99 §6.10.3p3: an object-like macro's name and replacement list are separated by \
                  whitespace",
             ),
-            | Self::VaArgsOutsideVariadicMacro =>
+            | Self::VaArgsOutsideVariadicMacro(_) =>
                 new("`__VA_ARGS__` can only appear in the replacement list of a variadic macro")
                     .label("not in a variadic macro's replacement list")
                     .note(
                         "C99 §6.10.3p5: `__VA_ARGS__` is reserved for macros whose parameters end \
                          in `...`",
                     ),
-            | Self::VaOptOutsideVariadicMacro =>
+            | Self::VaOptOutsideVariadicMacro(_) =>
                 new("`__VA_OPT__` can only appear in the replacement list of a variadic macro")
                     .label("not in a variadic macro's replacement list")
                     .note(

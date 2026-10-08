@@ -451,7 +451,7 @@ fn va_args_outside_a_variadic_replacement_list_is_diagnosed() {
         ("#define H(__VA_ARGS__) 2\nH(0)\n", "2"),
     ] {
         assert_only_error(source, expected, |error| {
-            matches!(error, PreprocessorErrorType::VaArgsOutsideVariadicMacro)
+            matches!(error, PreprocessorErrorType::VaArgsOutsideVariadicMacro(_))
         });
     }
     assert_expansion("#define V(x, ...) x __VA_ARGS__\nV(1, 2, 3)\n", "1 2 , 3");

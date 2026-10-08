@@ -1548,7 +1548,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         (is_valid, lists_match)
     }
 
-    /// Warns when `token`, read in a `#define` directive, is `__VA_ARGS__`
+    /// Diagnoses when `token`, read in a `#define` directive, is `__VA_ARGS__`
     /// or `__VA_OPT__`
     /// where it may not appear; the caller allows a variadic macro's
     /// replacement list.
@@ -1557,13 +1557,14 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// `__VA_OPT__`, §6.10.5p5, p. 178; PDF p. 191.
     pub(super) fn check_va_args_use(&mut self, token: PreprocessorToken) {
         if token.kind.is_identifier() {
+            let policy = self.context.configuration.extension_policy();
             let error_type = match self
                 .context
                 .string_cache
                 .at(token.identifier_id(self.context))
             {
-                | "__VA_ARGS__" => PreprocessorErrorType::VaArgsOutsideVariadicMacro,
-                | "__VA_OPT__" => PreprocessorErrorType::VaOptOutsideVariadicMacro,
+                | "__VA_ARGS__" => PreprocessorErrorType::VaArgsOutsideVariadicMacro(policy),
+                | "__VA_OPT__" => PreprocessorErrorType::VaOptOutsideVariadicMacro(policy),
                 | _ => return,
             };
             self.context.preprocessor_error(PreprocessorError {
