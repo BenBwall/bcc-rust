@@ -87,6 +87,7 @@ fn edge_cases_preserve_tokens_diagnostics_and_provenance() {
         "#pragma ignored tokens\nafter\n",
         "\"a\\q\" \"b\" 0xg identifier\n",
         "#define C(a,b) a ## b\n#define M(x) C(x,0) C(x,1)\nM(int value)\n",
+        "#define J(a,b,c) a##b##c\nJ(x,_,y) J(m n,o,p q) J(,,z) J(.,.,.)\n",
         "int sentinel; /* unterminated\n",
         "#error text here\nafter\n",
         "??=define X 1\r\nX ??/\r\n+ 2\r\n",

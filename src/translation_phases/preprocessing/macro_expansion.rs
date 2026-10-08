@@ -280,33 +280,10 @@ impl<'x> MacroCallCursor<'x> {
                         break;
                     };
                     if !pasted {
-                        tokens = if let Some(argument) = arguments.and_then(|arguments| {
-                            find_argument(arguments, token.identifier_id(preprocessor.context))
-                        }) {
-                            preprocessor.read_argument(argument, false)
-                        } else {
-                            let mut tokens = ArenaVec::new_in(preprocessor.scratch);
-                            tokens.push(token);
-                            tokens
-                        };
+                        tokens = preprocessor.paste_operand(arguments, token);
                     }
-                    let mut right = if let Some(argument) = arguments.and_then(|arguments| {
-                        find_argument(arguments, rhs.identifier_id(preprocessor.context))
-                    }) {
-                        preprocessor.read_argument(argument, false)
-                    } else {
-                        let mut right = ArenaVec::new_in(preprocessor.scratch);
-                        right.push(rhs);
-                        right
-                    };
-                    if !tokens.is_empty() && !right.is_empty() {
-                        let lhs = tokens.pop().unwrap();
-                        let rhs = right.remove(0);
-                        if let Some(merged) = preprocessor.merge_tokens(lhs, rhs) {
-                            tokens.push(merged);
-                        }
-                    }
-                    tokens.extend(right);
+                    let right = preprocessor.paste_operand(arguments, rhs);
+                    preprocessor.paste_onto(&mut tokens, right);
                     pasted = true;
                 }
             }
@@ -1242,14 +1219,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         lhs: PreprocessorToken,
         _hash_hash: PreprocessorToken,
         rhs: PreprocessorToken,
-        rhs_is_pasted: bool,
     ) -> Option<PreprocessorToken> {
         let lhs_frame = self.operand_frame(lhs);
-        let rhs_frame = if rhs_is_pasted {
-            None
-        } else {
-            self.operand_frame(rhs)
-        };
+        let rhs_frame = self.operand_frame(rhs);
         self.hash_hash_stack.push(HashHash::Empty);
         let rhs_is_macro_argument = if let Some(frame) = rhs_frame {
             self.push_tokenizer_frame(frame);
@@ -1947,48 +1919,149 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     ) -> Option<(PreprocessorToken, bool)> {
         'base: loop {
             let lhs = self.handle_hash_operator::<SHOULD_IGNORE_WHITESPACE>()?;
-            let replacement_list = match self.tokenizer_stack.last().map(|frame| &frame.frame_type)
-            {
-                | Some(
-                    TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                    | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
-                ) => true,
-                | Some(TokenizerFrameType::FunctionLikeMacroArgument { argument, .. }) =>
-                    argument.enclosing_arguments.is_some(),
-                | _ => false,
-            };
-            let hash_hash = if replacement_list {
-                let save = self.position();
-                self.context.set_ignore_tokenizer_errors(true);
-                let hash_hash = Self::next_ignore_whitespace(&mut self.tokenizer, self.context);
-                self.context.set_ignore_tokenizer_errors(false);
-                self.set_position(save);
-                if hash_hash.is_some_and(|v| v.kind == PreprocessorTokenType::HashHash) {
-                    Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
-                } else {
-                    None
-                }
+            // An empty argument's placemarker arrives as its frame is popped.
+            // A fenced read of that argument ends there, so it reads no `##`
+            // from the replacement list below the fence.
+            let fenced = self.tokenizer_stack.len() < self.operand_fence.max(self.expansion_fence);
+            let replacement_list = !fenced
+                && match self.tokenizer_stack.last().map(|frame| &frame.frame_type) {
+                    | Some(
+                        TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                        | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
+                    ) => true,
+                    | Some(TokenizerFrameType::FunctionLikeMacroArgument { argument, .. }) =>
+                        argument.enclosing_arguments.is_some(),
+                    | _ => false,
+                };
+            let hash_hash = if replacement_list && self.hash_hash_follows() {
+                Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
             } else {
                 None
             };
             if let Some(h) = hash_hash {
-                let Some((rhs, rhs_is_pasted)) = self.handle_hash_hash_operator::<true>() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::UnexpectedEndOfInput(
-                            "parsing hash-hash operator. Hash hash operator must be followed by a \
-                             preprocessor token on the same line.",
-                        ),
-                        source_vectors,
-                    });
+                let Some(rhs) = self.hash_hash_right_operand() else {
                     return Some((lhs, false));
                 };
-                if let Some(r) = self.parse_hash_hash_operator(lhs, h, rhs, rhs_is_pasted) {
+                if self.hash_hash_follows() {
+                    self.paste_hash_hash_chain(lhs, rhs);
+                    continue 'base;
+                }
+                if let Some(r) = self.parse_hash_hash_operator(lhs, h, rhs) {
                     return Some((r, true));
                 }
                 continue 'base;
             }
             return Some((lhs, false));
         }
+    }
+
+    /// Whether the replacement list being read continues with `##`.
+    fn hash_hash_follows(&mut self) -> bool {
+        let save = self.position();
+        self.context.set_ignore_tokenizer_errors(true);
+        let hash_hash = Self::next_ignore_whitespace(&mut self.tokenizer, self.context);
+        self.context.set_ignore_tokenizer_errors(false);
+        self.set_position(save);
+        hash_hash.is_some_and(|v| v.kind == PreprocessorTokenType::HashHash)
+    }
+
+    /// Reads the right operand of the `##` just read, applying `#` to it.
+    fn hash_hash_right_operand(&mut self) -> Option<PreprocessorToken> {
+        let operand = self.handle_hash_operator::<true>();
+        if operand.is_none() {
+            let source_vectors = self.current_location();
+            self.context.preprocessor_error(PreprocessorError {
+                error_type: PreprocessorErrorType::UnexpectedEndOfInput(
+                    "parsing hash-hash operator. Hash hash operator must be followed by a \
+                     preprocessor token on the same line.",
+                ),
+                source_vectors,
+            });
+        }
+        operand
+    }
+
+    /// Applies a chain of two or more `##` operators, `first ## second ##
+    /// ...`, whose second `##` is next, and replays the result to be
+    /// rescanned with the rest of the replacement list.
+    ///
+    /// The operators paste left to right, each pasting the result so far with
+    /// its right operand. The whole chain is pasted here, because the paste
+    /// of a single `##` waits for its argument frames to be read, and so
+    /// cannot be the operand of another `##`.
+    ///
+    /// C99: §6.10.3.3 paragraphs 2-3, p. 154; PDF p. 166: the order of
+    /// evaluation of `##` operators is unspecified; §6.10.3.4 paragraph 1,
+    /// p. 155; PDF p. 167.
+    fn paste_hash_hash_chain(&mut self, first: PreprocessorToken, second: PreprocessorToken) {
+        let arguments = self.get_arguments();
+        let mut result = self.paste_operand(arguments, first);
+        let mut operand = Some(second);
+        while let Some(token) = operand {
+            let right = self.paste_operand(arguments, token);
+            self.paste_onto(&mut result, right);
+            operand = if self.hash_hash_follows() {
+                _ = Self::next_ignore_whitespace(&mut self.tokenizer, self.context);
+                self.hash_hash_right_operand()
+            } else {
+                None
+            };
+        }
+        let Some(location) = result.first().map(|token| {
+            self.context
+                .get_source_vectors(token.source_vectors)
+                .first()
+                .cloned()
+                .unwrap_or_default()
+        }) else {
+            // Every operand was a placemarker.
+            return;
+        };
+        let tokenizer = TokenSource::replay(self.context, self.scratch, &[&result], location);
+        self.push_tokenizer_frame(TokenizerFrame {
+            frame_type: TokenizerFrameType::Rescan,
+            tokenizer,
+        });
+    }
+
+    /// The tokens that the `##` operand `token` stands for: the argument as
+    /// written when it names a parameter, which is empty for a placemarker,
+    /// and otherwise the token itself.
+    ///
+    /// C99: §6.10.3.3 paragraph 2, p. 154; PDF p. 166.
+    fn paste_operand(
+        &mut self,
+        arguments: Option<MacroArguments<'x>>,
+        token: PreprocessorToken,
+    ) -> ArenaVec<'x, PreprocessorToken> {
+        if let Some(argument) = arguments
+            .and_then(|arguments| find_argument(arguments, token.identifier_id(self.context)))
+        {
+            return self.read_argument(argument, false);
+        }
+        let mut tokens = ArenaVec::new_in(self.scratch);
+        tokens.push(token);
+        tokens
+    }
+
+    /// Pastes the last token of `left` with the first of `right`, then
+    /// appends the rest of `right`. An empty side is a placemarker, which
+    /// leaves the other unchanged.
+    ///
+    /// C99: §6.10.3.3 paragraphs 2-3, p. 154; PDF p. 166.
+    fn paste_onto(
+        &mut self,
+        left: &mut ArenaVec<'x, PreprocessorToken>,
+        mut right: ArenaVec<'x, PreprocessorToken>,
+    ) {
+        if !right.is_empty()
+            && let Some(lhs) = left.pop()
+        {
+            let rhs = right.remove(0);
+            if let Some(merged) = self.merge_tokens(lhs, rhs) {
+                left.push(merged);
+            }
+        }
+        left.extend(right);
     }
 }
