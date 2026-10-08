@@ -28,7 +28,8 @@ mod pipeline;
     clippy::disallowed_types,
     clippy::disallowed_macros,
     clippy::disallowed_methods,
-    reason = "Test fixtures name files with std paths and strings; the arena rule covers the               compiler, not its tests."
+    reason = "Test fixtures name files with std paths and strings; the arena rule covers the \
+              compiler, not its tests."
 )]
 mod test_support;
 pub(crate) mod translation_phases;
