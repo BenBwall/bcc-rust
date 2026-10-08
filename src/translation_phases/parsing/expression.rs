@@ -1524,20 +1524,16 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                     Self::report_alignof_expression(parser, token);
                 }
                 self.phase = ExpressionPhase::AwaitModern(keyword, token.source_vectors);
-                return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
-                    ModernFrame::new(
-                        parser.arena,
-                        if keyword == KeywordTokenType::Generic {
-                            ModernKind::Generic
-                        } else {
-                            ModernKind::Operand {
-                                type_only: false,
-                                constant:  false,
-                            }
-                        },
-                        parser.hard_error_count,
-                    ),
-                )));
+                return ParseAction::Push(parser.pooled_modern_frame(
+                    if keyword == KeywordTokenType::Generic {
+                        ModernKind::Generic
+                    } else {
+                        ModernKind::Operand {
+                            type_only: false,
+                            constant:  false,
+                        }
+                    },
+                ));
             }
             // A brace group directly inside a call's or statement header's
             // `(` and closed before its `)` is one error operand even when it

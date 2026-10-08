@@ -61,7 +61,6 @@ use super::{
     },
     modern::{
         AttributeSpecifier,
-        ModernFrame,
         ModernKind,
         ModernValue,
     },
@@ -543,13 +542,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 debug_assert!(returned.is_none());
                 if parser.attribute_starter(token) {
                     self.phase = StatementPhase::AwaitAttributes;
-                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
-                        ModernFrame::new(
-                            parser.arena,
-                            ModernKind::Attributes,
-                            parser.hard_error_count,
-                        ),
-                    )));
+                    return ParseAction::Push(parser.pooled_modern_frame(ModernKind::Attributes));
                 }
                 if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
                     self.phase = StatementPhase::AwaitCompound;

@@ -53,7 +53,6 @@ use super::{
     },
     modern::{
         ExtendedType,
-        ModernFrame,
         ModernKind,
         ModernValue,
     },
@@ -255,13 +254,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     matches!(x.kind, TokenType::Keyword(KeywordTokenType::StaticAssert))
                 }) {
                     self.phase = DeclarationPhase::AwaitAssertion;
-                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
-                        ModernFrame::new(
-                            parser.arena,
-                            ModernKind::Assertion,
-                            parser.hard_error_count,
-                        ),
-                    )));
+                    return ParseAction::Push(parser.pooled_modern_frame(ModernKind::Assertion));
                 }
                 // Specifiers are a child production because tag
                 // specifiers may suspend again
