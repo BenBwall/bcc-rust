@@ -138,6 +138,8 @@ enum OutputPurpose {
 /// State kept from the start of preprocessing to its end.
 struct PreprocessorState<'pp> {
     counter:               u64,
+    /// Reserved optional-replacement marker, checked by ID on token paths.
+    va_opt_name:           StringCacheId,
     query_depth:           usize,
     conditional_queries:   bool,
     retain_placeholders:   bool,
@@ -394,6 +396,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             resting: Some(Resting {
                 state: PreprocessorState {
                     counter: 0,
+                    va_opt_name: context.string_cache.intern("__VA_OPT__"),
                     query_depth: 0,
                     conditional_queries: false,
                     retain_placeholders: false,

@@ -13,23 +13,12 @@ error: expected `,` or `)` in macro parameter list, found number `1`
   |                ^ expected `,` or `)`
 
 
-diagnostic [SourceVector { index: 117, column: 9, line: 6, source_file_index: 0, length: 3 }]
-error: macro `FOO` redefined differently
- --> test-programs/define.c:6:9
-  |
-6 | #define FOO( C 1
-  |         ^^^ this definition differs from the previous one
-  |
-  = note: C99 §6.10.3p2: a redefinition must have the same parameters and an identical replacement list
-  = help: add `#undef FOO` before this definition
-
-
 test-programs/define.c:8:1: keyword `int` [SourceVector { index: 127, column: 1, line: 8, source_file_index: 0, length: 3 }]
 test-programs/define.c:8:5: identifier `x` [SourceVector { index: 131, column: 5, line: 8, source_file_index: 0, length: 1 }]
 test-programs/define.c:8:7: punctuator `=` [SourceVector { index: 133, column: 7, line: 8, source_file_index: 0, length: 1 }]
-test-programs/define.c:6:16: integer constant `1` = 1 (int) [SourceVector { index: 124, column: 16, line: 6, source_file_index: 0, length: 1 }]
+test-programs/define.c:1:15: integer constant `3` = 3 (int) [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 1 }]
 test-programs/define.c:8:14: punctuator `;` [SourceVector { index: 140, column: 14, line: 8, source_file_index: 0, length: 1 }]
-test-programs/define.c:6:16: integer constant `1` = 1 (int) [SourceVector { index: 124, column: 16, line: 6, source_file_index: 0, length: 1 }]
+test-programs/define.c:1:15: integer constant `3` = 3 (int) [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 1 }]
 test-programs/define.c:10:5: integer constant `5` = 5 (int) [SourceVector { index: 152, column: 5, line: 10, source_file_index: 0, length: 1 }]
 test-programs/define.c:3:21: punctuator `+` [SourceVector { index: 64, column: 21, line: 3, source_file_index: 0, length: 1 }]
 test-programs/define.c:10:8: integer constant `7` = 7 (int) [SourceVector { index: 155, column: 8, line: 10, source_file_index: 0, length: 1 }]
@@ -40,7 +29,7 @@ test-programs/define.c:12:8: integer constant `2` = 2 (int) [SourceVector { inde
 test-programs/define.c:12:9: punctuator `,` [SourceVector { index: 185, column: 9, line: 12, source_file_index: 0, length: 1 }]
 test-programs/define.c:12:11: integer constant `3` = 3 (int) [SourceVector { index: 187, column: 11, line: 12, source_file_index: 0, length: 1 }]
 test-programs/define.c:12:12: punctuator `,` [SourceVector { index: 188, column: 12, line: 12, source_file_index: 0, length: 1 }]
-test-programs/define.c:6:16: integer constant `1` = 1 (int) [SourceVector { index: 124, column: 16, line: 6, source_file_index: 0, length: 1 }]
+test-programs/define.c:1:15: integer constant `3` = 3 (int) [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 1 }]
 === donut.c "             i,j,k,x,y,o,N;\r\n         main(){float z[1760],a\r\n      #define R(t,x,y) f=x;x-=t*y\\\r\n   ;y+=t*f;f=(3-x*x-y*y)/2;x*=f;y*=f;\r\n   =0,e=1,c=1,d=0,f,g,h,G,H,A,t,D;char\r\n b[1760];for(;;){memset(b,32,1760);g=0,\r\nh=1;memset(z,0,7040);for(j=0;j<90;j++){\r\nG=0,H=1;for(i=0;i<314;i++){A=h+2,D=1/(G*\r\nA*a+g*e+5);t=G*A        *e-g*a;x=40+30*D\r\n*(H*A*d-t*c);y=          12+15*D*(H*A*c+\r\nt*d);o=x+80*y;N          =8*((g*a-G*h*e)\r\n*d-G*h*a-g*e-H*h        *c);if(22>y&&y>\r\n 0&&x>0&&80>x&&D>z[o]){z[o]=D;b[o]=(N>0\r\n  ?N:0)[\".,-~:;=!*#$@\"];}R(.02,H,G);}R(\r\n  .07,h,g);}for(k=0;1761>k;k++)putchar\r\n   (k%80?b[k]:10);R(.04,e,a);R(.02,d,\r\n     c);usleep(15000);printf('\\n'+(\r\n        \" donut.c! \\x1b[23A\"));}}\r\n           /*3D-spinning-donut"
 test-programs/donut.c:1:14: identifier `i` [SourceVector { index: 13, column: 14, line: 1, source_file_index: 0, length: 1 }]
 test-programs/donut.c:1:15: punctuator `,` [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 1 }]

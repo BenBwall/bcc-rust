@@ -227,3 +227,4 @@ tokenizer	UnknownToken	tokenizer-unknown-token.c	rendered
 tokenizer	UnterminatedCharacter	tokenizer-unterminated-character.c	rendered
 tokenizer	UnterminatedString	tokenizer-unterminated-string.c	rendered
 parser	ExpectedGnuSyntax	parser-gnu-asm.c	rendered
+pp	VaOptOutsideVariadicMacro	pp-va-opt-outside-variadic-macro.c	rendered

@@ -235,6 +235,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::UndefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::MissingWhitespaceAfterMacroName(..)
             | PreprocessorErrorType::VaArgsOutsideVariadicMacro
+            | PreprocessorErrorType::VaOptOutsideVariadicMacro
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(..)
             | PreprocessorErrorType::FloatConstantOutOfRange { .. }
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -450,6 +451,10 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     ///
     /// C99: §6.10.3 paragraph 5, p. 151; PDF p. 163.
     VaArgsOutsideVariadicMacro,
+    /// `__VA_OPT__` outside a variadic macro replacement list, retained
+    /// as an identifier with a warning, like GCC and Clang.
+    /// C23: §6.10.5p5, p. 178; PDF p. 191.
+    VaOptOutsideVariadicMacro,
     /// A function-like macro that names one parameter twice. The definition
     /// is discarded.
     ///
@@ -952,12 +957,20 @@ impl PreprocessorErrorType<'_> {
             ))
             .label("expected a macro name")
             .note("C99 §6.10.3: a macro name is an identifier"),
+            | Self::RedefinitionOfBuiltInMacro(name)
+                if super::language_features::overridable_gnu_builtin(name) =>
+                new(format_in!(arena, "redefining builtin macro `{name}`"))
+                    .label("replacement overrides the implementation definition"),
             | Self::RedefinitionOfBuiltInMacro(name) => new(format_in!(
                 arena,
                 "cannot redefine predefined macro `{name}`"
             ))
             .label("predefined by the implementation")
             .note("C99 §6.10.8p4: predefined macro names shall not be redefined"),
+            | Self::UndefinitionOfBuiltInMacro(name)
+                if super::language_features::overridable_gnu_builtin(name) =>
+                new(format_in!(arena, "undefining builtin macro `{name}`"))
+                    .label("implementation definition removed"),
             | Self::UndefinitionOfBuiltInMacro(name) => new(format_in!(
                 arena,
                 "cannot undefine predefined macro `{name}`"
@@ -978,6 +991,13 @@ impl PreprocessorErrorType<'_> {
                     .label("not in a variadic macro's replacement list")
                     .note(
                         "C99 §6.10.3p5: `__VA_ARGS__` is reserved for macros whose parameters end \
+                         in `...`",
+                    ),
+            | Self::VaOptOutsideVariadicMacro =>
+                new("`__VA_OPT__` can only appear in the replacement list of a variadic macro")
+                    .label("not in a variadic macro's replacement list")
+                    .note(
+                        "C23 §6.10.5p5: `__VA_OPT__` is reserved for macros whose parameters end \
                          in `...`",
                     ),
             | Self::DuplicateMacroParameter(name) =>

@@ -263,7 +263,7 @@ fn va_opt_and_gnu_named_variadic_macros_expand_with_empty_and_nonempty_arguments
 }
 
 #[test]
-fn named_variadic_redefinitions_compare_original_names_and_normalized_bodies() {
+fn named_variadic_redefinitions_compare_original_names_and_bodies() {
     let source = "#define N(args...) args\n#define N(args...) args\nN(1)\n#define U(args...) \
                   2\n#define U(other...) 2\nU(0)\n#undef N\n#define N(other...) other\nN(3)\n";
     for gnu in [false, true] {
@@ -274,6 +274,38 @@ fn named_variadic_redefinitions_compare_original_names_and_normalized_bodies() {
         for value in ["= 1", "= 2", "= 3"] {
             assert!(tokens.contains(value), "{tokens}");
         }
+    }
+}
+
+#[test]
+fn named_variadic_parameters_preserve_their_spelling_and_argument_boundaries() {
+    let source = "#define N(args...) args;\n#define O N\nO(1,2)\n#define S(args...) \
+                  #args;\nS(3,4)\n#define P(args...) f(0, ## args);\nP() P(5,6)\n#define \
+                  V(args...) __VA_OPT__(args);\nV() V(7,8)\n#define R(args...) __VA_ARGS__ \
+                  args;\nR(9,10)\n";
+    for standard in [
+        CStandard::C89,
+        CStandard::C17,
+        CStandard::C23,
+        CStandard::C2y,
+    ] {
+        let (tokens, errors) = observe(source, mode(standard).with_gnu_extensions(true));
+        assert_eq!(errors.len(), 1, "{standard:?}: {errors:?}");
+        assert!(errors[0].contains("__VA_ARGS__"), "{errors:?}");
+        let tokens = spellings(&tokens);
+        for value in 1..=10 {
+            if value == 3 || value == 4 {
+                continue;
+            }
+            assert!(tokens.contains(&format!("= {value} (int)")), "{tokens}");
+        }
+        assert!(tokens.contains("string literal \"3,4\""), "{tokens}");
+        assert_eq!(
+            tokens.matches("identifier `__VA_ARGS__`").count(),
+            1,
+            "{tokens}"
+        );
+        assert_eq!(tokens.matches("punctuator `,`").count(), 5, "{tokens}");
     }
 }
 
@@ -314,6 +346,123 @@ fn bit_precise_preprocessing_constants_use_intmax_magnitude_checks() {
     let (tokens, errors) = observe("9223372036854775808wb;\n", mode(CStandard::C23));
     assert!(errors.is_empty(), "{errors:?}");
     assert!(spellings(&tokens).contains("_BitInt(65)"), "{tokens:?}");
+}
+
+#[test]
+fn gnu_builtins_can_be_overridden_without_changing_protected_iso_macros() {
+    for standard in [
+        CStandard::C89,
+        CStandard::C17,
+        CStandard::C23,
+        CStandard::C2y,
+    ] {
+        for gnu in [false, true] {
+            let source = "#define __COUNTER__ 77\n__COUNTER__;\n#undef __has_attribute\n#define \
+                          __has_attribute(x) 78\n__has_attribute(unused);\n#undef \
+                          __has_builtin\n#ifdef __has_builtin\nwrong\n#else\nundefined\n#endif\n";
+            let (tokens, errors) = observe(source, mode(standard).with_gnu_extensions(gnu));
+            assert_eq!(errors.len(), 3, "{errors:?}");
+            assert!(
+                errors.iter().all(|error| {
+                    error.contains("redefining builtin") || error.contains("undefining builtin")
+                }),
+                "{errors:?}"
+            );
+            let tokens = spellings(&tokens);
+            assert!(tokens.contains("= 77 (int)"), "{tokens}");
+            assert!(tokens.contains("= 78 (int)"), "{tokens}");
+            assert!(tokens.contains("identifier `undefined`"), "{tokens}");
+            assert!(!tokens.contains("identifier `wrong`"), "{tokens}");
+        }
+    }
+    for name in [
+        "__STDC__",
+        "__has_include",
+        "__has_embed",
+        "__has_c_attribute",
+    ] {
+        let source =
+            format!("#undef {name}\n#define {name} 0\n#if defined({name})\nprotected\n#endif\n");
+        let (tokens, errors) = observe(&source, mode(CStandard::C23));
+        assert_eq!(errors.len(), 2, "{name}: {errors:?}");
+        assert!(
+            errors.iter().all(|error| error.contains("cannot")),
+            "{errors:?}"
+        );
+        assert!(
+            spellings(&tokens).contains("identifier `protected`"),
+            "{tokens:?}"
+        );
+    }
+}
+
+#[test]
+fn gnu_builtin_redefinitions_handle_both_macro_shapes_and_malformed_input() {
+    for standard in [
+        CStandard::C89,
+        CStandard::C17,
+        CStandard::C23,
+        CStandard::C2y,
+    ] {
+        for gnu in [false, true] {
+            let config = mode(standard).with_gnu_extensions(gnu);
+            for name in ["__COUNTER__", "__has_attribute", "__has_builtin"] {
+                for (definition, invocation) in [(" 79", ""), ("(x) 79", "(unused)")] {
+                    let source =
+                        format!("#define {name}{definition}\n{name}{invocation};\nafter\n");
+                    let (tokens, errors) = observe(&source, config);
+                    assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+                    assert!(errors[0].contains("redefining builtin"), "{errors:?}");
+                    let tokens = spellings(&tokens);
+                    assert!(tokens.contains("= 79 (int)"), "{source}: {tokens}");
+                    assert!(tokens.contains("identifier `after`"), "{source}: {tokens}");
+                }
+                for definition in ["(x,", "(x x) 79", " ##", "(x) ## x", "(x) x ##"] {
+                    let (invocation, value) = match name {
+                        | "__COUNTER__" => ("", 0),
+                        | "__has_attribute" => ("(unused)", 1),
+                        | _ => ("(__builtin_offsetof)", 1),
+                    };
+                    let source = format!(
+                        "#define {name}{definition}\n#if \
+                         defined({name})\npreserved\n#endif\n{name}{invocation};\nafter\n"
+                    );
+                    let (tokens, errors) = observe(&source, config);
+                    assert!(errors.len() >= 2, "{source}: {errors:?}");
+                    let tokens = spellings(&tokens);
+                    assert!(
+                        tokens.contains("identifier `preserved`"),
+                        "{source}: {tokens}"
+                    );
+                    assert!(tokens.contains("identifier `after`"), "{source}: {tokens}");
+                    assert!(
+                        tokens.contains(&format!("= {value} (int)")),
+                        "{source}: {tokens}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn misplaced_variadic_parameters_reject_the_definition_and_preserve_old_macro() {
+    for config in [
+        mode(CStandard::C23),
+        mode(CStandard::C17).with_gnu_extensions(true),
+    ] {
+        for parameters in ["..., x", "..., ...", "x, ..., y"] {
+            let source = format!("#define M 81\n#define M({parameters}) x\nM;\nafter\n");
+            let (tokens, errors) = observe(&source, config);
+            assert!(
+                errors.iter().any(|error| error.contains("last parameter")),
+                "{source}: {errors:?}"
+            );
+            let tokens = spellings(&tokens);
+            assert!(tokens.contains("= 81 (int)"), "{source}: {tokens}");
+            assert!(tokens.contains("identifier `after`"), "{source}: {tokens}");
+        }
+    }
 }
 
 #[test]
@@ -797,3 +946,44 @@ fn conditional_boolean_identifiers_follow_revision_after_macro_expansion() {
     }
 }
 
+#[test]
+fn va_opt_is_reserved_for_variadic_replacement_lists() {
+    for config in [
+        mode(CStandard::C23),
+        mode(CStandard::C2y),
+        mode(CStandard::C17).with_gnu_extensions(true),
+    ] {
+        for source in [
+            "#define __VA_OPT__ 83\nint value = __VA_OPT__;\nint after;\n",
+            "#define M(__VA_OPT__) __VA_OPT__\nint after;\n",
+            "#define M(x) __VA_OPT__(x)\nint after;\n",
+            "__VA_OPT__;\nint after;\n",
+        ] {
+            let (output, errors) = observe(source, config);
+            assert!(
+                errors.iter().any(|error| error.contains(
+                    "`__VA_OPT__` can only appear in the replacement list of a variadic macro"
+                )),
+                "{source}: {errors:?}"
+            );
+            assert!(
+                spellings(&output).contains("identifier `after`"),
+                "{source}"
+            );
+        }
+        let (output, errors) = observe(
+            "#define M(...) __VA_OPT__(83)\nM() M(x)\nint after;\n",
+            config,
+        );
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(spellings(&output).matches("83 (int)").count(), 1);
+    }
+    let (_, errors) = observe(
+        "#define M(args...) __VA_OPT__(args)\nM() M(83)\n",
+        mode(CStandard::C23).with_gnu_extensions(true),
+    );
+    assert!(
+        errors.is_empty(),
+        "named variadic optional replacement: {errors:?}"
+    );
+}

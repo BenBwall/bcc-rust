@@ -23,7 +23,10 @@ use super::{
     },
 };
 use crate::{
-    configuration::Feature,
+    configuration::{
+        Feature,
+        FeatureOrigin,
+    },
     translation_phases::{
         SourceVector,
         SourceVectors,
@@ -52,6 +55,14 @@ pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
     ("__STDC_EMBED_FOUND__", Feature::Embed),
     ("__STDC_EMBED_EMPTY__", Feature::Embed),
 ];
+
+/// GNU builtins can be overridden with a warning, like GCC and Clang. ISO
+/// predefined macros and standard query operators retain their protection.
+pub(super) fn overridable_gnu_builtin(name: &str) -> bool {
+    LANGUAGE_BUILTINS.iter().any(|(spelling, feature)| {
+        *spelling == name && matches!(feature.origin(), FeatureOrigin::Gnu)
+    })
+}
 
 impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
     /// C99 §6.10.3p4 permits empty arguments, unlike C89 §3.8.3.

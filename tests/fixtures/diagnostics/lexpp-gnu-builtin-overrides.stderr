@@ -1,0 +1,13 @@
+warning: redefining builtin macro `__COUNTER__`
+ --> lexpp-gnu-builtin-overrides.c:1:9
+  |
+1 | #define __COUNTER__ 77
+  |         ^^^^^^^^^^^ replacement overrides the implementation definition
+
+warning: undefining builtin macro `__has_attribute`
+ --> lexpp-gnu-builtin-overrides.c:3:8
+  |
+3 | #undef __has_attribute
+  |        ^^^^^^^^^^^^^^^ implementation definition removed
+
+2 warnings generated.

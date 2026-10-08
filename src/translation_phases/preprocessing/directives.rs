@@ -292,10 +292,6 @@ fn header_name_from_source<'a>(
     clippy::needless_continue,
     reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
 )]
-#[expect(
-    clippy::while_let_loop,
-    reason = "The macro-parameter loop has multiple semantic exit conditions."
-)]
 impl<'x> Expander<'_, '_, '_, 'x> {
     /// Executes the directive that `token`, a `#`, introduces.
     ///
@@ -1229,8 +1225,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         ),
                         source_vectors: name.source_vectors,
                     });
-                    self.skip_until_newline();
-                    return;
+                    if !super::language_features::overridable_gnu_builtin(
+                        self.context.string_cache.at(name.contents),
+                    ) {
+                        self.skip_until_newline();
+                        return;
+                    }
+                    None
                 },
             },
         };
@@ -1278,10 +1279,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let (body, first) = if is_function_like {
             if old_definition.as_ref().is_some_and(|d| match d {
                 | MacroDefinition::ObjectLike { .. } => true,
-                | MacroDefinition::FunctionLike { .. } => false,
-                | MacroDefinition::BuiltIn => {
-                    unreachable!("The case where name is a built-in macro is handled above")
-                },
+                // Overridable GNU builtins have no source macro shape.
+                | MacroDefinition::FunctionLike { .. } | MacroDefinition::BuiltIn => false,
             }) {
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:
@@ -1311,9 +1310,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     },
                     "parsing macro definition",
                 ) else {
+                    is_valid = false;
                     break;
                 };
                 if is_variadic {
+                    is_valid = false;
                     self.context.preprocessor_error(PreprocessorError {
                         error_type:     PreprocessorErrorType::VariadicMacroMustBeLastParameter(
                             self.context
@@ -1354,7 +1355,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         )
                     ,
                     "parsing macro definition",
-                ) else {break;};
+                ) else {is_valid = false; break;};
                 if comma_or_closing_parent.kind == PreprocessorTokenType::Ellipsis {
                     variadic_alias = argument_names.pop();
                     is_variadic = true;
@@ -1389,11 +1390,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             (self.tokenizer.clone(), None)
         } else {
             if old_definition.as_ref().is_some_and(|d| match d {
-                | MacroDefinition::ObjectLike { .. } => false,
                 | MacroDefinition::FunctionLike { .. } => true,
-                | MacroDefinition::BuiltIn => {
-                    unreachable!("The case where name is a built-in macro is handled above")
-                },
+                // Overridable GNU builtins have no source macro shape.
+                | MacroDefinition::ObjectLike { .. } | MacroDefinition::BuiltIn => false,
             }) {
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:
@@ -1407,8 +1406,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             // The probe already read the replacement list's first token.
             (tokenizer, probe)
         };
-        let (list_is_valid, lists_match) =
-            self.read_replacement_list(first, is_variadic, variadic_alias, old_tokenizer.as_mut());
+        let (list_is_valid, lists_match) = self.read_replacement_list(
+            first,
+            is_variadic,
+            is_variadic && variadic_alias.is_none(),
+            old_tokenizer.as_mut(),
+        );
         if !(is_valid && list_is_valid) {
             self.last_was_newline = true;
             self.current_is_newline = true;
@@ -1449,28 +1452,6 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             self.current_is_newline = true;
             return;
         }
-        let body = if let Some(alias) = variadic_alias {
-            let mut body = body;
-            let mut tokens = ArenaVec::new_in(self.scratch);
-            while let Some(mut token) = body.next_item(self.context) {
-                if token.kind.is_identifier() && token.identifier_id(self.context) == alias {
-                    token.contents = self.context.string_cache.intern("__VA_ARGS__");
-                }
-                let last = token.kind == PreprocessorTokenType::Newline;
-                tokens.push(token);
-                if last {
-                    break;
-                }
-            }
-            TokenSource::replay(
-                self.context,
-                self.scratch,
-                &[&tokens],
-                crate::translation_phases::SourceVector::default(),
-            )
-        } else {
-            body
-        };
         let tokenizer = self.state.lexed_files.persist(&body);
         let definition = if is_function_like {
             MacroDefinition::FunctionLike {
@@ -1507,7 +1488,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         &mut self,
         mut first: Option<PreprocessorToken>,
         is_variadic: bool,
-        variadic_alias: Option<StringCacheId>,
+        allows_va_args: bool,
         mut old: Option<&mut TokenSource<'_>>,
     ) -> (bool, bool) {
         let mut lists_match = true;
@@ -1521,15 +1502,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             };
             if lists_match && let Some(old) = old.as_deref_mut() {
                 let old_next = old.next_item(self.context);
-                let mut comparable = next;
-                if let (Some(alias), Some(token)) = (variadic_alias, comparable.as_mut())
-                    && token.kind.is_identifier()
-                    && token.identifier_id(self.context) == alias
-                {
-                    token.contents = self.context.string_cache.intern("__VA_ARGS__");
-                }
                 lists_match =
-                    same_replacement_token(self.context, old_next.as_ref(), comparable.as_ref());
+                    same_replacement_token(self.context, old_next.as_ref(), next.as_ref());
             }
             let Some(token) = next.filter(|token| token.kind != PreprocessorTokenType::Newline)
             else {
@@ -1538,7 +1512,15 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             if token.kind == PreprocessorTokenType::Whitespace {
                 continue;
             }
-            if !is_variadic {
+            if !is_variadic
+                || (!allows_va_args
+                    && token.kind.is_identifier()
+                    && self
+                        .context
+                        .string_cache
+                        .at(token.identifier_id(self.context))
+                        == "__VA_ARGS__")
+            {
                 self.check_va_args_use(token);
             }
             _ = first_operand.get_or_insert(token);
@@ -1567,21 +1549,25 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     }
 
     /// Warns when `token`, read in a `#define` directive, is `__VA_ARGS__`
+    /// or `__VA_OPT__`
     /// where it may not appear; the caller allows a variadic macro's
     /// replacement list.
     ///
-    /// C99: §6.10.3 paragraph 5, p. 151; PDF p. 163.
-    fn check_va_args_use(&mut self, token: PreprocessorToken) {
-        if token.kind.is_identifier()
-            && self
+    /// C99: §6.10.3 paragraph 5, p. 151; PDF p. 163. C23 adds
+    /// `__VA_OPT__`, §6.10.5p5, p. 178; PDF p. 191.
+    pub(super) fn check_va_args_use(&mut self, token: PreprocessorToken) {
+        if token.kind.is_identifier() {
+            let error_type = match self
                 .context
                 .string_cache
                 .at(token.identifier_id(self.context))
-                .trim_end_matches('\0')
-                == "__VA_ARGS__"
-        {
+            {
+                | "__VA_ARGS__" => PreprocessorErrorType::VaArgsOutsideVariadicMacro,
+                | "__VA_OPT__" => PreprocessorErrorType::VaOptOutsideVariadicMacro,
+                | _ => return,
+            };
             self.context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::VaArgsOutsideVariadicMacro,
+                error_type,
                 source_vectors: token.source_vectors,
             });
         }
@@ -1623,6 +1609,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 ),
                 source_vectors: name.source_vectors,
             });
+            if super::language_features::overridable_gnu_builtin(
+                self.context.string_cache.at(name.contents),
+            ) {
+                _ = self.state.macro_definitions.remove(&name_id);
+            }
         } else {
             _ = self.state.macro_definitions.remove(&name_id);
         }

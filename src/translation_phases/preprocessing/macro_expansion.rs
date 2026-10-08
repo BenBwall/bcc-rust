@@ -78,7 +78,7 @@ pub(crate) enum MacroDefinition<'pp> {
         argument_names: &'pp [StringCacheId],
         tokenizer:      TokenSource<'pp>,
         is_variadic:    bool,
-        /// Original GNU parameter spelling, before body normalization.
+        /// GNU named variadic parameter, distinct from standard `__VA_ARGS__`.
         variadic_alias: Option<StringCacheId>,
     },
     /// A predefined macro or the `_Pragma` operator, expanded by the driver.
@@ -113,6 +113,7 @@ pub(crate) enum HashHash {
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct FunctionLikeMacroArgument<'x> {
     pub(super) omitted:             bool,
+    pub(super) variadic:            bool,
     pub(super) name:                StringCacheId,
     pub(super) tokenizer:           TokenSource<'x>,
     pub(super) enclosing_arguments: Option<MacroArguments<'x>>,
@@ -199,7 +200,7 @@ impl<'x> MacroCallCursor<'x> {
                 ) => {
                     match preprocessor.update_macro_argument_paren_depth(
                         token,
-                        argument.name,
+                        argument.variadic,
                         *depth,
                     ) {
                         | Some(next) => {
@@ -512,10 +513,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         if !optional && !comma {
             return original;
         }
-        let va_name = self.context.string_cache.intern("__VA_ARGS__");
-        let Some(argument) = find_argument(arguments, va_name) else {
+        let Some(argument) = arguments.iter().find(|argument| argument.variadic) else {
             return original;
         };
+        let va_name = argument.name;
         let empty = if optional || self.context.configuration.accepts(Feature::MsVaArgs) {
             let mut expanded = self.expanded_argument(invocation, argument);
             !std::iter::from_fn(|| expanded.next_item(self.context))
@@ -648,8 +649,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         &mut self,
         invocation: PreprocessorToken,
         names: &[StringCacheId],
-        variadic: bool,
+        variadic_name: Option<StringCacheId>,
     ) -> Option<(MacroArguments<'x>, crate::translation_phases::SourceVector)> {
+        let variadic = variadic_name.is_some();
         let mut cursor = MacroCallCursor::new(self);
         let opening = loop {
             let token = cursor.next(self)?;
@@ -759,12 +761,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             .unwrap_or_default();
         let parameters = names.len() + usize::from(variadic);
         let mut arguments = ArenaVec::with_capacity_in(parameters, self.scratch);
-        for (i, name) in names
-            .iter()
-            .copied()
-            .chain(variadic.then(|| self.context.string_cache.intern("__VA_ARGS__")))
-            .enumerate()
-        {
+        for (i, name) in names.iter().copied().chain(variadic_name).enumerate() {
             // A normal argument cursor is terminated by a closing parenthesis.
             // Keep that sentinel so all existing raw #/## readers share bounds.
             let group = match i {
@@ -779,6 +776,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 location.clone(),
             );
             arguments.push(FunctionLikeMacroArgument {
+                variadic: variadic && i == names.len(),
                 expanded: self.scratch.alloc(OnceCell::new()),
                 omitted: i >= group_ends.len()
                     || (variadic
@@ -827,7 +825,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         else {
             return false;
         };
-        let name = argument.name;
+        let variadic = argument.variadic;
         let depth = *paren_depth;
         let position = self.position();
         let next_is_end = loop {
@@ -840,7 +838,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     continue,
                 | Some(token) =>
                     break depth.is_some_and(|depth| {
-                        self.update_macro_argument_paren_depth(token, name, depth)
+                        self.update_macro_argument_paren_depth(token, variadic, depth)
                             .is_none()
                     }),
                 | None => break true,
@@ -1229,7 +1227,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 source_vectors: token.source_vectors,
             };
         }
-        let argument_id = argument.name;
+        let variadic = argument.variadic;
         let mut token_tokenizer = argument.tokenizer.clone();
         let mut last_was_whitespace = true;
         let mut synthetic_contents = ArenaString::new_in(self.scratch);
@@ -1250,7 +1248,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 });
                 break 'base;
             };
-            match self.update_macro_argument_paren_depth(token, argument_id, paren_depth) {
+            match self.update_macro_argument_paren_depth(token, variadic, paren_depth) {
                 | Some(depth) => paren_depth = depth,
                 | None => break,
             }
@@ -1675,11 +1673,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                             ..
                         } => {
                             let paren_depth = *paren_depth;
-                            let argument_name = argument.name;
+                            let variadic = argument.variadic;
                             let has_generated_token = *has_generated_token;
                             let next_paren_depth = match paren_depth {
                                 | Some(depth) => self
-                                    .update_macro_argument_paren_depth(token, argument_name, depth)
+                                    .update_macro_argument_paren_depth(token, variadic, depth)
                                     .map(Some),
                                 | None => Some(None),
                             };
@@ -1778,15 +1776,14 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     fn update_macro_argument_paren_depth(
         &self,
         token: PreprocessorToken,
-        argument_name: StringCacheId,
+        variadic: bool,
         paren_depth: usize,
     ) -> Option<usize> {
         _ = self;
         // C99 §6.10.3p11: only a comma outside inner parentheses ends a
         // named argument.
         if paren_depth == 1
-            && ((token.kind == PreprocessorTokenType::Comma
-                && self.context.string_cache.at(argument_name) != "__VA_ARGS__")
+            && ((token.kind == PreprocessorTokenType::Comma && !variadic)
                 || token.kind == PreprocessorTokenType::ClosingParenthesis)
         {
             return None;

@@ -617,6 +617,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             {
                 break 'base Some(token);
             }
+            // C23: §6.10.5p5, p. 178; PDF p. 191. Valid optional
+            // replacements have already been consumed by prepare_variadic_body.
+            if token.identifier_id(self.context) == self.state.va_opt_name {
+                self.check_va_args_use(token);
+            }
             // C99 §6.10.3.1: parameters are replaced before the replacement
             // list is rescanned, so a parameter hides a macro of its name.
             // `##` runs after replacement, so its result names no parameter.
@@ -669,14 +674,18 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                         argument_names,
                         tokenizer,
                         is_variadic,
-                        ..
+                        variadic_alias,
                     } => {
+                        let variadic_name = is_variadic.then(|| {
+                            variadic_alias
+                                .unwrap_or_else(|| self.context.string_cache.intern("__VA_ARGS__"))
+                        });
                         if !matches!(
                             self.tokenizer_stack.last().map(|f| &f.frame_type),
                             Some(TokenizerFrameType::SourceFile { .. })
                         ) {
                             let Some((arguments, invocation_end)) =
-                                self.capture_cross_frame_call(token, argument_names, is_variadic)
+                                self.capture_cross_frame_call(token, argument_names, variadic_name)
                             else {
                                 break 'base Some(token);
                             };
@@ -778,6 +787,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                                     self.context.report_extension(crate::configuration::Feature::EmptyMacroArguments, "empty macro argument", token.source_vectors);
                                                 }
                                                 arguments.push(FunctionLikeMacroArgument {
+                                                    variadic: false,
                                                     expanded: self.scratch.alloc(OnceCell::new()),
                                                     omitted: false,
                                                     name: at!(),
@@ -800,6 +810,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                             self.report_empty_macro_argument(token.source_vectors);
                                         }
                                         arguments.push(FunctionLikeMacroArgument {
+                                            variadic: false,
                                             expanded: self.scratch.alloc(OnceCell::new()),
                                             omitted: false,
                                             name: at!(),
@@ -893,8 +904,9 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                 | None => self.tokenizer.clone(),
                             };
                             arguments.push(FunctionLikeMacroArgument {
+                                variadic: true,
                                 expanded: self.scratch.alloc(OnceCell::new()),
-                                name: self.context.string_cache.intern("__VA_ARGS__"),
+                                name: variadic_name.expect("variadic parameter name"),
                                 omitted: closed_at.is_some(),
                                 tokenizer: va_args_tokenizer,
                                 enclosing_arguments,
@@ -982,111 +994,12 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                         self.push_tokenizer_frame(frame);
                         continue;
                     },
-                    | MacroDefinition::BuiltIn =>
-                        match self.context.string_cache.at(token.contents) {
-                            // C99 §6.10.8p1: each built-in expands to an ordinary
-                            // token spelled as C source, located at the invocation.
-                            | "__FILE__" => {
-                                let invocation = self.invocation_location(token);
-                                let file: &Path =
-                                    self.context.source_files[invocation.source_file_index];
-                                let contents = intern_string_literal(
-                                    self.context,
-                                    self.scratch,
-                                    &file.to_string_lossy(),
-                                );
-                                break 'base Some(PreprocessorToken {
-                                    kind: PreprocessorTokenType::String,
-                                    contents,
-                                    source_vectors: self.context.push_source_vectors(&[invocation]),
-                                });
-                            },
-                            | "__LINE__" => {
-                                let invocation = self.invocation_location(token);
-                                let contents =
-                                    intern_line_number(self.context, self.scratch, invocation.line);
-                                break 'base Some(PreprocessorToken {
-                                    kind: PreprocessorTokenType::Number,
-                                    contents,
-                                    source_vectors: self.context.push_source_vectors(&[invocation]),
-                                });
-                            },
-                            | name @ ("__STDC__"
-                            | "__STDC_VERSION__"
-                            | "__STRICT_ANSI__"
-                            | "__STDC_HOSTED__"
-                            | "__STDC_MB_MIGHT_NEQ_WC__") => {
-                                // C99 §6.10.8p1. This front end currently uses
-                                // a freestanding execution model, so
-                                // `__STDC_HOSTED__` is 0 (§4p6); the version
-                                // must retain its prescribed long suffix.
-                                // MB_MIGHT_NEQ_WC permits unequal codes; its 1
-                                // does not assert that their values differ.
-                                let spelling = if name == "__STDC_VERSION__" {
-                                    self.context
-                                        .configuration
-                                        .standard()
-                                        .version_macro()
-                                        .expect("version built-in is registered only when defined")
-                                } else if name == "__STDC_HOSTED__" {
-                                    "0\0"
-                                } else {
-                                    "1\0"
-                                };
-                                break 'base Some(PreprocessorToken {
-                                    kind:           PreprocessorTokenType::Number,
-                                    contents:       self.context.string_cache.intern(spelling),
-                                    source_vectors: token.source_vectors,
-                                });
-                            },
-                            | name @ ("__DATE__" | "__TIME__") => {
-                                let is_date = name == "__DATE__";
-                                let source_date_epoch =
-                                    self.context.configuration.source_date_epoch();
-                                let timestamp =
-                                    self.state.translation_timestamp.get_or_insert_with(|| {
-                                        TranslationTimestamp::new(
-                                            self.state.arena,
-                                            source_date_epoch,
-                                        )
-                                    });
-                                let contents = intern_string_literal(
-                                    self.context,
-                                    self.scratch,
-                                    if is_date {
-                                        &timestamp.date
-                                    } else {
-                                        &timestamp.time
-                                    },
-                                );
-                                break 'base Some(PreprocessorToken {
-                                    kind: PreprocessorTokenType::String,
-                                    contents,
-                                    source_vectors: token.source_vectors,
-                                });
-                            },
-                            // C99 §6.10.9p1: `_Pragma ( string-literal )` runs
-                            // the destringized literal, retokenized, as the
-                            // pp-tokens of a `#pragma`, and all four tokens
-                            // are removed.
-                            | "_Pragma" => {
-                                self.expand_pragma_operator();
-                                continue 'base;
-                            },
-                            | name if super::language_features::LANGUAGE_BUILTINS
-                                .iter()
-                                .any(|(spelling, _)| *spelling == name) =>
-                            {
-                                if let Some(result) = self.language_builtin(token) {
-                                    break 'base Some(result);
-                                }
-                                continue 'base;
-                            },
-                            | s => unreachable!(
-                                "Compiler bug: Predefined macro {s:#?} not in \
-                                 PREDEFINED_MACRO_NAMES"
-                            ),
-                        },
+                    | MacroDefinition::BuiltIn => {
+                        if let Some(result) = self.expand_builtin(token) {
+                            break 'base Some(result);
+                        }
+                        continue 'base;
+                    },
                 }
             }
             break 'base Some(token);
@@ -1094,6 +1007,99 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         self.generate_placeholders = false;
         self.current_is_newline = ret.is_none_or(|t| t.kind == PreprocessorTokenType::Newline);
         ret
+    }
+
+    /// Expands a registered builtin at its invocation location. A consumed
+    /// pragma returns no token; the caller resumes its frame reader.
+    /// C99: §6.10.8p1 and §6.10.9p1, pp. 160-161; PDF pp. 172-173.
+    fn expand_builtin(&mut self, token: PreprocessorToken) -> Option<PreprocessorToken> {
+        match self.context.string_cache.at(token.contents) {
+            // C99 §6.10.8p1: each built-in expands to an ordinary
+            // token spelled as C source, located at the invocation.
+            | "__FILE__" => {
+                let invocation = self.invocation_location(token);
+                let file: &Path = self.context.source_files[invocation.source_file_index];
+                let contents =
+                    intern_string_literal(self.context, self.scratch, &file.to_string_lossy());
+                Some(PreprocessorToken {
+                    kind: PreprocessorTokenType::String,
+                    contents,
+                    source_vectors: self.context.push_source_vectors(&[invocation]),
+                })
+            },
+            | "__LINE__" => {
+                let invocation = self.invocation_location(token);
+                let contents = intern_line_number(self.context, self.scratch, invocation.line);
+                Some(PreprocessorToken {
+                    kind: PreprocessorTokenType::Number,
+                    contents,
+                    source_vectors: self.context.push_source_vectors(&[invocation]),
+                })
+            },
+            | name @ ("__STDC__"
+            | "__STDC_VERSION__"
+            | "__STRICT_ANSI__"
+            | "__STDC_HOSTED__"
+            | "__STDC_MB_MIGHT_NEQ_WC__") => {
+                // C99 §6.10.8p1. This front end currently uses
+                // a freestanding execution model, so
+                // `__STDC_HOSTED__` is 0 (§4p6); the version
+                // must retain its prescribed long suffix.
+                // MB_MIGHT_NEQ_WC permits unequal codes; its 1
+                // does not assert that their values differ.
+                let spelling = if name == "__STDC_VERSION__" {
+                    self.context
+                        .configuration
+                        .standard()
+                        .version_macro()
+                        .expect("version built-in is registered only when defined")
+                } else if name == "__STDC_HOSTED__" {
+                    "0\0"
+                } else {
+                    "1\0"
+                };
+                Some(PreprocessorToken {
+                    kind:           PreprocessorTokenType::Number,
+                    contents:       self.context.string_cache.intern(spelling),
+                    source_vectors: token.source_vectors,
+                })
+            },
+            | name @ ("__DATE__" | "__TIME__") => {
+                let is_date = name == "__DATE__";
+                let source_date_epoch = self.context.configuration.source_date_epoch();
+                let timestamp = self.state.translation_timestamp.get_or_insert_with(|| {
+                    TranslationTimestamp::new(self.state.arena, source_date_epoch)
+                });
+                let contents = intern_string_literal(
+                    self.context,
+                    self.scratch,
+                    if is_date {
+                        &timestamp.date
+                    } else {
+                        &timestamp.time
+                    },
+                );
+                Some(PreprocessorToken {
+                    kind: PreprocessorTokenType::String,
+                    contents,
+                    source_vectors: token.source_vectors,
+                })
+            },
+            // C99 §6.10.9p1: `_Pragma ( string-literal )` runs
+            // the destringized literal, retokenized, as the
+            // pp-tokens of a `#pragma`, and all four tokens
+            // are removed.
+            | "_Pragma" => {
+                self.expand_pragma_operator();
+                None
+            },
+            | name if super::language_features::LANGUAGE_BUILTINS
+                .iter()
+                .any(|(spelling, _)| *spelling == name) =>
+                self.language_builtin(token),
+            | s =>
+                unreachable!("Compiler bug: Predefined macro {s:#?} not in PREDEFINED_MACRO_NAMES"),
+        }
     }
 
     pub(super) fn next_ignore_whitespace(

@@ -1,0 +1,17 @@
+warning: `__VA_OPT__` can only appear in the replacement list of a variadic macro
+ --> pp-va-opt-outside-variadic-macro.c:1:9
+  |
+1 | #define __VA_OPT__ 83
+  |         ^^^^^^^^^^ not in a variadic macro's replacement list
+  |
+  = note: C23 §6.10.5p5: `__VA_OPT__` is reserved for macros whose parameters end in `...`
+
+warning: `__VA_OPT__` can only appear in the replacement list of a variadic macro
+ --> pp-va-opt-outside-variadic-macro.c:2:13
+  |
+2 | int value = __VA_OPT__;
+  |             ^^^^^^^^^^ not in a variadic macro's replacement list
+  |
+  = note: C23 §6.10.5p5: `__VA_OPT__` is reserved for macros whose parameters end in `...`
+
+2 warnings generated.
