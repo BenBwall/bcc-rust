@@ -958,9 +958,11 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
     }
 
     /// Lookahead can fetch a warning beyond the current parser error. Order
-    /// each file run only after folding; preprocessing errors, file transitions
-    /// and unknown locations
-    /// remain barriers, and macro diagnostics use their captured invocation.
+    /// each file run only after folding; preprocessing errors, file
+    /// transitions and unknown locations remain barriers, and macro
+    /// diagnostics use their captured invocation. Must be followed by
+    /// [`Self::flush`], since the pending indices that folding remembers no
+    /// longer hold.
     fn order_source_runs(&mut self) {
         for run in self.pending.chunk_by_mut(|left, right| {
             left.ordering_location.is_some()
@@ -973,11 +975,10 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
                 (diagnostic.ordering_location, diagnostic.sequence)
             });
         }
-        self.last_parser = None;
-        self.last_other = None;
-        self.other_errors.clear();
     }
 
+    /// Renders and counts every pending diagnostic. Later errors can no
+    /// longer fold into them, so the folding targets are forgotten.
     fn flush(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
         self.last_parser = None;
         self.last_other = None;
