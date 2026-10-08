@@ -107,7 +107,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
     }
 
     /// Collects an operator argument with an explicit delimiter counter.
-    /// C99: preprocessing-token nesting, §6.10.3p11, p. 153; PDF p. 165.
+    /// C99: preprocessing-token nesting, §6.10.3p11, p. 152; PDF p. 164.
     fn query_arguments(
         &mut self,
         operator: PreprocessorToken,
@@ -733,7 +733,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         _ = self.collect_written_resource(&mut tokens);
         // The rest of the line, through its new-line, belongs to the
         // directive whether or not the resource is valid. C99: §6.10p2,
-        // pp. 145-146; PDF pp. 157-158.
+        // pp. 146-147; PDF pp. 158-159.
         while let Some(token) = self.next_preprocessor_token::<false>() {
             if token.kind == T::Newline {
                 break;
