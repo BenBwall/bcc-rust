@@ -47,6 +47,13 @@ the syntax may be consumed, including as an extension; native availability means
 it belongs to the selected revision or dialect. Neither means its implementation
 is complete; the language-standards.md matrix records that status.
 
+**Extension policy** (`ExtensionPolicy`):
+How an accepted but non-native feature is diagnosed: Allow (silent, the
+default), Warn (`-pedantic`), or Deny (`-pedantic-errors`). Each diagnostic
+names the feature's origin: a later ISO revision, a removed earlier one, GNU,
+or MSVC. GNU and MSVC features stay non-ISO when enabled. Deny reports an
+error but keeps the syntax, so the parser still builds and recovers it.
+
 ## Storage and lifetimes
 
 **Translation-unit arena** (`'tu`):
@@ -185,7 +192,7 @@ The single driver that holds the context and owns the token cursor, control stac
 _Avoid_: Recursive-descent parser
 
 **ParseFrame** *(implemented)*:
-A resumable state machine for one grammar family. Current families cover external declarations, declarations, declarators, parameters, tags, function definitions, compound statements, statements, expressions, type names, and initializers.
+A resumable state machine for one grammar family. Current families cover external declarations, declarations, declarators, parameters, tags, function definitions, compound statements, statements, expressions, type names, and initializers. Three delimiter-owning families serve later and vendor syntax, running their expression, type-name, and compound children on the same stack: `ModernFrame` (ISO C11 through C2y keyword operands such as `_Alignas`, `_Alignof`, `_Atomic(...)`, `typeof`, `_BitInt(...)`, and `_Countof`; generic selections; static assertions; and attribute specifiers in all three syntaxes, `[[...]]`, `__attribute__((...))`, and `__declspec(...)`), `GnuFrame` (GNU assembly, builtins, and `__label__` declarations), and `MsvcFrame` (MSVC SEH and inline-assembly statements). Other extensions add phases to the ordinary families.
 _Avoid_: Grammar call
 
 **ExpressionFrame** *(implemented)*:
@@ -195,7 +202,7 @@ The parse frame that owns the Double-E operator and operand stacks for a languag
 A small owned instruction returned by a frame to the driver: consume input, push a child frame, reduce a value, reprocess lookahead, or recover at a synchronization set. After a forward phase change that needs no driver work, a frame may instead continue: frame dispatch runs it again at once with the same lookahead.
 
 **ParseValue** *(implemented)*:
-The typed result passed from a completed child frame to its parent. Variants cover declarations, function definitions, compound statements, statements, expressions, constant expressions, type names, and initializers.
+The typed result passed from a completed child frame to its parent. Variants cover declarations, function definitions, compound statements, statements, expressions, constant expressions, type names, and initializers, plus the extension frames' results: a modern value (keyword operand, generic selection, static assertion, or attribute specifier) and a GNU value (assembly, builtin, or local-label list). `MsvcFrame` returns an ordinary statement.
 
 **Deferred child** *(historical phase seam)*:
 A present grammar child whose parser belonged to a later phase, retained as a typed source-backed slot rather than confused with syntactic absence. Phase 04 removed these seams from supported C99 grammar paths.

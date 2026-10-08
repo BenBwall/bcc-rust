@@ -1,58 +1,49 @@
 # Language standards
 
-Configuration, CLI selection, predefined macros and shared extension diagnostics
-now connect the lexer, preprocessor and explicit-frame parser. ISO syntax through
-C23, the documented C2y subset, GNU extensions and independently enabled MSVC
-extensions are implemented across these phases. This is a syntax-only front end:
-mode selection is not a full conformance claim. No semantic analysis or code
-generation is added.
+bcc-rust parses C89 through C23, a listed subset of the C2y draft, GNU
+dialects, and independently enabled MSVC extensions. One configuration value,
+CLI selection, predefined macros and a shared extension-diagnostic emitter
+connect the lexer, preprocessor and explicit-frame parser. This is a
+syntax-only front end: selecting a mode is not a conformance claim, and there
+is no semantic analysis or code generation.
 
 ## Status and known gaps
 
-The requested modes, aliases, policy flags, independent MSVC gates and listed
-syntax extensions are wired through the batch frontend. The final review adds
-C23 `()` prototypes and ellipsis-only parameter lists, rejects C23
-identifier-list function declarators, and preserves the first enum underlying
-type when recovering a repeated colon. It corrects C89 integer type selection,
-C23 conditional `true`/`false` and bit-precise constants, GNU named variadic
-substitution and builtin overrides, misplaced `__VA_OPT__` diagnostics, and
-malformed macro/query continuation.
-GNU `__asm` remains available when MS assembly is disabled; with MS assembly
-enabled the parser selects the grammar from its following tokens.
+Every mode, alias, policy flag and MSVC group below, and every row of the
+feature matrix, is implemented through the batch pipeline. These limits remain:
 
-This remains a syntax frontend, rather than complete ISO or vendor conformance:
-
-- Type checking, constant evaluation outside preprocessing, attribute meanings,
-  target assembly validation, ABI/calling-convention effects and code generation
-  remain future phases. GNU zero-length array and union-cast recognition cannot
-  establish all semantic cases from syntax alone.
-- Decimal type keywords have retained syntax, but decimal floating suffixes
-  `df`, `dd` and `dl` and decimal values are not implemented.
-- Integer literal magnitudes are limited to 64 bits. A signed `wb` literal may
-  retain a 65-bit type, but larger magnitudes are diagnosed. Preprocessing
-  expressions use the frontend's 64-bit intmax/uintmax model.
-- C2y is the explicitly listed draft subset, not a claim to implement every
-  current or future draft change. Its version macro is a documented choice.
-- The brief's unified extension policy deliberately reports reserved GNU/MSVC
-  constructs that vendors sometimes exempt from pedantic diagnostics. Later
-  policy flags win as specified here; broader GCC/Clang warning-option behavior
-  (including `-Wno-pedantic`) is not implemented.
-- `__extension__` suppresses parser grammar, keyword and numeric-token extension
+- Type checking, constant evaluation outside preprocessing, attribute meaning,
+  target assembly validation, ABI and calling-convention effects and code
+  generation belong to later phases. Syntax alone cannot settle every GNU
+  zero-length array or union cast: the policy diagnostic covers literal zero
+  bounds (parenthesized too) and explicitly written union types, while general
+  constant bounds and typedefs naming unions wait for analysis.
+- Decimal type keywords parse, but the decimal floating suffixes `df`, `dd` and
+  `dl` and decimal values are not implemented.
+- Integer constants are limited to 64-bit magnitudes. A signed `wb` constant may
+  take a 65-bit type for a 64-bit magnitude; larger magnitudes are diagnosed.
+  Preprocessing expressions use a 64-bit intmax/uintmax model.
+- C2y is the subset listed under [Decisions](#decisions), not every current or
+  future draft change.
+- The unified extension policy reports reserved GNU and MSVC constructs that
+  GCC or Clang sometimes exempt from pedantic diagnostics. Only `-pedantic`,
+  `-Wpedantic` and `-pedantic-errors` select a policy; other warning options,
+  including `-Wno-pedantic`, are not implemented.
+- `__extension__` suppresses keyword, grammar and numeric-constant extension
   diagnostics within its owning declaration or expression. Lexical diagnostics
-  such as dollar identifiers/comments/digraphs, and preprocessing directives or
-  macro definitions, remain outside this suppression scope.
-- Phase-7 macro extension diagnostics use definition spelling and invocation
-  endpoints for occurrence identity. Their primary underline can still point
-  to the replacement definition. Conditional-expression diagnostics may retain
-  only the definition location; a full vendor-style expansion backtrace is not
-  rendered. Preprocessing errors precede parser errors by pipeline design.
-- The feature additions increase parser time and retained syntax memory relative
-  to `main`; the final measurement section records the cost and sampling limits.
+  (dollar identifiers, `//` comments, digraphs), directives and macro
+  definitions stay outside its scope.
+- An extension diagnostic raised in a macro expansion may underline the
+  replacement in the macro definition, and a conditional-expression diagnostic
+  may keep only the definition location; no expansion backtrace is rendered.
+  Preprocessing diagnostics precede parser diagnostics by pipeline design.
+- The added syntax costs parser time and retained memory; see
+  [Performance](#performance).
 
 ## CLI reference
 
 The CLI defaults to `gnu17`; `CompilerConfiguration::default()` remains strict
-C99 with `ExtensionPolicy::Allow` to preserve library/test callers. `-std=VALUE`,
+C99 with `ExtensionPolicy::Allow` for library and test callers. `-std=VALUE`,
 `-std VALUE`, `--std=VALUE`, and `--std VALUE` are accepted. Repeated `-std`
 selections use the last value.
 
@@ -67,682 +58,490 @@ selections use the last value.
 | C2y draft | `c2y` | `gnu2y` | `202400L` |
 
 Strict modes define `__STRICT_ANSI__` as `1`; GNU modes leave it undefined.
-MSVC flags do not affect either version or strictness. Existing `__STDC__`,
-`__STDC_HOSTED__` (freestanding: `0`), date/time, and encoding macros remain.
-`__GNUC__` and `_MSC_VER` are deliberately not defined.
+MSVC flags affect neither version nor strictness. `__STDC__`,
+`__STDC_HOSTED__` (freestanding: `0`), `__DATE__`/`__TIME__`, and
+`__STDC_MB_MIGHT_NEQ_WC__` are predefined in every mode. `__GNUC__` and `_MSC_VER` are deliberately not
+defined.
 
 `-pedantic` and `-Wpedantic` select Warn; `-pedantic-errors` selects Deny;
 the default is Allow. Later policy flags win. Deny emits an error but keeps
-classified tokens available for structured parser recovery. Existing specialized
-preprocessor extensions retain their established recovery behavior.
+classified tokens available for structured parser recovery. Preprocessor
+extensions with their own diagnostics keep their established recovery.
 
 MSVC groups are independently opt-in. `-fms-extensions` enables all ten groups;
 `-fno-ms-extensions` disables them. Each group has `-fms-NAME` and
 `-fno-ms-NAME`; later flags win, including umbrellas.
 
-| NAME | Spellings / behavior | Owner |
+| NAME | Spellings / behavior | Phase |
 | --- | --- | --- |
-| `declspec` | `__declspec(...)` | parse-msvc |
-| `int-types` | `__int8`, `__int16`, `__int32`, `__int64` | parse-msvc |
-| `calling-conventions` | `__cdecl`, `__stdcall`, `__fastcall`, `__vectorcall`, `__thiscall` | parse-msvc |
-| `type-qualifiers` | `__ptr32`, `__ptr64`, `__unaligned`, `__w64`, `__sptr`, `__uptr` | parse-msvc |
-| `inline` | `__forceinline`; GNU `__inline` also available independently | parse-msvc |
-| `seh` | `__try`, `__except`, `__finally`, `__leave` | parse-msvc |
-| `asm` | `__asm`, `_asm` blocks | parse-msvc |
-| `pragma` | `__pragma(...)` preprocessing operator | lexpp |
-| `anonymous-structs` | anonymous tagged struct/union members | parse-msvc |
-| `va-args` | empty `__VA_ARGS__` comma elision | lexpp |
+| `declspec` | `__declspec(...)` | parser |
+| `int-types` | `__int8`, `__int16`, `__int32`, `__int64` | parser |
+| `calling-conventions` | `__cdecl`, `__stdcall`, `__fastcall`, `__vectorcall`, `__thiscall` | parser |
+| `type-qualifiers` | `__ptr32`, `__ptr64`, `__unaligned`, `__w64`, `__sptr`, `__uptr` | parser |
+| `inline` | `__forceinline`; GNU `__inline` also available independently | parser |
+| `seh` | `__try`, `__except`, `__finally`, `__leave` | parser |
+| `asm` | `__asm`, `_asm` blocks | parser |
+| `pragma` | `__pragma(...)` preprocessing operator | preprocessor |
+| `anonymous-structs` | anonymous tagged struct/union members | parser |
+| `va-args` | empty `__VA_ARGS__` comma elision | preprocessor |
 
 Example: `bcc-rust -std=c89 -pedantic -fms-extensions -fno-ms-seh input.c`.
 Invalid standard values produce the exact clang-style error and thirteen
 notes (deprecated aliases are accepted but omitted from the notes).
 
-## Configuration and shared seams
+## Configuration model
 
-`src/configuration.rs` owns the value object. `CStandard` is ordered chronologically
-(C89 and C90 are the same value; C95 distinguishes amendment 1). `LanguageMode`
-pairs a standard with a GNU bit. `MsvcFeature` uses an independent ten-bit set.
-All phases read the single configuration through `Context.configuration`.
-The batch pipeline and included-file lexer already share that context.
+`src/configuration.rs` owns the value object. `CStandard` is ordered
+chronologically (C89 and C90 are the same value; C95 distinguishes amendment 1).
+`LanguageMode` pairs a standard with a GNU bit. `MsvcFeature` uses an
+independent ten-bit set. All phases read the single configuration through
+`Context.configuration`.
 
 `Feature::ALL` and `Feature::origin()` are the canonical feature vocabulary.
 `configuration.accepts(feature)` is a precomputed bit test describing whether
-the spelling/construct may be consumed, including extensions. `is_native(feature)`
-is a second bit test describing native availability. Both describe the target
-contract, **not implementation completion**. Constructors/builders recompute the
-bitsets once; there is no per-token string matching or global configuration.
-`ImplicitInt` has a `FeatureOrigin::Removed` origin: native before C99 and
-reported afterward as a C89 feature removed in C99. `Trigraphs` ceases to be
-native in C23 through a dedicated derivation case.
+the spelling or construct may be consumed, including as an extension;
+`is_native(feature)` is a second bit test describing native availability. Both
+describe the target contract, **not implementation completion**. Constructors
+and builders recompute the bitsets once; there is no per-token string matching
+or global configuration. `ImplicitInt` has a `FeatureOrigin::Removed` origin:
+native before C99 and reported afterward as a C89 feature removed in C99.
+`Trigraphs` ceases to be native in C23 through a dedicated derivation case.
 
-`Context::report_extension(feature, spelling, source_vectors)` is the normal
-shared emitter. `report_extension_since(spelling, FeatureOrigin, source_vectors)`
-is the explicit-origin adapter. Native standard features emit nothing; otherwise
-Allow emits nothing, Warn emits a warning, and Deny emits an error. Messages are
-`'SPELLING' is a C11 extension`, `'SPELLING' is a GNU extension`, or
-`'SPELLING' is an MSVC extension`. GNU/MSVC constructs remain non-ISO under
-pedantic flags even when enabled. The diagnostic retains provenance through
-preprocessor compaction and the ordinary FIFO renderer. Reserved aliases can
-use their own origin independently of their canonical parser kind.
+`Context::report_extension(feature, spelling, source_vectors)` in
+`translation_phases/extension.rs` is the shared emitter;
+`report_extension_since(spelling, FeatureOrigin, source_vectors)` is its
+explicit-origin form. Native standard features emit nothing; otherwise Allow
+emits nothing, Warn emits a warning, and Deny emits an error. Messages are
+`'SPELLING' is a C11 extension`, `'SPELLING' is a C89 feature removed in C99`,
+`'SPELLING' is a GNU extension`, or `'SPELLING' is an MSVC extension`.
+GNU/MSVC constructs remain non-ISO under pedantic flags even when enabled. The
+diagnostic retains provenance through preprocessor compaction and the ordinary
+FIFO renderer.
 
-`KeywordTokenType::classify(id, configuration)` is the **only** classifier.
-`ALL` contains canonical parser kinds/spellings; `ALIASES` follows them in the
-reserved interner prefix. `KeywordClassification` returns the canonical kind,
-original static spelling, and optional origin. Existing C99 keyword IDs remain
-stable. Adding parser grammar should consume these kinds and should not add a
-second spelling classifier. ISO/GNU/MSVC parser consumers use the canonical kinds
-and retain original tokens for spelling and provenance. Unsupported or malformed
-syntax follows the structured diagnostic and synchronization paths.
+`KeywordTokenType::classify(id, configuration)` is the **only** keyword
+classifier. `ALL` lists the canonical parser kinds; an explicit alias table
+gives each alternate spelling its keyword, mode gate and diagnostic origin, and
+its spellings (`ALIASES`) follow `ALL` in the reserved interner prefix.
+`KeywordClassification` returns the canonical kind, original static spelling,
+and optional origin. C99 keyword IDs are stable. New grammar consumes these
+kinds rather than adding a second spelling classifier, and parser consumers keep
+the original tokens for spelling and provenance.
 
 ## Feature matrix
 
-ISO-native columns below give revision availability: `Y` means native and
-`-` means not native. GNU counterparts use the same ISO revision and additionally
-mark GNU-origin rows as dialect-native; MSVC-origin rows become dialect-native
-when their flag is enabled. The acceptance column describes extensions/gates separately:
-`extension` accepts reserved or unambiguous syntax in older modes, `native` gates
-the spelling, `GNU earlier` also accepts it in older GNU modes, and `MS flag`
-requires its independent flag. `Trigraphs` is a special gate: only strict C89–C17.
-Rows describe native availability and extension gates. Implementation status is
-syntax-only: a `Y` does not promise semantic checks, target support, or code
-generation. The sections below describe limits and handoffs for implemented rows.
+ISO columns give revision availability: `Y` means native and `-` means not
+native. GNU modes use the same ISO revision and additionally make GNU-origin rows
+native; MSVC-origin rows become native when their flag is enabled. The
+acceptance column describes the gate: `extension` accepts reserved or
+unambiguous syntax in older modes with a policy diagnostic, `native` accepts the
+spelling only where it is native, `GNU earlier` also accepts it in older GNU
+modes, and `MS flag` requires its independent flag. `Trigraphs` is special: it
+is accepted only in strict C89 through C17. Every row is implemented with its
+mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
+`Y` promises no semantic checks, target support, or code generation.
 
-The foundation's mode/flags, version macros, complete keyword spelling recognition,
-and shared policy diagnostics are **implemented** for all modes. The lexical,
-preprocessing and parser rows below record the integrated implementation.
-
-| Feature (`Feature` variant) | C89 | C95 | C99 | C11 | C17 | C23 | C2y | Acceptance | Status / owner |
+| Feature (`Feature` variant) | C89 | C95 | C99 | C11 | C17 | C23 | C2y | Acceptance | Phase |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Digraphs | - | Y | Y | Y | Y | Y | Y | C95+ / GNU earlier | implemented (lexpp) |
-| LineComments | - | - | Y | Y | Y | Y | Y | GNU earlier | implemented (lexpp) |
-| Trigraphs | Y | Y | Y | Y | Y | - | - | strict through C17 | implemented (lexpp) |
-| UnicodeLiteralPrefixes | - | - | - | Y | Y | Y | Y | native | implemented (lexpp) |
-| Utf8CharacterConstants | - | - | - | - | - | Y | Y | native | implemented (lexpp) |
-| DigitSeparators | - | - | - | - | - | Y | Y | native | implemented (lexpp) |
-| BitIntSuffixes | - | - | - | - | - | Y | Y | native | implemented (lexpp) |
-| BinaryConstants | - | - | - | - | - | Y | Y | GNU earlier | implemented (lexpp) |
-| Elifdef | - | - | - | - | - | Y | Y | GNU earlier | implemented (lexpp) |
-| WarningDirective | - | - | - | - | - | Y | Y | GNU earlier | implemented (lexpp) |
-| Embed | - | - | - | - | - | Y | Y | GNU earlier | implemented (lexpp) |
-| HasInclude | - | - | - | - | - | Y | Y | GNU earlier | implemented (lexpp) |
-| HasEmbed | - | - | - | - | - | Y | Y | GNU earlier | implemented (lexpp) |
-| HasCAttribute | - | - | - | - | - | Y | Y | GNU earlier | implemented (lexpp) |
-| VaOpt | - | - | - | - | - | Y | Y | GNU earlier | implemented (lexpp) |
-| OctalPrefix | - | - | - | - | - | - | Y | native | implemented (lexpp) |
-| DelimitedEscapes | - | - | - | - | - | - | Y | native | implemented (lexpp) |
-| HexFloats | - | - | Y | Y | Y | Y | Y | extension | implemented (lexpp) |
-| VariadicMacros | - | - | Y | Y | Y | Y | Y | extension | implemented (lexpp) |
-| EmptyMacroArguments | - | - | Y | Y | Y | Y | Y | extension | implemented (lexpp) |
-| Inline | - | - | Y | Y | Y | Y | Y | GNU earlier | implemented syntax and mode diagnostics (parse-std) |
-| Restrict | - | - | Y | Y | Y | Y | Y | native | implemented syntax and mode diagnostics (parse-std) |
-| Bool | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| Complex | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| Imaginary | - | - | Y | Y | Y | Y | Y | extension | implemented unsupported-type diagnostic (parse-std); imaginary semantics remain out of scope |
-| ImplicitInt | Y | Y | - | - | - | - | - | extension | implemented syntax and mode diagnostics (parse-std) |
-| MixedDeclarations | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| ForDeclarations | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| DesignatedInitializers | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| CompoundLiterals | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| FlexibleArrayMembers | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| LongLong | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| TrailingEnumComma | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| Func | - | - | Y | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| StaticAssert | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| Generic | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| Alignas | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| Alignof | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| Noreturn | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| ThreadLocal | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| Atomic | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| AnonymousAggregates | - | - | - | Y | Y | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| C23Keywords | - | - | - | - | - | Y | Y | native | implemented syntax and mode diagnostics (parse-std) |
-| Attributes | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| BitInt | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| DecimalTypes | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| EmptyInitializers | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| EnumUnderlyingType | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| AutoTypeInference | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| Constexpr | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| Nullptr | - | - | - | - | - | Y | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| Countof | - | - | - | - | - | - | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| IfSwitchDeclarations | - | - | - | - | - | - | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| NamedLoops | - | - | - | - | - | - | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| GenericTypeOperand | - | - | - | - | - | - | Y | extension | implemented syntax and mode diagnostics (parse-std) |
-| CaseRanges | - | - | - | - | - | - | Y | extension | implemented ISO/GNU syntax and origin policy (parse-std, parse-gnu) |
-| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| StatementExpressions | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| BuiltinVaArg | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| BuiltinOffsetof | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| BuiltinTypesCompatible | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| BuiltinChooseExpr | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| LabelsAsValues | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| LocalLabels | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| OmittedConditionalOperand | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| ZeroLengthArrays | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| Int128 | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| AutoType | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| GnuAlternateKeywords | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| RealImag | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| GnuDesignators | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| UnionCasts | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| EmptyStructs | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| NestedFunctions | - | - | - | - | - | - | - | extension (GNU native) | implemented syntax and mode diagnostics (parse-gnu) |
-| ImaginaryConstants | - | - | - | - | - | - | - | extension (GNU native) | implemented (lexpp) |
-| DollarIdentifiers | - | - | - | - | - | - | - | extension (GNU native) | implemented (lexpp) |
-| NamedVariadicMacros | - | - | - | - | - | - | - | extension (GNU native) | implemented (lexpp) |
-| GnuVaArgs | - | - | - | - | - | - | - | extension (GNU native) | implemented (lexpp) |
-| IncludeNext | - | - | - | - | - | - | - | extension (GNU native) | implemented (lexpp) |
-| IdentDirective | - | - | - | - | - | - | - | extension (GNU native) | implemented (lexpp) |
-| Counter | - | - | - | - | - | - | - | extension (GNU native) | implemented (lexpp) |
-| HasAttribute | - | - | - | - | - | - | - | extension (GNU native) | implemented (lexpp) |
-| HasBuiltin | - | - | - | - | - | - | - | extension (GNU native) | implemented (lexpp) |
-| MsDeclspec | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
-| MsIntTypes | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
-| MsCallingConventions | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
-| MsTypeQualifiers | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
-| MsInline | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
-| MsSeh | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
-| MsAsm | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
-| MsPragma | - | - | - | - | - | - | - | MS flag | implemented (lexpp) |
-| MsAnonymousStructs | - | - | - | - | - | - | - | MS flag | implemented syntax, independent gates and policy diagnostics (parse-msvc) |
-| MsVaArgs | - | - | - | - | - | - | - | MS flag | implemented (lexpp) |
+| Digraphs | - | Y | Y | Y | Y | Y | Y | C95+ / GNU earlier | lexer/preprocessor |
+| LineComments | - | - | Y | Y | Y | Y | Y | GNU earlier | lexer/preprocessor |
+| Trigraphs | Y | Y | Y | Y | Y | - | - | strict through C17 | lexer/preprocessor |
+| UnicodeLiteralPrefixes | - | - | - | Y | Y | Y | Y | native | lexer/preprocessor |
+| Utf8CharacterConstants | - | - | - | - | - | Y | Y | native | lexer/preprocessor |
+| DigitSeparators | - | - | - | - | - | Y | Y | native | lexer/preprocessor |
+| BitIntSuffixes | - | - | - | - | - | Y | Y | native | lexer/preprocessor |
+| BinaryConstants | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
+| Elifdef | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
+| WarningDirective | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
+| Embed | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
+| HasInclude | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
+| HasEmbed | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
+| HasCAttribute | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
+| VaOpt | - | - | - | - | - | Y | Y | GNU earlier | lexer/preprocessor |
+| OctalPrefix | - | - | - | - | - | - | Y | native | lexer/preprocessor |
+| DelimitedEscapes | - | - | - | - | - | - | Y | native | lexer/preprocessor |
+| HexFloats | - | - | Y | Y | Y | Y | Y | extension | lexer/preprocessor |
+| VariadicMacros | - | - | Y | Y | Y | Y | Y | extension | lexer/preprocessor |
+| EmptyMacroArguments | - | - | Y | Y | Y | Y | Y | extension | lexer/preprocessor |
+| Inline | - | - | Y | Y | Y | Y | Y | GNU earlier | parser |
+| Restrict | - | - | Y | Y | Y | Y | Y | native | parser |
+| Bool | - | - | Y | Y | Y | Y | Y | extension | parser |
+| Complex | - | - | Y | Y | Y | Y | Y | extension | parser |
+| Imaginary | - | - | Y | Y | Y | Y | Y | extension | parser (unsupported-type diagnostic) |
+| ImplicitInt | Y | Y | - | - | - | - | - | extension | parser |
+| MixedDeclarations | - | - | Y | Y | Y | Y | Y | extension | parser |
+| ForDeclarations | - | - | Y | Y | Y | Y | Y | extension | parser |
+| DesignatedInitializers | - | - | Y | Y | Y | Y | Y | extension | parser |
+| CompoundLiterals | - | - | Y | Y | Y | Y | Y | extension | parser |
+| FlexibleArrayMembers | - | - | Y | Y | Y | Y | Y | extension | parser |
+| LongLong | - | - | Y | Y | Y | Y | Y | extension | parser |
+| TrailingEnumComma | - | - | Y | Y | Y | Y | Y | extension | parser |
+| Func | - | - | Y | Y | Y | Y | Y | extension | parser |
+| StaticAssert | - | - | - | Y | Y | Y | Y | extension | parser |
+| Generic | - | - | - | Y | Y | Y | Y | extension | parser |
+| Alignas | - | - | - | Y | Y | Y | Y | extension | parser |
+| Alignof | - | - | - | Y | Y | Y | Y | extension | parser |
+| Noreturn | - | - | - | Y | Y | Y | Y | extension | parser |
+| ThreadLocal | - | - | - | Y | Y | Y | Y | extension | parser |
+| Atomic | - | - | - | Y | Y | Y | Y | extension | parser |
+| AnonymousAggregates | - | - | - | Y | Y | Y | Y | extension | parser |
+| C23Keywords | - | - | - | - | - | Y | Y | native | parser |
+| Attributes | - | - | - | - | - | Y | Y | extension | parser |
+| BitInt | - | - | - | - | - | Y | Y | extension | parser |
+| DecimalTypes | - | - | - | - | - | Y | Y | extension | parser |
+| EmptyInitializers | - | - | - | - | - | Y | Y | extension | parser |
+| EnumUnderlyingType | - | - | - | - | - | Y | Y | extension | parser |
+| AutoTypeInference | - | - | - | - | - | Y | Y | extension | parser |
+| Constexpr | - | - | - | - | - | Y | Y | extension | parser |
+| Nullptr | - | - | - | - | - | Y | Y | extension | parser |
+| Countof | - | - | - | - | - | - | Y | extension | parser |
+| IfSwitchDeclarations | - | - | - | - | - | - | Y | extension | parser |
+| NamedLoops | - | - | - | - | - | - | Y | extension | parser |
+| GenericTypeOperand | - | - | - | - | - | - | Y | extension | parser |
+| CaseRanges | - | - | - | - | - | - | Y | extension | parser |
+| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| StatementExpressions | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| BuiltinVaArg | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| BuiltinOffsetof | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| BuiltinTypesCompatible | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| BuiltinChooseExpr | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| LabelsAsValues | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| LocalLabels | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| OmittedConditionalOperand | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| ZeroLengthArrays | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| Int128 | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| AutoType | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| GnuAlternateKeywords | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| RealImag | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| GnuDesignators | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| UnionCasts | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| EmptyStructs | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| NestedFunctions | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| ImaginaryConstants | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
+| DollarIdentifiers | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
+| NamedVariadicMacros | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
+| GnuVaArgs | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
+| IncludeNext | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
+| IdentDirective | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
+| Counter | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
+| HasAttribute | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
+| HasBuiltin | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
+| MsDeclspec | - | - | - | - | - | - | - | MS flag | parser |
+| MsIntTypes | - | - | - | - | - | - | - | MS flag | parser |
+| MsCallingConventions | - | - | - | - | - | - | - | MS flag | parser |
+| MsTypeQualifiers | - | - | - | - | - | - | - | MS flag | parser |
+| MsInline | - | - | - | - | - | - | - | MS flag | parser |
+| MsSeh | - | - | - | - | - | - | - | MS flag | parser |
+| MsAsm | - | - | - | - | - | - | - | MS flag | parser |
+| MsPragma | - | - | - | - | - | - | - | MS flag | lexer/preprocessor |
+| MsAnonymousStructs | - | - | - | - | - | - | - | MS flag | parser |
+| MsVaArgs | - | - | - | - | - | - | - | MS flag | lexer/preprocessor |
 
-The lexical workstream also owns exact prefix/suffix recognition, `//` treatment
-in GNU89 pedantic mode, `#elifndef`, `#sccs`, `, ## __VA_ARGS__`, and predicates
-for builtins represented by their grouped feature rows. Parser rows encompass
-all positions of GNU attributes; basic/extended/goto asm and declarator asm labels;
-GNU range/old-style designators; and syntax-only nested functions. The ISO C2y
-subset is implemented by parse-std.
+Lexer and preprocessor rows also cover exact prefix and suffix recognition,
+`//` in GNU89 pedantic mode, `#elifndef`, `#sccs`, `, ## __VA_ARGS__`, and the
+query predicates for builtins grouped under one row. GNU parser rows cover every
+GNU attribute position, basic, extended and goto assembly with declarator
+assembly labels, GNU range and old-style designators, and syntax-only nested
+functions.
 
-## Decisions and handoff
+## ISO syntax
 
-- C2y version is `202400L`, following the [Clang user manual](https://clang.llvm.org/docs/UsersManual.html#differences-between-various-standard-modes).
-  GCC used `202500L` in its [initial C2y implementation](https://gcc.gnu.org/pipermail/gcc-patches/2024-June/654270.html).
-  Draft versions are implementation choices, not published conformance claims.
-- C2y scope is `_Countof`, octal prefixes, delimited escapes, case ranges,
-  selection declarations, named loop control, and type-controlling `_Generic`.
-  Further draft features need an explicit matrix row and supporting primary source.
-- Reserved standard keywords stay recognized in older modes and are diagnosed
-  by origin. C23 non-reserved aliases stay identifiers before C23; GNU `typeof`
-  and `asm`, and GNU89 `inline`, are exceptions. `restrict` stays an identifier
-  before C99 unless written with a reserved GNU alternate spelling.
-- `_Alignas`/`alignas`, `_Static_assert`/`static_assert`, `_Bool`/`bool`, and
-  `_Thread_local`/`thread_local` share kinds. Aliases retain original spelling
-  for policy diagnostics; token contents preserve it for parser consumers.
-- GNU alternate keywords map to existing C99 kinds when applicable. `__asm__`
-  and reserved `__asm` accept GNU assembly in every mode. With MS assembly
-  enabled, `__asm` selects GNU parenthesized/qualified grammar or MSVC block/line
-  grammar at its parser owner; `_asm` stays gated by the MS assembly flag.
-  GNU `__inline` remains available with MSVC inline disabled because its GNU
-  spelling is independently reserved. With its flag enabled, lexpp consumes
-  `__pragma` as a preprocessing operator before keyword classification.
-- GNU/MSVC policy diagnostics remain active in their enabled dialects under
-  pedantic options. `_Imaginary` still reports the baseline unsupported-type
-  diagnostic; classification does not claim imaginary type semantics.
-- Phase A mechanically removes the old C99-only exhaustive matches around
-  existing preprocessor extension policy. Their behavior is otherwise unchanged.
-- Phase A introduced no lexer mode behavior, parser production, AST node, or
-  semantic rule. Avoid editing configuration, CLI, token classification, and
-  shared diagnostic surfaces in parallel later workstreams unless a missing seam
-  is coordinated. Use the prepared feature vocabulary and keyword variants.
-- Validation uses the existing pinned LLVM installation through an ignored
-  worktree-local `target/llvm` junction; no tracked build setting is changed.
-
-## ISO parser implementation and handoff
-
-Evidence: [mode, policy, recovery, AST and inspection tests](src/translation_phases/parsing/tests/standards.rs),
-[CLI mode tests](tests/cli.rs), [token-seam snapshot](tests/fixtures/lexing/iso_parser_token_seam.snap),
-[policy diagnostic goldens](tests/fixtures/diagnostics/language/iso-c89-warning.stderr),
-and [zero-global-allocation coverage](tests/allocation_count.rs).
-
-| Revision | Implemented phase-7 surface | Later analysis boundary |
+| Revision | Phase-7 syntax | Left to later analysis |
 | --- | --- | --- |
-| C89/C90/C95 | Native implicit int; C99-origin mixed blocks, for declarations, designated initializers, compound literals, flexible array members, long long, trailing enum comma, __func__, and unambiguous qualified/static/[*] array syntax follow Allow/Warn/Deny | Variable bounds need constant evaluation to distinguish VLAs from constant arrays; flexible-member position and object layout remain semantic |
-| C99 | Existing full grammar; implicit int is retained with a policy diagnostic | Type/name/control-flow constraints remain as documented in the C99 checklist |
-| C11/C17 | _Alignas expression/type operands, _Alignof types (parenthesized expressions as a GNU extension), _Atomic type/qualifier, _Generic associations, _Noreturn, _Static_assert, _Thread_local, anonymous untagged aggregates | Alignment validity, atomic eligibility, generic type compatibility/selection, assertion evaluation, storage-class combinations and aggregate layout |
-| C23 | All [[...]] attribute positions with standard/vendor names and balanced arguments; bool/true/false, nullptr, constexpr, typeof/typeof_unqual, message-optional static_assert, alignas/alignof/thread_local aliases; labels before declarations and at block end; {}; _BitInt with signedness; fixed enum underlying specifier-qualifier lists; auto inferred type; unnamed definition parameters; ellipsis-only prototypes; empty parameter lists as prototypes; rejected identifier-list declarators; decimal type keywords; compound-literal storage classes | Attribute applicability/meaning, inferred types, width values, enum type legality, decimal literal support and literal object lifetime |
-| C2y subset | _Countof unary expression or parenthesized type; type-controlling _Generic; if/switch declaration headers with optional following expression; case ranges; break/continue label | Array/type/count evaluation, selection conversion, range overlap, and named control-target resolution |
+| C89/C90/C95 | Native implicit int; C99-origin mixed blocks, for declarations, designated initializers, compound literals, flexible array members, long long, trailing enum comma, `__func__`, and unambiguous qualified/static/`[*]` array syntax follow Allow/Warn/Deny | Variable bounds need constant evaluation to distinguish VLAs from constant arrays; flexible-member position and object layout |
+| C99 | Full C99 grammar; implicit int is retained with a removed-feature policy diagnostic | Type/name/control-flow constraints listed in the C99 checklist |
+| C11/C17 | `_Alignas` expression/type operands, `_Alignof` types (parenthesized expressions as a GNU extension), `_Atomic` type/qualifier, `_Generic` associations, `_Noreturn`, `_Static_assert`, `_Thread_local`, anonymous untagged aggregates; `_Alignas` in a plain type name is a constraint error | Alignment validity, atomic eligibility, generic type compatibility/selection, assertion evaluation, storage-class combinations and aggregate layout |
+| C23 | All `[[...]]` attribute positions with standard/vendor names and balanced arguments; `bool`/`true`/`false`, `nullptr`, `constexpr`, `typeof`/`typeof_unqual`, message-optional `static_assert`, `alignas`/`alignof`/`thread_local` aliases; labels before declarations and at block end; `{}`; `_BitInt` with signedness; fixed enum underlying specifier-qualifier lists; `auto` type inference, alone or beside another storage class except `typedef`; unnamed definition parameters; ellipsis-only prototypes; empty parameter lists as prototypes; rejected identifier-list declarators; decimal type keywords; compound-literal storage classes | Attribute applicability/meaning, inferred types, width values, enum type legality, decimal literal support and literal object lifetime |
+| C2y subset | `_Countof` unary expression or parenthesized type; type-controlling `_Generic`; `if`/`switch` declaration headers with an optional following expression; case ranges; `break`/`continue` label | Array/type/count evaluation, selection conversion, range overlap, and named control-target resolution |
 
-Reserved keywords are diagnosed by the foundation's token classifier, so parser
-consumers do not duplicate keyword-origin diagnostics. Unambiguous grammar-only
-features report through the shared extension emitter and keep their AST under
-Deny. Non-reserved C23 aliases remain identifiers in earlier strict modes.
-The ISO parser does not change lexer or preprocessing behavior.
+The keyword classifier reports reserved keywords, so parser consumers do not
+duplicate keyword-origin diagnostics. Unambiguous grammar-only features report
+through the shared emitter and keep their AST under Deny. Non-reserved C23
+aliases remain identifiers in earlier strict modes.
 
-New operands, assertions, generic selections, specifier additions and attributes
-are immutable arena nodes. `ModernFrame` owns delimiters and delegates expression
-and type children to the existing machine; no recursive grammar calls are added.
-Node sizes are pinned. Inspection visits every new child, including compound-
-literal storage, generic default arms, and fixed enum underlying types.
+New operands, assertions, generic selections, specifier additions and
+attributes are immutable arena nodes. `ModernFrame` owns their delimiters and
+delegates expression and type children to the machine stack; no grammar
+recursion is added. `parsing/tests/node_sizes.rs` pins node sizes. Inspection
+visits every new child, including compound-literal storage, generic default
+arms, and fixed enum underlying types.
 
-`AttributeSpecifier` retains a syntax discriminator, balanced original tokens,
-provenance and recovery state. The GNU workstream adds `__attribute__` delimiter
-entry paths while sharing its immutable representation and attachment points.
-MSVC `__declspec` can add a further discriminator variant in its own workstream.
+`AttributeSpecifier` is shared by `[[...]]`, GNU `__attribute__((...))` and
+MSVC `__declspec(...)`; `AttributeSyntax` distinguishes them. Each keeps its
+balanced original tokens, provenance and recovery state, and attaches at the
+same points. An attribute after `*` belongs to that pointer level.
 
 C2y grammar follows WG14 [N3388 selection declarations](https://open-std.org/jtc1/sc22/wg14/www/docs/n3388.htm),
 [N3355 named loops](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n3355.htm),
 [N3260 generic type operands](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n3260.pdf),
-[N3370 case ranges](https://www.open-std.org/JTC1/SC22/WG14/www/docs/n3370.htm), and the draft _Countof grammar implemented in the
+[N3370 case ranges](https://www.open-std.org/JTC1/SC22/WG14/www/docs/n3370.htm), and the draft `_Countof` grammar implemented in the
 [GCC primary implementation patch](https://gcc.gnu.org/pipermail/gcc-patches/2025-May/683845.html).
-The C2y subset intentionally excludes draft semantic analysis and lexer-owned
-octal prefixes/delimited escapes.
+The C2y octal prefixes and delimited escapes are lexical; see
+[Lexical and preprocessing behavior](#lexical-and-preprocessing-behavior).
 
-## GNU phase-7 parser handoff
+## GNU syntax
 
-Reserved GNU spellings parse in every configured mode; the shared extension
-policy chooses Allow/Warn/Deny without discarding the AST. Non-reserved `asm`,
-`typeof`, and alternate keywords retain the foundation's mode gates. C23 `typeof`
-and C2y case ranges retain their ISO status. Lexer and preprocessor behavior is
-unchanged by this workstream.
+Reserved GNU spellings parse in every mode; the extension policy chooses
+Allow/Warn/Deny without discarding the AST. Non-reserved `asm` and `typeof` are
+keywords only in GNU modes, except that `typeof` is native from C23; before C23
+it reports a GNU origin. C2y case ranges keep their ISO origin.
 
-GNU attributes use the same `AttributeSpecifier` and linked specifier-extension
-representation as C23 attributes, distinguished by `AttributeSyntax::Gnu`.
-Balanced argument tokens and original spellings remain available to analysis.
-The parser accepts declaration, aggregate, enumerator, pointer, parameter,
-nested declarator, array, bit-field, function and label attribute positions from
+GNU attributes accept declaration, aggregate, enumerator, pointer, parameter,
+nested declarator, array, bit-field, function and label positions from
 [GCC Attribute Syntax](https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html).
 
 [GNU C Extensions](https://gcc.gnu.org/onlinedocs/gcc/C-Extensions.html) and
-[GCC Extended Asm](https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html) specify the
-vendor grammar. Assembly nodes preserve qualifiers/templates/constraints/clobbers
-and parsed expression operands, symbolic names and goto labels. File assembly and
-declarator assembly labels have explicit AST variants. Builtins preserve their
-type/expression operands and offset member paths. Statement expressions, local
-labels, label addresses, computed goto, omitted conditional operands, GNU
-initializers and nested definitions also have inspectable syntax nodes.
+[GCC Extended Asm](https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html) specify
+the vendor grammar. `GnuFrame` owns assembly, builtins and `__label__`
+declarations. Assembly nodes keep typed qualifiers, the template literal,
+constraint and clobber literals, parsed operand expressions, symbolic names and
+goto labels; file assembly and declarator assembly labels have explicit AST
+variants. Builtins keep their type/expression operands and `__builtin_offsetof`
+member paths. Statement expressions, local labels, label addresses, computed
+goto, omitted conditional operands, GNU initializers and nested definitions
+also have inspectable syntax nodes.
 
-`__extension__` suppresses parser grammar, keyword and numeric-token pedantic
-extension diagnostics for its expression or declaration, including a function body.
-Lexical and preprocessing diagnostics remain outside this scope. Suppression restores at the owning frame
-boundary and retains diagnostics from later unsuppressed occurrences, including
-macro expansions. Nested functions isolate typedef, label and switch state.
+`__extension__` suppresses extension diagnostics for keyword, grammar and
+numeric-constant tokens within its expression or declaration, including a
+function body or a parameter. Suppression ends at the owning frame boundary;
+later unsuppressed occurrences, including ones from macro expansions, keep their
+diagnostics. Nested functions isolate typedef, label and switch state. GNU empty
+structures and unions remain complete syntax under every policy.
 
-These are syntax guarantees. Attribute application, target assembly constraints,
-builtin evaluation, inferred types, label/control-target resolution, closure or
-trampoline generation and object layout remain semantic/lowering work. Zero-length
-array policy is diagnosed for literal zero bounds (including parentheses); general
-constant-expression evaluation is deferred. Union-cast policy is diagnosed for
-explicit union type names; resolving a typedef to a union is deferred. GNU empty
-structures/unions remain complete syntax under all policies.
+## MSVC syntax
 
-Evidence: `parsing::tests::gnu` covers grammar, AST ownership, provenance,
-Allow/Warn/Deny across all revisions, every input prefix, following-declaration
-recovery and deep nesting. CLI diagnostic goldens and the GNU token-seam snapshot
-pin rendering and the unchanged phase-7 input. Allocation tests exercise the new
-frame paths without global allocations.
-
-## MSVC phase-7 parser handoff
-
-All eight parser-owned groups are independently opt-in, regardless of ISO/GNU
+The eight parser-owned groups are independently opt-in in every ISO and GNU
 mode. Disabled keyword spellings remain identifiers. Enabled reserved keywords
-use the existing classifier's MSVC Allow/Warn/Deny diagnostics and retain their
-syntax under Deny. Anonymous tagged members are a grammar-only extension and
-report through the same policy emitter. The preprocessor implements `pragma` and
-`va-args` before the parser consumes the resulting tokens.
-No lexer/preprocessor behavior or keyword classification changed: all needed
-parser-visible MSVC token kinds were already present.
+use the classifier's MSVC Allow/Warn/Deny diagnostics and keep their syntax
+under Deny. Anonymous tagged members are a grammar-only extension reported
+through the same emitter. The preprocessor implements `pragma` and `va-args`
+before the parser sees the resulting tokens.
 
-- `__declspec(...)` shares `AttributeSpecifier`, attachment points and balanced
-  argument tokens with ISO/GNU attributes; `AttributeSyntax::Msvc` distinguishes
-  its single outer parenthesis. Space-separated and comma-separated modifiers,
-  nested argument delimiters, spelling and provenance are retained.
-- `__int8/16/32/64` retain their explicit width and optional signedness, including
-  signed/unsigned on either side. Declaration and pointer qualifiers retain
-  `__ptr32`, `__ptr64`, `__unaligned`, `__w64`, `__sptr` and `__uptr`; each pointer
-  level owns its qualifier set. Calling conventions retain their source-backed
+- `__declspec(...)` uses the shared `AttributeSpecifier` with
+  `AttributeSyntax::Msvc` and a single outer parenthesis. Space- and
+  comma-separated modifiers, nested argument delimiters, spelling and provenance
+  are retained.
+- `__int8/16/32/64` keep their explicit width and optional signedness, including
+  `signed`/`unsigned` on either side. Declaration and pointer qualifiers keep
+  `__ptr32`, `__ptr64`, `__unaligned`, `__w64`, `__sptr` and `__uptr`; each
+  pointer level owns its qualifier set. Calling conventions keep their
   declaration or declarator position, including nested function pointers,
-  parameters and abstract declarators. `__forceinline` retains its modifier and
-  inline property; GNU-reserved `__inline` stays available independently with
-  the MS inline flag disabled, as established by the foundation.
-- SEH owns `__try` guarded compounds, `__except` expression filters,
-  `__finally` compounds and `__leave;`. Children use the existing machine's
-  compound/expression frames and ordinary scope restoration. Missing handlers,
-  bodies, filters and delimiters produce recovered syntax and preserve following
-  input. Placement of `__leave` and handler semantics are later analysis.
-- `__asm` / `_asm` brace blocks and single-line instructions have opaque arena
-  token lists with balanced parentheses/brackets/braces. A repeated asm keyword
-  separates single-line instructions. The enclosing C brace remains unconsumed.
-  Line boundaries use macro invocation provenance and original source text,
-  ignoring phase-2 backslash/trigraph splices, without changing lexing. Assembly
-  semicolons remain opaque tokens; target instruction/comment interpretation is
-  deferred. EOF and mismatched delimiters mark the assembly node recovered.
-- Anonymous tagged struct/union definitions and references are accepted only
-  with `-fms-anonymous-structs`. ISO untagged anonymous members retain their
-  independent C11 status; resolving typedefs and promoting members are analysis.
+  parameters and abstract declarators. `__forceinline` keeps its modifier and
+  inline property.
+- `MsvcFrame` owns SEH: `__try` guarded compounds, `__except` expression
+  filters, `__finally` compounds and `__leave;`. Children use the machine's
+  compound and expression frames and ordinary scope restoration. Missing
+  handlers, bodies, filters and delimiters produce recovered syntax and preserve
+  following input. `__leave` placement and handler semantics are later analysis.
+- `MsvcFrame` also owns `__asm`/`_asm` brace blocks and single-line instructions
+  as opaque arena token lists with balanced parentheses, brackets and braces. A
+  repeated asm keyword separates single-line instructions, and the enclosing C
+  brace stays unconsumed. Line boundaries come from macro-invocation provenance
+  and the original source text, ignoring phase-2 splices. Phase 7 converts every
+  pp-number before parsing, so the assembly withdraws the C constant-conversion
+  errors and numeric extension diagnostics of its own tokens (MASM `0FFh`).
+  Assembly semicolons stay opaque tokens. EOF and mismatched delimiters mark
+  the node recovered.
+- Anonymous tagged struct/union definitions and references, and members naming
+  only a typedef, are accepted only with `-fms-anonymous-structs`. ISO untagged
+  anonymous members keep their independent C11 status; whether a typedef names
+  an aggregate, and member promotion, are analysis.
 
-Microsoft primary grammar references: [declspec](https://learn.microsoft.com/en-us/cpp/cpp/declspec),
+Microsoft grammar references: [declspec](https://learn.microsoft.com/en-us/cpp/cpp/declspec),
 [inline assembly](https://learn.microsoft.com/en-us/cpp/assembler/inline/asm),
 [try-except](https://learn.microsoft.com/en-us/cpp/cpp/try-except-statement),
 [try-finally](https://learn.microsoft.com/en-us/cpp/cpp/try-finally-statement), and
 [anonymous class types](https://learn.microsoft.com/en-us/cpp/cpp/anonymous-class-types).
-ABI selection, fixed-width target types, qualifier applicability, attributes,
-SEH control transfer and assembly meaning remain outside this syntax workstream.
 
-Evidence: `parsing::tests::msvc` covers each feature enabled alone and disabled
-under the umbrella, ISO/GNU modes, all policy severities, immutable nodes,
-provenance, every input prefix, recovery and deep SEH nesting. CLI tests pin all
-sub-flags, inspection, enabled/disabled token snapshots and diagnostic goldens.
-`node_sizes` pins the new arena nodes; the benchmarking-only MSVC parse seam
-exercises valid and recovered paths under the zero-global-allocation check.
-
-## Lexical and preprocessing implementation
+## Lexical and preprocessing behavior
 
 Phase 1 trigraph replacement and phase 2 splicing use the same mode gate in the
 main lexer, included files, terminal-splice diagnostics, and written header-name
-reconstruction. Strict C89-C17 translate trigraphs; GNU modes and C23/C2y preserve
-them. Strict C89 does not combine digraphs; C95 adds them. Strict C89/C95 retain
-`//` as two `/` tokens. GNU89 accepts both features and reports their origins
-under pedantic policy. Diagnostics are deferred with the batch token entries,
-so skipped conditional groups do not report unused extension spellings.
+reconstruction. Strict C89-C17 translate trigraphs; GNU modes and C23/C2y
+preserve them. Strict C89 does not combine digraphs; C95 adds them. Strict
+C89/C95 lex `//` as two `/` tokens. GNU89 accepts both features and reports
+their origins under pedantic policy. Diagnostics are deferred with the batch
+token entries, so skipped conditional groups do not report extension spellings.
 
-Phase 3 recognizes `u`, `U`, and `u8` string prefixes from C11, `u`/`U` character
-prefixes from C11, and `u8` character prefixes from C23. Earlier modes preserve
-the identifier followed by a literal. C23 digit separators are part of
-pp-numbers and must lie between digits of the constant's radix. C23 binary and
+Phase 3 recognizes `u`, `U`, and `u8` string prefixes and `u`/`U` character
+prefixes from C11, and `u8` character prefixes from C23. Earlier modes keep the
+identifier followed by a literal. C23 digit separators are part of pp-numbers
+and must lie between digits of the constant's radix. C23 binary constants,
 `wb`/`uwb` suffixes and C2y `0o`/`0O` octal prefixes convert to typed values.
-Suffix recognition also follows mode gates when tokens are pasted. GNU binary
-constants before C23 report the C23 origin; GNU imaginary `i`/`j` suffixes retain
-the real component's precision and signedness, including either order with
-ordinary floating suffixes. Dollar identifiers, including continuations, report
-GNU policy diagnostics. C89 long-long suffixes and hexadecimal floating
-constants report C99 policy diagnostics while retaining values.
+Suffix recognition follows the mode gates for pasted tokens too. GNU binary
+constants before C23 report the C23 origin. GNU imaginary `i`/`j` suffixes keep
+the real component's precision and signedness, in either order with ordinary
+floating suffixes; an integer takes no `f` suffix. Dollar identifiers, including
+continuations, report GNU policy diagnostics, except inside a written
+`#include <...>` name. C89 long-long suffixes and hexadecimal floating constants
+report C99 policy diagnostics while keeping their values.
 
-C23 pp-number separators follow the pp-number grammar: `'` continues a
-pp-number only before a digit or an ASCII nondigit, even when conversion must
-reject the resulting constant; a universal character name, another character
-or `$` after it starts a character constant instead. Because `e sign` may
-follow `' nondigit`, `0x1'e+1` is one invalid pp-number, as GCC lexes it. C23 permits universal names for basic/control characters
-inside literals while retaining invalid-scalar checks; earlier modes retain the
-C99/C11 low-code-point restriction.
+A C23 `'` continues a pp-number only before a digit or an ASCII nondigit, even
+when conversion must reject the resulting constant; a universal character name,
+another character or `$` after it starts a character constant instead. C23
+permits universal names for basic and control characters inside literals while
+keeping invalid-scalar checks; earlier modes keep the C99/C11 low-code-point
+restriction.
 
 Phase 5 preserves Unicode encoding in literal tokens and distinguishes numeric
 escapes from source characters. UTF-8/UTF-16/UTF-32 character constants must fit
-one code unit; numeric escapes have the selected code-unit range. C2y's scoped
-delimited-escape support is `\x{...}` and `\o{...}`, with empty, unterminated,
-invalid-radix, and out-of-range forms diagnosed. Phase 6 concatenates ordinary
-strings with encoded strings while retaining the encoding, and diagnoses
-incompatible nonordinary prefixes. Phase 7 adds encoding-bearing literal,
-bit-precise integer, and imaginary constant token variants. The existing integer
-magnitude ceiling remains 64 bits: `wb` can describe a signed 65-bit type for a
-64-bit positive magnitude, but larger magnitudes still diagnose overflow. This
-is token conversion, not arbitrary-precision arithmetic or type semantics.
+one code unit; numeric escapes have the selected code-unit range. C2y delimited
+escapes are `\x{...}` and `\o{...}`, with empty, unterminated, invalid-radix,
+and out-of-range forms diagnosed. Phase 6 concatenates ordinary strings with
+encoded strings while keeping the encoding, and diagnoses incompatible
+nonordinary prefixes. Phase 7 adds encoding-bearing literal, bit-precise
+integer, and imaginary constant token variants.
 
-C23 `#elifdef`/`#elifndef`, `#warning`, `#embed`, `__has_include`, `__has_embed`,
-`__has_c_attribute`, and `__VA_OPT__` also work as earlier GNU extensions.
-`#warning` always emits its message, with an additional policy diagnostic when
+C23 `#elifdef`/`#elifndef`, `#warning`, `#embed`, `__has_include`,
+`__has_embed`, `__has_c_attribute`, and `__VA_OPT__` also work as earlier GNU
+extensions. `#warning` always emits its message, plus a policy diagnostic when
 its spelling is an extension. `#embed` reads real files as 8-bit resource
-elements, sharing include search paths, and implements `limit`, `prefix`,
-`suffix`, `if_empty`, and their double-underscore aliases. Limits use the existing
-integer preprocessor evaluator and reject negative values and `defined`.
-Written quoted/angle names are read before macro replacement inside their
-boundaries, including digraph-looking punctuation and dollar signs as header
-characters; macro-produced names and builtin strings such as `__FILE__` are
-expanded normally. Missing operands and missing closing quotes diagnose. Resource queries
-return 0 for missing resources, 1 for found resources, and `__has_embed` returns
-2 for an empty effective resource, including `limit(0)`. The three
-`__STDC_EMBED_*__` constants are predefined when resource inclusion is enabled.
-An unsupported qualified embed parameter returns 0 in `__has_embed`; a direct
-`#embed` diagnoses it. Malformed parameters diagnose in both forms. Query
-nesting is bounded at 64 to turn adversarial recursive operands into a diagnostic
-instead of exhausting the native stack. Resource and C attribute queries are
-restricted to preprocessing conditional expressions (C23 §6.10.2p11); their
-names remain defined for `defined`, `#ifdef` and related macro tests. Invalid
-operator openings preserve the following token or directive boundary.
+elements through the include search paths, and implements `limit`, `prefix`,
+`suffix`, `if_empty`, and their double-underscore aliases. Limits use the
+integer preprocessor evaluator in their own expansion frame and reject negative values and `defined`. Written quoted/angle names are read before
+macro replacement, including digraph-looking punctuation and dollar signs as
+header characters; macro-produced names and builtin strings such as `__FILE__`
+expand normally. Missing operands and missing closing quotes are diagnosed.
+Resource queries return 0 for missing resources, 1 for found resources, and
+`__has_embed` returns 2 for an empty effective resource, including `limit(0)`.
+The three `__STDC_EMBED_*__` constants are predefined when resource inclusion is
+enabled. An unsupported qualified embed parameter returns 0 in `__has_embed`; a
+direct `#embed` diagnoses it. Malformed parameters are diagnosed in both forms.
+Query nesting is bounded at 64, so adversarial recursive operands produce a
+diagnostic instead of exhausting the native stack. Resource and C attribute
+queries are restricted to preprocessing conditional expressions (C23
+§6.10.2p11); their names remain defined for `defined`, `#ifdef` and related
+tests. Invalid operator openings preserve the following token or directive
+boundary.
 
-`__has_c_attribute` returns 202311 for the seven standard C23 attribute names,
-including double-underscore aliases, and 0 for unknown names. GNU
-`__has_attribute` returns 1 for the syntax-supported set `unused`, `deprecated`,
-`aligned`, `packed`, `noreturn`, `weak`, `section`, `visibility`, `format`,
-`always_inline`, and `noinline`; `__has_builtin` returns 1 for
-`__builtin_va_arg`, `__builtin_offsetof`, `__builtin_types_compatible_p`, and
-`__builtin_choose_expr`. Other names return 0. These query tables describe the
-intended syntax-front-end subset, not backend effects or a GCC/clang version.
-Both queries are available through their reserved GNU spellings in strict modes
-and report GNU policy diagnostics.
+`__has_c_attribute` returns 202311 for the seven standard C23 attributes and
+`_Noreturn`, including double-underscore forms, and 0 for other names. GNU
+`__has_attribute` returns 1 for `unused`, `deprecated`, `aligned`, `packed`,
+`noreturn`, `weak`, `section`, `visibility`, `format`, `always_inline`, and
+`noinline`; `__has_builtin` returns 1 for `__builtin_va_arg`,
+`__builtin_offsetof`, `__builtin_types_compatible_p`, and
+`__builtin_choose_expr`. Other names return 0. These tables describe the
+syntax-front-end subset, not backend effects or a GCC/Clang version. Both GNU
+queries are available through their reserved spellings in strict modes and
+report GNU policy diagnostics.
 
 `__VA_OPT__` selects its inner replacement after variadic argument expansion;
-inner substitution and pasting precede outer stringification or pasting.
-Placemarkers survive until the outer paste is complete. Definition-time checks
-reject use outside a variadic replacement, nested optional replacements,
-missing parentheses, and `##` at either inner boundary. C23 permits omitted
-variadic arguments; pre-C23 pedantic modes retain the existing omission
-diagnostic. C89 fixed and variadic empty arguments and variadic definitions
-report C99 origin. Named `args...` definitions retain the original parameter name and report GNU
-origin. Their variadic argument captures use the same machinery, but
-`__VA_ARGS__` does not denote that named argument.
-Original named variadic parameter IDs remain in definition metadata and
-replacement bodies, so identical redefinitions compare original token spellings
-and parameter names, even when the variadic parameter is unused.
+inner substitution and pasting precede outer stringification or pasting. The
+result is rescanned with the rest of the replacement but never substituted
+again (C23 §6.10.5.1p7). Placemarkers survive until
+the outer paste is complete. Definition-time checks reject use outside a
+variadic replacement, nested optional replacements, missing parentheses, and
+`##` at either inner boundary. C23 permits omitted variadic
+arguments; pre-C23 pedantic modes keep the omission diagnostic. C89 fixed and
+variadic empty arguments and variadic definitions report C99 origin. Named
+`args...` definitions keep the original parameter name, report GNU origin, and
+must be last. Their captures use the same machinery, but `__VA_ARGS__` does not
+denote the named argument. Identical redefinitions compare original token
+spellings and parameter names, even when the variadic parameter is unused.
 
-GNU `, ## __VA_ARGS__` elides a comma for an omitted variadic argument, preserves
+GNU `, ## __VA_ARGS__` elides a comma for an omitted variadic argument, keeps
 it for an explicitly empty argument, and substitutes supplied arguments without
 pasting a comma. For a macro with only `...`, an empty invocation elides in GNU
-modes and retains the comma in strict modes, following the documented
+modes and keeps the comma in strict modes, following the documented
 [GCC distinction](https://gcc.gnu.org/onlinedocs/cpp/Variadic-Macros.html).
 MSVC `-fms-va-args` independently elides a preceding comma when the variadic
 argument expands to nothing, following the traditional
 [MSVC behavior](https://learn.microsoft.com/en-us/cpp/preprocessor/variadic-macros?view=msvc-170).
 
-GNU `#include_next` continues after the actual configured search entry that
-provided the current header, even when the next directive changes quote/angle
-form. A quoted include found next to its including file has no configured entry;
-its `#include_next` starts at the first configured directory. This follows
+GNU `#include_next` continues after the configured search entry that provided
+the current header, even when the next directive changes quote/angle form. A
+quoted include found next to its including file has no configured entry; its
+`#include_next` starts at the first configured directory, following
 [GCC's search-order description](https://gcc.gnu.org/onlinedocs/cpp/Wrapper-Headers.html).
-`#ident`/`#sccs` require a string and are consumed as metadata directives; this
-syntax-only frontend emits no object-file metadata. `__COUNTER__` starts at 0
-for each translation unit and increments only when expanded. GNU builtins
-`__COUNTER__`, `__has_attribute`, and `__has_builtin` may be redefined or
-undefined with a warning; ISO predefined macros and C23 query names remain
-protected. MSVC
-`-fms-pragma` consumes `__pragma(...)` tokens and passes their payload to the
-existing pragma handler, retaining source provenance. It is independent of
-`-fms-va-args` and of the selected standard, consistent with the
+`#ident`/`#sccs` require a string and are consumed as metadata directives; no
+object-file metadata is emitted. `__COUNTER__` starts at 0 for each translation
+unit and increments only when expanded. MSVC `-fms-pragma` consumes
+`__pragma(...)` and passes its payload to the pragma handler with source
+provenance, independent of `-fms-va-args` and the selected standard,
+consistent with the
 [MSVC operator documentation](https://learn.microsoft.com/en-us/cpp/preprocessor/pragma-directives-and-the-pragma-keyword?view=msvc-170).
 
-No keyword classification or parser grammar changed in lexpp. The small shared
-changes are exhaustive literal-display arms in `src/cli.rs` and
-`src/translation_phases/parsing/inspection.rs`, a mode-aware diagnostic measurement
-adapter exported from `src/lib.rs`,
-a context iterator exposing stable include search ranks, and activation of the
-prepared extension emitter. The original measurement API retains its library
-default mode. The adapter parses mode/policy flags before measured intervals;
-CLI setup allocations are excluded as before. Tests cover all seven ISO
-revisions and their GNU counterparts,
-Allow/Warn/Deny policies, MSVC flags independently, written and expanded real
-resource paths, include-next chains, optional replacement examples from C23,
-and malformed/truncated input recovery. The diagnostic harness accepts optional
-`.args` sidecars to render the selected mode and policy.
+## Decisions
 
-### Lexpp performance verification (8 October 2026)
+- C2y `__STDC_VERSION__` is `202400L`, following the
+  [Clang user manual](https://clang.llvm.org/docs/UsersManual.html#differences-between-various-standard-modes).
+  GCC used `202500L` in its
+  [initial C2y implementation](https://gcc.gnu.org/pipermail/gcc-patches/2024-June/654270.html).
+  Draft versions are implementation choices, not conformance claims.
+- C2y scope is `0o` octal prefixes and `\x{}`/`\o{}` delimited escapes in the
+  lexer, and `_Countof`, case ranges, selection declarations, named loop
+  control, and type-controlling `_Generic` in the parser. Further draft
+  features need an explicit matrix row and a supporting primary source.
+- Reserved standard keywords stay recognized in older modes and are diagnosed
+  by origin. C23 non-reserved aliases stay identifiers before C23; GNU `typeof`
+  and `asm`, and GNU89 `inline`, are exceptions. `restrict` stays an identifier
+  before C99 unless written with a reserved GNU alternate spelling.
+- `_Alignas`/`alignas`, `_Static_assert`/`static_assert`, `_Bool`/`bool`, and
+  `_Thread_local`/`thread_local` share kinds. Aliases keep their original
+  spelling for policy diagnostics, and token contents preserve it for parser
+  consumers.
+- GNU alternate keywords map to existing C99 kinds where they exist. `__asm__`
+  and reserved `__asm` accept GNU assembly in every mode, and file-scope
+  `__asm` is always GNU. With MS assembly enabled, a statement `__asm` followed
+  by `(`, `volatile`, `inline` or `goto` selects GNU
+  grammar and anything else selects MSVC block or line grammar; `_asm` stays
+  gated by the MS assembly flag. GNU `__inline` remains available with MSVC
+  inline disabled because its GNU spelling is independently reserved. With its
+  flag enabled, the preprocessor consumes `__pragma` as an operator before
+  keyword classification.
+- GNU/MSVC policy diagnostics stay active in their enabled dialects under
+  pedantic options. `_Imaginary` reports the baseline unsupported-type
+  diagnostic; classification does not claim imaginary type semantics.
+- Implicit int is a removed C89 feature, not a GNU extension: C99 and later
+  report `'implicit int' is a C89 feature removed in C99`.
+- `__STRICT_ANSI__` is an implementation macro outside §6.10.8's protection, so
+  `#undef` and `#define` apply to it as to any macro, as in GCC. The GNU builtins
+  `__COUNTER__`, `__has_attribute`, and `__has_builtin` may be redefined or
+  undefined with a warning; ISO predefined macros and C23 query names stay
+  protected.
+- Because `e sign` may follow `' nondigit` in the pp-number grammar,
+  `0x1'e+1` is one invalid pp-number, as GCC lexes it.
 
-Baseline: foundation commit `f73b9cd`. Feature implementation: `2ee1605`, then
-named-variadic redefinition fix `d6b516a`. The final timing artifact is
-`d6b516a` plus the two `#[inline(always)]` annotations on `Lexer::lex_token`
-and `Lexer::lex_number`. The resource-header correction `228a5b9` affects
-query/resource paths absent from these three benchmark inputs. No parser-only
-performance claim is made: parser grammar and keyword classification are outside
-this workstream.
+## Testing evidence
 
-Windows x86-64, Rust 1.99.0, native LLVM 23.1.1, static native C archive and
-Rust/C fat LTO; release builds with `benchmarking-internals`, without
-`portable-simd`. Both executables use the unchanged strict-C99 library benchmark
-configuration. Seven interleaved baseline/current runs alternate their order.
-Criterion parameters: 0.2 s warm-up, 0.5 s requested measurement, 10 samples;
-the preprocessor group overrides this to 20 samples and Criterion extends short
-measurement windows. Each cell below is the minimum **mean point estimate** of
-the seven runs, followed by that run's 95% bootstrap confidence interval, in ms.
-These are lexer-only and phases-1-through-6 timings, respectively.
+- Parser: `parsing::tests::standards`, `gnu`, `msvc` and `dialect_regressions`
+  cover each feature in every revision, enabled and disabled gates, all policy
+  severities, immutable nodes, provenance, every input prefix, recovery with a
+  following declaration, and deep nesting. `node_sizes` pins the new nodes.
+- Lexer and preprocessor: `preprocessing::tests::language_modes` and the
+  regression modules beside it; token snapshots under `tests/fixtures/lexing/`
+  pin the mode-dependent token streams, including the ISO, GNU and MSVC parser
+  seams.
+- CLI: [`tests/cli.rs`](tests/cli.rs) covers flag parsing and overrides;
+  [`tests/language_cli.rs`](tests/language_cli.rs) runs every accepted
+  standard spelling through preprocessing, parsing and syntax inspection, with
+  GNU and MSVC programs, disabled gates and malformed cross-phase input.
+- Diagnostics: golden inputs under `tests/fixtures/diagnostics/` take optional
+  `.args` sidecars that select mode and policy; see its `COVERAGE.md`.
+- Allocation: [`tests/allocation_count.rs`](tests/allocation_count.rs) checks
+  that ISO, GNU, MSVC and pedantic-suppression parsing, and diagnostic
+  rendering, make no global allocations.
 
-| Workload | Baseline min mean [95% CI], ms | Lexpp min mean [95% CI], ms | Change |
-| --- | ---: | ---: | ---: |
-| Lexer / one million lines | 496.22 [491.56, 501.66] | 470.93 [464.77, 479.87] | -5.1% |
-| Lexer / mixed c99 workload | 347.98 [346.38, 350.26] | 361.93 [360.26, 363.75] | +4.0% |
-| Lexer / macro-heavy workload | 109.64 [109.10, 110.25] | 116.97 [116.52, 117.42] | +6.7% |
-| Preprocessor / one million lines | 810.26 [800.85, 822.05] | 837.72 [820.95, 855.73] | +3.4% |
-| Preprocessor / mixed c99 workload | 707.33 [704.78, 710.17] | 722.01 [718.84, 725.44] | +2.1% |
-| Preprocessor / macro-heavy workload | 617.61 [614.72, 620.84] | 621.92 [620.04, 623.98] | +0.7% |
+## Performance
 
-An earlier seven-run comparison without the annotations measured +9.2% mixed
-and +10.8% macro-heavy lexer overhead. Symbol inspection showed that LLVM had
-outlined these two hot methods after the additional feature arms enlarged them;
-the baseline had inlined both. The annotations restore that property. The
-remaining overhead is reported above, not treated as a parser improvement.
+Measured 8 October 2026 against `main` at `938c0c2`: Windows x86-64, Rust
+1.99.0, native LLVM 23.1.1 with fat LTO, `benchmarking-internals` without
+`portable-simd`, unchanged strict-C99 benchmark inputs, seven interleaved
+Criterion `--quick` runs, minimum point estimates. Treat the small sample set
+as indicative.
 
-The memory harness reports identical rounded arena high-water marks for baseline
-and the optimized lexpp build: PP arenas 145.9/144.3/55.0 MiB, expansion arenas
-0.1/0.1/37.7 KiB, parse arenas 1.6/10.5/9.5 KiB, and TU arenas
-238.4/181.0/147.1 MiB for the plain/mixed/macro workloads. Peak arena commits are
-526.1/454.1/344.6 MiB; peak regions are 8/9/8 (800/900/800 GiB reserved).
-OS peak commit and working set are unchanged to within 0.1 MiB: phases 1-6 commit
-458.9/412.8/227.0 MiB and working set 480.2/434.7/233.9 MiB; phases 1-7 commit
-528.0/455.9/346.1 MiB and working set 548.0/476.7/338.3 MiB.
+| Pipeline | Change vs `main` |
+| --- | ---: |
+| Lexer only | -2.5% to +2.4% |
+| Phases 1-6 | +1.0% to +4.8% |
+| Full pipeline, phases 1-7 | +4.0% to +9.2% |
+| Parser only | +8.9% to +16.2% |
 
-Temporary counters in isolated benchmark copies (including the final resource
-correction) count every iteration of the preprocessor driver's outer token loop
-and sample its live preprocessing provenance before that iteration. They are not
-part of the production changes. Output token counts, driver steps, and total
-retained source segments match the baseline exactly:
-
-| Input | Output tokens | Driver steps | Steps/token | Retained segments | Peak live PP vectors, baseline → lexpp |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| one million lines | 5,000,000 | 6,000,001 | 1.200 | 5,000,001 | 1 → 1 |
-| mixed C99 workload | 5,240,000 | 5,800,001 | 1.107 | 5,240,001 | 2 → 2 |
-| macro-heavy workload | 3,260,000 | 6,100,012 | 1.871 | 3,300,001 | 194 → 311 |
-
-The extra macro-definition preprocessing provenance is bounded by setup in this
-input and does not grow across its repeated expansions. Ordered provenance,
-macro/include locations, recovery, query-depth bounds and token values are
-covered by snapshots, structured tests and rendered diagnostics. All six
-canonical checks pass, including the eight feature-enabled allocation tests;
-rendering every diagnostic golden continues to require zero global allocations.
-
-## Integrated CLI verification
-
-The integration branch merges `std/parse` before `std/lexpp`, preserving each
-workstream's implementation and diagnostic coverage. The only textual merge
-conflicts were this document's status matrix/implementation sections and the
-diagnostic coverage document; both sets of completed behavior were retained.
-
-[End-to-end tests](tests/language_cli.rs) run the compiled CLI through preprocessing,
-parsing and syntax inspection for every accepted standard spelling. Representative
-strict programs use native syntax under `-pedantic-errors`; GNU programs combine
-named variadic macros, dollar identifiers, keyword aliases, inline, asm,
-statement expressions and imaginary constants. MSVC programs combine macro-produced
-`__pragma`, declspec, integer types, calling conventions, pointer qualifiers, SEH,
-assembly and empty variadic comma elision in every ISO revision. Tests cover later
-flag overrides, disabled gates, older-mode identifier preservation and malformed
-cross-phase inputs with a following declaration.
-
-C attribute queries report the syntax-recognized subset: all seven names can
-reach retained `[[...]]` nodes, while unknown/vendor queries return zero.
-Attribute meaning and applicability remain later analysis. `#embed` and
-`__has_embed` use the same real resource; emitted bytes, prefix/suffix, limits and
-empty-resource replacement reach ordinary initializer elements. Numeric and
-character literal variants, including C23 bit-precise and C2y literals, reach
-expression nodes without introducing semantic evaluation.
-
-GNU imaginary integer values previously displayed only their component magnitude,
-while floating imaginary values displayed `i`. Both the token dump and syntax
-inspection now retain `i` consistently, including unsigned and long components.
-The verified lexical snapshot and parser AST/inspection regression pin this
-behavior. No feature gate, diagnostic severity, arena rule or canonical check
-was relaxed during integration.
-
-Integration validation (8 October 2026): `cargo test --all-targets` passes 763
-tests, including all seven new CLI integration tests and the combined diagnostic
-golden. `cargo test --features benchmarking-internals --test allocation_count`
-passes all 11 tests. `cargo +nightly fmt --check`, both canonical Clippy commands
-with `-D warnings`, and `git diff --check` pass. Work remains syntax-only;
-semantic analysis and code generation are outside this integration.
-
-## Final maintainer review and performance verification
-
-The final review checks `main...HEAD`, the shared brief, all configured modes,
-and the cited grammar in the local C89/C99/C11/C17/C23 editions. Regression
-coverage adds C23 function forms, duplicate enum underlying types, conditional
-booleans and bit-precise magnitudes, GNU/MSVC assembly selection, macro identity
-and override recovery, query boundaries and inactive branches, variadic-marker
-policy, opaque numeric spelling, and suppression occurrence provenance.
-Malformed modern/GNU/MSVC prefixes and deterministic token mutations exercise
-termination, restored frames/scopes and following valid input. The golden guard
-continues to reject panics, internal representations and raw NUL bytes.
-
-Two diagnostic-heavy quadratic paths were removed: parser suppression scans
-and preprocessing relocation through an already-processed queue prefix. The
-replacement structures are arena-backed; cached counts and direct queue suffixes
-avoid repeated walks. A debug CLI probe with pedantic declaration markers has
-minimum times of 0.110/0.121/0.144/0.190 seconds for 1,000/2,000/4,000/8,000
-declarations (three runs, including process startup). The 8,000 case took
-1.23 seconds before the direct-suffix correction, with the suppression index
-already in place. These debug probes describe scaling, not release throughput.
-
-The release comparison uses `main` at `938c0c2` and measurement artifact
-`016b531`. The subsequent reserved-marker severity fix affects malformed
-variadic-marker input, which none of the benchmark workloads contain. Platform:
-Windows x86-64, Rust 1.99.0, native LLVM 23.1.1, static native C archive and
-Rust/C fat LTO, `benchmarking-internals`, without `portable-simd`. Inputs and
-library configuration are unchanged strict C99 with Allow policy. Seven
-interleaved runs alternate executable order. Criterion `--quick` is used for
-these large workloads; the table reports the minimum point estimate and its
-displayed interval, without treating the small sample set as strong statistical
-evidence.
-Concurrent work and a shared machine can affect individual runs. Full pipeline
-and parser-only results are separate below.
-
-| Workload | Main minimum [interval], ms | Branch minimum [interval], ms | Change |
-| --- | ---: | ---: | ---: |
-| Lexer / one million lines | 474.850 [458.940, 478.830] | 462.910 [458.090, 464.120] | -2.5% |
-| Lexer / mixed C99 workload | 355.270 [354.850, 355.380] | 363.870 [360.710, 376.520] | +2.4% |
-| Lexer / macro-heavy workload | 116.560 [116.510, 116.750] | 116.080 [115.970, 116.510] | -0.4% |
-| Preprocessor / one million lines | 788.360 [780.280, 820.680] | 820.280 [805.570, 823.950] | +4.0% |
-| Preprocessor / mixed C99 workload | 693.950 [691.890, 694.470] | 727.240 [726.520, 730.110] | +4.8% |
-| Preprocessor / macro-heavy workload | 617.190 [615.860, 622.530] | 623.640 [622.390, 628.660] | +1.0% |
-| Parser / one million lines | 1469.600 [1463.100, 1495.600] | 1602.500 [1595.100, 1604.300] | +9.0% |
-| Parser / mixed C99 workload | 1350.900 [1350.300, 1353.400] | 1475.500 [1474.600, 1479.300] | +9.2% |
-| Parser / macro-heavy workload | 1138.400 [1137.300, 1143.100] | 1184.300 [1183.800, 1184.400] | +4.0% |
-| Parser only / one million lines | 676.430 [675.800, 676.590] | 779.120 [776.390, 790.000] | +15.2% |
-| Parser only / mixed C99 workload | 648.410 [645.330, 649.190] | 753.700 [748.080, 755.100] | +16.2% |
-| Parser only / macro-heavy workload | 451.870 [449.750, 460.370] | 492.180 [492.060, 492.210] | +8.9% |
-| Parser only / expression-heavy workload | 96.194 [96.194, 96.195] | 105.980 [105.680, 107.160] | +10.2% |
-| Parser only / declaration-heavy workload | 169.540 [169.360, 170.270] | 194.570 [194.490, 194.590] | +14.8% |
-
-The minimum estimates show full-pipeline parsing costs of 4.0-9.2% and
-parser-only costs of 8.9-16.2%. The additional retained syntax and mode checks
-remain measurable costs; unchanged driver counts do not remove that overhead.
-
-Temporary counters in isolated copies give identical results for both revisions:
-
-| Input | Consumed tokens | Parser driver steps | Steps/token | Peak phase-7 source segments |
-| --- | ---: | ---: | ---: | ---: |
-| one million lines | 5,000,000 | 17,000,001 | 3.400 | 5,000,000 |
-| mixed C99 workload | 5,240,000 | 11,920,001 | 2.275 | 5,520,000 |
-| macro-heavy workload | 3,260,000 | 6,840,001 | 2.098 | 4,900,000 |
-
-Those counters are absent from production code and timing executables. The
-unmodified memory harness reports increased retained syntax memory:
-
-| Input | Peak commit, main → branch (MiB) | Peak working set, main → branch (MiB) | TU arena, main → branch (MiB) | Parse arena, main → branch (KiB) |
-| --- | ---: | ---: | ---: | ---: |
-| one million lines | 528.0 → 543.0 | 548.1 → 563.4 | 238.4 → 253.6 | 1.6 → 1.7 |
-| mixed C99 workload | 455.9 → 462.9 | 476.7 → 484.0 | 181.0 → 188.4 | 10.5 → 11.5 |
-| macro-heavy workload | 346.1 → 349.2 | 338.3 → 341.5 | 147.1 → 150.1 | 9.5 → 10.6 |
-
-PP arena high-water marks remain 145.9/144.3/55.0 MiB and expansion arenas
-0.1/0.1/37.7 KiB. Peak region counts remain 8/9/8, reserving 800/900/800 GiB
-of virtual address space. Peak arena commits increase from 526.1/454.1/344.6
-to 541.1/461.1/347.6 MiB. Phases 1-3 and 1-6 OS peaks remain within 0.1 MiB
-at the reported precision. These costs are part of the expanded retained syntax,
-not global-allocator leakage or increased parser scheduling/provenance growth.
-
-Final review validation (8 October 2026): `cargo test --all-targets` passes
-787 tests. `cargo test --features benchmarking-internals --test allocation_count`
-passes all 12 checks, including zero global allocations during parsing and
-diagnostic rendering. `cargo +nightly fmt --check`,
-`cargo clippy --all-targets -- -D warnings`,
-`cargo clippy --all-targets --features benchmarking-internals -- -D warnings`,
-and `git diff --check` pass. Fixes and these review notes are granular signed
-commits on `feat/language-standards`; the comparison baseline is unchanged.
+Parser driver steps per token are unchanged. Retained syntax grows the
+translation-unit arena by 3-15 MiB on the three large workloads; preprocessing
+and expansion arenas are unchanged. The main parser causes identified so far are
+general `TokenType` equality used for scalar keyword and operator tests,
+`ParseFrame` widening from 144 to 176 bytes, and `Declaration` growing from 56
+to 72 bytes. Fixes are pending.
