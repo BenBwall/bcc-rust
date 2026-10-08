@@ -447,7 +447,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     if let Some(extension) = declaration.declaration_specifiers.extensions {
                         work.push(Work::SpecifierExtension(extension, indent + 1));
                     }
-                    if let Some(ordinal) = first_visit(&mut visited, 0, declaration) {
+                    if let Some(ordinal) =
+                        first_visit(&mut visited, VisitKind::Declaration, declaration)
+                    {
                         Self::shared(
                             &mut output,
                             indent,
@@ -517,7 +519,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     if let Some(x) = function.declaration_specifiers.extensions {
                         work.push(Work::SpecifierExtension(x, indent + 1));
                     }
-                    if let Some(ordinal) = first_visit(&mut visited, 1, function) {
+                    if let Some(ordinal) =
+                        first_visit(&mut visited, VisitKind::FunctionDefinition, function)
+                    {
                         Self::shared(
                             &mut output,
                             indent,
@@ -742,7 +746,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     if let Some(x) = specifier.attributes {
                         work.push(Work::SpecifierExtension(x, indent + 1));
                     }
-                    if first_visit(&mut visited, 7, specifier).is_some() {
+                    if first_visit(&mut visited, VisitKind::StructOrUnion, specifier).is_some() {
                         continue;
                     }
                     let kind = match specifier.struct_or_union {
@@ -821,7 +825,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     if let Some(x) = specifier.underlying_type {
                         work.push(Work::TypeName(x, indent + 1, "underlying-type"));
                     }
-                    if first_visit(&mut visited, 8, specifier).is_some() {
+                    if first_visit(&mut visited, VisitKind::Enum, specifier).is_some() {
                         continue;
                     }
                     let name = specifier.name.map_or("<anonymous>", |identifier| {
@@ -861,7 +865,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     }
                 },
                 | Work::Statement(statement, indent, role) => {
-                    if let Some(ordinal) = first_visit(&mut visited, 2, statement) {
+                    if let Some(ordinal) =
+                        first_visit(&mut visited, VisitKind::Statement, statement)
+                    {
                         Self::shared(
                             &mut output,
                             indent,
@@ -892,7 +898,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     Self::push_statement_children(&mut work, &statement.kind, indent + 1);
                 },
                 | Work::Expression(expression, indent, role) => {
-                    if let Some(ordinal) = first_visit(&mut visited, 3, expression) {
+                    if let Some(ordinal) =
+                        first_visit(&mut visited, VisitKind::Expression, expression)
+                    {
                         Self::shared(
                             &mut output,
                             indent,
@@ -932,7 +940,9 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     options,
                 ),
                 | Work::Initializer(initializer, indent, role) => {
-                    if let Some(ordinal) = first_visit(&mut visited, 4, initializer) {
+                    if let Some(ordinal) =
+                        first_visit(&mut visited, VisitKind::Initializer, initializer)
+                    {
                         Self::shared(
                             &mut output,
                             indent,
@@ -991,7 +1001,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     }
                 },
                 | Work::Designation(designation, indent) => {
-                    if first_visit(&mut visited, 9, designation).is_some() {
+                    if first_visit(&mut visited, VisitKind::Designation, designation).is_some() {
                         continue;
                     }
                     Self::line(
@@ -1061,7 +1071,8 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     }
                 },
                 | Work::TypeName(type_name, indent, role) => {
-                    if let Some(ordinal) = first_visit(&mut visited, 5, type_name) {
+                    if let Some(ordinal) = first_visit(&mut visited, VisitKind::TypeName, type_name)
+                    {
                         Self::shared(
                             &mut output,
                             indent,
@@ -1771,12 +1782,27 @@ fn constant_label(constant: &Constant) -> impl Display {
     })
 }
 
+/// The kind of a shared node, which keeps nodes of different kinds at one
+/// address apart in the visited map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum VisitKind {
+    Declaration,
+    FunctionDefinition,
+    Statement,
+    Expression,
+    Initializer,
+    TypeName,
+    StructOrUnion,
+    Enum,
+    Designation,
+}
+
 /// Records a node reached through a reference. Returns `None` on the first
 /// visit, or the order in which the node was first visited when it is
 /// reached again through another parent.
 fn first_visit<T>(
-    visited: &mut ArenaMap<'_, (u8, usize), usize>,
-    kind: u8,
+    visited: &mut ArenaMap<'_, (VisitKind, usize), usize>,
+    kind: VisitKind,
     node: &T,
 ) -> Option<usize> {
     let ordinal = visited.len();
