@@ -184,9 +184,14 @@ pub(crate) struct Parser<'c, 'tu, 'p> {
     recovery: RecoveryState<'p>,
     /// Number of hard parser diagnostics emitted so far.
     hard_error_count: usize,
+    /// Open `__extension__` scopes; while any is open, extension diagnostics
+    /// for the tokens read are suppressed.
     pedantic_suppression: usize,
     /// Token diagnostics indexed once by spelling, provenance and invocation.
     token_diagnostics: driver::TokenDiagnostics<'tu, 'p>,
+    /// The number of `switch_scopes` entries that belong to enclosing
+    /// function bodies, so a nested function's `case` labels never attach
+    /// to an outer `switch`.
     switch_floor: usize,
     /// Frame currently executing, captured into every parser diagnostic.
     active_frame: ParseFrameKind,

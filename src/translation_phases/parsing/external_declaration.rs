@@ -54,7 +54,8 @@ use crate::translation_phases::{
 pub(super) struct ExternalDeclarationFrame {
     /// Current root-frame transition.
     phase:                     ExternalDeclarationPhase,
-    /// Hard-error count at entry, used only to classify the yielded AST.
+    /// Hard-error count at entry, used to classify the yielded AST and handed
+    /// to a function-definition child.
     starting_error_count:      usize,
     /// Pending-diagnostic boundary used to attach root-level recovery context
     /// to the primary diagnostic for this external declaration.

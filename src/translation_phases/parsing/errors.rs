@@ -46,7 +46,8 @@ use crate::{
     util::bump::Bump,
 };
 
-/// Structured parser diagnostic paired with original-source provenance.
+/// Which requirement a parser diagnostic reports: a syntax rule, a
+/// constraint, or neither.
 ///
 /// C99: the diagnostic requirement is §5.1.1.3, p. 11; PDF p. 23.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -211,6 +212,9 @@ pub(crate) struct RecoverySummary {
     pub(crate) stopped_at:       Option<TokenType>,
 }
 
+/// Structured parser diagnostic paired with original-source provenance.
+///
+/// C99: the diagnostic requirement is §5.1.1.3, p. 11; PDF p. 23.
 #[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
 pub(crate) struct ParserError<'tu> {
@@ -557,9 +561,6 @@ pub(crate) enum ParserErrorType<'tu> {
     /// Struct member list was not closed by `}`.
     /// C99: §6.7.2.1, p. 101; PDF p. 113.
     ExpectedClosingCurlyBraceInStructDeclarationList(Option<TokenType>),
-    /// A struct or union definition had no member declaration.
-    /// C99: struct-declaration-list is nonempty in §6.7.2.1, p. 101;
-    /// PDF p. 113.
     /// Struct member declaration reached `}` without its semicolon.
     /// C99: struct-declaration is §6.7.2.1, p. 101; PDF p. 113.
     ExpectedSemicolonBeforeClosingCurlyBraceInStructDeclaratorList,

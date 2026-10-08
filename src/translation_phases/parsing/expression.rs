@@ -400,8 +400,9 @@ fn brace_group_is_block(parser: &mut Parser<'_, '_, '_>) -> bool {
 const PARENTHESIZED_BRACE_GROUP_LOOKAHEAD: usize = 4096;
 
 /// Returns whether the brace group starting at the current `{` closes within
-/// reach and is followed directly by `)`, as in a GNU statement expression
-/// `({ ... })`. bcc-rust does not implement that extension.
+/// reach and is followed directly by `)`, as in `f({ ... })` or
+/// `if ({ ... })`, where the `(` belongs to a call or a statement header
+/// rather than opening a GNU statement expression.
 ///
 /// C99: a `{` cannot start a primary expression (§6.5.1, p. 69; PDF p. 81),
 /// so the whole group is skipped as one diagnosed operand (§5.1.1.3, p. 11;
@@ -1543,10 +1544,11 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                     ),
                 )));
             }
-            // A brace group directly inside a `(` and closed before its `)`,
-            // such as a GNU statement expression `({ ... })`, is one error
-            // operand even when it holds statements: skip it whole so the
-            // parenthesis keeps its `)`.
+            // A brace group directly inside a call's or statement header's
+            // `(` and closed before its `)` is one error operand even when it
+            // holds statements: skip it whole so the parenthesis keeps its
+            // `)`. A `({` that opens an expression is a GNU statement
+            // expression and never reaches here.
             if matches!(
                 token.kind,
                 TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
@@ -1973,13 +1975,12 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         }
     }
 
-    /// Returns whether the current `(` opens a type name: a type-name starter
-    /// follows, or a storage-class or `inline` keyword that a type-name frame
-    /// diagnoses as not allowed before one, as in `(static int)x`.
+    /// Returns whether the parenthesized type name starting at the current
+    /// token belongs to a compound literal: the `)` closing it is followed
+    /// directly by `{`. A `;` or `}` before that `)` ends the scan.
     ///
-    /// C99: a `type-name` begins with a `specifier-qualifier-list` (§6.7.6
-    /// paragraph 1, p. 122; PDF p. 134), and an identifier starts one only
-    /// as a visible `typedef-name` (§6.7.7 paragraph 1, p. 123; PDF p. 135).
+    /// C99: `( type-name ) { initializer-list }`, §6.5.2.5 paragraph 1,
+    /// p. 75; PDF p. 87.
     fn type_name_is_compound_literal(parser: &Parser<'_, 'tu, 'p>) -> bool {
         let mut groups = 0usize;
         let mut offset = 0usize;

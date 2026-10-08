@@ -93,9 +93,11 @@ pub(super) struct DeclarationFrame<'tu, 'p> {
     pub(super) init_declarators: ArenaVec<'p, InitDeclarator<'tu>>,
     /// Provenance accumulated across specifiers, declarators, and separators.
     pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
-    /// Hard-error count on entry, used to scope recovery to this declaration.
+    /// The parser's pedantic-suppression depth when this frame first ran,
+    /// restored when a leading `__extension__` goes out of scope.
     suppression_entry: Option<usize>,
     leading_extension: Option<SourceVectors>,
+    /// Hard-error count on entry, used to scope recovery to this declaration.
     starting_error_count: usize,
     /// Provenance of `=` retained while the initializer child runs.
     initializer_source: Option<SourceVectors>,
@@ -144,7 +146,7 @@ pub(super) enum DeclarationPhase {
     AfterDeclarator,
     /// Push the initializer child after consuming `=`.
     PushInitializer,
-    /// Attach a recovered initializer placeholder.
+    /// Attach the initializer child.
     AwaitInitializer,
     /// Push another declarator after consuming `,`.
     BeforeNextDeclarator,

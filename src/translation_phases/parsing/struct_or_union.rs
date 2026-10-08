@@ -155,7 +155,7 @@ pub(super) enum StructOrUnionPhase {
     AfterMemberDeclarator,
     /// Push the constant-expression bit-field width.
     PushBitFieldWidth,
-    /// Receive the recovered bit-field width placeholder.
+    /// Receive the bit-field width child.
     AwaitBitFieldWidth,
     /// Require `,` or `;` after one struct declarator.
     AfterStructDeclarator,

@@ -211,7 +211,8 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
         }
     }
 
-    /// Designation starts: ISO paths and GNU colon/range forms.
+    /// Continues an array designator into a GNU range when `...` follows its
+    /// first constant expression, as in `[1 ... 3]`.
     /// C99: extension to §6.7.8, p. 125; PDF p. 137.
     fn continue_range(
         &mut self,

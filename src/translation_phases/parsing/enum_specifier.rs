@@ -131,7 +131,7 @@ pub(super) enum EnumPhase {
     AfterEnumeratorName,
     /// Push the constant-expression value.
     PushEnumeratorValue,
-    /// Receive the recovered enumerator-value placeholder.
+    /// Receive the enumerator-value child.
     AwaitEnumeratorValue,
     /// Require `,` or `}` after one enumerator.
     AfterEnumerator,

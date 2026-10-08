@@ -1019,8 +1019,6 @@ pub(crate) struct ParameterDeclaration<'tu> {
     pub(crate) source_vectors:         SourceVectors,
 }
 
-// The Phase 03 parser machine is implemented below the retained syntax model.
-
 /// A parsed type-name syntax node.
 ///
 /// type-name:

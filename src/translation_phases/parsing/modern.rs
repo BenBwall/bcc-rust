@@ -200,8 +200,11 @@ enum Phase {
     GnuAttributeInnerOpen,
 }
 
-/// Delimiter-owning frame, whose grammar children run on the shared machine
-/// stack. C11: §6.5.1.1 and §6.7.10, pp. 78, 145; PDF pp. 96, 163.
+/// Delimiter-owning frame for the ISO additions: generic selections, static
+/// assertions, attribute specifiers, and the parenthesized operands of
+/// `_Alignof`, `_Alignas`, `_Atomic`, `_BitInt`, and `typeof`. Its grammar
+/// children run on the shared machine stack.
+/// C11: §6.5.1.1 and §6.7.10, pp. 78, 145; PDF pp. 96, 163.
 #[derive(Debug)]
 pub(super) struct ModernFrame<'tu, 'p> {
     keyword: Option<KeywordTokenType>,
