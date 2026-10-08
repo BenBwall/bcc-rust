@@ -497,6 +497,11 @@ consistent with the
   diagnostic; classification does not claim imaginary type semantics.
 - Implicit int is a removed C89 feature, not a GNU extension: C99 and later
   report `'implicit int' is a C89 feature removed in C99`.
+- Semantic calls to undeclared functions follow `ImplicitFunctionDeclaration`,
+  another removed C89 feature. C89/C95 create an unprototyped int-returning
+  declaration; GNU modes retain that behavior with the configured pedantic
+  policy. Strict C99 and later report an undeclared identifier. Ordinary
+  non-call identifier lookup never creates an implicit declaration.
 - `__STRICT_ANSI__` is an implementation macro outside §6.10.8's protection, so
   `#undef` and `#define` apply to it as to any macro, as in GCC. The GNU builtins
   `__COUNTER__`, `__has_attribute`, and `__has_builtin` may be redefined or

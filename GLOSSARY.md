@@ -289,12 +289,13 @@ isolate function-local label/switch state while preserving enclosing typedef vis
 GNU `__extension__` syntax wrapping an expression or declaration and suppressing
 pedantic extension diagnostics within that owner. It does not repair malformed syntax.
 
-## Declaration semantic analysis
+## Semantic analysis results
 
 **Semantic translation unit** (`SemanticTranslationUnit<'tu>`):
-The retained result of declaration analysis after parsing: a canonical type graph,
+The retained result of semantic analysis after parsing: a canonical type graph,
 nominal tags and members, resolved declaration occurrences, scope identities,
-resolved type names, and parameter metadata. It borrows the translation-unit arena.
+resolved type names, parameter metadata, typed expressions and contextual
+conversions. It borrows the translation-unit arena.
 Syntax remains immutable and separately inspectable.
 
 **Semantic working arena** (`'s`):
@@ -324,6 +325,38 @@ semantic layout, defaulting to x86-64 System V LP64. It describes the C target r
 than Rust's host ABI.
 
 **Unanalyzed type** (`TypeKind::Unknown`):
-A conservative result for accepted syntax whose semantics are outside the implemented
-stage. It suppresses dependent compatibility/layout diagnostics without pretending
-that an extension has a C99 scalar representation.
+A result for failed operands or accepted syntax whose semantics are outside the
+implemented stage. It suppresses dependent constraints without pretending that an
+extension has a C99 scalar representation. Unknown does not certify valid input.
+
+**Typed expression result** (`ExpressionInfo`):
+A retained side-table record borrowing an immutable syntax expression. It carries
+the original type/category, binding and bit-field metadata where applicable,
+constant eligibility and available constant values. Records have deterministic
+child-before-parent order; scratch lookup is keyed by syntax identity.
+
+**Value category** (`ValueCategory`):
+An expression's relationship to an object or value before contextual conversions:
+lvalue, modifiable lvalue, function designator or rvalue. A modifiable lvalue is
+the assignable subset of lvalues, including complete non-const object constraints.
+
+**Contextual conversion** (`Conversion`):
+A retained operation on an expression at a use site: lvalue conversion, decay,
+arithmetic/assignment conversion or default argument promotion. It records the
+destination type without changing the syntax expression's original category.
+
+**Integer constant expression** (ICE):
+An integer expression satisfying C99 operand and operator restrictions as well as
+having an evaluable value. A folded integer value alone does not establish ICE
+eligibility. Enumerators, bit-fields, case labels and designators require ICEs.
+
+**Constant-expression class** (`ConstantClass`):
+Arithmetic, address or nonconstant eligibility for static initialization, distinct
+from strict ICE eligibility. Address eligibility identifies permitted static
+designations without evaluating the stored value of an object.
+
+**Initializer current object** (`Current`):
+An arena cursor identifying the subobject to receive the next initializer under
+its containing brace pair. Designators reset the path; brace elision descends it;
+sequential initialization advances and unwinds it. It validates syntax and infers
+array bounds without materializing backend stores.
