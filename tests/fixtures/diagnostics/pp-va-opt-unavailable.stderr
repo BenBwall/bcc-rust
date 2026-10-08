@@ -1,0 +1,9 @@
+error: `__VA_OPT__` is not available in this mode
+ --> pp-va-opt-unavailable.c:1:18
+  |
+1 | #define V(...) f(__VA_OPT__(,) __VA_ARGS__)
+  |                  ^^^^^^^^^^ the macro is not defined
+  |
+  = help: select C23 or a GNU mode for `__VA_OPT__`
+
+1 error generated.

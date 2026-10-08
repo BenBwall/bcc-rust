@@ -56,7 +56,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **243 top-level C inputs and 243 stderr snapshots**, plus two supporting headers and nine mode/policy `.args` sidecars. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **129 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 110 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **249 top-level C inputs and 249 stderr snapshots**, plus two supporting headers and fifteen mode/policy `.args` sidecars. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **135 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 116 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, and include cases may target the same variant more than once.
 
@@ -82,7 +82,15 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 
 | Variant | Status | Fixture or reason |
 | --- | --- | --- |
-| `LanguageConstraint` | rendered | [C23 literal encodings, optional replacement and missing embed](lexpp-c23-constraints.c), [C2y delimited escapes](lexpp-c2y-escapes.c); structured mode tests also cover malformed queries and embed parameters |
+| `LanguageConstraint` | rendered | [C23 literal encodings](lexpp-c23-constraints.c), [C2y delimited escapes](lexpp-c2y-escapes.c); structured mode tests also cover malformed queries and embed parameters |
+| `EmbeddedResourceNotFound` | rendered | [pp-embedded-resource-not-found.c](pp-embedded-resource-not-found.c), [lexpp-c23-constraints.c](lexpp-c23-constraints.c) |
+| `EmbeddedResourceUnreadable` | environment-dependent; not covered | Like `HeaderFileInaccessible`, requires a discovered resource whose open, size query, or read then fails; the OS error wording is host-dependent. |
+| `EmbeddedResourceTooLarge` | unreachable on 64-bit hosts | A resource length is a `u64`, which always converts to the 64-bit `usize` that bcc requires. |
+| `VaOptUnavailable` | rendered | [pp-va-opt-unavailable.c](pp-va-opt-unavailable.c) |
+| `MissingOpeningParenthesisAfterVaOpt` | rendered | [pp-missing-opening-parenthesis-after-va-opt.c](pp-missing-opening-parenthesis-after-va-opt.c) |
+| `NestedVaOpt` | rendered | [pp-nested-va-opt.c](pp-nested-va-opt.c) |
+| `UnterminatedVaOpt` | rendered | [pp-unterminated-va-opt.c](pp-unterminated-va-opt.c) |
+| `HashHashAtVaOptBoundary` | rendered | [pp-hash-hash-at-va-opt-boundary.c](pp-hash-hash-at-va-opt-boundary.c), [lexpp-c23-constraints.c](lexpp-c23-constraints.c) |
 | `WarningDirective` | rendered | [GNU89 warning message and extension policy](lexpp-gnu89-extensions.c); structured tests cover native C23 warnings and earlier strict rejection |
 | `InvalidHexadecimalFloatLiteral` | rendered | [pp-invalid-hexadecimal-float-literal.c](pp-invalid-hexadecimal-float-literal.c) |
 | `InvalidDecimalFloatLiteral` | rendered | [pp-invalid-decimal-float-literal.c](pp-invalid-decimal-float-literal.c) |

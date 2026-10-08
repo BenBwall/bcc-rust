@@ -128,7 +128,7 @@ fn header_terminators_cannot_close_or_skip_the_callers_group() {
     for (directive, error_kind) in [
         ("#endif", "MoreEndifDirectivesThanIfDirectives"),
         ("#else", "ElseDirectiveWithoutIfDirective"),
-        ("#elif 0", "ElifDirectiveWithoutIfDirective"),
+        ("#elif 0", "ElifDirectiveWithoutIfDirective(\"elif\")"),
     ] {
         headers.write("bad.h", &format!("{directive}\nheader_after\n"));
         let actual = observe(source, &main);

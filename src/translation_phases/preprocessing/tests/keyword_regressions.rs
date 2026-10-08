@@ -264,3 +264,96 @@ fn extension_policy_reports_original_alias_spelling_and_native_origin() {
         }
     }
 }
+
+/// Each alternate keyword spelling, written out independently of the
+/// classifier's table: the keyword it spells, the modes where it is one, and
+/// the origin its extension diagnostics name.
+#[test]
+fn every_alias_spelling_has_its_keyword_gate_and_origin() {
+    use KeywordTokenType as K;
+
+    use crate::configuration::{
+        CStandard,
+        CompilerConfiguration,
+        ExtensionPolicy,
+        FeatureOrigin,
+        MsvcFeature,
+    };
+    #[derive(Clone, Copy, PartialEq)]
+    enum Gate {
+        C23,
+        Always,
+        Gnu,
+        MsAsm,
+    }
+    let c23 = FeatureOrigin::Standard(CStandard::C23);
+    let gnu = FeatureOrigin::Gnu;
+    let expected = [
+        ("bool", K::Bool, Gate::C23, c23),
+        ("alignas", K::Alignas, Gate::C23, c23),
+        ("alignof", K::Alignof, Gate::C23, c23),
+        ("static_assert", K::StaticAssert, Gate::C23, c23),
+        ("thread_local", K::ThreadLocal, Gate::C23, c23),
+        ("__inline", K::Inline, Gate::Always, gnu),
+        ("__inline__", K::Inline, Gate::Always, gnu),
+        ("__restrict", K::Restrict, Gate::Always, gnu),
+        ("__restrict__", K::Restrict, Gate::Always, gnu),
+        ("__const", K::Const, Gate::Always, gnu),
+        ("__const__", K::Const, Gate::Always, gnu),
+        ("__volatile", K::Volatile, Gate::Always, gnu),
+        ("__volatile__", K::Volatile, Gate::Always, gnu),
+        ("__signed", K::Signed, Gate::Always, gnu),
+        ("__signed__", K::Signed, Gate::Always, gnu),
+        ("__alignof", K::Alignof, Gate::Always, gnu),
+        ("__alignof__", K::Alignof, Gate::Always, gnu),
+        ("__complex", K::Complex, Gate::Always, gnu),
+        ("__complex__", K::Complex, Gate::Always, gnu),
+        ("__real", K::Real, Gate::Always, gnu),
+        ("__imag", K::Imag, Gate::Always, gnu),
+        ("__typeof", K::Typeof, Gate::Always, gnu),
+        ("__typeof__", K::Typeof, Gate::Always, gnu),
+        ("__typeof_unqual", K::TypeofUnqual, Gate::Always, gnu),
+        ("__typeof_unqual__", K::TypeofUnqual, Gate::Always, gnu),
+        ("__attribute", K::Attribute, Gate::Always, gnu),
+        ("asm", K::Asm, Gate::Gnu, gnu),
+        (
+            "_asm",
+            K::MsAsm,
+            Gate::MsAsm,
+            FeatureOrigin::Msvc(MsvcFeature::Asm),
+        ),
+    ];
+    assert_eq!(
+        KeywordTokenType::ALIASES.len(),
+        expected.len(),
+        "every alias needs an expectation"
+    );
+    for (standard, gnu_mode, msvc) in [
+        (CStandard::C17, false, false),
+        (CStandard::C17, true, false),
+        (CStandard::C23, false, false),
+        (CStandard::C17, false, true),
+    ] {
+        let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+            .with_gnu_extensions(gnu_mode)
+            .with_msvc_extensions(msvc);
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::with_configuration(&tu, configuration);
+        for (spelling, kind, gate, origin) in expected {
+            let id = context.string_cache.intern(spelling);
+            let enabled = match gate {
+                | Gate::C23 => standard >= CStandard::C23,
+                | Gate::Always => true,
+                | Gate::Gnu => gnu_mode,
+                | Gate::MsAsm => msvc,
+            };
+            let classification = KeywordTokenType::classify(id, configuration);
+            assert_eq!(classification.is_some(), enabled, "{spelling} {standard:?}");
+            if let Some(classification) = classification {
+                assert_eq!(classification.kind, kind, "{spelling}");
+                assert_eq!(classification.origin, Some(origin), "{spelling}");
+                assert_eq!(classification.spelling, spelling);
+            }
+        }
+    }
+}

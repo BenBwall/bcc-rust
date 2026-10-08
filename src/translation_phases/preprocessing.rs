@@ -251,6 +251,9 @@ pub(crate) struct Expander<'c, 'tu, 'pp: 'x, 'x> {
     operand_fence:         usize,
     /// Argument prescan stops here without suppressing expansion within it.
     expansion_fence:       usize,
+    /// The tokenizer-stack depth from which no name is macro-replaced, or 0.
+    /// A `__VA_OPT__` result is substituted but not rescanned.
+    verbatim_fence:        usize,
     expression_parser:     PreprocessorExpressionParser<'pp>,
     pending_parser_token:  Option<Token>,
     pending_parser_errors: ArenaVec<'pp, TranslationError<'tu>>,
@@ -610,6 +613,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             generate_placeholders: false,
             operand_fence: 0,
             expansion_fence: 0,
+            verbatim_fence: 0,
             expression_parser,
             pending_parser_token,
             pending_parser_errors,
@@ -623,6 +627,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
     fn is_between_expansions(&self) -> bool {
         self.operand_fence == 0
             && self.expansion_fence == 0
+            && self.verbatim_fence == 0
             && self.hash_hash_stack.is_empty()
             && self
                 .tokenizer_stack

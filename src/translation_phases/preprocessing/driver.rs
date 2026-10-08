@@ -618,8 +618,17 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                 break 'base Some(token);
             }
             // C23: §6.10.5p5, p. 178; PDF p. 191. Valid optional
-            // replacements have already been consumed by prepare_variadic_body.
-            if token.identifier_id(self.context) == self.state.va_opt_name {
+            // replacements have already been consumed by prepare_variadic_body,
+            // and a replacement list was checked where it was defined.
+            if token.identifier_id(self.context) == self.state.va_opt_name
+                && !matches!(
+                    self.tokenizer_stack.last().map(|frame| &frame.frame_type),
+                    Some(
+                        TokenizerFrameType::ObjectLikeMacroInvocation { .. }
+                            | TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                    )
+                )
+            {
                 self.check_va_args_use(token);
             }
             // C99 §6.10.3.1: parameters are replaced before the replacement
@@ -689,10 +698,10 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             else {
                                 break 'base Some(token);
                             };
-                            let tokenizer = if is_variadic {
+                            let (tokenizer, arguments) = if is_variadic {
                                 self.prepare_variadic_body(token, tokenizer, arguments)
                             } else {
-                                tokenizer
+                                (tokenizer, arguments)
                             };
                             self.push_tokenizer_frame(TokenizerFrame {
                                 frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
@@ -788,6 +797,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                                 }
                                                 arguments.push(FunctionLikeMacroArgument {
                                                     variadic: false,
+                                                    substituted: false,
                                                     expanded: self.scratch.alloc(OnceCell::new()),
                                                     omitted: false,
                                                     name: at!(),
@@ -811,6 +821,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                         }
                                         arguments.push(FunctionLikeMacroArgument {
                                             variadic: false,
+                                            substituted: false,
                                             expanded: self.scratch.alloc(OnceCell::new()),
                                             omitted: false,
                                             name: at!(),
@@ -905,6 +916,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             };
                             arguments.push(FunctionLikeMacroArgument {
                                 variadic: true,
+                                substituted: false,
                                 expanded: self.scratch.alloc(OnceCell::new()),
                                 name: variadic_name.expect("variadic parameter name"),
                                 omitted: closed_at.is_some(),
@@ -971,11 +983,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                 }
                             }
                         }
-                        let arguments = arguments.leak();
-                        let tokenizer = if is_variadic {
+                        let arguments: MacroArguments<'x> = arguments.leak();
+                        let (tokenizer, arguments) = if is_variadic {
                             self.prepare_variadic_body(token, tokenizer, arguments)
                         } else {
-                            tokenizer
+                            (tokenizer, arguments)
                         };
                         let frame = TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {

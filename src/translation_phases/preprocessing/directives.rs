@@ -49,6 +49,7 @@ use crate::{
         SourcePosition,
         SourceVectors,
         StrExt,
+        TranslationError,
         TranslationPhase,
         preprocessor_tokenizer::{
             LogicalCharacter,
@@ -79,6 +80,13 @@ use crate::{
 /// p. 150; PDF p. 162; the minimum is in §5.2.4.1 paragraph 1, p. 21; PDF
 /// p. 33.
 const MAX_INCLUDE_NESTING: usize = 200;
+
+/// Whether `name` is a macro the implementation predefines beyond the names
+/// of C99 §6.10.8, p. 160; PDF p. 172. §6.10.8 paragraph 4 does not protect
+/// it, so `#undef` and `#define` apply as to any macro, as in GCC.
+fn implementation_macro(name: &str) -> bool {
+    name == "__STRICT_ANSI__"
+}
 
 /// Compares one position of two macro definitions under C99 §6.10.3p2: the
 /// tokens must be spelled identically, while any two whitespace separations
@@ -339,10 +347,16 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             | "ifdef" => self.parse_ifdef_directive(directive),
             | "ifndef" => self.parse_ifndef_directive(directive),
             | "elif" => self.parse_elif_directive(directive),
-            | "elifdef" | "elifndef" if self.context.configuration.accepts(Feature::Elifdef) => {
+            | name @ ("elifdef" | "elifndef")
+                if self.context.configuration.accepts(Feature::Elifdef) =>
+            {
                 self.context.report_extension(
                     Feature::Elifdef,
-                    "#elifdef/#elifndef",
+                    if name == "elifdef" {
+                        "#elifdef"
+                    } else {
+                        "#elifndef"
+                    },
                     directive.source_vectors,
                 );
                 self.parse_elif_directive(directive);
@@ -614,6 +628,21 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     ///
     /// C99: `< h-char-sequence >`, §6.4.7 paragraph 1, p. 64; PDF p. 76, and
     /// §6.10.2 paragraph 2, p. 149; PDF p. 161.
+    /// Withdraws the extension diagnostics reported since the first
+    /// `reported` while lexing a written `<...>` header name as tokens: its
+    /// characters form no tokens (C99 §6.4.7p1, p. 64; PDF p. 76), so `$`
+    /// there is no identifier character. Other diagnostics stay.
+    #[cold]
+    fn withdraw_header_name_extensions(&mut self, reported: usize) {
+        let mut kept = ArenaVec::new_in(self.scratch);
+        kept.extend(
+            self.context
+                .split_off_pending_errors(reported)
+                .filter(|error| !matches!(error, TranslationError::Extension(_))),
+        );
+        self.context.append_pending_errors(kept);
+    }
+
     fn read_written_angle_header(&mut self, directive: PreprocessorToken) -> HeaderName<'x> {
         let open = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
             .expect("the operand was peeked");
@@ -629,7 +658,15 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let mut closing = None;
         let mut extra_after_closing = None;
         loop {
-            let Some(token) = self.tokenizer.next_item(self.context) else {
+            let reported = self.context.pending_error_count();
+            let token = self.tokenizer.next_item(self.context);
+            // A comment before the new-line ends the operand's text.
+            if self.context.pending_error_count() != reported
+                && token.is_some_and(|token| token.kind != PreprocessorTokenType::Newline)
+            {
+                self.withdraw_header_name_extensions(reported);
+            }
+            let Some(token) = token else {
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing include directive",
@@ -1215,6 +1252,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             | Some(ref v) => match v {
                 | MacroDefinition::FunctionLike { tokenizer, .. }
                 | MacroDefinition::ObjectLike { tokenizer, .. } => Some(tokenizer.clone()),
+                // Not one of the names C99 §6.10.8 predefines, so it may be
+                // redefined, as in GCC.
+                | MacroDefinition::BuiltIn
+                    if implementation_macro(self.context.string_cache.at(name.contents)) =>
+                    None,
                 | MacroDefinition::BuiltIn => {
                     // C99 §6.10.8p4: predefined macro names cannot be
                     // redefined, so the built-in definition stays in effect.
@@ -1366,11 +1408,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     );
                     let Some(closing) = self.expect_token_from_previous_phase::<true>(
                         |_, t| t.kind == PreprocessorTokenType::ClosingParenthesis,
-                        |_, token| {
+                        |this, token| {
                             ControlFlow::Break(PreprocessorError {
                                 error_type:
                                     PreprocessorErrorType::VariadicMacroMustBeLastParameter(
-                                        "named variadic macro",
+                                        this.context.diagnostic_text(
+                                            this.context.string_cache.at(name.contents),
+                                        ),
                                     ),
                                 source_vectors: token.source_vectors,
                             })
@@ -1600,7 +1644,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         if matches!(
             self.state.macro_definitions.get(&name_id),
             Some(MacroDefinition::BuiltIn)
-        ) {
+        ) && !implementation_macro(self.context.string_cache.at(name.contents))
+        {
             // C99 §6.10.8p4: predefined macro names cannot be undefined, so
             // the built-in definition stays in effect.
             self.context.preprocessor_error(PreprocessorError {

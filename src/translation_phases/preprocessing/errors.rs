@@ -117,7 +117,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::NoConditionInElifDirective
             | PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives
             | PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives
-            | PreprocessorErrorType::ElifDirectiveWithoutIfDirective
+            | PreprocessorErrorType::ElifDirectiveWithoutIfDirective(_)
             | PreprocessorErrorType::ConditionalArmAfterElse(_)
             | PreprocessorErrorType::ElseDirectiveWithoutIfDirective
             | PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(..)
@@ -219,6 +219,14 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(..)
             | PreprocessorErrorType::UnexpectedTokenAtPhase7(..)
             | PreprocessorErrorType::LanguageConstraint(..)
+            | PreprocessorErrorType::EmbeddedResourceNotFound(..)
+            | PreprocessorErrorType::EmbeddedResourceUnreadable { .. }
+            | PreprocessorErrorType::EmbeddedResourceTooLarge(..)
+            | PreprocessorErrorType::VaOptUnavailable
+            | PreprocessorErrorType::MissingOpeningParenthesisAfterVaOpt
+            | PreprocessorErrorType::NestedVaOpt
+            | PreprocessorErrorType::UnterminatedVaOpt
+            | PreprocessorErrorType::HashHashAtVaOptBoundary
             | PreprocessorErrorType::ErrorDirective(..)
              => ErrorSeverity::Error,
             | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(policy)
@@ -255,8 +263,8 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::ExtraTokensAfterPragmaOperator
             | PreprocessorErrorType::ExtraTokensAfterIncludeDirective
             | PreprocessorErrorType::ExtraTokensAfterConditionalDirective(_)
-            | PreprocessorErrorType::ExtraTokensAfterIfdefDirective
-            | PreprocessorErrorType::ExtraTokensAfterIfndefDirective
+            | PreprocessorErrorType::ExtraTokensAfterIfdefDirective(_)
+            | PreprocessorErrorType::ExtraTokensAfterIfndefDirective(_)
             | PreprocessorErrorType::WarningDirective(..)
             | PreprocessorErrorType::PragmaOnceInNonHeader => ErrorSeverity::Warning,
         }
@@ -267,7 +275,51 @@ impl GetSeverity for PreprocessorError<'_> {
 pub(crate) enum PreprocessorErrorType<'tu> {
     /// Later-standard lexical/directive constraint (C99 §5.1.1.3p1).
     LanguageConstraint(&'tu str),
-    /// C23 #warning message; GNU extension in earlier modes.
+    /// An `#embed` resource that no search place holds.
+    ///
+    /// C23: §6.10.4.1 paragraph 3, p. 171; PDF p. 184.
+    EmbeddedResourceNotFound(&'tu str),
+    /// An `#embed` resource that was found but could not be opened, sized,
+    /// or read, with the system's reason.
+    ///
+    /// C23: §6.10.4.1 paragraph 3, p. 171; PDF p. 184.
+    EmbeddedResourceUnreadable {
+        name:   &'tu str,
+        reason: &'tu str,
+    },
+    /// An `#embed` resource larger than the host can address.
+    ///
+    /// C23: §6.10.4.1 paragraph 3, p. 171; PDF p. 184.
+    EmbeddedResourceTooLarge(&'tu str),
+    /// `__VA_OPT__` in a variadic macro's replacement list in a mode that
+    /// lacks it. The definition is discarded.
+    ///
+    /// C23: §6.10.5.1 paragraph 1, p. 179; PDF p. 192.
+    VaOptUnavailable,
+    /// `__VA_OPT__` without its parenthesized replacement. The definition is
+    /// discarded.
+    ///
+    /// C23: §6.10.5.1 paragraphs 1 and 3, p. 179; PDF p. 192.
+    MissingOpeningParenthesisAfterVaOpt,
+    /// `__VA_OPT__` within another's replacement. The definition is
+    /// discarded.
+    ///
+    /// C23: §6.10.5.1 paragraph 3, p. 179; PDF p. 192.
+    NestedVaOpt,
+    /// A `__VA_OPT__` replacement without its closing parenthesis. The
+    /// definition is discarded.
+    ///
+    /// C23: §6.10.5.1 paragraph 3, p. 179; PDF p. 192.
+    UnterminatedVaOpt,
+    /// `##` first or last in a `__VA_OPT__` replacement, which must form a
+    /// valid replacement list. The definition is discarded.
+    ///
+    /// C23: §6.10.5.1 paragraph 3, p. 179; PDF p. 192, and §6.10.5.3
+    /// paragraph 1, p. 181; PDF p. 194.
+    HashHashAtVaOptBoundary,
+    /// A `#warning` and its message, reported like `#error` but without
+    /// failing translation. C23: §6.10.7 paragraph 1, p. 186; PDF p. 199;
+    /// a GNU extension in earlier modes.
     WarningDirective(&'tu str),
     /// A pp-number with `0x` that is not a `hexadecimal-floating-constant`.
     ///
@@ -424,16 +476,19 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     // p. 145; PDF p. 157.
     MoreIfDirectivesThanEndifDirectives,
     MoreEndifDirectivesThanIfDirectives,
-    ElifDirectiveWithoutIfDirective,
+    /// An `#elif`, or the named C23 `#elifdef` or `#elifndef`, outside a
+    /// conditional.
+    ElifDirectiveWithoutIfDirective(&'static str),
     ElseDirectiveWithoutIfDirective,
     ConditionalArmAfterElse(&'static str),
     /// C99: `# else new-line` and `# endif new-line`, §6.10 paragraph 1,
     /// p. 145; PDF p. 157, and footnote 147, p. 149; PDF p. 161.
     ExtraTokensAfterConditionalDirective(&'static str),
     // C99: `# ifdef identifier new-line`, §6.10 paragraph 1, p. 145; PDF
-    // p. 157.
-    ExpectedIdentifierInIfdefDirective(PreprocessorTokenType),
-    ExpectedIdentifierInIfndefDirective(PreprocessorTokenType),
+    // p. 157. The name is `ifdef` or `ifndef`, or C23's `elifdef` or
+    // `elifndef`, §6.10.2 paragraph 16, p. 168; PDF p. 181.
+    ExpectedIdentifierInIfdefDirective(&'static str, PreprocessorTokenType),
+    ExpectedIdentifierInIfndefDirective(&'static str, PreprocessorTokenType),
     /// C99: `# define identifier`, §6.10 paragraph 1, p. 146; PDF p. 158.
     ExpectedIdentifierInDefineDirective(PreprocessorTokenType),
     /// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173.
@@ -600,9 +655,9 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// paragraph 4, p. 150; PDF p. 162.
     ExtraTokensAfterIncludeDirective,
     // C99: `# ifdef identifier new-line`, §6.10 paragraph 1, p. 145; PDF
-    // p. 157.
-    ExtraTokensAfterIfdefDirective,
-    ExtraTokensAfterIfndefDirective,
+    // p. 157, named as for `ExpectedIdentifierInIfdefDirective`.
+    ExtraTokensAfterIfdefDirective(&'static str),
+    ExtraTokensAfterIfndefDirective(&'static str),
     // C99: `#pragma STDC` takes a pragma name and an `on-off-switch`,
     // §6.10.6 paragraph 2, p. 159; PDF p. 171.
     STDCPragmaDirectiveWithoutArgument,
@@ -931,8 +986,9 @@ impl PreprocessorErrorType<'_> {
             .help("add `#endif` where the conditional section should end"),
             | Self::MoreEndifDirectivesThanIfDirectives =>
                 new("`#endif` without `#if`").label("no conditional directive is open here"),
-            | Self::ElifDirectiveWithoutIfDirective =>
-                new("`#elif` without `#if`").label("no conditional directive is open here"),
+            | Self::ElifDirectiveWithoutIfDirective(name) =>
+                new(format_in!(arena, "`#{name}` without `#if`"))
+                    .label("no conditional directive is open here"),
             | Self::ConditionalArmAfterElse(name) =>
                 new(format_in!(arena, "`#{name}` after `#else`"))
                     .label("the final arm of this conditional has already begun")
@@ -942,15 +998,10 @@ impl PreprocessorErrorType<'_> {
                     .label("expected the end of the directive"),
             | Self::ElseDirectiveWithoutIfDirective =>
                 new("`#else` without `#if`").label("no conditional directive is open here"),
-            | Self::ExpectedIdentifierInIfdefDirective(kind) => new(format_in!(
+            | Self::ExpectedIdentifierInIfdefDirective(name, kind)
+            | Self::ExpectedIdentifierInIfndefDirective(name, kind) => new(format_in!(
                 arena,
-                "expected a macro name after `#ifdef`, found {}",
-                kind.found(spelling)
-            ))
-            .label("expected a macro name"),
-            | Self::ExpectedIdentifierInIfndefDirective(kind) => new(format_in!(
-                arena,
-                "expected a macro name after `#ifndef`, found {}",
+                "expected a macro name after `#{name}`, found {}",
                 kind.found(spelling)
             ))
             .label("expected a macro name"),
@@ -1331,10 +1382,12 @@ impl PreprocessorErrorType<'_> {
                 new("extra tokens after the pragma in `_Pragma`").label("not part of the pragma"),
             | Self::ExtraTokensAfterIncludeDirective =>
                 new("extra tokens at end of `#include` directive").label("ignored"),
-            | Self::ExtraTokensAfterIfdefDirective =>
-                new("extra tokens at end of `#ifdef` directive").label("ignored"),
-            | Self::ExtraTokensAfterIfndefDirective =>
-                new("extra tokens at end of `#ifndef` directive").label("ignored"),
+            | Self::ExtraTokensAfterIfdefDirective(name)
+            | Self::ExtraTokensAfterIfndefDirective(name) => new(format_in!(
+                arena,
+                "extra tokens at end of `#{name}` directive"
+            ))
+            .label("ignored"),
             | Self::STDCPragmaDirectiveWithoutArgument =>
                 new("expected a pragma name after `#pragma STDC`")
                     .label("expected `FP_CONTRACT`, `FENV_ACCESS`, or `CX_LIMITED_RANGE`"),
@@ -1350,8 +1403,52 @@ impl PreprocessorErrorType<'_> {
             .note("C99 §6.10.6p2: each standard pragma takes an on-off switch"),
             | Self::PragmaOnceInNonHeader =>
                 new("`#pragma once` in main file").label("only affects files that are included"),
-            | Self::LanguageConstraint(message) | Self::WarningDirective(message) =>
-                new(format_in!(arena, "{message}")),
+            | Self::LanguageConstraint(message) => new(format_in!(arena, "{message}")),
+            | Self::EmbeddedResourceNotFound(name) =>
+                new(format_in!(arena, "cannot find embedded resource `{name}`"))
+                    .label("not found in any search directory")
+                    .note("C23 §6.10.4.1p3: `#embed` must identify a resource it can process"),
+            | Self::EmbeddedResourceUnreadable { name, reason } => new(format_in!(
+                arena,
+                "cannot read embedded resource `{name}`: {reason}"
+            ))
+            .label("embedded here")
+            .note("C23 §6.10.4.1p3: `#embed` must identify a resource it can process"),
+            | Self::EmbeddedResourceTooLarge(name) =>
+                new(format_in!(arena, "embedded resource `{name}` is too large"))
+                    .label("its size exceeds the host's address space")
+                    .help("add a `limit` parameter to embed a prefix of the resource"),
+            | Self::VaOptUnavailable => new("`__VA_OPT__` is not available in this mode")
+                .label("the macro is not defined")
+                .help("select C23 or a GNU mode for `__VA_OPT__`"),
+            | Self::MissingOpeningParenthesisAfterVaOpt => new("expected `(` after `__VA_OPT__`")
+                .label("the macro is not defined")
+                .note("C23 §6.10.5.1p1: the form is `__VA_OPT__ ( pp-tokens(opt) )`"),
+            | Self::NestedVaOpt => new("`__VA_OPT__` cannot be nested")
+                .label("inside another `__VA_OPT__` replacement")
+                .note(
+                    "C23 §6.10.5.1p3: the pp-tokens of a `__VA_OPT__` replacement shall not \
+                     contain `__VA_OPT__`; the macro is not defined",
+                ),
+            | Self::UnterminatedVaOpt => new("unterminated `__VA_OPT__` replacement")
+                .label("no matching `)` before the end of the definition")
+                .note("C23 §6.10.5.1p3: the macro is not defined"),
+            | Self::HashHashAtVaOptBoundary =>
+                new("`##` cannot begin or end a `__VA_OPT__` replacement")
+                    .label("the macro is not defined")
+                    .note(
+                        "C23 §6.10.5.1p3: the replacement must form a valid replacement list, \
+                         which `##` cannot begin or end (§6.10.5.3p1)",
+                    ),
+            | Self::WarningDirective(message) => {
+                let message = message.trim();
+                new(if message.is_empty() {
+                    "#warning"
+                } else {
+                    format_in!(arena, "#warning {message}")
+                })
+                .label("`#warning` directive")
+            },
             | Self::ErrorDirective(message) => {
                 let message = message.trim();
                 new(if message.is_empty() {

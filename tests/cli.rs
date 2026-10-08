@@ -546,7 +546,7 @@ mod tests {
         let error = stderr
             .find("error: expected an expression")
             .expect("parser error");
-        let warning = stderr.find("warning:  late").expect("warning");
+        let warning = stderr.find("warning: #warning late").expect("warning");
         assert!(error < warning, "{stderr}");
         assert!(
             stderr.contains("1 error and 1 warning generated"),
@@ -564,7 +564,7 @@ mod tests {
         let first = stderr
             .find("error: expected an expression, found `;`")
             .expect("first error");
-        let warning = stderr.find("warning:  middle").expect("warning");
+        let warning = stderr.find("warning: #warning middle").expect("warning");
         let last = stderr
             .find("error: expected an expression, found `)`")
             .expect("macro error");

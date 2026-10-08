@@ -64,7 +64,7 @@ pub(super) fn overridable_gnu_builtin(name: &str) -> bool {
     })
 }
 
-impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
+impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
     /// C99 §6.10.3p4 permits empty arguments, unlike C89 §3.8.3.
     pub(super) fn report_empty_macro_argument(&mut self, source: SourceVectors) {
         self.context
@@ -137,12 +137,9 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         if matches!(
             self.context.string_cache.at(operator.contents),
             "__has_include" | "__has_embed"
-        ) {
-            self.collect_written_resource(&mut tokens);
-        }
-        if tokens.last().is_some_and(|t| t.kind == T::Newline) {
+        ) && !self.collect_written_resource(&mut tokens)
+        {
             self.language_error("unterminated resource query", operator.source_vectors);
-            self.replay_query_boundary(tokens.pop().expect("collected newline"));
             return None;
         }
         let resource_query = matches!(
@@ -198,8 +195,11 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
     }
 
     /// A written header name is not macro-replaced inside its delimiters.
+    /// Returns false when a new-line ends the line, or the replacement list,
+    /// before the name does; the new-line is left unread for the frame that
+    /// owns it.
     /// C99: §6.10.2p2-4, pp. 149-150; PDF pp. 161-162.
-    fn collect_written_resource(&mut self, tokens: &mut ArenaVec<'x, PreprocessorToken>) {
+    fn collect_written_resource(&mut self, tokens: &mut ArenaVec<'x, PreprocessorToken>) -> bool {
         let position = self.position();
         let ignored = self.context.ignore_tokenizer_errors();
         self.context.set_ignore_tokenizer_errors(true);
@@ -209,19 +209,29 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         let Some(first) = first.filter(|t| {
             t.kind == T::String || self.context.string_cache.at(t.contents).starts_with('<')
         }) else {
-            return;
+            return true;
         };
         self.context.set_ignore_tokenizer_errors(true);
-        while let Some(token) = self.tokenizer.next_item(self.context) {
+        let mut terminated = true;
+        loop {
+            let position = self.position();
+            let Some(token) = self.tokenizer.next_item(self.context) else {
+                break;
+            };
+            if token.kind == T::Newline {
+                self.set_position(position);
+                terminated = false;
+                break;
+            }
             tokens.push(token);
-            if token.kind == T::Newline
-                || (first.kind == T::String && token.kind == T::String)
+            if (first.kind == T::String && token.kind == T::String)
                 || self.context.string_cache.at(token.contents).contains('>')
             {
                 break;
             }
         }
         self.context.set_ignore_tokenizer_errors(ignored);
+        terminated
     }
 
     /// Reads the macro-expanded header operand common to queries and embedding.
@@ -487,10 +497,12 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                         return Some(self.integer_pp_token(0, token.source_vectors));
                     }
                     match (name, &*operand) {
+                        // C23 §6.7.13.2p2, p. 143; PDF p. 156: the standard
+                        // attributes, `_Noreturn` included (§6.7.13.7p1).
                         | (
                             "__has_c_attribute",
                             "deprecated" | "fallthrough" | "nodiscard" | "maybe_unused"
-                            | "noreturn" | "unsequenced" | "reproducible",
+                            | "noreturn" | "_Noreturn" | "unsequenced" | "reproducible",
                         ) => 202_311,
                         | (
                             "__has_attribute",
@@ -564,20 +576,35 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             }
             seen |= bit;
             index += 1;
-            if bit == 0 {
-                while tokens.get(index).is_some_and(|t| {
-                    t.kind == T::Whitespace || t.kind == T::Colon || t.kind.is_identifier()
-                }) {
+            let significant = |mut index: usize| {
+                while tokens.get(index).is_some_and(|t| t.kind == T::Whitespace) {
                     index += 1;
                 }
+                index
+            };
+            if bit == 0 {
+                // C23 §6.10.1p1: `pp-prefixed-parameter: identifier ::
+                // identifier`.
+                let first = significant(index);
+                let second = significant(first + 1);
+                let suffix = significant(second + 1);
+                if tokens.get(first).is_some_and(|t| t.kind == T::Colon)
+                    && tokens.get(second).is_some_and(|t| t.kind == T::Colon)
+                    && tokens.get(suffix).is_some_and(|t| t.kind.is_identifier())
+                {
+                    index = suffix + 1;
+                }
             }
-            while tokens.get(index).is_some_and(|t| t.kind == T::Whitespace) {
-                index += 1;
-            }
+            index = significant(index);
             if tokens
                 .get(index)
                 .is_none_or(|t| t.kind != T::OpeningParenthesis)
             {
+                // Only a standard parameter requires its clause (C23
+                // §6.10.4.2p1, §6.10.4.3p1, §6.10.4.4p1, §6.10.4.5p1).
+                if bit == 0 {
+                    continue;
+                }
                 self.language_error("expected '(' after embed parameter", source);
                 return None;
             }
@@ -609,22 +636,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                         self.language_error("defined is not permitted in an embed limit", source);
                         return None;
                     }
-                    let end = PreprocessorToken {
-                        kind:           T::Newline,
-                        contents:       self.context.string_cache.intern("\n"),
-                        source_vectors: source,
-                    };
-                    let old = std::mem::replace(
-                        &mut self.tokenizer,
-                        TokenSource::replay(
-                            self.context,
-                            self.scratch,
-                            &[body, &[end]],
-                            SourceVector::default(),
-                        ),
-                    );
-                    let value = self.eval_resource_limit();
-                    self.tokenizer = old;
+                    let value = self.eval_fenced_resource_limit(body, source);
                     result.limit = value;
                     _ = value?;
                 },
@@ -637,6 +649,80 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         Some(result)
     }
 
+    /// Evaluates a `limit` operand as its own fenced frame, ended by a
+    /// sentinel new-line, like an argument prescan. The operand may come from
+    /// a replacement list that is still being read: its frames and cursors
+    /// stay below the fence, so the sentinel cannot end them.
+    /// C23: §6.10.4.2 paragraph 1, p. 174; PDF p. 187.
+    fn eval_fenced_resource_limit(
+        &mut self,
+        body: &[PreprocessorToken],
+        source: SourceVectors,
+    ) -> Option<u64> {
+        let end = PreprocessorToken {
+            kind:           T::Newline,
+            contents:       self.context.string_cache.intern("\n"),
+            source_vectors: source,
+        };
+        let location = self
+            .context
+            .get_source_vectors(source)
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        let tokenizer = TokenSource::replay(self.context, self.scratch, &[body, &[end]], location);
+        let hash_hash_stack =
+            std::mem::replace(&mut self.hash_hash_stack, ArenaVec::new_in(self.scratch));
+        let generate_placeholders = self.generate_placeholders;
+        self.push_tokenizer_frame(TokenizerFrame {
+            frame_type: TokenizerFrameType::Rescan,
+            tokenizer,
+        });
+        let depth = self.tokenizer_stack.len();
+        let operand_fence = std::mem::replace(&mut self.operand_fence, 0);
+        let expansion_fence = std::mem::replace(&mut self.expansion_fence, depth);
+        let verbatim_fence = std::mem::replace(&mut self.verbatim_fence, 0);
+        let value = self.eval_resource_limit();
+        // An expression that stopped early leaves its remaining operand
+        // frames above the fence.
+        while self.tokenizer_stack.len() >= depth {
+            self.pop_tokenizer_frame();
+        }
+        self.operand_fence = operand_fence;
+        self.expansion_fence = expansion_fence;
+        self.verbatim_fence = verbatim_fence;
+        self.generate_placeholders = generate_placeholders;
+        self.hash_hash_stack = hash_hash_stack;
+        value
+    }
+
+    fn embed_error(
+        &mut self,
+        error_type: PreprocessorErrorType<'tu>,
+        directive: PreprocessorToken,
+    ) {
+        self.context.preprocessor_error(PreprocessorError {
+            error_type,
+            source_vectors: directive.source_vectors,
+        });
+    }
+
+    #[cold]
+    fn embed_unreadable(
+        &mut self,
+        name: &str,
+        error: &std::io::Error,
+        directive: PreprocessorToken,
+    ) {
+        let mut reason = ArenaString::new_in(self.scratch);
+        _ = write!(reason, "{error}");
+        let error_type = PreprocessorErrorType::EmbeddedResourceUnreadable {
+            name:   self.context.diagnostic_text(name),
+            reason: self.context.diagnostic_text(&reason),
+        };
+        self.embed_error(error_type, directive);
+    }
+
     /// Replaces resource inclusion with ordinary integer preprocessing tokens.
     /// C23: §6.10.4.1p7, p. 171; PDF p. 184, and §6.10.4.2p4,
     /// p. 174; PDF p. 187.
@@ -644,15 +730,18 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         self.context
             .report_extension(Feature::Embed, "#embed", directive.source_vectors);
         let mut tokens = ArenaVec::new_in(self.scratch);
-        self.collect_written_resource(&mut tokens);
-        while tokens.last().is_none_or(|t| t.kind != T::Newline)
-            && let Some(token) = self.next_preprocessor_token::<false>()
-        {
+        _ = self.collect_written_resource(&mut tokens);
+        // The rest of the line, through its new-line, belongs to the
+        // directive whether or not the resource is valid. C99: §6.10p2,
+        // pp. 145-146; PDF pp. 157-158.
+        while let Some(token) = self.next_preprocessor_token::<false>() {
             if token.kind == T::Newline {
                 break;
             }
             tokens.push(token);
         }
+        self.last_was_newline = true;
+        self.current_is_newline = true;
         let tokens = tokens.leak();
         let Some((name, system, end)) = self.resource_operand(tokens, directive.source_vectors)
         else {
@@ -664,33 +753,36 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             return;
         };
         let Some(path) = self.find_resource(name, system) else {
-            self.language_error("embedded resource not found", directive.source_vectors);
-            return;
-        };
-        let Ok(mut file) = std::fs::File::open(self.context.get_source_file(path)) else {
-            self.language_error(
-                "embedded resource is inaccessible",
-                directive.source_vectors,
+            self.embed_error(
+                PreprocessorErrorType::EmbeddedResourceNotFound(self.context.diagnostic_text(name)),
+                directive,
             );
             return;
         };
-        let Ok(metadata) = file.metadata() else {
-            self.language_error(
-                "cannot determine embedded resource size",
-                directive.source_vectors,
-            );
-            return;
+        let read = std::fs::File::open(self.context.get_source_file(path)).and_then(|file| {
+            let length = file.metadata()?.len();
+            Ok((file, length))
+        });
+        let (mut file, length) = match read {
+            | Ok(opened) => opened,
+            | Err(error) => {
+                self.embed_unreadable(name, &error, directive);
+                return;
+            },
         };
-        let length = metadata.len().min(params.limit.unwrap_or(u64::MAX));
+        let length = length.min(params.limit.unwrap_or(u64::MAX));
         let Ok(length) = usize::try_from(length) else {
-            self.language_error("embedded resource is too large", directive.source_vectors);
+            self.embed_error(
+                PreprocessorErrorType::EmbeddedResourceTooLarge(self.context.diagnostic_text(name)),
+                directive,
+            );
             return;
         };
         let bytes = self
             .scratch
             .alloc_slice_fill_iter(std::iter::repeat_n(0u8, length));
-        if file.read_exact(bytes).is_err() {
-            self.language_error("cannot read embedded resource", directive.source_vectors);
+        if let Err(error) = file.read_exact(bytes) {
+            self.embed_unreadable(name, &error, directive);
             return;
         }
         let mut output = ArenaVec::new_in(self.scratch);

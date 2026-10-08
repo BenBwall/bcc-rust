@@ -11,11 +11,11 @@ use crate::{
     },
 };
 
-fn observe(source: &str, config: CompilerConfiguration) -> (Vec<String>, Vec<String>) {
+pub(super) fn observe(source: &str, config: CompilerConfiguration) -> (Vec<String>, Vec<String>) {
     observe_paths(source, config, PathBuf::from("<test>"), &[])
 }
 
-fn observe_paths(
+pub(super) fn observe_paths(
     source: &str,
     config: CompilerConfiguration,
     path: PathBuf,
@@ -46,10 +46,10 @@ fn observe_paths(
     (output, errors)
 }
 
-fn mode(standard: CStandard) -> CompilerConfiguration {
+pub(super) fn mode(standard: CStandard) -> CompilerConfiguration {
     CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
 }
-fn spellings(output: &[String]) -> String {
+pub(super) fn spellings(output: &[String]) -> String {
     output.join("\n")
 }
 
@@ -149,7 +149,7 @@ fn modern_numeric_forms_and_delimited_escapes_have_values_and_gates() {
 
 #[test]
 fn separator_nondigits_remain_one_preprocessing_number_for_diagnostics() {
-    for spelling in ["1'e+2", "1'\\u00e9", "1'é"] {
+    for spelling in ["1'e+2", "1'_", "0x1'e+1"] {
         let (tokens, errors) = observe(&format!("{spelling} after\n"), mode(CStandard::C23));
         assert_eq!(errors.len(), 1, "{spelling}: {errors:?}");
         let tokens = spellings(&tokens);
@@ -205,7 +205,7 @@ fn conditional_directives_and_warning_are_gated_and_recover() {
     assert!(tokens.contains("identifier `yes2`"));
     assert!(!tokens.contains("identifier `no`"));
     assert!(tokens.contains("identifier `after`"));
-    assert_eq!(errors, ["Warning:  a message"]);
+    assert_eq!(errors, ["Warning: #warning a message"]);
     let (_, errors) = observe("#warning message\n", mode(CStandard::C17));
     assert!(
         errors
@@ -699,7 +699,7 @@ fn c23_queries_and_resource_directives_are_gated_in_earlier_strict_modes() {
         let (_, errors) = observe("#embed \"missing.bin\"\nafter\n", config);
         assert!(
             errors.iter().any(|e| e.contains(if enabled {
-                "embedded resource not found"
+                "cannot find embedded resource `missing.bin`"
             } else {
                 "unknown preprocessing directive"
             })),

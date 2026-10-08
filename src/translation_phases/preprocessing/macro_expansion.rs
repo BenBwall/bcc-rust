@@ -12,7 +12,10 @@
 
 use std::{
     cell::OnceCell,
-    fmt::Debug,
+    fmt::{
+        Debug,
+        Write,
+    },
     mem::{
         replace,
         take,
@@ -114,6 +117,11 @@ pub(crate) enum HashHash {
 pub(crate) struct FunctionLikeMacroArgument<'x> {
     pub(super) omitted:             bool,
     pub(super) variadic:            bool,
+    /// A `__VA_OPT__` result standing in for its replacement: the tokenizer
+    /// replays the substituted tokens to their end, with no closing
+    /// parenthesis, and they are never substituted again.
+    /// C23: §6.10.5.1 paragraphs 4 and 7, pp. 179-180; PDF pp. 192-193.
+    pub(super) substituted:         bool,
     pub(super) name:                StringCacheId,
     pub(super) tokenizer:           TokenSource<'x>,
     pub(super) enclosing_arguments: Option<MacroArguments<'x>>,
@@ -352,8 +360,10 @@ impl<'x> MacroCallCursor<'x> {
     reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
 )]
 impl<'x> Expander<'_, '_, '_, 'x> {
-    /// Expands the inner replacement as a unit before outer #/##; it is not
-    /// rescanned. C23: §6.10.5.1p7, p. 180; PDF p. 193.
+    /// Expands the inner replacement as a unit before outer #/##: parameters
+    /// are substituted and `#` and `##` applied, but nothing is rescanned, so
+    /// no name in the result is macro-replaced here.
+    /// C23: §6.10.5.1 paragraph 7, p. 180; PDF p. 193.
     fn expand_optional_replacement(
         &mut self,
         invocation: PreprocessorToken,
@@ -394,17 +404,30 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let depth = self.tokenizer_stack.len();
         let saved_operand = replace(&mut self.operand_fence, depth);
         let saved_expansion = replace(&mut self.expansion_fence, depth);
+        let saved_verbatim = replace(&mut self.verbatim_fence, depth);
         let mut result = ArenaVec::new_in(self.scratch);
         while let Some(token) = self.next_preprocessor_token::<false>() {
             result.push(token);
         }
         self.operand_fence = saved_operand;
         self.expansion_fence = saved_expansion;
+        self.verbatim_fence = saved_verbatim;
         self.hash_hash_stack = saved_hashes;
         self.generate_placeholders = placeholder_mode;
         self.state.retain_placeholders = retain_placeholders;
         (self.last_was_newline, self.current_is_newline) = newlines;
         result
+    }
+
+    fn va_opt_error(
+        &mut self,
+        error_type: PreprocessorErrorType<'static>,
+        token: PreprocessorToken,
+    ) {
+        self.context.preprocessor_error(PreprocessorError {
+            error_type,
+            source_vectors: token.source_vectors,
+        });
     }
 
     /// Validates the optional variadic replacement at definition time.
@@ -427,11 +450,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             {
                 continue;
             }
-            if !variadic || !self.context.configuration.accepts(Feature::VaOpt) {
-                self.language_error(
-                    "__VA_OPT__ requires an enabled variadic macro replacement",
-                    token.source_vectors,
-                );
+            // Outside a variadic macro, the replacement-list reader already
+            // reported the name, which then remains an identifier.
+            if !variadic {
+                continue;
+            }
+            if !self.context.configuration.accepts(Feature::VaOpt) {
+                self.va_opt_error(PreprocessorErrorType::VaOptUnavailable, token);
                 valid = false;
                 continue;
             }
@@ -439,7 +464,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 .report_extension(Feature::VaOpt, "__VA_OPT__", token.source_vectors);
             let open = Self::next_ignore_whitespace(&mut body, self.context);
             if open.is_none_or(|t| t.kind != T::OpeningParenthesis) {
-                self.language_error("expected '(' after __VA_OPT__", token.source_vectors);
+                self.va_opt_error(
+                    PreprocessorErrorType::MissingOpeningParenthesisAfterVaOpt,
+                    token,
+                );
                 valid = false;
                 continue;
             }
@@ -465,21 +493,18 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 if inner.kind.is_identifier()
                     && self.context.string_cache.at(inner.contents) == "__VA_OPT__"
                 {
-                    self.language_error("__VA_OPT__ cannot be nested", inner.source_vectors);
+                    self.va_opt_error(PreprocessorErrorType::NestedVaOpt, inner);
                     valid = false;
                 }
                 _ = first.get_or_insert(inner.kind);
                 last = Some(inner.kind);
             }
             if depth != 0 {
-                self.language_error("unterminated __VA_OPT__ replacement", token.source_vectors);
+                self.va_opt_error(PreprocessorErrorType::UnterminatedVaOpt, token);
                 valid = false;
             }
             if first == Some(T::HashHash) || last == Some(T::HashHash) {
-                self.language_error(
-                    "## cannot begin or end a __VA_OPT__ replacement",
-                    token.source_vectors,
-                );
+                self.va_opt_error(PreprocessorErrorType::HashHashAtVaOptBoundary, token);
                 valid = false;
             }
         }
@@ -490,12 +515,17 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// Selects optional tokens and dialect comma elision before ordinary
     /// substitution. C23: §6.10.5.1p2-7, pp. 179-180; PDF pp. 192-193.
     /// GNU comma-paste and traditional MSVC comma elision are extensions.
+    ///
+    /// Each nonempty optional replacement that is not a `#` operand becomes
+    /// one more argument, read through a name no source identifier can
+    /// spell, so its result is rescanned with the rest of the replacement
+    /// list but never substituted again (§6.10.5.1 paragraph 4).
     pub(super) fn prepare_variadic_body(
         &mut self,
         invocation: PreprocessorToken,
         mut body: TokenSource<'x>,
         arguments: MacroArguments<'x>,
-    ) -> TokenSource<'x> {
+    ) -> (TokenSource<'x>, MacroArguments<'x>) {
         use PreprocessorTokenType as T;
         let original = body.clone();
         let mut tokens = ArenaVec::new_in(self.scratch);
@@ -511,20 +541,24 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             }
         }
         if !optional && !comma {
-            return original;
+            return (original, arguments);
         }
         let Some(argument) = arguments.iter().find(|argument| argument.variadic) else {
-            return original;
+            return (original, arguments);
         };
         let va_name = argument.name;
-        let empty = if optional || self.context.configuration.accepts(Feature::MsVaArgs) {
-            let mut expanded = self.expanded_argument(invocation, argument);
-            !std::iter::from_fn(|| expanded.next_item(self.context))
-                .any(|t| !matches!(t.kind, T::Whitespace | T::Newline | T::Placeholder))
-        } else {
-            false
-        };
+        // Whether `__VA_ARGS__` would be replaced by no tokens. It is decided
+        // only where a construct needs it, since deciding prescans the
+        // argument, which may then be used only as a `#` operand.
+        let mut empty = None;
         let mut output = ArenaVec::new_in(self.scratch);
+        let mut results = ArenaVec::new_in(self.scratch);
+        let location = self
+            .context
+            .get_source_vectors(invocation.source_vectors)
+            .first()
+            .cloned()
+            .unwrap_or_default();
         let mut index = 0;
         while index < tokens.len() {
             let token = tokens[index];
@@ -556,7 +590,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     }
                     index += 1;
                 }
-                let selected = if empty {
+                let selected = if self.variadic_argument_is_empty(&mut empty, invocation, argument)
+                {
                     ArenaVec::new_in(self.scratch)
                 } else {
                     self.expand_optional_replacement(invocation, arguments, &tokens[start..index])
@@ -580,7 +615,32 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         source_vectors: token.source_vectors,
                     });
                 } else {
-                    output.extend_from_slice(&selected);
+                    let mut name = ArenaString::new_in(self.scratch);
+                    _ = write!(name, "__VA_OPT__ {}", results.len());
+                    let name = self.context.string_cache.intern(&*name);
+                    let tokenizer = TokenSource::replay(
+                        self.context,
+                        self.scratch,
+                        &[&selected],
+                        location.clone(),
+                    );
+                    let expanded = self.scratch.alloc(OnceCell::new());
+                    drop(expanded.set(tokenizer.clone()));
+                    results.push(FunctionLikeMacroArgument {
+                        omitted: false,
+                        variadic: false,
+                        substituted: true,
+                        name,
+                        tokenizer,
+                        enclosing_arguments: None,
+                        disabled_macros: argument.disabled_macros,
+                        expanded,
+                    });
+                    output.push(PreprocessorToken {
+                        kind:           T::Identifier,
+                        contents:       name,
+                        source_vectors: token.source_vectors,
+                    });
                 }
                 index += usize::from(index < tokens.len());
                 continue;
@@ -613,7 +673,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         index = next + 1;
                         continue;
                     }
-                    if empty && self.context.configuration.accepts(Feature::MsVaArgs) {
+                    if self.context.configuration.accepts(Feature::MsVaArgs)
+                        && self.variadic_argument_is_empty(&mut empty, invocation, argument)
+                    {
                         self.context.report_extension(
                             Feature::MsVaArgs,
                             "empty __VA_ARGS__ comma elision",
@@ -627,16 +689,43 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             output.push(token);
             index += 1;
         }
-        TokenSource::replay(
-            self.context,
-            self.scratch,
-            &[&output],
-            self.context
-                .get_source_vectors(invocation.source_vectors)
-                .first()
-                .cloned()
-                .unwrap_or_default(),
+        let arguments = if results.is_empty() {
+            arguments
+        } else {
+            let mut all = ArenaVec::with_capacity_in(arguments.len() + results.len(), self.scratch);
+            all.extend_from_slice(arguments);
+            all.extend(results);
+            all.leak()
+        };
+        (
+            TokenSource::replay(self.context, self.scratch, &[&output], location),
+            arguments,
         )
+    }
+
+    /// Whether the variadic argument, completely macro-replaced, has no
+    /// tokens, deciding it once per invocation.
+    /// C23: §6.10.5.1 paragraph 7, p. 180; PDF p. 193.
+    fn variadic_argument_is_empty(
+        &mut self,
+        empty: &mut Option<bool>,
+        invocation: PreprocessorToken,
+        argument: &'x FunctionLikeMacroArgument<'x>,
+    ) -> bool {
+        if let Some(empty) = *empty {
+            return empty;
+        }
+        let mut expanded = self.expanded_argument(invocation, argument);
+        let result = !std::iter::from_fn(|| expanded.next_item(self.context)).any(|t| {
+            !matches!(
+                t.kind,
+                PreprocessorTokenType::Whitespace
+                    | PreprocessorTokenType::Newline
+                    | PreprocessorTokenType::Placeholder
+            )
+        });
+        *empty = Some(result);
+        result
     }
 
     /// Capture an invocation whose opening, arguments, or closing delimiter
@@ -777,6 +866,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             );
             arguments.push(FunctionLikeMacroArgument {
                 variadic: variadic && i == names.len(),
+                substituted: false,
                 expanded: self.scratch.alloc(OnceCell::new()),
                 omitted: i >= group_ends.len()
                     || (variadic
@@ -948,7 +1038,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             let frame = TokenizerFrame {
                 frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
                     argument:            arg,
-                    paren_depth:         Some(1),
+                    paren_depth:         (!arg.substituted).then_some(1),
                     has_generated_token: false,
                 },
                 tokenizer:  arg.tokenizer.clone(),
@@ -960,9 +1050,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     }
 
     /// Whether the token just read belongs to the `#` or `##` operand being
-    /// replaced rather than to an argument substituted into it.
+    /// replaced rather than to an argument substituted into it, or to a
+    /// `__VA_OPT__` replacement, which is not rescanned.
     pub(super) fn is_reading_operand(&self) -> bool {
-        self.operand_fence != 0 && self.tokenizer_stack.len() == self.operand_fence
+        let depth = self.tokenizer_stack.len();
+        (self.operand_fence != 0 && depth == self.operand_fence)
+            || (self.verbatim_fence != 0 && depth >= self.verbatim_fence)
     }
 
     /// Returns the frame that reads `token`'s argument as a `##` operand.
@@ -1030,7 +1123,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
                 argument,
-                paren_depth: Some(1),
+                paren_depth: (!argument.substituted).then_some(1),
                 has_generated_token: false,
             },
             tokenizer:  argument.tokenizer.clone(),
@@ -1038,12 +1131,20 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let depth = self.tokenizer_stack.len();
         let fence = replace(&mut self.operand_fence, if expand { 0 } else { depth });
         let expansion_fence = replace(&mut self.expansion_fence, depth);
+        // A prescan replaces macros completely, even within a `__VA_OPT__`
+        // replacement; an operand is read as it is.
+        let verbatim_fence = if expand {
+            replace(&mut self.verbatim_fence, 0)
+        } else {
+            self.verbatim_fence
+        };
         let mut tokens = ArenaVec::new_in(self.scratch);
         while let Some(token) = self.next_preprocessor_token::<false>() {
             tokens.push(token);
         }
         self.operand_fence = fence;
         self.expansion_fence = expansion_fence;
+        self.verbatim_fence = verbatim_fence;
         (self.last_was_newline, self.current_is_newline) = newlines;
         self.generate_placeholders = generate_placeholders;
         self.hash_hash_stack = hash_hash_stack;

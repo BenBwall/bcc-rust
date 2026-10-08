@@ -1,4 +1,5 @@
 mod conditional_boundary_regressions;
+mod dialect_regressions;
 mod directive_regressions;
 mod encoding_regressions;
 mod expression_regressions;

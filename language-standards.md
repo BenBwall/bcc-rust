@@ -451,9 +451,11 @@ ordinary floating suffixes. Dollar identifiers, including continuations, report
 GNU policy diagnostics. C89 long-long suffixes and hexadecimal floating
 constants report C99 policy diagnostics while retaining values.
 
-C23 pp-number separator boundaries include identifier nondigits (ASCII,
-Unicode and universal-character names), even when conversion must reject the
-resulting constant. C23 permits universal names for basic/control characters
+C23 pp-number separators follow the pp-number grammar: `'` continues a
+pp-number only before a digit or an ASCII nondigit, even when conversion must
+reject the resulting constant; a universal character name, another character
+or `$` after it starts a character constant instead. Because `e sign` may
+follow `' nondigit`, `0x1'e+1` is one invalid pp-number, as GCC lexes it. C23 permits universal names for basic/control characters
 inside literals while retaining invalid-scalar checks; earlier modes retain the
 C99/C11 low-code-point restriction.
 
