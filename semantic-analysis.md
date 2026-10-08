@@ -16,7 +16,9 @@ The default CLI and the measured diagnostic adapter invoke semantic analysis.
 `--semantic-types` reports declarations in deterministic lexical traversal order,
 with a nominal-tag declaration table followed by ordinary binding occurrences,
 C-like abstract type spelling, scope, binding category, linkage, duration,
-and available size/alignment. `--tokens`, `--syntax-tree` and `--raw-syntax` stop
+and available size/alignment, then typed expressions and contextual conversions.
+Expression ordinals follow deterministic child-before-parent traversal; no host
+address is printed. `--tokens`, `--syntax-tree` and `--raw-syntax` stop
 at their existing phases and retain their previous output contracts.
 
 Diagnostics enter the existing pending FIFO after preprocessing and parser
@@ -33,7 +35,8 @@ as error identities. No new rendering/normalization path exists.
 The translation-unit arena (`'tu`) retains canonical type nodes, nominal tag
 identities and completion cells, record members with byte/bit offsets, binding
 occurrences, semantic scope identities, resolved type names, and parameter
-metadata (including array `static` minimums), and tag declaration occurrences. A backend can retain this graph
+metadata (including array `static` minimums), tag declaration occurrences, typed
+expression results and conversion records. A backend can retain this graph
 without retaining a semantic analyzer. The syntax tree remains separately available.
 
 The semantic working arena (`'s`) owns continuations, value stacks, interning
@@ -160,18 +163,17 @@ Signed overflow and exceptional evaluation produce one primary diagnostic before
 dependent array/enumerator checks. Signed right shift is arithmetic; narrowing
 integer casts use two's-complement truncation, following the selected target.
 
-Conservative boundaries and later work:
+Stage-1 boundaries, with their current disposition:
 
-- sizeof/alignof expression operands are not typed yet; only type-name operands
-  contribute evaluated ICE values in this stage. This follows the requested
-  Stage-1 subset; expression typing belongs to Stage 2.
+- Stage 2 types sizeof/alignof expression operands and evaluates their modeled
+  constant sizes. VLA sizes remain runtime expressions.
 - Extension-derived and inferred types, fixed-underlying enums, decimal/bit-precise
   types and attribute/calling-convention effects are unanalyzed. Attribute-bearing
   declaration/pointer/declarator types and affected aggregate layouts become
   unavailable. C23-specific redeclaration/value rules beyond repeated typedefs
   are not fully modeled.
-- Initializer conversions, array extent inference from an initializer, and object
-  completeness after an initializer await Stage 2. Parameter completeness in a
+- Stage 2 implements initializer conversions, inferred array extents, and object
+  completeness after an initializer. Parameter completeness in a
   function definition, named-parameter requirements and identifier-list definition
   constraints belong to the function-definition checks of Stage 3.
 - Label bindings/constraints, for-init storage constraints, inline body restrictions
@@ -182,14 +184,128 @@ constant-expression forms similarly suppress dependent enum/VLA diagnostics rath
 than calling a valid unsupported constant a runtime bound. This is deliberately
 conservative, and is not evidence that those expressions have been validated.
 
-GNU size/alignment queries on void and function types use the one-byte GCC convention; strict ISO modes retain the constraint diagnostics. Later-standard assertion, generic-selection and count operands are walked structurally without evaluating their additional semantic rules.
+GNU size/alignment queries on void and function types use the one-byte GCC convention;
+strict ISO modes retain the constraint diagnostics. Stage 2 evaluates supported
+static assertions. Generic-selection and count operands remain structurally walked.
 
 ### Stage 2: Expressions and initializers
 
-Complete typed expression results, lvalues, conversions (§6.3), all operator
-constraints (§6.5), integer constant expressions (§6.6) and initialization/current-object traversal
-(§6.7.8). Use the existing work stack rather than recursive visitors. Preserve
-canonical types needed for backend lowering, while dropping expression scratch.
+#### Retained expressions and conversions
+
+`SemanticTranslationUnit.expressions` is an arena vector of `ExpressionInfo`
+records. Each record borrows its immutable syntax expression and retains its type,
+value category, resolved binding where applicable, bit-field width, address
+eligibility, integer/floating constant value and constant-expression class.
+The analyzer's scratch map from syntax identity to vector index gives expected
+O(1) operand lookup. The retained vector is preferable to a retained hash map:
+it gives deterministic inspection and a compact backend iteration surface without
+preserving host-address hashing or scratch capacity. A backend needing random
+lookup can build an arena index from the retained expression references.
+
+Value categories distinguish lvalues, their modifiable subset, function
+designators and rvalues (§6.3.2.1p1, printed p. 46, PDF p. 58). Const aggregate
+members, including array elements, prevent modification; bit-fields retain enough
+information for promotion and address/sizeof constraints. Parentheses preserve
+the underlying category. Ordinary identifiers resolve through the declaration
+binding model. A function's `__func__` is modeled as a static const character array.
+Calls to undeclared names create an unprototyped int-returning function only in
+C89/C95 and GNU modes, using shared removed-feature policy. Strict C99 and later
+diagnose undeclared identifiers.
+
+`conversions` retains the syntax expression, destination type and conversion
+kind: lvalue conversion, array/function decay, arithmetic conversion, assignment
+conversion or default argument promotion (§6.3, pp. 42-49, PDF pp. 54-61).
+These are contextual operations, separate from the expression's original category;
+sizeof and unary address operands therefore keep their unconverted identities.
+Compound assignments also retain their arithmetic/pointer operation type before
+the final conversion to the left operand's type. The backend must evaluate that
+left operand once (§6.5.16.2p3, p. 93, PDF p. 105).
+
+Integer promotions preserve enum and bit-field rules. Usual arithmetic conversions
+preserve integer rank even where LP64 long and long long have equal widths, and
+preserve real/complex component precision. Assignment conversion checks immediate
+pointed-to qualifier inclusion and exact compatibility at deeper pointer levels;
+it supports object/void pointers, null pointer constants and pointer-to-bool.
+Function prototypes enforce argument count and assignment-compatible arguments;
+unprototyped and variadic arguments receive default promotions. Core unary,
+postfix, binary, conditional, assignment, comma, cast and compound-literal
+constraints use the same helpers (§6.5, pp. 69-94, PDF pp. 81-106).
+
+Expression completion runs on the existing explicit work stack after children
+and type names. Failed operands yield `Unknown` and suppress dependent diagnostics.
+Recovery taint and unmodeled extension owners likewise yield unknown results;
+walking their children is not a claim that their extension semantics were checked.
+Member-name lookup has an arena index per nominal tag; const-member queries cache
+explicit postorder results rather than rescanning aggregate trees for every use.
+
+#### Constant expressions
+
+Typed expression folding shares `integer.rs` arithmetic with the Stage-1 ICE
+evaluator. Eligibility remains separate from a folded value: arbitrary folded
+integer expressions are not automatically ICEs (§6.6p6, p. 95, PDF p. 107).
+ICE validation covers enumerators, bounds, bit-fields, designators, case labels
+and supported static assertions. Case expressions retain evaluated values;
+duplicate case checking and conversion to the switch type belong to Stage 3.
+Unevaluated sizeof operands and unselected logical/conditional arms follow the
+§6.6p3 exceptions. Strict ICE floating operands require immediate integer casts.
+
+Arithmetic constant expressions and address constants govern static-duration
+initializers (§6.6p7-9, pp. 95-96, PDF pp. 107-108; §6.7.8p4, p. 125, PDF p. 137).
+Addresses track static storage/function/string/compound-literal designations,
+including members, subscripts, casts and integer offsets, without reading stored
+object values. This is constant eligibility, not backend relocation lowering:
+syntax, binding identity and retained conversions preserve the operands needed
+to lower a symbol plus offset. Scalar initializers additionally apply assignment
+conversion. Automatic aggregate copies may use compatible record expressions.
+
+Finite floating arithmetic uses the existing padding-free native `LongDouble`
+carrier, with a small C bridge for arithmetic, comparison and rounding. The
+configured GNU x86-64 host's x87 precision matches the selected target model.
+Operands round to the common component type before arithmetic/comparison, and
+results round to the expression type. Integer arithmetic never uses 128-bit
+division/remainder or checked/overflowing 128-bit multiplication.
+Exceptional constant evaluation produces one primary diagnostic.
+
+#### Initializer current objects
+
+`initializers.rs` implements §6.7.8p17-22 (pp. 126-128, PDF pp. 138-140) with
+explicit list/value continuations and immutable arena cursor paths. Each cursor
+identifies an array element or named record member and its containing cursor;
+brace elision descends and subsequent elements advance or unwind that path.
+Designators reset the current path relative to the containing brace pair.
+Unions initialize one selected member; unnamed bit-fields and flexible-array
+members do not consume ordinary initializer positions. Excess elements,
+incompatible scalar values and invalid designators have structured diagnostics.
+Narrow/wide strings initialize their matching character arrays, with optional
+braces and the permitted omitted terminator in an exactly sized array.
+
+An incomplete outer array records the greatest initialized top-level index and
+completes its canonical type before following expressions resolve its binding
+(§6.7.8p22). This includes nested designators and brace elision. Recovered or
+unmodeled range initialization yields an unknown completed result rather than
+a fabricated extent or a dependent incomplete-object error.
+
+Statement expression sites, return operands and loop iteration/initialization
+expressions are typed. Selection/iteration conditions require scalar type and
+switch operands require integer type (§6.8.4-§6.8.5, pp. 133-137, PDF pp. 145-149).
+Return assignment conversion remains Stage 3.
+
+#### Boundaries carried forward
+
+- The remaining statement/function rules are Stage 3: return conversions,
+  labels/gotos, duplicate cases/defaults, function-definition parameter rules,
+  inline-body restrictions and tentative-definition completion.
+- GNU builtins, statement-expression results, union casts, range initializers,
+  generic selections, count queries, attribute-derived types and newer-standard
+  special values remain conservative unknowns. Core operator checks do not
+  implement GNU void/function-pointer arithmetic.
+- Optional IEC 60559/Annex F and G exceptional floating behavior is not modeled.
+  Nonfinite constant results are diagnosed; Clang may accept such values under
+  its floating extensions. Floating evaluation also depends on the configured
+  native x87 bridge rather than a portable software target-float engine.
+- Initializer traversal validates and completes types; it does not emit a
+  flattened store plan or materialize implicit zero-filled object bytes. Those
+  are backend lowering responsibilities, recoverable from syntax and types.
 
 ### Stage 3: Statements and functions
 
@@ -201,14 +317,18 @@ full expression/binding model.
 ## Validation
 
 Unit tests cover type interning, compatibility and composite types, layout,
-integer constant evaluation, scopes, linkage, and tags. Deep-input tests check
+integer/floating constant evaluation, expressions/conversions, current objects,
+scopes, linkage, and tags. Deep-input tests check
 that traversal stays iterative: 100,000 pointer derivations, 100,000
-compatibility derivations, and 10,000 nested blocks. Layout expectations were
+compatibility derivations, 10,000 nested blocks, 100,000 expression parentheses,
+100,000 unary operators and 100,000 additions. Layout and expression-sizeof expectations were
 checked against Clang `_Static_assert`s for `x86_64-unknown-linux-gnu`. Each
 semantic diagnostic has a rendered golden fixture, and `tests/allocation_count.rs`
-checks that declaration analysis allocates only from arenas.
+checks that declarations, expressions, initializers and their diagnostics allocate
+only from arenas. The same harness requires every ordinary and parser-stress
+benchmark input to remain diagnostic-free through `sema`.
 
-The `Semantic analysis` Criterion group runs phases 1-7 plus declaration
+The `Semantic analysis` Criterion group runs phases 1-7 plus semantic
 analysis over the same inputs as `Parser` and `Parser only`; the difference
 from `Parser` is the cost of analysis.
 
@@ -246,3 +366,13 @@ run with semantic analysis enabled; the 12 retained torture regressions pass.
 The defensive `UnknownTypedef` kind cannot be reached by deliberately well-formed
 source through the parser's typedef classification. Its constructed resolver unit
 test replaces a source golden; the other 21 kinds have rendered source goldens.
+
+Stage 2 adds 28 diagnostic fixtures, covering every new semantic kind and the
+shared implicit-function extension policy; the existing overflow diagnostic now
+also covers arithmetic initializer evaluation. Linux-target Clang rejects every
+negative fixture under its matching standard with `-pedantic-errors`.
+The ordinary survey still has 14 files, 24 preprocessing/syntax errors and zero
+additional semantic errors. The positive shared `expression-sizeof-probe.c`
+checks inferred arrays, compound literals, strings, promotions, complex sizes and
+pointers through both sema and Clang static assertions. This corpus and the unit
+tests establish regression protection, not general conformance.
