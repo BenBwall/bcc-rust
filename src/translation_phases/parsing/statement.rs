@@ -812,8 +812,12 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 }
             },
             | StatementPhase::SimpleJumpSemicolon(jump) => {
+                // C2y named loops: `break identifier ;`. Without that `;`
+                // the identifier more likely starts the next statement after
+                // a `break` missing its own.
                 if let Some(token) = token
                     && token.kind == TokenType::Identifier
+                    && is_operator(parser.cursor.following(), OperatorTokenType::Semicolon)
                 {
                     parser.extension(
                         crate::configuration::Feature::NamedLoops,
@@ -1023,7 +1027,13 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     };
                     return self.finish(parser, kind);
                 }
-                if token.is_some_and(|x| parser.declaration_starter(x))
+                // C99 §6.8.1p1: `identifier :` is another label even when the
+                // identifier names a typedef; labels have their own name
+                // space (§6.2.3p1).
+                let is_label = token.is_some_and(|x| x.kind == TokenType::Identifier)
+                    && is_operator(parser.cursor.following(), OperatorTokenType::Colon);
+                if !is_label
+                    && token.is_some_and(|x| parser.declaration_starter(x))
                     && parser.extension_precedes_declaration()
                     && (!parser.attribute_starter(token) || parser.attributes_precede_declaration())
                 {
@@ -1098,6 +1108,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | StatementPhase::HeaderExpression(kind) => {
                 if matches!(kind, HeaderKind::If | HeaderKind::Switch)
                     && token.is_some_and(|x| parser.declaration_starter(x))
+                    && parser.extension_precedes_declaration()
                 {
                     parser.extension(
                         crate::configuration::Feature::IfSwitchDeclarations,
@@ -1424,15 +1435,19 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     self.own_semicolon_or_report(parser, token, "for initializer");
                     self.phase = StatementPhase::ForCondition(None);
                     ParseAction::Reprocess
-                } else if token.is_some_and(|token| parser.declaration_starter(token)) {
+                } else if token.is_some_and(|token| parser.declaration_starter(token))
+                    && parser.extension_precedes_declaration()
+                {
                     // C99 §6.8.5p1: `for ( declaration ...`. The declared
+                    // names are in scope for the rest of the header and the
+                    // body (§6.8.5.3p1), the iteration statement's block. A
+                    // GNU `__extension__` before an expression leaves it an
+                    // expression.
                     parser.extension(
                         crate::configuration::Feature::ForDeclarations,
                         "for declaration",
                         token.expect("declaration starts here"),
                     );
-                    // names are in scope for the rest of the header and the
-                    // body (§6.8.5.3p1), the iteration statement's block.
                     self.phase = StatementPhase::AwaitForInitializerDeclaration;
                     ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
                         parser.arena,

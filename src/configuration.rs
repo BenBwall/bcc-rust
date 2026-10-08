@@ -128,6 +128,12 @@ impl MsvcFeature {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum FeatureOrigin {
     Standard(CStandard),
+    /// A standard feature that a later revision removed: native from
+    /// `since` up to, but not including, `removed`, and an extension after.
+    Removed {
+        since:   CStandard,
+        removed: CStandard,
+    },
     Gnu,
     Msvc(MsvcFeature),
 }
@@ -394,7 +400,13 @@ impl Feature {
             | Self::GenericTypeOperand
             | Self::CaseRanges => FeatureOrigin::Standard(CStandard::C2y),
 
-            | Self::ImplicitInt
+            // C99: Foreword paragraph 5, p. xii; PDF p. 10 lists "remove
+            // implicit int" among the changes from C89.
+            | Self::ImplicitInt => FeatureOrigin::Removed {
+                since:   CStandard::C89,
+                removed: CStandard::C99,
+            },
+
             | Self::GnuAttribute
             | Self::GnuAsm
             | Self::GnuTypeof
@@ -533,6 +545,8 @@ impl CompilerConfiguration {
     pub(crate) const fn origin_is_native(self, origin: FeatureOrigin) -> bool {
         match origin {
             | FeatureOrigin::Standard(standard) => self.standard as u8 >= standard as u8,
+            | FeatureOrigin::Removed { since, removed } =>
+                self.standard as u8 >= since as u8 && (self.standard as u8) < removed as u8,
             | FeatureOrigin::Gnu => self.gnu,
             | FeatureOrigin::Msvc(feature) => self.msvc_feature(feature),
         }
@@ -545,7 +559,6 @@ impl CompilerConfiguration {
         while index < Feature::ALL.len() {
             let feature = Feature::ALL[index];
             let native = match feature {
-                | Feature::ImplicitInt => (self.standard as u8) < CStandard::C99 as u8,
                 | Feature::Trigraphs => (self.standard as u8) <= CStandard::C17 as u8,
                 | _ => self.origin_is_native(feature.origin()),
             };
@@ -640,7 +653,7 @@ mod tests {
                 let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
                     .with_gnu_extensions(gnu);
                 for &feature in Feature::ALL {
-                    if matches!(feature, Feature::ImplicitInt | Feature::Trigraphs) {
+                    if feature == Feature::Trigraphs {
                         continue;
                     }
                     assert_eq!(

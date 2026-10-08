@@ -827,15 +827,22 @@ pub(crate) struct FunctionSpecifiers {
 /// specified by §6.7.1-§6.7.4, pp. 98-113; PDF pp. 110-125.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct DeclarationSpecifiers<'tu> {
-    pub(crate) implicit_int:        bool,
-    pub(crate) extensions:          Option<&'tu super::modern::SpecifierExtension<'tu>>,
+    pub(crate) implicit_int:            bool,
+    pub(crate) extensions:              Option<&'tu super::modern::SpecifierExtension<'tu>>,
     /// `None` preserves the grammatical absence of a storage-class specifier;
     /// it is not equivalent to an explicitly written `auto`.
-    pub(crate) storage_class:       Option<StorageClass>,
-    pub(crate) type_qualifiers:     TypeQualifiers,
-    pub(crate) type_specifiers:     TypeSpecifiers<'tu>,
-    pub(crate) function_specifiers: FunctionSpecifiers,
-    pub(crate) source_vectors:      SourceVectors,
+    pub(crate) storage_class:           Option<StorageClass>,
+    /// Whether `auto` was written beside the specifier in `storage_class`.
+    ///
+    /// C23 (N3220): §6.7.2 paragraph 2, p. 99; PDF p. 112 lets `auto`
+    /// appear with every other storage-class specifier except `typedef`.
+    /// Paragraph 4 restricts that pairing to inferred types, a constraint
+    /// left to semantic analysis.
+    pub(crate) auto_with_storage_class: bool,
+    pub(crate) type_qualifiers:         TypeQualifiers,
+    pub(crate) type_specifiers:         TypeSpecifiers<'tu>,
+    pub(crate) function_specifiers:     FunctionSpecifiers,
+    pub(crate) source_vectors:          SourceVectors,
 }
 
 impl Default for DeclarationSpecifiers<'_> {
@@ -847,16 +854,31 @@ impl Default for DeclarationSpecifiers<'_> {
 impl DeclarationSpecifiers<'_> {
     pub(super) fn new() -> Self {
         Self {
-            extensions:          None,
-            implicit_int:        false,
-            storage_class:       None,
-            type_qualifiers:     TypeQualifiers::empty(),
-            type_specifiers:     TypeSpecifiers::Empty,
-            function_specifiers: FunctionSpecifiers {
+            extensions:              None,
+            implicit_int:            false,
+            storage_class:           None,
+            auto_with_storage_class: false,
+            type_qualifiers:         TypeQualifiers::empty(),
+            type_specifiers:         TypeSpecifiers::Empty,
+            function_specifiers:     FunctionSpecifiers {
                 is_inline:   false,
                 is_noreturn: false,
             },
-            source_vectors:      VectorSlice::empty(),
+            source_vectors:          VectorSlice::empty(),
+        }
+    }
+
+    /// The storage-class specifiers as written: `none`, one keyword, or a
+    /// C23 pairing such as `auto static`.
+    pub(super) fn storage_spelling(&self) -> &'static str {
+        match (self.storage_class, self.auto_with_storage_class) {
+            | (None, _) => "none",
+            | (Some(class), false) => class.spelling(),
+            | (Some(StorageClass::Register), true) => "auto register",
+            | (Some(StorageClass::Static), true) => "auto static",
+            | (Some(StorageClass::Extern), true) => "auto extern",
+            | (Some(StorageClass::Auto | StorageClass::Typedef), true) =>
+                unreachable!("`auto` pairs only with register, static, or extern"),
         }
     }
 }

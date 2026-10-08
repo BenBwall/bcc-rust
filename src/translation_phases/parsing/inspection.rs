@@ -54,7 +54,6 @@ use super::{
         Identifier,
         Statement,
         StatementType,
-        StorageClass,
         UnaryOperator,
     },
 };
@@ -441,10 +440,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                             } else {
                                 ""
                             },
-                            declaration
-                                .declaration_specifiers
-                                .storage_class
-                                .map_or("none", StorageClass::spelling),
+                            declaration.declaration_specifiers.storage_spelling(),
                             Self::type_label(
                                 declaration.declaration_specifiers.type_specifiers,
                                 context,
@@ -520,10 +516,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                                 function.declaration_specifiers.type_specifiers,
                                 context
                             ),
-                            function
-                                .declaration_specifiers
-                                .storage_class
-                                .map_or("none", StorageClass::spelling),
+                            function.declaration_specifiers.storage_spelling(),
                             qualifier_list(function.declaration_specifiers.type_qualifiers),
                             function_specifier_list(
                                 function.declaration_specifiers.function_specifiers
@@ -690,10 +683,7 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                                 parameter.declaration_specifiers.type_specifiers,
                                 context,
                             ),
-                            parameter
-                                .declaration_specifiers
-                                .storage_class
-                                .map_or("none", StorageClass::spelling),
+                            parameter.declaration_specifiers.storage_spelling(),
                             qualifier_list(parameter.declaration_specifiers.type_qualifiers),
                             function_specifier_list(
                                 parameter.declaration_specifiers.function_specifiers

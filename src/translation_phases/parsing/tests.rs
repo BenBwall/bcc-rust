@@ -5,6 +5,7 @@ mod declaration_recovery;
 mod declaration_regressions;
 mod declarations;
 mod diagnostics;
+mod dialect_regressions;
 mod driver_regressions;
 mod expression_recovery;
 mod expression_regressions;

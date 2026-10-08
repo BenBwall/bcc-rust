@@ -228,7 +228,9 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                 let source = statement.source_vectors;
                 self.source_vectors.push(source);
                 self.items.push(BlockItem::Statement(statement));
-                self.has_statement = true;
+                // A GNU `__label__` declaration opens the block before its
+                // declarations; it is not code that they follow.
+                self.has_statement |= !matches!(statement.kind, StatementType::LocalLabels(_));
                 self.phase = CompoundStatementPhase::ItemOrClose;
                 ParseAction::Continue
             },

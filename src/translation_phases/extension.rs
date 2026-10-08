@@ -56,6 +56,13 @@ impl Display for ExtensionDiagnostic<'_> {
         match self.origin {
             | FeatureOrigin::Standard(standard) =>
                 write!(f, "'{}' is a {} extension", self.spelling, standard.name()),
+            | FeatureOrigin::Removed { since, removed } => write!(
+                f,
+                "'{}' is a {} feature removed in {}",
+                self.spelling,
+                since.name(),
+                removed.name()
+            ),
             | FeatureOrigin::Gnu => write!(f, "'{}' is a GNU extension", self.spelling),
             | FeatureOrigin::Msvc(_) => write!(f, "'{}' is an MSVC extension", self.spelling),
         }
@@ -96,8 +103,10 @@ impl Context<'_> {
         origin: FeatureOrigin,
         source_vectors: SourceVectors,
     ) {
-        if matches!(origin, FeatureOrigin::Standard(_))
-            && self.configuration.origin_is_native(origin)
+        if matches!(
+            origin,
+            FeatureOrigin::Standard(_) | FeatureOrigin::Removed { .. }
+        ) && self.configuration.origin_is_native(origin)
         {
             return;
         }
@@ -125,8 +134,10 @@ impl Context<'_> {
         source: SourceVectors,
     ) {
         if self.configuration.is_native(feature)
-            && (matches!(feature.origin(), FeatureOrigin::Standard(_))
-                || feature == Feature::ImplicitInt)
+            && matches!(
+                feature.origin(),
+                FeatureOrigin::Standard(_) | FeatureOrigin::Removed { .. }
+            )
         {
             return;
         }

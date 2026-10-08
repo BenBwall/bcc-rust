@@ -123,6 +123,10 @@ pub(super) struct StructOrUnionSpecifierFrame<'tu, 'p> {
     member_source: Option<SourceVectors>,
     /// Provenance for the member declarator/bit-field currently being built.
     current_member_declarator_source: Option<SourceVectors>,
+    /// `__extension__` suppression depth when the specifier began. Each
+    /// member restores it, so a marker before one member covers only that
+    /// member (GNU extension; C99 §5.1.1.3, p. 11; PDF p. 23).
+    suppression_entry: usize,
 }
 
 /// State transitions for a struct/union tag and member body.
@@ -177,6 +181,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
             source_vectors: ArenaVec::new_in(arena),
             member_source: None,
             current_member_declarator_source: None,
+            suppression_entry: 0,
         }
     }
 
@@ -252,6 +257,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
+                self.suppression_entry = parser.pedantic_suppression;
                 let Some(token) = token else {
                     parser.report(ParserErrorType::ExpectedStructOrUnionKeyword(None), None);
                     return self.finish(parser);
@@ -395,7 +401,17 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     // C99 §6.7.2.1p1: a struct-declaration needs a
                     // struct-declarator-list; C99 has no anonymous members.
                     let anonymous = matches!(self.member_specifiers.as_ref().map(|x|x.type_specifiers),Some(super::declaration_syntax::TypeSpecifiers::StructOrUnion(x)) if x.identifier.is_none() && x.struct_declaration_list.is_some());
-                    let ms_anonymous = matches!(specifiers.type_specifiers, super::declaration_syntax::TypeSpecifiers::StructOrUnion(x) if x.identifier.is_some())
+                    // MSVC also accepts a typedef name of a structure or
+                    // union; whether the typedef names one is semantic.
+                    let ms_anonymous = matches!(
+                        specifiers.type_specifiers,
+                        super::declaration_syntax::TypeSpecifiers::TypedefName(_)
+                    ) || matches!(
+                        specifiers.type_specifiers,
+                        super::declaration_syntax::TypeSpecifiers::StructOrUnion(x)
+                            if x.identifier.is_some()
+                    );
+                    let ms_anonymous = ms_anonymous
                         && parser
                             .context
                             .configuration
@@ -743,6 +759,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
     }
 
     fn finish_member(&mut self, parser: &mut Parser<'_, 'tu, 'p>) {
+        parser.pedantic_suppression = self.suppression_entry;
         // Commit all declarators for this shared specifier-qualifier-list as a
         // single member declaration with one stable arena slice.
         for member in &self.member_declarators {
@@ -774,6 +791,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
     }
 
     fn finish(&mut self, parser: &mut Parser<'_, 'tu, 'p>) -> ParseAction<'tu, 'p> {
+        parser.pedantic_suppression = self.suppression_entry;
         let declaration_list = self
             .body_started
             .then(|| parser.alloc_syntax_list(&mut self.declarations));

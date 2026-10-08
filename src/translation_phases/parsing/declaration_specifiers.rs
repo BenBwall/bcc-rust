@@ -298,8 +298,14 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             return ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers));
         };
 
+        // GNU extension: `__extension__` may lead a declaration or a member
+        // declaration. Its owner (the declaration, parameter, or member)
+        // restores the suppression depth when it ends.
         if token.kind == TokenType::Keyword(KeywordTokenType::Extension)
-            && self.mode == SpecifierMode::Declaration
+            && matches!(
+                self.mode,
+                SpecifierMode::Declaration | SpecifierMode::StructMember
+            )
         {
             parser.pedantic_suppression += 1;
             self.add_extension(
@@ -367,11 +373,13 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                     x.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
                 })
             {
+                // C17 §6.7.5p2 (C23 (N3220) §6.7.6p2): an alignment specifier
+                // belongs only to a declaration, a member declaration, or a
+                // compound literal's type name. Its operand still parses.
                 if keyword == KeywordTokenType::Alignas && self.mode == SpecifierMode::TypeName {
-                    parser.extension(
-                        crate::configuration::Feature::C23Keywords,
-                        "alignment specifier in type name",
-                        token,
+                    parser.report(
+                        ParserErrorType::DeclarationSpecifierNotAllowedHere(token.kind),
+                        Some(token),
                     );
                 }
                 if keyword != KeywordTokenType::Alignas
@@ -504,15 +512,31 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                 self.consumed = true;
                 return ParseAction::Consume;
             }
-            // C99 §6.7.1p2: at most one storage-class specifier.
+            // C99 §6.7.1p2: at most one storage-class specifier. C23 lets
+            // `auto` join any other one except `typedef`; `storage_class`
+            // then keeps the other one (C23 (N3220) §6.7.2p2).
             if self.storage_seen {
+                let previous = self
+                    .specifiers
+                    .storage_class
+                    .expect("storage_seen implies a storage class");
+                if !self.specifiers.auto_with_storage_class
+                    && (previous == StorageClass::Auto) != (storage_class == StorageClass::Auto)
+                    && previous != StorageClass::Typedef
+                    && storage_class != StorageClass::Typedef
+                    && parser.context.configuration.standard()
+                        >= crate::configuration::CStandard::C23
+                {
+                    self.specifiers.auto_with_storage_class = true;
+                    if storage_class != StorageClass::Auto {
+                        self.specifiers.storage_class = Some(storage_class);
+                    }
+                    parser.merge_source(&mut self.source_vectors, token);
+                    self.consumed = true;
+                    return ParseAction::Consume;
+                }
                 parser.report(
-                    ParserErrorType::StorageClassRedefinition(
-                        self.specifiers
-                            .storage_class
-                            .expect("storage_seen implies a storage class"),
-                        token.kind,
-                    ),
+                    ParserErrorType::StorageClassRedefinition(previous, token.kind),
                     Some(token),
                 );
             }
@@ -560,10 +584,10 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                     token.source_vectors,
                 );
             }
-            if !matches!(
-                self.mode,
-                SpecifierMode::Declaration | SpecifierMode::CompoundLiteral
-            ) {
+            // C23 (N3220) §6.5.3.6p1: a compound literal takes only
+            // storage-class specifiers before its type name, never function
+            // specifiers.
+            if self.mode != SpecifierMode::Declaration {
                 parser.report(
                     ParserErrorType::DeclarationSpecifierNotAllowedHere(token.kind),
                     Some(token),
@@ -663,7 +687,8 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             } else if self.mode == SpecifierMode::Declaration
                 && (self.consumed || self.implicit_name_allowed)
             {
-                if self.specifiers.storage_class == Some(StorageClass::Auto)
+                if (self.specifiers.storage_class == Some(StorageClass::Auto)
+                    || self.specifiers.auto_with_storage_class)
                     && parser.context.configuration.standard()
                         >= crate::configuration::CStandard::C23
                 {

@@ -947,15 +947,6 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         }));
     }
 
-    /// Reports whether `token` can begin declaration specifiers in the current
-    /// typedef environment.
-    ///
-    /// C99: declaration-specifiers are §6.7, p. 97; PDF p. 109, built from
-    /// storage-class specifiers (§6.7.1, p. 98; PDF p. 110), type specifiers
-    /// (§6.7.2, p. 99; PDF p. 111), type qualifiers (§6.7.3, p. 108;
-    /// PDF p. 120), and `inline` (§6.7.4, p. 112; PDF p. 124); typedef-name
-    /// is a type-specifier under §6.7.2, p. 99; PDF p. 111. `_Imaginary` is
-    /// accepted here so the specifier frame can diagnose it.
     /// Reports a syntax feature through the shared mode policy.
     /// C99: §5.1.1.3, p. 11; PDF p. 23. Later ISO syntax is an extension.
     pub(super) fn extension(
@@ -978,6 +969,9 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         }
     }
 
+    /// Reports whether the token after any leading GNU `__extension__`
+    /// markers starts a declaration, so `__extension__ x` stays an
+    /// expression.
     pub(super) fn extension_precedes_declaration(&self) -> bool {
         let mut offset = 0;
         let mut token = self.cursor.current();
@@ -1000,6 +994,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         }
     }
 
+    /// Reports whether a declaration, not a statement, follows the attribute
+    /// specifiers (and `__extension__` markers) starting at the current token.
     pub(super) fn attributes_precede_declaration(&self) -> bool {
         let mut offset = 0;
         let mut token = self.cursor.current();
@@ -1064,19 +1060,59 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         }
     }
 
+    /// Reports whether `token`, the current token, begins an attribute
+    /// specifier: `__attribute__`, `__declspec`, or `[[`.
+    ///
+    /// C23 (N3220): attribute-specifier is §6.7.13.2 paragraph 1,
+    /// pp. 142-143; PDF pp. 155-156. `__attribute__` and `__declspec` are GNU
+    /// and MSVC extensions.
     pub(super) fn attribute_starter(&self, token: Option<Token>) -> bool {
-        token.is_some_and(|x| {
-            matches!(
-                x.kind,
-                TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec)
-            )
-        }) || token
-            .is_some_and(|x| x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket))
-            && self.cursor.following().is_some_and(|x| {
-                x.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
-            })
+        token.is_some_and(|token| Self::attribute_starter_before(token, self.cursor.following()))
     }
 
+    /// Reports whether `token`, followed by `next`, begins an attribute
+    /// specifier. A `[` starts one only when another `[` follows it.
+    fn attribute_starter_before(token: Token, next: Option<Token>) -> bool {
+        match token.kind {
+            | TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec) => true,
+            | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) =>
+                next.is_some_and(|next| {
+                    next.kind == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                }),
+            | _ => false,
+        }
+    }
+
+    /// [`Self::attribute_starter_before`] for a token the caller may have
+    /// read by lookahead. The token after a `[` is known only when the `[` is
+    /// the current token or the one following it; at any later position the
+    /// `[` is not taken as an attribute start.
+    fn attribute_starter_in_lookahead(&self, token: Token) -> bool {
+        if token.kind != TokenType::Operator(OperatorTokenType::OpeningSquareBracket) {
+            return Self::attribute_starter_before(token, None);
+        }
+        let next = if Some(token) == self.cursor.current() {
+            self.cursor.following()
+        } else if Some(token) == self.cursor.following() {
+            self.cursor.lookahead(1)
+        } else {
+            None
+        };
+        Self::attribute_starter_before(token, next)
+    }
+
+    /// Reports whether `token` can begin declaration specifiers in the current
+    /// typedef environment.
+    ///
+    /// C99: declaration-specifiers are §6.7, p. 97; PDF p. 109, built from
+    /// storage-class specifiers (§6.7.1, p. 98; PDF p. 110), type specifiers
+    /// (§6.7.2, p. 99; PDF p. 111), type qualifiers (§6.7.3, p. 108;
+    /// PDF p. 120), and `inline` (§6.7.4, p. 112; PDF p. 124); typedef-name
+    /// is a type-specifier under §6.7.2, p. 99; PDF p. 111. `_Imaginary` is
+    /// accepted here so the specifier frame can diagnose it. Later-standard
+    /// specifiers, `_Static_assert`, attribute specifiers, and the GNU and
+    /// MSVC specifier keywords also start one; a `[` counts only as described
+    /// on [`Self::attribute_starter_in_lookahead`].
     pub(super) fn declaration_starter(&self, token: Token) -> bool {
         match token.kind {
             | TokenType::Keyword(
@@ -1137,7 +1173,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Bool,
             ) => true,
             | TokenType::Identifier => self.scopes.is_typedef(token.contents),
-            | _ => self.attribute_starter(Some(token)),
+            | _ => self.attribute_starter_in_lookahead(token),
         }
     }
 
@@ -1190,7 +1226,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Bool,
             ) => true,
             | TokenType::Identifier => self.scopes.is_typedef(token.contents),
-            | _ => self.attribute_starter(Some(token)),
+            | _ => self.attribute_starter_in_lookahead(token),
         }
     }
 
