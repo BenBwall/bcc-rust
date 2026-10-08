@@ -494,6 +494,25 @@ mod measurements {
         }
     }
 
+    #[test]
+    fn declaration_semantics_allocates_only_from_arenas() {
+        for input in BenchmarkInput::ALL
+            .into_iter()
+            .chain(BenchmarkInput::PARSER_STRESS)
+        {
+            _ = input.bytes();
+            let (summary, allocations) = count_compile(|| bcc_rust::sema(input));
+            assert_no_allocations(input.name(), summary, &allocations);
+        }
+        let source = "enum E {A=1, B=(A<<3)+sizeof(long), C=B?B:1/0}; typedef const int I; struct \
+                      S {char a; int b:3; unsigned c:5; int :0; long d; int flexible[];}; union U \
+                      {long a; double b;}; static int x; extern int x; void f(int a[static const \
+                      4]) {int n; int v[n]; {typedef I T; T *p;} for(int i=0;i<3;i++) {int j;} }\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("declaration and layout paths", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0, "valid semantic input");
+    }
+
     /// Reaches the paths the generated inputs leave out.
     const FEATURE_SOURCE: &str = concat!(
         "#define STR(x) #x\r\n",

@@ -1,0 +1,19 @@
+target: x86-64 System V LP64; size_t=unsigned long, ptrdiff_t=long, wchar_t=int; 0 resolved type names
+parameter arrays with static minimum: 1
+scope 0 (File): tag Node: struct Node [size=16, align=8]; Tag, None, None
+scope 0 (File): tag Mode: enum Mode [size=4, align=4]; Tag, None, None
+scope 0 (File): Size: unsigned long [size=8, align=8]; Typedef, None, None
+scope 0 (File): Idle: int [size=4, align=4]; Enumerator, None, None
+scope 0 (File): Busy: int [size=4, align=4]; Enumerator, None, None
+scope 0 (File): Done: int [size=4, align=4]; Enumerator, None, None
+scope 0 (File): head: const struct Node * [size=8, align=8]; Object, Internal, Static
+scope 0 (File): head: const struct Node * [size=8, align=8]; Object, Internal, Static
+scope 0 (File): callbacks: int (*[3])(unsigned long, const char *, ...) [size=24, align=8]; Object, External, Static
+scope 0 (File): f: int (int *, int (*)(int)); Function, External, None
+scope 4 (Function): values: int *const  [size=8, align=8]; Parameter, None, Automatic
+scope 4 (Function): cb: int (*)(int) [size=8, align=8]; Parameter, None, Automatic
+scope 4 (Function): local: int [size=4, align=4]; Object, None, Automatic
+scope 5 (Block): count: const unsigned long [size=8, align=8]; Object, None, Automatic
+scope 5 (Block): values: int [vla]; Object, None, Automatic
+scope 6 (Block): i: int [size=4, align=4]; Object, None, Automatic
+scope 7 (Block): node: struct Node * [size=8, align=8]; Object, None, Automatic

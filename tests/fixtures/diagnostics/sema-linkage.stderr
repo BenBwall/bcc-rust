@@ -1,0 +1,11 @@
+error: identifier has both internal and external linkage: `x`
+ --> sema-linkage.c:2:12
+  |
+1 | int x;
+  |     - previous declaration is here
+2 | static int x;
+  |            ^ declaration constraint violated
+  |
+  = note: C99 §6.2.2p4 and p7: extern inherits visible linkage; mixing internal and external linkage is undefined
+
+1 error generated.

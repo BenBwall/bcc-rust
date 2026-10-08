@@ -1,0 +1,21 @@
+error: redeclaration has an incompatible type: `x`
+ --> sema-incompatible.c:2:8
+  |
+1 | int x;
+  |     - previous declaration is here
+2 | double x;
+  |        ^ declaration constraint violated
+  |
+  = note: C99 §6.7p4 and §6.2.7p2: declarations of the same entity require compatible types
+
+error: redeclaration has an incompatible type: `e`
+ --> sema-incompatible.c:7:15
+  |
+6 | extern int e;
+  |            - previous declaration is here
+7 | extern enum F e;
+  |               ^ declaration constraint violated
+  |
+  = note: C99 §6.7p4 and §6.2.7p2: declarations of the same entity require compatible types
+
+2 errors generated.
