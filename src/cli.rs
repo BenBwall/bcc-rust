@@ -203,9 +203,7 @@ fn normalize_language_arguments(
         } else if text == "-std" {
             normalized.push("--std".into());
             opaque_value = true;
-        } else if matches!(text, "-pedantic" | "-Wpedantic" | "-pedantic-errors")
-            || valid_msvc_flag(text)
-        {
+        } else if LanguageFlag::parse(text).is_some() {
             normalized.push(format!("--language-option={text}").into());
         } else {
             opaque_value = matches!(
@@ -225,41 +223,57 @@ fn normalize_language_arguments(
     }
     normalized
 }
-fn valid_msvc_flag(text: &str) -> bool {
-    text.strip_prefix("-fms-")
-        .or_else(|| text.strip_prefix("-fno-ms-"))
-        .is_some_and(|name| name == "extensions" || MsvcFeature::parse(name).is_some())
+/// A GCC language flag, which clap receives as `--language-option`.
+#[derive(Clone, Copy)]
+enum LanguageFlag {
+    /// `-pedantic` or `-Wpedantic` (warn), or `-pedantic-errors` (deny).
+    Pedantic(ExtensionPolicy),
+    /// `-fms-extensions` or `-fno-ms-extensions`.
+    MsvcExtensions(bool),
+    /// `-fms-<feature>` or `-fno-ms-<feature>`.
+    MsvcFeature(MsvcFeature, bool),
 }
+
+impl LanguageFlag {
+    fn parse(text: &str) -> Option<Self> {
+        match text {
+            | "-pedantic" | "-Wpedantic" => return Some(Self::Pedantic(ExtensionPolicy::Warn)),
+            | "-pedantic-errors" => return Some(Self::Pedantic(ExtensionPolicy::Deny)),
+            | _ => {},
+        }
+        let (name, enabled) = text
+            .strip_prefix("-fms-")
+            .map(|name| (name, true))
+            .or_else(|| text.strip_prefix("-fno-ms-").map(|name| (name, false)))?;
+        if name == "extensions" {
+            Some(Self::MsvcExtensions(enabled))
+        } else {
+            MsvcFeature::parse(name).map(|feature| Self::MsvcFeature(feature, enabled))
+        }
+    }
+
+    fn apply(self, configuration: CompilerConfiguration) -> CompilerConfiguration {
+        match self {
+            | Self::Pedantic(policy) => configuration.with_extension_policy(policy),
+            | Self::MsvcExtensions(enabled) => configuration.with_msvc_extensions(enabled),
+            | Self::MsvcFeature(feature, enabled) =>
+                configuration.with_msvc_feature(feature, enabled),
+        }
+    }
+}
+
 impl Cli {
     fn configuration(&self) -> CompilerConfiguration {
-        let mut configuration =
+        let configuration =
             CompilerConfiguration::new(self.standard.standard, ExtensionPolicy::Allow)
                 .with_gnu_extensions(self.standard.gnu);
-        for option in &self.language_option {
-            match option.as_str() {
-                | "-pedantic" | "-Wpedantic" =>
-                    configuration = configuration.with_extension_policy(ExtensionPolicy::Warn),
-                | "-pedantic-errors" =>
-                    configuration = configuration.with_extension_policy(ExtensionPolicy::Deny),
-                | text => {
-                    let (name, enabled) = if let Some(name) = text.strip_prefix("-fms-") {
-                        (name, true)
-                    } else if let Some(name) = text.strip_prefix("-fno-ms-") {
-                        (name, false)
-                    } else {
-                        continue;
-                    };
-                    configuration = if name == "extensions" {
-                        configuration.with_msvc_extensions(enabled)
-                    } else if let Some(feature) = MsvcFeature::parse(name) {
-                        configuration.with_msvc_feature(feature, enabled)
-                    } else {
-                        configuration
-                    };
-                },
-            }
-        }
-        configuration.with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
+        self.language_option
+            .iter()
+            .filter_map(|option| LanguageFlag::parse(option))
+            .fold(configuration, |configuration, flag| {
+                flag.apply(configuration)
+            })
+            .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
     }
 }
 
