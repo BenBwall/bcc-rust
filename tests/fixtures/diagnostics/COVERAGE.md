@@ -439,3 +439,17 @@ example, independent MSVC comma elision, and malformed/truncated input. The
 allocation harness reads the same `.args` before its measured compiler/reporting
 intervals; it still requires every golden fixture to produce diagnostics and
 requires zero global allocations while rendering them.
+
+## Integrated language-mode CLI coverage
+
+[`tests/language_cli.rs`](../../language_cli.rs) checks every standard alias
+through macro expansion, parsing and syntax inspection. It covers C attribute
+queries with macro-produced attribute specifiers, GNU keywords and imaginary
+constants, embedded bytes as initializer elements, and MSVC macro pragmas with
+empty variadic calls and parser syntax. Disabled feature flags and older literal
+gates diagnose while preserving a following declaration. Malformed query operands,
+missing resources, pragma payloads, imaginary suffixes and attributes also retain
+following declarations. Existing lexpp/parser policy and recovery goldens remain
+active. The [combined policy golden](language-integration-policy.stderr) pins GNU
+imaginary, C attribute query/grammar and MSVC pragma/declspec warnings in one
+translation unit. This integration adds no diagnostic kinds or severity exemptions.
