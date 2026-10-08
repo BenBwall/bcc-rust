@@ -100,3 +100,78 @@ fn self_containing_records_terminate() {
         [SemanticErrorKind::InvalidMember]
     );
 }
+
+#[test]
+fn declaration_attributes_never_erase_a_shared_tag_layout() {
+    assert_eq!(
+        kinds(
+            "struct A { int a; }; struct B { double b; }; __attribute__((unused)) static struct A \
+             ua; struct A g(void); struct B g(void); _Alignas(8) struct A aligned; extern struct \
+             A obj; extern int obj;",
+            gnu17()
+        ),
+        [
+            SemanticErrorKind::IncompatibleDeclaration,
+            SemanticErrorKind::IncompatibleDeclaration,
+        ]
+    );
+    assert_eq!(
+        tag_layout(
+            "struct A { int a; }; __attribute__((unused)) static struct A ua; _Alignas(8) struct \
+             A b;",
+            gnu17(),
+            "A"
+        ),
+        Some(Layout { size: 4, align: 4 })
+    );
+}
+
+#[test]
+fn only_layout_attributes_make_declarator_types_unanalyzed() {
+    // Function, pointer and member attributes that do not change layout keep
+    // the declared type, so later conflicts are still found.
+    assert_eq!(
+        kinds(
+            "extern int printf(const char *, ...) __attribute__((__format__(__printf__, 1, 2))); \
+             extern long printf(const char *, ...); int *__attribute__((unused)) p; long *p;",
+            gnu17()
+        ),
+        [
+            SemanticErrorKind::IncompatibleDeclaration,
+            SemanticErrorKind::IncompatibleDeclaration,
+        ]
+    );
+    // x86-64 ignores calling conventions; pointer-size modifiers change layout.
+    assert_eq!(
+        kinds(
+            "void __cdecl c(void); int c(void); int *__ptr32 r; long r;",
+            gnu17().with_msvc_extensions(true)
+        ),
+        [SemanticErrorKind::IncompatibleDeclaration]
+    );
+    // Alignment, packing, modes and vectors are not modeled.
+    assert_eq!(
+        kinds(
+            "int x __attribute__((aligned(16))); extern long x; int \
+             *__attribute__((__aligned__(8))) q; long q; int m __attribute__((mode(DI))); long m;",
+            gnu17()
+        ),
+        []
+    );
+    assert_eq!(
+        tag_layout(
+            "struct S { int a __attribute__((unused)); char b; };",
+            gnu17(),
+            "S"
+        ),
+        Some(Layout { size: 8, align: 4 })
+    );
+    assert_eq!(
+        tag_layout(
+            "struct S { int a; char b __attribute__((aligned(8))); };",
+            gnu17(),
+            "S"
+        ),
+        None
+    );
+}
