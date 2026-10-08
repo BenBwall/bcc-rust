@@ -450,38 +450,115 @@ pub(crate) enum TokenType {
     Character(CharacterTokenType),
 }
 
+/// When an alternate keyword spelling is a keyword.
+#[derive(Debug, Clone, Copy)]
+enum AliasGate {
+    /// A reserved spelling, a keyword in every mode.
+    Always,
+    /// An ordinary identifier unless GNU extensions are enabled.
+    GnuExtensions,
+    /// A keyword where the configuration accepts the feature.
+    Feature(Feature),
+}
+
+/// An alternate spelling of a keyword: the keyword it spells, when it is
+/// one, and the origin its extension diagnostics name.
+#[derive(Debug, Clone, Copy)]
+struct KeywordAlias {
+    spelling: &'static str,
+    kind:     KeywordTokenType,
+    gate:     AliasGate,
+    origin:   FeatureOrigin,
+}
+
+const fn alias(
+    spelling: &'static str,
+    kind: KeywordTokenType,
+    gate: AliasGate,
+    origin: FeatureOrigin,
+) -> KeywordAlias {
+    KeywordAlias {
+        spelling,
+        kind,
+        gate,
+        origin,
+    }
+}
+
+/// A C23 keyword spelled differently from an earlier keyword with the same
+/// meaning, gated by C23 keywords. C23: §6.4.1 paragraph 3, p. 53; PDF
+/// p. 66.
+const fn c23_alias(spelling: &'static str, kind: KeywordTokenType) -> KeywordAlias {
+    alias(
+        spelling,
+        kind,
+        AliasGate::Feature(Feature::C23Keywords),
+        FeatureOrigin::Standard(CStandard::C23),
+    )
+}
+
+/// A GNU spelling reserved to the implementation, so a keyword in every
+/// mode. C99: §7.1.3 paragraph 1, p. 166; PDF p. 178.
+const fn gnu_alias(spelling: &'static str, kind: KeywordTokenType) -> KeywordAlias {
+    alias(spelling, kind, AliasGate::Always, FeatureOrigin::Gnu)
+}
+
+/// Alternate keyword spellings, in the order their IDs follow
+/// [`KeywordTokenType::ALL`] in the reserved interner prefix.
+const KEYWORD_ALIASES: [KeywordAlias; 28] = {
+    use KeywordTokenType as K;
+    [
+        c23_alias("bool", K::Bool),
+        c23_alias("alignas", K::Alignas),
+        c23_alias("alignof", K::Alignof),
+        c23_alias("static_assert", K::StaticAssert),
+        c23_alias("thread_local", K::ThreadLocal),
+        gnu_alias("__inline", K::Inline),
+        gnu_alias("__inline__", K::Inline),
+        gnu_alias("__restrict", K::Restrict),
+        gnu_alias("__restrict__", K::Restrict),
+        gnu_alias("__const", K::Const),
+        gnu_alias("__const__", K::Const),
+        gnu_alias("__volatile", K::Volatile),
+        gnu_alias("__volatile__", K::Volatile),
+        gnu_alias("__signed", K::Signed),
+        gnu_alias("__signed__", K::Signed),
+        gnu_alias("__alignof", K::Alignof),
+        gnu_alias("__alignof__", K::Alignof),
+        gnu_alias("__complex", K::Complex),
+        gnu_alias("__complex__", K::Complex),
+        gnu_alias("__real", K::Real),
+        gnu_alias("__imag", K::Imag),
+        gnu_alias("__typeof", K::Typeof),
+        gnu_alias("__typeof__", K::Typeof),
+        gnu_alias("__typeof_unqual", K::TypeofUnqual),
+        gnu_alias("__typeof_unqual__", K::TypeofUnqual),
+        gnu_alias("__attribute", K::Attribute),
+        // Not reserved, so an identifier in strict modes.
+        alias("asm", K::Asm, AliasGate::GnuExtensions, FeatureOrigin::Gnu),
+        alias(
+            "_asm",
+            K::MsAsm,
+            AliasGate::Feature(Feature::MsAsm),
+            Feature::MsAsm.origin(),
+        ),
+    ]
+};
+
+const fn alias_spellings() -> [&'static str; KEYWORD_ALIASES.len()] {
+    let mut spellings = [""; KEYWORD_ALIASES.len()];
+    let mut index = 0;
+    while index < spellings.len() {
+        spellings[index] = KEYWORD_ALIASES[index].spelling;
+        index += 1;
+    }
+    spellings
+}
+
 impl KeywordTokenType {
-    /// Alias spellings occupy the rest of the reserved interner prefix.
-    pub(crate) const ALIASES: &'static [&'static str] = &[
-        "bool",
-        "alignas",
-        "alignof",
-        "static_assert",
-        "thread_local",
-        "__inline",
-        "__inline__",
-        "__restrict",
-        "__restrict__",
-        "__const",
-        "__const__",
-        "__volatile",
-        "__volatile__",
-        "__signed",
-        "__signed__",
-        "__alignof",
-        "__alignof__",
-        "__complex",
-        "__complex__",
-        "__real",
-        "__imag",
-        "__typeof",
-        "__typeof__",
-        "__typeof_unqual",
-        "__typeof_unqual__",
-        "__attribute",
-        "asm",
-        "_asm",
-    ];
+    /// Alias spellings occupy the rest of the reserved interner prefix, in
+    /// the order of [`KEYWORD_ALIASES`].
+    pub(crate) const ALIASES: &'static [&'static str] = &alias_spellings();
     /// Contexts reserve this contiguous prefix before interning source text.
     /// Keep this in discriminant order; the constructor and regression test
     /// verify that each spelling has its well-known ID.
@@ -762,69 +839,16 @@ impl KeywordTokenType {
                 spelling: kind.spelling(),
             });
         }
-        let (kind, enabled, origin) = match index.checked_sub(Self::ALL.len())? {
-            | 0 => (
-                Self::Bool,
-                configuration.accepts(Feature::C23Keywords),
-                FeatureOrigin::Standard(CStandard::C23),
-            ),
-            | 1 => (
-                Self::Alignas,
-                configuration.accepts(Feature::C23Keywords),
-                FeatureOrigin::Standard(CStandard::C23),
-            ),
-            | 2 => (
-                Self::Alignof,
-                configuration.accepts(Feature::C23Keywords),
-                FeatureOrigin::Standard(CStandard::C23),
-            ),
-            | 3 => (
-                Self::StaticAssert,
-                configuration.accepts(Feature::C23Keywords),
-                FeatureOrigin::Standard(CStandard::C23),
-            ),
-            | 4 => (
-                Self::ThreadLocal,
-                configuration.accepts(Feature::C23Keywords),
-                FeatureOrigin::Standard(CStandard::C23),
-            ),
-            | 5 | 6 => (Self::Inline, true, FeatureOrigin::Gnu),
-
-            | 7 | 8 => (Self::Restrict, true, FeatureOrigin::Gnu),
-
-            | 9 | 10 => (Self::Const, true, FeatureOrigin::Gnu),
-
-            | 11 | 12 => (Self::Volatile, true, FeatureOrigin::Gnu),
-
-            | 13 | 14 => (Self::Signed, true, FeatureOrigin::Gnu),
-
-            | 15 | 16 => (Self::Alignof, true, FeatureOrigin::Gnu),
-
-            | 17 | 18 => (Self::Complex, true, FeatureOrigin::Gnu),
-
-            | 19 => (Self::Real, true, FeatureOrigin::Gnu),
-            | 20 => (Self::Imag, true, FeatureOrigin::Gnu),
-            | 21 | 22 => (Self::Typeof, true, FeatureOrigin::Gnu),
-
-            | 23 | 24 => (Self::TypeofUnqual, true, FeatureOrigin::Gnu),
-
-            | 25 => (Self::Attribute, true, FeatureOrigin::Gnu),
-            | 26 => (
-                Self::Asm,
-                configuration.gnu_extensions(),
-                FeatureOrigin::Gnu,
-            ),
-            | 27 => (
-                Self::MsAsm,
-                configuration.accepts(Feature::MsAsm),
-                Feature::MsAsm.origin(),
-            ),
-            | _ => return None,
+        let alias = KEYWORD_ALIASES.get(index.checked_sub(Self::ALL.len())?)?;
+        let enabled = match alias.gate {
+            | AliasGate::Always => true,
+            | AliasGate::GnuExtensions => configuration.gnu_extensions(),
+            | AliasGate::Feature(feature) => configuration.accepts(feature),
         };
         enabled.then_some(KeywordClassification {
-            kind,
-            origin: Some(origin),
-            spelling: Self::ALIASES[index - Self::ALL.len()],
+            kind:     alias.kind,
+            origin:   Some(alias.origin),
+            spelling: alias.spelling,
         })
     }
 
