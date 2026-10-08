@@ -1,0 +1,9 @@
+error: compound literal requires a non-variable object type
+ --> sema2-compound-literal.c:1:16
+  |
+1 | void f(int n) {(int[n]){1};}
+  |                ^^^^^^^^ expression or initializer constraint violated
+  |
+  = note: C99 §6.5.2.5p1: a compound literal specifies an object type or an array of unknown size, not a variable-length array
+
+1 error generated.

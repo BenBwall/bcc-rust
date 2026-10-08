@@ -1,8 +1,8 @@
 error: constant expression overflows or has an invalid operation
- --> sema-overflow.c:1:11
+ --> sema2-static-overflow.c:1:7
   |
-1 | enum E {A=2147483647+1};
-  |           ^^^^^^^^^^^^ declaration constraint violated
+1 | int x=1/0;
+  |       ^^^ declaration constraint violated
   |
   = note: C99 §6.6p4: a constant expression is representable in its type; §6.5p5 forbids exceptional evaluation
 

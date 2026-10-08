@@ -1,0 +1,9 @@
+error: subscript requires an integer and a pointer to complete object type
+ --> sema2-subscript.c:1:25
+  |
+1 | void f(void) { int *p; p[1.0]; }
+  |                         ^^^^^ expression or initializer constraint violated
+  |
+  = note: C99 §6.5.2.1p1: one operand is integer and the other points to a complete object type
+
+1 error generated.

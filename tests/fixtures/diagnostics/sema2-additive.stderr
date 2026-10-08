@@ -1,0 +1,9 @@
+error: invalid operand types for pointer or arithmetic addition
+ --> sema2-additive.c:1:25
+  |
+1 | void f(void) { int *p; p+p; }
+  |                         ^ expression or initializer constraint violated
+  |
+  = note: C99 §6.5.6p2-3: addition and subtraction require arithmetic operands or the specified complete-object pointer combinations
+
+1 error generated.

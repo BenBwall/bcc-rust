@@ -517,3 +517,52 @@ visibility and deep non-recursive traversal have positive unit regressions.
 Unmodeled extensions carry unknown/tainted types and suppress dependent errors.
 The allocation harness additionally compiles generated C inputs through sema
 and renders this same golden corpus with the default semantic CLI path.
+
+## Expression and initializer semantic diagnostics
+
+The `sema2-*` fixtures preserve a following declaration and render the structured
+source range and standard note. They use C99 except the C11 assertion and the
+GNU99 pedantic implicit-function fixture. Every new semantic kind is covered
+below; implicit functions use the existing shared extension diagnostic.
+
+| Symbolic kind | Golden | Constraint |
+| --- | --- | --- |
+| `UndeclaredIdentifier` | [undeclared](sema2-undeclared.c) | Ordinary names need visible bindings; failed operands suppress cascades. |
+| `InvalidAddressOperand` | [address](sema2-address.c) | Address operands, register objects and bit-fields. |
+| `InvalidUnaryOperand` | [unary](sema2-unary.c) | Dereference, arithmetic unary operators and increment/decrement operand types. |
+| `ExpectedModifiableLvalue` | [lvalue](sema2-lvalue.c) | Assignment and increment need modifiable lvalues. |
+| `InvalidSubscript` | [subscript](sema2-subscript.c) | Object pointer plus integer subscripts. |
+| `InvalidArithmeticOperands` | [arithmetic](sema2-arithmetic.c) | Multiplicative arithmetic operands. |
+| `InvalidAdditiveOperands` | [additive](sema2-additive.c) | Arithmetic addition, complete-object pointer arithmetic and pointer difference. |
+| `InvalidIntegerOperands` | [integer-operator](sema2-integer-operator.c) | Shift, remainder and bitwise integer operands. |
+| `InvalidLogicalOperands` | [logical](sema2-logical.c) | Scalar logical operands. |
+| `InvalidComparisonOperands` | [comparison](sema2-comparison.c) | Arithmetic/pointer comparison compatibility. |
+| `InvalidConditionalOperands` | [conditional](sema2-conditional.c) | Scalar condition and compatible result alternatives. |
+| `InvalidAssignment` | [assignment](sema2-assignment.c) | Assignment conversions, including nested pointer qualifiers. |
+| `InvalidCast` | [cast](sema2-cast.c) | Scalar casts and pointer/floating exclusions. |
+| `InvalidSizeof` | [sizeof](sema2-sizeof.c) | Function, incomplete and bit-field operands. |
+| `InvalidMemberAccess` | [member-access](sema2-member-access.c) | Complete records and existing member names. |
+| `InvalidCall` | [call](sema2-call.c) | Pointer to function designators. |
+| `InvalidArgumentCount` | [argument-count](sema2-argument-count.c) | Prototype fixed and variadic arity. |
+| `InvalidArgumentType` | [argument-type](sema2-argument-type.c) | Prototype assignment compatibility. |
+| `InvalidCompoundLiteral` | [compound-literal](sema2-compound-literal.c) | Object type and no variably modified literal type. |
+| `InvalidCondition` | [condition](sema2-condition.c) | Scalar selection/iteration conditions. |
+| `InvalidSwitchExpression` | [switch](sema2-switch.c) | Integer switch operand. |
+| `FailedAssertion` | [assertion](sema2-assertion.c) | Evaluated supported static assertion and its message (C11 mode). |
+| `InvalidInitializer` | [initializer](sema2-initializer.c) | Scalar assignment conversion and valid object initialization. |
+| `ExcessInitializer` | [excess](sema2-excess.c) | Scalar/aggregate/array current-object exhaustion. |
+| `InvalidDesignator` | [designator](sema2-designator.c) | Existing members and in-range nonnegative ICE array indices. |
+| `NonConstantInitializer` | [static-initializer](sema2-static-initializer.c) | Static arithmetic/address constant eligibility. |
+| `ConstantOverflow` | [static-overflow](sema2-static-overflow.c) | Shared exceptional constant evaluation in initializers. |
+| `Extension(ImplicitFunctionDeclaration)` | [implicit function](sema2-implicit-function.c) | Removed C89 function declaration policy in GNU99 pedantic mode. |
+
+Positive and negative rules are checked in
+`semantic_analysis/tests/expressions.rs`: categories, promotions, null pointers,
+qualifiers, all core operator families, calls, VLA sizeof, constant expressions,
+compound literals, current-object traversal, designators, brace elision, strings,
+inferred extents and statement expression sites. Diagnostic-free positive
+inspection is pinned by `tests/fixtures/semantic/expressions.stderr`; the shared
+`expression-sizeof-probe.c` is checked by sema and Linux-target Clang assertions.
+Deep tests exercise 100,000 parentheses, unary operators and additions.
+The allocation harness measures valid expression/initializer paths, erroneous
+operands, and rendering of every golden here without global allocations.
