@@ -1023,7 +1023,13 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     };
                     return self.finish(parser, kind);
                 }
-                if token.is_some_and(|x| parser.declaration_starter(x))
+                // C99 §6.8.1p1: `identifier :` is another label even when the
+                // identifier names a typedef; labels have their own name
+                // space (§6.2.3p1).
+                let is_label = token.is_some_and(|x| x.kind == TokenType::Identifier)
+                    && is_operator(parser.cursor.following(), OperatorTokenType::Colon);
+                if !is_label
+                    && token.is_some_and(|x| parser.declaration_starter(x))
                     && parser.extension_precedes_declaration()
                     && (!parser.attribute_starter(token) || parser.attributes_precede_declaration())
                 {

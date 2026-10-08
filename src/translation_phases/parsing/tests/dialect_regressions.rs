@@ -218,3 +218,15 @@ fn local_label_declaration_is_not_a_statement_before_declarations() {
         },
     );
 }
+
+#[test]
+fn typedef_name_label_may_follow_another_label() {
+    let source = "typedef int T;\nvoid f(void) { a: T: return; }\n";
+    with_parse_configuration(
+        source,
+        mode(CStandard::C99, false, ExtensionPolicy::Warn),
+        |p| {
+            assert_clean_parse(p, source);
+        },
+    );
+}
