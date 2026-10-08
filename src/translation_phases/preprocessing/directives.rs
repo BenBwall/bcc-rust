@@ -80,6 +80,13 @@ use crate::{
 /// p. 33.
 const MAX_INCLUDE_NESTING: usize = 200;
 
+/// Whether `name` is a macro the implementation predefines beyond the names
+/// of C99 §6.10.8, p. 160; PDF p. 172. §6.10.8 paragraph 4 does not protect
+/// it, so `#undef` and `#define` apply as to any macro, as in GCC.
+fn implementation_macro(name: &str) -> bool {
+    name == "__STRICT_ANSI__"
+}
+
 /// Compares one position of two macro definitions under C99 §6.10.3p2: the
 /// tokens must be spelled identically, while any two whitespace separations
 /// are equivalent and a line end matches the end of input.
@@ -1221,6 +1228,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             | Some(ref v) => match v {
                 | MacroDefinition::FunctionLike { tokenizer, .. }
                 | MacroDefinition::ObjectLike { tokenizer, .. } => Some(tokenizer.clone()),
+                // Not one of the names C99 §6.10.8 predefines, so it may be
+                // redefined, as in GCC.
+                | MacroDefinition::BuiltIn
+                    if implementation_macro(self.context.string_cache.at(name.contents)) =>
+                    None,
                 | MacroDefinition::BuiltIn => {
                     // C99 §6.10.8p4: predefined macro names cannot be
                     // redefined, so the built-in definition stays in effect.
@@ -1608,7 +1620,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         if matches!(
             self.state.macro_definitions.get(&name_id),
             Some(MacroDefinition::BuiltIn)
-        ) {
+        ) && !implementation_macro(self.context.string_cache.at(name.contents))
+        {
             // C99 §6.10.8p4: predefined macro names cannot be undefined, so
             // the built-in definition stays in effect.
             self.context.preprocessor_error(PreprocessorError {

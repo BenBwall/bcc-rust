@@ -463,3 +463,17 @@ fn misplaced_named_variadic_parameter_names_its_macro() {
     assert!(errors[0].contains("`F`"), "{errors:?}");
     assert_eq!(texts(&tokens), "int z ;");
 }
+
+/// `__STRICT_ANSI__` is not one of the predefined macro names of C99
+/// §6.10.8, so like GCC it may be undefined and then defined again.
+#[test]
+fn strict_ansi_may_be_undefined() {
+    let source = "#undef __STRICT_ANSI__\n#ifdef \
+                  __STRICT_ANSI__\nwrong\n#else\nok\n#endif\n#define __STRICT_ANSI__ 2\nint z = \
+                  __STRICT_ANSI__;\n";
+    let (tokens, errors) = observe(source, mode(CStandard::C99));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(texts(&tokens), "ok int z = 2 ;");
+    let (_, errors) = observe("#undef __STDC__\n", mode(CStandard::C99));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+}
