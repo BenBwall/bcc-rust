@@ -544,3 +544,23 @@ fn digit_separators_follow_the_pp_number_grammar() {
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(spellings(&tokens).contains("0x1'e+1"), "{tokens:?}");
 }
+
+/// Before C23, GNU modes accept `typeof` as GCC's own keyword, so its
+/// diagnostic names the GNU origin rather than the later standard.
+#[test]
+fn typeof_before_c23_is_a_gnu_extension() {
+    for standard in [CStandard::C89, CStandard::C17] {
+        let config =
+            CompilerConfiguration::new(standard, ExtensionPolicy::Warn).with_gnu_extensions(true);
+        let (_, errors) = observe("typeof(int) x;\n", config);
+        assert_eq!(
+            errors,
+            ["Warning: 'typeof' is a GNU extension"],
+            "{standard:?}"
+        );
+    }
+    let config =
+        CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Warn).with_gnu_extensions(true);
+    let (_, errors) = observe("typeof(int) x; typeof_unqual(int) y;\n", config);
+    assert!(errors.is_empty(), "{errors:?}");
+}

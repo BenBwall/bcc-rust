@@ -732,9 +732,12 @@ impl KeywordTokenType {
                     Some(Feature::C23Keywords.origin()),
                 ),
 
+                // Before C23, GNU modes accept GCC's own `typeof`.
+                | Self::Typeof if configuration.accepts(Feature::C23Keywords) =>
+                    (true, Some(Feature::C23Keywords.origin())),
                 | Self::Typeof => (
-                    configuration.accepts(Feature::C23Keywords) || configuration.gnu_extensions(),
-                    Some(Feature::C23Keywords.origin()),
+                    configuration.gnu_extensions(),
+                    Some(Feature::GnuTypeof.origin()),
                 ),
 
                 | Self::Countof => (
