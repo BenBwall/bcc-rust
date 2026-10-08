@@ -206,8 +206,14 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
         })
     }
 
-    /// Uses invocation endpoints for macros and ignores phase-2 splices.
-    /// C99: phase 2 is §5.1.1.2 paragraph 1, p. 10; PDF p. 22.
+    /// Whether a source line ends between `previous` and `next`. Macro tokens
+    /// stand at their invocation: `previous` at its end, and `next` at the
+    /// invocation's start, which is the first character after `previous`
+    /// that is neither white space nor a comment, so an invocation whose
+    /// arguments span lines stays on the line where it starts. Phase-2
+    /// splices join lines, while a comment's new-line ends one, as in the
+    /// text of the line.
+    /// C99: phases 2-3 are §5.1.1.2 paragraph 1, p. 10; PDF p. 22.
     fn new_line(parser: &Parser<'_, 'tu, 'p>, previous: Token, next: Token) -> bool {
         let Some(a) = parser.context.user_source_end(previous.source_vectors) else {
             return false;
@@ -225,33 +231,41 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
             return true;
         };
         let bytes = text.as_bytes();
-        let end = b.index as usize;
-        for index in a.end()..end {
-            if bytes[index] != b'\n' && bytes[index] != b'\r' {
-                continue;
+        let trigraphs = parser
+            .context
+            .configuration
+            .accepts(crate::configuration::Feature::Trigraphs);
+        let spliced = |index: usize| {
+            let before = if bytes[index] == b'\n' && index > 0 && bytes[index - 1] == b'\r' {
+                index - 1
+            } else {
+                index
+            };
+            before > 0 && bytes[before - 1] == b'\\'
+                || trigraphs && before >= 3 && &bytes[before - 3..before] == b"??/"
+        };
+        let mut index = a.end();
+        let mut comment = false;
+        while index < b.index as usize {
+            match bytes[index] {
+                | b'\r' if bytes.get(index + 1) == Some(&b'\n') => {},
+                | b'\n' | b'\r' if !spliced(index) => return true,
+                | b'\n' | b'\r' | b' ' | b'\t' | b'\x0b' | b'\x0c' | b'\\' => {},
+                | b'?' if trigraphs && bytes[index..].starts_with(b"??/") => index += 2,
+                | b'*' if comment && bytes.get(index + 1) == Some(&b'/') => {
+                    comment = false;
+                    index += 1;
+                },
+                | _ if comment => {},
+                | b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                    comment = true;
+                    index += 1;
+                },
+                // A line comment runs to the new-line that ends the line.
+                | b'/' if bytes.get(index + 1) == Some(&b'/') => return true,
+                | _ => return false,
             }
-            if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') {
-                continue;
-            }
-            let before =
-                if bytes[index] == b'\n' && bytes.get(index.wrapping_sub(1)) == Some(&b'\r') {
-                    index - 1
-                } else {
-                    index
-                };
-            if before > 0 && bytes[before - 1] == b'\\' {
-                continue;
-            }
-            if before >= 3
-                && &bytes[before - 3..before] == b"??/"
-                && parser
-                    .context
-                    .configuration
-                    .accepts(crate::configuration::Feature::Trigraphs)
-            {
-                continue;
-            }
-            return true;
+            index += 1;
         }
         false
     }

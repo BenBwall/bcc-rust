@@ -575,3 +575,37 @@ fn masm_numbers_in_asm_do_not_raise_c_constant_diagnostics() {
         },
     );
 }
+
+#[test]
+fn asm_line_boundaries_start_at_a_macro_invocation() {
+    for (source, tokens) in [
+        (
+            "#define OFF(a,b) a + b\nint f(void){ __asm mov eax, OFF(1,\n2)\n return 0; }\n",
+            7,
+        ),
+        (
+            "#define ONE 1\nint f(void){ __asm mov eax, ONE /* c */\n return 0; }\n",
+            5,
+        ),
+        (
+            "#define ONE 1\nint f(void){ __asm mov eax, 2 // c\nONE;\n return 0; }\n",
+            5,
+        ),
+        (
+            "#define OFF(a,b) a + b\nint f(void){ __asm mov eax, 1 /* c\n */ OFF(1,\n2);\n return \
+             0; }\n",
+            5,
+        ),
+    ] {
+        with_parse_configuration(
+            source,
+            CompilerConfiguration::default().with_msvc_feature(MsvcFeature::Asm, true),
+            |p| {
+                let nodes: Vec<_> = p.parser.syntax.iter::<MsAsm<'_>>().collect();
+                assert_eq!(nodes.len(), 1, "{source}");
+                assert_eq!(nodes[0].tokens.len(), tokens, "{source}");
+                assert!(p.errors.is_empty(), "{source}: {:?}", p.errors);
+            },
+        );
+    }
+}
