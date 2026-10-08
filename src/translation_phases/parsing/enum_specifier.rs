@@ -195,7 +195,12 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     recovered:              parser.hard_error_count
                         > self.body_starting_error_count,
                 });
-                self.underlying_type = Some(x);
+                // Keep the first specifier when recovering an extra colon.
+                // C23: §6.7.3.3 paragraph 1, p. 109; PDF p. 122 permits
+                // only one optional enum-type-specifier.
+                if self.underlying_type.is_none() {
+                    self.underlying_type = Some(x);
+                }
                 self.source_vectors.push(x.source_vectors);
                 self.phase = EnumPhase::AfterName;
                 ParseAction::Continue
@@ -303,6 +308,15 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
             | EnumPhase::AfterName => {
                 if is_operator(token, OperatorTokenType::Colon) {
                     let token = token.expect("colon exists");
+                    if self.underlying_type.is_some() {
+                        parser.report(
+                            ParserErrorType::ExpectedIsoSyntax(
+                                "an enum body or declarator after its underlying type",
+                                Some(token.kind),
+                            ),
+                            Some(token),
+                        );
+                    }
                     parser.extension(
                         crate::configuration::Feature::EnumUnderlyingType,
                         "fixed enum underlying type",

@@ -664,3 +664,164 @@ fn implicit_return_types_support_pointer_and_parenthesized_declarators() {
         );
     }
 }
+
+#[test]
+fn c23_standalone_ellipsis_retains_variadic_prototypes_and_definitions() {
+    for standard in [CStandard::C23, CStandard::C2y] {
+        clean("int apply(int (...)); int (*pointer)(...);", standard);
+    }
+    for standard in [CStandard::C17, CStandard::C23, CStandard::C2y] {
+        for policy in [
+            ExtensionPolicy::Allow,
+            ExtensionPolicy::Warn,
+            ExtensionPolicy::Deny,
+        ] {
+            with_parse_configuration(
+                "int f(...); int g(...){return 0;} int after;",
+                mode(standard, policy),
+                |p| {
+                    assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+                    let prototype = declaration(p, 0).init_declarators[0].declarator;
+                    let definition = function_definition(p, 1).declarator;
+                    for declarator in [prototype, definition] {
+                        assert!(matches!(
+                            declarator.function_suffix(),
+                            Some(DirectDeclarator::Function { parameter_list, is_variadic: true })
+                                if parameter_list.is_empty()
+                        ));
+                    }
+                    assert_eq!(
+                        extensions(p).len(),
+                        if standard == CStandard::C17 && policy != ExtensionPolicy::Allow {
+                            2
+                        } else {
+                            0
+                        }
+                    );
+                    assert_eq!(p.items.len(), 3);
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn c23_removed_identifier_lists_diagnose_and_preserve_legacy_recovery() {
+    for standard in [CStandard::C17, CStandard::C23, CStandard::C2y] {
+        with_parse_configuration(
+            "int f(a); int g(a) int a; {return a;} int after;",
+            mode(standard, ExtensionPolicy::Allow),
+            |p| {
+                assert_eq!(
+                    parser_errors(p).count(),
+                    if standard == CStandard::C17 { 0 } else { 2 },
+                    "{:?}",
+                    p.errors
+                );
+                assert_eq!(p.items.len(), 3);
+                assert_eq!(declaration(p, 0).recovered, standard != CStandard::C17);
+                assert_eq!(
+                    function_definition(p, 1).recovered,
+                    standard != CStandard::C17
+                );
+                assert_eq!(p.parser.scopes.depth(), 0);
+            },
+        );
+    }
+}
+
+#[test]
+fn repeated_enum_underlying_types_diagnose_without_overwriting_the_first() {
+    for standard in [CStandard::C17, CStandard::C23, CStandard::C2y] {
+        with_parse_configuration(
+            "enum E : int : unsigned {A}; int after;",
+            mode(standard, ExtensionPolicy::Allow),
+            |p| {
+                assert_eq!(parser_errors(p).count(), 1, "{:?}", p.errors);
+                assert!(declaration(p, 0).recovered);
+                let TypeSpecifiers::Enum(enumeration) =
+                    declaration(p, 0).declaration_specifiers.type_specifiers
+                else {
+                    panic!("expected enum");
+                };
+                assert_eq!(
+                    enumeration
+                        .underlying_type
+                        .unwrap()
+                        .declaration_specifiers
+                        .type_specifiers,
+                    TypeSpecifiers::Int
+                );
+                assert_eq!(p.items.len(), 2);
+                assert!(!declaration(p, 1).recovered);
+            },
+        );
+    }
+}
+
+#[test]
+fn variadic_and_fixed_enum_recovery_terminates_at_every_prefix() {
+    for source in [
+        "int f(..., int x);",
+        "enum E : int : unsigned : {A};",
+        "int f(a) int a; {return a;}",
+    ] {
+        for end in 0..=source.len() {
+            with_parse_configuration(
+                &source[..end],
+                mode(CStandard::C23, ExtensionPolicy::Deny),
+                |p| {
+                    assert_eq!(p.parser.scopes.depth(), 0, "{source} at {end}");
+                    assert!(p.parser.frames.is_empty());
+                    assert!(p.parser.returned.is_none());
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn c23_empty_named_and_abstract_function_declarators_are_prototypes() {
+    for standard in [CStandard::C17, CStandard::C23, CStandard::C2y] {
+        with_parse_configuration(
+            "int f(); int size=sizeof(int ());",
+            mode(standard, ExtensionPolicy::Deny),
+            |p| {
+                assert!(p.errors.is_empty(), "{:?}", p.errors);
+                let abstract_type = p
+                    .parser
+                    .syntax
+                    .iter::<super::super::syntax::Expression<'_>>()
+                    .find_map(|x| match x.kind {
+                        | ExpressionType::SizeofType(type_name) => Some(type_name),
+                        | _ => None,
+                    })
+                    .expect("sizeof abstract function type");
+                let named = declaration(p, 0).init_declarators[0].declarator;
+                let abstract_declarator = abstract_type.declarator.unwrap();
+                for declarator in [named, abstract_declarator] {
+                    let suffix = declarator
+                        .kind
+                        .iter()
+                        .find(|x| {
+                            matches!(
+                                x,
+                                DirectDeclarator::Function { .. }
+                                    | DirectDeclarator::KAndRStyleFunction { .. }
+                            )
+                        })
+                        .expect("function declarator");
+                    if standard == CStandard::C17 {
+                        assert!(
+                            matches!(suffix, DirectDeclarator::KAndRStyleFunction { parameters } if parameters.is_empty())
+                        );
+                    } else {
+                        assert!(
+                            matches!(suffix, DirectDeclarator::Function { parameter_list, is_variadic: false } if parameter_list.is_empty())
+                        );
+                    }
+                }
+            },
+        );
+    }
+}

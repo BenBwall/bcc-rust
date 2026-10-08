@@ -240,6 +240,20 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 // branch.
                 self.entry_scope_depth = Some(parser.scopes.depth());
                 parser.scopes.enter_scope(ScopeKind::FunctionPrototype);
+                // C23: §6.7.7.1 paragraph 1, pp. 126-127; PDF pp. 139-140
+                // permits an ellipsis without a preceding parameter-list.
+                if is_operator(token, OperatorTokenType::Ellipsis) {
+                    let token = token.expect("ellipsis exists");
+                    parser.extension(
+                        crate::configuration::Feature::C23Keywords,
+                        "variadic function without named parameters",
+                        token,
+                    );
+                    self.is_variadic = true;
+                    self.source_vectors.push(token.source_vectors);
+                    self.phase = ParameterListPhase::ExpectCloseAfterEllipsis;
+                    return ParseAction::Consume;
+                }
                 if self.allow_k_and_r
                     && token.is_some_and(|token| {
                         token.kind == TokenType::Identifier
@@ -247,6 +261,21 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     })
                     && !Self::unknown_type_name_starts_prototype(parser)
                 {
+                    // C23: §6.7.7.1 paragraph 1, pp. 126-127; PDF
+                    // pp. 139-140 removes identifier-list declarators.
+                    // Retain the legacy shape for recovery, but never
+                    // present it as native C23 grammar.
+                    if parser.context.configuration.standard()
+                        >= crate::configuration::CStandard::C23
+                    {
+                        parser.report(
+                            ParserErrorType::ExpectedIsoSyntax(
+                                "a prototype parameter list in C23",
+                                token.map(|x| x.kind),
+                            ),
+                            token,
+                        );
+                    }
                     self.phase = ParameterListPhase::KAndRIdentifier;
                 } else {
                     self.phase = ParameterListPhase::PrototypeParameter;
