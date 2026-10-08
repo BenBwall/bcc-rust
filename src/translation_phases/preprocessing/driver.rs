@@ -65,7 +65,9 @@ use crate::{
 /// What a frame of the tokenizer stack reads.
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TokenizerFrameType<'a> {
-    /// Remainder of already substituted tokens in a boundary-crossing call.
+    /// Tokens replayed ahead of the frame below: the remainder of a
+    /// boundary-crossing macro call, rejected lookahead, or the output of a
+    /// builtin query or `#embed`.
     Rescan,
     /// A source file, the main file or one named by `#include`.
     ///
@@ -464,11 +466,6 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         }
     }
 
-    /// Returns the next completely macro-replaced preprocessing token.
-    ///
-    /// Placemarkers left by `##` are dropped here (C99: §6.10.3.4 paragraph
-    /// 1, p. 155; PDF p. 167), and a name met while its macro is being
-    /// replaced is marked unavailable for good (§6.10.3.4 paragraph 2).
     /// Executes the C99 string-form pragma operator.
     /// C99: §6.10.9p1, p. 161; PDF p. 173.
     fn expand_pragma_operator(&mut self) {
@@ -539,6 +536,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             );
     }
 
+    /// Returns the next completely macro-replaced preprocessing token.
+    ///
+    /// Placemarkers left by `##` are dropped here (C99: §6.10.3.4 paragraph
+    /// 1, p. 155; PDF p. 167), and a name met while its macro is being
+    /// replaced is marked unavailable for good (§6.10.3.4 paragraph 2).
     pub(super) fn next_preprocessor_token<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
     ) -> Option<PreprocessorToken> {

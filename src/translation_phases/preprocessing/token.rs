@@ -117,12 +117,12 @@ impl GetSourceVectors for Token {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-/// 8-byte values are [`Packed`] so tokens and constants stay 4-byte aligned.
-///
 /// An `integer-constant` with the type its value and suffix give it.
 ///
+/// 8-byte values are [`Packed`] so tokens and constants stay 4-byte aligned.
+///
 /// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum IntegerTokenType {
     Int(i32),
     Long(Packed<i64>),
@@ -676,8 +676,11 @@ impl KeywordTokenType {
         Self::Pragma,
     ];
 
-    /// Classification is an integer-index lookup and cheap configuration tests.
-    /// C99: §6.4.2.1p4, p. 51; PDF p. 63. Later/non-ISO keywords are
+    /// Classifies an identifier after preprocessing has finished. It is an
+    /// integer-index lookup and cheap configuration tests: no cache access
+    /// or string comparison is needed for ordinary identifiers.
+    /// C99: a token that could be a keyword or an identifier is a keyword,
+    /// §6.4.2.1p4, p. 51; PDF p. 63. Later/non-ISO keywords are
     /// extensions; reserved aliases retain their own diagnostic origin.
     pub(crate) fn classify(
         id: StringCacheId,
@@ -880,11 +883,8 @@ impl KeywordTokenType {
         StringCacheId::from_u32(self as u32 + 1)
     }
 
-    /// Only identifiers are classified here, after preprocessing has finished.
-    /// No cache access or string comparison is needed for ordinary identifiers.
-    ///
-    /// C99: a token that could be a keyword or an identifier is a keyword,
-    /// §6.4.2.1 paragraph 4, p. 51; PDF p. 63.
+    /// The keyword whose interned spelling is `id`, the inverse of
+    /// [`Self::cache_id`].
     #[cfg(test)]
     pub(crate) fn from_cache_id(id: StringCacheId) -> Option<Self> {
         Self::ALL.get((id.to_u32() - 1) as usize).copied()

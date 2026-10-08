@@ -1,5 +1,4 @@
 //! Source-file conditional boundary regressions only; no else-order policy.
-//! Scratch draft, not registered or compiled.
 
 use std::{
     path::{

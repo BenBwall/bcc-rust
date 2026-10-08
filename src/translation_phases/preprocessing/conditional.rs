@@ -341,7 +341,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         self.parse_macro_test_directive(directive, "ifndef");
     }
 
-    /// Handles `#ifdef` (`wants_defined`) and `#ifndef`. A missing macro name
+    /// Handles `#ifdef` and `#ifndef`, as `name` says. A missing macro name
     /// is diagnosed and the group is skipped, as GCC and Clang do.
     ///
     /// C99: §6.10.1 paragraph 5, pp. 148-149; PDF pp. 160-161: the same

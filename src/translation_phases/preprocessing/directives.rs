@@ -622,12 +622,6 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         }
     }
 
-    /// Reads a `<…>` operand as written: tokens through the first one that
-    /// contains `>`. The name is the source text between the delimiters, so
-    /// it keeps the whitespace that the tokens between them do not spell.
-    ///
-    /// C99: `< h-char-sequence >`, §6.4.7 paragraph 1, p. 64; PDF p. 76, and
-    /// §6.10.2 paragraph 2, p. 149; PDF p. 161.
     /// Withdraws the extension diagnostics reported since the first
     /// `reported` while lexing a written `<...>` header name as tokens: its
     /// characters form no tokens (C99 §6.4.7p1, p. 64; PDF p. 76), so `$`
@@ -643,6 +637,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         self.context.append_pending_errors(kept);
     }
 
+    /// Reads a `<…>` operand as written: tokens through the first one that
+    /// contains `>`. The name is the source text between the delimiters, so
+    /// it keeps the whitespace that the tokens between them do not spell.
+    ///
+    /// C99: `< h-char-sequence >`, §6.4.7 paragraph 1, p. 64; PDF p. 76, and
+    /// §6.10.2 paragraph 2, p. 149; PDF p. 161.
     fn read_written_angle_header(&mut self, directive: PreprocessorToken) -> HeaderName<'x> {
         let open = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
             .expect("the operand was peeked");
