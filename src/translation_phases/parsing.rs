@@ -50,7 +50,9 @@ mod inspection;
 mod machine;
 mod modern;
 pub(crate) use modern::{
+    AttributeSpecifier,
     ExtendedType,
+    SpecifierExtension,
     SpecifierExtensionKind,
     StaticAssertion,
     SyntaxOperand,

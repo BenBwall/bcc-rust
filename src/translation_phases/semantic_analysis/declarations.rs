@@ -39,6 +39,15 @@ use super::{
     align_up,
 };
 
+/// The x86-64 System V target ignores MSVC calling conventions.
+fn calling_convention(keyword: super::super::preprocessing::KeywordTokenType) -> bool {
+    use super::super::preprocessing::KeywordTokenType as K;
+    matches!(
+        keyword,
+        K::Cdecl | K::Stdcall | K::Fastcall | K::Vectorcall | K::Thiscall
+    )
+}
+
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Resolves the parser's validated specifier multiset into a canonical
     /// type. C99: §6.7.2p2-5, pp. 99-100; PDF pp. 111-112.
@@ -118,7 +127,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
                 let ty = self.types.intern(TypeKind::Tag(tag));
                 self.values.push(ty);
-                if s.attributes.is_some() {
+                if define && self.unmodeled_extension(s.attributes) {
                     self.types.tags[tag].tainted.set(true);
                 }
                 if define && let Some(list) = s.struct_declaration_list {
@@ -142,7 +151,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     _ = self.defining.insert(tag, ());
                     self.work.push(Work::EnumMembers(tag, list, 0, None));
                 }
-                if s.attributes.is_some() || s.underlying_type.is_some() {
+                if (define && self.unmodeled_extension(s.attributes)) || s.underlying_type.is_some()
+                {
                     self.types.tags[tag].tainted.set(true);
                 }
                 if let Some(name) = s.underlying_type {
@@ -162,6 +172,48 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | _ => self.values.push(self.types.unknown()),
         }
+    }
+
+    /// Specifier extensions whose meaning this phase does not model:
+    /// alignment, thread or constexpr storage, MSVC pointer modifiers and
+    /// layout attributes. Other attributes, `__extension__` and x86-64
+    /// calling conventions leave the declared type unchanged. Extensions
+    /// follow C99 §4p6, p. 7; PDF p. 19.
+    pub(super) fn unmodeled_extension(
+        &self,
+        mut chain: Option<&'tu super::SpecifierExtension<'tu>>,
+    ) -> bool {
+        use super::SpecifierExtensionKind as K;
+        while let Some(item) = chain {
+            if match item.kind {
+                | K::ExtensionMarker => false,
+                | K::Attributes(attribute) => self.layout_attribute(attribute),
+                | K::MsModifier(keyword) => !calling_convention(keyword),
+                | K::Alignment(_) | K::ThreadLocal | K::Constexpr => true,
+            } {
+                return true;
+            }
+            chain = item.next;
+        }
+        false
+    }
+
+    /// GNU, standard-syntax vendor and MSVC attributes that change size,
+    /// alignment or representation. Their arguments are not interpreted, so
+    /// any such name, or an attribute that failed to parse, is conservative.
+    pub(super) fn layout_attribute(&self, attribute: &super::AttributeSpecifier<'tu>) -> bool {
+        attribute.recovered
+            || attribute.tokens.iter().any(|token| {
+                let name = self.context.string_cache.at(token.contents);
+                let name = name
+                    .strip_prefix("__")
+                    .and_then(|n| n.strip_suffix("__"))
+                    .unwrap_or(name);
+                matches!(
+                    name,
+                    "aligned" | "align" | "packed" | "mode" | "vector_size" | "ext_vector_type"
+                )
+            })
     }
 
     /// Discover core type names inside opaque later-standard operands.
@@ -383,8 +435,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .parameters
                     .insert(std::ptr::from_ref(direct).addr(), (list.leak(), 0));
             },
-            | DirectDeclarator::Attributes(_) | DirectDeclarator::MsModifier(..) =>
-                self.values.push(self.types.unknown()),
+            | DirectDeclarator::Attributes(attribute) =>
+                self.values.push(if self.layout_attribute(attribute) {
+                    self.types.unknown()
+                } else {
+                    base
+                }),
+            | DirectDeclarator::MsModifier(keyword, _) =>
+                self.values.push(if calling_convention(keyword) {
+                    base
+                } else {
+                    self.types.unknown()
+                }),
             | _ => self.values.push(base),
         }
     }

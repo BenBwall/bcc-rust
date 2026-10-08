@@ -172,9 +172,13 @@ Stage-1 boundaries, with their current disposition:
 - Stage 2 types sizeof/alignof expression operands and evaluates their modeled
   constant sizes. VLA sizes remain runtime expressions.
 - Extension-derived and inferred types, fixed-underlying enums, decimal/bit-precise
-  types and attribute/calling-convention effects are unanalyzed. Attribute-bearing
-  declaration/pointer/declarator types and affected aggregate layouts become
-  unavailable. C23-specific redeclaration/value rules beyond repeated typedefs
+  types and layout-changing extensions are unanalyzed. Only alignment
+  specifiers, thread/constexpr storage, MSVC pointer-size modifiers and
+  attributes naming `aligned`, `align`, `packed`, `mode`, `vector_size` or
+  `ext_vector_type` make that one declaration's type unavailable; other
+  attributes and the calling conventions that x86-64 ignores leave it intact. A
+  tag's layout becomes unavailable only when its own definition or one of its
+  members carries such an extension, never from a use site. C23-specific redeclaration/value rules beyond repeated typedefs
   are not fully modeled.
 - Stage 2 implements initializer conversions, inferred array extents, and object
   completeness after an initializer. Parameter completeness in a

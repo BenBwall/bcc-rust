@@ -58,8 +58,10 @@ use super::{
     SourceVectors,
     TranslationError,
     parsing::{
+        AttributeSpecifier,
         ExtendedType,
         ParsedTranslationUnit,
+        SpecifierExtension,
         SpecifierExtensionKind,
         SyntaxOperand,
         declaration_syntax::{
@@ -551,15 +553,11 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         self.tainted |= recovered;
     }
 
+    /// Unmodeled specifier extensions make only this declaration's type
+    /// unanalyzed; a tag named here keeps its own completion and layout.
     /// C99: §6.7.2p2-5, pp. 99-100; PDF pp. 111-112.
     fn spec(&mut self, spec: DeclarationSpecifiers<'tu>, force_tag: bool) {
-        let mut extension = spec.extensions;
-        let mut unmodeled = spec.auto_with_storage_class;
-        while let Some(item) = extension {
-            unmodeled |= !matches!(item.kind, SpecifierExtensionKind::ExtensionMarker);
-            extension = item.next;
-        }
-        if unmodeled {
+        if spec.auto_with_storage_class || self.unmodeled_extension(spec.extensions) {
             self.taint(true);
             self.work.push(Work::UnknownType);
         }
@@ -606,12 +604,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 _ = self.values.pop();
             },
             | Work::UnknownType => {
-                if let Some(ty) = self.values.pop()
-                    && let TypeKind::Tag(id) = self.types.nodes[ty.index]
-                {
-                    self.types.tags[id].tainted.set(true);
-                    self.types.tags[id].layout.set(None);
-                }
+                _ = self.take_type();
                 self.values.push(self.types.unknown());
             },
             | Work::Declaration(d) => {
@@ -813,7 +806,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                         base = self.types.unknown();
                         continue;
                     }
-                    if level.attributes.is_some() {
+                    if self.unmodeled_extension(level.attributes) {
                         base = self.types.unknown();
                         continue;
                     }
@@ -1023,7 +1016,12 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 for &d in member.struct_declarator_list.iter().rev() {
                     self.work.push(Work::MemberBase(tag, d, base, members));
                 }
-                if member.extensions.is_some() {
+                if self.unmodeled_extension(member.extensions)
+                    || member
+                        .struct_declarator_list
+                        .iter()
+                        .any(|d| self.unmodeled_extension(d.attributes))
+                {
                     self.types.tags[tag].tainted.set(true);
                 }
             },
