@@ -368,3 +368,23 @@ fn typedef_name_singleton_parameter_may_name_void() {
         },
     );
 }
+
+#[test]
+fn ms_anonymous_structs_accept_typedef_name_members() {
+    let source = "typedef struct { int a; } A;\nstruct S { A; int b; };\n";
+    let configuration = mode(CStandard::C17, false, ExtensionPolicy::Allow);
+    with_parse_configuration(
+        source,
+        configuration.with_msvc_feature(crate::configuration::MsvcFeature::AnonymousStructs, true),
+        |p| {
+            assert_clean_parse(p, source);
+        },
+    );
+    with_parse_configuration(source, configuration, |p| {
+        assert!(
+            parser_errors(p).any(|error| *error == ParserErrorType::EmptyStructDeclarator),
+            "{:?}",
+            p.errors
+        );
+    });
+}

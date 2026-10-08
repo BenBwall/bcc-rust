@@ -401,7 +401,17 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     // C99 §6.7.2.1p1: a struct-declaration needs a
                     // struct-declarator-list; C99 has no anonymous members.
                     let anonymous = matches!(self.member_specifiers.as_ref().map(|x|x.type_specifiers),Some(super::declaration_syntax::TypeSpecifiers::StructOrUnion(x)) if x.identifier.is_none() && x.struct_declaration_list.is_some());
-                    let ms_anonymous = matches!(specifiers.type_specifiers, super::declaration_syntax::TypeSpecifiers::StructOrUnion(x) if x.identifier.is_some())
+                    // MSVC also accepts a typedef name of a structure or
+                    // union; whether the typedef names one is semantic.
+                    let ms_anonymous = matches!(
+                        specifiers.type_specifiers,
+                        super::declaration_syntax::TypeSpecifiers::TypedefName(_)
+                    ) || matches!(
+                        specifiers.type_specifiers,
+                        super::declaration_syntax::TypeSpecifiers::StructOrUnion(x)
+                            if x.identifier.is_some()
+                    );
+                    let ms_anonymous = ms_anonymous
                         && parser
                             .context
                             .configuration
