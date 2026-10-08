@@ -1915,13 +1915,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                                     consumed_newline = true;
                                     break 'base;
                                 },
-                                | Some(t) => {
+                                | Some(extra) => {
                                     self.context.preprocessor_error(PreprocessorError {
                                         error_type:
                                             PreprocessorErrorType::ExtraTokensAfterPragmaOnce(
-                                                t.kind,
+                                                extra.kind,
                                             ),
-                                        source_vectors: token.source_vectors,
+                                        source_vectors: extra.source_vectors,
                                     });
                                     break 'base;
                                 },
