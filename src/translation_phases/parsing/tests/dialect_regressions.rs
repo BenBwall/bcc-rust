@@ -295,3 +295,29 @@ fn function_specifiers_are_not_compound_literal_storage() {
         },
     );
 }
+
+#[test]
+fn alignment_specifier_belongs_only_to_declarations_and_compound_literals() {
+    let source = "int n = sizeof(alignas(8) int);\n";
+    for policy in [ExtensionPolicy::Allow, ExtensionPolicy::Warn] {
+        with_parse_configuration(source, mode(CStandard::C23, false, policy), |p| {
+            assert_eq!(
+                parser_errors(p).collect::<Vec<_>>(),
+                [&ParserErrorType::DeclarationSpecifierNotAllowedHere(
+                    TokenType::Keyword(KeywordTokenType::Alignas)
+                )],
+                "{:?}",
+                p.errors
+            );
+        });
+    }
+    let literal = "int *p = &(alignas(8) int){0};\nstruct S { alignas(8) int m; };\n";
+    with_parse_configuration(
+        literal,
+        mode(CStandard::C23, false, ExtensionPolicy::Warn),
+        |p| {
+            assert_clean_parse(p, literal);
+            assert!(extensions(p).is_empty(), "{:?}", p.errors);
+        },
+    );
+}

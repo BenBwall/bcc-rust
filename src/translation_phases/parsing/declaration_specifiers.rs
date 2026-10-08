@@ -373,11 +373,13 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                     x.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
                 })
             {
+                // C17 §6.7.5p2 (C23 (N3220) §6.7.6p2): an alignment specifier
+                // belongs only to a declaration, a member declaration, or a
+                // compound literal's type name. Its operand still parses.
                 if keyword == KeywordTokenType::Alignas && self.mode == SpecifierMode::TypeName {
-                    parser.extension(
-                        crate::configuration::Feature::C23Keywords,
-                        "alignment specifier in type name",
-                        token,
+                    parser.report(
+                        ParserErrorType::DeclarationSpecifierNotAllowedHere(token.kind),
+                        Some(token),
                     );
                 }
                 if keyword != KeywordTokenType::Alignas
