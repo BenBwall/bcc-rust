@@ -40,20 +40,10 @@ fn record_token(token: Token, context: &Context<'_>, observation: &mut Observati
     match token.kind {
         | TokenType::Integer(value) => observation.integers.push(value),
         | TokenType::Character(value) => observation.characters.push(value),
-        | TokenType::String(StringTokenType::String(contents)) => observation.strings.push((
-            false,
-            context
-                .literal_text_in(context.tu_arena(), contents, false)
-                .expect("UTF-8 test literal")
-                .to_owned(),
-        )),
-        | TokenType::String(StringTokenType::WideString(contents)) => observation.strings.push((
-            true,
-            context
-                .literal_text_in(context.tu_arena(), contents, true)
-                .expect("UTF-8 test literal")
-                .to_owned(),
-        )),
+        | TokenType::String(StringTokenType::String(_) | StringTokenType::WideString(_)) =>
+            observation
+                .strings
+                .push(super::string_value(context, token)),
         | _ => {},
     }
 }

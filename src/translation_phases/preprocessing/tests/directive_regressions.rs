@@ -24,6 +24,7 @@ use super::{
     Token,
     TokenType,
     TranslationError,
+    with_tokens_of,
 };
 use crate::translation_phases::{
     ErrorSeverity,
@@ -100,28 +101,6 @@ fn with_directive_tokens_with_system_directory<R>(
     inspect(&tokens, &mut context)
 }
 
-fn with_directive_tokens<R>(
-    source: &str,
-    inspect: impl FnOnce(&[Token], &mut Context<'_>) -> R,
-) -> R {
-    let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
-    let preprocess_arena = crate::util::bump::Bump::new();
-    let mut preprocessor = Preprocessor::new(
-        &preprocess_arena,
-        &mut context,
-        PathBuf::from("<directive-test>").into_boxed_path(),
-        source,
-        SharedVec::default(),
-        SharedVec::default(),
-    );
-    let mut tokens = Vec::new();
-    preprocessor.for_each_item(&mut context, |_, token| {
-        tokens.push(token);
-    });
-    inspect(&tokens, &mut context)
-}
-
 #[test]
 fn pragma_destringizing_preserves_non_special_escapes() {
     for (literal, expected) in [
@@ -160,7 +139,7 @@ fn pragma_destringizing_preserves_non_special_escapes() {
 fn enormous_line_number_diagnoses_without_panicking_and_retains_its_digits() {
     let digits = "9".repeat(1000);
     let source = format!("#line {digits}\nafter\n");
-    with_directive_tokens(&source, |tokens, context| {
+    with_tokens_of(&source, "<directive-test>", |tokens, context| {
         assert_eq!(tokens.len(), 1);
         assert_eq!(context.string_cache.at(tokens[0].contents), "after");
         let errors = context.take_pending_errors();
@@ -285,7 +264,7 @@ fn pragma_expectations_preserve_tokens_across_source_boundaries() {
 #[test]
 fn unfinished_pragma_expectations_terminate_at_end_of_input() {
     for source in ["_Pragma", "_Pragma(", "_Pragma(\"STDC FP_CONTRACT ON\""] {
-        with_directive_tokens(source, |tokens, context| {
+        with_tokens_of(source, "<directive-test>", |tokens, context| {
             assert!(tokens.is_empty(), "{source:?}: {tokens:#?}");
             assert!(!context.take_pending_errors().is_empty(), "{source:?}");
         });
@@ -298,7 +277,7 @@ fn line_directive_applies_to_the_following_line_and_strips_file_delimiters() {
         "#line 10 \"logical.c\"\n__FILE__; __LINE__\n",
         "#define NUMBER 10\n#define FILE \"logical.c\"\n#line NUMBER FILE\n__FILE__; __LINE__\n",
     ] {
-        with_directive_tokens(source, |tokens, context| {
+        with_tokens_of(source, "<directive-test>", |tokens, context| {
             assert_eq!(tokens.len(), 3, "{tokens:#?}");
             let TokenType::String(StringTokenType::String(contents)) = tokens[0].kind else {
                 panic!("expected __FILE__ string: {tokens:#?}");
@@ -336,7 +315,7 @@ fn direct_pragmas_consume_the_entire_directive_line() {
         "#pragma STDC FP_CONTRACT ON\nafter\n",
         "_Pragma(\"unknown token token2\")\nafter\n",
     ] {
-        with_directive_tokens(source, |tokens, context| {
+        with_tokens_of(source, "<directive-test>", |tokens, context| {
             assert_eq!(
                 tokens.len(),
                 1,
@@ -355,8 +334,9 @@ fn direct_pragmas_consume_the_entire_directive_line() {
 
 #[test]
 fn repeated_line_directives_replace_the_presumed_line() {
-    with_directive_tokens(
+    with_tokens_of(
         "#line 30\n__LINE__\n#line 70\n__LINE__\n",
+        "<directive-test>",
         |tokens, context| {
             assert_eq!(tokens.len(), 2);
             assert_eq!(
@@ -374,8 +354,9 @@ fn repeated_line_directives_replace_the_presumed_line() {
 
 #[test]
 fn line_filename_escapes_follow_string_literal_rules() {
-    with_directive_tokens(
+    with_tokens_of(
         "#line 10 \"dir\\\\file.c\"\n__FILE__\n",
+        "<directive-test>",
         |tokens, context| {
             let TokenType::String(StringTokenType::String(contents)) = tokens[0].kind else {
                 panic!("expected file name: {tokens:#?}");
@@ -910,7 +891,7 @@ fn undefining_a_predefined_macro_is_diagnosed_and_keeps_it() {
     // C99 §6.10.8p4: predefined macro names cannot be undefined.
     for name in ["__LINE__", "__FILE__", "__STDC__", "__STDC_VERSION__"] {
         let source = format!("#undef {name}\n#ifdef {name}\nkept\n#endif\n");
-        with_directive_tokens(&source, |tokens, context| {
+        with_tokens_of(&source, "<directive-test>", |tokens, context| {
             assert_eq!(
                 tokens
                     .iter()
@@ -934,8 +915,12 @@ fn undefining_a_predefined_macro_is_diagnosed_and_keeps_it() {
             assert_eq!(error.severity(), ErrorSeverity::Warning);
         });
     }
-    with_directive_tokens("#define M 1\n#undef M\nM\n", |tokens, context| {
-        assert_eq!(context.string_cache.at(tokens[0].contents), "M");
-        assert!(context.take_pending_errors().is_empty());
-    });
+    with_tokens_of(
+        "#define M 1\n#undef M\nM\n",
+        "<directive-test>",
+        |tokens, context| {
+            assert_eq!(context.string_cache.at(tokens[0].contents), "M");
+            assert!(context.take_pending_errors().is_empty());
+        },
+    );
 }
