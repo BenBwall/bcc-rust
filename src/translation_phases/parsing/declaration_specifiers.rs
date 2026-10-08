@@ -582,10 +582,10 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                     token.source_vectors,
                 );
             }
-            if !matches!(
-                self.mode,
-                SpecifierMode::Declaration | SpecifierMode::CompoundLiteral
-            ) {
+            // C23 (N3220) §6.5.3.6p1: a compound literal takes only
+            // storage-class specifiers before its type name, never function
+            // specifiers.
+            if self.mode != SpecifierMode::Declaration {
                 parser.report(
                     ParserErrorType::DeclarationSpecifierNotAllowedHere(token.kind),
                     Some(token),

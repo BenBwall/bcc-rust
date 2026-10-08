@@ -25,7 +25,10 @@ use crate::{
                 StorageClass,
             },
         },
-        preprocessing::TokenType,
+        preprocessing::{
+            KeywordTokenType,
+            TokenType,
+        },
     },
 };
 
@@ -258,6 +261,37 @@ fn named_jump_needs_its_semicolon_after_the_label() {
         |p| {
             assert_clean_parse(p, named);
             assert!(extensions(p).is_empty(), "{:?}", p.errors);
+        },
+    );
+}
+
+#[test]
+fn function_specifiers_are_not_compound_literal_storage() {
+    for source in [
+        "int *p = &(inline int){0};\n",
+        "int *p = &(inline const int){0};\n",
+    ] {
+        with_parse_configuration(
+            source,
+            mode(CStandard::C23, false, ExtensionPolicy::Warn),
+            |p| {
+                assert_eq!(
+                    parser_errors(p).collect::<Vec<_>>(),
+                    [&ParserErrorType::DeclarationSpecifierNotAllowedHere(
+                        TokenType::Keyword(KeywordTokenType::Inline)
+                    )],
+                    "{source}: {:?}",
+                    p.errors
+                );
+            },
+        );
+    }
+    let storage = "int *p = &(static int){0};\n";
+    with_parse_configuration(
+        storage,
+        mode(CStandard::C23, false, ExtensionPolicy::Warn),
+        |p| {
+            assert_clean_parse(p, storage);
         },
     );
 }
