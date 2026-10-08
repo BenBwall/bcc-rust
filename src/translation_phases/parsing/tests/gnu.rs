@@ -11,10 +11,7 @@ use crate::{
         CompilerConfiguration,
         ExtensionPolicy,
     },
-    translation_phases::{
-        GetSeverity,
-        parsing::errors::ParserErrorType,
-    },
+    translation_phases::parsing::errors::ParserErrorType,
 };
 
 #[test]
@@ -48,30 +45,18 @@ fn reserved_asm_alias_remains_gnu_with_or_without_msvc_assembly() {
                                     .count(),
                                 0
                             );
-                            let extensions: Vec<_> = p
-                                .errors
-                                .iter()
-                                .filter_map(|x| match x {
-                                    | crate::translation_phases::TranslationError::Extension(x) =>
-                                        Some(x),
-                                    | _ => None,
-                                })
-                                .collect();
+                            let extensions = super::extensions(p);
                             if policy == ExtensionPolicy::Allow {
-                                assert!(extensions.is_empty());
+                                assert_eq!(extensions, Vec::<String>::new());
                             } else {
                                 assert_eq!(
                                     extensions
                                         .iter()
-                                        .filter(|x| x.to_string() == "'__asm' is a GNU extension")
+                                        .filter(|x| *x == "'__asm' is a GNU extension")
                                         .count(),
                                     5
                                 );
-                                assert!(
-                                    extensions
-                                        .iter()
-                                        .all(|x| x.to_string().contains("GNU extension"))
-                                );
+                                assert!(extensions.iter().all(|x| x.contains("GNU extension")));
                             }
                         },
                     );
@@ -149,20 +134,9 @@ fn reserved_gnu_syntax_keeps_ast_under_every_policy_and_mode() {
                             p.errors
                         );
                         assert_eq!(p.items.len(), 5);
-                        let extensions: Vec<_> = p
-                            .errors
-                            .iter()
-                            .filter_map(|x| {
-                                if let crate::translation_phases::TranslationError::Extension(x) = x
-                                {
-                                    Some(x)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
+                        let extensions = super::extensions(p);
                         if policy == ExtensionPolicy::Allow {
-                            assert!(extensions.is_empty());
+                            assert_eq!(extensions, Vec::<String>::new());
                         } else {
                             for spelling in [
                                 "__attribute__",
@@ -181,20 +155,20 @@ fn reserved_gnu_syntax_keeps_ast_under_every_policy_and_mode() {
                                 "omitted conditional",
                             ] {
                                 assert!(
-                                    extensions.iter().any(|x| x.to_string().contains(spelling)),
+                                    extensions.iter().any(|x| x.contains(spelling)),
                                     "{spelling}: {extensions:?}"
                                 );
                             }
-                            assert!(extensions.iter().all(|x| x.severity()
-                                == if policy == ExtensionPolicy::Deny {
-                                    crate::translation_phases::ErrorSeverity::Error
-                                } else {
-                                    crate::translation_phases::ErrorSeverity::Warning
-                                }));
+                            assert!(super::extension_severities(p).iter().all(
+                                |severity| *severity
+                                    == if policy == ExtensionPolicy::Deny {
+                                        crate::translation_phases::ErrorSeverity::Error
+                                    } else {
+                                        crate::translation_phases::ErrorSeverity::Warning
+                                    }
+                            ));
                             assert_eq!(
-                                extensions
-                                    .iter()
-                                    .any(|x| x.to_string().contains("case range")),
+                                extensions.iter().any(|x| x.contains("case range")),
                                 standard < CStandard::C2y
                             );
                         }
@@ -275,17 +249,7 @@ fn extension_marker_suppresses_only_its_operand_or_declaration() {
         CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
         |p| {
             assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
-            let extensions: Vec<_> = p
-                .errors
-                .iter()
-                .filter_map(|x| {
-                    if let crate::translation_phases::TranslationError::Extension(x) = x {
-                        Some(x.to_string())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            let extensions = super::extensions(p);
             assert_eq!(extensions.len(), 2, "{extensions:?}");
             assert!(extensions[0].contains("__int128"));
             assert!(extensions[1].contains("statement expression"));

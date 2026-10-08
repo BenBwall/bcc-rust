@@ -5,6 +5,7 @@
 use super::{
     Parsed,
     declaration,
+    extensions,
     parser_errors,
     with_parse_configuration,
 };
@@ -15,7 +16,6 @@ use crate::{
         ExtensionPolicy,
     },
     translation_phases::{
-        TranslationError,
         parsing::{
             declaration_syntax::TypeSpecifiers,
             errors::ParserErrorType,
@@ -34,17 +34,6 @@ use crate::{
 
 fn mode(standard: CStandard, gnu: bool, policy: ExtensionPolicy) -> CompilerConfiguration {
     CompilerConfiguration::new(standard, policy).with_gnu_extensions(gnu)
-}
-
-fn extensions(parsed: &Parsed<'_, '_>) -> Vec<String> {
-    parsed
-        .errors
-        .iter()
-        .filter_map(|error| match error {
-            | TranslationError::Extension(extension) => Some(extension.to_string()),
-            | _ => None,
-        })
-        .collect()
 }
 
 fn assert_clean_parse(parsed: &Parsed<'_, '_>, source: &str) {

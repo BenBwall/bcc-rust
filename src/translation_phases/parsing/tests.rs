@@ -46,6 +46,8 @@ use crate::{
     configuration::CompilerConfiguration,
     translation_phases::{
         Context,
+        ErrorSeverity,
+        GetSeverity,
         SourceVectors,
         TranslationError,
         preprocessing::Preprocessor,
@@ -203,6 +205,28 @@ fn parser_errors<'a, 'tu>(
         | TranslationError::Parsing(error) => Some(&error.error_type),
         | _ => None,
     })
+}
+
+/// The messages of the extension diagnostics, in report order.
+fn extensions(parsed: &Parsed<'_, '_>) -> Vec<String> {
+    parsed
+        .errors
+        .iter()
+        .filter_map(|error| match error {
+            | TranslationError::Extension(extension) => Some(extension.to_string()),
+            | _ => None,
+        })
+        .collect()
+}
+
+/// The severities of the extension diagnostics, in report order.
+fn extension_severities(parsed: &Parsed<'_, '_>) -> Vec<ErrorSeverity> {
+    parsed
+        .errors
+        .iter()
+        .filter(|error| matches!(error, TranslationError::Extension(_)))
+        .map(GetSeverity::severity)
+        .collect()
 }
 
 fn sourced_text(parsed: &Parsed<'_, '_>, source_vectors: SourceVectors) -> String {

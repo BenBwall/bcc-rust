@@ -3,6 +3,7 @@
 use super::{
     block_items,
     declaration,
+    extensions,
     function_definition,
     parser_errors,
 };
@@ -15,7 +16,6 @@ use crate::{
     translation_phases::{
         ErrorSeverity,
         GetSeverity,
-        TranslationError,
         parsing::{
             declaration_syntax::{
                 DirectDeclarator,
@@ -44,19 +44,6 @@ fn with_parse_configuration<R>(
 }
 fn mode(standard: CStandard, policy: ExtensionPolicy) -> CompilerConfiguration {
     CompilerConfiguration::new(standard, policy)
-}
-fn extensions(parsed: &super::Parsed<'_, '_>) -> Vec<String> {
-    parsed
-        .errors
-        .iter()
-        .filter_map(|x| {
-            if let TranslationError::Extension(x) = x {
-                Some(x.to_string())
-            } else {
-                None
-            }
-        })
-        .collect()
 }
 fn clean(source: &str, standard: CStandard) {
     with_parse_configuration(source, mode(standard, ExtensionPolicy::Warn), |p| {
