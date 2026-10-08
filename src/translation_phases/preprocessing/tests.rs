@@ -665,11 +665,9 @@ fn function_like_macro_names_without_parentheses_are_not_invocations() {
 
 #[test]
 fn quoted_includes_search_beside_the_including_file_not_the_working_directory() {
-    let directory = std::env::temp_dir().join(format!("bcc-include-search-{}", std::process::id()));
-    let nested = directory.join("nested");
-    std::fs::create_dir_all(&nested).unwrap();
-    std::fs::write(nested.join("sibling.h"), "from_sibling\n").unwrap();
-    let main = nested.join("main.c");
+    let directory = crate::test_support::TempDir::new("include-search");
+    directory.write("nested/sibling.h", "from_sibling\n");
+    let main = directory.join("nested").join("main.c");
 
     with_tokens_of(
         "#include \"sibling.h\"\n#include <sibling.h>\n",
@@ -697,7 +695,6 @@ fn quoted_includes_search_beside_the_including_file_not_the_working_directory() 
             );
         },
     );
-    drop(std::fs::remove_dir_all(&directory));
 }
 
 /// Preprocesses `source`, spelling each token as written in C source with a
