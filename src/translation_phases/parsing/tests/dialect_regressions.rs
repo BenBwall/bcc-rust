@@ -90,3 +90,17 @@ fn bracket_after_an_identifier_is_not_an_attribute() {
         },
     );
 }
+
+#[test]
+fn extension_operand_in_control_headers_is_an_expression() {
+    let source = "int f(int x) { if (__extension__ x) return 1; switch (__extension__ x) { \
+                  default: break; } for (__extension__ x; x; ) break; if (__extension__ ({ x; })) \
+                  x = 2; return 0; }\n";
+    with_parse_configuration(
+        source,
+        mode(CStandard::C17, true, ExtensionPolicy::Warn),
+        |p| {
+            assert_clean_parse(p, source);
+        },
+    );
+}
