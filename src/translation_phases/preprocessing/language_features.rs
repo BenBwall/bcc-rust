@@ -79,6 +79,22 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         }
     }
 
+    /// Leaves a rejected token available to its enclosing directive or source
+    /// frame. C99: directives end at a newline, §6.10p2, pp. 146-147;
+    /// PDF pp. 158-159.
+    fn replay_query_boundary(&mut self, token: PreprocessorToken) {
+        let tokenizer = TokenSource::replay(
+            self.context,
+            self.scratch,
+            &[&[token]],
+            SourceVector::default(),
+        );
+        self.push_tokenizer_frame(TokenizerFrame {
+            frame_type: TokenizerFrameType::Rescan,
+            tokenizer,
+        });
+    }
+
     /// Collects an operator argument with an explicit delimiter counter.
     /// C99: preprocessing-token nesting, §6.10.3p11, p. 153; PDF p. 165.
     fn query_arguments(
@@ -103,16 +119,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                 "expected '(' after preprocessing operator",
                 open.source_vectors,
             );
-            let tokenizer = TokenSource::replay(
-                self.context,
-                self.scratch,
-                &[&[open]],
-                SourceVector::default(),
-            );
-            self.push_tokenizer_frame(TokenizerFrame {
-                frame_type: TokenizerFrameType::Rescan,
-                tokenizer,
-            });
+            self.replay_query_boundary(open);
             return None;
         }
         let mut tokens = ArenaVec::new_in(self.scratch);
@@ -124,6 +131,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         }
         if tokens.last().is_some_and(|t| t.kind == T::Newline) {
             self.language_error("unterminated resource query", operator.source_vectors);
+            self.replay_query_boundary(tokens.pop().expect("collected newline"));
             return None;
         }
         let resource_query = matches!(
@@ -160,6 +168,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                         "unterminated preprocessing operator",
                         operator.source_vectors,
                     );
+                    self.replay_query_boundary(token);
                     return None;
                 },
                 | _ => {},
@@ -355,7 +364,16 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
         self.state.query_depth += 1;
         let result = self.language_builtin_inner(token);
         self.state.query_depth -= 1;
-        result
+        // A malformed conditional operand still occupies its expression
+        // position. C99: diagnostics and recovery, §5.1.1.3p1, p. 11;
+        // PDF p. 23. Keep its boundary replay, but avoid diagnosing a second
+        // missing operand at the following directive. Token-form pragmas
+        // intentionally disappear and must never introduce an integer.
+        if result.is_none() && self.context.string_cache.at(token.contents) != "__pragma" {
+            Some(self.integer_pp_token(0, token.source_vectors))
+        } else {
+            result
+        }
     }
 
     fn language_builtin_inner(&mut self, token: PreprocessorToken) -> Option<PreprocessorToken> {

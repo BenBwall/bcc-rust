@@ -1719,8 +1719,21 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                             }
                         },
                         | TokenizerFrame {
-                            frame_type:
-                                TokenizerFrameType::SourceFile { .. } | TokenizerFrameType::Rescan,
+                            frame_type: TokenizerFrameType::Rescan,
+                            ..
+                        } => {
+                            // A recovered directive boundary must return its
+                            // source frame before raw conditional-group
+                            // skipping starts. C99:
+                            // §6.10.1p6, p. 149; PDF p. 161.
+                            if token.kind == PreprocessorTokenType::Newline
+                                && self.tokenizer.is_exhausted_replay()
+                            {
+                                self.pop_tokenizer_frame();
+                            }
+                        },
+                        | TokenizerFrame {
+                            frame_type: TokenizerFrameType::SourceFile { .. },
                             ..
                         } => (),
                     }

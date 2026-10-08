@@ -317,6 +317,44 @@ fn bit_precise_preprocessing_constants_use_intmax_magnitude_checks() {
 }
 
 #[test]
+fn failed_queries_recover_as_zero_without_missing_operand_cascades() {
+    for config in [
+        mode(CStandard::C23),
+        mode(CStandard::C17).with_gnu_extensions(true),
+    ] {
+        for query in [
+            "__has_include(",
+            "__has_embed(<missing",
+            "__has_c_attribute(",
+            "__has_include(identifier)",
+            "__has_embed()",
+        ] {
+            for directive in ["#if", "#if 0\nwrong\n#elif"] {
+                let source =
+                    format!("{directive} {query}\nwrong\n#else\nrecovered\n#endif\nafter\n");
+                let (tokens, errors) = observe(&source, config);
+                assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+                let tokens = spellings(&tokens);
+                assert!(
+                    tokens.contains("identifier `recovered`"),
+                    "{source}: {tokens}"
+                );
+                assert!(tokens.contains("identifier `after`"), "{source}: {tokens}");
+                assert!(!tokens.contains("identifier `wrong`"), "{source}: {tokens}");
+            }
+        }
+    }
+    let (tokens, errors) = observe(
+        "__pragma(\nafter\n",
+        mode(CStandard::C23).with_msvc_feature(MsvcFeature::Pragma, true),
+    );
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let tokens = spellings(&tokens);
+    assert!(tokens.contains("identifier `after`"), "{tokens}");
+    assert!(!tokens.contains("integer constant"), "{tokens}");
+}
+
+#[test]
 fn c89_integer_type_candidates_include_native_unsigned_long_decimals() {
     for standard in [CStandard::C89, CStandard::C95, CStandard::C99] {
         for gnu in [false, true] {
@@ -680,6 +718,42 @@ fn mode_snapshot_preserves_token_values_spellings_and_extension_diagnostics() {
         return;
     }
     pretty_assertions::assert_eq!(std::fs::read_to_string(path).unwrap(), snapshot);
+}
+
+#[test]
+fn unterminated_feature_queries_preserve_directive_boundaries() {
+    for config in [
+        mode(CStandard::C23),
+        mode(CStandard::C2y),
+        mode(CStandard::C17).with_gnu_extensions(true),
+    ] {
+        for operand in [
+            "__has_include(",
+            "__has_include(<missing",
+            "__has_include(\"missing\"",
+            "__has_embed(",
+            "__has_embed(<missing",
+            "__has_c_attribute(",
+            "__has_attribute(",
+            "__has_builtin(",
+        ] {
+            for directive in ["#if", "#if 0\nskipped\n#elif"] {
+                let source = format!("{directive} {operand}\n#endif\nint after;\n");
+                let (tokens, errors) = observe(&source, config);
+                assert!(!errors.is_empty(), "{source}");
+                assert!(
+                    spellings(&tokens).contains("identifier `after`"),
+                    "lost following input: {source}: {tokens:?}; {errors:?}"
+                );
+                assert!(
+                    !errors
+                        .iter()
+                        .any(|error| error.contains("unterminated `#if`")),
+                    "lost #endif boundary: {source}: {errors:?}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

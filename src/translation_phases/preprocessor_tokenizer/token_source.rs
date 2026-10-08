@@ -52,6 +52,12 @@ impl Default for TokenSource<'_> {
 }
 
 impl<'a> TokenSource<'a> {
+    /// Whether all tokens of a replay have been consumed. File sources retain
+    /// their own EOF and missing-final-newline processing.
+    pub(crate) fn is_exhausted_replay(&self) -> bool {
+        matches!(self, Self::Replay(cursor) if cursor.is_exhausted())
+    }
+
     /// Lexes all of `source` (translation phases 1 through 3) into `arena`
     /// and opens it.
     /// C99: §5.1.1.2p1-3, pp. 9-10; PDF pp. 21-22.
