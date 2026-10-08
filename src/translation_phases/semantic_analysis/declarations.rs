@@ -1,7 +1,7 @@
 //! Phase-7 declaration typing, nominal tags, bindings and aggregate completion.
 //! C99: §6.2.1-§6.2.4, pp. 29-32; PDF pp. 41-44; §6.7-§6.7.7,
-//! pp. 97-124; PDF pp. 109-136. Initializer and function-body constraints are
-//! deferred.
+//! pp. 97-124; PDF pp. 109-136. Initializer constraints use initializers.rs;
+//! remaining function-definition constraints await Stage 3.
 
 use super::{
     Analyzer,
@@ -620,6 +620,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
         }
         self.bind(name, ty, kind, linkage, duration, None);
+        if spec.storage_class == Some(StorageClass::Register) {
+            _ = self.register_bindings.insert(self.bindings.len() - 1, true);
+        }
     }
 
     /// Merges compatible linked declarations and rejects same-scope no-linkage
@@ -842,6 +845,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             output.push(resolved);
         }
         tag.members.set(output.leak());
+        for (index, member) in tag.members.get().iter().enumerate() {
+            if let Some(name) = member.name {
+                _ = self.member_indices.insert((id, name.name), index);
+            }
+        }
         tag.complete.set(true);
         if !tag.tainted.get() {
             tag.layout

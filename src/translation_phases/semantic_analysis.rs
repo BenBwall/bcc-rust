@@ -1,10 +1,14 @@
-//! Declaration semantic analysis, the second half of translation phase 7.
+//! Semantic analysis, the second half of translation phase 7.
 //! C99: §5.1.1.2p1, p. 10; PDF p. 22; scopes/linkage §6.2.1-§6.2.4,
 //! pp. 29-32; PDF pp. 41-44; declarations §6.7, pp. 97-124;
-//! PDF pp. 109-136. Expression and statement constraints remain later work.
+//! PDF pp. 109-136; expressions/initializers §6.3, §6.5-§6.7.8, pp. 42-128;
+//! PDF pp. 54-140. Remaining statement/function constraints await Stage 3.
 
+mod constants;
 mod declarations;
 mod errors;
+mod expressions;
+mod initializers;
 mod inspection;
 mod integer;
 #[cfg(test)]
@@ -22,6 +26,11 @@ use std::cell::Cell;
 pub(crate) use errors::{
     SemanticError,
     SemanticErrorKind,
+};
+use expressions::{
+    ConstantClass,
+    Conversion,
+    ExpressionInfo,
 };
 use integer::Integer;
 use rustc_hash::FxBuildHasher;
@@ -161,6 +170,8 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) scopes:           &'tu [Scope],
     pub(crate) type_names:       &'tu [(SourceVectors, TypeId)],
     pub(crate) parameters:       &'tu [(SourceVectors, &'tu [Parameter])],
+    pub(crate) expressions:      &'tu [ExpressionInfo<'tu>],
+    pub(crate) conversions:      &'tu [Conversion<'tu>],
     pub(crate) tag_declarations: &'tu [(usize, usize)],
 }
 
@@ -227,9 +238,21 @@ enum Work<'tu, 's> {
     Statement(&'tu Statement<'tu>, bool),
     BlockItem(BlockItem<'tu>),
     Expression(&'tu Expression<'tu>),
+    ExpressionDone(&'tu Expression<'tu>),
+    ValueExpression(&'tu Expression<'tu>),
+    CompoundInitializer(&'tu Expression<'tu>, &'tu Initializer<'tu>),
+    InitializeDeclaration(Declarator<'tu>, &'tu Initializer<'tu>),
+    InitializeDone(usize, &'tu Initializer<'tu>),
+    Condition(ExpressionSlot<'tu>, bool),
+    RequireConstant(
+        &'tu Expression<'tu>,
+        Option<&'tu super::parsing::StaticAssertion<'tu>>,
+        usize,
+    ),
     Slot(ExpressionSlot<'tu>),
     Initializer(&'tu Initializer<'tu>),
     PopScope,
+    RestoreFunction(Option<Identifier>),
     RestoreTaint(bool),
     RestoreParameterMode(bool),
     OldSignature(&'tu FunctionDefinition<'tu>),
@@ -317,12 +340,19 @@ struct Analyzer<'a, 'tu, 's> {
     values:              ArenaVec<'s, TypeId>,
     integers:            ArenaVec<'s, Option<Integer>>,
     tainted:             bool,
+    function_name:       Option<Identifier>,
     old_parameter_mode:  bool,
     semantic_errors:     usize,
+    member_indices:      ArenaMap<'s, (usize, StringCacheId), usize>,
     member_names:        ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
     tag_declarations:    ArenaVec<'tu, (usize, usize)>,
     resolved_type_names: ArenaMap<'s, SourceVectors, TypeId>,
     integer_models:      ArenaMap<'s, usize, Option<(u32, bool)>>,
+    expressions:         ArenaVec<'tu, ExpressionInfo<'tu>>,
+    expression_indices:  ArenaMap<'s, usize, usize>,
+    conversions:         ArenaVec<'tu, Conversion<'tu>>,
+    const_members:       ArenaMap<'s, usize, bool>,
+    register_bindings:   ArenaMap<'s, usize, bool>,
     ice_operands:        ArenaMap<'s, (usize, bool), bool>,
 }
 
@@ -341,6 +371,8 @@ pub(crate) fn analyze<'tu>(
         analyzer.step(work);
     }
     SemanticTranslationUnit {
+        expressions:      analyzer.expressions.leak(),
+        conversions:      analyzer.conversions.leak(),
         types:            analyzer.types.finish(),
         bindings:         analyzer.bindings.leak(),
         scopes:           analyzer.scopes.leak(),
@@ -371,12 +403,19 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             values: ArenaVec::new_in(scratch),
             integers: ArenaVec::new_in(scratch),
             tainted: false,
+            function_name: None,
             old_parameter_mode: false,
             semantic_errors: 0,
+            member_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             member_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             tag_declarations: ArenaVec::new_in(tu),
             resolved_type_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             integer_models: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            expressions: ArenaVec::new_in(tu),
+            expression_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            conversions: ArenaVec::new_in(tu),
+            const_members: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            register_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             ice_operands: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         };
         analyzer.scopes.push(Scope {
@@ -517,6 +556,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             | Work::RestoreTaint(old) => self.tainted = old,
             | Work::RestoreParameterMode(old) => self.old_parameter_mode = old,
             | Work::PopScope => self.leave(),
+            | Work::RestoreFunction(name) => self.function_name = name,
             | Work::DiscardType => {
                 _ = self.values.pop();
             },
@@ -531,6 +571,13 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             },
             | Work::Declaration(d) => {
                 if let Some(assertion) = d.assertion {
+                    self.taint(assertion.recovered);
+                    self.work.push(Work::RequireConstant(
+                        assertion.expression,
+                        Some(assertion),
+                        self.semantic_errors,
+                    ));
+                    self.work.push(Work::Eval(assertion.expression));
                     self.work.push(Work::Expression(assertion.expression));
                     return;
                 }
@@ -542,7 +589,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 let base = self.take_type();
                 for init in d.init_declarators.iter().rev() {
                     if let Some(initializer) = init.initializer {
-                        self.work.push(Work::Initializer(initializer));
+                        self.work
+                            .push(Work::InitializeDeclaration(init.declarator, initializer));
                     }
                     self.work.push(Work::Bind(
                         init.declarator,
@@ -570,6 +618,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 self.work.push(Work::Declarator(f.declarator, base, false));
             },
             | Work::FunctionBody(f) => {
+                self.work.push(Work::RestoreFunction(self.function_name));
+                self.function_name = f.declarator.identifier();
                 self.enter(ScopeKind::Function);
                 if let Some(&(params, prototype_scope)) =
                     self.parameters.get(&f.declarator.source_vectors)
@@ -634,27 +684,86 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             },
             | Work::Statement(statement, new_scope) => self.statement(statement, new_scope),
             | Work::Expression(expression) => self.expression(expression),
+            | Work::ExpressionDone(e) => self.expression_done(e),
+            | Work::ValueExpression(e) => {
+                let info = self.expression_info(e);
+                _ = self.converted(info);
+            },
+            | Work::CompoundInitializer(e, initializer) => {
+                self.work.push(Work::ExpressionDone(e));
+                self.work.push(Work::Initializer(initializer));
+            },
+            | Work::InitializeDeclaration(declarator, initializer) => {
+                if let Some(entry) = declarator
+                    .identifier()
+                    .and_then(|n| self.lookup(Namespace::Ordinary, n.name))
+                {
+                    self.work
+                        .push(Work::InitializeDone(entry.binding, initializer));
+                }
+                self.work.push(Work::Initializer(initializer));
+            },
+            | Work::InitializeDone(binding, initializer) =>
+                self.initialize_declaration(binding, initializer),
+            | Work::Condition(slot, integer) => self.check_condition(slot, integer),
+            | Work::RequireConstant(e, assertion, before) => {
+                let value = self.integers.pop().flatten();
+                if self.semantic_errors == before && !self.unanalyzed_constant(e) {
+                    if value.is_none() {
+                        self.error(
+                            SemanticErrorKind::InvalidConstant,
+                            e.source_vectors,
+                            None,
+                            None,
+                        );
+                    } else if let Some(assertion) = assertion
+                        && value.is_some_and(|v| v.value == 0)
+                    {
+                        let message = assertion.message.map(|token| {
+                            let text = match token.kind {
+                                | super::preprocessing::TokenType::String(
+                                    super::preprocessing::StringTokenType::String(id),
+                                ) => self.context.literal_text_in(self.scratch, id, false),
+                                | _ => None,
+                            };
+                            text.map_or(token.contents, |text| {
+                                self.context.string_cache.intern(text)
+                            })
+                        });
+                        self.error(
+                            SemanticErrorKind::FailedAssertion,
+                            e.source_vectors,
+                            message,
+                            None,
+                        );
+                    }
+                }
+            },
             | Work::Slot(slot) => self.expression_slot(slot),
-            | Work::Initializer(initializer) => match initializer.kind {
-                | InitializerType::AssignmentExpression(e) => self.work.push(Work::Expression(e)),
-                | InitializerType::InitializerList(list) => {
-                    for element in list.elements.iter().rev() {
-                        self.work.push(Work::Initializer(element.initializer));
-                        if let Some(designation) = element.designation {
-                            for designator in designation.designators.iter().rev() {
-                                match designator.kind {
-                                    | DesignatorType::Array(e) =>
-                                        self.work.push(Work::Expression(e.expression())),
-                                    | DesignatorType::Range(r) => {
-                                        self.work.push(Work::Expression(r.upper.expression()));
-                                        self.work.push(Work::Expression(r.lower.expression()));
-                                    },
-                                    | _ => {},
+            | Work::Initializer(initializer) => {
+                self.taint(initializer.recovered);
+                match initializer.kind {
+                    | InitializerType::AssignmentExpression(e) =>
+                        self.work.push(Work::Expression(e)),
+                    | InitializerType::InitializerList(list) => {
+                        for element in list.elements.iter().rev() {
+                            self.work.push(Work::Initializer(element.initializer));
+                            if let Some(designation) = element.designation {
+                                for designator in designation.designators.iter().rev() {
+                                    match designator.kind {
+                                        | DesignatorType::Array(e) =>
+                                            self.work.push(Work::Expression(e.expression())),
+                                        | DesignatorType::Range(r) => {
+                                            self.work.push(Work::Expression(r.upper.expression()));
+                                            self.work.push(Work::Expression(r.lower.expression()));
+                                        },
+                                        | _ => {},
+                                    }
                                 }
                             }
                         }
-                    }
-                },
+                    },
+                }
             },
             | Work::Spec(s, q, source, force) => self.resolve_spec(s, q, source, force),
             | Work::Qualify(q, source) => {
@@ -899,6 +1008,17 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 if let Some(&member) = list.as_slice().get(index) {
                     self.work
                         .push(Work::RecordMembers(tag, list, index + 1, members));
+                    if let Some(assertion) = member.assertion {
+                        self.taint(assertion.recovered);
+                        self.work.push(Work::RequireConstant(
+                            assertion.expression,
+                            Some(assertion),
+                            self.semantic_errors,
+                        ));
+                        self.work.push(Work::Eval(assertion.expression));
+                        self.work.push(Work::Expression(assertion.expression));
+                        return;
+                    }
                     self.work.push(Work::RecordMemberBase(tag, member, members));
                     self.work.push(Work::Spec(
                         member.type_specifiers,

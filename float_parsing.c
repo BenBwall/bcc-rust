@@ -57,6 +57,44 @@ int long_double_classify(long_double_t const value)
   return ld_value == 0 ? FLOAT_CLASS_ZERO : FLOAT_CLASS_NONZERO;
 }
 
+/* C99 §6.6p4 and §6.3.1.8: preserve native x87 long-double precision and
+   round each semantic operation to the selected target component type. */
+static long_double_t store_long_double(long double value)
+{
+  long_double_t result;
+  memset(result.bytes, 0, sizeof(result.bytes));
+  memcpy(result.bytes, &value, LONG_DOUBLE_VALUE_BYTES);
+  return result;
+}
+
+long_double_t long_double_from_double(double value)
+{
+  return store_long_double((long double)value);
+}
+
+long_double_t long_double_arithmetic(long_double_t left, long_double_t right,
+                                    int operation, int precision)
+{
+  long double a = load_long_double(left), b = load_long_double(right);
+  long double result;
+  switch (operation) {
+  case 0: result = a + b; break;
+  case 1: result = a - b; break;
+  case 2: result = a * b; break;
+  case 3: result = a / b; break;
+  default: result = a; break;
+  }
+  if (precision == 1) { volatile float rounded = (float)result; result = rounded; }
+  if (precision == 2) { volatile double rounded = (double)result; result = rounded; }
+  return store_long_double(result);
+}
+
+int long_double_compare(long_double_t left, long_double_t right)
+{
+  long double a = load_long_double(left), b = load_long_double(right);
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 size_t long_double_to_hex(long_double_t const value, char *const buffer,
                           size_t const buffer_size)
 {

@@ -122,7 +122,7 @@ fn bench_parser_only(c: &mut Criterion) {
     group.finish();
 }
 
-/// Translation phases 1-7 followed by declaration semantic analysis; compare
+/// Translation phases 1-7 followed by semantic analysis; compare
 /// with the `Parser` group for the cost of analysis.
 fn bench_semantic_analysis(c: &mut Criterion) {
     let mut group = c.benchmark_group("Semantic analysis");
