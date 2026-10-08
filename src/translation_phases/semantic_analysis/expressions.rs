@@ -144,7 +144,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut pending = ArenaVec::new_in(self.scratch);
         pending.push((ty, false));
         while let Some((current, ready)) = pending.pop() {
-            if self.const_members.contains_key(&current.index) {
+            if !ready && self.const_members.contains_key(&current.index) {
                 continue;
             }
             if ready {
@@ -169,6 +169,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
                 _ = self.const_members.insert(current.index, value);
             } else {
+                // A provisional answer ends a cycle through an invalid
+                // self-containing record.
+                _ = self.const_members.insert(current.index, false);
                 pending.push((current, true));
                 match self.types.nodes[current.index] {
                     | TypeKind::Array(element, _) => pending.push((element, false)),

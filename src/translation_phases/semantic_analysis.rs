@@ -373,6 +373,8 @@ struct Analyzer<'a, 'tu, 's> {
     functions:           functions::State<'tu, 's>,
     va_list_type:        Option<TypeId>,
     statements:          statements::State<'s>,
+    /// Tags whose member or enumerator list is open.
+    defining:            ArenaMap<'s, usize, ()>,
 }
 
 /// Runs declaration analysis only after the complete immutable syntax tree
@@ -444,6 +446,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             functions: functions::State::new(scratch),
             va_list_type: None,
             statements: statements::State::new(scratch),
+            defining: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         };
         analyzer.scopes.push(Scope {
             parent: None,
@@ -1115,6 +1118,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                         );
                     }
                 } else {
+                    _ = self.defining.remove(&tag);
                     self.types.tags[tag].complete.set(true);
                     if !self.types.tags[tag].tainted.get() {
                         self.types.tags[tag]
