@@ -237,6 +237,22 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
         }
     }
 
+    /// C23: §6.7.7.4 paragraph 13, p. 130; PDF p. 143 makes every empty
+    /// function declarator a prototype, as if its parameter list were `void`.
+    fn empty_function(parser: &Parser<'_, 'tu, 'p>, legacy: bool) -> DirectDeclarator<'tu> {
+        if legacy && parser.context.configuration.standard() < crate::configuration::CStandard::C23
+        {
+            DirectDeclarator::KAndRStyleFunction {
+                parameters: ArenaList::empty(),
+            }
+        } else {
+            DirectDeclarator::Function {
+                parameter_list: ArenaList::empty(),
+                is_variadic:    false,
+            }
+        }
+    }
+
     /// GNU declarator labels and shared attribute attachment points.
     /// C99: vendor extension to §6.7.5, p. 114; PDF p. 126.
     fn step_extension(
@@ -462,14 +478,13 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
                     let token = token.expect("closing-parenthesis token exists");
                     self.direct_declarators
-                        .push(DirectDeclarator::KAndRStyleFunction {
-                            parameters: ArenaList::empty(),
-                        });
+                        .push(Self::empty_function(parser, true));
                     self.has_direct_declarator = true;
                     parser.merge_source(&mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
-                } else if token.is_some_and(|token| parser.declaration_starter(token) && !matches!(token.kind, TokenType::Keyword(k) if super::msvc::calling_convention(k) || super::msvc::type_modifier(k))) {
+                } else if is_operator(token, OperatorTokenType::Ellipsis)
+                    || token.is_some_and(|token| parser.declaration_starter(token) && !matches!(token.kind, TokenType::Keyword(k) if super::msvc::calling_convention(k) || super::msvc::type_modifier(k))) {
                     self.phase = DeclaratorPhase::AwaitParameterList;
                     Self::push_parameter_list(parser, false)
                 } else {
@@ -793,16 +808,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 // interpret their contents as a prototype.
                 let allow_k_and_r = self.named;
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    let direct = if allow_k_and_r {
-                        DirectDeclarator::KAndRStyleFunction {
-                            parameters: ArenaList::empty(),
-                        }
-                    } else {
-                        DirectDeclarator::Function {
-                            parameter_list: ArenaList::empty(),
-                            is_variadic:    false,
-                        }
-                    };
+                    let direct = Self::empty_function(parser, allow_k_and_r);
                     self.direct_declarators.push(direct);
                     self.has_direct_declarator = true;
                     let token = token.expect("closing-parenthesis token exists");
