@@ -423,10 +423,9 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                 }
                 let expression = any_expression_value(returned);
                 self.expression = Some(expression);
-                self.source_vectors = Some(parser.context.merge_vectors(
-                    self.source_vectors.unwrap_or_default(),
-                    expression.source_vectors,
-                ));
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, expression.source_vectors);
                 self.phase = Phase::OperandClose;
                 ParseAction::Continue
             },
@@ -493,11 +492,9 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                     | Some(ParseValue::TypeName(x)) => SyntaxOperand::Type(x),
                     | x => SyntaxOperand::Expression(any_expression_value(x)),
                 };
-                self.source_vectors = Some(
-                    parser
-                        .context
-                        .merge_vectors(self.source_vectors.unwrap_or_default(), operand.source()),
-                );
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, operand.source());
                 self.operands.push(operand);
                 self.phase = Phase::BuiltinSeparator;
                 ParseAction::Continue
@@ -575,10 +572,9 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                 }
                 let expression = any_expression_value(returned);
                 self.members.push(OffsetMember::Index(expression));
-                self.source_vectors = Some(parser.context.merge_vectors(
-                    self.source_vectors.unwrap_or_default(),
-                    expression.source_vectors,
-                ));
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, expression.source_vectors);
                 self.phase = Phase::OffsetIndexClose;
                 ParseAction::Continue
             },

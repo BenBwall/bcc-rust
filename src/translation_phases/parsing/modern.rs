@@ -505,11 +505,9 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     | Some(ParseValue::TypeName(x)) => SyntaxOperand::Type(x),
                     | other => SyntaxOperand::Expression(any_expression_value(other)),
                 };
-                self.source_vectors = Some(
-                    parser
-                        .context
-                        .merge_vectors(self.source_vectors.unwrap_or_default(), operand.source()),
-                );
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, operand.source());
                 self.operand = Some(operand);
                 self.phase = if matches!(self.kind, ModernKind::Operand { .. }) {
                     Phase::Close
@@ -568,11 +566,9 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     panic!("generic association type protocol: {returned:?}")
                 };
                 self.association_type = Some(x);
-                self.source_vectors = Some(
-                    parser
-                        .context
-                        .merge_vectors(self.source_vectors.unwrap_or_default(), x.source_vectors),
-                );
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, x.source_vectors);
                 self.phase = Phase::Colon;
                 ParseAction::Continue
             },
@@ -596,10 +592,9 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
             },
             | Phase::AwaitAssociationExpression => {
                 let expression = any_expression_value(returned);
-                self.source_vectors = Some(parser.context.merge_vectors(
-                    self.source_vectors.unwrap_or_default(),
-                    expression.source_vectors,
-                ));
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, expression.source_vectors);
                 self.associations.push(GenericAssociation {
                     type_name: self.association_type.take(),
                     expression,

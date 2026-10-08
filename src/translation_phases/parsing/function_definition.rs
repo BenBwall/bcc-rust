@@ -325,9 +325,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                     panic!("old-style declaration returned an unexpected value: {returned:?}");
                 };
                 let source = declaration.source_vectors;
-                self.source_vectors = Some(self.source_vectors.map_or(source, |existing| {
-                    parser.context.merge_vectors(existing, source)
-                }));
+                parser.context.merge_into(&mut self.source_vectors, source);
                 self.declaration_list.push(declaration);
                 // A head that is not a function declarator only became a
                 // definition because this declaration followed it. When the
@@ -355,9 +353,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                     panic!("function body returned an unexpected value: {returned:?}");
                 };
                 let source = body.source_vectors;
-                self.source_vectors = Some(self.source_vectors.map_or(source, |existing| {
-                    parser.context.merge_vectors(existing, source)
-                }));
+                parser.context.merge_into(&mut self.source_vectors, source);
                 self.body = Some(body);
                 self.phase = FunctionDefinitionPhase::Finish;
                 ParseAction::Reprocess

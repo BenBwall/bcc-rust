@@ -234,10 +234,9 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                 self.source_vectors.push(x.source_vectors);
                 if is_enumerator {
                     self.enumerator_attributes = attributes;
-                    self.current_enumerator_source = Some(parser.context.merge_vectors(
-                        self.current_enumerator_source.unwrap_or_default(),
-                        x.source_vectors,
-                    ));
+                    parser
+                        .context
+                        .merge_into(&mut self.current_enumerator_source, x.source_vectors);
                     self.phase = EnumPhase::AfterEnumeratorName;
                 } else {
                     self.attributes = attributes;
@@ -505,12 +504,9 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                 self.resuming_after_error = recovered;
                 let source_vectors = index.expression().source_vectors;
                 self.source_vectors.push(source_vectors);
-                self.current_enumerator_source = Some(
-                    self.current_enumerator_source
-                        .map_or(source_vectors, |existing| {
-                            parser.context.merge_vectors(existing, source_vectors)
-                        }),
-                );
+                parser
+                    .context
+                    .merge_into(&mut self.current_enumerator_source, source_vectors);
                 self.finish_enumerator(parser, Some(index));
                 self.phase = EnumPhase::AfterEnumerator;
                 ParseAction::Reprocess
