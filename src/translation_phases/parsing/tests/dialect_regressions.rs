@@ -25,6 +25,7 @@ use crate::{
                 StorageClass,
             },
         },
+        preprocessing::TokenType,
     },
 };
 
@@ -227,6 +228,36 @@ fn typedef_name_label_may_follow_another_label() {
         mode(CStandard::C99, false, ExtensionPolicy::Warn),
         |p| {
             assert_clean_parse(p, source);
+        },
+    );
+}
+
+#[test]
+fn named_jump_needs_its_semicolon_after_the_label() {
+    let source = "void f(void){ for(;;){ break\n x = 1; } }\n";
+    with_parse_configuration(
+        source,
+        mode(CStandard::C99, false, ExtensionPolicy::Warn),
+        |p| {
+            assert!(extensions(p).is_empty(), "{:?}", p.errors);
+            let errors: Vec<_> = parser_errors(p).collect();
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert!(matches!(
+                errors[0],
+                ParserErrorType::ExpectedSemicolonInStatement(
+                    "jump statement",
+                    Some(TokenType::Identifier)
+                )
+            ));
+        },
+    );
+    let named = "void f(void){ outer: for(;;){ break outer; continue outer; } }\n";
+    with_parse_configuration(
+        named,
+        mode(CStandard::C2y, false, ExtensionPolicy::Warn),
+        |p| {
+            assert_clean_parse(p, named);
+            assert!(extensions(p).is_empty(), "{:?}", p.errors);
         },
     );
 }

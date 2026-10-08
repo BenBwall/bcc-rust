@@ -812,8 +812,12 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 }
             },
             | StatementPhase::SimpleJumpSemicolon(jump) => {
+                // C2y named loops: `break identifier ;`. Without that `;`
+                // the identifier more likely starts the next statement after
+                // a `break` missing its own.
                 if let Some(token) = token
                     && token.kind == TokenType::Identifier
+                    && is_operator(parser.cursor.following(), OperatorTokenType::Semicolon)
                 {
                     parser.extension(
                         crate::configuration::Feature::NamedLoops,
