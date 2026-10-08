@@ -30,6 +30,7 @@ use super::{
         Declaration,
         Declarator,
         DirectDeclarator,
+        TypeSpecifiers,
     },
     errors::ParserErrorType,
     expression_operators::is_operator,
@@ -159,10 +160,16 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                     match suffix {
                         | DirectDeclarator::Function { parameter_list, .. } => {
                             for parameter in parameter_list {
+                                // C99 §6.9.1p5: a sole unnamed parameter of
+                                // type `void` takes no identifier. A
+                                // typedef name may denote `void`; whether
+                                // it does is left to semantic analysis.
                                 let void_singleton = parameter_list.len() == 1
                                     && parameter.declarator.is_none()
-                                    && parameter.declaration_specifiers.type_specifiers
-                                        == super::declaration_syntax::TypeSpecifiers::Void;
+                                    && matches!(
+                                        parameter.declaration_specifiers.type_specifiers,
+                                        TypeSpecifiers::Void | TypeSpecifiers::TypedefName(_)
+                                    );
                                 if !void_singleton
                                     && parameter
                                         .declarator

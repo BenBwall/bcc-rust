@@ -347,3 +347,24 @@ fn implicit_int_after_c89_is_a_removed_feature() {
         },
     );
 }
+
+#[test]
+fn typedef_name_singleton_parameter_may_name_void() {
+    let source = "typedef void V;\nint f(V) { return 0; }\n";
+    with_parse_configuration(
+        source,
+        mode(CStandard::C99, false, ExtensionPolicy::Deny),
+        |p| {
+            assert_clean_parse(p, source);
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+        },
+    );
+    let unnamed = "int f(int) { return 0; }\n";
+    with_parse_configuration(
+        unnamed,
+        mode(CStandard::C99, false, ExtensionPolicy::Warn),
+        |p| {
+            assert_eq!(extensions(p).len(), 1, "{:?}", p.errors);
+        },
+    );
+}
