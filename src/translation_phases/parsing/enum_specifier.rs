@@ -41,7 +41,6 @@ use super::{
         ParseValue,
     },
     modern::{
-        ModernFrame,
         ModernKind,
         ModernValue,
         SpecifierExtension,
@@ -179,11 +178,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
         if matches!(self.phase, EnumPhase::FinishBody) && parser.attribute_starter(token) {
             self.attribute_resume = self.phase;
             self.phase = EnumPhase::AwaitTagAttributes;
-            return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(ModernFrame::new(
-                parser.arena,
-                ModernKind::Attributes,
-                parser.hard_error_count,
-            ))));
+            return ParseAction::Push(parser.pooled_modern_frame(ModernKind::Attributes));
         }
         match self.phase {
             | EnumPhase::PushUnderlyingType => {
@@ -271,13 +266,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                 if parser.attribute_starter(token) {
                     self.attribute_resume = EnumPhase::NameOrBody;
                     self.phase = EnumPhase::AwaitTagAttributes;
-                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
-                        ModernFrame::new(
-                            parser.arena,
-                            ModernKind::Attributes,
-                            parser.hard_error_count,
-                        ),
-                    )));
+                    return ParseAction::Push(parser.pooled_modern_frame(ModernKind::Attributes));
                 }
                 if is_operator(token, OperatorTokenType::Colon)
                     && Self::underlying_type_follows(parser)
@@ -458,13 +447,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                 );
                 if parser.attribute_starter(token) {
                     self.phase = EnumPhase::AwaitEnumeratorAttributes;
-                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(
-                        ModernFrame::new(
-                            parser.arena,
-                            ModernKind::Attributes,
-                            parser.hard_error_count,
-                        ),
-                    )));
+                    return ParseAction::Push(parser.pooled_modern_frame(ModernKind::Attributes));
                 }
                 // The constant-expression is optional. Finalize immediately
                 // unless `=` explicitly transfers ownership to the value child.
