@@ -57,8 +57,9 @@ pub(crate) fn parse_translation_unit<'tu>(
     parse_with_arena(preprocessed, context, &parse)
 }
 
-/// Keeps phase-4 working storage within preprocessing. The arena is passed to
-/// the phase callback so stage 6 can move its state without changing callers.
+/// Keeps phase-4 working storage within preprocessing: the preprocessing
+/// arena is dropped when `run` returns. `run` also receives that arena, so a
+/// measurement can read its high-water mark.
 pub(crate) fn with_preprocessor<'tu, R>(
     context: &mut Context<'tu>,
     source_filename: &Path,

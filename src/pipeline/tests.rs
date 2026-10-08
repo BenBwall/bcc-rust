@@ -35,7 +35,7 @@ use crate::{
 };
 
 /// Preprocesses `source` as the CLI's `--tokens` does and scopes its tokens
-/// and context together for a future translation-unit arena.
+/// and context together, since the tokens borrow the translation-unit arena.
 fn with_preprocessed_with<R>(
     source: &str,
     configuration: CompilerConfiguration,

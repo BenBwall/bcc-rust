@@ -795,8 +795,8 @@ fn print_raw_syntax(unit: &ParsedTranslationUnit<'_>) {
     });
 }
 
-/// Renders diagnostics to stderr and summarizes them at the end, like
-/// `N errors and M warnings generated`.
+/// Renders diagnostics to a caller's writer (stderr, for the CLI) and
+/// summarizes them at the end, like `N errors and M warnings generated`.
 ///
 /// An error reported at exactly the same place as an earlier error from the
 /// same mistake is folded into it rather than printed again: a parser error
