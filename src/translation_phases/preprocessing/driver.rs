@@ -510,7 +510,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             .add_synthetic_source_file(Path::new("<pragma string>"), input);
         self.tokenizer = TokenSource::new(self.context, self.scratch, pragma_string, input);
         self.pushed_frames += 1;
-        _ = self.parse_pragma_directive(string_token);
+        _ = self.parse_pragma_directive();
         if self.tokenizer.next_item(self.context).is_some() {
             let source_vectors = self.current_location();
             self.context.preprocessor_error(PreprocessorError {
@@ -718,21 +718,18 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             continue;
                         }
                         let position = self.position();
-                        // A source newline is whitespace between a function
-                        // macro's name and `(` (C99 §6.10.3p10). In a
-                        // replacement list it ends
-                        // the frame and must not expose the definition's
-                        // following source lines to this lookahead.
-                        let source_file = matches!(
-                            self.tokenizer_stack.last().map(|frame| &frame.frame_type),
-                            Some(TokenizerFrameType::SourceFile { .. })
-                        );
+                        // The name was read from a source file, where a
+                        // newline is whitespace between a function macro's
+                        // name and `(` (C99 §6.10.3p10). Calls read from
+                        // other frames were captured above.
                         loop {
                             match self.tokenizer.next_item(self.context) {
                                 | Some(brace)
-                                    if brace.kind == PreprocessorTokenType::Whitespace
-                                        || (source_file
-                                            && brace.kind == PreprocessorTokenType::Newline) =>
+                                    if matches!(
+                                        brace.kind,
+                                        PreprocessorTokenType::Whitespace
+                                            | PreprocessorTokenType::Newline
+                                    ) =>
                                     continue,
                                 | Some(brace)
                                     if brace.kind == PreprocessorTokenType::OpeningParenthesis =>

@@ -134,18 +134,14 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             return None;
         }
         let mut tokens = ArenaVec::new_in(self.scratch);
-        if matches!(
-            self.context.string_cache.at(operator.contents),
-            "__has_include" | "__has_embed"
-        ) && !self.collect_written_resource(&mut tokens)
-        {
-            self.language_error("unterminated resource query", operator.source_vectors);
-            return None;
-        }
         let resource_query = matches!(
             self.context.string_cache.at(operator.contents),
             "__has_include" | "__has_embed"
         );
+        if resource_query && !self.collect_written_resource(&mut tokens) {
+            self.language_error("unterminated resource query", operator.source_vectors);
+            return None;
+        }
         let mut resource_started = tokens.iter().any(|t| t.kind != T::Whitespace);
         let mut in_header = false;
         let mut depth = 1usize;
@@ -182,10 +178,6 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                 | _ => {},
             }
             tokens.push(token);
-            if token.kind == T::Newline {
-                self.last_was_newline = true;
-                self.current_is_newline = true;
-            }
         }
         self.language_error(
             "unterminated preprocessing operator",
@@ -445,7 +437,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                             SourceVector::default(),
                         ),
                     );
-                    _ = self.parse_pragma_directive(token);
+                    _ = self.parse_pragma_directive();
                     self.tokenizer = old;
                     return None;
                 }

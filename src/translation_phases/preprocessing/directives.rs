@@ -296,10 +296,6 @@ fn header_name_from_source<'a>(
     }
 }
 
-#[expect(
-    clippy::needless_continue,
-    reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
-)]
 impl<'x> Expander<'_, '_, '_, 'x> {
     /// Executes the directive that `token`, a `#`, introduces.
     ///
@@ -393,9 +389,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 self.last_was_newline = true;
                 self.current_is_newline = true;
             },
-            | "define" => self.parse_define_directive(directive),
-            | "undef" => self.parse_undef_directive(directive),
-            | "line" => self.parse_line_directive(directive),
+            | "define" => self.parse_define_directive(),
+            | "undef" => self.parse_undef_directive(),
+            | "line" => self.parse_line_directive(),
             | "error" => self.parse_error_directive(directive),
             | "warning"
                 if self
@@ -413,7 +409,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 self.current_is_newline = true;
             },
             | "pragma" => {
-                if !self.parse_pragma_directive(directive) {
+                if !self.parse_pragma_directive() {
                     self.skip_until_newline();
                 }
                 self.last_was_newline = true;
@@ -1225,7 +1221,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// list (§6.10.3.3 paragraph 1, p. 154; PDF p. 166) is an error that
     /// discards the definition, as GCC does, so its uses do not expand into
     /// further errors.
-    fn parse_define_directive(&mut self, _directive: PreprocessorToken) {
+    fn parse_define_directive(&mut self) {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             |_, t| t.kind.is_identifier(),
             |_, token| {
@@ -1624,7 +1620,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// predefined name, which §6.10.8 paragraph 4, p. 161; PDF p. 173
     /// forbids, is diagnosed and leaves the name defined, as a redefinition
     /// does.
-    fn parse_undef_directive(&mut self, _directive: PreprocessorToken) {
+    fn parse_undef_directive(&mut self) {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             |_, t| t.kind.is_identifier(),
             |_, token| {
@@ -1693,7 +1689,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// is diagnosed and ignored. The string literal is decoded like any
     /// other; a wide one, which paragraph 1 forbids, is diagnosed and its
     /// name ignored.
-    fn parse_line_directive(&mut self, _directive: PreprocessorToken) {
+    fn parse_line_directive(&mut self) {
         let Some(token) = self.expect_token_without_rewind::<true>(
             |_, t| t.kind == PreprocessorTokenType::Number,
             |_, t| {
@@ -1869,7 +1865,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// once` is bcc's one implementation-defined pragma. Other pragmas are
     /// ignored (paragraph 1), and one that does not begin with an identifier
     /// draws a warning first.
-    pub(super) fn parse_pragma_directive(&mut self, _directive: PreprocessorToken) -> bool {
+    pub(super) fn parse_pragma_directive(&mut self) -> bool {
         let mut consumed_newline = false;
         let mut completed_stdc = false;
         'base: loop {
@@ -1885,7 +1881,6 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 break 'base;
             };
             match token.kind {
-                | PreprocessorTokenType::Whitespace => continue 'base,
                 | PreprocessorTokenType::Newline => {
                     consumed_newline = true;
                     break 'base;
