@@ -662,6 +662,8 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 if token.is_some_and(|x| {
                     x.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
                 }) && Self::parenthesized_type_name_follows(parser)
+                    // C2y: a compound literal is a unary-expression operand.
+                    && !Self::parenthesized_compound_literal_follows(parser)
                 {
                     self.phase = ExpressionPhase::AwaitModern(KeywordTokenType::Countof, source);
                     let frame = ModernFrame::operand_after_keyword(
@@ -1482,6 +1484,9 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 keyword @ (KeywordTokenType::Generic | KeywordTokenType::Alignof),
             ) = token.kind
             {
+                if keyword == KeywordTokenType::Alignof {
+                    Self::report_alignof_expression(parser, token);
+                }
                 self.phase = ExpressionPhase::AwaitModern(keyword, token.source_vectors);
                 return ParseAction::Push(ParseFrame::Modern(ModernFrame::new(
                     parser.arena,
@@ -1489,14 +1494,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                         ModernKind::Generic
                     } else {
                         ModernKind::Operand {
-                            type_only: keyword == KeywordTokenType::Alignof
-                                && !KeywordTokenType::classify(
-                                    token.contents,
-                                    parser.context.configuration,
-                                )
-                                .is_some_and(|x| {
-                                    x.origin == Some(crate::configuration::FeatureOrigin::Gnu)
-                                }),
+                            type_only: false,
                             constant:  false,
                         }
                     },
@@ -1929,25 +1927,105 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         false
     }
 
+    /// Returns whether the current `(` opens a type name, or the storage
+    /// classes of a compound literal before one, as in `(constexpr int){1}`.
+    /// Storage-class and `inline` keywords that a compound literal cannot
+    /// take are diagnosed by the type-name frame, as in `(static int)x`.
+    /// C23: compound-literal storage-class specifiers §6.5.3.6 paragraph 1,
+    /// p. 78; PDF p. 91.
     fn parenthesized_type_name_follows(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
-        let Some(following) = parser.cursor.following() else {
-            return false;
-        };
-        parser.type_name_starter(following)
-            || matches!(
-                following.kind,
+        let storage = |token: Token| {
+            matches!(
+                token.kind,
                 TokenType::Keyword(
                     KeywordTokenType::Auto
+                        | KeywordTokenType::Constexpr
                         | KeywordTokenType::Extern
                         | KeywordTokenType::Inline
                         | KeywordTokenType::Register
                         | KeywordTokenType::Static
+                        | KeywordTokenType::ThreadLocal
                         | KeywordTokenType::Typedef
                 )
-            ) && parser
+            )
+        };
+        let mut index = 0;
+        while let Some(token) = parser.cursor.lookahead(index) {
+            if parser.type_name_starter(token) {
+                return true;
+            }
+            if !storage(token) {
+                return false;
+            }
+            index += 1;
+        }
+        false
+    }
+
+    /// Returns whether the current `(` begins a compound literal: a type name
+    /// whose `)` is followed by `{`.
+    /// C99: §6.5.2.5 paragraph 1, p. 75; PDF p. 87.
+    fn parenthesized_compound_literal_follows(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
+        if !Self::parenthesized_type_name_follows(parser) {
+            return false;
+        }
+        let mut groups = 0usize;
+        let mut index = 0;
+        while let Some(token) = parser.cursor.lookahead(index) {
+            index += 1;
+            match token.kind {
+                | TokenType::Operator(
+                    OperatorTokenType::OpeningParenthesis | OperatorTokenType::OpeningSquareBracket,
+                ) => groups += 1,
+                | TokenType::Operator(OperatorTokenType::ClosingParenthesis) if groups == 0 =>
+                    return parser.cursor.lookahead(index).is_some_and(|x| {
+                        x.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                    }),
+                | TokenType::Operator(
+                    OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
+                ) => groups = groups.saturating_sub(1),
+                | TokenType::Operator(
+                    OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace,
+                ) => return false,
+                | _ => {},
+            }
+        }
+        false
+    }
+
+    /// Diagnoses `_Alignof` or `alignof` applied to a parenthesized
+    /// expression, which GCC and Clang accept from `__alignof__`. The
+    /// standard spellings take only a type name.
+    /// C11: §6.5.3 paragraph 1, p. 88; PDF p. 106. Extension: GNU.
+    fn report_alignof_expression(parser: &mut Parser<'_, 'tu, 'p>, keyword: Token) {
+        let gnu_spelling =
+            KeywordTokenType::classify(keyword.contents, parser.context.configuration)
+                .is_some_and(|x| x.origin == Some(crate::configuration::FeatureOrigin::Gnu));
+        let expression =
+            parser.cursor.following().is_some_and(|x| {
+                x.kind == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+            }) && parser
                 .cursor
                 .lookahead(1)
-                .is_some_and(|next| parser.type_name_starter(next))
+                .is_some_and(|x| !parser.type_name_starter(x));
+        if gnu_spelling || !expression || parser.pedantic_suppression != 0 {
+            return;
+        }
+        let spelling = if parser
+            .context
+            .string_cache
+            .at(keyword.contents)
+            .starts_with('_')
+        {
+            "_Alignof (expression)"
+        } else {
+            "alignof (expression)"
+        };
+        parser.context.report_extension_since(
+            spelling,
+            crate::configuration::FeatureOrigin::Gnu,
+            keyword.source_vectors,
+        );
     }
 
     fn push_operand(

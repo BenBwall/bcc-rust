@@ -951,3 +951,100 @@ fn pointer_levels_keep_gnu_and_iso_attribute_chains_in_place() {
         },
     );
 }
+
+#[test]
+fn countof_takes_a_compound_literal_operand() {
+    with_parse_configuration(
+        "int n = _Countof (int[]){1, 2, 3}; int m = _Countof(int[4]); int k = _Countof (int[]){1} \
+         + 1;",
+        mode(CStandard::C2y, ExtensionPolicy::Deny),
+        |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+            let operands: Vec<_> = p
+                .parser
+                .syntax
+                .iter::<super::super::syntax::Expression<'_>>()
+                .filter_map(|x| match x.kind {
+                    | ExpressionType::Countof(operand) => Some(operand),
+                    | _ => None,
+                })
+                .collect();
+            assert_eq!(operands.len(), 3);
+            assert!(
+                matches!(operands[0], SyntaxOperand::Expression(x) if matches!(x.kind, ExpressionType::CompoundLiteral { .. }))
+            );
+            assert!(matches!(operands[1], SyntaxOperand::Type(_)));
+            assert!(
+                matches!(operands[2], SyntaxOperand::Expression(x) if matches!(x.kind, ExpressionType::CompoundLiteral { .. }))
+            );
+        },
+    );
+}
+
+#[test]
+fn constexpr_and_thread_local_compound_literals_are_recognized() {
+    for source in [
+        "int f(void){ return (constexpr int){1}; }",
+        "int *f(void){ return &(thread_local int){1}; }",
+        "int *f(void){ return &(static thread_local int){1}; }",
+        "int f(void){ return (constexpr static int){1}; }",
+    ] {
+        with_parse_configuration(source, mode(CStandard::C23, ExtensionPolicy::Deny), |p| {
+            assert!(p.errors.is_empty(), "{source}: {:?}", p.errors);
+            assert!(
+                p.parser
+                    .syntax
+                    .iter::<super::super::syntax::Expression<'_>>()
+                    .any(|x| matches!(x.kind, ExpressionType::CompoundLiteral { .. })),
+                "{source}"
+            );
+        });
+    }
+}
+
+#[test]
+fn alignof_expression_is_accepted_as_a_gnu_extension() {
+    for policy in [
+        ExtensionPolicy::Allow,
+        ExtensionPolicy::Warn,
+        ExtensionPolicy::Deny,
+    ] {
+        for (source, keyword) in [
+            (
+                "int x; int a = _Alignof(x); int b = _Alignof((x));",
+                "_Alignof",
+            ),
+            ("int x; int a = alignof(x[0] + 1);", "alignof"),
+        ] {
+            let standard = if keyword == "alignof" {
+                CStandard::C23
+            } else {
+                CStandard::C11
+            };
+            with_parse_configuration(source, mode(standard, policy), |p| {
+                assert_eq!(parser_errors(p).count(), 0, "{source}: {:?}", p.errors);
+                assert!(
+                    p.parser
+                        .syntax
+                        .iter::<super::super::syntax::Expression<'_>>()
+                        .any(|x| matches!(x.kind, ExpressionType::AlignofExpr(_))),
+                    "{source}"
+                );
+                let found = extensions(p);
+                if policy == ExtensionPolicy::Allow {
+                    assert!(found.is_empty(), "{found:?}");
+                } else {
+                    assert!(
+                        !found.is_empty() && found.iter().all(|x| x.contains("GNU extension")),
+                        "{source}: {found:?}"
+                    );
+                }
+            });
+        }
+    }
+    with_parse_configuration(
+        "int a = _Alignof(int);",
+        mode(CStandard::C11, ExtensionPolicy::Deny),
+        |p| assert!(p.errors.is_empty(), "{:?}", p.errors),
+    );
+}
