@@ -1327,10 +1327,8 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
                     if self.context.configuration.accepts(Feature::DigitSeparators)
                         && let Some(after) = self.number_separator_end(end) =>
                 {
-                    let ascii_nondigit = after == end + 2;
                     end = after;
-                    if ascii_nondigit
-                        && matches!(self.bytes[end - 1], b'e' | b'E' | b'p' | b'P')
+                    if matches!(self.bytes[end - 1], b'e' | b'E' | b'p' | b'P')
                         && matches!(self.peek(end), Some(b'+' | b'-'))
                     {
                         end += 1;
@@ -1367,23 +1365,16 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
         }
     }
 
-    /// C23 pp-number separator grammar admits digits and identifier
-    /// nondigits; conversion subsequently requires digits of the radix.
+    /// C23: §6.4.8 paragraph 1, p. 70; PDF p. 83: a separator continues a
+    /// pp-number only as `' digit` or `' nondigit`, and a `nondigit` is
+    /// ASCII, so a universal character name, another character, or `$` after
+    /// the `'` ends the pp-number before it. Conversion then requires digits
+    /// of the radix. After `' nondigit`, the grammar's `e sign` rule still
+    /// applies, so `0x1'e+1` is one pp-number, as GCC lexes it.
     fn number_separator_end(&mut self, apostrophe: usize) -> Option<usize> {
         let index = apostrophe + 1;
-        match self.peek(index)? {
-            | byte if byte.is_ascii_alphanumeric() || byte == b'_' => Some(index + 1),
-            | b'$' if self
-                .context
-                .configuration
-                .accepts(Feature::DollarIdentifiers) =>
-                Some(index + 1),
-            | b'\\' =>
-                super::ucn::decode(&self.text[index..], false).map(|(_, length)| index + length),
-            | 0x80.. if self.char_at(index).is_alphanumeric() =>
-                Some(index + self.char_at(index).len_utf8()),
-            | _ => None,
-        }
+        let byte = self.peek(index)?;
+        (byte.is_ascii_alphanumeric() || byte == b'_').then_some(index + 1)
     }
 
     /// Continues a whitespace token from `end`; comments join it.

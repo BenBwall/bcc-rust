@@ -523,3 +523,24 @@ fn dollar_in_an_angle_header_name_is_not_an_identifier_extension() {
         );
     }
 }
+
+/// C23 §6.4.8p1: a digit separator continues a pp-number only before a
+/// digit or a `nondigit`, which is ASCII. Before a universal character name,
+/// another character, or `$`, the `'` starts a character constant. After
+/// `' nondigit`, `e sign` still continues the pp-number, so `0x1'e+1` is one
+/// (invalid) pp-number, as in GCC.
+#[test]
+fn digit_separators_follow_the_pp_number_grammar() {
+    for (source, expected) in [
+        (r"1'\u00e9' after", r"1 '\u00e9' after"),
+        ("1'\\u00e9' after", "1 '\\u00e9' after"),
+        ("1'$' after", "1 '$' after"),
+        ("1'2 after", "1'2 after"),
+    ] {
+        let (tokens, _) = observe(&format!("{source}\n"), mode(CStandard::C23));
+        assert_eq!(texts(&tokens), expected, "{source}");
+    }
+    let (tokens, errors) = observe("0x1'e+1 after\n", mode(CStandard::C23));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(spellings(&tokens).contains("0x1'e+1"), "{tokens:?}");
+}

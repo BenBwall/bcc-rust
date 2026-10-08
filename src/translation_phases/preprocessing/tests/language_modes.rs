@@ -149,7 +149,7 @@ fn modern_numeric_forms_and_delimited_escapes_have_values_and_gates() {
 
 #[test]
 fn separator_nondigits_remain_one_preprocessing_number_for_diagnostics() {
-    for spelling in ["1'e+2", "1'\\u00e9", "1'é"] {
+    for spelling in ["1'e+2", "1'_", "0x1'e+1"] {
         let (tokens, errors) = observe(&format!("{spelling} after\n"), mode(CStandard::C23));
         assert_eq!(errors.len(), 1, "{spelling}: {errors:?}");
         let tokens = spellings(&tokens);
