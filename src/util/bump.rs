@@ -181,16 +181,25 @@ impl Bump {
     /// [`std::io::ErrorKind::OutOfMemory`] rather than aborting, so a caller
     /// can turn it into a diagnostic. The file is read into the arena's tail,
     /// so it costs exactly its length and commits only what it fills.
+    /// Files or repaired text exceeding `u32::MAX` bytes return `InvalidData`.
     pub(crate) fn read_to_str_lossy(&self, path: &Path) -> std::io::Result<&str> {
         let mut file = std::fs::File::open(path)?;
+        if file.metadata()?.len() > u64::from(u32::MAX) {
+            return Err(oversized_source());
+        }
         let mut bytes = self.tail_vec();
         let mut buffer = [0_u8; 8192];
         loop {
             match file.read(&mut buffer) {
                 | Ok(0) => break,
-                | Ok(count) => bytes
-                    .try_extend_from_slice(&buffer[..count])
-                    .map_err(|_| out_of_arena_memory())?,
+                | Ok(count) => {
+                    if count > u32::MAX as usize - bytes.len() {
+                        return Err(oversized_source());
+                    }
+                    bytes
+                        .try_extend_from_slice(&buffer[..count])
+                        .map_err(|_| out_of_arena_memory())?;
+                },
                 | Err(error) if error.kind() == std::io::ErrorKind::Interrupted => (),
                 | Err(error) => return Err(error),
             }
@@ -205,11 +214,20 @@ impl Bump {
         let mut remaining = &*bytes;
         while let Err(error) = std::str::from_utf8(remaining) {
             let valid = error.valid_up_to();
+            let replacement = "�".as_bytes();
+            if valid > u32::MAX as usize - repaired.len()
+                || replacement.len() > u32::MAX as usize - repaired.len() - valid
+            {
+                return Err(oversized_source());
+            }
             repaired
                 .try_extend_from_slice(&remaining[..valid])
-                .and_then(|()| repaired.try_extend_from_slice("�".as_bytes()))
+                .and_then(|()| repaired.try_extend_from_slice(replacement))
                 .map_err(|_| out_of_arena_memory())?;
             remaining = &remaining[valid + error.error_len().unwrap_or(remaining.len() - valid)..];
+        }
+        if remaining.len() > u32::MAX as usize - repaired.len() {
+            return Err(oversized_source());
         }
         repaired
             .try_extend_from_slice(remaining)
@@ -275,6 +293,13 @@ fn out_of_arena_memory() -> std::io::Error {
     std::io::Error::new(
         std::io::ErrorKind::OutOfMemory,
         "the compiler's arena memory is exhausted",
+    )
+}
+
+fn oversized_source() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "source file exceeds u32::MAX bytes",
     )
 }
 

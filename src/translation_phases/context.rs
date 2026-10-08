@@ -589,15 +589,39 @@ impl<'tu> Context<'tu> {
         source_file_index: u32,
         length: usize,
     ) -> u32 {
+        self.push_source_vector_value(SourceVector::new(start_position, source_file_index, length))
+    }
+
+    /// The caller read this span from a `LexedFile`, which checked its entire
+    /// original source fits in `u32` before lexing. Its offsets and lengths
+    /// therefore fit without repeated per-token conversion checks.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "LexedFile checked the source length and every span lies within that source"
+    )]
+    pub(crate) fn push_lexed_source_vector(
+        &mut self,
+        start_position: SourcePosition,
+        source_file_index: u32,
+        length: usize,
+    ) -> u32 {
+        self.push_source_vector_value(SourceVector {
+            index: start_position.index as u32,
+            column: start_position.column,
+            line: start_position.line,
+            source_file_index,
+            length: length as u32,
+        })
+    }
+
+    fn push_source_vector_value(&mut self, vector: SourceVector) -> u32 {
         let (index, _) = Self::checked_source_append(
             SourceArena::Preprocessor,
             self.source_vectors.0.len(),
             self.source_vectors.0.len(),
             1,
         );
-        self.source_vectors
-            .0
-            .push(SourceVector::new(start_position, source_file_index, length));
+        self.source_vectors.0.push(vector);
         index
     }
 

@@ -734,9 +734,9 @@ fn lexed_files_grow_in_place_and_keep_exact_storage() {
     let pp = crate::util::bump::Bump::new();
     let lexed = super::batch::LexedFile::lex(&mut context, &pp, file, &text);
     assert_eq!(lexed.len(), text.len());
-    // Exactly the 17-byte packed entries: growing left no copies behind,
+    // Exactly the 16-byte aligned entries: growing left no copies behind,
     // and the unused capacity went back to the arena.
-    assert_eq!(pp.used(), 17 * text.len());
+    assert_eq!(pp.used(), 16 * text.len());
     assert!(pp.high_water() < 2 * pp.used());
 }
 
@@ -751,7 +751,7 @@ fn lexing_commits_the_entries_written_not_a_capacity() {
     let pp = crate::util::bump::Bump::new();
     let lexed = super::batch::LexedFile::lex(&mut context, &pp, file, &text);
     assert_eq!(lexed.len(), text.len());
-    assert_eq!(pp.used(), 17 * text.len());
+    assert_eq!(pp.used(), 16 * text.len());
     assert_eq!(pp.high_water(), pp.used());
     // Commit followed the entries as they were written, at most one step
     // ahead; a doubling capacity would have committed up to twice as much.

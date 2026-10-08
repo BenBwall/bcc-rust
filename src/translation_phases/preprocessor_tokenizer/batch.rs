@@ -407,16 +407,17 @@ enum LexDiagnostic {
 /// (`kind` is `None`), and where it starts.
 /// C99: phase-3 decomposition §5.1.1.2p3, p. 10; PDF p. 22.
 ///
-/// Packed, so an entry costs the 17 bytes its fields need. Fields are read
-/// by value only, through the accessors.
+/// The low three bytes of the source line leave a byte for the kind in a
+/// 16-byte, naturally aligned entry. The containing file records where the
+/// high byte changes, preserving the full `u32` source-position range.
 #[derive(Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C)]
 struct Entry {
     contents: StringCacheId,
     /// Byte offset of the entry's start in the source.
     index:    u32,
-    line:     u32,
     column:   u32,
+    line:     [u8; 3],
     kind:     Option<PreprocessorTokenType>,
 }
 
@@ -440,7 +441,7 @@ impl Entry {
     fn start(self) -> SourcePosition {
         SourcePosition {
             index:  self.index as usize,
-            line:   self.line,
+            line:   u32::from_le_bytes([self.line[0], self.line[1], self.line[2], 0]),
             column: self.column,
         }
     }
@@ -464,6 +465,8 @@ pub(super) struct LexedFile<'a> {
     /// it was opened there rather than for temporary use.
     pub(super) registration: Option<u32>,
     entries: &'a [Entry],
+    /// Entry indices where the high byte of the source line changes.
+    line_high_starts: &'a [(u32, u8)],
     /// Where the last entry ends.
     end_of_tokens: SourcePosition,
     /// Where reading past the last entry stands: past any trailing splices.
@@ -499,6 +502,7 @@ struct LexingFile<'arena, 's> {
     /// The rest of the arena's reservation while lexing, committed as
     /// entries are written, so it never moves or overcommits.
     entries:               TailVec<'arena, Entry>,
+    line_high_starts:      ArenaVec<'s, (u32, u8)>,
     end_of_tokens:         SourcePosition,
     eof:                   SourcePosition,
     diagnostics:           ArenaVec<'s, (u32, LexDiagnostic)>,
@@ -520,6 +524,7 @@ impl<'arena> LexingFile<'arena, '_> {
     ) -> LexedFile<'arena> {
         let Self {
             entries,
+            line_high_starts,
             end_of_tokens,
             eof,
             diagnostics,
@@ -533,6 +538,7 @@ impl<'arena> LexingFile<'arena, '_> {
             source_file_index,
             registration: None,
             entries: entries.into_slice(),
+            line_high_starts: arena.alloc_slice_copy(&line_high_starts),
             end_of_tokens,
             eof,
             diagnostics: arena.alloc_slice_copy(&diagnostics),
@@ -565,6 +571,10 @@ impl<'a> LexedFile<'a> {
         source_file_index: u32,
         source: &str,
     ) -> Self {
+        assert!(
+            u32::try_from(source.len()).is_ok(),
+            "source file exceeds u32::MAX bytes"
+        );
         let scratch = Bump::new();
         let trigraphs = context.configuration.accepts(Feature::Trigraphs);
         let (text, remaps) = splice(source, &scratch, trigraphs);
@@ -593,6 +603,7 @@ impl<'a> LexedFile<'a> {
             source_file_index:     self.source_file_index,
             registration:          None,
             entries:               arena.alloc_slice_copy(self.entries),
+            line_high_starts:      arena.alloc_slice_copy(self.line_high_starts),
             end_of_tokens:         self.end_of_tokens,
             eof:                   self.eof,
             diagnostics:           arena.alloc_slice_copy(self.diagnostics),
@@ -658,9 +669,27 @@ impl<'a> LexedFile<'a> {
     /// Where `entry` starts, or where the last entry ends for `len()`.
     #[inline(always)]
     pub(super) fn start(&self, entry: usize) -> SourcePosition {
-        self.entries
-            .get(entry)
-            .map_or(self.end_of_tokens, |entry| entry.start())
+        let Some(value) = self.entries.get(entry) else {
+            return self.end_of_tokens;
+        };
+        let mut position = value.start();
+        if self
+            .line_high_starts
+            .first()
+            .is_some_and(|&(first, _)| entry >= first as usize)
+        {
+            position.line |= self.line_high_bits(entry);
+        }
+        position
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn line_high_bits(&self, entry: usize) -> u32 {
+        let after = self
+            .line_high_starts
+            .partition_point(|&(index, _)| (index as usize) <= entry);
+        u32::from(self.line_high_starts[after - 1].1) << 24
     }
 
     #[inline(always)]
@@ -830,6 +859,8 @@ struct Lexer<'a, 'tu, 'arena, 's> {
     tracker:             PositionTracker<'a>,
     /// Spliced offset of the next token.
     pos:                 usize,
+    /// High byte of the line number stored for the previous entry.
+    current_line_high:   u8,
     /// Whether the input lacks a final newline, so one is supplied.
     lacks_final_newline: bool,
     /// Whether reading the end of input now yields the supplied newline.
@@ -870,6 +901,7 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
             bytes,
             tracker: PositionTracker::new(bytes, remaps),
             pos: 0,
+            current_line_high: 0,
             lacks_final_newline,
             virtual_newline: lacks_final_newline,
             reached_eof: false,
@@ -881,6 +913,7 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
             pending: ArenaVec::new_in(scratch),
             file: LexingFile {
                 entries: arena.tail_vec(),
+                line_high_starts: ArenaVec::new_in(scratch),
                 end_of_tokens: SourcePosition::default(),
                 eof: SourcePosition::default(),
                 diagnostics: ArenaVec::new_in(scratch),
@@ -1029,8 +1062,17 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
         next - 1
     }
 
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "LexedFile checked the original source length before lexing"
+    )]
     fn push(&mut self, position: SourcePosition, lexed: Lexed) {
         let entry = Self::checked_entry_index(self.file.entries.len());
+        let line_high = (position.line >> 24) as u8;
+        if line_high != self.current_line_high {
+            self.file.line_high_starts.push((entry, line_high));
+            self.current_line_high = line_high;
+        }
         if self.read_final_newline {
             self.file.final_newline_readers.push(entry);
         }
@@ -1042,9 +1084,14 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
             .extend(self.pending.drain(..).map(|diagnostic| (entry, diagnostic)));
         self.file.entries.push(Entry {
             contents: lexed.contents,
-            index:    u32::try_from(position.index).expect("source files are smaller than 4 GiB"),
-            line:     position.line,
+            // `LexedFile::lex` checked the original source length before
+            // phases 1 and 2, which can only shorten it.
+            index:    position.index as u32,
             column:   position.column,
+            line:     {
+                let bytes = position.line.to_le_bytes();
+                [bytes[0], bytes[1], bytes[2]]
+            },
             kind:     lexed.kind,
         });
     }
@@ -1511,5 +1558,35 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
                 | Some(_) => end += 1,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod entry_layout_tests {
+    use super::*;
+
+    #[test]
+    fn entries_keep_full_source_lines_across_the_inline_limit() {
+        const INLINE_LINE_MAX: u32 = 0x00FF_FFFF;
+        assert_eq!(size_of::<Entry>(), 16);
+        assert_eq!(align_of::<Entry>(), 4);
+
+        let tu = Bump::new();
+        let mut context = Context::new(&tu);
+        let arena = Bump::new();
+        let scratch = Bump::new();
+        let mut lexer = Lexer::new(&mut context, &arena, &scratch, "a\nb\nc\n", &[], false);
+        lexer.tracker.position.line = INLINE_LINE_MAX - 1;
+        let file = lexer.run().finish(&arena, 0, None);
+        assert_eq!(file.start(0).line, INLINE_LINE_MAX - 1);
+        assert_eq!(file.start(2).line, INLINE_LINE_MAX);
+        assert_eq!(file.start(4).line, INLINE_LINE_MAX + 1);
+        assert_eq!(file.start(file.len()).line, INLINE_LINE_MAX + 2);
+        assert_eq!(file.line_high_starts.len(), 1);
+
+        let copy_arena = Bump::new();
+        let copy = file.copy_into(&copy_arena);
+        assert_eq!(copy.start(2).line, INLINE_LINE_MAX);
+        assert_eq!(copy.start(4).line, INLINE_LINE_MAX + 1);
     }
 }

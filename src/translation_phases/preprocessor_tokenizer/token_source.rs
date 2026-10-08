@@ -328,7 +328,7 @@ impl<'a> LexedCursor<'a> {
                 (start, self.file.end_index(entry) - start.index)
             };
             start.line = start.line.wrapping_add(self.line_delta);
-            let vector = context.push_source_vector(start, self.source_file_index, length);
+            let vector = context.push_lexed_source_vector(start, self.source_file_index, length);
             return Some(PreprocessorToken {
                 kind,
                 source_vectors: SourceVectors::new(vector, vector + 1),
@@ -354,7 +354,7 @@ impl<'a> LexedCursor<'a> {
         self.final_newline_withheld = true;
         self.finished = true;
         let length = self.file.eof().index - start.index;
-        let vector = context.push_source_vector(start, self.source_file_index, length);
+        let vector = context.push_lexed_source_vector(start, self.source_file_index, length);
         PreprocessorToken {
             kind:           super::PreprocessorTokenType::Newline,
             source_vectors: SourceVectors::new(vector, vector + 1),
