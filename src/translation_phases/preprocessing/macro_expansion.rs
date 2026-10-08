@@ -539,13 +539,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             return (original, arguments);
         };
         let va_name = argument.name;
-        let empty = if optional || self.context.configuration.accepts(Feature::MsVaArgs) {
-            let mut expanded = self.expanded_argument(invocation, argument);
-            !std::iter::from_fn(|| expanded.next_item(self.context))
-                .any(|t| !matches!(t.kind, T::Whitespace | T::Newline | T::Placeholder))
-        } else {
-            false
-        };
+        // Whether `__VA_ARGS__` would be replaced by no tokens. It is decided
+        // only where a construct needs it, since deciding prescans the
+        // argument, which may then be used only as a `#` operand.
+        let mut empty = None;
         let mut output = ArenaVec::new_in(self.scratch);
         let mut results = ArenaVec::new_in(self.scratch);
         let location = self
@@ -585,7 +582,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     }
                     index += 1;
                 }
-                let selected = if empty {
+                let selected = if self.variadic_argument_is_empty(&mut empty, invocation, argument)
+                {
                     ArenaVec::new_in(self.scratch)
                 } else {
                     self.expand_optional_replacement(invocation, arguments, &tokens[start..index])
@@ -667,7 +665,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         index = next + 1;
                         continue;
                     }
-                    if empty && self.context.configuration.accepts(Feature::MsVaArgs) {
+                    if self.context.configuration.accepts(Feature::MsVaArgs)
+                        && self.variadic_argument_is_empty(&mut empty, invocation, argument)
+                    {
                         self.context.report_extension(
                             Feature::MsVaArgs,
                             "empty __VA_ARGS__ comma elision",
@@ -693,6 +693,31 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             TokenSource::replay(self.context, self.scratch, &[&output], location),
             arguments,
         )
+    }
+
+    /// Whether the variadic argument, completely macro-replaced, has no
+    /// tokens, deciding it once per invocation.
+    /// C23: §6.10.5.1 paragraph 7, p. 180; PDF p. 193.
+    fn variadic_argument_is_empty(
+        &mut self,
+        empty: &mut Option<bool>,
+        invocation: PreprocessorToken,
+        argument: &'x FunctionLikeMacroArgument<'x>,
+    ) -> bool {
+        if let Some(empty) = *empty {
+            return empty;
+        }
+        let mut expanded = self.expanded_argument(invocation, argument);
+        let result = !std::iter::from_fn(|| expanded.next_item(self.context)).any(|t| {
+            !matches!(
+                t.kind,
+                PreprocessorTokenType::Whitespace
+                    | PreprocessorTokenType::Newline
+                    | PreprocessorTokenType::Placeholder
+            )
+        });
+        *empty = Some(result);
+        result
     }
 
     /// Capture an invocation whose opening, arguments, or closing delimiter

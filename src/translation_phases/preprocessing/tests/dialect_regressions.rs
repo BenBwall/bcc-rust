@@ -14,6 +14,7 @@ use super::{
     },
     *,
 };
+use crate::configuration::MsvcFeature;
 
 /// Runs `observe_paths` on another thread and fails, rather than hanging the
 /// suite, when preprocessing does not finish.
@@ -177,4 +178,22 @@ fn va_opt_in_a_non_variadic_macro_is_reported_once() {
         );
         assert!(texts(&tokens).ends_with("int z ;"), "{tokens:?}");
     }
+}
+
+/// MSVC comma elision needs the expanded variadic argument only where a
+/// comma precedes `__VA_ARGS__`; an argument used only by `#` is never
+/// macro-replaced (C99 §6.10.3.1p1).
+#[test]
+fn msvc_comma_elision_does_not_expand_unused_variadic_arguments() {
+    let source = "#define S(x,...) #__VA_ARGS__, x\nconst char *p[] = { S(1, \
+                  __has_include(\"a.h\")) };\n#define C(x, ...) f(x, __VA_ARGS__)\nC(1) C(2, 3)\n";
+    let config = mode(CStandard::C17)
+        .with_gnu_extensions(true)
+        .with_msvc_feature(MsvcFeature::VaArgs, true);
+    let (tokens, errors) = observe(source, config);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(
+        texts(&tokens),
+        "const char * p [ ] = { \"__has_include(\\\"a.h\\\")\" , 1 } ; f ( 1 ) f ( 2 , 3 )"
+    );
 }
