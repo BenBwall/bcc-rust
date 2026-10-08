@@ -353,3 +353,39 @@ fn elifdef_selects_groups_by_mode_on_skip_and_active_paths() {
         }
     }
 }
+
+/// Diagnostics for `#elifdef` and `#elifndef` name the directive written.
+#[test]
+fn elifdef_diagnostics_name_their_directive() {
+    for (source, expected) in [
+        ("#if 0\n#elifdef 1\n#endif\n", "after `#elifdef`"),
+        ("#if 0\n#elifndef 1\n#endif\n", "after `#elifndef`"),
+        (
+            "#if 0\n#elifdef A B\n#endif\n",
+            "end of `#elifdef` directive",
+        ),
+        (
+            "#if 0\n#elifndef A B\n#endif\n",
+            "end of `#elifndef` directive",
+        ),
+        (
+            "#if 1\n#else\n#elifdef A\n#endif\n",
+            "`#elifdef` after `#else`",
+        ),
+        (
+            "#if 0\n#else\n#elifndef A\n#endif\n",
+            "`#elifndef` after `#else`",
+        ),
+        ("#elifdef A\n", "`#elifdef` without `#if`"),
+        ("#elifndef A\n", "`#elifndef` without `#if`"),
+    ] {
+        let (_, errors) = observe(&format!("{source}int z;\n"), mode(CStandard::C23));
+        assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+        assert!(errors[0].contains(expected), "{source}: {errors:?}");
+    }
+    let (_, errors) = observe(
+        "#if 0\n#elifndef A\n#endif\n",
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Warn).with_gnu_extensions(true),
+    );
+    assert_eq!(errors, ["Warning: '#elifndef' is a C23 extension"]);
+}

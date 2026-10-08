@@ -339,10 +339,16 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             | "ifdef" => self.parse_ifdef_directive(directive),
             | "ifndef" => self.parse_ifndef_directive(directive),
             | "elif" => self.parse_elif_directive(directive),
-            | "elifdef" | "elifndef" if self.context.configuration.accepts(Feature::Elifdef) => {
+            | name @ ("elifdef" | "elifndef")
+                if self.context.configuration.accepts(Feature::Elifdef) =>
+            {
                 self.context.report_extension(
                     Feature::Elifdef,
-                    "#elifdef/#elifndef",
+                    if name == "elifdef" {
+                        "#elifdef"
+                    } else {
+                        "#elifndef"
+                    },
                     directive.source_vectors,
                 );
                 self.parse_elif_directive(directive);

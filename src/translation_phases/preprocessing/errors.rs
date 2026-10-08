@@ -117,7 +117,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::NoConditionInElifDirective
             | PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives
             | PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives
-            | PreprocessorErrorType::ElifDirectiveWithoutIfDirective
+            | PreprocessorErrorType::ElifDirectiveWithoutIfDirective(_)
             | PreprocessorErrorType::ConditionalArmAfterElse(_)
             | PreprocessorErrorType::ElseDirectiveWithoutIfDirective
             | PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(..)
@@ -255,8 +255,8 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::ExtraTokensAfterPragmaOperator
             | PreprocessorErrorType::ExtraTokensAfterIncludeDirective
             | PreprocessorErrorType::ExtraTokensAfterConditionalDirective(_)
-            | PreprocessorErrorType::ExtraTokensAfterIfdefDirective
-            | PreprocessorErrorType::ExtraTokensAfterIfndefDirective
+            | PreprocessorErrorType::ExtraTokensAfterIfdefDirective(_)
+            | PreprocessorErrorType::ExtraTokensAfterIfndefDirective(_)
             | PreprocessorErrorType::WarningDirective(..)
             | PreprocessorErrorType::PragmaOnceInNonHeader => ErrorSeverity::Warning,
         }
@@ -424,16 +424,19 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     // p. 145; PDF p. 157.
     MoreIfDirectivesThanEndifDirectives,
     MoreEndifDirectivesThanIfDirectives,
-    ElifDirectiveWithoutIfDirective,
+    /// An `#elif`, or the named C23 `#elifdef` or `#elifndef`, outside a
+    /// conditional.
+    ElifDirectiveWithoutIfDirective(&'static str),
     ElseDirectiveWithoutIfDirective,
     ConditionalArmAfterElse(&'static str),
     /// C99: `# else new-line` and `# endif new-line`, §6.10 paragraph 1,
     /// p. 145; PDF p. 157, and footnote 147, p. 149; PDF p. 161.
     ExtraTokensAfterConditionalDirective(&'static str),
     // C99: `# ifdef identifier new-line`, §6.10 paragraph 1, p. 145; PDF
-    // p. 157.
-    ExpectedIdentifierInIfdefDirective(PreprocessorTokenType),
-    ExpectedIdentifierInIfndefDirective(PreprocessorTokenType),
+    // p. 157. The name is `ifdef` or `ifndef`, or C23's `elifdef` or
+    // `elifndef`, §6.10.2 paragraph 16, p. 168; PDF p. 181.
+    ExpectedIdentifierInIfdefDirective(&'static str, PreprocessorTokenType),
+    ExpectedIdentifierInIfndefDirective(&'static str, PreprocessorTokenType),
     /// C99: `# define identifier`, §6.10 paragraph 1, p. 146; PDF p. 158.
     ExpectedIdentifierInDefineDirective(PreprocessorTokenType),
     /// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173.
@@ -600,9 +603,9 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// paragraph 4, p. 150; PDF p. 162.
     ExtraTokensAfterIncludeDirective,
     // C99: `# ifdef identifier new-line`, §6.10 paragraph 1, p. 145; PDF
-    // p. 157.
-    ExtraTokensAfterIfdefDirective,
-    ExtraTokensAfterIfndefDirective,
+    // p. 157, named as for `ExpectedIdentifierInIfdefDirective`.
+    ExtraTokensAfterIfdefDirective(&'static str),
+    ExtraTokensAfterIfndefDirective(&'static str),
     // C99: `#pragma STDC` takes a pragma name and an `on-off-switch`,
     // §6.10.6 paragraph 2, p. 159; PDF p. 171.
     STDCPragmaDirectiveWithoutArgument,
@@ -931,8 +934,9 @@ impl PreprocessorErrorType<'_> {
             .help("add `#endif` where the conditional section should end"),
             | Self::MoreEndifDirectivesThanIfDirectives =>
                 new("`#endif` without `#if`").label("no conditional directive is open here"),
-            | Self::ElifDirectiveWithoutIfDirective =>
-                new("`#elif` without `#if`").label("no conditional directive is open here"),
+            | Self::ElifDirectiveWithoutIfDirective(name) =>
+                new(format_in!(arena, "`#{name}` without `#if`"))
+                    .label("no conditional directive is open here"),
             | Self::ConditionalArmAfterElse(name) =>
                 new(format_in!(arena, "`#{name}` after `#else`"))
                     .label("the final arm of this conditional has already begun")
@@ -942,15 +946,10 @@ impl PreprocessorErrorType<'_> {
                     .label("expected the end of the directive"),
             | Self::ElseDirectiveWithoutIfDirective =>
                 new("`#else` without `#if`").label("no conditional directive is open here"),
-            | Self::ExpectedIdentifierInIfdefDirective(kind) => new(format_in!(
+            | Self::ExpectedIdentifierInIfdefDirective(name, kind)
+            | Self::ExpectedIdentifierInIfndefDirective(name, kind) => new(format_in!(
                 arena,
-                "expected a macro name after `#ifdef`, found {}",
-                kind.found(spelling)
-            ))
-            .label("expected a macro name"),
-            | Self::ExpectedIdentifierInIfndefDirective(kind) => new(format_in!(
-                arena,
-                "expected a macro name after `#ifndef`, found {}",
+                "expected a macro name after `#{name}`, found {}",
                 kind.found(spelling)
             ))
             .label("expected a macro name"),
@@ -1331,10 +1330,12 @@ impl PreprocessorErrorType<'_> {
                 new("extra tokens after the pragma in `_Pragma`").label("not part of the pragma"),
             | Self::ExtraTokensAfterIncludeDirective =>
                 new("extra tokens at end of `#include` directive").label("ignored"),
-            | Self::ExtraTokensAfterIfdefDirective =>
-                new("extra tokens at end of `#ifdef` directive").label("ignored"),
-            | Self::ExtraTokensAfterIfndefDirective =>
-                new("extra tokens at end of `#ifndef` directive").label("ignored"),
+            | Self::ExtraTokensAfterIfdefDirective(name)
+            | Self::ExtraTokensAfterIfndefDirective(name) => new(format_in!(
+                arena,
+                "extra tokens at end of `#{name}` directive"
+            ))
+            .label("ignored"),
             | Self::STDCPragmaDirectiveWithoutArgument =>
                 new("expected a pragma name after `#pragma STDC`")
                     .label("expected `FP_CONTRACT`, `FENV_ACCESS`, or `CX_LIMITED_RANGE`"),
