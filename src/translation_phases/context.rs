@@ -1108,10 +1108,21 @@ impl<'tu> Context<'tu> {
 
     /// Removes and yields the pending errors after the first `keep`, in
     /// order.
+    ///
+    /// `keep` is a raw queue position, and callers take it from
+    /// [`Self::pending_error_count`], which excludes suppressed entries.
+    /// The two agree because only phase 7 suppresses diagnostics, and it
+    /// starts after phases 4-6 have preprocessed the whole translation unit
+    /// into a fresh context. A split with suppressed entries pending would
+    /// land too early and could drop one without updating the count.
     pub(crate) fn split_off_pending_errors(
         &mut self,
         keep: usize,
     ) -> impl Iterator<Item = TranslationError<'tu>> + '_ {
+        debug_assert_eq!(
+            self.suppressed_errors, 0,
+            "pending-error splits happen only before parsing suppresses diagnostics"
+        );
         self.relocated_errors = self.relocated_errors.min(keep);
         self.pending_errors.split_off(keep)
     }
