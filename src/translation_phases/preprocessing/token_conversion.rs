@@ -42,7 +42,10 @@ use super::{
     },
 };
 use crate::{
-    configuration::Feature,
+    configuration::{
+        CStandard,
+        Feature,
+    },
     float_parsing::{
         ParseFloatError,
         string_to_double,
@@ -108,7 +111,11 @@ impl IntegerConstantType {
     /// extension, use the octal and hexadecimal lists, as GCC and Clang do.
     ///
     /// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
-    fn candidates(suffix: Option<IntegerSuffix>, is_decimal: bool) -> &'static [Self] {
+    fn candidates(
+        suffix: Option<IntegerSuffix>,
+        is_decimal: bool,
+        standard: CStandard,
+    ) -> &'static [Self] {
         use IntegerConstantType::{
             Int,
             Long,
@@ -117,6 +124,19 @@ impl IntegerConstantType {
             UnsignedLong,
             UnsignedLongLong,
         };
+        // C89: §3.1.3.2; PDF p. 42. Decimal constants may have unsigned
+        // long type, and long-long types are absent from the native lists.
+        // Explicit ll suffixes keep the later-standard extension below.
+        if standard < CStandard::C99 {
+            match (suffix, is_decimal) {
+                | (None, true) => return &[Int, Long, UnsignedLong],
+                | (None, false) => return &[Int, UnsignedInt, Long, UnsignedLong],
+                | (Some(IntegerSuffix::Unsigned), _) => return &[UnsignedInt, UnsignedLong],
+                | (Some(IntegerSuffix::Long), _) => return &[Long, UnsignedLong],
+                | (Some(IntegerSuffix::UnsignedLong), _) => return &[UnsignedLong],
+                | _ => {},
+            }
+        }
         match (suffix, is_decimal) {
             | (None, true) => &[Int, Long, LongLong],
             | (None, false) => &[
@@ -416,7 +436,7 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         }
         let contents = self.context.string_cache.at(token.contents);
         let tail = &contents[index..contents.len() - 1];
-        if self.context.configuration.accepts(Feature::BitIntSuffixes)
+        let bitint_unsigned = if self.context.configuration.accepts(Feature::BitIntSuffixes)
             && matches!(
                 tail,
                 "wb" | "WB" | "uwb" | "Uwb" | "uWB" | "UWB" | "wbu" | "wbU" | "WBu" | "WBU"
@@ -424,16 +444,26 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
             && !missing_digits
         {
             let unsigned = tail.contains(['u', 'U']);
-            let width = (64 - result.leading_zeros()).max(1) + u32::from(!unsigned);
-            return Self::build_token(
-                token,
-                TokenType::Integer(IntegerTokenType::BitInt(
-                    Packed::new(result),
-                    u8::try_from(width).expect("64-bit magnitudes require at most 65 bits"),
-                    unsigned,
-                )),
-            );
-        }
+            if representation == IntegerRepresentation::Lp64 {
+                let width = (64 - result.leading_zeros()).max(1) + u32::from(!unsigned);
+                return Self::build_token(
+                    token,
+                    TokenType::Integer(IntegerTokenType::BitInt(
+                        Packed::new(result),
+                        u8::try_from(width).expect("64-bit magnitudes require at most 65 bits"),
+                        unsigned,
+                    )),
+                );
+            }
+            // C23: §6.10.2p13, p. 167; PDF p. 180: even bit-precise
+            // integer types act as intmax_t/uintmax_t in #if. Apply the
+            // ordinary magnitude checks instead of wrapping a signed 65-bit
+            // constant into the frontend's signed 64-bit evaluator.
+            index = contents.len() - 1;
+            Some(unsigned)
+        } else {
+            None
+        };
         if matches!(
             tail,
             "ll" | "LL" | "ull" | "Ull" | "uLL" | "ULL" | "llu" | "llU" | "LLu" | "LLU"
@@ -445,35 +475,39 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
             );
         }
         let contents = self.context.string_cache.at(token.contents);
-        let suffix_type = match (
-            contents.char_at(index),
-            contents.char_at(index + 1),
-            contents.char_at(index + 2),
-        ) {
-            | (Some('u' | 'U'), Some('l'), Some('l'))
-            | (Some('u' | 'U'), Some('L'), Some('L'))
-            | (Some('l'), Some('l'), Some('u' | 'U'))
-            | (Some('L'), Some('L'), Some('u' | 'U')) => {
-                index += 3;
-                Some(IntegerSuffix::UnsignedLongLong)
-            },
-            | (Some('u' | 'U'), Some('l' | 'L'), _) | (Some('l' | 'L'), Some('u' | 'U'), _) => {
-                index += 2;
-                Some(IntegerSuffix::UnsignedLong)
-            },
-            | (Some('u' | 'U'), _, _) => {
-                index += 1;
-                Some(IntegerSuffix::Unsigned)
-            },
-            | (Some('l'), Some('l'), _) | (Some('L'), Some('L'), _) => {
-                index += 2;
-                Some(IntegerSuffix::LongLong)
-            },
-            | (Some('l' | 'L'), _, _) => {
-                index += 1;
-                Some(IntegerSuffix::Long)
-            },
-            | _ => None,
+        let suffix_type = if let Some(unsigned) = bitint_unsigned {
+            unsigned.then_some(IntegerSuffix::Unsigned)
+        } else {
+            match (
+                contents.char_at(index),
+                contents.char_at(index + 1),
+                contents.char_at(index + 2),
+            ) {
+                | (Some('u' | 'U'), Some('l'), Some('l'))
+                | (Some('u' | 'U'), Some('L'), Some('L'))
+                | (Some('l'), Some('l'), Some('u' | 'U'))
+                | (Some('L'), Some('L'), Some('u' | 'U')) => {
+                    index += 3;
+                    Some(IntegerSuffix::UnsignedLongLong)
+                },
+                | (Some('u' | 'U'), Some('l' | 'L'), _) | (Some('l' | 'L'), Some('u' | 'U'), _) => {
+                    index += 2;
+                    Some(IntegerSuffix::UnsignedLong)
+                },
+                | (Some('u' | 'U'), _, _) => {
+                    index += 1;
+                    Some(IntegerSuffix::Unsigned)
+                },
+                | (Some('l'), Some('l'), _) | (Some('L'), Some('L'), _) => {
+                    index += 2;
+                    Some(IntegerSuffix::LongLong)
+                },
+                | (Some('l' | 'L'), _, _) => {
+                    index += 1;
+                    Some(IntegerSuffix::Long)
+                },
+                | _ => None,
+            }
         };
         if missing_digits || index != contents.len() - 1 {
             self.context.preprocessor_error(PreprocessorError {
@@ -482,7 +516,11 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
             });
         }
         let is_decimal = radix == 10;
-        let candidates = IntegerConstantType::candidates(suffix_type, is_decimal);
+        let candidates = IntegerConstantType::candidates(
+            suffix_type,
+            is_decimal,
+            self.context.configuration.standard(),
+        );
         let constant_type = match candidates
             .iter()
             .copied()
@@ -858,7 +896,7 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                         } else if let Some(character) = char::from_u32(value).filter(|_| {
                             // C23 §6.4.3p2, p. 56; PDF p. 69 permits basic
                             // and control characters inside literals.
-                            context.configuration.standard() >= crate::configuration::CStandard::C23
+                            context.configuration.standard() >= CStandard::C23
                                 || value >= 0xA0
                                 || matches!(value, 0x24 | 0x40 | 0x60)
                         }) {

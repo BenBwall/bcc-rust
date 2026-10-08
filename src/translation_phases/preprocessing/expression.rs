@@ -38,7 +38,10 @@ use super::{
     token_conversion::IntegerRepresentation,
 };
 use crate::{
-    configuration::ExtensionPolicy,
+    configuration::{
+        CStandard,
+        ExtensionPolicy,
+    },
     translation_phases::{
         Context,
         SourceVectors,
@@ -1700,14 +1703,21 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         },
                     ),
                     (PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::UnavailableIdentifier | PreprocessorTokenType::UnavailableUniversalIdentifier, UNARY) => {
-                        // C99 §6.10.1p4: an identifier left after macro
-                        // replacement, even a keyword, is the pp-number 0.
-                        self.context.preprocessor_error(PreprocessorError {
+                        // C23: §6.10.2p13, p. 167; PDF p. 180 replaces
+                        // remaining `true` with 1 after macro expansion.
+                        // C99 §6.10.1p4 replaces all identifiers with 0.
+                        let spelling = self.context.string_cache.at(token.contents);
+                        let boolean = self.context.configuration.standard() >= CStandard::C23
+                            && matches!(spelling, "true" | "false");
+                        let value = i64::from(boolean && spelling == "true");
+                        if !boolean {
+                            self.context.preprocessor_error(PreprocessorError {
                                     error_type: PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(self.context.diagnostic_text(self.context.string_cache.at(token.contents))),
                                     source_vectors: token.source_vectors,
                                 },
-                        );
-                        self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+                            );
+                        }
+                        self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(value));
                         self.expression_parser.state = BINARY;
                     },
                     (PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::UnavailableIdentifier | PreprocessorTokenType::UnavailableUniversalIdentifier, BINARY) => self.context.preprocessor_error(PreprocessorError {

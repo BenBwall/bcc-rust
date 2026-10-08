@@ -278,6 +278,78 @@ fn named_variadic_redefinitions_compare_original_names_and_normalized_bodies() {
 }
 
 #[test]
+fn bit_precise_preprocessing_constants_use_intmax_magnitude_checks() {
+    for standard in [CStandard::C23, CStandard::C2y] {
+        for gnu in [false, true] {
+            for (literal, warnings) in [
+                ("9223372036854775807wb", 0),
+                ("9223372036854775808wb", 1),
+                ("18446744073709551615WB", 1),
+                ("18446744073709551615uwb", 0),
+                ("18446744073709551615WBU", 0),
+                ("0xffffffffffffffffwb", 0),
+            ] {
+                let source = format!("#if {literal} > 0\npositive\n#else\nwrong\n#endif\nafter\n");
+                let (tokens, errors) = observe(&source, mode(standard).with_gnu_extensions(gnu));
+                let tokens = spellings(&tokens);
+                assert!(
+                    tokens.contains("identifier `positive`"),
+                    "{literal}: {tokens}; {errors:?}"
+                );
+                assert!(
+                    !tokens.contains("identifier `wrong`"),
+                    "{literal}: {tokens}"
+                );
+                assert!(tokens.contains("identifier `after`"), "{literal}: {tokens}");
+                assert_eq!(errors.len(), warnings, "{literal}: {errors:?}");
+                assert!(
+                    errors
+                        .iter()
+                        .all(|error| error.contains("so large that it is unsigned")),
+                    "{literal}: {errors:?}"
+                );
+            }
+        }
+    }
+    let (tokens, errors) = observe("9223372036854775808wb;\n", mode(CStandard::C23));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(spellings(&tokens).contains("_BitInt(65)"), "{tokens:?}");
+}
+
+#[test]
+fn c89_integer_type_candidates_include_native_unsigned_long_decimals() {
+    for standard in [CStandard::C89, CStandard::C95, CStandard::C99] {
+        for gnu in [false, true] {
+            for literal in ["9223372036854775808", "9223372036854775808L"] {
+                let (tokens, errors) = observe(
+                    &format!("{literal};\n"),
+                    mode(standard).with_gnu_extensions(gnu),
+                );
+                let tokens = spellings(&tokens);
+                if standard < CStandard::C99 {
+                    assert!(errors.is_empty(), "{standard:?}: {errors:?}");
+                    assert!(tokens.contains("(unsigned long)"), "{tokens}");
+                } else {
+                    assert_eq!(errors.len(), 1, "{errors:?}");
+                    assert!(tokens.contains("(unsigned long long)"), "{tokens}");
+                }
+                let source = format!("#if {literal} > 0\npositive\n#else\nwrong\n#endif\n");
+                let (tokens, errors) = observe(&source, mode(standard).with_gnu_extensions(gnu));
+                assert!(
+                    spellings(&tokens).contains("identifier `positive`"),
+                    "{tokens:?}"
+                );
+                assert_eq!(
+                    errors.len(),
+                    usize::from(standard >= CStandard::C99),
+                    "{errors:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn optional_replacements_follow_the_standard_paste_and_stringification_examples() {
     let source = "#define H2(X,Y,...) __VA_OPT__(X ## Y,) __VA_ARGS__\nH2(a,b,c,d)\n#define \
                   H3(X,...) #__VA_OPT__(X##X X##X)\nH3(,0)\n#define H4(X,...) __VA_OPT__(a X ## \
@@ -609,3 +681,45 @@ fn mode_snapshot_preserves_token_values_spellings_and_extension_diagnostics() {
     }
     pretty_assertions::assert_eq!(std::fs::read_to_string(path).unwrap(), snapshot);
 }
+
+#[test]
+fn conditional_boolean_identifiers_follow_revision_after_macro_expansion() {
+    let source = "#define BOOL true\n#if true && BOOL && !false\nyes\n#else\nno\n#endif\n";
+    for standard in [
+        CStandard::C89,
+        CStandard::C95,
+        CStandard::C99,
+        CStandard::C11,
+        CStandard::C17,
+        CStandard::C23,
+        CStandard::C2y,
+    ] {
+        for gnu in [false, true] {
+            let (output, errors) = observe(source, mode(standard).with_gnu_extensions(gnu));
+            let output = spellings(&output);
+            let modern = standard >= CStandard::C23;
+            assert_eq!(
+                output.contains("identifier `yes`"),
+                modern,
+                "{standard:?}: {output}"
+            );
+            assert_eq!(
+                output.contains("identifier `no`"),
+                !modern,
+                "{standard:?}: {output}"
+            );
+            if modern {
+                assert!(errors.is_empty(), "{errors:?}");
+            }
+        }
+    }
+    for source in [
+        "#define true 0\n#if true\nwrong\n#else\nright\n#endif\n",
+        "#define true false\n#if true\nwrong\n#else\nright\n#endif\n",
+    ] {
+        let (output, errors) = observe(source, mode(CStandard::C23));
+        assert!(errors.is_empty(), "{errors:?}");
+        assert!(spellings(&output).contains("identifier `right`"));
+    }
+}
+
