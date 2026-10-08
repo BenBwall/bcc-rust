@@ -422,3 +422,31 @@ fn has_c_attribute_reports_noreturn_spellings() {
         assert_eq!(texts(&tokens), "yes", "{operand}");
     }
 }
+
+/// C23 §6.10.1p1: an embed parameter's clause is optional in the grammar; a
+/// query with a parameter it does not support evaluates to
+/// `__STDC_EMBED_NOT_FOUND__` (C23 §6.10.2p10) without a diagnostic.
+#[test]
+fn has_embed_accepts_parameters_without_a_clause() {
+    for parameters in [
+        "vendor::flag",
+        "vendor :: flag",
+        "vendor::flag limit(1)",
+        "vendor::flag(1) vendor::other",
+    ] {
+        let source = format!(
+            "#if __has_embed(<embed.bin> {parameters}) == \
+             __STDC_EMBED_NOT_FOUND__\nyes\n#endif\nafter\n"
+        );
+        let (tokens, errors) =
+            observe_terminating(&source, mode(CStandard::C23), vec![language_fixtures()]);
+        assert!(errors.is_empty(), "{parameters}: {errors:?}");
+        assert_eq!(texts(&tokens), "yes after", "{parameters}");
+    }
+    let (_, errors) = observe_terminating(
+        "#if __has_embed(<embed.bin> limit)\n#endif\nafter\n",
+        mode(CStandard::C23),
+        vec![language_fixtures()],
+    );
+    assert_eq!(errors.len(), 1, "{errors:?}");
+}

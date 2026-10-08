@@ -576,20 +576,35 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             }
             seen |= bit;
             index += 1;
-            if bit == 0 {
-                while tokens.get(index).is_some_and(|t| {
-                    t.kind == T::Whitespace || t.kind == T::Colon || t.kind.is_identifier()
-                }) {
+            let significant = |mut index: usize| {
+                while tokens.get(index).is_some_and(|t| t.kind == T::Whitespace) {
                     index += 1;
                 }
+                index
+            };
+            if bit == 0 {
+                // C23 §6.10.1p1: `pp-prefixed-parameter: identifier ::
+                // identifier`.
+                let first = significant(index);
+                let second = significant(first + 1);
+                let suffix = significant(second + 1);
+                if tokens.get(first).is_some_and(|t| t.kind == T::Colon)
+                    && tokens.get(second).is_some_and(|t| t.kind == T::Colon)
+                    && tokens.get(suffix).is_some_and(|t| t.kind.is_identifier())
+                {
+                    index = suffix + 1;
+                }
             }
-            while tokens.get(index).is_some_and(|t| t.kind == T::Whitespace) {
-                index += 1;
-            }
+            index = significant(index);
             if tokens
                 .get(index)
                 .is_none_or(|t| t.kind != T::OpeningParenthesis)
             {
+                // Only a standard parameter requires its clause (C23
+                // §6.10.4.2p1, §6.10.4.3p1, §6.10.4.4p1, §6.10.4.5p1).
+                if bit == 0 {
+                    continue;
+                }
                 self.language_error("expected '(' after embed parameter", source);
                 return None;
             }
