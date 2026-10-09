@@ -90,8 +90,9 @@ struct Cli {
         overrides_with = "standard")]
     standard: LanguageMode,
     /// GCC language flags: -pedantic, -Wpedantic, -pedantic-errors,
-    /// -fms-extensions, and -f[no-]ms-{declspec,int-types,calling-conventions,
-    /// type-qualifiers,inline,seh,asm,pragma,anonymous-structs,va-args}.
+    /// -ffreestanding, -fhosted, -fms-extensions, and
+    /// -f[no-]ms-{declspec,int-types,calling-conventions,type-qualifiers,
+    /// inline,seh,asm,pragma,anonymous-structs,va-args}.
     #[arg(long, hide = true)]
     language_option: Vec<String>,
     /// Add directory to include search path.
@@ -222,6 +223,8 @@ enum LanguageFlag {
     MsvcExtensions(bool),
     /// `-fms-<feature>` or `-fno-ms-<feature>`.
     MsvcFeature(MsvcFeature, bool),
+    /// `-fhosted` (true) or `-ffreestanding` (false).
+    Hosted(bool),
 }
 
 impl LanguageFlag {
@@ -229,6 +232,8 @@ impl LanguageFlag {
         match text {
             | "-pedantic" | "-Wpedantic" => return Some(Self::Pedantic(ExtensionPolicy::Warn)),
             | "-pedantic-errors" => return Some(Self::Pedantic(ExtensionPolicy::Deny)),
+            | "-fhosted" => return Some(Self::Hosted(true)),
+            | "-ffreestanding" => return Some(Self::Hosted(false)),
             | _ => {},
         }
         let (name, enabled) = text
@@ -248,6 +253,7 @@ impl LanguageFlag {
             | Self::MsvcExtensions(enabled) => configuration.with_msvc_extensions(enabled),
             | Self::MsvcFeature(feature, enabled) =>
                 configuration.with_msvc_feature(feature, enabled),
+            | Self::Hosted(hosted) => configuration.with_hosted(hosted),
         }
     }
 }

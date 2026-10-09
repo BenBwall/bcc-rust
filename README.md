@@ -12,7 +12,9 @@ boundaries. The CLI defaults to `gnu17`; library configuration defaults to stric
 C99. Pass `-std=c23`, `-std=c2y`, or any documented GCC standard alias to select a
 mode. `-pedantic`/`-Wpedantic` warn on extensions; `-pedantic-errors` makes them
 errors. MSVC syntax is independently enabled with `-fms-extensions` or its ten
-individual feature flags; later flags win.
+individual feature flags; later flags win. Translation targets a hosted
+execution environment by default; `-ffreestanding` selects a freestanding one
+and `-fhosted` restores hosted, the later flag winning.
 
 ## Current status
 
@@ -244,12 +246,15 @@ processing continues with the remaining input. This exceeds C99's required
 minimum of 15 nested includes; the ceiling also makes an unguarded recursive
 include terminate without exhausting the process.
 
-Preprocessing uses a freestanding execution model: `__STDC__` is `1`,
-`__STDC_VERSION__` is `199901L`, and `__STDC_HOSTED__` is `0`.
+`__STDC__` is `1` and `__STDC_VERSION__` is `199901L` (or the selected
+revision's value). `__STDC_HOSTED__` is `1` in the default hosted execution
+environment and `0` with `-ffreestanding` (C99 §4p6, §5.1.2). A hosted
+translation checks the portable signatures of `main` (§5.1.2.2.1); a
+freestanding one leaves its startup function implementation-defined.
 `__STDC_MB_MIGHT_NEQ_WC__` is `1`, permitting multibyte and wide-character
 codes to differ. These predefined values describe the front end's selected
-language and execution model; semantic analysis, runtime support, and code
-generation remain unfinished.
+language and execution model; runtime support and code generation remain
+unfinished.
 
 Literal values use UTF-8 for source characters in ordinary strings and 8-bit
 codes for numeric escapes (`\xFF` is one byte). Wide literals use 32-bit

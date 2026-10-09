@@ -413,7 +413,9 @@ including before its first use (§6.4.2.2p1, printed p. 52, PDF p. 64). Its
 retained synthesized definition records the function-name string. Inner blocks
 may shadow it; the function's outer block may not redefine it. Hosted `main`
 signatures outside the portable `int (void)` and `int (int, char **)` forms,
-including internal linkage, receive an implementation warning. GNU nested
+including internal linkage, receive an implementation warning. With
+`-ffreestanding` the startup function is implementation-defined (§5.1.2.1p1),
+so `main` is not checked. GNU nested
 definitions have lexical bindings and no translation-unit linkage; their
 statement/return state is independent of the enclosing function.
 

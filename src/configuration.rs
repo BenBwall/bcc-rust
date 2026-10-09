@@ -480,6 +480,7 @@ pub(crate) struct CompilerConfiguration {
     native: u128,
     repeated_specifier_warnings: bool,
     source_date_epoch: Option<i64>,
+    hosted: bool,
 }
 
 impl CompilerConfiguration {
@@ -493,6 +494,7 @@ impl CompilerConfiguration {
             native: 0,
             repeated_specifier_warnings: true,
             source_date_epoch: None,
+            hosted: true,
         }
         .derive_features()
     }
@@ -639,6 +641,22 @@ impl CompilerConfiguration {
 
     pub(crate) const fn with_source_date_epoch(mut self, seconds: Option<i64>) -> Self {
         self.source_date_epoch = seconds;
+        self
+    }
+
+    /// Whether translation targets a hosted execution environment, the
+    /// default, rather than a freestanding one. It sets `__STDC_HOSTED__`,
+    /// lets the resource headers defer to the C library, and applies the
+    /// hosted requirements on `main`.
+    ///
+    /// C99: §4 paragraph 6, p. 7; PDF p. 19; §5.1.2 paragraph 1 and §5.1.2.1
+    /// paragraph 1, p. 11; PDF p. 23; §6.10.8 paragraph 1, p. 160; PDF p. 172.
+    pub(crate) const fn hosted(self) -> bool {
+        self.hosted
+    }
+
+    pub(crate) const fn with_hosted(mut self, hosted: bool) -> Self {
+        self.hosted = hosted;
         self
     }
 }

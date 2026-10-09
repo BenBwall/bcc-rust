@@ -669,9 +669,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Hosted `main` signatures are implementation-defined outside the two
-    /// portable forms; warn without rejecting them.
-    /// C99: §5.1.2.2.1p1, p. 12; PDF p. 24.
+    /// portable forms; warn without rejecting them. A freestanding startup
+    /// function's name and type are implementation-defined, so nothing is
+    /// checked there.
+    /// C99: §5.1.2.2.1p1, p. 12; PDF p. 24; §5.1.2.1p1, p. 11; PDF p. 23.
     fn check_main(&mut self, f: &'tu FunctionDefinition<'tu>, ty: TypeId) {
+        if !self.context.configuration.hosted() {
+            return;
+        }
         let Some(name) = f.declarator.identifier() else {
             return;
         };

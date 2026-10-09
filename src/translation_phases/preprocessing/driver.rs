@@ -1058,9 +1058,9 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             | "__STRICT_ANSI__"
             | "__STDC_HOSTED__"
             | "__STDC_MB_MIGHT_NEQ_WC__") => {
-                // C99 §6.10.8p1. This front end currently uses
-                // a freestanding execution model, so
-                // `__STDC_HOSTED__` is 0 (§4p6); the version
+                // C99 §6.10.8p1. `__STDC_HOSTED__` follows the
+                // configured execution environment (§4p6, §5.1.2):
+                // 1 by default, 0 with `-ffreestanding`. The version
                 // must retain its prescribed long suffix.
                 // MB_MIGHT_NEQ_WC permits unequal codes; its 1
                 // does not assert that their values differ.
@@ -1070,7 +1070,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                         .standard()
                         .version_macro()
                         .expect("version built-in is registered only when defined")
-                } else if name == "__STDC_HOSTED__" {
+                } else if name == "__STDC_HOSTED__" && !self.context.configuration.hosted() {
                     "0\0"
                 } else {
                     "1\0"

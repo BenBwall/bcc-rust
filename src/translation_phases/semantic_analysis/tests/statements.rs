@@ -153,6 +153,18 @@ fn function_definition_constraints() {
         kinds("void main(void) {}"),
         [SemanticErrorKind::MainSignature]
     );
+    // A freestanding startup function is implementation-defined (C99
+    // §5.1.2.1p1), so `main` has no required signature there.
+    for source in [
+        "void main(void) {}",
+        "static int main(char c) { return c; }",
+    ] {
+        with_configuration(
+            source,
+            crate::configuration::CompilerConfiguration::default().with_hosted(false),
+            |context, _| assert_eq!(context.pending_error_count(), 0, "{source}"),
+        );
+    }
 }
 
 #[test]
