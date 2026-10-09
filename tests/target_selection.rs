@@ -31,6 +31,13 @@ mod tests {
             .join(binary)
     }
 
+    /// Keep Clang reference probes on its resource headers. For musl and
+    /// MinGW, Clang searches the C library before them even when
+    /// freestanding, and a Linux host has glibc there; the fixture sysroot
+    /// stands in for that library on every host.
+    const CLANG_LIBRARY_ISOLATION: [&str; 2] =
+        ["--sysroot=tests/fixtures/hosted/sysroot", "-nostdlibinc"];
+
     #[test]
     fn every_target_passes_the_same_clang_and_bcc_c11_probe() {
         let probe = "tests/fixtures/targets/conformance.c";
@@ -124,7 +131,7 @@ mod tests {
                         "-ffreestanding",
                     ]);
                     if binary == clang() {
-                        _ = command.arg("-fsyntax-only");
+                        _ = command.args(CLANG_LIBRARY_ISOLATION).arg("-fsyntax-only");
                     }
                     let output = command
                         .arg("tests/fixtures/targets/atomic.c")
@@ -149,7 +156,7 @@ mod tests {
                     let mut command = Command::new(&binary);
                     _ = command.args([&format!("--target={triple}"), &format!("-std={standard}")]);
                     if binary == clang() {
-                        _ = command.arg("-fsyntax-only");
+                        _ = command.args(CLANG_LIBRARY_ISOLATION).arg("-fsyntax-only");
                     }
                     let output = command.arg(probe).output().unwrap();
                     let diagnostics = String::from_utf8_lossy(&output.stderr);
@@ -212,7 +219,7 @@ mod tests {
                     let mut command = Command::new(&binary);
                     _ = command.args([&format!("--target={triple}"), "-std=c11", "-ffreestanding"]);
                     if binary == clang() {
-                        _ = command.arg("-fsyntax-only");
+                        _ = command.args(CLANG_LIBRARY_ISOLATION).arg("-fsyntax-only");
                     }
                     let output = command.arg(probe).output().unwrap();
                     let diagnostics = String::from_utf8_lossy(&output.stderr);

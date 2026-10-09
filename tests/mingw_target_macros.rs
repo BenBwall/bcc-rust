@@ -35,7 +35,15 @@ mod tests {
                     let mut command = Command::new(binary);
                     _ = command.args([format!("--target={triple}"), format!("-std={mode}")]);
                     if binary == &clang {
-                        _ = command.arg("-fsyntax-only");
+                        // Only Clang's resource headers: for musl and MinGW,
+                        // Clang searches the C library before them, and a
+                        // Linux host has glibc there. The fixture sysroot
+                        // stands in for that library on every host.
+                        _ = command.args([
+                            "--sysroot=tests/fixtures/hosted/sysroot",
+                            "-nostdlibinc",
+                            "-fsyntax-only",
+                        ]);
                     }
                     let output = command
                         .arg("tests/fixtures/targets/x86-baseline-macros.c")
