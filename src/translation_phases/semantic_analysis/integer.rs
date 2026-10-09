@@ -175,21 +175,13 @@ impl Integer {
                 if r.value == 0 || (l.signed && l.value == l.minimum() && r.value == -1) {
                     return None;
                 }
-                // C99 §6.5.5p6: the quotient truncates toward zero and the
-                // remainder takes the dividend's sign, so dividing magnitudes
-                // is exact. Operands are at most 64 bits wide; `i128`
-                // division would call `__divti3`/`__modti3`, which the
-                // linker-plugin LTO link fetches only after LTO has dropped
-                // the `rust_eh_personality` their unwind tables reference.
-                let dividend = u64::try_from(l.value.unsigned_abs()).ok()?;
-                let divisor = u64::try_from(r.value.unsigned_abs()).ok()?;
-                let (magnitude, negative) = if op == B::Division {
-                    (dividend / divisor, (l.value < 0) != (r.value < 0))
+                // C99 §6.5.5p6: like Rust's, the quotient truncates toward
+                // zero and the remainder takes the dividend's sign.
+                if op == B::Division {
+                    l.value / r.value
                 } else {
-                    (dividend % divisor, l.value < 0)
-                };
-                let magnitude = i128::from(magnitude);
-                if negative { -magnitude } else { magnitude }
+                    l.value % r.value
+                }
             },
             | B::BitwiseAnd => l.value & r.value,
             | B::BitwiseOr => l.value | r.value,
