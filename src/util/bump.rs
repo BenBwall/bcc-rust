@@ -210,9 +210,8 @@ impl Bump {
             }
         }
         let bytes = bytes.into_slice();
-        if std::str::from_utf8(bytes).is_ok() {
-            // SAFETY: UTF-8 validation above covered these exact bytes.
-            return Ok(unsafe { std::str::from_utf8_unchecked(bytes) });
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            return Ok(text);
         }
 
         let mut repaired = self.tail_vec();
