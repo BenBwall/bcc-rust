@@ -507,6 +507,33 @@ impl<'tu> Context<'tu> {
         self.literal_values[id.0]
     }
 
+    /// Execution code units of an L-prefixed string, excluding its terminator.
+    /// Original source units remain available for diagnostics and inspection.
+    /// C99: implementation-defined encoding §6.4.5p5, pp. 62-63; PDF pp. 74-75.
+    pub(crate) fn wide_literal_units(&self, id: LiteralId) -> impl Iterator<Item = u32> + '_ {
+        let utf16 = self.configuration.target().layout().wide_utf16();
+        self.literal_units(id).iter().flat_map(move |unit| {
+            let mut units = [0; 2];
+            let count = match *unit {
+                | LiteralUnit::Character(c) if utf16 => {
+                    let mut encoded = [0; 2];
+                    let n = c.encode_utf16(&mut encoded).len();
+                    units = encoded.map(u32::from);
+                    n
+                },
+                | LiteralUnit::Character(c) => {
+                    units[0] = u32::from(c);
+                    1
+                },
+                | LiteralUnit::Numeric(code) => {
+                    units[0] = code;
+                    1
+                },
+            };
+            units.into_iter().take(count)
+        })
+    }
+
     /// The literal's characters spelled in `arena`, if they are text.
     /// Text-only consumers (filenames and tests) must reject non-UTF-8
     /// values.
@@ -1331,7 +1358,7 @@ impl<'tu> Context<'tu> {
                 write!(
                     rendered,
                     "{before}{}{after}",
-                    crate::target::TargetLayout::LP64.mb_len_max
+                    self.configuration.target().layout().mb_len_max
                 )
                 .unwrap();
                 rendered.into_str()

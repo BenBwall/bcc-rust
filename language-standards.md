@@ -81,26 +81,40 @@ whereas Clang drops the GNU identity under `-fms-compatibility`. Every mode
 defines `__bcc__` `1`, `__bcc_major__`, `__bcc_minor__`, `__bcc_patchlevel__`
 and the string `__bcc_version__` from the package version. `__clang__`,
 `__llvm__`, `__VERSION__` and `__GXX_ABI_VERSION` are never defined. Like
-Clang's, these are ordinary macros that `#undef` may remove. `__linux__`,
-`_WIN32` and other OS identity macros belong to target selection and are not
-yet defined. The identity and target definitions are read from the synthetic
+Clang's, these are ordinary macros that `#undef` may remove. OS identity
+macros such as `__linux__` and `_WIN32` follow the selected target, below. The identity and target definitions are read from the synthetic
 `<built-in>/predefined.h` before user input.
 
-Reserved target-description macros are predefined in **every mode**, including
-strict ISO modes. Like GCC and Clang, these describe the implementation without
-changing the language grammar (C99 §7.1.3p1, printed p. 166; PDF p. 178). The
-single target model in `src/target.rs` and its `target/` module owns the values:
-8-bit signed char, x86-64 System V LP64, little endian, binary32/binary64 and
-x87 extended precision in 16-byte storage. Definitions include scalar/pointer
-`__SIZEOF_*__`, integer maxima, exact/least/fast-width and ABI typedef `__*_TYPE__`
-macros, integer-constant functions and suffix helpers, endian constants,
-`__LP64__`/`_LP64`/`__x86_64__`/`__x86_64`, and the exact Clang `__FLT_*__`,
-`__DBL_*__`, `__LDBL_*__` and `__DECIMAL_DIG__` spellings. The frozen Linux-target
-Clang `-dM -E` subset is `tests/fixtures/freestanding/target-macros.h`; a unit test
-checks every emitted definition against it. They are ordinary implementation
-macros, so `#undef` and compatible redefinition work as in Clang; the required
-ISO predefined macros retain their existing protection. GNU identity follows
-the language mode, not the target description.
+Reserved target-description macros follow the pinned LLVM 23.1.1 Clang for the
+selected `--target` triple. The default remains `x86_64-unknown-linux-gnu`;
+`x86_64-unknown-linux-musl`, `x86_64-w64-windows-gnu` (aliases
+`x86_64-w64-mingw32` and `x86_64-pc-windows-gnu`) and
+`x86_64-pc-windows-msvc` are supported. Unknown triples are CLI errors.
+`CompilerConfiguration::with_target` selects the same contract for the library
+pipeline. Target selection does not implicitly enable GNU or MSVC syntax groups.
+
+`src/target.rs` is the single target seam: scalar/pointer layout, ABI aliases,
+wide encoding, va-list representation and record rules. Its `target/` module
+contains frozen, ordinary macro definitions. GNU modes receive Clang's unreserved
+OS spellings (`linux`, `unix`, `WIN32`, etc.) where Clang emits them; ISO modes
+receive only the corresponding reserved forms. GNU Linux and musl share the
+data model and the retained target macros; libc-specific distinctions come
+from the selected headers, without inventing a musl identity macro. Windows triples supply Clang's MinGW or MSVC OS/ABI
+names. This replaces the earlier policy of leaving OS identity undefined.
+C99 §7.1.3p1 (printed p. 166; PDF p. 178) reserves implementation names without
+changing language grammar. These definitions can be undefined or redefined;
+required ISO builtins retain their existing protection.
+
+Run `python scripts/update_target_macros.py --check` to compare all frozen
+spellings against the repository's Clang (`-dM -E -x c`, ISO C11 and GNU C17).
+Omit `--check` only when deliberately refreshing the oracle. The canonical Rust
+tests independently invoke Clang and compare sets of exact definitions, then
+check that every exclusion is documented below. Existing language-mode
+builtins are checked separately and are excluded from the target set; this
+work does not change their registration or compiler-identity/hosted ownership.
+The original 163-definition Linux fixture is retained and every one of its
+spellings must still be present. Unsupported semantic/backend capabilities
+must not be advertised merely because Clang advertises them.
 
 ### Embedded freestanding headers
 
@@ -121,8 +135,8 @@ still follows the configured extension policy.
 | --- | --- |
 | `float.h` | C99 floating limits; C11 adds true minima, subnormal and decimal-digit macros. `FLT_ROUNDS` is the default round-to-nearest value `1`; `FLT_EVAL_METHOD` is `0`. Runtime changes to the rounding environment require backend support. Hosted with `__MINGW32__` or `_MSC_VER` defined, it first reads the C library's `<float.h>` and then replaces its characteristics, as Clang does; it defines GCC's guard `_FLOAT_H___` first, so MinGW-w64's header does not look for GCC's. |
 | `iso646.h` | The eleven C alternative operator macros. |
-| `limits.h` | LP64 signed/unsigned limits; long-long limits from C99 onward. Hosted, it first reads the C library's `<limits.h>` for its POSIX and other additions, defining `_GCC_LIMITS_H_` in GNU modes so glibc does not look for GCC's header, then replaces the integer limits with the target's, as Clang does. `MB_LEN_MAX` is defined only if the C library did not (glibc 16, musl 4, MSVC 5); the fallback is `4`, since bcc's literals are UTF-8 and 4 bytes cover every stateless encoding. Clang's fallback is `1`. |
-| `stdarg.h` | `va_list` and the four `va_*` macros in every mode, plus GNU `__gnuc_va_list` and `__va_copy`. Like Clang's, it may be included repeatedly; `__need___va_list`, `__need_va_list`, `__need_va_arg`, `__need___va_copy` and `__need_va_copy` request one part, and each part keeps its conventional guard (`__GNUC_VA_LIST`, `_VA_LIST`). The reserved intrinsic type is an array of one opaque 24-byte, 8-aligned SysV record. |
+| `limits.h` | Target-derived signed/unsigned limits; long-long limits from C99 onward. Hosted, it first reads the C library's `<limits.h>` for its POSIX and other additions, defining `_GCC_LIMITS_H_` in GNU modes so glibc does not look for GCC's header, then replaces the integer limits with the target's, as Clang does. `MB_LEN_MAX` is defined only if the C library did not (glibc 16, musl 4, MSVC 5); the fallback is `4`, since bcc's literals are UTF-8 and 4 bytes cover every stateless encoding. Clang's fallback is `1`. |
+| `stdarg.h` | `va_list` and the four `va_*` macros in every mode, plus GNU `__gnuc_va_list` and `__va_copy`. Like Clang's, it may be included repeatedly; `__need___va_list`, `__need_va_list`, `__need_va_arg`, `__need___va_copy` and `__need_va_copy` request one part, and each part keeps its conventional guard (`__GNUC_VA_LIST`, `_VA_LIST`). The intrinsic type is an array of one opaque 24-byte, 8-aligned SysV record on Linux, and `char *` on Windows. |
 | `stdbool.h` | `__bool_true_false_are_defined`; `bool`, `true`, `false` macros before C23. C23 uses language keywords. |
 | `stddef.h` | `size_t`, `ptrdiff_t`, `wchar_t`, `NULL`, `offsetof`; C11 adds `max_align_t`, and `__STDC_WANT_LIB_EXT1__` adds `rsize_t`. Like Clang's, it may be included repeatedly: `__need_size_t`, `__need_ptrdiff_t`, `__need_wchar_t`, `__need_NULL`, `__need_wint_t`, `__need_rsize_t`, `__need_max_align_t` and `__need_offsetof` request one part, as glibc's headers do. Each type keeps its conventional guard (`_SIZE_T`, `_PTRDIFF_T`, `_WCHAR_T`, `_WINT_T`, `_RSIZE_T`), so a definition the C library made first is kept; a requested `NULL` is always restored to `((void *)0)`. |
 | `stdint.h` | All 8/16/32/64 exact, least and fast types, pointer and maximum types, corresponding limits and constant macros; `SIG_ATOMIC`, `SIZE`, `PTRDIFF`, `WCHAR`, `WINT` limits. Hosted, a C library `<stdint.h>` replaces all of these, as with Clang. |
@@ -685,3 +699,154 @@ and expansion arenas are unchanged. The main parser causes identified so far are
 general `TokenType` equality used for scalar keyword and operator tests,
 `ParseFrame` widening from 144 to 176 bytes, and `Declaration` growing from 56
 to 72 bytes. Fixes are pending.
+
+## Target macro exclusions
+
+Each name omitted from the pinned Clang target dump is listed individually.
+The first two categories identify separate ownership, rather than unsupported
+C features. `__STDC__`, version/strictness and embed constants remain in the
+existing language-mode builtin mechanism. Target macros do not emulate the
+Clang compiler identity. Feature promises below require further semantic or
+backend work before they can be enabled.
+
+| Macro | Reason |
+| --- | --- |
+| `_MSC_BUILD` | Compiler identity/version or hosted-mode contract owned separately. |
+| `_MSC_EXTENSIONS` | Compiler identity/version or hosted-mode contract owned separately. |
+| `_MSC_FULL_VER` | Compiler identity/version or hosted-mode contract owned separately. |
+| `_MSC_VER` | Compiler identity/version or hosted-mode contract owned separately. |
+| `_MSVC_CONSTEXPR_ATTRIBUTE` | The advertised pragma/attribute semantics are not implemented. |
+| `_MSVC_TRADITIONAL` | Traditional Microsoft preprocessing is not implemented; bcc uses its conforming preprocessor. |
+| `_M_FP_CONTRACT` | MS floating code-generation modes are not implemented. |
+| `_M_FP_PRECISE` | MS floating code-generation modes are not implemented. |
+| `__ATOMIC_ACQUIRE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__ATOMIC_ACQ_REL` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__ATOMIC_CONSUME` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__ATOMIC_RELAXED` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__ATOMIC_RELEASE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__ATOMIC_SEQ_CST` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__BITINT_MAXWIDTH__` | Extended integer syntax exists but these widths lack semantic types. |
+| `__CLANG_ATOMIC_BOOL_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__CLANG_ATOMIC_CHAR16_T_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__CLANG_ATOMIC_CHAR32_T_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__CLANG_ATOMIC_CHAR_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__CLANG_ATOMIC_INT_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__CLANG_ATOMIC_LLONG_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__CLANG_ATOMIC_LONG_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__CLANG_ATOMIC_POINTER_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__CLANG_ATOMIC_SHORT_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__CLANG_ATOMIC_WCHAR_T_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__CONSTANT_CFSTRINGS__` | Objective-C and CoreFoundation string intrinsics are not implemented. |
+| `__FLOAT128__` | Quadruple-precision floating types and arithmetic are not implemented. |
+| `__FLT16_DECIMAL_DIG__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FLT16_DENORM_MIN__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FLT16_DIG__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FLT16_EPSILON__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FLT16_HAS_DENORM__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FLT16_HAS_INFINITY__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FLT16_HAS_QUIET_NAN__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FLT16_MANT_DIG__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FLT16_MAX_10_EXP__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FLT16_MAX_EXP__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FLT16_MAX__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FLT16_MIN_10_EXP__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FLT16_MIN_EXP__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FLT16_MIN__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FLT16_NORM_MAX__` | Half-precision floating types and arithmetic are not implemented. |
+| `__FPCLASS_NEGINF` | Floating classification intrinsics are not implemented. |
+| `__FPCLASS_NEGNORMAL` | Floating classification intrinsics are not implemented. |
+| `__FPCLASS_NEGSUBNORMAL` | Floating classification intrinsics are not implemented. |
+| `__FPCLASS_NEGZERO` | Floating classification intrinsics are not implemented. |
+| `__FPCLASS_POSINF` | Floating classification intrinsics are not implemented. |
+| `__FPCLASS_POSNORMAL` | Floating classification intrinsics are not implemented. |
+| `__FPCLASS_POSSUBNORMAL` | Floating classification intrinsics are not implemented. |
+| `__FPCLASS_POSZERO` | Floating classification intrinsics are not implemented. |
+| `__FPCLASS_QNAN` | Floating classification intrinsics are not implemented. |
+| `__FPCLASS_SNAN` | Floating classification intrinsics are not implemented. |
+| `__FXSR__` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
+| `__GCC_ASM_FLAG_OUTPUTS__` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
+| `__GCC_ATOMIC_BOOL_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GCC_ATOMIC_CHAR16_T_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GCC_ATOMIC_CHAR32_T_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GCC_ATOMIC_CHAR_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GCC_ATOMIC_INT_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GCC_ATOMIC_LLONG_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GCC_ATOMIC_LONG_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GCC_ATOMIC_POINTER_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GCC_ATOMIC_SHORT_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GCC_ATOMIC_TEST_AND_SET_TRUEVAL` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GCC_ATOMIC_WCHAR_T_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GCC_CONSTRUCTIVE_SIZE` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
+| `__GCC_DESTRUCTIVE_SIZE` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
+| `__GCC_HAVE_DWARF2_CFI_ASM` | DWARF CFI assembly and unwind code generation are not implemented. |
+| `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__GNUC_MINOR__` | Compiler identity/version or hosted-mode contract owned separately. |
+| `__GNUC_PATCHLEVEL__` | Compiler identity/version or hosted-mode contract owned separately. |
+| `__GNUC_STDC_INLINE__` | Compiler identity/version or hosted-mode contract owned separately. |
+| `__GNUC__` | Compiler identity/version or hosted-mode contract owned separately. |
+| `__GXX_ABI_VERSION` | C++ ABI and type-info semantics are not implemented. |
+| `__GXX_TYPEINFO_EQUALITY_INLINE` | C++ ABI and type-info semantics are not implemented. |
+| `__MEMORY_SCOPE_CLUSTR` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__MEMORY_SCOPE_DEVICE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__MEMORY_SCOPE_SINGLE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__MEMORY_SCOPE_SYSTEM` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__MEMORY_SCOPE_WRKGRP` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__MEMORY_SCOPE_WVFRNT` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__MMX__` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
+| `__NO_INLINE__` | Code generation, relocation and optimization policy are not implemented. |
+| `__NO_MATH_ERRNO__` | Code generation, relocation and optimization policy are not implemented. |
+| `__OBJC_BOOL_IS_BOOL` | Objective-C and CoreFoundation string intrinsics are not implemented. |
+| `__OPENCL_MEMORY_SCOPE_ALL_SVM_DEVICES` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__OPENCL_MEMORY_SCOPE_DEVICE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__OPENCL_MEMORY_SCOPE_SUB_GROUP` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__OPENCL_MEMORY_SCOPE_WORK_GROUP` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__OPENCL_MEMORY_SCOPE_WORK_ITEM` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__PIC__` | Code generation, relocation and optimization policy are not implemented. |
+| `__PIE__` | Code generation, relocation and optimization policy are not implemented. |
+| `__PRAGMA_REDEFINE_EXTNAME` | The advertised pragma/attribute semantics are not implemented. |
+| `__SEG_FS` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
+| `__SEG_GS` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
+| `__SIZEOF_FLOAT128__` | Quadruple-precision floating types and arithmetic are not implemented. |
+| `__SIZEOF_INT128__` | Extended integer syntax exists but these widths lack semantic types. |
+| `__SSE2_MATH__` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
+| `__SSE2__` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
+| `__SSE_MATH__` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
+| `__SSE__` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
+| `__STDC_EMBED_EMPTY__` | Existing language-mode preprocessor builtin; not a target definition. |
+| `__STDC_EMBED_FOUND__` | Existing language-mode preprocessor builtin; not a target definition. |
+| `__STDC_EMBED_NOT_FOUND__` | Existing language-mode preprocessor builtin; not a target definition. |
+| `__STDC_HOSTED__` | Compiler identity/version or hosted-mode contract owned separately. |
+| `__STDC_UTF_16__` | Encoded literal syntax exists, but its semantic types and storage are not implemented. |
+| `__STDC_UTF_32__` | Encoded literal syntax exists, but its semantic types and storage are not implemented. |
+| `__STDC_VERSION__` | Existing language-mode preprocessor builtin; not a target definition. |
+| `__STDC__` | Existing language-mode preprocessor builtin; not a target definition. |
+| `__STRICT_ANSI__` | Existing language-mode preprocessor builtin; not a target definition. |
+| `__VERSION__` | Compiler identity/version or hosted-mode contract owned separately. |
+| `__cdecl` | Vendor attribute/calling-convention semantics are not implemented. |
+| `__clang__` | Compiler identity/version or hosted-mode contract owned separately. |
+| `__clang_literal_encoding__` | Compiler identity/version or hosted-mode contract owned separately. |
+| `__clang_major__` | Compiler identity/version or hosted-mode contract owned separately. |
+| `__clang_minor__` | Compiler identity/version or hosted-mode contract owned separately. |
+| `__clang_patchlevel__` | Compiler identity/version or hosted-mode contract owned separately. |
+| `__clang_version__` | Compiler identity/version or hosted-mode contract owned separately. |
+| `__clang_wide_literal_encoding__` | Compiler identity/version or hosted-mode contract owned separately. |
+| `__code_model_small__` | Code generation, relocation and optimization policy are not implemented. |
+| `__declspec` | Vendor attribute/calling-convention semantics are not implemented. |
+| `__fastcall` | Vendor attribute/calling-convention semantics are not implemented. |
+| `__llvm__` | Compiler identity/version or hosted-mode contract owned separately. |
+| `__pascal` | Vendor attribute/calling-convention semantics are not implemented. |
+| `__pic__` | Code generation, relocation and optimization policy are not implemented. |
+| `__pie__` | Code generation, relocation and optimization policy are not implemented. |
+| `__seg_fs` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
+| `__seg_gs` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
+| `__stdcall` | Vendor attribute/calling-convention semantics are not implemented. |
+| `__thiscall` | Vendor attribute/calling-convention semantics are not implemented. |
+| `__tune_k8__` | Code generation, relocation and optimization policy are not implemented. |
+| `_cdecl` | Vendor attribute/calling-convention semantics are not implemented. |
+| `_fastcall` | Vendor attribute/calling-convention semantics are not implemented. |
+| `_pascal` | Vendor attribute/calling-convention semantics are not implemented. |
+| `_stdcall` | Vendor attribute/calling-convention semantics are not implemented. |
+| `_thiscall` | Vendor attribute/calling-convention semantics are not implemented. |

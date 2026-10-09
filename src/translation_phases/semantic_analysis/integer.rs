@@ -10,6 +10,7 @@ use super::{
     Expression,
     ExpressionType,
     Namespace,
+    Scalar,
     TagKind,
     TypeId,
     TypeKind,
@@ -119,7 +120,7 @@ impl Integer {
         (shifted < 1_i128 << l.bits).then(|| l.cast_value(shifted))
     }
 
-    /// Usual integer arithmetic conversions, including LP64 rank distinctions.
+    /// Usual integer arithmetic conversions using target widths.
     /// C99: §6.3.1.8p1, p. 45; PDF p. 57.
     pub(crate) fn binary(self, op: BinaryOperator, right: Self) -> Option<Self> {
         use BinaryOperator as B;
@@ -339,10 +340,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | _ => return None,
         };
-        if matches!(
-            self.types.nodes[ty.index],
-            TypeKind::Scalar(super::Scalar::Bool)
-        ) {
+        if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
             return Some(Integer {
                 value:  i128::from(mantissa != 0),
                 bits:   1,
@@ -424,11 +422,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     match value {
                         | I::Int(_) => Some((32, true)),
                         | I::UnsignedInt(_) => Some((32, false)),
-                        | I::Long(_) | I::LongLong(_) => Some((64, true)),
-                        | I::UnsignedLong(_) | I::UnsignedLongLong(_) => Some((64, false)),
+                        | I::Long(_) => self.types.target.integer(Scalar::Long),
+                        | I::LongLong(_) => Some((64, true)),
+                        | I::UnsignedLong(_) => self.types.target.integer(Scalar::UnsignedLong),
+                        | I::UnsignedLongLong(_) => Some((64, false)),
                         | _ => None,
                     }
                 },
+                | ExpressionType::Constant(Constant::Char(
+                    super::super::preprocessing::CharacterTokenType::WideChar(_),
+                )) => self.types.target.integer(self.types.target.wchar_t),
                 | ExpressionType::Constant(Constant::Char(_)) | ExpressionType::Boolean(_) =>
                     Some((32, true)),
                 | ExpressionType::Identifier(name) => self
@@ -507,18 +510,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | S::UnsignedShort | S::UnsignedShortInt => Some((16, false)),
                         | S::Int | S::Signed | S::SignedInt => Some((32, true)),
                         | S::Unsigned | S::UnsignedInt => Some((32, false)),
-                        | S::Long
-                        | S::LongInt
-                        | S::SignedLong
-                        | S::SignedLongInt
+                        | S::Long | S::LongInt | S::SignedLong | S::SignedLongInt =>
+                            self.types.target.integer(Scalar::Long),
                         | S::LongLong
                         | S::LongLongInt
                         | S::SignedLongLong
                         | S::SignedLongLongInt => Some((64, true)),
-                        | S::UnsignedLong
-                        | S::UnsignedLongInt
-                        | S::UnsignedLongLong
-                        | S::UnsignedLongLongInt => Some((64, false)),
+                        | S::UnsignedLong | S::UnsignedLongInt =>
+                            self.types.target.integer(Scalar::UnsignedLong),
+                        | S::UnsignedLongLong | S::UnsignedLongLongInt => Some((64, false)),
                         | S::TypedefName(name) => self
                             .lookup(Namespace::Ordinary, name.name)
                             .and_then(|e| self.integer_type(self.bindings[e.binding].ty)),
@@ -536,7 +536,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.2.5p2-9, pp. 33-34; PDF pp. 45-46.
     pub(super) fn integer_type(&self, ty: TypeId) -> Option<(u32, bool)> {
         match self.types.nodes[ty.index] {
-            | TypeKind::Scalar(super::Scalar::Bool) => Some((1, false)),
+            | TypeKind::Scalar(Scalar::Bool) => Some((1, false)),
             | TypeKind::Scalar(s) => self.types.target.integer(s),
             | TypeKind::Tag(id)
                 if self.types.tags[id].kind == TagKind::Enum
@@ -685,8 +685,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let (bits, signed) = match value {
                     | I::Int(_) => (32, true),
                     | I::UnsignedInt(_) => (32, false),
-                    | I::Long(_) | I::LongLong(_) => (64, true),
-                    | I::UnsignedLong(_) | I::UnsignedLongLong(_) => (64, false),
+                    | I::Long(_) => self.types.target.integer(Scalar::Long).unwrap(),
+                    | I::LongLong(_) => (64, true),
+                    | I::UnsignedLong(_) =>
+                        self.types.target.integer(Scalar::UnsignedLong).unwrap(),
+                    | I::UnsignedLongLong(_) => (64, false),
                     | I::BitInt(..) | I::Imaginary(..) => {
                         self.integers.push(None);
                         return;
@@ -699,7 +702,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }));
             },
             | E::Constant(Constant::Char(value)) => {
-                let mut value = i128::from(i64::from(value));
+                let scalar = if matches!(
+                    value,
+                    super::super::preprocessing::CharacterTokenType::WideChar(_)
+                ) {
+                    self.types.target.wchar_t
+                } else {
+                    Scalar::Int
+                };
+                let (bits, signed) = self.types.target.integer(scalar).unwrap();
+                let mut value = i128::from(value.target_value(&self.types.target));
                 if matches!(
                     expression.kind,
                     ExpressionType::Constant(Constant::Char(
@@ -710,7 +722,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 {
                     value -= 256;
                 }
-                self.integers.push(Some(Integer::int(value)));
+                self.integers.push(Some(Integer {
+                    value,
+                    bits,
+                    signed,
+                }));
             },
             | E::Boolean(value) => self.integers.push(Some(Integer::int(i128::from(value)))),
             | E::Identifier(name) => {

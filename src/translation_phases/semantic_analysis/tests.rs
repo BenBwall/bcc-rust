@@ -4,6 +4,8 @@ use std::path::Path;
 
 use super::*;
 
+mod targets;
+
 fn with_source(source: &str, run: impl FnOnce(&mut Context<'_>, &SemanticTranslationUnit<'_>)) {
     with_configuration(
         source,
@@ -221,7 +223,7 @@ fn deeply_nested_pointer_and_blocks_do_not_recurse() {
 fn interning_compatibility_and_layout_are_iterative() {
     let tu = Bump::new();
     let scratch = Bump::new();
-    let mut types = TypeInterner::new(&tu, &scratch);
+    let mut types = TypeInterner::new(&tu, &scratch, &crate::target::TargetLayout::LP64);
     let int = types.scalar(Scalar::Int);
     let long = types.scalar(Scalar::Long);
     let a = types.intern(TypeKind::Array(int, ArrayBound::Incomplete));

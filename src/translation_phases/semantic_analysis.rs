@@ -400,17 +400,20 @@ struct Analyzer<'a, 'tu, 's> {
 /// from its value range: unsigned int when no value is negative, otherwise
 /// int, widening to the 64-bit type of the same signedness. C99 leaves this
 /// choice implementation-defined (§6.7.2.2p4, p. 105; PDF p. 117).
-fn compatible_enum_type((low, high): (i128, i128)) -> Scalar {
+fn compatible_enum_type((low, high): (i128, i128), target: &crate::target::TargetLayout) -> Scalar {
+    if let Some(scalar) = target.fixed_enum_type {
+        return scalar;
+    }
     if low >= 0 {
         if high <= i128::from(u32::MAX) {
             Scalar::UnsignedInt
         } else {
-            Scalar::UnsignedLong
+            target.uintmax_t
         }
     } else if low >= i128::from(i32::MIN) && high <= i128::from(i32::MAX) {
         Scalar::Int
     } else {
-        Scalar::Long
+        target.intmax_t
     }
 }
 
@@ -454,12 +457,13 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
 
     fn new(context: &'c mut Context<'tu>, scratch: &'s Bump) -> Self {
         let tu = context.tu_arena();
+        let target = context.configuration.target().layout();
         let mut analyzer = Self {
             #[cfg(test)]
             review_steps: Cell::new([0; 3]),
             context,
             scratch,
-            types: TypeInterner::new(tu, scratch),
+            types: TypeInterner::new(tu, scratch, &target),
             bindings: ArenaVec::new_in(tu),
             definitions: ArenaVec::new_in(tu),
             scopes: ArenaVec::new_in(tu),
@@ -1234,7 +1238,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     let tag = self.types.tags[tag];
                     tag.complete.set(true);
                     if !tag.tainted.get() {
-                        let compatible = compatible_enum_type(range);
+                        let compatible = compatible_enum_type(range, &self.types.target);
                         tag.compatible.set(compatible);
                         tag.layout.set(self.types.target.scalar(compatible));
                     }
@@ -1282,7 +1286,10 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                         .copied()
                         .unwrap_or((v.value, v.value));
                     let (low, high) = (low.min(v.value), high.max(v.value));
-                    if low < 0 && high > i128::from(i64::MAX) {
+                    if low < 0
+                        && high > i128::from(i64::MAX)
+                        && self.types.target.fixed_enum_type.is_none()
+                    {
                         self.error(
                             SemanticErrorKind::EnumeratorRange,
                             item.name.source_vectors,
@@ -1300,10 +1307,12 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 let opaque = self.types.tags[tag].tainted.get();
                 let (ty, retained) = match value {
                     | _ if opaque => (self.types.unknown(), None),
+                    | Some(v) if self.types.target.fixed_enum_type.is_some() =>
+                        (self.types.scalar(Scalar::Int), Some(v.cast(32, true))),
                     | Some(v) if wide => (
                         self.types.scalar(match (v.bits, v.signed) {
-                            | (64, true) => Scalar::Long,
-                            | (64, false) => Scalar::UnsignedLong,
+                            | (64, true) => self.types.target.intmax_t,
+                            | (64, false) => self.types.target.uintmax_t,
                             | _ => Scalar::UnsignedInt,
                         }),
                         Some(v),
@@ -1321,8 +1330,16 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     Duration::None,
                     retained,
                 );
-                self.work
-                    .push(Work::EnumMembers(tag, list, index + 1, value));
+                self.work.push(Work::EnumMembers(
+                    tag,
+                    list,
+                    index + 1,
+                    if self.types.target.fixed_enum_type.is_some() {
+                        retained
+                    } else {
+                        value
+                    },
+                ));
             },
             | Work::Eval(expression) => self.evaluate(expression),
             | Work::Unary(op, source) => {

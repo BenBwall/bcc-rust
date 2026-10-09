@@ -476,6 +476,7 @@ const MSVC_COMPATIBILITY: u16 = 1 << 15;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct CompilerConfiguration {
+    target: crate::target::Target,
     standard: CStandard,
     gnu: bool,
     /// One bit per `MsvcFeature`, plus [`MSVC_COMPATIBILITY`].
@@ -491,6 +492,7 @@ pub(crate) struct CompilerConfiguration {
 impl CompilerConfiguration {
     pub(crate) const fn new(standard: CStandard, extension_policy: ExtensionPolicy) -> Self {
         Self {
+            target: crate::target::Target::LinuxGnu,
             standard,
             gnu: false,
             msvc: 0,
@@ -506,6 +508,15 @@ impl CompilerConfiguration {
 
     pub(crate) const fn standard(self) -> CStandard {
         self.standard
+    }
+
+    pub(crate) const fn target(self) -> crate::target::Target {
+        self.target
+    }
+
+    pub(crate) const fn with_target(mut self, target: crate::target::Target) -> Self {
+        self.target = target;
+        self
     }
 
     pub(crate) const fn gnu_extensions(self) -> bool {

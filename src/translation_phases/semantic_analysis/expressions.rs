@@ -870,7 +870,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Scalar::Int
                 };
                 info.ty = self.types.scalar(scalar);
-                let mut value = i128::from(i64::from(value));
+                let mut value = i128::from(value.target_value(&self.types.target));
                 if matches!(
                     e.kind,
                     E::Constant(Constant::Char(CharacterTokenType::Char(_)))
@@ -879,7 +879,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 {
                     value -= 256;
                 }
-                info.integer = Some(Integer::int(value));
+                let (bits, signed) = self
+                    .integer_type(info.ty)
+                    .expect("character type is integer");
+                info.integer = Some(Integer {
+                    value,
+                    bits,
+                    signed,
+                });
                 info.ice = true;
                 info.constant = ConstantClass::Arithmetic;
             },
@@ -1055,16 +1062,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | StringTokenType::WideString(id) => (id, true),
             | _ => return None,
         };
-        let count = self
-            .context
-            .literal_units(id)
-            .iter()
-            .map(|u| match u {
-                | LiteralUnit::Character(c) if !wide => c.len_utf8() as u64,
-                | _ => 1,
-            })
-            .sum::<u64>()
-            + 1;
+        let count = if wide {
+            self.context.wide_literal_units(id).count() as u64
+        } else {
+            self.context
+                .literal_units(id)
+                .iter()
+                .map(|u| match u {
+                    | LiteralUnit::Character(c) => c.len_utf8() as u64,
+                    | LiteralUnit::Numeric(_) => 1,
+                })
+                .sum::<u64>()
+        } + 1;
         Some((
             self.types.scalar(if wide {
                 self.types.target.wchar_t
@@ -1743,7 +1752,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.round_floating(v, arithmetic_operands.unwrap_or(info.ty))
                     }))
             {
-                info.floating = Self::floating_binary(op, left, right)
+                info.floating = self
+                    .floating_binary(op, left, right)
                     .and_then(|value| self.round_floating(value, info.ty));
                 info.integer = Self::floating_comparison(op, left, right);
             }

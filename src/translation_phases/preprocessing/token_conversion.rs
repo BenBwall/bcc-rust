@@ -76,12 +76,11 @@ use crate::{
 /// The integer representation an integer constant is typed against.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(super) enum IntegerRepresentation {
-    /// Translation phase 7 under LP64: `int` has 32 bits, and `long` and
-    /// `long long` have 64.
+    /// Translation phase 7 using the configured target scalar widths.
     ///
     /// C99: the widths are implementation-defined (§5.2.4.2.1 paragraph 1,
     /// pp. 21-22; PDF pp. 33-34).
-    Lp64,
+    Target,
     /// An `#if` or `#elif` expression, where every signed type acts as
     /// `intmax_t` and every unsigned type as `uintmax_t`, here 64 bits. So
     /// `0xFFFFFFFF` is a signed, positive `int` there although it is
@@ -130,11 +129,22 @@ impl IntegerConstantType {
         // Explicit ll suffixes keep the later-standard extension below.
         if standard < CStandard::C99 {
             match (suffix, is_decimal) {
-                | (None, true) => return &[Int, Long, UnsignedLong],
-                | (None, false) => return &[Int, UnsignedInt, Long, UnsignedLong],
-                | (Some(IntegerSuffix::Unsigned), _) => return &[UnsignedInt, UnsignedLong],
-                | (Some(IntegerSuffix::Long), _) => return &[Long, UnsignedLong],
-                | (Some(IntegerSuffix::UnsignedLong), _) => return &[UnsignedLong],
+                | (None, true) => return &[Int, Long, UnsignedLong, LongLong, UnsignedLongLong],
+                | (None, false) =>
+                    return &[
+                        Int,
+                        UnsignedInt,
+                        Long,
+                        UnsignedLong,
+                        LongLong,
+                        UnsignedLongLong,
+                    ],
+                | (Some(IntegerSuffix::Unsigned), _) =>
+                    return &[UnsignedInt, UnsignedLong, UnsignedLongLong],
+                | (Some(IntegerSuffix::Long), _) =>
+                    return &[Long, UnsignedLong, LongLong, UnsignedLongLong],
+                | (Some(IntegerSuffix::UnsignedLong), _) =>
+                    return &[UnsignedLong, UnsignedLongLong],
                 | _ => {},
             }
         }
@@ -160,8 +170,12 @@ impl IntegerConstantType {
     }
 
     /// The largest value this type holds under `representation`.
-    fn max(self, representation: IntegerRepresentation) -> u64 {
-        if representation == IntegerRepresentation::Lp64 {
+    fn max(
+        self,
+        representation: IntegerRepresentation,
+        target: &crate::target::TargetLayout,
+    ) -> u64 {
+        if representation == IntegerRepresentation::Target {
             let scalar = match self {
                 | Self::Int => crate::target::Scalar::Int,
                 | Self::UnsignedInt => crate::target::Scalar::UnsignedInt,
@@ -170,15 +184,17 @@ impl IntegerConstantType {
                 | Self::LongLong => crate::target::Scalar::LongLong,
                 | Self::UnsignedLongLong => crate::target::Scalar::UnsignedLongLong,
             };
-            let (bits, signed) = crate::target::TargetLayout::LP64
+            let (bits, signed) = target
                 .integer(scalar)
                 .expect("integer literal candidate is an integer type");
             return u64::MAX >> (64 - bits + u32::from(signed));
         }
-        match self {
-            | Self::Int | Self::Long | Self::LongLong => i64::MAX.unsigned_abs(),
-            | Self::UnsignedInt | Self::UnsignedLong | Self::UnsignedLongLong => u64::MAX,
-        }
+        let scalar = match self {
+            | Self::Int | Self::Long | Self::LongLong => target.intmax_t,
+            | Self::UnsignedInt | Self::UnsignedLong | Self::UnsignedLongLong => target.uintmax_t,
+        };
+        let (bits, signed) = target.integer(scalar).unwrap();
+        u64::MAX >> (64 - bits + u32::from(signed))
     }
 
     /// A token holding `value`, which this type can represent. Under
@@ -189,18 +205,23 @@ impl IntegerConstantType {
         clippy::cast_possible_wrap,
         reason = "`max` has bounded `value` by this type's range."
     )]
-    fn token_type(self, value: u64, representation: IntegerRepresentation) -> IntegerTokenType {
+    fn token_type(
+        self,
+        value: u64,
+        representation: IntegerRepresentation,
+        target: &crate::target::TargetLayout,
+    ) -> IntegerTokenType {
         debug_assert!(
-            value <= self.max(representation),
+            value <= self.max(representation, target),
             "the type was chosen to hold the value"
         );
         match (self, representation) {
-            | (Self::Int, IntegerRepresentation::Lp64) => IntegerTokenType::Int(value as i32),
-            | (Self::UnsignedInt, IntegerRepresentation::Lp64) =>
+            | (Self::Int, IntegerRepresentation::Target) => IntegerTokenType::Int(value as i32),
+            | (Self::UnsignedInt, IntegerRepresentation::Target) =>
                 IntegerTokenType::UnsignedInt(value as u32),
-            | (Self::Long, IntegerRepresentation::Lp64) =>
+            | (Self::Long, IntegerRepresentation::Target) =>
                 IntegerTokenType::Long(Packed::new(value as i64)),
-            | (Self::UnsignedLong, IntegerRepresentation::Lp64) =>
+            | (Self::UnsignedLong, IntegerRepresentation::Target) =>
                 IntegerTokenType::UnsignedLong(Packed::new(value)),
             | (Self::Int | Self::Long | Self::LongLong, _) =>
                 IntegerTokenType::LongLong(Packed::new(value as i64)),
@@ -397,6 +418,7 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         token: PreprocessorToken,
         representation: IntegerRepresentation,
     ) -> Token {
+        let target = self.context.configuration.target().layout();
         let mut index = start_index;
         let (result, did_overflow) = {
             let contents = self.context.string_cache.at(token.contents);
@@ -451,7 +473,7 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
             && !missing_digits
         {
             let unsigned = tail.contains(['u', 'U']);
-            if representation == IntegerRepresentation::Lp64 {
+            if representation == IntegerRepresentation::Target {
                 let width = (64 - result.leading_zeros()).max(1) + u32::from(!unsigned);
                 return Self::build_token(
                     token,
@@ -531,14 +553,14 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         let constant_type = match candidates
             .iter()
             .copied()
-            .find(|candidate| result <= candidate.max(representation))
+            .find(|candidate| result <= candidate.max(representation, &target))
         {
             | Some(constant_type) => constant_type,
             // Only a decimal list without `u` can run out, and only once its
             // last type, a 64-bit signed one, cannot hold the value.
             | None => {
                 debug_assert!(
-                    is_decimal && result > i64::MAX.unsigned_abs(),
+                    result > candidates.last().unwrap().max(representation, &target),
                     "only a signed decimal list runs out of types"
                 );
                 if !did_overflow {
@@ -574,7 +596,11 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
             }
         }
         Token {
-            kind:           TokenType::Integer(constant_type.token_type(result, representation)),
+            kind:           TokenType::Integer(constant_type.token_type(
+                result,
+                representation,
+                &target,
+            )),
             source_vectors: token.source_vectors,
             contents:       token.contents,
         }
@@ -693,6 +719,15 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         };
         let res = match contents.char_at(contents.len() - 2) {
             | Some('f' | 'F') => string_to_float(contents).map(FloatTokenType::Float),
+            | Some('l' | 'L')
+                if self
+                    .context
+                    .configuration
+                    .target()
+                    .layout()
+                    .long_double_is_double() =>
+                crate::float_parsing::string_to_binary64_long_double(contents)
+                    .map(FloatTokenType::LongDouble),
             | Some('l' | 'L') => string_to_long_double(contents).map(FloatTokenType::LongDouble),
             | _ =>
                 string_to_double(contents).map(|value| FloatTokenType::Double(Packed::new(value))),
@@ -763,7 +798,9 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         // The largest value a numeric escape may give one code unit of the
         // literal's element type: C99 §6.4.4.4p9, p. 61; PDF p. 73, with
         // C11's 16-bit `u` literals.
-        let max_escape = if string.starts_with('u') && !string.starts_with("u8") {
+        let max_escape = if (string.starts_with('u') && !string.starts_with("u8"))
+            || (string.starts_with('L') && context.configuration.target().layout().wide_utf16())
+        {
             65535
         } else if wide {
             u32::MAX
@@ -954,7 +991,7 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
     /// paragraph 1, p. 57; PDF p. 69.
     ///
     /// Integer constants are typed under `representation`: phase 7 uses
-    /// [`IntegerRepresentation::Lp64`] and `#if` evaluation
+    /// [`IntegerRepresentation::Target`] and `#if` evaluation
     /// [`IntegerRepresentation::IntMax`].
     pub(super) fn parse_number(
         &mut self,
@@ -1164,10 +1201,17 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                     source_vectors: token.source_vectors,
                 });
             }
-            CharacterTokenType::WideChar(units.first().map_or(0, |unit| match *unit {
+            let value = units.first().map_or(0, |unit| match *unit {
                 | LiteralUnit::Character(c) => u32::from(c),
                 | LiteralUnit::Numeric(code) => code,
-            }))
+            });
+            if context.configuration.target().layout().wide_utf16() && value > 65535 {
+                context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::WideCharacterOutOfRange,
+                    source_vectors: token.source_vectors,
+                });
+            }
+            CharacterTokenType::WideChar(value)
         } else {
             let bytes = units.iter().flat_map(|unit| {
                 let mut encoded = [0; 4];
@@ -1229,7 +1273,7 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                 return None;
             },
             | PreprocessorTokenType::Number =>
-                self.parse_number(token, IntegerRepresentation::Lp64),
+                self.parse_number(token, IntegerRepresentation::Target),
             | PreprocessorTokenType::Newline => return None,
             | PreprocessorTokenType::Hash => {
                 if matches!(

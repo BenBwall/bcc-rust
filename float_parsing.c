@@ -77,6 +77,30 @@ long_double_t long_double_arithmetic(long_double_t left, long_double_t right,
 {
   long double a = load_long_double(left), b = load_long_double(right);
   long double result;
+  /* MSVC target operations must execute in binary64, rather than rounding
+     an x87 result twice. C99 §6.3.1.8, pp. 44-45; PDF pp. 56-57. */
+  if (precision == 2) {
+    double da = (double)a, db = (double)b;
+    volatile double rounded;
+    switch (operation) {
+    case 0: rounded = da + db; break;
+    case 1: rounded = da - db; break;
+    case 2: rounded = da * db; break;
+    case 3: rounded = da / db; break;
+    case 5: rounded = -da; break;
+    default: rounded = da; break;
+    }
+    return store_long_double((long double)rounded);
+  }
+#if LDBL_MANT_DIG == 64 && (defined(__i386__) || defined(__x86_64__))
+  /* Windows worker threads may begin with a 53-bit x87 control word even
+     though long double has a 64-bit significand. Preserve the caller's
+     environment while making target extended operations deterministic. */
+  unsigned short saved_control, extended_control;
+  __asm__ volatile("fnstcw %0" : "=m"(saved_control));
+  extended_control = (unsigned short)((saved_control & ~0x0300u) | 0x0300u);
+  __asm__ volatile("fldcw %0" : : "m"(extended_control));
+#endif
   switch (operation) {
   case 0: result = a + b; break;
   case 1: result = a - b; break;
@@ -86,8 +110,11 @@ long_double_t long_double_arithmetic(long_double_t left, long_double_t right,
   default: result = a; break;
   }
   if (precision == 1) { volatile float rounded = (float)result; result = rounded; }
-  if (precision == 2) { volatile double rounded = (double)result; result = rounded; }
-  return store_long_double(result);
+  long_double_t stored = store_long_double(result);
+#if LDBL_MANT_DIG == 64 && (defined(__i386__) || defined(__x86_64__))
+  __asm__ volatile("fldcw %0" : : "m"(saved_control));
+#endif
+  return stored;
 }
 
 int long_double_compare(long_double_t left, long_double_t right)
@@ -137,6 +164,12 @@ size_t long_double_to_hex(long_double_t const value, char *const buffer,
   else
   {
     int exponent;
+#if LDBL_MANT_DIG == 64 && (defined(__i386__) || defined(__x86_64__))
+    unsigned short saved_control, extended_control;
+    __asm__ volatile("fnstcw %0" : "=m"(saved_control));
+    extended_control = (unsigned short)((saved_control & ~0x0300u) | 0x0300u);
+    __asm__ volatile("fldcw %0" : : "m"(extended_control));
+#endif
     /* frexpl normalizes subnormals too, so every finite nonzero value
        prints as 0x1.<fraction>p<exponent>. */
     long double fraction = frexpl(ld_value, &exponent) * 2 - 1;
@@ -156,6 +189,9 @@ size_t long_double_to_hex(long_double_t const value, char *const buffer,
         fraction -= digit;
       }
     }
+#if LDBL_MANT_DIG == 64 && (defined(__i386__) || defined(__x86_64__))
+    __asm__ volatile("fldcw %0" : : "m"(saved_control));
+#endif
     length += (size_t)snprintf(text + length, sizeof(text) - length, "p%+d",
                                exponent);
   }
