@@ -955,12 +955,14 @@ mod tests {
         // SAFETY: `ptr` is live and the new layout is smaller.
         let shrunk = unsafe { arena.shrink(ptr, large, small) }.unwrap();
         assert_eq!(shrunk.cast::<u8>(), ptr);
-        // SAFETY: the returned block fits `small`, and `large` is larger.
-        let regrown = unsafe { arena.grow(ptr, small, large) }.unwrap();
+        // SAFETY: `shrunk` is the live block that `shrink` returned; it fits
+        // `small`, and `large` is larger.
+        let regrown = unsafe { arena.grow(shrunk.cast(), small, large) }.unwrap();
         assert_eq!(regrown.cast::<u8>(), ptr);
-        // SAFETY: the latest block is live and fits `small`.
+        // SAFETY: `regrown` is the live block that `grow` returned, and it
+        // fits `large`.
         unsafe {
-            arena.deallocate(ptr, small);
+            arena.deallocate(regrown.cast(), large);
         }
         assert_eq!(arena.used(), 0);
     }
