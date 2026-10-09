@@ -19,6 +19,14 @@ CHECK(uintptr_t, sizeof(uintptr_t) == 8);
 CHECK(intmax_t, sizeof(intmax_t) == 8);
 CHECK(uintmax_t, sizeof(uintmax_t) == 8);
 CHECK(wchar_t, sizeof(wchar_t) == 4);
+/* C99 §6.7p4: repeated declarations require compatible types. Pin the
+   typedef identities as well as their LP64 sizes (C99 §7.17p2). */
+extern size_t size_type_probe;
+extern unsigned long size_type_probe;
+extern ptrdiff_t ptrdiff_type_probe;
+extern long ptrdiff_type_probe;
+extern wchar_t wchar_type_probe;
+extern int wchar_type_probe;
 CHECK(va_list, sizeof(va_list) == 24);
 CHECK(va_align, _Alignof(va_list) == 8);
 CHECK(null, sizeof(NULL) == 8);
@@ -106,6 +114,27 @@ CHECK(INT_FAST64_size, sizeof(int_fast64_t) == 8);
 CHECK(INT_FAST64_MIN, INT_FAST64_MIN == (-9223372036854775807L - 1));
 CHECK(UINT_FAST64_MAX, UINT_FAST64_MAX == 18446744073709551615UL);
 CHECK(UINT_FAST64_size, sizeof(uint_fast64_t) == 8);
+/* Check both sides of every integer typedef pair. The positivity check
+   catches signed 64-bit -1 even when comparison with an unsigned maximum
+   would convert it to that maximum (C99 §7.18.1.1-5). */
+#define CHECK_INTEGER_PAIR(i, u, m) \
+    CHECK(i##_signed, (i)-1 < 0); \
+    CHECK(u##_unsigned, (u)-1 > 0 && (u)-1 == (m))
+CHECK_INTEGER_PAIR(int8_t, uint8_t, UINT8_MAX);
+CHECK_INTEGER_PAIR(int16_t, uint16_t, UINT16_MAX);
+CHECK_INTEGER_PAIR(int32_t, uint32_t, UINT32_MAX);
+CHECK_INTEGER_PAIR(int64_t, uint64_t, UINT64_MAX);
+CHECK_INTEGER_PAIR(int_least8_t, uint_least8_t, UINT_LEAST8_MAX);
+CHECK_INTEGER_PAIR(int_least16_t, uint_least16_t, UINT_LEAST16_MAX);
+CHECK_INTEGER_PAIR(int_least32_t, uint_least32_t, UINT_LEAST32_MAX);
+CHECK_INTEGER_PAIR(int_least64_t, uint_least64_t, UINT_LEAST64_MAX);
+CHECK_INTEGER_PAIR(int_fast8_t, uint_fast8_t, UINT_FAST8_MAX);
+CHECK_INTEGER_PAIR(int_fast16_t, uint_fast16_t, UINT_FAST16_MAX);
+CHECK_INTEGER_PAIR(int_fast32_t, uint_fast32_t, UINT_FAST32_MAX);
+CHECK_INTEGER_PAIR(int_fast64_t, uint_fast64_t, UINT_FAST64_MAX);
+CHECK_INTEGER_PAIR(intptr_t, uintptr_t, UINTPTR_MAX);
+CHECK_INTEGER_PAIR(intmax_t, uintmax_t, UINTMAX_MAX);
+#undef CHECK_INTEGER_PAIR
 CHECK(INTMAX_MAX, INTMAX_MAX == 9223372036854775807L);
 CHECK(INTMAX_MIN, INTMAX_MIN == (-9223372036854775807L - 1));
 CHECK(UINTMAX_MAX, UINTMAX_MAX == 18446744073709551615UL);
