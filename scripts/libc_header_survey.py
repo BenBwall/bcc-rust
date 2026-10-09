@@ -66,8 +66,8 @@ GROUP_PRELUDES = {"win32": ["windows.h"]}
 MINGW_POSIX_HEADERS = ["dirent.h", "getopt.h", "pthread.h", "strings.h", "sys/time.h", "unistd.h"]
 COMBINED = "<c-standard>"
 SENTINEL = "typedef int libc_header_survey_unit;\n"
-DEFAULT_BCC_ARGS = '--std={std} "--isystem {dir}"'
-PLACEHOLDERS = {"triple", "sysroot", "std", "config", "dir", "input"}
+DEFAULT_BCC_ARGS = '--target={triple} {flags} --std={std} "--isystem {dir}"'
+PLACEHOLDERS = {"triple", "sysroot", "std", "config", "dir", "input", "flags"}
 CLANG_DIAGNOSTIC = re.compile(r"^(.*?):(\d+):\d+: (fatal error|error|warning): (.*)$", re.MULTILINE)
 BCC_FIRST_ERROR_LOCATION = re.compile(r"^[Ee]rror: .*\n\s*--> (.+):(\d+):\d+\s*$", re.MULTILINE)
 
@@ -150,12 +150,15 @@ def check_template(template):
         unknown = template_fields(word) - PLACEHOLDERS
         if unknown:
             raise ValueError(f"unknown placeholder {sorted(unknown)} in {word!r}")
+        if "flags" in template_fields(word) and word != "{flags}":
+            raise ValueError("{flags} must be a separate word")
     return words
 
 
 def expand_template(template, values, include_dirs, source):
     """Expand a bcc argument template into arguments.
 
+    {flags} expands to the configuration's equivalent bcc extension flags.
     Scalar placeholders fill in place; a word whose placeholder is empty (the
     MSVC configuration has no sysroot) is dropped. A word containing {dir}
     repeats once per include directory and is itself split into words first,
@@ -164,7 +167,9 @@ def expand_template(template, values, include_dirs, source):
     arguments = []
     fields = {**values, "input": str(source)}
     for word in check_template(template):
-        if "{dir}" in word:
+        if word == "{flags}":
+            arguments.extend(fields.get("flags", []))
+        elif "{dir}" in word:
             for directory in include_dirs:
                 arguments.extend(part.format_map({**fields, "dir": str(directory)})
                                  for part in shlex.split(word))
@@ -190,6 +195,7 @@ def linux_configuration(name, triple, sysroots, multiarch):
         "triple": triple, "sysroot": str(sysroot), "include_dirs": include_dirs,
         "header_roots": include_dirs, "extra_groups": {"posix": POSIX_HEADERS},
         "clang_flags": [f"--target={triple}", f"--sysroot={sysroot}"],
+        "bcc_flags": [],
         "source": json.loads(manifest.read_text(encoding="utf-8")),
     }, None
 
@@ -221,6 +227,7 @@ def mingw_configuration(gcc, resource_include, environment):
         "clang_flags": ["--target=x86_64-w64-windows-gnu", "-nostdinc",
                         "-isystem", resource_include,
                         *[item for path in include_dirs for item in ("-isystem", path)]],
+        "bcc_flags": [],
         "source": {
             "gcc": executable, "gcc_machine": machine,
             "gcc_version": invoke([executable, "--version"], 30, environment)["stdout"].splitlines()[0],
@@ -281,6 +288,7 @@ def msvc_configuration(resource_include, environment):
         "clang_flags": ["--target=x86_64-pc-windows-msvc", "-fms-extensions", "-fms-compatibility",
                         "-nostdinc", "-isystem", resource_include,
                         *[item for path in include_dirs for item in ("-isystem", path)]],
+        "bcc_flags": ["-fms-extensions"],
         "source": source,
     }, None
 
@@ -364,7 +372,7 @@ def survey_row(row, configuration, args, environment):
         row["bcc"] = None
         return row
     values = {"triple": configuration["triple"], "sysroot": configuration["sysroot"],
-              "std": std, "config": name}
+              "std": std, "config": name, "flags": configuration["bcc_flags"]}
     template = args.bcc_args_for.get(name, args.bcc_args)
     command = [args.bcc, *expand_template(template, values, include_dirs, source)]
     bcc = invoke(command, args.timeout, environment)
@@ -449,7 +457,8 @@ def compare(old_path, new_report):
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Template placeholders: {triple} {sysroot} {std} {config} {input} and {dir}. "
+        epilog="Template placeholders: {triple} {sysroot} {std} {config} {input} {dir} and {flags}. "
+               "{flags} must be a separate word and expands to the configuration's bcc flags. "
                "A word containing {dir} repeats for each include directory; a word whose "
                "placeholder is empty is dropped; the translation unit is appended unless "
                "{input} appears. Default: " + DEFAULT_BCC_ARGS)
@@ -540,6 +549,7 @@ def main():
                 "include_dirs": [str(path) for path in item["include_dirs"]],
                 "header_roots": [str(path) for path in item["header_roots"]],
                 "clang_flags": [str(flag) for flag in item["clang_flags"]],
+                "bcc_flags": item["bcc_flags"],
                 "bcc_args_template": args.bcc_args_for.get(name, args.bcc_args),
                 "source": item["source"],
             } for name, item in selected.items()
