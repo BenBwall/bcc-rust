@@ -2,7 +2,7 @@ error: function definition parameter has incomplete type: `value`
  --> sema3-parameter-complete.c:1:27
   |
 1 | struct S; void f(struct S value) {}
-  |                           ^^^^^ declaration constraint violated
+  |                           ^^^^^ incomplete parameter type
   |
   = note: C99 §6.7.5.3p4: after adjustment, each prototype-definition parameter has complete object type
 

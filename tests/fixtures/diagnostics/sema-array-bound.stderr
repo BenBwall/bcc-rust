@@ -2,7 +2,7 @@ error: array bound requires integer type; a constant bound must be positive
  --> sema-array-bound.c:2:5
   |
 2 | int bad[-1];
-  |     ^^^^^^^ declaration constraint violated
+  |     ^^^^^^^ invalid array size
   |
   = note: C99 §6.7.5.2p1: array sizes have integer type; a constant size shall be greater than zero
 
@@ -10,7 +10,7 @@ error: array bound requires integer type; a constant bound must be positive
  --> sema-array-bound.c:3:5
   |
 3 | int floating[1.5];
-  |     ^^^^^^^^^^^^^ declaration constraint violated
+  |     ^^^^^^^^^^^^^ invalid array size
   |
   = note: C99 §6.7.5.2p1: array sizes have integer type; a constant size shall be greater than zero
 
@@ -18,7 +18,7 @@ error: array bound requires integer type; a constant bound must be positive
  --> sema-array-bound.c:4:22
   |
 4 | void f(float n) {int local[n];}
-  |                      ^^^^^^^^ declaration constraint violated
+  |                      ^^^^^^^^ invalid array size
   |
   = note: C99 §6.7.5.2p1: array sizes have integer type; a constant size shall be greater than zero
 

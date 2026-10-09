@@ -2,7 +2,7 @@ error: label is defined more than once: `L`
  --> sema3-label-duplicate.c:1:22
   |
 1 | void f(void) { L:; { L:; } }
-  |                -     ^ statement constraint violated
+  |                -     ^ label defined again here
   |                |
   |                previous label is here
   |

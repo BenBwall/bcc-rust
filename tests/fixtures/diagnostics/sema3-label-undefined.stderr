@@ -2,7 +2,7 @@ error: goto target label is not defined: `absent`
  --> sema3-label-undefined.c:1:20
   |
 1 | void f(void) {goto absent; goto absent;}
-  |                    ^^^^^^ statement constraint violated
+  |                    ^^^^^^ label is never defined
   |
   = note: C99 §6.8.6.1p1: a goto identifier names a label somewhere in the enclosing function
 

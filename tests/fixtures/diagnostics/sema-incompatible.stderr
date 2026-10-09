@@ -4,7 +4,7 @@ error: redeclaration has an incompatible type: `x`
 1 | int x;
   |     - previous declaration is here
 2 | double x;
-  |        ^ declaration constraint violated
+  |        ^ conflicting type
   |
   = note: C99 §6.7p4 and §6.2.7p2: declarations of the same entity require compatible types
 
@@ -14,7 +14,7 @@ error: redeclaration has an incompatible type: `e`
 5 | extern enum E e;
   |               - previous declaration is here
 6 | extern int e;
-  |            ^ declaration constraint violated
+  |            ^ conflicting type
   |
   = note: C99 §6.7p4 and §6.2.7p2: declarations of the same entity require compatible types
 
@@ -24,7 +24,7 @@ error: redeclaration has an incompatible type: `e`
 6 | extern int e;
   |            - previous declaration is here
 7 | extern enum F e;
-  |               ^ declaration constraint violated
+  |               ^ conflicting type
   |
   = note: C99 §6.7p4 and §6.2.7p2: declarations of the same entity require compatible types
 

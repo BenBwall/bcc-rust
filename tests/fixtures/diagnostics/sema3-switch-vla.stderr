@@ -2,7 +2,7 @@ error: switch dispatch enters the scope of a variably modified identifier
  --> sema3-switch-vla.c:1:37
   |
 1 | void f(int n) {switch(n) {int a[n]; case 1:; default:;}}
-  |                               -     ^^^^^^^^ statement constraint violated
+  |                               -     ^^^^^^^^ jumps into a variably modified scope
   |                               |
   |                               variably modified identifier is declared here
   |
@@ -12,7 +12,7 @@ error: switch dispatch enters the scope of a variably modified identifier
  --> sema3-switch-vla.c:1:46
   |
 1 | void f(int n) {switch(n) {int a[n]; case 1:; default:;}}
-  |                               -              ^^^^^^^^^ statement constraint violated
+  |                               -              ^^^^^^^^^ jumps into a variably modified scope
   |                               |
   |                               variably modified identifier is declared here
   |

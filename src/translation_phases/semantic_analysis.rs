@@ -1116,7 +1116,15 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                                 .is_some_and(|w| self.unanalyzed_constant(w.expression()))
                         {
                             self.error(
-                                SemanticErrorKind::InvalidBitField,
+                                if bits.is_none() {
+                                    SemanticErrorKind::InvalidBitFieldType
+                                } else if value.is_none() {
+                                    SemanticErrorKind::InvalidConstant
+                                } else if valid.is_none() || valid > bits {
+                                    SemanticErrorKind::InvalidBitFieldWidth
+                                } else {
+                                    SemanticErrorKind::NamedZeroWidthBitField
+                                },
                                 d.source_vectors,
                                 name.map(|n| n.name),
                                 None,

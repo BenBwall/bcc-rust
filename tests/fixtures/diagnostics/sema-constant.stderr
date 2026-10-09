@@ -2,7 +2,7 @@ error: an integer constant expression is required: `A`
  --> sema-constant.c:2:9
   |
 2 | enum E {A=x};
-  |         ^^^ declaration constraint violated
+  |         ^^^ not an integer constant expression
   |
   = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
 
@@ -10,7 +10,7 @@ error: an integer constant expression is required: `B`
  --> sema-constant.c:3:9
   |
 3 | enum F {B=1?2:x, C=1||x};
-  |         ^^^^^^^ declaration constraint violated
+  |         ^^^^^^^ not an integer constant expression
   |
   = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
 
@@ -18,7 +18,7 @@ error: an integer constant expression is required: `C`
  --> sema-constant.c:3:18
   |
 3 | enum F {B=1?2:x, C=1||x};
-  |                  ^^^^^^ declaration constraint violated
+  |                  ^^^^^^ not an integer constant expression
   |
   = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
 

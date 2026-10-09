@@ -2,7 +2,7 @@ error: operator requires a modifiable lvalue
  --> sema2-lvalue.c:1:32
   |
 1 | void f(void) { const int x=1; x++; }
-  |                                ^^ expression or initializer constraint violated
+  |                                ^^ not a modifiable lvalue
   |
   = note: C99 §6.5.16p2: assignment and increment operators require a modifiable lvalue
 

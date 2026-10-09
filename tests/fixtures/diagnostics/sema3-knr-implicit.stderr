@@ -2,7 +2,7 @@ error: invalid function definition parameter list: `b`
  --> sema3-knr-implicit.c:1:9
   |
 1 | int f(a,b) int a; {return b;}
-  |         ^ declaration constraint violated
+  |         ^ invalid parameter list for a definition
   |
   = note: C99 §6.9.1p5-6: prototype definitions have no declaration list; identifier-list declarations name only listed parameters, with no initializers
 

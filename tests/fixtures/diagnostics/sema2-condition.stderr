@@ -2,7 +2,7 @@ error: condition requires scalar type
  --> sema2-condition.c:1:49
   |
 1 | struct S {int x;}; void f(void) {struct S s; if(s) {} }
-  |                                                 ^ expression or initializer constraint violated
+  |                                                 ^ condition is not scalar
   |
   = note: C99 §6.8.4.1p1: selection and iteration conditions have scalar type
 

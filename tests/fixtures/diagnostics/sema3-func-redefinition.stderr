@@ -2,7 +2,7 @@ error: identifier with no linkage is declared more than once: `__func__`
  --> sema3-func-redefinition.c:1:18
   |
 1 | int f(void) {int __func__; return 0;}
-  |     -            ^^^^^^^^ declaration constraint violated
+  |     -            ^^^^^^^^ declared again here
   |     |
   |     previous declaration is here
   |

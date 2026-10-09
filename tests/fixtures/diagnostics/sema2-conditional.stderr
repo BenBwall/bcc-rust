@@ -2,7 +2,7 @@ error: invalid operand types for conditional operator
  --> sema2-conditional.c:1:24
   |
 1 | void f(void) {int *p; 1?p:1.0;}
-  |                        ^^^ expression or initializer constraint violated
+  |                        ^^^ operands do not have a common type
   |
   = note: C99 §6.5.15p2-3: the condition is scalar and the alternatives have compatible arithmetic, aggregate, void or pointer types
 

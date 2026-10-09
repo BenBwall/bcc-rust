@@ -2,7 +2,7 @@ error: member access requires a declared record member
  --> sema2-member-access.c:1:47
   |
 1 | struct S {int x;}; void f(void) {struct S s; s.missing;}
-  |                                               ^ expression or initializer constraint violated
+  |                                               ^ no such member
   |
   = note: C99 §6.5.2.3p1-2: member access names a member of the designated structure or union
 

@@ -2,7 +2,7 @@ error: invalid operand types for comparison
  --> sema2-comparison.c:1:24
   |
 1 | void f(void) {int *p; p==1;}
-  |                        ^^ expression or initializer constraint violated
+  |                        ^^ operands cannot be compared
   |
   = note: C99 §6.5.8p2: comparisons require the specified arithmetic or compatible pointer operands
 

@@ -2,7 +2,7 @@ warning: tentative array definition is assumed to have one element: `a`
  --> sema3-array-completion.c:1:5
   |
 1 | int a[];
-  |     ^ implementation warning
+  |     ^ array assumed to have one element
   |
   = note: C99 §6.9.2p2: an incomplete tentative array without an external definition is completed at translation-unit end (see example 2)
 

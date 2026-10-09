@@ -2,7 +2,7 @@ error: inline definition references an internal-linkage identifier: `x`
  --> sema3-inline-reference.c:1:42
   |
 1 | static int x; inline int f(void) {return x;}
-  |            -                             ^ declaration constraint violated
+  |            -                             ^ internal identifier in an inline definition
   |            |
   |            previous declaration is here
   |

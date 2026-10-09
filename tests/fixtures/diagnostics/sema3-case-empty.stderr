@@ -2,7 +2,7 @@ warning: case range is empty after conversion
  --> sema3-case-empty.c:1:27
   |
 1 | void f(int n) {switch(n) {case 5 ... 3:;}}
-  |                           ^^^^^^^^^^^^^^ statement constraint violated
+  |                           ^^^^^^^^^^^^^^ empty case range
   |
   = note: C99 §6.8.4.2p3: GNU extension: inclusive case ranges with a lower value greater than the upper value match nothing
 

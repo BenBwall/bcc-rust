@@ -2,7 +2,7 @@ error: invalid array element or function return type
  --> sema-derived.c:1:5
   |
 1 | int f(void)[3];
-  |     ^^^^^^^^^^ declaration constraint violated
+  |     ^^^^^^^^^^ invalid element or return type
   |
   = note: C99 §6.7.5.2p1 and §6.7.5.3p1: arrays need complete object elements; functions cannot return arrays or functions
 

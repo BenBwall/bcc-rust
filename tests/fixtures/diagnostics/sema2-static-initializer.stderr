@@ -2,7 +2,7 @@ error: static-storage initializer requires a constant expression
  --> sema2-static-initializer.c:1:14
   |
 1 | int x; int y=x;
-  |              ^ expression or initializer constraint violated
+  |              ^ not a constant expression
   |
   = note: C99 §6.7.8p4: every expression in an initializer for an object of static storage duration is constant or a string literal
 

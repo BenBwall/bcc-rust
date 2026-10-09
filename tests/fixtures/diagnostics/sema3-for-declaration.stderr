@@ -2,7 +2,7 @@ error: for initializer declaration permits only automatic objects
  --> sema3-for-declaration.c:1:19
   |
 1 | void f(void) {for(static int x=0;;) break;}
-  |                   ^^^^^^^^^^^^^^^ statement constraint violated
+  |                   ^^^^^^^^^^^^^^^ not an automatic object
   |
   = note: C99 §6.8.5p3: the declaration part of a for statement declares only objects with auto or register storage
 

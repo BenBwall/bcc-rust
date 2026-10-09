@@ -2,7 +2,7 @@ error: inline requires a function other than main: `object`
  --> sema-inline.c:1:12
   |
 1 | inline int object;
-  |            ^^^^^^ declaration constraint violated
+  |            ^^^^^^ inline applies only to functions other than main
   |
   = note: C99 §6.7.4p2-4: inline applies only to function identifiers other than main
 
@@ -10,7 +10,7 @@ error: inline requires a function other than main: `Function`
  --> sema-inline.c:2:20
   |
 2 | typedef inline int Function(void);
-  |                    ^^^^^^^^ declaration constraint violated
+  |                    ^^^^^^^^ inline applies only to functions other than main
   |
   = note: C99 §6.7.4p2-4: inline applies only to function identifiers other than main
 

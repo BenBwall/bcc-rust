@@ -2,7 +2,7 @@ error: constant expression overflows or has an invalid operation
  --> sema-overflow.c:1:11
   |
 1 | enum E {A=2147483647+1};
-  |           ^^^^^^^^^^^^ declaration constraint violated
+  |           ^^^^^^^^^^^^ overflow or invalid operation
   |
   = note: C99 §6.6p4: a constant expression is representable in its type; §6.5p5 forbids exceptional evaluation
 

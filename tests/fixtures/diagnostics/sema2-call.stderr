@@ -2,7 +2,7 @@ error: call requires a function pointer returning void or complete object type
  --> sema2-call.c:1:23
   |
 1 | void f(void) {int x; x();}
-  |                       ^^ expression or initializer constraint violated
+  |                       ^^ not a callable function
   |
   = note: C99 §6.5.2.2p1: the called expression points to a function with a valid return type
 

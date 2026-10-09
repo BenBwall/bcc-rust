@@ -2,7 +2,7 @@ error: used internal identifier has no definition: `f`
  --> sema3-internal-undefined.c:1:41
   |
 1 | static int f(void); int g(void) {return f();}
-  |            -                            ^ declaration constraint violated
+  |            -                            ^ used here but never defined
   |            |
   |            previous declaration is here
   |

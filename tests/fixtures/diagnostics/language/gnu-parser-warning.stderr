@@ -158,7 +158,7 @@ error: identifier has no visible declaration: `ap`
   --> <input>:14:28
    |
 14 |     int b=__builtin_va_arg(ap,int)+__builtin_offsetof(struct S,x);
-   |                            ^^ expression or initializer constraint violated
+   |                            ^^ not declared
    |
    = note: C99 §6.5.1p2: an identifier expression designates a declared object, function or enumeration constant
 
