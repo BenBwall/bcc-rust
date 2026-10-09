@@ -364,6 +364,85 @@ See the [compiler corpus research](compiler-test-corpus-research.md) and
 [recorded parser results](gcc-torture-parser-results.md) for comparison profiles,
 known discrepancies, and interpretation limits.
 
+### libc header survey
+
+The header survey measures how many of a C library's public headers bcc
+compiles, taking Clang for the same target as the reference. It covers four
+configurations: `glibc-x86_64-linux`, `musl-x86_64-linux`, `mingw-w64`, and
+`msvc-ucrt`.
+
+```sh
+python scripts/fetch_libc_sysroots.py
+cargo build --bin bcc-rust
+python scripts/libc_header_survey.py --output target/libc-survey/new-run
+```
+
+`fetch_libc_sysroots.py` downloads about 10 MB of pinned distribution packages:
+Debian 13 `libc6-dev` and `linux-libc-dev` from `snapshot.debian.org`, and
+Alpine 3.20 `musl-dev` and `linux-headers`. It checks each against its recorded
+SHA-256 before reading it, then extracts only `usr/include/` into
+`target/sysroots/<configuration>/`, where a `sysroot.json` manifest records
+the packages. Python reads the archives directly, and nothing from a package
+is executed. Links inside the header tree become copies of their targets;
+links that leave the sysroot abort the extraction. A few Linux headers differ
+only in case (`xt_MARK.h` and `xt_mark.h`); on a case-insensitive file system
+the second is skipped and listed in the manifest. `--list` prints the pinned
+URLs, versions, sizes, and hashes.
+
+The MinGW-w64 configuration takes its include directories from
+`gcc -xc -E -v` on `PATH`, leaving out GCC's private `lib/gcc/...` directories.
+The MSVC configuration takes them from `INCLUDE` when it is set, and otherwise
+from `vswhere.exe` and the Windows Kits registry key (the Visual C++ `include`
+directory, then the SDK's `ucrt`, `shared`, `um`, and `winrt` directories).
+A configuration whose headers are missing is skipped unless `--config` names
+it.
+
+Each selected header becomes a translation unit holding only its `#include`
+and one declaration. The selection is the C17 standard headers, the C23
+headers the library ships, the common POSIX headers for glibc and musl, and
+`windows.h` with other common Win32 and CRT headers for MinGW-w64 and MSVC.
+`--all-headers` adds every `.h` under the library's include roots. One more
+unit includes all the standard headers together. Clang runs first with the
+configuration's target and include flags and `-fsyntax-only`, in `-std=gnu17`
+and, for the standard headers, also `-std=c17`. Clang's verdict decides which
+headers are valid: bcc does not run on headers that Clang rejects, and the
+results record why Clang rejected them. bcc exits 0 even after reporting
+errors, so the survey counts its rendered diagnostics instead. A crash or
+timeout makes the survey exit nonzero. `--config`, `--match` (a header glob),
+`--jobs`, and `--timeout` narrow or tune a run.
+
+bcc's arguments come from a template. The default, `--std={std} "--isystem {dir}"`,
+works with today's CLI by passing the library's include directories as system
+directories, ahead of bcc's built-in freestanding headers. The placeholders
+are `{triple}`, `{sysroot}`, `{std}`, `{config}`, `{dir}`, and `{input}`. A
+word containing `{dir}` repeats once for each include directory, and a word
+whose placeholder is empty is dropped (the MSVC configuration has no sysroot;
+MinGW-w64's is the GCC installation root). The translation unit is appended
+unless `{input}` appears. When bcc gains target selection and hosted header
+lookup, select them with a different template, for every configuration or for
+one:
+
+```sh
+python scripts/libc_header_survey.py --output target/libc-survey/hosted \
+  --bcc-args "--target={triple} --sysroot={sysroot} --std={std}" \
+  --bcc-args-for msvc-ucrt "--target={triple} --std={std} '--isystem {dir}'" \
+  --compare target/libc-survey/baseline/results.json
+```
+
+Each output directory holds `results.json` (run metadata, a per-configuration
+summary, and one row per header and language mode), `results.jsonl` (rows as
+they finish), the generated units under `tu/`, and the Clang and bcc output
+under `logs/`. The metadata records the bcc binary's SHA-256, the Git head,
+the Clang version, each configuration's flags and include directories, and
+the package versions and hashes. The printed table gives, per configuration
+and mode, the headers surveyed, those Clang accepts, those bcc also accepts,
+and the combined unit's verdicts, followed by bcc's most common first errors.
+The survey refuses an output directory that already has results.
+`--compare OLD/results.json` lists the headers that bcc newly accepts or newly
+rejects relative to an earlier run, and adding `--against NEW/results.json`
+compares two finished runs without surveying. Run the scripts' tests with
+`python -m unittest discover -s scripts -p "test_*.py"`.
+
 ### Branch cleanup
 
 [`scripts/branch-cleanup.rs`](scripts/branch-cleanup.rs) is a nightly Cargo
