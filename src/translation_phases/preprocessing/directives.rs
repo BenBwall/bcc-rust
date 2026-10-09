@@ -371,15 +371,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             | "endif" => self.parse_endif_directive(directive),
             | "include" => self.parse_include_directive(directive),
             | "include_next" => {
-                // The resource headers are part of the implementation, so
-                // their own `#include_next` is no extension of the user's.
-                if !self.in_resource_header() {
-                    self.context.report_extension(
-                        Feature::IncludeNext,
-                        "#include_next",
-                        directive.source_vectors,
-                    );
-                }
+                self.context.report_extension(
+                    Feature::IncludeNext,
+                    "#include_next",
+                    directive.source_vectors,
+                );
                 self.parse_include_directive(directive);
             },
             | "embed" if self.context.configuration.accepts(Feature::Embed) =>
@@ -531,14 +527,6 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         )
     }
 
-    /// Whether the directive or query being read is in an embedded resource
-    /// header.
-    pub(super) fn in_resource_header(&self) -> bool {
-        self.context
-            .get_source_file(self.physical_source_file_index())
-            .starts_with(crate::headers::DIRECTORY)
-    }
-
     /// The configured search entry that provided the innermost open source
     /// file, which `#include_next` continues after. Each opening carries its
     /// own entry, so one file reached through different entries continues
@@ -631,6 +619,17 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             let mut found = None;
             for (search_index, directory) in places.clone() {
                 if let Some(index) = self.probe_header(directory, path) {
+                    // As in GCC, a header found through a system directory
+                    // is a system header, and so is one found beside a
+                    // system header.
+                    let system = if let Some(search_index) = search_index {
+                        self.context.is_system_include_directory(search_index)
+                    } else {
+                        self.context.has_system_header_part(including_file)
+                    };
+                    if system {
+                        self.context.mark_system_header(index, 0);
+                    }
                     found = Some((index, search_index));
                     break;
                 }
@@ -668,6 +667,28 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         } else {
             Some((source_file_index, search_index))
         }
+    }
+
+    /// `#pragma GCC system_header`: the rest of the current header is a
+    /// system header, as in GCC and Clang. The primary source file never is.
+    /// C99: an implementation-defined pragma, §6.10.6 paragraph 1, p. 159;
+    /// PDF p. 171.
+    fn pragma_system_header(&mut self, source_vectors: SourceVectors) {
+        if !self.current_is_header() {
+            self.context.preprocessor_error(PreprocessorError {
+                error_type: PreprocessorErrorType::SystemHeaderPragmaInMainFile,
+                source_vectors,
+            });
+            return;
+        }
+        let file = self.physical_source_file_index();
+        let vector = self.context.first_source_vector(source_vectors);
+        let from = if vector.source_file_index == file {
+            vector.index
+        } else {
+            0
+        };
+        self.context.mark_system_header(file, from);
     }
 
     /// Judges an `#include` operand by its first token as written, without
@@ -1979,9 +2000,9 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     /// C99: §6.10.6 paragraphs 1-2, p. 159; PDF p. 171. `STDC` pragmas must
     /// name `FP_CONTRACT`, `FENV_ACCESS`, or `CX_LIMITED_RANGE` and an
     /// `on-off-switch`; they are checked but have no effect yet. `#pragma
-    /// once` is bcc's one implementation-defined pragma. Other pragmas are
-    /// ignored (paragraph 1), and one that does not begin with an identifier
-    /// draws a warning first.
+    /// once` and `#pragma GCC system_header` are bcc's implementation-defined
+    /// pragmas. Other pragmas are ignored (paragraph 1), and one that does
+    /// not begin with an identifier draws a warning first.
     pub(super) fn parse_pragma_directive(&mut self) -> bool {
         let mut consumed_newline = false;
         let mut completed_stdc = false;
@@ -2042,6 +2063,28 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                     break 'base;
                                 },
                             }
+                        },
+                        | "GCC" => {
+                            let Some(operand) =
+                                Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
+                            else {
+                                break 'base;
+                            };
+                            if operand.kind == PreprocessorTokenType::Newline {
+                                consumed_newline = true;
+                                break 'base;
+                            }
+                            if operand.kind.is_identifier()
+                                && self.context.string_cache.at(operand.contents) == "system_header"
+                            {
+                                self.pragma_system_header(operand.source_vectors);
+                            }
+                            // Other GCC pragmas, and any operands, are ignored.
+                            let line_state = (self.last_was_newline, self.current_is_newline);
+                            self.skip_until_newline();
+                            (self.last_was_newline, self.current_is_newline) = line_state;
+                            consumed_newline = true;
+                            break 'base;
                         },
                         | "STDC" => {
                             match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {

@@ -515,13 +515,20 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
     ) {
         if !self.tainted {
             self.semantic_errors += 1;
-            self.context
-                .append_pending_errors([TranslationError::Semantic(SemanticError {
-                    kind,
-                    source_vectors,
-                    name,
-                    previous,
-                })]);
+            let error = SemanticError {
+                kind,
+                source_vectors,
+                name,
+                previous,
+            };
+            if !self.context.withholds(
+                crate::translation_phases::GetSeverity::severity(&error),
+                false,
+                source_vectors,
+            ) {
+                self.context
+                    .append_pending_errors([TranslationError::Semantic(error)]);
+            }
         }
     }
 

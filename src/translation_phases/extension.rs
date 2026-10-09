@@ -116,6 +116,9 @@ impl Context<'_> {
             | ExtensionPolicy::Warn => ErrorSeverity::Warning,
             | ExtensionPolicy::Deny => ErrorSeverity::Error,
         };
+        if self.withholds(severity, true, source_vectors) {
+            return;
+        }
         let spelling = self.diagnostic_text(spelling);
         self.pending_errors
             .push_back(TranslationError::Extension(ExtensionDiagnostic {

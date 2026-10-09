@@ -269,6 +269,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::ExtraTokensAfterIfndefDirective(_)
             | PreprocessorErrorType::WarningDirective(..)
             | PreprocessorErrorType::PragmaOnceInNonHeader
+            | PreprocessorErrorType::SystemHeaderPragmaInMainFile
             | PreprocessorErrorType::IncludeNextInPrimarySource(..) => ErrorSeverity::Warning,
         }
     }
@@ -683,12 +684,17 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     STDCPragmaDirectiveWithoutOnOffSwitch,
     MissingOnOffSwitchInSTDCPragma(&'tu str),
     PragmaOnceInNonHeader,
+    /// `#pragma GCC system_header` in the primary source file, which is never
+    /// a system header; the pragma is ignored, as in GCC and Clang. An
+    /// implementation-defined pragma, C99 §6.10.6 paragraph 1, p. 159; PDF
+    /// p. 171.
+    SystemHeaderPragmaInMainFile,
     /// `#include_next` or `__has_include_next`, named by the payload, in the
     /// primary source file, where there is no entry to continue after; the
     /// lookup searches as `#include` would, as GCC's and Clang's do. The
-    /// directive is an
-    /// extension (C99 §4p6, p. 7; PDF p. 19) over implementation-defined
-    /// header places, §6.10.2 paragraphs 2-3, pp. 149-150; PDF pp. 161-162.
+    /// directive is an extension (C99 §4p6, p. 7; PDF p. 19) over
+    /// implementation-defined header places, §6.10.2 paragraphs 2-3, pp.
+    /// 149-150; PDF pp. 161-162.
     IncludeNextInPrimarySource(&'static str),
     /// C99: §6.10.5 paragraph 1, p. 159; PDF p. 171; translation fails,
     /// §4 paragraph 4, p. 7; PDF p. 19.
@@ -1432,6 +1438,9 @@ impl PreprocessorErrorType<'_> {
             .note("C99 §6.10.6p2: each standard pragma takes an on-off switch"),
             | Self::PragmaOnceInNonHeader =>
                 new("`#pragma once` in main file").label("only affects files that are included"),
+            | Self::SystemHeaderPragmaInMainFile =>
+                new("`#pragma GCC system_header` ignored in main file")
+                    .label("only a header can be a system header"),
             | Self::IncludeNextInPrimarySource(spelling) =>
                 new(format_in!(arena, "`{spelling}` in the primary source file"))
                     .label("searches from the start of the include path")
@@ -1496,6 +1505,24 @@ impl PreprocessorErrorType<'_> {
                 .label("`#error` directive")
             },
         }
+    }
+}
+
+impl PreprocessorErrorType<'_> {
+    /// Whether the diagnostic reports a construct the extension policy
+    /// governs, so a system header withholds it at every severity.
+    pub(crate) fn is_extension(&self) -> bool {
+        matches!(
+            self,
+            Self::CommaOperatorInPreprocessorExpression(_)
+                | Self::MissingVariadicArgument(_)
+                | Self::BackslashInQuotedHeaderName(_)
+                | Self::VaArgsOutsideVariadicMacro(_)
+                | Self::VaOptOutsideVariadicMacro(_)
+                | Self::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(..)
+                | Self::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(..)
+                | Self::MacroRedefinedWithDifferentDefinition(..)
+        )
     }
 }
 

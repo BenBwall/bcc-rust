@@ -243,7 +243,16 @@ directories stay. The GCC single-dash spellings `-iquote`, `-isystem` and
 `--iquote`/`-q` and `--isystem`/`-s` remain. The working directory is never
 searched implicitly. The environment variables use the platform path separator,
 and, as in GCC, an empty element names the working directory. A missing
-header's diagnostic lists every directory searched. `__DATE__` and `__TIME__` are fixed once per translation unit. For reproducible output, `--source-date-epoch <seconds>` or the `SOURCE_DATE_EPOCH` variable pins them to that UTC time; the flag wins, a malformed variable is ignored, and a malformed flag value is an error. Files under [`test-programs/`](test-programs/) are useful manual inspection inputs, but they are not an automated conformance suite.
+header's diagnostic lists every directory searched.
+
+Headers found through `-isystem`, `C_INCLUDE_PATH`, the resource directory, the
+C library's directories or `-idirafter`, and headers that use `#pragma GCC
+system_header`, are system headers, as in GCC: their warnings and extension
+diagnostics are withheld, even under `-pedantic-errors`, while errors are
+still reported. See
+[language-standards.md](language-standards.md#system-headers) for the rule,
+including how macro expansions are attributed. Macro redefinitions are
+warnings, and errors under `-pedantic-errors`, as in GCC and Clang. `__DATE__` and `__TIME__` are fixed once per translation unit. For reproducible output, `--source-date-epoch <seconds>` or the `SOURCE_DATE_EPOCH` variable pins them to that UTC time; the flag wins, a malformed variable is ignored, and a malformed flag value is an error. Files under [`test-programs/`](test-programs/) are useful manual inspection inputs, but they are not an automated conformance suite.
 
 The resource directory holds the seven headers a freestanding implementation
 provides: `<float.h>`, `<iso646.h>`, `<limits.h>`, `<stdarg.h>`, `<stdbool.h>`,
