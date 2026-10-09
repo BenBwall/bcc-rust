@@ -190,6 +190,16 @@ availability and promoted argument/type agreement remain backend/runtime work.
 An `offsetof` member/index path yields a `size_t` integer constant; bit-fields
 and invalid paths diagnose.
 
+`#pragma clang deprecated(NAME)` also applies to user-defined macros. Its
+optional message is a sequence of adjacent narrow string literals, decoded
+like Clang's. Warnings point at the outermost replacement invocation (or the
+argument being prescanned), with related expansion and pragma locations;
+system-header suppression follows that use location. The mark survives
+redefinitions, including identical ones, and is cleared by `#undef`.
+Evaluated `#ifdef`, `#ifndef`, `defined`, `#elifdef` and `#elifndef` tests also
+warn. Skipped conditional groups do not. This is implementation-defined
+pragma behavior under C99 §6.10.6p1, rather than a GNU language-mode feature.
+
 `-pedantic` and `-Wpedantic` select Warn; `-pedantic-errors` selects Deny;
 the default is Allow. Later policy flags win. Deny emits an error but keeps
 classified tokens available for structured parser recovery. Preprocessor

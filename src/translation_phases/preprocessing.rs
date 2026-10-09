@@ -87,6 +87,7 @@ use crate::{
         SetPosition,
         SetSourceFileIndex,
         SourcePosition,
+        SourceVector,
         TranslationError,
         preprocessor_tokenizer::{
             LexedFiles,
@@ -158,8 +159,8 @@ struct PreprocessorState<'pp> {
     arena:                 &'pp Bump,
     once_set:              ArenaSet<'pp, u32>,
     macro_definitions:     ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,
-    /// Clang resource-header `#pragma clang deprecated(name)` markers.
-    deprecated_macros:     ArenaSet<'pp, StringCacheId>,
+    /// Implementation-defined pragma markers (C99 §6.10.6p1).
+    deprecated_macros:     ArenaMap<'pp, StringCacheId, MacroDeprecation<'pp>>,
     /// Every source file opened, including the main file and headers.
     lexed_files:           LexedFiles<'pp>,
     /// Source-file frames, outermost first, while no expansion is active.
@@ -174,6 +175,15 @@ struct PreprocessorState<'pp> {
     translation_timestamp: Option<TranslationTimestamp<'pp>>,
     /// Storage that string-literal conversion reuses.
     literal_scratch:       LiteralScratch<'pp>,
+}
+
+/// Clang's macro deprecation message and the end of its pragma payload.
+/// Own the location across preprocessor provenance compaction.
+/// C99: implementation-defined pragma behavior, §6.10.6p1, p. 159; PDF p. 171.
+#[derive(Debug, Clone)]
+struct MacroDeprecation<'pp> {
+    message:  Option<&'pp str>,
+    location: SourceVector,
 }
 
 impl Debug for PreprocessorState<'_> {
@@ -459,7 +469,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     arena: pp,
                     once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),
                     macro_definitions,
-                    deprecated_macros: ArenaSet::with_hasher_in(FxBuildHasher, pp),
+                    deprecated_macros: ArenaMap::with_hasher_in(FxBuildHasher, pp),
                     lexed_files,
                     file_frames,
                     command_line_file,

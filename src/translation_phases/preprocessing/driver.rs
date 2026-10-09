@@ -26,6 +26,8 @@ use chrono::Local;
 use super::{
     Expander,
     errors::{
+        DeprecatedMacroDiagnostic,
+        MacroExpansionNote,
         PreprocessorError,
         PreprocessorErrorType,
     },
@@ -63,22 +65,77 @@ use crate::{
 };
 
 impl Expander<'_, '_, '_, '_> {
-    /// Resource-header deprecation is reported at the macro use, so a
-    /// system-header definition does not hide a user-file use warning.
-    fn warn_deprecated_macro(&mut self, token: PreprocessorToken) {
-        if self
+    /// Clang's implementation-defined deprecation is reported at the outer
+    /// replacement invocation, or the argument being prescanned. Suppression
+    /// therefore follows the use rather than a system-header spelling.
+    /// C99: §6.10.6p1, p. 159; PDF p. 171; rescanning §6.10.3.4p1,
+    /// p. 155; PDF p. 167.
+    pub(super) fn warn_deprecated_macro(&mut self, token: PreprocessorToken) {
+        let Some(deprecation) = self
             .state
             .deprecated_macros
-            .contains(&token.identifier_id(self.context))
-        {
-            self.context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::DeprecatedMacro(
-                    self.context
-                        .diagnostic_text(self.context.string_cache.at(token.contents)),
-                ),
-                source_vectors: token.source_vectors,
-            });
+            .get(&token.identifier_id(self.context))
+            .cloned()
+        else {
+            return;
+        };
+        let mut spelling = self.spelling_location(token);
+        let mut invocation = spelling.clone();
+        let mut expansions = ArenaVec::new_in(self.scratch);
+        for frame in self.tokenizer_stack.iter().rev() {
+            match &frame.frame_type {
+                | TokenizerFrameType::ObjectLikeMacroInvocation {
+                    name,
+                    invocation: location,
+                    spelling: parent_spelling,
+                    ..
+                }
+                | TokenizerFrameType::FunctionLikeMacroInvocation {
+                    name,
+                    invocation: location,
+                    spelling: parent_spelling,
+                    ..
+                } => {
+                    // __VA_OPT__ uses an internal replacement frame, not an
+                    // additional source macro expansion (C23 §6.10.5.1p4).
+                    if *name == self.state.va_opt_name {
+                        continue;
+                    }
+                    expansions.push(MacroExpansionNote {
+                        name:     self
+                            .context
+                            .diagnostic_text(self.context.string_cache.at(*name)),
+                        location: spelling,
+                    });
+                    spelling = parent_spelling.clone();
+                    invocation = location.clone();
+                },
+                | TokenizerFrameType::SourceFile { .. }
+                | TokenizerFrameType::FunctionLikeMacroArgument { .. }
+                | TokenizerFrameType::Rescan { argument: true } => break,
+                | TokenizerFrameType::Rescan { argument: false }
+                | TokenizerFrameType::DeferredQuery => {},
+            }
         }
+        let source_vectors = self.context.push_source_vectors(&[invocation]);
+        self.context.preprocessor_error(PreprocessorError {
+            error_type: PreprocessorErrorType::DeprecatedMacro(
+                self.context.tu_arena().alloc(DeprecatedMacroDiagnostic {
+                    name:       self
+                        .context
+                        .diagnostic_text(self.context.string_cache.at(token.contents)),
+                    message:    deprecation
+                        .message
+                        .map(|text| self.context.diagnostic_text(text)),
+                    marked_at:  deprecation.location,
+                    expansions: self
+                        .context
+                        .tu_arena()
+                        .alloc_slice_fill_iter(expansions.iter().rev().cloned()),
+                }),
+            ),
+            source_vectors,
+        });
     }
 }
 
@@ -118,6 +175,8 @@ pub(super) enum TokenizerFrameType<'a> {
         name:           StringCacheId,
         invocation:     SourceVector,
         invocation_end: SourceVector,
+        /// Spelling before replacement, for nested expansion notes.
+        spelling:       SourceVector,
     },
     /// The replacement list of a function-like macro, with the arguments
     /// that its parameters stand for.
@@ -129,6 +188,8 @@ pub(super) enum TokenizerFrameType<'a> {
         name:           StringCacheId,
         arguments:      MacroArguments<'a>,
         is_variadic:    bool,
+        /// Spelling before replacement, for nested expansion notes.
+        spelling:       SourceVector,
     },
     /// The tokens of one argument, read where its parameter is substituted.
     ///
@@ -262,6 +323,12 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                 | TokenizerFrameType::Rescan { .. } | TokenizerFrameType::DeferredQuery => (),
             }
         }
+        self.spelling_location(token)
+    }
+
+    /// C99: §6.10.3.4p1, p. 155; PDF p. 167: retain the name's spelling
+    /// separately from its invocation through nested rescanning.
+    fn spelling_location(&self, token: PreprocessorToken) -> SourceVector {
         self.context
             .get_source_vectors(token.source_vectors)
             .first()
@@ -714,6 +781,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                         .unwrap_or_default()
                                 }),
                                 invocation:     self.invocation_location(token),
+                                spelling:       self.spelling_location(token),
                                 name:           token.identifier_id(self.context),
                             },
                             tokenizer,
@@ -750,6 +818,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                 frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
                                     invocation_end,
                                     invocation: self.invocation_location(token),
+                                    spelling: self.spelling_location(token),
                                     name: token.identifier_id(self.context),
                                     arguments,
                                     is_variadic,
@@ -1038,6 +1107,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                     0,
                                 ),
                                 invocation: self.invocation_location(token),
+                                spelling: self.spelling_location(token),
                                 name: token.identifier_id(self.context),
                                 arguments,
                                 is_variadic,

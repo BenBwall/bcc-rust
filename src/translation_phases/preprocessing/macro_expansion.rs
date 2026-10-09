@@ -398,6 +398,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
                 name: invocation.identifier_id(self.context),
                 invocation: location.clone(),
+                spelling: location.clone(),
                 invocation_end: location,
                 arguments,
                 is_variadic: true,

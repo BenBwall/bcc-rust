@@ -1,4 +1,5 @@
 mod conditional_boundary_regressions;
+mod deprecated_macros;
 mod dialect_regressions;
 mod directive_regressions;
 mod encoding_regressions;

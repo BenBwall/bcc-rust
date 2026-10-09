@@ -1079,6 +1079,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             return;
         };
         if ident_or_opening_paren.kind.is_identifier() {
+            self.warn_deprecated_macro(ident_or_opening_paren);
             let is_defined = self
                 .state
                 .macro_definitions
@@ -1110,6 +1111,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             |t| t.kind == PreprocessorTokenType::ClosingParenthesis,
             PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective,
         );
+        self.warn_deprecated_macro(ident);
         let is_defined = self
             .state
             .macro_definitions

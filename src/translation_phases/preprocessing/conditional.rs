@@ -376,8 +376,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// `#elifndef` (named by `directive`) tests, and returns whether the
     /// test holds.
     ///
-    /// C23: §6.10.2p16, p. 168; PDF p. 181: elifdef tests a macro name
-    /// directly.
+    /// C99: §6.10.1p5, pp. 148-149; PDF pp. 160-161. C23: §6.10.2p16,
+    /// p. 168; PDF p. 181: elifdef tests a macro name directly. Clang's
+    /// implementation-defined deprecation pragma also checks these uses
+    /// (C99 §6.10.6p1, p. 159; PDF p. 171).
     fn eval_macro_test(&mut self, directive: &'static str) -> bool {
         let wants_defined = matches!(directive, "ifdef" | "elifdef");
         let Some(name) = self.expect_token_from_previous_phase::<true>(
@@ -407,6 +409,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             }
             return false;
         };
+        self.warn_deprecated_macro(name);
         if self
             .expect_token_from_previous_phase::<true>(
                 |_, t| t.kind == PreprocessorTokenType::Newline,

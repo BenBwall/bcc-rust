@@ -731,13 +731,17 @@ Six fixtures cover atomic diagnostics and preserve following valid input:
 | `sema-atomic-order` | `InvalidAtomicOrder`, `InvalidAtomicFailureOrder` and `AtomicBufferQualifiers` warnings; valid runtime orders, stronger failure orders and unrestricted fences remain accepted. |
 | `sema-atomic-generic` | `InvalidGenericSelection`, no matching association, duplicate compatible associations, and a selected false assertion. |
 | `sema-atomic-constant` | Atomic size assertion evaluation, non-ICE atomic casts/runtime lock-free sizes, nonconstant 16-byte queries, atomic bit-fields and incomplete pointer fetches. |
-| `sema-atomic-deprecated` | `DeprecatedMacro` at a C17 `ATOMIC_VAR_INIT` invocation, despite its definition in a system resource header. |
+| `sema-atomic-deprecated` | `DeprecatedMacro` at direct and wrapped C17 resource/user macro uses, with expansion and pragma labels; identical redefinition, `#ifdef`/`#ifndef`, both `defined` forms, adjacent message literals, `_Pragma`, `#undef` clearing, and use-location suppression for a system-header replacement. |
 
 Direct semantic tests additionally check C89/C99/C11/C17/C23 extension policy,
 header deprecation suppression, retained result types, atomic/non-atomic pointer
 identity and constant-evaluated `_Generic` results. The shared atomic probe runs
 with both Clang and bcc for every target in C11, C17 and C23. It deliberately
 disables header deprecation warnings; the separate golden pins that warning.
+Preprocessor unit tests additionally pin Clang's C23 `#elifdef`/`#elifndef`
+warning locations, skipped groups, argument prescan, cross-frame invocations,
+changed definitions and malformed optional-message recovery. The corpus and
+variant inventory counts are unchanged: this extends an existing fixture.
 All new fixtures participate in the zero-global-allocation reporting harness.
 
 ### Binary128 and type-generic diagnostics

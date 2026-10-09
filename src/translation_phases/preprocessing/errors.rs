@@ -45,6 +45,7 @@ use crate::{
         GetSeverity,
         GetSourceVectors,
         SourcePosition,
+        SourceVector,
         SourceVectors,
         preprocessor_tokenizer::PreprocessorTokenType,
     },
@@ -60,6 +61,25 @@ pub(crate) struct PreprocessorError<'tu> {
     pub(crate) source_vectors: SourceVectors,
 }
 
+/// Owned related locations for Clang's implementation-defined pragma warning.
+/// C99: §6.10.6p1, p. 159; PDF p. 171; macro rescanning §6.10.3.4p1,
+/// p. 155; PDF p. 167.
+#[derive(Debug)]
+pub(crate) struct DeprecatedMacroDiagnostic<'tu> {
+    pub(super) name:       &'tu str,
+    pub(super) message:    Option<&'tu str>,
+    pub(super) marked_at:  SourceVector,
+    pub(super) expansions: &'tu [MacroExpansionNote<'tu>],
+}
+
+/// A macro replacement's spelling location, retained independently of frames.
+/// C99: §6.10.3.4p1, p. 155; PDF p. 167.
+#[derive(Debug, Clone)]
+pub(super) struct MacroExpansionNote<'tu> {
+    pub(super) name:     &'tu str,
+    pub(super) location: SourceVector,
+}
+
 impl Display for PreprocessorError<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "{}", self.error_type)
@@ -73,9 +93,23 @@ impl ToDiagnostic for PreprocessorError<'_> {
         source: SourceVectors,
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
-        self.error_type
+        let mut diagnostic = self
+            .error_type
             .explain_in(arena, context.source_spelling(source))
-            .at(self.severity(), source)
+            .at(self.severity(), source);
+        if let PreprocessorErrorType::DeprecatedMacro(deprecation) = &self.error_type {
+            for expansion in deprecation.expansions {
+                diagnostic = diagnostic.secondary_segments(
+                    arena.alloc_slice_fill_iter([expansion.location.clone()]),
+                    format_in!(arena, "expanded from macro `{}`", expansion.name),
+                );
+            }
+            diagnostic = diagnostic.secondary_segments(
+                arena.alloc_slice_fill_iter([deprecation.marked_at.clone()]),
+                "macro marked deprecated here",
+            );
+        }
+        diagnostic
     }
 }
 
@@ -728,8 +762,10 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// C99: §6.10.5 paragraph 1, p. 159; PDF p. 171; translation fails,
     /// §4 paragraph 4, p. 7; PDF p. 19.
     ErrorDirective(&'tu str),
-    /// Clang resource-header `#pragma clang deprecated(name)` warning.
-    DeprecatedMacro(&'tu str),
+    /// Clang `#pragma clang deprecated(name[, message])` warning.
+    /// C99: implementation-defined pragma behavior, §6.10.6p1, p. 159;
+    /// PDF p. 171.
+    DeprecatedMacro(&'tu DeprecatedMacroDiagnostic<'tu>),
 }
 
 /// The directives of C99 §6.10, for suggestions.
@@ -1553,15 +1589,19 @@ impl PreprocessorErrorType<'_> {
                 })
                 .label("`#warning` directive")
             },
-            | Self::DeprecatedMacro(name) => new(format_in!(
-                arena,
-                "macro `{name}` has been marked as deprecated"
-            ))
-            .label("deprecated macro")
-            .note(
-                "Clang #pragma clang deprecated: the resource header deprecates ATOMIC_VAR_INIT \
-                 in C17",
-            ),
+            | Self::DeprecatedMacro(deprecation) => {
+                let message = format_in!(
+                    arena,
+                    "macro `{}` has been marked as deprecated",
+                    deprecation.name,
+                );
+                new(match deprecation.message {
+                    | Some(detail) if !detail.is_empty() =>
+                        format_in!(arena, "{message}: {detail}"),
+                    | _ => message,
+                })
+                .label("deprecated macro")
+            },
             | Self::ErrorDirective(message) => {
                 let message = message.trim();
                 new(if message.is_empty() {

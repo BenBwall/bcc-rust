@@ -1,9 +1,105 @@
 warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
- --> sema-atomic-deprecated.c:2:25
-  |
-2 | atomic_int deprecated = ATOMIC_VAR_INIT(1);
-  |                         ^^^^^^^^^^^^^^^ deprecated macro
-  |
-  = note: Clang #pragma clang deprecated: the resource header deprecates ATOMIC_VAR_INIT in C17
+  --> sema-atomic-deprecated.c:2:25
+   |
+ 2 | atomic_int deprecated = ATOMIC_VAR_INIT(1);
+   |                         ^^^^^^^^^^^^^^^ deprecated macro
+  ::: <built-in>/stdatomic.h:62:41
+   |
+62 | #pragma clang deprecated(ATOMIC_VAR_INIT)
+   |                                         - macro marked deprecated here
 
-1 warning generated.
+warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
+  --> sema-atomic-deprecated.c:4:22
+   |
+ 3 | #define W(x) ATOMIC_VAR_INIT(x)
+   |              --------------- expanded from macro `W`
+ 4 | atomic_int wrapped = W(2);
+   |                      ^ deprecated macro
+  ::: <built-in>/stdatomic.h:62:41
+   |
+62 | #pragma clang deprecated(ATOMIC_VAR_INIT)
+   |                                         - macro marked deprecated here
+
+warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
+  --> sema-atomic-deprecated.c:6:24
+   |
+ 6 | atomic_int redefined = ATOMIC_VAR_INIT(3);
+   |                        ^^^^^^^^^^^^^^^ deprecated macro
+  ::: <built-in>/stdatomic.h:62:41
+   |
+62 | #pragma clang deprecated(ATOMIC_VAR_INIT)
+   |                                         - macro marked deprecated here
+
+warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
+  --> sema-atomic-deprecated.c:7:8
+   |
+ 7 | #ifdef ATOMIC_VAR_INIT
+   |        ^^^^^^^^^^^^^^^ deprecated macro
+  ::: <built-in>/stdatomic.h:62:41
+   |
+62 | #pragma clang deprecated(ATOMIC_VAR_INIT)
+   |                                         - macro marked deprecated here
+
+warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
+  --> sema-atomic-deprecated.c:9:9
+   |
+ 9 | #ifndef ATOMIC_VAR_INIT
+   |         ^^^^^^^^^^^^^^^ deprecated macro
+  ::: <built-in>/stdatomic.h:62:41
+   |
+62 | #pragma clang deprecated(ATOMIC_VAR_INIT)
+   |                                         - macro marked deprecated here
+
+warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
+  --> sema-atomic-deprecated.c:11:13
+   |
+11 | #if defined(ATOMIC_VAR_INIT)
+   |             ^^^^^^^^^^^^^^^ deprecated macro
+  ::: <built-in>/stdatomic.h:62:41
+   |
+62 | #pragma clang deprecated(ATOMIC_VAR_INIT)
+   |                                         - macro marked deprecated here
+
+warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
+  --> sema-atomic-deprecated.c:13:13
+   |
+13 | #if defined ATOMIC_VAR_INIT
+   |             ^^^^^^^^^^^^^^^ deprecated macro
+  ::: <built-in>/stdatomic.h:62:41
+   |
+62 | #pragma clang deprecated(ATOMIC_VAR_INIT)
+   |                                         - macro marked deprecated here
+
+warning: macro `OLD` has been marked as deprecated: use NEW
+  --> sema-atomic-deprecated.c:18:14
+   |
+16 | #pragma clang deprecated(OLD, "use " "NEW")
+   |                                           - macro marked deprecated here
+17 | #define WRAP OLD
+   |              --- expanded from macro `WRAP`
+18 | int legacy = WRAP;
+   |              ^^^^ deprecated macro
+
+warning: macro `__CLANG_ATOMIC_INT_LOCK_FREE` has been marked as deprecated
+  --> sema-atomic-deprecated.c:23:17
+   |
+22 | #pragma clang deprecated(__CLANG_ATOMIC_INT_LOCK_FREE)
+   |                                                      - macro marked deprecated here
+23 | int lock_free = ATOMIC_INT_LOCK_FREE;
+   |                 ^^^^^^^^^^^^^^^^^^^^ deprecated macro
+  ::: <built-in>/stdatomic.h:45:37
+   |
+45 | #define ATOMIC_INT_LOCK_FREE        __CLANG_ATOMIC_INT_LOCK_FREE
+   |                                     ---------------------------- expanded from macro `ATOMIC_INT_LOCK_FREE`
+
+warning: macro `OLD` has been marked as deprecated: operator
+  --> sema-atomic-deprecated.c:25:20
+   |
+25 | int operator_use = OLD;
+   |                    ^^^ deprecated macro
+  ::: <pragma string>:1:33
+   |
+ 1 | clang deprecated(OLD, "operator")
+   |                                 - macro marked deprecated here
+
+10 warnings generated.

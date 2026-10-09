@@ -16,6 +16,7 @@
 
 use std::{
     ffi::OsStr,
+    fmt::Write as _,
     ops::ControlFlow,
     path::{
         Component,
@@ -25,6 +26,7 @@ use std::{
 
 use super::{
     Expander,
+    MacroDeprecation,
     driver::{
         TokenizerFrame,
         TokenizerFrameType,
@@ -1641,10 +1643,9 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             .state
             .macro_definitions
             .insert(name.identifier_id(self.context), definition);
-        _ = self
-            .state
-            .deprecated_macros
-            .remove(&name.identifier_id(self.context));
+        // Clang's implementation-defined pragma mark follows the name across
+        // redefinitions (including C99 §6.10.3p2 identical definitions).
+        // Only #undef ends it, as it ends the definition (§6.10.3.5p1).
         self.resume_at_line_start();
     }
 
@@ -2230,42 +2231,171 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         consumed_newline
     }
 
-    /// Clang's resource header marks `ATOMIC_VAR_INIT` deprecated in C17.
-    /// Recognize the single-name pragma form; unknown pragmas remain ignored.
+    /// Clang's implementation-defined macro deprecation pragma.
+    /// C99: §6.10.6p1, p. 159; PDF p. 171.
     /// <https://clang.llvm.org/docs/LanguageExtensions.html#deprecating-macros>
     fn pragma_deprecated_macro(&mut self) -> bool {
-        let mut name = None;
-        for index in 0..4 {
-            let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
-            else {
-                return false;
-            };
-            if token.kind == PreprocessorTokenType::Newline {
-                return true;
-            }
-            let valid = match index {
-                | 0 =>
-                    token.kind.is_identifier()
-                        && self.context.string_cache.at(token.contents) == "deprecated",
-                | 1 => token.kind == PreprocessorTokenType::OpeningParenthesis,
-                | 2 => {
-                    name = token
-                        .kind
-                        .is_identifier()
-                        .then(|| token.identifier_id(self.context));
-                    name.is_some()
-                },
-                | _ => token.kind == PreprocessorTokenType::ClosingParenthesis,
-            };
-            if !valid {
-                return false;
-            }
-        }
-        if let Some(name) = name
-            && self.state.macro_definitions.contains_key(&name)
+        let Some(kind) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context) else {
+            return false;
+        };
+        if !kind.kind.is_identifier() || self.context.string_cache.at(kind.contents) != "deprecated"
         {
-            _ = self.state.deprecated_macros.insert(name);
+            return kind.kind == PreprocessorTokenType::Newline;
         }
+        if let Err(consumed_newline) = self.deprecated_pragma_token(
+            |_, token| token.kind == PreprocessorTokenType::OpeningParenthesis,
+            "expected ( in #pragma clang deprecated",
+        ) {
+            return consumed_newline;
+        }
+        let name = match self.deprecated_pragma_token(
+            |_, token| token.kind.is_identifier(),
+            "expected macro name in #pragma clang deprecated",
+        ) {
+            | Ok(name) => name,
+            | Err(consumed_newline) => return consumed_newline,
+        };
+        let name_id = name.identifier_id(self.context);
+        if !self.state.macro_definitions.contains_key(&name_id) {
+            self.context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::LanguageConstraint(
+                    self.context.diagnostic_format(format_args!(
+                        "no macro named `{}`",
+                        self.context.string_cache.at(name.contents),
+                    )),
+                ),
+                source_vectors: name.source_vectors,
+            });
+            return false;
+        }
+        let mut closing = match self.deprecated_pragma_token(
+            |_, token| {
+                matches!(
+                    token.kind,
+                    PreprocessorTokenType::Comma | PreprocessorTokenType::ClosingParenthesis
+                )
+            },
+            "expected ) in #pragma clang deprecated",
+        ) {
+            | Ok(token) => token,
+            | Err(consumed_newline) => return consumed_newline,
+        };
+        let mut message = None;
+        if closing.kind == PreprocessorTokenType::Comma {
+            let mut text = ArenaString::new_in(self.scratch);
+            let mut literal = match self.deprecated_pragma_token(
+                Self::is_deprecation_message_literal,
+                "expected string literal in #pragma clang deprecated",
+            ) {
+                | Ok(token) => token,
+                | Err(consumed_newline) => return consumed_newline,
+            };
+            loop {
+                self.append_deprecation_message(literal, &mut text);
+                let next = match self.deprecated_pragma_token(
+                    |this, token| {
+                        this.is_deprecation_message_literal(token)
+                            || token.kind == PreprocessorTokenType::ClosingParenthesis
+                    },
+                    "expected ) in #pragma clang deprecated",
+                ) {
+                    | Ok(token) => token,
+                    | Err(consumed_newline) => return consumed_newline,
+                };
+                if next.kind == PreprocessorTokenType::ClosingParenthesis {
+                    closing = next;
+                    break;
+                }
+                literal = next;
+            }
+            message = Some(&*self.state.arena.alloc_str(&text));
+        }
+        _ = self.state.deprecated_macros.insert(
+            name_id,
+            MacroDeprecation {
+                message,
+                location: self
+                    .context
+                    .first_source_vector(closing.source_vectors)
+                    .clone(),
+            },
+        );
         false
+    }
+
+    /// A pragma operand, with recovery that preserves the following line.
+    /// C99: implementation-defined pragma grammar, §6.10.6p1, p. 159;
+    /// PDF p. 171. Unknown Clang pragmas are still ignored by the caller.
+    fn deprecated_pragma_token(
+        &mut self,
+        accepts: impl Fn(&Self, PreprocessorToken) -> bool,
+        message: &'static str,
+    ) -> Result<PreprocessorToken, bool> {
+        let token = Self::next_ignore_whitespace(&mut self.tokenizer, self.context);
+        if let Some(token) = token
+            && accepts(self, token)
+        {
+            return Ok(token);
+        }
+        let source_vectors =
+            token.map_or_else(|| self.current_location(), |token| token.source_vectors);
+        self.context.preprocessor_error(PreprocessorError {
+            error_type: PreprocessorErrorType::LanguageConstraint(message),
+            source_vectors,
+        });
+        Err(token.is_none_or(|token| token.kind == PreprocessorTokenType::Newline))
+    }
+
+    /// Clang permits only ordinary, unexpanded string literals in messages.
+    /// C99: §6.4.5p1, p. 62; PDF p. 74, as an implementation-defined
+    /// pragma operand (§6.10.6p1, p. 159; PDF p. 171).
+    fn is_deprecation_message_literal(&self, token: PreprocessorToken) -> bool {
+        token.kind == PreprocessorTokenType::String
+            && self
+                .context
+                .string_cache
+                .at(token.contents)
+                .starts_with('"')
+    }
+
+    /// Decode and concatenate message literals, escaping non-printing bytes
+    /// as Clang does so diagnostics never carry a raw NUL. This pragma uses
+    /// ordinary phase-5 decoding and phase-6 concatenation rules.
+    /// C99: §6.4.5p4, p. 62; PDF p. 74; implementation-defined pragma
+    /// behavior §6.10.6p1, p. 159; PDF p. 171.
+    fn append_deprecation_message(&mut self, token: PreprocessorToken, text: &mut ArenaString<'_>) {
+        let Some(token) = self.map_preprocessor_token(token) else {
+            return;
+        };
+        let TokenType::String(StringTokenType::String(contents)) = token.kind else {
+            return;
+        };
+        let append = |text: &mut ArenaString<'_>, character: char| {
+            if character.is_control() && !matches!(character, '\n' | '\r' | '\t') {
+                let _ = write!(text, "<U+{:04X}>", u32::from(character));
+            } else {
+                text.push(character);
+            }
+        };
+        if let Some(decoded) = self.context.literal_text_in(self.scratch, contents, false) {
+            for character in decoded.chars() {
+                append(text, character);
+            }
+        } else {
+            // Non-UTF-8 execution bytes are still valid message contents.
+            for unit in self.context.literal_units(contents) {
+                match *unit {
+                    | super::LiteralUnit::Character(character) => append(text, character),
+                    | super::LiteralUnit::Numeric(value) if value < 128 => {
+                        if let Some(character) = char::from_u32(value) {
+                            append(text, character);
+                        }
+                    },
+                    | super::LiteralUnit::Numeric(value) => {
+                        let _ = write!(text, "<{value:02X}>");
+                    },
+                }
+            }
+        }
     }
 }
