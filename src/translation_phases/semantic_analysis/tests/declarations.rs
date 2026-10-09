@@ -199,6 +199,29 @@ fn unanalyzed_redeclarations_inherit_the_previous_kind() {
 }
 
 #[test]
+fn members_through_pointers_to_unanalyzed_types_are_opaque() {
+    // `->` must not assume that an unanalyzed pointee has no such member, as
+    // `.` on an unanalyzed object already does not. shlobj_core.h reads
+    // members through `const ITEMIDLIST __unaligned *`.
+    assert_eq!(
+        kinds(
+            "struct T { int a; } t; __typeof__(t) *v; int h(void) { return v->a + (*v).a + \
+             v->missing; } struct T *w; int g(void) { return w->missing; }",
+            gnu17()
+        ),
+        [SemanticErrorKind::InvalidMemberAccess]
+    );
+    assert_eq!(
+        kinds(
+            "typedef struct L { struct { unsigned short cb; } mkid; } L; typedef const L \
+             __unaligned *P; int f(P p) { return p->mkid.cb; }",
+            gnu17().with_msvc_extensions(true)
+        ),
+        []
+    );
+}
+
+#[test]
 fn enums_use_the_gcc_x86_64_compatible_integer_type() {
     for configuration in [CompilerConfiguration::default(), gnu17()] {
         assert_eq!(

@@ -283,7 +283,8 @@ Stage-1 boundaries, with their current disposition:
 - Stage 3 implements label constraints, for-init declaration constraints, inline
   body restrictions and translation-unit completion of tentative definitions.
 
-Unanalyzed types suppress dependent compatibility/layout diagnostics. Unsupported
+Unanalyzed types suppress dependent compatibility/layout diagnostics, including
+member access through `.` or through a pointer to an unanalyzed type. Unsupported
 constant-expression forms similarly suppress dependent enum/VLA diagnostics rather
 than calling a valid unsupported constant a runtime bound. This is deliberately
 conservative, and is not evidence that those expressions have been validated.

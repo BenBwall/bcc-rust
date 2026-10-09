@@ -1427,6 +1427,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let Some(target) = self.pointer_target(converted) else {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidMemberAccess);
             };
+            // An unanalyzed pointee may be a record; its members are unknown.
+            if self.types.unanalyzed(target) {
+                return Self::expression_result(e, self.types.unknown());
+            }
             ty = target;
         }
         // C99 §6.5.2.3p2: defer the record constraint for an unmodeled target.
