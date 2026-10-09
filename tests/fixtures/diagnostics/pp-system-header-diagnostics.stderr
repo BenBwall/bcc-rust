@@ -1,5 +1,5 @@
 error: #error a system header still reports errors
-  --> system-headers\noisy.h:16:2
+  --> system-headers/noisy.h:16:2
    |
 16 | #error a system header still reports errors
    |  ^^^^^ `#error` directive
