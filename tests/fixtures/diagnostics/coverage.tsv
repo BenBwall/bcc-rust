@@ -240,3 +240,4 @@ pp	MissingOpeningParenthesisAfterVaOpt	pp-missing-opening-parenthesis-after-va-o
 pp	NestedVaOpt	pp-nested-va-opt.c	rendered
 pp	UnterminatedVaOpt	pp-unterminated-va-opt.c	rendered
 pp	HashHashAtVaOptBoundary	pp-hash-hash-at-va-opt-boundary.c	rendered
+pp	DeprecatedMacro	sema-atomic-deprecated.c	rendered

@@ -57,6 +57,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C99: §6.3.1.5-§6.3.1.8, pp. 44-45; PDF pp. 56-57.
     pub(super) fn round_floating(&self, value: Floating, ty: TypeId) -> Option<Floating> {
+        let ty = self.types.non_atomic(ty);
         let TypeKind::Scalar(scalar) = self.types.nodes[ty.index] else {
             return None;
         };

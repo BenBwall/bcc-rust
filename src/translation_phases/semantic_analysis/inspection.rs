@@ -419,6 +419,11 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                                 ty = result;
                             },
                             | TypeKind::Unknown => break "<unanalyzed>",
+                            | TypeKind::Atomic(value) => {
+                                left.push(Part::Text("_Atomic("));
+                                right.push(Part::Text(")"));
+                                ty = value;
+                            },
                             | TypeKind::Scalar(s) => break s.spelling(),
                             | TypeKind::Tag(id) => {
                                 let tag = self.types.tags[id];

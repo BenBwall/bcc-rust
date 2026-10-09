@@ -1,0 +1,1 @@
+#define __CLANG_ATOMIC_CHAR8_T_LOCK_FREE 2

@@ -1,0 +1,65 @@
+error: atomic type requires an eligible complete object type
+ --> sema-atomic-type.c:4:1
+  |
+4 | _Atomic(Array) array;
+  | ^^^^^^^^^^^^^^ invalid atomic operand type
+  |
+  = note: C11 §6.7.2.4p3 and §6.7.3p3: arrays and functions cannot be atomic; an atomic type specifier also excludes qualified and atomic types
+
+error: atomic type requires an eligible complete object type
+ --> sema-atomic-type.c:5:1
+  |
+5 | _Atomic(Function) function;
+  | ^^^^^^^^^^^^^^^^^ invalid atomic operand type
+  |
+  = note: C11 §6.7.2.4p3 and §6.7.3p3: arrays and functions cannot be atomic; an atomic type specifier also excludes qualified and atomic types
+
+error: atomic type requires an eligible complete object type
+ --> sema-atomic-type.c:6:1
+  |
+6 | _Atomic(const int) qualified;
+  | ^^^^^^^^^^^^^^^^^^ invalid atomic operand type
+  |
+  = note: C11 §6.7.2.4p3 and §6.7.3p3: arrays and functions cannot be atomic; an atomic type specifier also excludes qualified and atomic types
+
+error: atomic type requires an eligible complete object type
+ --> sema-atomic-type.c:7:1
+  |
+7 | _Atomic(_Atomic(int)) repeated;
+  | ^^^^^^^^^^^^^^^^^^^^^ invalid atomic operand type
+  |
+  = note: C11 §6.7.2.4p3 and §6.7.3p3: arrays and functions cannot be atomic; an atomic type specifier also excludes qualified and atomic types
+
+error: atomic type requires an eligible complete object type
+ --> sema-atomic-type.c:8:1
+  |
+8 | _Atomic(struct Incomplete) incomplete;
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^ invalid atomic operand type
+  |
+  = note: C11 §6.7.2.4p3 and §6.7.3p3: arrays and functions cannot be atomic; an atomic type specifier also excludes qualified and atomic types
+
+error: atomic type requires an eligible complete object type
+  --> sema-atomic-type.c:9:1
+   |
+ 9 | _Atomic(void) empty;
+   | ^^^^^^^^^^^^^ invalid atomic operand type
+   |
+   = note: C11 §6.7.2.4p3 and §6.7.3p3: arrays and functions cannot be atomic; an atomic type specifier also excludes qualified and atomic types
+
+error: atomic type requires an eligible complete object type
+  --> sema-atomic-type.c:10:1
+   |
+10 | _Atomic Array qualifier_array;
+   | ^^^^^^^^^^^^^ invalid atomic operand type
+   |
+   = note: C11 §6.7.2.4p3 and §6.7.3p3: arrays and functions cannot be atomic; an atomic type specifier also excludes qualified and atomic types
+
+error: atomic type requires an eligible complete object type
+  --> sema-atomic-type.c:11:1
+   |
+11 | _Atomic Function qualifier_function;
+   | ^^^^^^^^^^^^^^^^ invalid atomic operand type
+   |
+   = note: C11 §6.7.2.4p3 and §6.7.3p3: arrays and functions cannot be atomic; an atomic type specifier also excludes qualified and atomic types
+
+8 errors generated.

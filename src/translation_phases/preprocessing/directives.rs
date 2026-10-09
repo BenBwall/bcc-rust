@@ -1624,6 +1624,10 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             .state
             .macro_definitions
             .insert(name.identifier_id(self.context), definition);
+        _ = self
+            .state
+            .deprecated_macros
+            .remove(&name.identifier_id(self.context));
         self.resume_at_line_start();
     }
 
@@ -1766,6 +1770,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             return;
         };
         let name_id = name.identifier_id(self.context);
+        _ = self.state.deprecated_macros.remove(&name_id);
         if matches!(
             self.state.macro_definitions.get(&name_id),
             Some(MacroDefinition::BuiltIn)
@@ -2054,6 +2059,15 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                 },
                             }
                         },
+                        | "clang" => {
+                            if !self.pragma_deprecated_macro() {
+                                let line_state = (self.last_was_newline, self.current_is_newline);
+                                self.skip_until_newline();
+                                (self.last_was_newline, self.current_is_newline) = line_state;
+                            }
+                            consumed_newline = true;
+                            break 'base;
+                        },
                         | "GCC" => {
                             let Some(operand) =
                                 Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
@@ -2177,5 +2191,44 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             }
         }
         consumed_newline
+    }
+
+    /// Clang's resource header marks `ATOMIC_VAR_INIT` deprecated in C17.
+    /// Recognize the single-name pragma form; unknown pragmas remain ignored.
+    /// <https://clang.llvm.org/docs/LanguageExtensions.html#deprecating-macros>
+    fn pragma_deprecated_macro(&mut self) -> bool {
+        let mut name = None;
+        for index in 0..4 {
+            let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
+            else {
+                return false;
+            };
+            if token.kind == PreprocessorTokenType::Newline {
+                return true;
+            }
+            let valid = match index {
+                | 0 =>
+                    token.kind.is_identifier()
+                        && self.context.string_cache.at(token.contents) == "deprecated",
+                | 1 => token.kind == PreprocessorTokenType::OpeningParenthesis,
+                | 2 => {
+                    name = token
+                        .kind
+                        .is_identifier()
+                        .then(|| token.identifier_id(self.context));
+                    name.is_some()
+                },
+                | _ => token.kind == PreprocessorTokenType::ClosingParenthesis,
+            };
+            if !valid {
+                return false;
+            }
+        }
+        if let Some(name) = name
+            && self.state.macro_definitions.contains_key(&name)
+        {
+            _ = self.state.deprecated_macros.insert(name);
+        }
+        false
     }
 }

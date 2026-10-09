@@ -161,8 +161,8 @@ zero-width union fields occupy no bytes. The C11 probe in
 mixed-type fields, exhausted units, zero-width fields, compact byte-field
 records, and unions against all four Clang targets. Rust tests additionally
 verify bit offsets, typedef identities, literal types and UTF-16 surrogate
-values directly. `_Generic` remains syntax-only in sema: the C probe includes
-Clang-checked `_Generic` assertions, and **direct Rust type assertions** supply
+values directly. `_Generic` now resolves associations in sema (see the atomic section below).
+The original target probe also includes **direct Rust type assertions** supplying
 bcc's type evidence rather than claiming unmodeled generic assertions passed.
 No packed/aligned attribute or pragma-pack semantics are added.
 
@@ -423,7 +423,7 @@ return expressions.
   function-definition parameter rules, inline-body restrictions and
   tentative-definition completion.
 - Other GNU builtins, statement-expression results, union casts, range initializers,
-  generic selections, count queries, attribute-derived types and newer-standard
+  count queries, attribute-derived types and newer-standard
   special values remain conservative unknowns. Core operator checks do not
   implement GNU void/function-pointer arithmetic.
 - Floating constants follow the IEC 60559 arithmetic of Annex F, as GCC and
@@ -787,7 +787,7 @@ Review decisions: target selection does not imply syntax-extension flags;
 MSVC enums use Clang's 32-bit int/truncation rule; Microsoft bit-field rules
 apply to both Windows targets; the native x87 bridge saves/restores precision
 control on Windows worker threads. Packed/aligned attributes, pragma-pack,
-`_Generic` semantic selection, encoded u/U literal semantic types, target instruction lowering and a portable
+encoded u/U literal semantic types, target instruction lowering and a portable
 software implementation of extended floating arithmetic remain existing gaps.
 No resource header, hosted-mode or compiler-identity implementation was changed.
 
@@ -912,3 +912,54 @@ all generated sources, logs and evidence stayed under this worktree's target/.
 Exact comparison: `target/int128-gcc-comparison.json`; full survey:
 `target/survey-int128/results.json`. Ordered exact-file commit partitions are
 in `target/INT128_COMMITS.md`; no commits or pushes were made.
+
+## C11 atomics (2026-10-09)
+
+`atomics.rs` owns the type-generic intrinsic classification and checking.
+`TypeKind::Atomic(TypeId)` preserves identity independently of cv/restrict
+qualifiers. Eligibility is checked after the work stack resolves the operand
+type. Compatibility descends through atomic nodes with explicit continuations.
+Atomic object layout follows the pinned Clang's default x86-64 targets:
+sizes up to 16 bytes round up to a power of two with at least that alignment;
+larger objects keep the underlying layout. No instructions or runtime
+synchronization are emitted.
+
+The Clang C11, GNU atomic and legacy sync builtins share argument checking but
+retain their distinct pointer contracts and arities. C11 fetch-add/sub accept
+atomic integer, pointer and float/double values; bitwise fetches require
+integers and min/max accept integers or float/double. GNU scalar forms exclude
+atomic pointees; GNU generic forms accept complete ordinary object types.
+Legacy sync forms accept integer/pointer objects and their ignored variadic
+arguments. Memory-order constants are checked where Clang checks them, with
+structured warning diagnostics suppressed in system headers. Nonconstant
+orders are accepted. Lock-free queries preserve Clang's distinction between
+compile-time `always_lock_free` and runtime queries that cannot be folded.
+
+`generic.rs` selects a compatible association or default and propagates the
+selected expression. The existing integer evaluator now consumes that result
+without evaluating the controlling expression or unselected associations.
+Atomic casts remain non-ICEs; atomic size/alignment assertions are evaluated.
+Unit tests check type identities and every modeled call's retained type.
+
+The embedded header is adapted from the pinned Clang header with its
+Apache-2.0 WITH LLVM-exception license retained. `#pragma clang deprecated`
+single-name markers supply C17 `ATOMIC_VAR_INIT` warnings, and are cleared on
+undefinition or replacement. C23 removes that macro and adds char8 atomics.
+The installed MSVC 14.44 toolchain supplies `stdatomic.h`, which delegates in C
+to `vcruntime_c11_stdatomic.h` and requires C11 with atomics enabled. Despite
+that newer C implementation, the pinned Clang resource header still bypasses
+the MSVC header in C mode, so bcc does too. The Windows SDK UCRT directory
+itself has no competing `stdatomic.h` in this installation.
+
+The shared target probe exercises C11/C17/C23 for all four triples, with
+aggregate/scalar layout assertions, `_Generic` result checks, pointer/floating
+fetches and all three builtin families. Allocation coverage includes the
+header, type construction, calls, generic selection and every golden diagnostic.
+
+The `target/libc-survey/atomic/results.json` comparison with `gnuc` has 448
+shared rows: **8 newly accepted, 0 newly rejected**. `stdatomic.h` is newly
+accepted for glibc, musl and MinGW in C17/GNU17; musl's two combined standard
+header units also become accepted. MSVC's two `stdatomic.h` rows remain accepted.
+The remaining first errors are glibc's unsupported `<tgmath.h>` type
+combination, MinGW's missing `<tgmath.h>` and 13 MinGW headers needing
+`<x86intrin.h>`. Those sibling features are outside this change.
