@@ -200,14 +200,14 @@ pub(crate) struct RelatedParserDiagnostic {
 pub(crate) struct RecoverySummary {
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "Retained in structured recovery metadata")
+        expect(dead_code, reason = "Only parser tests assert on this recovery field.")
     )]
     pub(crate) owner:            ParseFrameKind,
     pub(crate) discarded:        Option<SourceVectors>,
     pub(crate) discarded_tokens: usize,
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "Retained in structured recovery metadata")
+        expect(dead_code, reason = "Only parser tests assert on this recovery field.")
     )]
     pub(crate) stopped_at:       Option<TokenType>,
 }
@@ -220,19 +220,28 @@ pub(crate) struct RecoverySummary {
 pub(crate) struct ParserError<'tu> {
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "Retained in structured parser diagnostics")
+        expect(
+            dead_code,
+            reason = "Only parser tests assert on this diagnostic field."
+        )
     )]
     pub(crate) code:              ParserDiagnosticCode,
     pub(crate) severity:          ErrorSeverity,
     pub(crate) warning_group:     Option<ParserWarningGroup>,
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "Retained in structured parser diagnostics")
+        expect(
+            dead_code,
+            reason = "Only parser tests assert on this diagnostic field."
+        )
     )]
     pub(crate) frame:             ParseFrameKind,
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "Retained in structured parser diagnostics")
+        expect(
+            dead_code,
+            reason = "Only parser tests assert on this diagnostic field."
+        )
     )]
     pub(crate) expected:          ExpectedSyntax,
     pub(crate) found:             Option<TokenType>,
@@ -649,7 +658,7 @@ pub(crate) enum ParserErrorType<'tu> {
     NoTypeSpecifiersInDeclarationSpecifiers(
         #[cfg_attr(
             not(test),
-            expect(dead_code, reason = "Retained for diagnostic assertions")
+            expect(dead_code, reason = "Only parser tests assert on the offending token.")
         )]
         TokenType,
     ),

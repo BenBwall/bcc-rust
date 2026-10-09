@@ -177,7 +177,7 @@ pub(crate) trait SetPosition: GetPosition {
         not(test),
         expect(
             dead_code,
-            reason = "Position setters are retained for translation-phase implementations."
+            reason = "Only the tokenizer tests move a reader to another line."
         )
     )]
     #[inline(always)]

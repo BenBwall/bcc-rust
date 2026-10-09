@@ -96,7 +96,10 @@ impl Bump {
     /// padding and blocks a reset later reclaimed.
     #[cfg_attr(
         not(any(test, feature = "benchmarking-internals")),
-        expect(dead_code, reason = "Only measurements read the high-water mark.")
+        expect(
+            dead_code,
+            reason = "Only tests and measurements read the high-water mark."
+        )
     )]
     pub(crate) fn high_water(&self) -> usize {
         self.inner.borrow().high_water
