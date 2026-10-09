@@ -139,6 +139,9 @@ required ISO builtins retain their existing protection.
 
 Run `python scripts/update_target_macros.py --check` to compare all frozen
 spellings against the repository's Clang (`-dM -E -x c`, ISO C11 and GNU C17).
+The MSVC triple also passes `-fms-compatibility-version=19.33`, the version
+bcc's `_MSC_VER` claims: Clang otherwise takes the host's installed Visual C++
+version, and macros such as `__STDC_NO_THREADS__` would differ between hosts.
 Omit `--check` only when deliberately refreshing the oracle. The canonical Rust
 tests independently invoke Clang and compare sets of exact definitions, then
 check that every exclusion is documented below. Existing language-mode

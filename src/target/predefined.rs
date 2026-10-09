@@ -47,6 +47,18 @@ mod tests {
         }
     }
 
+    /// The Clang flag matching the `_MSC_VER` (1933) that bcc predefines;
+    /// `scripts/update_target_macros.py` passes the same flag.
+    const MSVC_COMPATIBILITY_VERSION: &str = "-fms-compatibility-version=19.33";
+
+    #[test]
+    fn msvc_compatibility_version_matches_the_predefined_msc_ver() {
+        let script = include_str!("../../scripts/update_target_macros.py");
+        assert!(script.contains(MSVC_COMPATIBILITY_VERSION));
+        let identity = include_str!("../translation_phases/preprocessing/language_features.rs");
+        assert!(identity.contains(r"#define _MSC_VER 1933\n"));
+    }
+
     #[test]
     fn every_target_definition_equals_live_clang_minus_documented_exclusions() {
         use std::{
@@ -75,10 +87,20 @@ mod tests {
         ] {
             for gnu in [false, true] {
                 let mode = if gnu { "gnu17" } else { "c11" };
-                let output = Command::new(&clang)
+                let mut command = Command::new(&clang);
+                _ = command.args([
+                    format!("--target={}", target.triple()).as_str(),
+                    format!("-std={mode}").as_str(),
+                ]);
+                // Clang's default MSVC version is the host's installed
+                // Visual C++ (or 19.33 elsewhere), and macros such as
+                // `__STDC_NO_THREADS__` follow it. Pin the version bcc's
+                // `_MSC_VER` claims so that every host sees one contract.
+                if target == Target::WindowsMsvc {
+                    _ = command.arg(MSVC_COMPATIBILITY_VERSION);
+                }
+                let output = command
                     .args([
-                        format!("--target={}", target.triple()).as_str(),
-                        format!("-std={mode}").as_str(),
                         "-dM",
                         "-E",
                         "-x",

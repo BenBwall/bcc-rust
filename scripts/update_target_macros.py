@@ -5,6 +5,10 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parent.parent
+# Clang's default MSVC version is the host's installed Visual C++ (19.33 on
+# other hosts), and macros such as __STDC_NO_THREADS__ follow it. Pin the
+# version bcc's _MSC_VER claims so that every host freezes one contract.
+MSVC_COMPATIBILITY_VERSION = "-fms-compatibility-version=19.33"
 TRIPLES = ("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-w64-windows-gnu", "x86_64-pc-windows-msvc")
 
 
@@ -55,7 +59,8 @@ def main():
     outputs = {}
     for triple in TRIPLES:
         for mode in ("c11", "gnu17"):
-            result = subprocess.run([str(clang), f"--target={triple}", f"-std={mode}", "-dM", "-E", "-x", "c", "-"], input="", text=True, capture_output=True, check=True)
+            pinned = [MSVC_COMPATIBILITY_VERSION] if triple == "x86_64-pc-windows-msvc" else []
+            result = subprocess.run([str(clang), f"--target={triple}", f"-std={mode}", *pinned, "-dM", "-E", "-x", "c", "-"], input="", text=True, capture_output=True, check=True)
             kept = []
             for line in result.stdout.splitlines():
                 name = re.match(r"#define (\w+)", line)[1]

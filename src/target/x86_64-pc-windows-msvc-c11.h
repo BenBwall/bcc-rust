@@ -180,6 +180,7 @@
 #define __SIZE_MAX__ 18446744073709551615ULL
 #define __SIZE_TYPE__ long long unsigned int
 #define __SIZE_WIDTH__ 64
+#define __STDC_NO_THREADS__ 1
 #define __UINT16_C(c) c
 #define __UINT16_C_SUFFIX__
 #define __UINT16_FMTX__ "hX"
