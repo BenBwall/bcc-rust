@@ -319,3 +319,22 @@ fn shared_deep_typedefs_answer_variably_modified_queries_once() {
     assert_eq!(kinds(&source, gnu17()), []);
     assert!(start.elapsed().as_secs() < 15, "{:?}", start.elapsed());
 }
+
+#[test]
+fn unnamed_bit_fields_do_not_align_records() {
+    // Expectations come from Linux-target Clang static assertions.
+    for (source, name, size, align) in [
+        ("struct L1 {char a; int :4;};", "L1", 2, 1),
+        ("struct L2 {char a; int :4; char b;};", "L2", 3, 1),
+        ("union L3 {char c; int :3;};", "L3", 1, 1),
+        ("union L4 {char c; int :12;};", "L4", 2, 1),
+        ("struct L5 {char a; long :0; char b;};", "L5", 9, 1),
+        ("union L6 {char c; int x:3;};", "L6", 4, 4),
+    ] {
+        assert_eq!(
+            tag_layout(source, gnu17(), name),
+            Some(Layout { size, align }),
+            "{source}"
+        );
+    }
+}
