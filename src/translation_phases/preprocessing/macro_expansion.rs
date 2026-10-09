@@ -1328,6 +1328,21 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         _hash_hash: PreprocessorToken,
         rhs: PreprocessorToken,
     ) -> Option<PreprocessorToken> {
+        let arguments = self.get_arguments();
+        if let Some(argument) = arguments
+            .and_then(|arguments| find_argument(arguments, lhs.identifier_id(self.context)))
+        {
+            let mut left = self.read_argument(argument, false);
+            if left.len() > 1 {
+                // Rescanning an argument prefix here can enter another macro
+                // frame and prematurely apply the pending paste to that macro's
+                // first token. Paste the complete raw operand first instead.
+                let right = self.paste_operand(arguments, rhs);
+                self.paste_onto(&mut left, right);
+                self.replay_pasted_tokens(&left);
+                return None;
+            }
+        }
         let lhs_frame = self.operand_frame(lhs);
         let rhs_frame = self.operand_frame(rhs);
         self.hash_hash_stack.push(HashHash::Empty);
@@ -2116,6 +2131,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 None
             };
         }
+        self.replay_pasted_tokens(&result);
+    }
+
+    fn replay_pasted_tokens(&mut self, result: &[PreprocessorToken]) {
         let Some(location) = result.first().map(|token| {
             self.context
                 .get_source_vectors(token.source_vectors)
@@ -2126,7 +2145,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             // Every operand was a placemarker.
             return;
         };
-        let tokenizer = TokenSource::replay(self.context, self.scratch, &[&result], location);
+        let tokenizer = TokenSource::replay(self.context, self.scratch, &[result], location);
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::Rescan { argument: false },
             tokenizer,
