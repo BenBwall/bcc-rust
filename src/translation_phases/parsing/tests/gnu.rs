@@ -928,6 +928,178 @@ fn leading_attributes_do_not_turn_a_grouping_parenthesis_into_parameters() {
 }
 
 #[test]
+fn omitted_designation_equals_requires_a_single_array_designator() {
+    for standard in [CStandard::C17, CStandard::C23] {
+        for gnu in [false, true] {
+            for policy in [
+                ExtensionPolicy::Allow,
+                ExtensionPolicy::Warn,
+                ExtensionPolicy::Deny,
+            ] {
+                for source in [
+                    "struct S { int x; }; struct S s = { .x 1 }; int after;\n",
+                    "struct S { int x; }; struct S a[1] = { [0].x 1 }; int after;\n",
+                    "struct S { int x[1]; }; struct S s = { .x[0] 1 }; int after;\n",
+                    "int a[1][1] = { [0][0] 1 }; int after;\n",
+                ] {
+                    with_parse_configuration(
+                        source,
+                        CompilerConfiguration::new(standard, policy).with_gnu_extensions(gnu),
+                        |p| {
+                            assert!(
+                                matches!(
+                                    parser_errors(p).collect::<Vec<_>>().as_slice(),
+                                    [ParserErrorType::ExpectedEqualsAfterInitializerDesignation(
+                                        _
+                                    )]
+                                ),
+                                "{source}: {:?}",
+                                p.errors
+                            );
+                            let designation = p
+                                .parser
+                                .syntax
+                                .iter::<super::super::declaration_syntax::Designation<'_>>()
+                                .next()
+                                .expect("recovered designation");
+                            assert!(designation.recovered);
+                            assert!(designation.equals_source_vectors.is_none());
+                            assert!(clean_declared_names(p).iter().any(|name| name == "after"));
+                        },
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn gnu_designation_forms_preserve_syntax_and_extension_policy() {
+    for (source, designator_source, extension_count) in [
+        ("int a[1] = { [0] 1 };\n", "[0]", 1),
+        ("int a[2] = { [0 ... 1] 1 };\n", "[0...1]", 2),
+        ("struct S { int x; }; struct S s = { x: 1 };\n", "x:", 1),
+        ("struct S { int x; }; struct S s = { .x = 1 };\n", ".x", 0),
+    ] {
+        for policy in [
+            ExtensionPolicy::Allow,
+            ExtensionPolicy::Warn,
+            ExtensionPolicy::Deny,
+        ] {
+            with_parse_configuration(
+                source,
+                CompilerConfiguration::new(CStandard::C17, policy).with_gnu_extensions(true),
+                |p| {
+                    assert_eq!(parser_errors(p).count(), 0, "{source}: {:?}", p.errors);
+                    assert_eq!(
+                        p.errors.len(),
+                        if policy == ExtensionPolicy::Allow {
+                            0
+                        } else {
+                            extension_count
+                        }
+                    );
+                    let designation = p
+                        .parser
+                        .syntax
+                        .iter::<super::super::declaration_syntax::Designation<'_>>()
+                        .next()
+                        .expect("designation");
+                    assert!(!designation.recovered);
+                    assert_eq!(designation.designators.len(), 1);
+                    assert_eq!(
+                        super::sourced_text(p, designation.designators[0].source_vectors),
+                        designator_source
+                    );
+                    assert_eq!(
+                        designation.equals_source_vectors.is_some(),
+                        extension_count == 0
+                    );
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn old_field_designator_keeps_nested_statement_expression_values() {
+    use super::super::{
+        declaration_syntax::{
+            Designation,
+            DesignatorType,
+        },
+        syntax::{
+            BlockItem,
+            Expression,
+            ExpressionType,
+            StatementType,
+        },
+    };
+
+    for value in [
+        "({int t=0; if(t) t=1; t;})",
+        "{({int t=0; if(t) t=1; t;})}",
+        "({int t=0; while(t) {break;} t;})",
+        "({int t=0; for(;t;) {continue;} t;})",
+        "({int t=0; switch(t) {case 1: break; default: break;} t;})",
+    ] {
+        let source = format!(
+            "struct S {{ int x; }}; void f(void) {{ struct S s = {{ x: {value} }}; int after; }} \
+             int tail;\n"
+        );
+        for policy in [
+            ExtensionPolicy::Allow,
+            ExtensionPolicy::Warn,
+            ExtensionPolicy::Deny,
+        ] {
+            with_parse_configuration(
+                &source,
+                CompilerConfiguration::new(CStandard::C17, policy).with_gnu_extensions(true),
+                |p| {
+                    assert_eq!(parser_errors(p).count(), 0, "{source}: {:?}", p.errors);
+                    assert_eq!(
+                        p.errors.len(),
+                        usize::from(policy != ExtensionPolicy::Allow) * 2
+                    );
+                    let designation = p.parser.syntax.iter::<Designation<'_>>().next().unwrap();
+                    assert!(!designation.recovered);
+                    assert!(matches!(
+                        designation.designators[0].kind,
+                        DesignatorType::GnuField(_)
+                    ));
+                    assert_eq!(super::sourced_text(p, designation.source_vectors), "x:");
+                    let expression = p
+                        .parser
+                        .syntax
+                        .iter::<Expression<'_>>()
+                        .find(|x| matches!(x.kind, ExpressionType::StatementExpression(_)))
+                        .expect("statement expression remains an initializer value");
+                    assert!(!expression.recovered);
+                    let function = super::function_definition(p, 1);
+                    assert!(!function.recovered);
+                    let StatementType::Compound { items } = function.body.kind else {
+                        panic!("expected compound function body");
+                    };
+                    assert_eq!(
+                        items.len(),
+                        2,
+                        "initializer contents stay in the declaration"
+                    );
+                    let BlockItem::Declaration(after) = items[1] else {
+                        panic!("expected following declaration");
+                    };
+                    assert_eq!(
+                        super::identifier_name(p, after.init_declarators[0].declarator).as_deref(),
+                        Some("after")
+                    );
+                    assert!(clean_declared_names(p).iter().any(|name| name == "tail"));
+                },
+            );
+        }
+    }
+}
+
+#[test]
 fn label_after_an_unclosed_initializer_list_stays_a_label() {
     for (source, labels) in [
         (

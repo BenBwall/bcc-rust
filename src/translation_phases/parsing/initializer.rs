@@ -701,7 +701,18 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                         Some(equals.source_vectors);
                     self.merge_designation_source(parser.context, equals.source_vectors);
                     true
-                } else if token.is_some_and(|x| {
+                } else if self.designation.as_ref().is_some_and(|designation| {
+                    // C99 §6.7.8p1 requires `=` after a designator-list.
+                    // GNU omission applies only to one array designator,
+                    // including a range; fields use the separate `field:` form.
+                    matches!(
+                        designation.current_designators.as_slice(),
+                        [Designator {
+                            kind: DesignatorType::Array(_) | DesignatorType::Range(_),
+                            ..
+                        }]
+                    )
+                }) && token.is_some_and(|x| {
                     super::expression_operators::is_expression_operand_starter(x.kind)
                         || matches!(
                             x.kind,
@@ -1155,13 +1166,14 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
 
     /// Whether the current `identifier :` begins a GNU `field: value`
     /// element rather than a label after an unclosed list: its value ends at
-    /// a `,` or `}` before any `;` or statement keyword outside parentheses.
+    /// a `,` or `}` before any `;` or statement keyword at depth zero.
     /// A scan that runs out of lookahead keeps the element, so long values
     /// stay initializers.
     ///
-    /// C99: labels are §6.8.1 paragraph 1, p. 131; PDF p. 143, and no
-    /// initializer contains a `;` (§6.7.8 paragraph 1, p. 125; PDF p. 137).
-    /// The `field:` designator is a GNU extension.
+    /// C99: labels are §6.8.1 paragraph 1, p. 131; PDF p. 143. The
+    /// initializer-list grammar (§6.7.8 paragraph 1, p. 125; PDF p. 137)
+    /// has no top-level `;`. GNU `field:` designators and statement-expression
+    /// values extend that grammar; nested delimiters may contain statements.
     fn gnu_designator_element_follows(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
         const SCAN_LIMIT: usize = 64;
         let mut parentheses = 0_u32;
@@ -1193,9 +1205,11 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 | TokenType::Operator(OperatorTokenType::Comma)
                     if parentheses == 0 && braces == 0 =>
                     return true,
-                | TokenType::Operator(OperatorTokenType::Semicolon) if parentheses == 0 =>
+                | TokenType::Operator(OperatorTokenType::Semicolon)
+                    if parentheses == 0 && braces == 0 =>
                     return false,
-                | kind if is_statement_keyword(kind) => return false,
+                | kind if parentheses == 0 && braces == 0 && is_statement_keyword(kind) =>
+                    return false,
                 | _ => {},
             }
         }
