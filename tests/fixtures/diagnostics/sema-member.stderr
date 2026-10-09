@@ -6,11 +6,11 @@ error: member requires a complete object type: `x`
   |
   = note: C99 §6.7.2.1p2: members cannot have incomplete or function type except a final flexible array member
 
-error: member requires a complete object type: `invalid`
- --> sema-member.c:3:35
+error: member requires a complete object type: `items`
+ --> sema-member.c:2:23
   |
-3 | struct Container {struct Flexible invalid;};
-  |                                   ^^^^^^^ declaration constraint violated
+2 | struct Misplaced {int items[]; int n;};
+  |                       ^^^^^ declaration constraint violated
   |
   = note: C99 §6.7.2.1p2: members cannot have incomplete or function type except a final flexible array member
 

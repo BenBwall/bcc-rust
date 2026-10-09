@@ -105,7 +105,10 @@ bit-fields never increase aggregate alignment: an unnamed zero-width field
 advances to its base-type boundary, and in a union an unnamed bit-field occupies
 only the bytes its width needs. Plain-int bit-fields are signed; integer bit-field types beyond the
 C99-required int/unsigned-int/bool set are accepted as an implementation-defined
-choice following the target ABI. Packed/aligned/vendor attribute meaning is not
+choice following the target ABI. GCC's flexible-array forms (in a union, as a
+structure's only member, a flexible structure nested in a structure, and arrays
+of flexible structures) keep their layout and are reported through the
+`FlexibleArrayExtensions` policy. Packed/aligned/vendor attribute meaning is not
 modeled; affected record layouts become unavailable instead of fabricated.
 `tests/fixtures/semantic/layout-probe.c` uses Clang's Linux target static assertions
 for scalar sizes, mixed-base bit-fields, zero-width and unnamed bit-fields, nested records, unions,
@@ -515,7 +518,8 @@ with `-std=c99 -pedantic-errors` also rejects every fixture. Sample triage:
 | --- | --- |
 | `sema-duplicate.c` | Genuine: repeated automatic declaration and automatic followed by same-scope extern; Clang rejects both. |
 | `sema-enum-range.c` | Genuine under `-pedantic-errors`: values outside int are the C23 extension Clang also reports, and Clang also rejects a negative member beside one that needs unsigned long. |
-| `sema-member.c` | Genuine: void member and nesting a flexible-array structure; Clang rejects both. |
+| `sema-member.c` | Genuine: void member and a flexible array before the last member; Clang rejects both. |
+| `sema-flexible-extension.c` | Genuine under `-pedantic-errors`: the four GNU flexible-array forms violate §6.7.2.1p2 or p16; Clang reports the same four as extensions. |
 | `sema-overflow.c` | Genuine C99 ICE constraint; Clang accepts folding only as a GNU extension and rejects it in strict mode. |
 | GNU literal zero array in existing policy fixture | Initial sema rejection was a false positive; fixed to use shared parser/extension policy without duplicate diagnostics. Computed zero uses the same policy. |
 | `sema-function-qualifier.c` | Genuine undefined behavior under C99; emitted as a warning, while strict Clang promotes its ignored-qualifier extension warning to an error. |

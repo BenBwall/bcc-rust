@@ -232,6 +232,8 @@ pub(crate) enum Feature {
     HasAttribute,
     HasBuiltin,
     SignBitShifts,
+    FlexibleArrayExtensions,
+    ConstantFolding,
     MsDeclspec,
     MsIntTypes,
     MsCallingConventions,
@@ -335,6 +337,8 @@ impl Feature {
         Self::HasAttribute,
         Self::HasBuiltin,
         Self::SignBitShifts,
+        Self::FlexibleArrayExtensions,
+        Self::ConstantFolding,
         Self::MsDeclspec,
         Self::MsIntTypes,
         Self::MsCallingConventions,
@@ -444,7 +448,9 @@ impl Feature {
             | Self::Counter
             | Self::HasAttribute
             | Self::HasBuiltin
-            | Self::SignBitShifts => FeatureOrigin::Gnu,
+            | Self::SignBitShifts
+            | Self::FlexibleArrayExtensions
+            | Self::ConstantFolding => FeatureOrigin::Gnu,
 
             | Self::MsDeclspec => FeatureOrigin::Msvc(MsvcFeature::Declspec),
             | Self::MsIntTypes => FeatureOrigin::Msvc(MsvcFeature::IntTypes),
