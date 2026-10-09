@@ -105,8 +105,11 @@ fn include_next_uses_each_opening_search_origin() {
     )
     .unwrap();
     std::fs::write(a.join("neighbor.h"), "#include \"wrapper.h\"\n").unwrap();
-    std::fs::write(a.join("payload.h"), "first\n").unwrap();
-    std::fs::write(b.join("payload.h"), "wrong\n").unwrap();
+    // As in Clang, `wrapper.h` found beside `neighbor.h` takes the entry
+    // that provided `neighbor.h`, so its `#include_next` skips `a`, however
+    // `wrapper.h` was opened before.
+    std::fs::write(a.join("payload.h"), "same_entry\n").unwrap();
+    std::fs::write(b.join("payload.h"), "next_entry\n").unwrap();
     for config in [
         mode(CStandard::C99),
         mode(CStandard::C17).with_gnu_extensions(true),
@@ -115,13 +118,13 @@ fn include_next_uses_each_opening_search_origin() {
         for (source, expected) in [
             (
                 "#define LOCAL\n#include <neighbor.h>\nafter\n",
-                vec!["identifier `first`", "identifier `after`"],
+                vec!["identifier `next_entry`", "identifier `after`"],
             ),
             (
                 "#include <wrapper.h>\n#define LOCAL\n#include <neighbor.h>\nafter\n",
                 vec![
                     "identifier `initial`",
-                    "identifier `first`",
+                    "identifier `next_entry`",
                     "identifier `after`",
                 ],
             ),
@@ -167,15 +170,18 @@ fn include_next_continues_across_quote_and_local_origins() {
     .unwrap();
     std::fs::write(q1.join("neighbor.h"), "#include \"local.h\"\n").unwrap();
     std::fs::write(temp.0.join("root-local.h"), "#include_next <payload.h>\n").unwrap();
-    std::fs::write(q1.join("payload.h"), "local_payload\n").unwrap();
-    std::fs::write(q2.join("payload.h"), "wrong_quote\n").unwrap();
-    std::fs::write(system.join("payload.h"), "wrong_system\n").unwrap();
+    // Expected outputs follow Clang 23: a header found beside its includer
+    // continues after the includer's entry, and one found beside the
+    // primary source file warns and searches as `#include` would.
+    std::fs::write(q1.join("payload.h"), "q1_payload\n").unwrap();
+    std::fs::write(q2.join("payload.h"), "q2_payload\n").unwrap();
+    std::fs::write(system.join("payload.h"), "system_payload\n").unwrap();
     for config in [
         mode(CStandard::C99),
         mode(CStandard::C17).with_gnu_extensions(true),
         mode(CStandard::C23),
     ] {
-        for (source, expected) in [
+        for (source, expected, warns) in [
             (
                 "#include \"wrapper.h\"\nafter\n",
                 vec![
@@ -184,10 +190,12 @@ fn include_next_continues_across_quote_and_local_origins() {
                     "identifier `third`",
                     "identifier `after`",
                 ],
+                false,
             ),
             (
                 "#include \"root-local.h\"\nafter\n",
-                vec!["identifier `local_payload`", "identifier `after`"],
+                vec!["identifier `system_payload`", "identifier `after`"],
+                true,
             ),
             (
                 "#include \"wrapper.h\"\n#define LOCAL\n#include \"neighbor.h\"\nafter\n",
@@ -195,17 +203,19 @@ fn include_next_continues_across_quote_and_local_origins() {
                     "identifier `first`",
                     "identifier `second`",
                     "identifier `third`",
-                    "identifier `local_payload`",
+                    "identifier `q2_payload`",
                     "identifier `after`",
                 ],
+                false,
             ),
             (
                 "#include \"local.h\"\n#define LOCAL\n#include \"neighbor.h\"\nafter\n",
                 vec![
                     "identifier `initial`",
-                    "identifier `local_payload`",
+                    "identifier `q2_payload`",
                     "identifier `after`",
                 ],
+                false,
             ),
         ] {
             let (tokens, errors) = observe_include_paths(
@@ -215,7 +225,15 @@ fn include_next_continues_across_quote_and_local_origins() {
                 &[q1.clone(), q2.clone()],
                 std::slice::from_ref(&system),
             );
-            assert!(errors.is_empty(), "{source}: {errors:?}");
+            let expected_errors: &[&str] = if warns {
+                &[
+                    "Warning: `#include_next` in a file found relative to the primary source file \
+                     or by an absolute path",
+                ]
+            } else {
+                &[]
+            };
+            assert_eq!(errors, expected_errors, "{source}");
             assert_eq!(token_descriptions(&tokens), expected, "{source}");
         }
     }
@@ -1065,7 +1083,7 @@ fn resource_queries_embed_parameters_and_include_next_use_real_search_paths() {
 }
 
 #[test]
-fn has_include_next_predicts_include_next_with_gccs_start_and_warning() {
+fn has_include_next_predicts_include_next_with_clangs_start_and_warnings() {
     let temp = crate::test_support::TempDir::new("lexpp-include-next");
     let a = temp.path().join("a");
     let b = temp.path().join("b");
@@ -1083,12 +1101,11 @@ fn has_include_next_predicts_include_next_with_gccs_start_and_warning() {
     )
     .unwrap();
     std::fs::write(a.join("only_a.h"), "").unwrap();
-    // Found beside its includer: as in GCC, the lookup starts at the first
-    // configured entry, so it neither finds the header itself nor warns.
+    // Found beside the primary source file: the lookup starts over, as
+    // `#include`.
     std::fs::write(
         temp.path().join("local.h"),
-        "#if !__has_include_next(\"local.h\") && \
-         __has_include_next(<only_a.h>)\nlocal_starts_at_first_entry\n#endif\n",
+        "#if __has_include_next(\"local.h\")\nlocal_restarts\n#endif\n",
     )
     .unwrap();
     std::fs::write(temp.path().join("main.c"), []).unwrap();
@@ -1106,14 +1123,18 @@ fn has_include_next_predicts_include_next_with_gccs_start_and_warning() {
         "a_sees_next",
         "a_skips_itself",
         "b_is_last",
-        "local_starts_at_first_entry",
+        "local_restarts",
         "after",
     ] {
         assert!(tokens.contains(&format!("identifier `{word}`")), "{tokens}");
     }
     assert_eq!(
         errors,
-        ["Warning: `__has_include_next` in the primary source file"]
+        [
+            "Warning: `__has_include_next` in the primary source file",
+            "Warning: `__has_include_next` in a file found relative to the primary source file or \
+             by an absolute path",
+        ]
     );
     // GNU queries report their origin under a pedantic policy, and are
     // restricted to conditional expressions like `__has_include`.
@@ -1136,6 +1157,80 @@ fn has_include_next_predicts_include_next_with_gccs_start_and_warning() {
             .any(|error| error.contains("require a preprocessing conditional expression")),
         "{errors:?}"
     );
+}
+
+/// `__has_include_next` in the positions of the `#include_next` origin
+/// tests, with the answers Clang 23 gives: a header found beside its
+/// includer continues after the includer's entry, and one found beside the
+/// primary source file warns and searches as `__has_include` would.
+#[test]
+fn has_include_next_in_relative_headers_matches_clang() {
+    let temp = IncludeDirectory::new("has-next-relative");
+    let q1 = temp.0.join("q1");
+    let q2 = temp.0.join("q2");
+    let system = temp.0.join("system");
+    for path in [&q1, &q2, &system] {
+        std::fs::create_dir(path).unwrap();
+    }
+    std::fs::write(
+        q1.join("local.h"),
+        "#ifdef LOCAL\n#if __has_include_next(<only_q1.h>)\nsees_q1\n#endif\n#if \
+         __has_include_next(<only_q2.h>)\nsees_q2\n#endif\n#if \
+         __has_include_next(\"local.h\")\nsees_self\n#endif\n#else\ninitial\n#endif\n",
+    )
+    .unwrap();
+    std::fs::write(q1.join("neighbor.h"), "#include \"local.h\"\n").unwrap();
+    std::fs::write(
+        temp.0.join("root-local.h"),
+        "#if __has_include_next(<only_q1.h>)\nroot_sees_q1\n#endif\n#if \
+         __has_include_next(<only_sys.h>)\nroot_sees_sys\n#endif\n#if \
+         __has_include_next(\"root-local.h\")\nroot_sees_self\n#endif\n",
+    )
+    .unwrap();
+    for (directory, name) in [
+        (&q1, "only_q1.h"),
+        (&q2, "only_q2.h"),
+        (&system, "only_sys.h"),
+    ] {
+        std::fs::write(directory.join(name), "").unwrap();
+    }
+    let warning = "Warning: `__has_include_next` in a file found relative to the primary source \
+                   file or by an absolute path";
+    for (source, expected, warnings) in [
+        (
+            "#include \"root-local.h\"\nafter\n",
+            vec![
+                "identifier `root_sees_sys`",
+                "identifier `root_sees_self`",
+                "identifier `after`",
+            ],
+            3,
+        ),
+        (
+            "#define LOCAL\n#include \"neighbor.h\"\nafter\n",
+            vec!["identifier `sees_q2`", "identifier `after`"],
+            0,
+        ),
+        (
+            "#include \"local.h\"\n#define LOCAL\n#include \"neighbor.h\"\nafter\n",
+            vec![
+                "identifier `initial`",
+                "identifier `sees_q2`",
+                "identifier `after`",
+            ],
+            0,
+        ),
+    ] {
+        let (tokens, errors) = observe_include_paths(
+            source,
+            mode(CStandard::C23),
+            temp.0.join("main.c"),
+            &[q1.clone(), q2.clone()],
+            std::slice::from_ref(&system),
+        );
+        assert_eq!(errors, vec![warning; warnings], "{source}");
+        assert_eq!(token_descriptions(&tokens), expected, "{source}");
+    }
 }
 
 #[test]

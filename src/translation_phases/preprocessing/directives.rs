@@ -532,11 +532,12 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         )
     }
 
-    /// The configured search entry that provided the innermost open source
-    /// file, which `#include_next` continues after. Each opening carries its
-    /// own entry, so one file reached through different entries continues
-    /// from each. A file found beside its includer, by an absolute path, or
-    /// the primary source file has none.
+    /// The configured search entry of the innermost open source file, which
+    /// `#include_next` continues after. Each opening carries its own entry,
+    /// so one file reached through different entries continues from each.
+    /// As in Clang, a header found beside its includer takes the includer's
+    /// entry; the primary source file, a header found by an absolute path,
+    /// and one found beside either have none.
     pub(super) fn including_search_index(&self) -> Option<usize> {
         self.tokenizer_stack
             .iter()
@@ -552,11 +553,10 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     }
 
     /// Where an `#include_next` or `__has_include_next` (`spelling`) lookup
-    /// starts, following GCC: after the configured entry that provided this
-    /// opening of the current file, or from the first configured entry in a
-    /// header that none provided (found beside its includer or by an
-    /// absolute path). In the primary source file it warns and searches as
-    /// `#include` would, as GCC and Clang do.
+    /// starts, following Clang: after the configured entry of this opening
+    /// of the current file. With no entry to continue after, in the primary
+    /// source file or in a header with none, it warns and searches exactly
+    /// as `#include` would (`None`).
     ///
     /// C99: an extension (§4p6, p. 7; PDF p. 19) over the
     /// implementation-defined places of §6.10.2 paragraphs 2-3, pp. 149-150;
@@ -566,11 +566,15 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         spelling: &'static str,
         source_vectors: SourceVectors,
     ) -> Option<usize> {
-        if self.current_is_header() {
-            return Some(self.including_search_index().map_or(0, |index| index + 1));
-        }
+        let error_type = if !self.current_is_header() {
+            PreprocessorErrorType::IncludeNextInPrimarySource(spelling)
+        } else if let Some(index) = self.including_search_index() {
+            return Some(index + 1);
+        } else {
+            PreprocessorErrorType::IncludeNextWithoutSearchEntry(spelling)
+        };
         self.context.preprocessor_error(PreprocessorError {
-            error_type: PreprocessorErrorType::IncludeNextInPrimarySource(spelling),
+            error_type,
             source_vectors,
         });
         None
@@ -601,8 +605,9 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     ///
     /// `including_file` is the file containing the directive, captured before
     /// a macro-expanded operand can switch to its definition's tokenizer. The
-    /// result pairs the header with the configured entry that provided it,
-    /// which its own `#include_next` continues after.
+    /// result pairs the header with the configured entry its own
+    /// `#include_next` continues after: the entry that provided it, or, for
+    /// a header found beside its includer, the includer's, as in Clang.
     ///
     /// A header that cannot be found violates the constraint of C99 §6.10.2
     /// paragraph 1, p. 149; PDF p. 161. A file that `#pragma once` marked,
@@ -635,7 +640,8 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     if system {
                         self.context.mark_system_header(index, 0);
                     }
-                    found = Some((index, search_index));
+                    let origin = search_index.or_else(|| self.including_search_index());
+                    found = Some((index, origin));
                     break;
                 }
             }

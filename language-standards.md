@@ -606,13 +606,15 @@ GNU `#include_next` continues after the configured search entry that provided
 the current header, even when the next directive changes quote/angle form, as
 [GCC's search-order description](https://gcc.gnu.org/onlinedocs/cpp/Wrapper-Headers.html)
 explains. Each opening of a header carries its own entry, so a header reached
-through two entries continues after each. A header found beside its includer
-or by an absolute path has no entry, and, as in GCC, its search starts at the
-first configured entry, the `-iquote` directories included (Clang warns and
-searches as `#include` would). In the primary source file the directive warns
-and searches exactly as `#include` would, as both compilers do. GNU
-`__has_include_next(header)` reports whether that `#include_next` would find
-the header, with the same start and warning. Like
+through two entries continues after each. The rest follows Clang. A header
+found beside its includer takes the includer's entry. The primary source file
+has none, nor do a header found by an absolute path and a header found beside
+either: there the directive warns (Clang's `-Winclude-next-outside-header` and
+`-Winclude-next-absolute-path`) and searches exactly as `#include` would. GCC
+instead starts a relative header's search at the first `-iquote` directory
+without a warning. Both warnings are ordinary warnings, so they are withheld in
+system headers. GNU `__has_include_next(header)` reports whether that
+`#include_next` would find the header, with the same start and warnings. Like
 `__has_include` it is restricted to conditional expressions, and it reports
 the `IncludeNext` GNU origin under pedantic policy; in a system header, such
 as the resource headers, that diagnostic is withheld (see

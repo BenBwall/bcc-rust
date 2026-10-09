@@ -6,7 +6,7 @@ Run `cargo test --test diagnostics_golden`. Use `BLESS=1 cargo test --test diagn
 
 Snapshots record current behavior, including defects. The guard test rejects panics, internal representations, and raw NUL bytes in any output, so a crash or control-byte leak cannot be blessed into a passing snapshot. Fix the compiler instead of normalizing such output.
 
-`clean.h` supports the include-directive test; `included-error.h` contains the included-file parser error; `pragma-system-header.h` and the `system-headers/` directory (`noisy.h`, `beside-noisy.h`) supply the user header with `#pragma GCC system_header` and the system headers of `pp-system-header-diagnostics.c`. The header files are included by C fixtures, not invoked independently.
+`clean.h` supports the include-directive test; `included-error.h` contains the included-file parser error; `include-next-relative.h` is found beside its includer, the primary source file, for the `#include_next` search-start warning; `pragma-system-header.h` and the `system-headers/` directory (`noisy.h`, `beside-noisy.h`) supply the user header with `#pragma GCC system_header` and the system headers of `pp-system-header-diagnostics.c`. The header files are included by C fixtures, not invoked independently.
 
 ## Coverage
 
@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **362 top-level C inputs and 362 stderr snapshots**, plus five supporting headers and 122 mode/policy `.args` sidecars. One hundred four of the inputs cover semantic analysis (twenty-eight for declarations, twenty-eight for expressions and initializers, forty-one for statements and functions, three for 128-bit integers, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **140 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 121 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **363 top-level C inputs and 363 stderr snapshots**, plus six supporting headers and 122 mode/policy `.args` sidecars. One hundred four of the inputs cover semantic analysis (twenty-eight for declarations, twenty-eight for expressions and initializers, forty-one for statements and functions, three for 128-bit integers, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **141 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 122 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -235,6 +235,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `MissingOnOffSwitchInSTDCPragma` | rendered | [pp-missing-on-off-switch-in-s-t-d-c-pragma.c](pp-missing-on-off-switch-in-s-t-d-c-pragma.c) |
 | `PragmaOnceInNonHeader` | rendered | [pp-pragma-once-in-non-header.c](pp-pragma-once-in-non-header.c) |
 | `IncludeNextInPrimarySource` | rendered | [pp-include-next-in-primary-source.c](pp-include-next-in-primary-source.c) covers `#include_next` and `__has_include_next`; both then search as `#include` would, as GCC and Clang do. |
+| `IncludeNextWithoutSearchEntry` | rendered | [pp-include-next-without-search-entry.c](pp-include-next-without-search-entry.c), through `include-next-relative.h`, which is found beside the primary source file and so has no search entry, as in Clang's `-Winclude-next-absolute-path`. |
 | `ErrorDirective` | rendered | [pp-error-directive.c](pp-error-directive.c) |
 | `SystemHeaderPragmaInMainFile` | rendered | [pp-system-header-pragma-in-main-file.c](pp-system-header-pragma-in-main-file.c) |
 

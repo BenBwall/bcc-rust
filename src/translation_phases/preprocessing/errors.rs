@@ -273,7 +273,8 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::WarningDirective(..)
             | PreprocessorErrorType::PragmaOnceInNonHeader
             | PreprocessorErrorType::SystemHeaderPragmaInMainFile
-            | PreprocessorErrorType::IncludeNextInPrimarySource(..) => ErrorSeverity::Warning,
+            | PreprocessorErrorType::IncludeNextInPrimarySource(..)
+            | PreprocessorErrorType::IncludeNextWithoutSearchEntry(..) => ErrorSeverity::Warning,
         }
     }
 }
@@ -716,6 +717,13 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// implementation-defined header places, §6.10.2 paragraphs 2-3, pp.
     /// 149-150; PDF pp. 161-162.
     IncludeNextInPrimarySource(&'static str),
+    /// `#include_next` or `__has_include_next` in a header with no
+    /// configured search entry to continue after: one found by an absolute
+    /// path, or beside the primary source file or such a header. The lookup
+    /// searches exactly as `#include` would, as Clang's does
+    /// (`-Winclude-next-absolute-path`). C99: §4p6, p. 7; PDF p. 19;
+    /// §6.10.2 paragraphs 2-3, pp. 149-150; PDF pp. 161-162.
+    IncludeNextWithoutSearchEntry(&'static str),
     /// C99: §6.10.5 paragraph 1, p. 159; PDF p. 171; translation fails,
     /// §4 paragraph 4, p. 7; PDF p. 19.
     ErrorDirective(&'tu str),
@@ -1482,6 +1490,16 @@ impl PreprocessorErrorType<'_> {
                          header, and the primary source file came from none",
                     )
                     .help("use `#include` or `__has_include` outside headers"),
+            | Self::IncludeNextWithoutSearchEntry(spelling) => new(format_in!(
+                arena,
+                "`{spelling}` in a file found relative to the primary source file or by an \
+                 absolute path"
+            ))
+            .label("searches from the start of the include path")
+            .note(
+                "it continues after the search directory that provided the current header, and \
+                 this header came from none",
+            ),
             | Self::LanguageConstraint(message) => new(format_in!(arena, "{message}")),
             | Self::WideCharacterOutOfRange =>
                 new("wide character constant does not fit in wchar_t")
