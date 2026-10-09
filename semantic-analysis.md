@@ -552,3 +552,47 @@ new GCC-accepted rejections. The 36 remaining preprocessed rejections already
 occurred in Stage 2 and are outside this stage's new statement/function rules.
 Evidence is retained in `target/survey-stage2`, `target/survey-stage3` (initial
 triage), `target/survey-stage3-cli`, and `target/sema3-final-triage.json`.
+
+## Freestanding resources and intrinsic boundary
+
+Embedded freestanding headers and reserved target-description macros are now
+available through the ordinary preprocessing pipeline. The implementation and
+mode decisions are in [language-standards.md](language-standards.md). Varargs
+operations retain typed GNU builtin syntax; semantic analysis resolves
+`__builtin_va_list` as an array of one opaque complete SysV record (24 bytes,
+alignment 8). Ordinary parameter adjustment and array decay apply. Intrinsics
+check va-list operands, complete object result types for `va_arg`, and variadic
+function context for `va_start`; `va_start`, `va_end` and `va_copy` return void.
+`offsetof` resolves field/index paths iteratively and retains a `size_t` ICE.
+No varargs instruction lowering, runtime pairing or argument-availability
+checks are implied. `FLT_ROUNDS` describes the default round-to-nearest state;
+observing dynamic rounding-state changes remains backend work.
+
+The shared `tests/fixtures/freestanding/conformance.c` probe checks every
+header, ABI layouts, integer limits and constant helpers in bcc and Linux-target
+Clang. Strict C11 validates portable integer checks; GNU17 additionally validates
+floating-value comparisons (Clang folds these as an extension to ICE rules).
+Every emitted target macro matches the pinned Clang `-dM -E` definition exactly,
+and CLI tests compare expanded values with live Clang in every language mode.
+Allocation coverage exercises all resources and invalid varargs paths.
+
+The raw GCC torture comparison with `target/survey-stage3-final/results.json`
+accepts 3,565 of 3,878 sources (448 newly accepted, two newly rejected),
+with no crashes or timeouts. GCC C99 pedantic acceptance is unchanged at 2,874;
+bcc accepts 2,757 of those, up from 2,352, with no newly rejected strict-valid
+sources. Header-free preprocessed acceptance rises from 2,560 to 2,565.
+
+Both new raw rejections are independently GCC GNU17-valid and expose the
+existing lack of GNU global register variables when `__x86_64__` now selects
+the architecture-specific branch:
+
+| Source | Triage |
+| --- | --- |
+| `compile/20041119-1.c` | File-scope `register unsigned int reg __asm("r14")`; GCC GNU17 accepts, Clang Linux rejects the unsuitable global register, bcc reports file-scope register storage. |
+| `execute/pr51447.c` | File-scope `register void *ptr asm("rbx")`; GCC GNU17 accepts, Clang rejects the register and nested function, bcc reports file-scope register storage. |
+
+These are documented GNU-extension gaps, not reasons to hide the target's
+architecture macros. The semantic-review work owns broader declaration rules;
+this change does not alter global-register semantics. Full evidence, including
+per-file logs, delta lists and independent GNU-mode triage, is retained under
+`target/survey-freestanding/`.
