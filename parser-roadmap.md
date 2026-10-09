@@ -6,8 +6,10 @@ contracts retained from their implementation plans. The
 grammar, ownership, and evidence inventory; [GLOSSARY.md](GLOSSARY.md) defines
 the canonical domain terms.
 
-The roadmap covers syntax parsing only. Semantic analysis, backend lowering,
-code generation, and compiler extensions remain separate projects.
+The roadmap covers syntax parsing only. Semantic analysis has its own record in
+[semantic-analysis.md](semantic-analysis.md), and language modes and extensions
+in [language-standards.md](language-standards.md); backend lowering and code
+generation are not implemented.
 
 ## Completed foundations
 
@@ -202,7 +204,8 @@ With Phase 05 complete, the language parser is complete for the project's declar
 syntax target when it can construct source-backed syntax for complete
 translation units and recover predictably from malformed input.
 
-Parser-complete does not mean compiler-complete. The following remain separate:
+Parser-complete does not mean compiler-complete. The following remain outside
+the parser:
 
 - type resolution and compatibility;
 - linkage, storage-duration, and redeclaration constraints;
@@ -211,6 +214,10 @@ Parser-complete does not mean compiler-complete. The following remain separate:
 - intermediate representation, optimization, code generation, assembly, and
   linking;
 - non-C99 extensions unless separately planned.
+
+Semantic analysis ([semantic-analysis.md](semantic-analysis.md)) owns the first
+four; the backend items are not implemented; extensions are planned in
+[language-standards.md](language-standards.md).
 
 ## Phase rule
 
