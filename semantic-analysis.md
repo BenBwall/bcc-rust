@@ -13,12 +13,20 @@ parsing. `pipeline::analyze_translation_unit` then consumes the immutable
 semantic lookup is independent, with no feedback to parser frames.
 
 The default CLI and the measured diagnostic adapter invoke semantic analysis.
-`--semantic-types` reports declarations in deterministic lexical traversal order,
-with a nominal-tag declaration table followed by ordinary binding occurrences,
-C-like abstract type spelling, scope, binding category, linkage, duration,
-and available size/alignment, then typed expressions and contextual conversions.
+`--semantic-types` uses the `--syntax-tree` conventions: one item per line,
+lowercase `key=value` fields with inapplicable ones omitted, quoted values
+other than plain words, and two-space indentation (a `[depth=N]` prefix past
+32 levels). A `target` line precedes the scope tree, printed in creation
+order with each scope nested under its parent; prototype scopes are omitted.
+Within a scope, tag declarations come first (with members, bit offsets and
+widths, and the names anonymous members contribute, at the tag's last
+declaration; enums show their compatible type), then ordinary binding
+occurrences in lexical order with C-like abstract type spelling, linkage,
+object duration, parameter `static` minimums and available size/alignment.
+Resolved type names, typed expressions and contextual conversions follow.
 Expression ordinals follow deterministic child-before-parent traversal; no host
-address is printed. `--tokens`, `--syntax-tree` and `--raw-syntax` stop
+address is printed, and source locations are not yet shown. `--tokens`,
+`--syntax-tree` and `--raw-syntax` stop
 at their existing phases and retain their previous output contracts.
 
 Diagnostics enter the existing pending FIFO after preprocessing and parser

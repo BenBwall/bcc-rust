@@ -998,6 +998,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let bits = layout.size * 8;
                 if width == 0 {
                     bit_end = align_up(bit_end, bits).unwrap_or(bit_end);
+                    resolved.offset = bit_end / 8;
                 } else {
                     let unit_start = bit_end / bits * bits;
                     if bit_end + u64::from(width) > unit_start + bits {
