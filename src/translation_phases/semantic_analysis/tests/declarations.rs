@@ -532,8 +532,8 @@ fn star_bounds_need_a_prototype_that_is_not_a_definition() {
             gnu17()
         ),
         [
-            SemanticErrorKind::InvalidStarBound,
-            SemanticErrorKind::InvalidStarBound,
+            SemanticErrorKind::DefinitionStarArray,
+            SemanticErrorKind::DefinitionStarArray,
             SemanticErrorKind::InvalidStarBound,
             SemanticErrorKind::InvalidStarBound,
         ]

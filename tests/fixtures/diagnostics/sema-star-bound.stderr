@@ -1,17 +1,17 @@
-error: `[*]` array bound outside a function prototype declaration: `a`
- --> sema-star-bound.c:1:21
-  |
-1 | void definition(int a[*]) {}
-  |                     ^^^^ `[*]` is not allowed here
-  |
-  = note: C99 §6.7.5.2p4: a `[*]` size is used only in declarations with function prototype scope; a function definition's parameters have block scope (§6.2.1p4)
-
 error: `[*]` array bound outside a function prototype declaration
- --> sema-star-bound.c:2:5
+ --> sema-star-bound.c:1:5
   |
-2 | int (*file)[*];
+1 | int (*file)[*];
   |     ^^^^^^^^^^ `[*]` is not allowed here
   |
-  = note: C99 §6.7.5.2p4: a `[*]` size is used only in declarations with function prototype scope; a function definition's parameters have block scope (§6.2.1p4)
+  = note: C99 §6.7.5.2p4: a `[*]` size is used only in declarations with function prototype scope
+
+error: `[*]` array bound outside a function prototype declaration
+ --> sema-star-bound.c:2:24
+  |
+2 | void block(void) { int (*local)[*]; }
+  |                        ^^^^^^^^^^^ `[*]` is not allowed here
+  |
+  = note: C99 §6.7.5.2p4: a `[*]` size is used only in declarations with function prototype scope
 
 2 errors generated.
