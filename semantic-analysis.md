@@ -33,7 +33,7 @@ as error identities. No new rendering/normalization path exists.
 ## Storage and traversal
 
 The translation-unit arena (`'tu`) retains canonical type nodes, nominal tag
-identities and completion cells, record members with byte/bit offsets, binding
+identities and completion cells, record members with byte/bit offsets and per-record member-name tables, binding
 occurrences, semantic scope identities, resolved type names, and parameter
 metadata (including array `static` minimums), tag declaration occurrences, typed
 expression results and conversion records. A backend can retain this graph
@@ -80,6 +80,11 @@ enumerators in the outer body scope. `ScopeKind::Function` names that semantic
 owner: ordinary names there have C99 block scope, while the distinct label
 namespace has function scope; GNU local labels additionally have lexical scope.
 Each aggregate has a separate member namespace.
+An anonymous structure or union member (C11 §6.7.2.1p13; an extension in C99
+and GNU modes, and with MSVC anonymous structures also a tagged or typedef
+record) is retained as an unnamed `Member` marked anonymous; its names join the
+containing namespace, where duplicates are diagnosed, and initialization treats
+it as a subobject.
 Labels are reserved to the function statement stage and are not yet resolved.
 
 `src/target.rs` is the target seam. `TargetLayout::LP64` describes x86-64 System V:
@@ -103,7 +108,7 @@ C99-required int/unsigned-int/bool set are accepted as an implementation-defined
 choice following the target ABI. Packed/aligned/vendor attribute meaning is not
 modeled; affected record layouts become unavailable instead of fabricated.
 `tests/fixtures/semantic/layout-probe.c` uses Clang's Linux target static assertions
-for scalar sizes, mixed-base bit-fields, zero-width fields, nested records, unions,
+for scalar sizes, mixed-base bit-fields, zero-width and unnamed bit-fields, nested records, unions,
 member offsets and flexible arrays. Clang accepted that probe.
 
 Compatibility handles qualifiers, pointer targets, constant vs incomplete array
@@ -263,7 +268,11 @@ Expression completion runs on the existing explicit work stack after children
 and type names. Failed operands yield `Unknown` and suppress dependent diagnostics.
 Recovery taint and unmodeled extension owners likewise yield unknown results;
 walking their children is not a claim that their extension semantics were checked.
-Member-name lookup has an arena index per nominal tag; const-member queries cache
+Each completed record retains a field table (`Tag::fields`) that resolves every
+name in its member namespace, including names contributed by anonymous members,
+to the member path, the qualifiers of the anonymous members on that path and the
+byte/bit offset from the record's start. Member access and designators use it
+through a scratch index with expected O(1) lookup; const-member queries cache
 explicit postorder results rather than rescanning aggregate trees for every use.
 
 #### Constant expressions

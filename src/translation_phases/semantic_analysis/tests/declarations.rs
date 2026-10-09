@@ -338,3 +338,97 @@ fn unnamed_bit_fields_do_not_align_records() {
         );
     }
 }
+
+fn c11() -> CompilerConfiguration {
+    CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Allow)
+}
+
+#[test]
+fn anonymous_members_have_layout_names_and_initializers() {
+    let records = "struct A { int a; union { int b; float c; }; int d; }; struct N { int x; \
+                   struct { union { int y; char z; }; int w; }; };";
+    for configuration in [c11(), gnu17()] {
+        assert_eq!(
+            tag_layout(records, configuration, "A"),
+            Some(Layout {
+                size:  12,
+                align: 4,
+            })
+        );
+        assert_eq!(
+            tag_layout(records, configuration, "N"),
+            Some(Layout {
+                size:  12,
+                align: 4,
+            })
+        );
+    }
+    with_configuration(records, c11(), |context, s| {
+        let n = s
+            .types
+            .tags
+            .iter()
+            .find(|t| t.name.is_some_and(|n| context.string_cache.at(n) == "N"))
+            .unwrap();
+        let fields = n.fields.get();
+        assert_eq!(
+            fields
+                .iter()
+                .map(|f| (f.offset, f.path.len()))
+                .collect::<Vec<_>>(),
+            [(0, 1), (4, 3), (4, 3), (8, 2)]
+        );
+        assert!(n.members.get()[1].anonymous);
+    });
+    assert_eq!(
+        kinds(
+            &format!(
+                "{records} void f(void) {{ struct A s = {{1, 2, 3}}; struct A t = {{.b = 2, .d = \
+                 4}}; struct A u = {{.c = 1.0f}}; struct N n = {{.y = 1, .w = 2}}; s.b = 1; s.c = \
+                 2.0f; s.d = 3; struct A *p = &s; p->b = 4; n.z = 'a'; int *q = &n.w; }}"
+            ),
+            c11()
+        ),
+        []
+    );
+    assert_eq!(
+        kinds(
+            "struct A { int a; union { int b; float c; }; int d; } e = {1, 2, 3, 4}; struct C { \
+             const union { int b; }; } cs; void g(void) { cs.b = 1; cs.missing = 2; }",
+            c11()
+        ),
+        [
+            SemanticErrorKind::ExcessInitializer,
+            SemanticErrorKind::ExpectedModifiableLvalue,
+            SemanticErrorKind::InvalidMemberAccess,
+        ]
+    );
+}
+
+#[test]
+fn anonymous_member_names_share_the_containing_namespace() {
+    assert_eq!(
+        kinds(
+            "struct D { int a; union { int a; float f; }; }; struct E { union { int x; }; struct \
+             { int x; }; }; struct F { struct { int y; }; int y; };",
+            c11()
+        ),
+        [
+            SemanticErrorKind::DuplicateMember,
+            SemanticErrorKind::DuplicateMember,
+            SemanticErrorKind::DuplicateMember,
+        ]
+    );
+}
+
+#[test]
+fn msvc_tagged_anonymous_members_join_the_namespace() {
+    assert_eq!(
+        kinds(
+            "struct T { int t; }; typedef struct T TT; struct S { struct T; int u; } s; struct R \
+             { TT; } r; void f(void) { s.t = 1; r.t = 2; s.u = 3; }",
+            gnu17().with_msvc_extensions(true)
+        ),
+        []
+    );
+}

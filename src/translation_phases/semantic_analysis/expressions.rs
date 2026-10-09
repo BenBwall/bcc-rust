@@ -1103,7 +1103,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(&index) = self.member_indices.get(&(id, member.name)) else {
             return self.invalid_expression(e, SemanticErrorKind::InvalidMemberAccess);
         };
-        let Some(field) = self.types.tags[id].members.get().get(index).copied() else {
+        let Some(field) = self.types.tags[id].fields.get().get(index).copied() else {
             return Self::expression_result(e, self.types.unknown());
         };
         let mut field_ty = field.ty;
@@ -1112,7 +1112,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             arrays.push(bound);
             field_ty = element;
         }
-        field_ty = field_ty.qualified(ty.qualifiers);
+        // Qualifiers of the record and of any anonymous members on the path
+        // reach the member, and an array's element (§6.5.2.3p3, §6.7.3p8).
+        field_ty = field_ty.qualified(ty.qualifiers | field.qualifiers);
         while let Some(bound) = arrays.pop() {
             field_ty = self.types.intern(TypeKind::Array(field_ty, bound));
         }

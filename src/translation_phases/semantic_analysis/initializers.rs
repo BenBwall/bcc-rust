@@ -16,6 +16,7 @@ use super::{
     ExpressionType,
     Initializer,
     InitializerType,
+    Member,
     Scalar,
     SemanticErrorKind,
     TagKind,
@@ -219,6 +220,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         let mut valid = true;
                         let mut unknown_designator = false;
                         for designator in designation.designators {
+                            // A member of an anonymous member is reached
+                            // through that member (C11 §6.7.2.1p13).
+                            let mut path = ArenaVec::new_in(self.scratch);
                             let index = match designator.kind {
                                 | DesignatorType::Array(expression) => {
                                     let info = self.expression_info(expression.expression());
@@ -235,10 +239,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                     }
                                 },
                                 | DesignatorType::Field(name) | DesignatorType::GnuField(name) =>
-                                    if let TypeKind::Tag(id) = self.types.nodes[selected.index] {
-                                        self.member_indices
-                                            .get(&(id, name.name))
-                                            .and_then(|&index| u64::try_from(index).ok())
+                                    if let TypeKind::Tag(id) = self.types.nodes[selected.index]
+                                        && let Some(&index) =
+                                            self.member_indices.get(&(id, name.name))
+                                        && let Some(field) =
+                                            self.types.tags[id].fields.get().get(index)
+                                    {
+                                        path.extend(field.path.iter().map(|&i| i as u64));
+                                        path.pop()
                                     } else {
                                         None
                                     },
@@ -254,18 +262,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 valid = false;
                                 break;
                             };
-                            let Some(child) = self.subobject(selected, index) else {
-                                valid = false;
+                            path.push(index);
+                            for &index in &path {
+                                let Some(child) = self.subobject(selected, index) else {
+                                    valid = false;
+                                    break;
+                                };
+                                cursor = Current {
+                                    container: selected,
+                                    index,
+                                    parent,
+                                    root_index: parent
+                                        .map_or(index, |p: &Current<'_>| p.root_index),
+                                };
+                                parent = Some(&*self.scratch.alloc(cursor));
+                                selected = child;
+                            }
+                            if !valid {
                                 break;
-                            };
-                            cursor = Current {
-                                container: selected,
-                                index,
-                                parent,
-                                root_index: parent.map_or(index, |p: &Current<'_>| p.root_index),
-                            };
-                            parent = Some(&*self.scratch.alloc(cursor));
-                            selected = child;
+                            }
                         }
                         if !valid {
                             unmodeled |= unknown_designator;
@@ -431,7 +446,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .members
                 .get()
                 .iter()
-                .position(|m| m.name.is_some())
+                .position(Member::initializable)
                 .map_or(u64::MAX, |n| n as u64)
         } else {
             0
@@ -453,7 +468,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .get()
                 .get(usize::try_from(index).ok()?)
                 .filter(|m| {
-                    m.name.is_some()
+                    m.initializable()
                         && !matches!(
                             self.types.nodes[m.ty.index],
                             TypeKind::Array(_, ArrayBound::Incomplete)
@@ -478,7 +493,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .iter()
                         .enumerate()
                         .skip(usize::try_from(next).unwrap_or(members.len()))
-                        .find(|(_, m)| m.name.is_some())
+                        .find(|(_, m)| m.initializable())
                         .map_or(members.len() as u64, |(i, _)| i as u64)
                 };
             }

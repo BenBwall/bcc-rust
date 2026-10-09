@@ -53,6 +53,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 name:              Some(name),
                 kind:              TagKind::Struct,
                 members:           Cell::new(&[]),
+                fields:            Cell::new(&[]),
                 layout:            Cell::new(Some(self.types.target.va_list)),
                 complete:          Cell::new(true),
                 tainted:           Cell::new(false),

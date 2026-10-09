@@ -37,6 +37,7 @@ use super::{
     TypeSpecifiers,
     Work,
     align_up,
+    types::Field,
 };
 
 /// The x86-64 System V target ignores MSVC calling conventions.
@@ -300,6 +301,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             name: name.map(|n| n.name),
             kind,
             members: Cell::new(&[]),
+            fields: Cell::new(&[]),
             layout: Cell::new(None),
             complete: Cell::new(false),
             tainted: Cell::new(false),
@@ -795,6 +797,54 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ty.is_some_and(|ty| !self.types.unanalyzed(ty) && self.integer_type(ty).is_none())
     }
 
+    /// An untagged structure or union specifier with no declarator, or with
+    /// MSVC anonymous structures a tagged or typedef one, declares an
+    /// anonymous member whose names join this record's namespace.
+    /// C11: §6.7.2.1p13, p. 115; PDF p. 133; C99: §6.7p3, p. 97; PDF p. 109.
+    pub(super) fn anonymous_member(
+        &mut self,
+        tag: usize,
+        member: super::StructDeclaration<'tu>,
+        base: TypeId,
+    ) -> Option<Member> {
+        let anonymous = match member.type_specifiers {
+            | TypeSpecifiers::StructOrUnion(s) if s.identifier.is_none() =>
+                s.struct_declaration_list.is_some(),
+            | TypeSpecifiers::StructOrUnion(_) | TypeSpecifiers::TypedefName(_) => self
+                .context
+                .configuration
+                .accepts(crate::configuration::Feature::MsAnonymousStructs),
+            | _ => false,
+        };
+        let TypeKind::Tag(inner) = self.types.nodes[base.index] else {
+            return None;
+        };
+        if !anonymous || self.types.tags[inner].kind == TagKind::Enum {
+            return None;
+        }
+        for field in self.types.tags[inner].fields.get() {
+            if let Some(previous) = self
+                .member_names
+                .insert((tag, field.name.name), field.name.source_vectors)
+            {
+                self.error(
+                    SemanticErrorKind::DuplicateMember,
+                    field.name.source_vectors,
+                    Some(field.name.name),
+                    Some(previous),
+                );
+            }
+        }
+        Some(Member {
+            name:       None,
+            ty:         base,
+            width:      None,
+            offset:     0,
+            bit_offset: 0,
+            anonymous:  true,
+        })
+    }
+
     /// System V records use natural alignment, low-to-high bits and
     /// non-straddling units. C99: implementation-defined bit-field
     /// allocation §6.7.2.1p10-16, pp. 102-103; PDF pp. 114-115.
@@ -808,7 +858,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 TypeKind::Array(_, ArrayBound::Incomplete)
             ) && index + 1 == members.len()
                 && tag.kind == TagKind::Struct
-                && members.iter().filter(|m| m.name.is_some()).count() > 1;
+                && members.iter().filter(|m| m.initializable()).count() > 1;
             if flexible {
                 tag.contains_flexible.set(true);
             }
@@ -896,10 +946,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         _ = self.defining.remove(&id);
         tag.members.set(output.leak());
+        let mut fields = ArenaVec::new_in(self.types.tu);
         for (index, member) in tag.members.get().iter().enumerate() {
             if let Some(name) = member.name {
-                _ = self.member_indices.insert((id, name.name), index);
+                fields.push(Field {
+                    name,
+                    path: self.types.tu.alloc_slice_copy(&[index]),
+                    ty: member.ty,
+                    qualifiers: TypeQualifiers::empty(),
+                    offset: member.offset,
+                    bit_offset: member.bit_offset,
+                    width: member.width,
+                });
+            } else if member.anonymous
+                && let TypeKind::Tag(inner) = self.types.nodes[member.ty.index]
+            {
+                for field in self.types.tags[inner].fields.get() {
+                    let mut path = ArenaVec::new_in(self.scratch);
+                    path.push(index);
+                    path.extend_from_slice(field.path);
+                    fields.push(Field {
+                        path: self.types.tu.alloc_slice_copy(&path),
+                        qualifiers: field.qualifiers | member.ty.qualifiers,
+                        offset: member.offset.saturating_add(field.offset),
+                        ..*field
+                    });
+                }
             }
+        }
+        tag.fields.set(fields.leak());
+        for (index, field) in tag.fields.get().iter().enumerate() {
+            _ = self.member_indices.insert((id, field.name.name), index);
         }
         tag.complete.set(true);
         if !tag.tainted.get() {
