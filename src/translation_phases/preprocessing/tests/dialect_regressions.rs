@@ -83,6 +83,85 @@ fn texts(output: &[String]) -> String {
         .join(" ")
 }
 
+/// GNU/MSVC operators in ordinary text follow the whitespace rule for
+/// invocations (C99 §6.10.3p10), including nested pragma parentheses.
+#[test]
+fn preprocessing_operator_arguments_accept_newlines_in_ordinary_text() {
+    for (source, expected) in [
+        (
+            "__pragma(\n    warning(disable: 4068)\n)\nint x;\n",
+            "int x ;",
+        ),
+        ("__pragma\n(\nSTDC\nFP_CONTRACT\nON\n)\nint x;\n", "int x ;"),
+        (
+            "int x = __has_builtin(\n__builtin_va_arg\n);\nint after;\n",
+            "int x = 1 ; int after ;",
+        ),
+        (
+            "int x = __has_builtin\n(\n__builtin_va_arg\n);\nint after;\n",
+            "int x = 1 ; int after ;",
+        ),
+        (
+            "int x = __has_attribute(\nunused\n);\nint after;\n",
+            "int x = 1 ; int after ;",
+        ),
+    ] {
+        for config in [
+            mode(CStandard::C17).with_msvc_feature(MsvcFeature::Pragma, true),
+            mode(CStandard::C17)
+                .with_gnu_extensions(true)
+                .with_msvc_feature(MsvcFeature::Pragma, true),
+            mode(CStandard::C23).with_msvc_feature(MsvcFeature::Pragma, true),
+        ] {
+            let (tokens, errors) = observe(source, config);
+            assert!(errors.is_empty(), "{source}: {errors:?}");
+            assert_eq!(texts(&tokens), expected, "{source}");
+        }
+    }
+}
+
+/// C99 §6.10p2: a directive ends at its first new-line even inside an
+/// operator; recovery must leave the enclosing conditional intact.
+#[test]
+fn preprocessing_operator_arguments_keep_directive_newline_boundaries() {
+    let config = mode(CStandard::C17).with_gnu_extensions(true);
+    for directive in ["#if", "#if 0\nwrong\n#elif"] {
+        for operator in ["__has_builtin(", "__has_builtin", "__has_attribute("] {
+            let source = format!(
+                "{directive} {operator}\nunused\n)\n#else\nint recovered;\n#endif\nint after;\n"
+            );
+            let (tokens, errors) = observe(&source, config);
+            assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+            assert!(errors[0].contains("preprocessing operator"), "{errors:?}");
+            assert_eq!(texts(&tokens), "int recovered ; int after ;", "{source}");
+        }
+    }
+    // #line expands its operand too, but is not a conditional expression.
+    let (tokens, errors) = observe(
+        "#line __has_builtin(\n__builtin_va_arg\n)\nint after;\n",
+        config,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("unterminated preprocessing operator")),
+        "{errors:?}"
+    );
+    assert_eq!(texts(&tokens), "__builtin_va_arg ) int after ;");
+}
+
+/// A malformed macro-sourced operand keeps its existing line recovery
+/// rather than consuming the following declaration (C99 §6.10p2).
+#[test]
+fn preprocessing_operator_arguments_keep_macro_newline_recovery() {
+    let (tokens, errors) = observe(
+        "#define Q __has_builtin(\nQ\nint after;\n",
+        mode(CStandard::C17).with_gnu_extensions(true),
+    );
+    assert_eq!(errors, ["Error: unterminated preprocessing operator"]);
+    assert_eq!(texts(&tokens), "0 int after ;");
+}
+
 /// C23 §6.10.5.1p7: a `__VA_OPT__` result is a substitution; it is rescanned
 /// with the rest of the replacement list but never substituted again.
 #[test]

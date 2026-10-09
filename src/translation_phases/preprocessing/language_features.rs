@@ -107,14 +107,27 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
     }
 
     /// Collects an operator argument with an explicit delimiter counter.
-    /// C99: preprocessing-token nesting, §6.10.3p11, p. 152; PDF p. 164.
+    /// GNU/MSVC extension: ordinary-text invocations treat new-lines as
+    /// whitespace, following C99 §6.10.3p10-11, p. 152; PDF p. 164.
+    /// Directives and replacement lists retain their new-line boundary:
+    /// C99: §6.10p2, pp. 146-147; PDF pp. 158-159.
     fn query_arguments(
         &mut self,
         operator: PreprocessorToken,
     ) -> Option<ArenaVec<'x, PreprocessorToken>> {
+        let newline_ends_operand = self.state.in_directive
+            || matches!(
+                self.tokenizer_stack.last().map(|frame| &frame.frame_type),
+                Some(
+                    TokenizerFrameType::ObjectLikeMacroInvocation { .. }
+                        | TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                )
+            );
         let open = loop {
             match self.next_preprocessor_token::<false>() {
-                | Some(token) if token.kind == T::Whitespace => {},
+                | Some(token)
+                    if token.kind == T::Whitespace
+                        || (token.kind == T::Newline && !newline_ends_operand) => {},
                 | token => break token,
             }
         };
@@ -145,7 +158,11 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         let mut resource_started = tokens.iter().any(|t| t.kind != T::Whitespace);
         let mut in_header = false;
         let mut depth = 1usize;
-        while let Some(token) = self.next_preprocessor_token::<false>() {
+        while let Some(mut token) = self.next_preprocessor_token::<false>() {
+            if token.kind == T::Newline && !newline_ends_operand {
+                token.kind = T::Whitespace;
+                token.contents = self.context.string_cache.intern(" ");
+            }
             if resource_query && !resource_started && token.kind != T::Whitespace {
                 resource_started = true;
                 in_header = self

@@ -716,9 +716,9 @@ fn failed_queries_recover_as_zero_without_missing_operand_cascades() {
         mode(CStandard::C23).with_msvc_feature(MsvcFeature::Pragma, true),
     );
     assert_eq!(errors.len(), 1, "{errors:?}");
-    let tokens = spellings(&tokens);
-    assert!(tokens.contains("identifier `after`"), "{tokens}");
-    assert!(!tokens.contains("integer constant"), "{tokens}");
+    // In ordinary text, the new-line is whitespace: this unterminated
+    // pragma consumes its operand through EOF and never produces a zero.
+    assert!(tokens.is_empty(), "{tokens:?}");
 }
 
 #[test]

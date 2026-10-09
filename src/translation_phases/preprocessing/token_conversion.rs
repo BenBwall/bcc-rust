@@ -1229,7 +1229,11 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                 ) {
                     unreachable!("Handled in next_preprocessor_token");
                 }
+                // C99 §6.10p2: expanded directive operands still end at
+                // the first new-line, including within query operators.
+                let in_directive = std::mem::replace(&mut self.state.in_directive, true);
                 self.parse_directive(token);
+                self.state.in_directive = in_directive;
                 return None;
             },
             | PreprocessorTokenType::GeneratedString

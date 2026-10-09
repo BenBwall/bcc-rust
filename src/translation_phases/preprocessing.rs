@@ -142,6 +142,8 @@ struct PreprocessorState<'pp> {
     va_opt_name:           StringCacheId,
     query_depth:           usize,
     conditional_queries:   bool,
+    /// Directives end at their first new-line (C99 §6.10p2).
+    in_directive:          bool,
     retain_placeholders:   bool,
     arena:                 &'pp Bump,
     once_set:              ArenaSet<'pp, u32>,
@@ -403,6 +405,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     va_opt_name: context.string_cache.intern("__VA_OPT__"),
                     query_depth: 0,
                     conditional_queries: false,
+                    in_directive: false,
                     retain_placeholders: false,
                     arena: pp,
                     once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),
