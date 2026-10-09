@@ -14,9 +14,10 @@
 //! unsigned.
 //!
 //! Behavior C99 leaves open: a `defined` produced by macro replacement is
-//! undefined (§6.10.1 paragraph 4) and is evaluated like a written one, as
-//! GCC does. An evaluated comma operator (§6.6 paragraph 3) is an extension
-//! under the extension policy.
+//! undefined (§6.10.1 paragraph 4) and is evaluated like a written one once
+//! parameters are replaced and `##` applied, as GCC and Clang do; it is
+//! diagnosed as Clang's `-Wexpansion-to-defined` is. An evaluated comma
+//! operator (§6.6 paragraph 3) is an extension under the extension policy.
 
 use std::{
     fmt::Debug,
@@ -27,6 +28,7 @@ use std::{
 
 use super::{
     Expander,
+    driver::TokenizerFrameType,
     errors::{
         PreprocessorError,
         PreprocessorErrorType,
@@ -1027,21 +1029,24 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// before macro replacement.
     ///
     /// C99: §6.10.1 paragraph 1, p. 148; PDF p. 160, and paragraph 4.
-    fn parse_defined_operator(&mut self) {
-        let Some(ident_or_opening_paren) = self.expect_token_from_previous_phase::<true>(|_, t| matches!(t.kind, PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::OpeningParenthesis),
-            |_, t|
-                ControlFlow::Break(PreprocessorError {
-                        error_type:     PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective(t.kind),
-                        source_vectors: t.source_vectors,
-                    },
-                )
-            ,
-            "parsing defined operator",
+    ///
+    /// Undefined behavior C99 leaves open: when macro replacement produced
+    /// `defined` (paragraph 4), its operand comes from the rest of the
+    /// replacement, with parameters replaced and `##` applied, and then from
+    /// the text after it, as in GCC and Clang. Only the operand's own name is
+    /// left unreplaced.
+    fn parse_defined_operator(&mut self, defined: PreprocessorToken) {
+        self.report_defined_from_expansion(defined);
+        let Some(ident_or_opening_paren) = self.defined_operand_token(
+            |t| t.kind.is_identifier() || t.kind == PreprocessorTokenType::OpeningParenthesis,
+            PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective,
         ) else {
             // The malformed operator still stands for one operand, so the
             // expression continues in the binary state without cascading.
             self.skip_token_unless_line_end();
-            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+            self.expression_parser
+                .operand_stack
+                .push(PreprocessorExpressionOperand::Signed(0));
             self.expression_parser.state = PreprocessorExpressionParserState::Binary;
             return;
         };
@@ -1061,17 +1066,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             PreprocessorTokenType::OpeningParenthesis,
             "Compiler bug: ident_or_opening_paren should be an opening parenthesis or identifier."
         );
-        let Some(ident) = self.expect_token_from_previous_phase::<true>(
-            |_, t| t.kind.is_identifier(),
-            |_, t| {
-                ControlFlow::Break(PreprocessorError {
-                    error_type:     PreprocessorErrorType::MissingIdentifierInDefinedDirective(
-                        t.kind,
-                    ),
-                    source_vectors: t.source_vectors,
-                })
-            },
-            "parsing defined operator",
+        let Some(ident) = self.defined_operand_token(
+            |t| t.kind.is_identifier(),
+            PreprocessorErrorType::MissingIdentifierInDefinedDirective,
         ) else {
             self.skip_token_unless_line_end();
             self.expression_parser
@@ -1081,16 +1078,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             return;
         };
 
-        _ = self.expect_token_from_previous_phase::<true>(
-            |_, t| matches!(t.kind, PreprocessorTokenType::ClosingParenthesis),
-            |_, t| {
-                ControlFlow::Break(PreprocessorError {
-                    error_type:
-                        PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective(t.kind),
-                    source_vectors: t.source_vectors,
-                })
-            },
-            "parsing defined operator",
+        _ = self.defined_operand_token(
+            |t| t.kind == PreprocessorTokenType::ClosingParenthesis,
+            PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective,
         );
         let is_defined = self
             .state
@@ -1100,6 +1090,97 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             .operand_stack
             .push(PreprocessorExpressionOperand::Signed(i64::from(is_defined)));
         self.expression_parser.state = PreprocessorExpressionParserState::Binary;
+    }
+
+    /// Reads the next token of a `defined` operator without replacing a macro
+    /// name, or reports `error` and leaves the rejected token to be read
+    /// again.
+    ///
+    /// C99: §6.10.1 paragraph 4, p. 148; PDF p. 160: macro names that
+    /// `defined` modifies are not replaced. Parameters are still replaced and
+    /// `##` applied in a replacement list being read (§6.10.3.1 paragraph 1,
+    /// p. 153; PDF p. 165, and §6.10.3.3 paragraph 3, p. 154; PDF p. 166);
+    /// an argument's prescan replaces macros as usual.
+    fn defined_operand_token(
+        &mut self,
+        is_expected: impl Fn(PreprocessorToken) -> bool,
+        error: fn(PreprocessorTokenType) -> PreprocessorErrorType<'tu>,
+    ) -> Option<PreprocessorToken> {
+        let verbatim_fence = replace(&mut self.verbatim_fence, 1);
+        let token = self.expect_token_preserving_rejected::<true>(
+            |_, t| is_expected(t),
+            |_, t| {
+                ControlFlow::Break(PreprocessorError {
+                    error_type:     error(t.kind),
+                    source_vectors: t.source_vectors,
+                })
+            },
+            "parsing defined operator",
+        );
+        self.verbatim_fence = verbatim_fence;
+        token
+    }
+
+    /// Reports a `defined` operator that macro replacement produced, which
+    /// the frame it was read from shows, as Clang does
+    /// (`-Wexpansion-to-defined`).
+    ///
+    /// C99: §6.10.1 paragraph 4, p. 148; PDF p. 160: the behavior is
+    /// undefined. A function-like replacement list, including a `defined`
+    /// that `##` formed there, is an extension under the policy; an
+    /// object-like one, or an argument, draws a warning in every policy.
+    /// The diagnostic is placed at the outermost invocation, so it belongs
+    /// to the file that uses the macro.
+    fn report_defined_from_expansion(&mut self, defined: PreprocessorToken) {
+        let mut function_like = None;
+        let mut invocation = None;
+        for frame in self.tokenizer_stack.iter().rev() {
+            match &frame.frame_type {
+                // A raw argument is read here only as a `##` operand, so the
+                // `defined` it forms belongs to the replacement list below.
+                | TokenizerFrameType::Rescan { argument: false }
+                | TokenizerFrameType::FunctionLikeMacroArgument { .. } => continue,
+                | TokenizerFrameType::Rescan { argument: true } => {
+                    _ = function_like.get_or_insert(false);
+                    continue;
+                },
+                | TokenizerFrameType::SourceFile { .. } => (),
+                | TokenizerFrameType::ObjectLikeMacroInvocation {
+                    invocation: location,
+                    ..
+                } => {
+                    _ = function_like.get_or_insert(false);
+                    invocation = Some(location.clone());
+                },
+                | TokenizerFrameType::FunctionLikeMacroInvocation {
+                    invocation: location,
+                    ..
+                } => {
+                    _ = function_like.get_or_insert(true);
+                    invocation = Some(location.clone());
+                },
+            }
+            break;
+        }
+        let Some(function_like) = function_like else {
+            return;
+        };
+        let policy = self.context.configuration.extension_policy();
+        let error_type = if !function_like {
+            PreprocessorErrorType::DefinedFromObjectLikeMacroExpansion
+        } else if policy == ExtensionPolicy::Allow {
+            return;
+        } else {
+            PreprocessorErrorType::DefinedFromFunctionLikeMacroExpansion(policy)
+        };
+        let source_vectors = match invocation {
+            | Some(invocation) => self.context.push_source_vectors(&[invocation]),
+            | None => defined.source_vectors,
+        };
+        self.context.preprocessor_error(PreprocessorError {
+            error_type,
+            source_vectors,
+        });
     }
 
     /// Consumes the next token of a directive after it was diagnosed, unless
@@ -1287,7 +1368,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         }
                     }
                     (PreprocessorTokenType::Defined, UNARY) =>
-                        self.parse_defined_operator(),
+                        self.parse_defined_operator(token),
                     (PreprocessorTokenType::Defined, BINARY) => self.context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression,
                             source_vectors: token.source_vectors,

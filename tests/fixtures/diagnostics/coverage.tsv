@@ -88,6 +88,8 @@ pp	BitwiseXorWithoutRhs	pp-bitwise-xor-without-rhs.c	folded
 pp	CannotUseHashHashAfterFunctionLikeMacroCall	pp-cannot-use-hash-hash-after-function-like-macro-call.c	rendered
 pp	CharacterInsteadOfBinaryOperatorInPreprocessorExpression	pp-character-instead-of-binary-operator-in-preprocessor-expression.c	rendered
 pp	ColonWithoutMatchingQuestionMark	pp-colon-without-matching-question-mark.c	rendered
+pp	DefinedFromFunctionLikeMacroExpansion	pp-defined-from-function-like-macro-expansion.c	rendered
+pp	DefinedFromObjectLikeMacroExpansion	pp-defined-from-object-like-macro-expansion.c	rendered
 pp	DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression	pp-defined-operator-instead-of-binary-operator-in-preprocessor-expression.c	rendered
 pp	DereferenceOperatorNotSupportedInPreprocessorExpression	pp-dereference-operator-not-supported-in-preprocessor-expression.c	rendered
 pp	DivideByZero	pp-divide-by-zero.c	rendered

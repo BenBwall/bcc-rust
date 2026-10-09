@@ -228,6 +228,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::ErrorDirective(..)
              => ErrorSeverity::Error,
             | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(policy)
+            | PreprocessorErrorType::DefinedFromFunctionLikeMacroExpansion(policy)
             | PreprocessorErrorType::MissingVariadicArgument(policy)
             | PreprocessorErrorType::BackslashInQuotedHeaderName(policy) =>
                 match policy {
@@ -247,6 +248,7 @@ impl GetSeverity for PreprocessorError<'_> {
                 | ExtensionPolicy::Deny => ErrorSeverity::Error,
             },
             | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
+            | PreprocessorErrorType::DefinedFromObjectLikeMacroExpansion
             | PreprocessorErrorType::UndefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::MissingWhitespaceAfterMacroName(..)
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(..)
@@ -480,6 +482,20 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     MissingOpeningParenthesisOrIdentifierInDefinedDirective(PreprocessorTokenType),
     MissingIdentifierInDefinedDirective(PreprocessorTokenType),
     MissingClosingParenthesisInDefinedDirective(PreprocessorTokenType),
+    /// A `defined` operator that an object-like macro or a macro argument
+    /// produced. The behavior is undefined; it is evaluated as GCC and Clang
+    /// do, and like Clang's default `-Wexpansion-to-defined` it is a warning
+    /// under every policy.
+    ///
+    /// C99: §6.10.1 paragraph 4, p. 148; PDF p. 160.
+    DefinedFromObjectLikeMacroExpansion,
+    /// A `defined` operator that a function-like macro's replacement list
+    /// produced. The behavior is undefined; it is evaluated as GCC and Clang
+    /// do, and like Clang's pedantic `-Wexpansion-to-defined` it is an
+    /// extension under the policy.
+    ///
+    /// C99: §6.10.1 paragraph 4, p. 148; PDF p. 160.
+    DefinedFromFunctionLikeMacroExpansion(ExtensionPolicy),
     // C99: `# if constant-expression` and `# elif constant-expression`,
     // §6.10 paragraph 1, p. 145; PDF p. 157.
     NoConditionInIfDirective,
@@ -742,6 +758,14 @@ impl PreprocessorErrorType<'_> {
             ))
             .label(format_in!(arena, "`{operator}` needs an operand here"))
         };
+        let defined_from_expansion = || {
+            new("macro expansion producing `defined` has undefined behavior")
+                .label("this macro expansion produces `defined`")
+                .note(
+                    "C99 §6.10.1p4: the behavior is undefined if macro replacement generates \
+                     `defined`; it is evaluated as GCC and Clang do",
+                )
+        };
         let overflow = |operation: &str| {
             new(format_in!(
                 arena,
@@ -1003,6 +1027,11 @@ impl PreprocessorErrorType<'_> {
                 kind.found(spelling)
             ))
             .label("expected `)`"),
+            | Self::DefinedFromObjectLikeMacroExpansion => defined_from_expansion().help(
+                "test the macro name in `#if defined(NAME)` and define this macro as `1` or `0` \
+                 instead",
+            ),
+            | Self::DefinedFromFunctionLikeMacroExpansion(_) => defined_from_expansion(),
             | Self::NoConditionInIfDirective => new("`#if` with no condition")
                 .label("expected an expression")
                 .help("write the condition to test, as in `#if VERSION >= 2`"),
@@ -1525,6 +1554,7 @@ impl PreprocessorErrorType<'_> {
         matches!(
             self,
             Self::CommaOperatorInPreprocessorExpression(_)
+                | Self::DefinedFromFunctionLikeMacroExpansion(_)
                 | Self::MissingVariadicArgument(_)
                 | Self::BackslashInQuotedHeaderName(_)
                 | Self::VaArgsOutsideVariadicMacro(_)

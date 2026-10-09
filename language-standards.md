@@ -598,9 +598,9 @@ header is not reported, matching Clang, where such diagnostics are warnings
 promoted to errors and are not emitted from system headers. Policy-governed
 preprocessor diagnostics (macro redefinitions, `__VA_ARGS__` and `__VA_OPT__`
 outside a variadic macro, empty variadic arguments, the `#if` comma operator,
-a backslash in a quoted header name) count as extensions. Errors, such as
-syntax errors, constraint violations that are errors by default, and `#error`,
-are always reported.
+`defined` produced by a function-like macro, a backslash in a quoted header
+name) count as extensions. Errors, such as syntax errors, constraint violations
+that are errors by default, and `#error`, are always reported.
 
 The diagnostic's location decides: its first source vector, which for a token
 produced by macro expansion is where the token is spelled in the macro's
@@ -617,6 +617,17 @@ diagnostics are not counted.
   warnings, and errors under `-pedantic-errors`, as in GCC and Clang
   (`-Wmacro-redefined`); C99 §6.10.3p2 requires only a diagnostic. The new
   definition replaces the old one. A change of form is reported once.
+- A `defined` operator that macro replacement produces in `#if` is undefined
+  behavior (C99 §6.10.1p4). As in GCC and Clang, it is evaluated once the
+  replacement list's parameters are replaced and its `##` operators applied,
+  and its operand is not macro-replaced, so MinGW-w64's
+  `defined(__INTRINSIC_DEFINED_ ## name)` works. It is diagnosed as Clang's
+  `-Wexpansion-to-defined` is: from an object-like macro or a macro argument it
+  is a warning under every policy; from a function-like replacement list,
+  including a `defined` formed by `##`, it is a policy-governed extension. The
+  diagnostic is placed at the outermost invocation, so it is withheld inside a
+  system header but reported where a user file expands the system macro, as in
+  GCC and Clang.
 - C2y `__STDC_VERSION__` is `202400L`, following the
   [Clang user manual](https://clang.llvm.org/docs/UsersManual.html#differences-between-various-standard-modes).
   GCC used `202500L` in its

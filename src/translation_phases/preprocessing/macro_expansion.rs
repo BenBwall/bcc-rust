@@ -321,7 +321,7 @@ impl<'x> MacroCallCursor<'x> {
             self.frames.insert(
                 self.index.unwrap() + 1,
                 TokenizerFrame {
-                    frame_type: TokenizerFrameType::Rescan,
+                    frame_type: TokenizerFrameType::Rescan { argument: false },
                     tokenizer,
                 },
             );
@@ -976,7 +976,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         // Prescan is isolated from the replacement list. Rescanning the result
         // then uses the callee's disabled-name set, not the caller's.
         Some(TokenizerFrame {
-            frame_type: TokenizerFrameType::Rescan,
+            frame_type: TokenizerFrameType::Rescan { argument: true },
             tokenizer:  self.expanded_argument(token, argument),
         })
     }
@@ -1790,7 +1790,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                             }
                         },
                         | TokenizerFrame {
-                            frame_type: TokenizerFrameType::Rescan,
+                            frame_type: TokenizerFrameType::Rescan { .. },
                             ..
                         } => {
                             // A recovered directive boundary must return its
@@ -2019,7 +2019,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         };
         let tokenizer = TokenSource::replay(self.context, self.scratch, &[&result], location);
         self.push_tokenizer_frame(TokenizerFrame {
-            frame_type: TokenizerFrameType::Rescan,
+            frame_type: TokenizerFrameType::Rescan { argument: false },
             tokenizer,
         });
     }

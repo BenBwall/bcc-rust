@@ -152,7 +152,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             SourceVector::default(),
         );
         self.push_tokenizer_frame(TokenizerFrame {
-            frame_type: TokenizerFrameType::Rescan,
+            frame_type: TokenizerFrameType::Rescan { argument: false },
             tokenizer,
         });
     }
@@ -722,7 +722,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             std::mem::replace(&mut self.hash_hash_stack, ArenaVec::new_in(self.scratch));
         let generate_placeholders = self.generate_placeholders;
         self.push_tokenizer_frame(TokenizerFrame {
-            frame_type: TokenizerFrameType::Rescan,
+            frame_type: TokenizerFrameType::Rescan { argument: false },
             tokenizer,
         });
         let depth = self.tokenizer_stack.len();
@@ -860,7 +860,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             SourceVector::default(),
         );
         self.push_tokenizer_frame(TokenizerFrame {
-            frame_type: TokenizerFrameType::Rescan,
+            frame_type: TokenizerFrameType::Rescan { argument: false },
             tokenizer,
         });
         self.resume_at_line_start();
