@@ -93,6 +93,8 @@ and GNU modes, and with MSVC anonymous structures also a tagged or typedef
 record) is retained as an unnamed `Member` marked anonymous; its names join the
 containing namespace, where duplicates are diagnosed, and initialization treats
 it as a subobject.
+Anonymous-member paths share retained index chains: each enclosing record
+prepends one node, so deep nesting does not copy every descendant path.
 Labels are reserved to the function statement stage and are not yet resolved.
 
 `src/target.rs` is the target seam. `TargetLayout::LP64` describes x86-64 System V:

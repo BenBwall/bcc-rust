@@ -285,7 +285,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                         && let Some(field) =
                                             self.types.tags[id].fields.get().get(index)
                                     {
-                                        path.extend(field.path.iter().map(|&i| i as u64));
+                                        path.extend(field.path.iter().map(|i| i as u64));
                                         path.pop()
                                     } else {
                                         None

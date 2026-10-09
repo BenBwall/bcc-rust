@@ -315,7 +315,12 @@ enum Work<'tu, 's> {
         TypeId,
         &'s Collection<'s, Member>,
     ),
-    MemberDone(usize, StructDeclarator<'tu>, &'s Collection<'s, Member>),
+    MemberDone(
+        usize,
+        StructDeclarator<'tu>,
+        &'s Collection<'s, Member>,
+        usize,
+    ),
     MemberWidth(
         usize,
         StructDeclarator<'tu>,
@@ -1092,17 +1097,18 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 }
             },
             | Work::MemberBase(tag, d, base, members) => {
-                self.work.push(Work::MemberDone(tag, d, members));
+                self.work
+                    .push(Work::MemberDone(tag, d, members, self.semantic_errors));
                 if let Some(decl) = d.declarator {
                     self.work.push(Work::Declarator(decl, base, false));
                 } else {
                     self.values.push(base);
                 }
             },
-            | Work::MemberDone(tag, d, members) => {
+            | Work::MemberDone(tag, d, members, errors_before) => {
                 let ty = self.take_type();
                 self.work
-                    .push(Work::MemberWidth(tag, d, ty, members, self.semantic_errors));
+                    .push(Work::MemberWidth(tag, d, ty, members, errors_before));
                 if let Some(width) = d.bitfield_width {
                     self.work.push(Work::Eval(width.expression()));
                     self.work.push(Work::Expression(width.expression()));
@@ -1112,6 +1118,9 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             },
             | Work::MemberWidth(tag, d, ty, members, errors_before) => {
                 let value = self.integers.pop().flatten();
+                // C99 §6.7.2.1p2-4: retain rejected members for recovery,
+                // without repeating their constraints during completion.
+                let mut invalid = self.semantic_errors != errors_before;
                 let width = if d.bitfield_width.is_some() {
                     let valid = value.and_then(|v| u32::try_from(v.value).ok());
                     let bits = self.integer_type(ty).map(|(bits, _)| bits);
@@ -1121,6 +1130,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                         || valid > bits
                         || (valid == Some(0) && name.is_some())
                     {
+                        invalid = true;
                         if !self.types.unanalyzed(ty)
                             && self.semantic_errors == errors_before
                             && !d
@@ -1150,6 +1160,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 };
                 let name = d.declarator.and_then(Declarator::identifier);
                 if self.variably_modified(ty) {
+                    invalid = true;
                     self.error(
                         SemanticErrorKind::FileScopeVariableType,
                         name.map_or(d.source_vectors, |n| n.source_vectors),
@@ -1174,6 +1185,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     self.scratch,
                     Member {
                         name,
+                        source_vectors: d.source_vectors,
+                        invalid,
                         ty,
                         width,
                         offset: 0,

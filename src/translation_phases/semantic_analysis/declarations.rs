@@ -37,7 +37,10 @@ use super::{
     TypeSpecifiers,
     Work,
     align_up,
-    types::Field,
+    types::{
+        Field,
+        FieldPath,
+    },
 };
 
 /// The x86-64 System V target ignores MSVC calling conventions.
@@ -882,12 +885,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         Some(Member {
-            name:       None,
-            ty:         base,
-            width:      None,
-            offset:     0,
-            bit_offset: 0,
-            anonymous:  true,
+            name:           None,
+            source_vectors: member.source_vectors,
+            invalid:        false,
+            ty:             base,
+            width:          None,
+            offset:         0,
+            bit_offset:     0,
+            anonymous:      true,
         })
     }
 
@@ -915,7 +920,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         for (index, &member) in members.iter().enumerate() {
             let source = member
                 .name
-                .map_or_else(SourceVectors::empty, |n| n.source_vectors);
+                .map_or(member.source_vectors, |n| n.source_vectors);
+            // C99 §6.7.2.1p2-4: a rejected declarator has already been
+            // diagnosed; completion preserves it without dependent errors.
+            if member.invalid {
+                tag.tainted.set(true);
+                output.push(member);
+                continue;
+            }
             // C99 permits a flexible array only as the last member of a
             // structure with another named member (§6.7.2.1p16). GCC also
             // accepts one in a union or as a structure's only member.
@@ -964,9 +976,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if !self.types.unanalyzed(member.ty) && !self.variably_modified(member.ty) {
                     self.error(
                         SemanticErrorKind::InvalidMember,
-                        member
-                            .name
-                            .map_or_else(SourceVectors::empty, |n| n.source_vectors),
+                        source,
                         member.name.map(|n| n.name),
                         None,
                     );
@@ -988,19 +998,40 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | _ => layout.size,
                 });
             } else if let Some(width) = member.width {
-                let bits = layout.size * 8;
-                if width == 0 {
-                    bit_end = align_up(bit_end, bits).unwrap_or(bit_end);
-                    resolved.offset = bit_end / 8;
-                } else {
-                    let unit_start = bit_end / bits * bits;
-                    if bit_end + u64::from(width) > unit_start + bits {
-                        bit_end = unit_start + bits;
+                // C99 §6.7.2.1p10: checked non-straddling allocation;
+                // §5.2.4.1: reject layouts beyond our representable cursor.
+                let placed = (|| {
+                    let bits = layout.size.checked_mul(8)?;
+                    let width = u64::from(width);
+                    let start = if width == 0 {
+                        align_up(bit_end, bits)?
+                    } else {
+                        let remaining = bits - bit_end.checked_rem(bits)?;
+                        if width > remaining {
+                            bit_end.checked_add(remaining)?
+                        } else {
+                            bit_end
+                        }
+                    };
+                    Some((start, start.checked_add(width)?))
+                })();
+                let Some((start, end)) = placed else {
+                    if !too_large {
+                        self.error(
+                            SemanticErrorKind::ObjectTooLarge,
+                            source,
+                            member.name.map(|n| n.name),
+                            None,
+                        );
                     }
-                    resolved.offset = bit_end / 8;
-                    resolved.bit_offset = u32::try_from(bit_end % 8).unwrap_or(0);
-                    bit_end += u64::from(width);
-                }
+                    too_large = true;
+                    tag.tainted.set(true);
+                    output.push(member);
+                    continue;
+                };
+                resolved.offset = start / 8;
+                resolved.bit_offset = u32::try_from(start % 8).unwrap_or(0);
+                bit_end = end;
                 bytes = bytes.max(bit_end.div_ceil(8));
             } else {
                 let placed = align_up(bytes, layout.align).and_then(|offset| {
@@ -1037,7 +1068,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if let Some(name) = member.name {
                 fields.push(Field {
                     name,
-                    path: self.types.tu.alloc_slice_copy(&[index]),
+                    path: self.types.tu.alloc(FieldPath::new(index, None)),
                     ty: member.ty,
                     qualifiers: TypeQualifiers::empty(),
                     offset: member.offset,
@@ -1048,11 +1079,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && let TypeKind::Tag(inner) = self.types.nodes[member.ty.index]
             {
                 for field in self.types.tags[inner].fields.get() {
-                    let mut path = ArenaVec::new_in(self.scratch);
-                    path.push(index);
-                    path.extend_from_slice(field.path);
                     fields.push(Field {
-                        path: self.types.tu.alloc_slice_copy(&path),
+                        path: self.types.tu.alloc(FieldPath::new(index, Some(field.path))),
                         qualifiers: field.qualifiers | member.ty.qualifiers,
                         offset: member.offset.saturating_add(field.offset),
                         ..*field

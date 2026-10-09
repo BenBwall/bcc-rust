@@ -213,3 +213,160 @@ fn hidden_linked_declarations_still_check_compatibility() {
         },
     );
 }
+
+#[test]
+fn bit_field_cursor_overflow_rejects_layout_and_preserves_following_binding() {
+    for source in [
+        "struct S { char a[9223372036854775807]; unsigned b:1; }; int after;",
+        "struct S { char a[9223372036854775807L]; unsigned :0; }; int after;",
+        "struct S { char a[2305843009213693951L]; unsigned b:7; unsigned c:1; }; int after;",
+        "struct S { char a[2305843009213693951L]; unsigned b:8; unsigned c:1; }; int after;",
+    ] {
+        with_source(source, |context, unit| {
+            // The unsuffixed review input also warns about promotion to long.
+            let pending = context.take_pending_errors();
+            let errors = pending
+                .iter()
+                .filter(|e| matches!(e, TranslationError::Semantic(_)))
+                .collect::<Vec<_>>();
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert!(matches!(
+                errors[0],
+                TranslationError::Semantic(e) if e.kind == SemanticErrorKind::ObjectTooLarge
+            ));
+            let tag = unit
+                .types
+                .tags
+                .iter()
+                .find(|t| t.kind == TagKind::Struct)
+                .unwrap();
+            assert!(tag.complete.get());
+            assert_eq!(tag.layout.get(), None);
+            assert!(
+                unit.bindings
+                    .iter()
+                    .any(|b| context.string_cache.at(b.name.name) == "after")
+            );
+        });
+    }
+}
+
+#[test]
+fn unnamed_invalid_bit_fields_report_once_with_source_and_recover() {
+    for source in [
+        "struct S { void :3; }; int after;",
+        "struct S { struct Missing :3; }; int after;",
+        "struct S { void :missing; }; int after;",
+    ] {
+        with_source(source, |context, unit| {
+            let errors = context.take_pending_errors();
+            assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+            let TranslationError::Semantic(error) = errors[0] else {
+                panic!("{errors:?}");
+            };
+            assert_ne!(context.get_source_vectors(error.source_vectors), []);
+            let tag = unit
+                .types
+                .tags
+                .iter()
+                .find(|t| t.kind == TagKind::Struct && t.complete.get())
+                .unwrap();
+            assert_eq!(tag.layout.get(), None);
+            assert!(
+                unit.bindings
+                    .iter()
+                    .any(|b| context.string_cache.at(b.name.name) == "after")
+            );
+        });
+    }
+}
+
+#[test]
+fn anonymous_member_paths_use_linear_retained_storage() {
+    let mut previous = None;
+    for depth in [2000, 4000, 8000] {
+        let source = format!(
+            "struct Outer {{ {} int leaf; {} }}; struct Outer value = {{.leaf = 7}}; int f(void) \
+             {{ return value.leaf; }}",
+            "struct {".repeat(depth),
+            "};".repeat(depth),
+        );
+        let tu = Bump::new();
+        let source = tu.alloc_str(&format!("{source}\n"));
+        let mut context = Context::with_configuration(
+            &tu,
+            CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Deny),
+        );
+        let parsed = crate::pipeline::parse_translation_unit(
+            &mut context,
+            Path::new("<input>"),
+            source,
+            &[],
+            &[],
+        );
+        assert_eq!(context.pending_error_count(), 0);
+        let before = tu.used();
+        let unit = analyze(&mut context, &parsed);
+        let retained = tu.used() - before;
+        assert_eq!(
+            context.pending_error_count(),
+            0,
+            "{:?}",
+            context.take_pending_errors()
+        );
+        let outer = unit
+            .types
+            .tags
+            .iter()
+            .find(|t| {
+                t.name
+                    .is_some_and(|n| context.string_cache.at(n) == "Outer")
+            })
+            .unwrap();
+        assert_eq!(outer.layout.get(), Some(Layout { size: 4, align: 4 }));
+        assert_eq!(outer.fields.get()[0].path.len(), depth + 1);
+        assert_eq!(outer.fields.get()[0].offset, 0);
+        if let Some(previous) = previous {
+            assert!(
+                retained <= 3 * previous,
+                "depth={depth}: {previous} -> {retained} retained bytes"
+            );
+        }
+        previous = Some(retained);
+    }
+}
+
+#[test]
+fn anonymous_member_designators_preserve_index_order_and_offsets() {
+    with_configuration(
+        "struct Outer { int first; struct { char pad; union { int leaf; char alternate; }; }; int \
+         last; }; struct Outer value = {.leaf = 7, .last = 9}; _Static_assert(sizeof(struct \
+         Outer) == 16, \"layout\"); int f(void) { return value.leaf; }",
+        CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Allow),
+        |context, unit| {
+            assert_eq!(
+                context.pending_error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
+            let outer = unit
+                .types
+                .tags
+                .iter()
+                .find(|t| {
+                    t.name
+                        .is_some_and(|n| context.string_cache.at(n) == "Outer")
+                })
+                .unwrap();
+            let leaf = outer
+                .fields
+                .get()
+                .iter()
+                .find(|f| context.string_cache.at(f.name.name) == "leaf")
+                .unwrap();
+            assert_eq!(leaf.offset, 8);
+            assert_eq!(leaf.path.iter().collect::<Vec<_>>(), [1, 1, 0]);
+        },
+    );
+}

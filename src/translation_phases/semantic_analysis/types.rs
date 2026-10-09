@@ -86,12 +86,16 @@ pub(crate) enum TagKind {
 /// C99: §6.7.2.1, pp. 101-104; PDF pp. 113-116.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Member {
-    pub(crate) name:       Option<super::Identifier>,
-    pub(crate) ty:         TypeId,
-    pub(crate) offset:     u64,
-    pub(crate) bit_offset: u32,
-    pub(crate) width:      Option<u32>,
-    pub(crate) anonymous:  bool,
+    pub(crate) name:           Option<super::Identifier>,
+    /// Declarator provenance, including unnamed bit-fields.
+    pub(crate) source_vectors: super::SourceVectors,
+    /// A rejected declarator must not produce dependent completion errors.
+    pub(crate) invalid:        bool,
+    pub(crate) ty:             TypeId,
+    pub(crate) offset:         u64,
+    pub(crate) bit_offset:     u32,
+    pub(crate) width:          Option<u32>,
+    pub(crate) anonymous:      bool,
 }
 
 impl Member {
@@ -103,6 +107,39 @@ impl Member {
     }
 }
 
+/// A shared path from a containing record to a declaring member. Prepending
+/// an anonymous member retains its child's tail without copying the indices.
+/// C11: §6.7.2.1p13, p. 115; PDF p. 133.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FieldPath<'tu> {
+    pub(crate) index: usize,
+    pub(crate) next:  Option<&'tu Self>,
+    length:           usize,
+}
+
+impl<'tu> FieldPath<'tu> {
+    /// C11: §6.7.2.1p13, p. 115; PDF p. 133.
+    pub(crate) fn new(index: usize, next: Option<&'tu Self>) -> Self {
+        Self {
+            index,
+            next,
+            length: next.map_or(1, |path| path.length + 1),
+        }
+    }
+
+    /// C11: §6.7.2.1p13, p. 115; PDF p. 133.
+    pub(crate) const fn len(&self) -> usize {
+        self.length
+    }
+
+    /// Walks the member indices in current-object order without recursion.
+    /// C99: §6.7.8p18, p. 127; PDF p. 139; C11: §6.7.2.1p13,
+    /// p. 115; PDF p. 133.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = usize> + '_ {
+        std::iter::successors(Some(self), |path| path.next).map(|path| path.index)
+    }
+}
+
 /// One name in a record's member namespace, including the names an anonymous
 /// member contributes, resolved to the member that declares it. A backend
 /// can lower member access from the byte offset without walking `path`.
@@ -111,7 +148,7 @@ impl Member {
 pub(crate) struct Field<'tu> {
     pub(crate) name:       super::Identifier,
     /// Member indices from this record through each anonymous member.
-    pub(crate) path:       &'tu [usize],
+    pub(crate) path:       &'tu FieldPath<'tu>,
     /// The declaring member's type.
     pub(crate) ty:         TypeId,
     /// Qualifiers of the anonymous members on the path.
