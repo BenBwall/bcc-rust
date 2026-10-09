@@ -759,15 +759,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C99: §6.7.5p3, p. 114; PDF p. 126; §6.7.5.2p2, p. 116; PDF p. 128.
-    pub(super) fn variably_modified(&self, mut ty: TypeId) -> bool {
-        loop {
-            match self.types.nodes[ty.index] {
-                | TypeKind::Array(_, ArrayBound::Variable | ArrayBound::Star) => return true,
-                | TypeKind::Array(element, _) | TypeKind::Pointer(element) => ty = element,
-                | TypeKind::Function { result, .. } => ty = result,
-                | _ => return false,
-            }
-        }
+    pub(super) fn variably_modified(&self, ty: TypeId) -> bool {
+        self.types.variably_modified(ty)
     }
 
     /// Already-resolved leaf/cast types can reject non-integer bounds without

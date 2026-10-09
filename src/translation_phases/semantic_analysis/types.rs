@@ -171,6 +171,8 @@ pub(crate) struct TypeInterner<'tu, 's> {
     pub(crate) nodes:  ArenaVec<'tu, TypeKind<'tu>>,
     pub(crate) tags:   ArenaVec<'tu, &'tu Tag<'tu>>,
     keys:              ArenaMap<'s, TypeKind<'tu>, TypeId>,
+    /// Variably modified nodes, decided once from immediate children.
+    variably_modified: ArenaVec<'s, bool>,
     pub(crate) target: TargetLayout,
     pub(crate) tu:     &'tu Bump,
     scratch:           &'s Bump,
@@ -182,6 +184,7 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
             nodes: ArenaVec::new_in(tu),
             tags: ArenaVec::new_in(tu),
             keys: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            variably_modified: ArenaVec::new_in(scratch),
             target: TargetLayout::LP64,
             tu,
             scratch,
@@ -198,6 +201,14 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
             index:      self.nodes.len(),
             qualifiers: TypeQualifiers::empty(),
         };
+        let variably_modified = match kind {
+            | TypeKind::Array(_, ArrayBound::Variable | ArrayBound::Star) => true,
+            | TypeKind::Array(next, _) | TypeKind::Pointer(next) =>
+                self.variably_modified[next.index],
+            | TypeKind::Function { result, .. } => self.variably_modified[result.index],
+            | _ => false,
+        };
+        self.variably_modified.push(variably_modified);
         self.nodes.push(kind);
         _ = self.keys.insert(kind, ty);
         ty
@@ -209,6 +220,13 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
 
     pub(crate) fn unknown(&self) -> TypeId {
         self.keys[&TypeKind::Unknown]
+    }
+
+    /// A variable or `[*]` array derivation reached through arrays, pointers
+    /// or function results; constant time for shared typedef graphs.
+    /// C99: §6.7.5p3, p. 114; PDF p. 126; §6.7.5.2p2, p. 116; PDF p. 128.
+    pub(crate) fn variably_modified(&self, ty: TypeId) -> bool {
+        self.variably_modified[ty.index]
     }
 
     /// Unmodeled extension layout suppresses dependent constraints.

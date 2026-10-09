@@ -305,3 +305,17 @@ fn shifting_into_the_sign_bit_is_a_gnu_extension() {
         ]
     );
 }
+
+#[test]
+fn shared_deep_typedefs_answer_variably_modified_queries_once() {
+    // Each declarator once walked the whole pointer chain of its typedef.
+    let count = 60_000;
+    let mut source = format!("typedef int {}P; P a0", "*".repeat(count));
+    for index in 1..count {
+        source.push_str(&format!(", a{index}"));
+    }
+    source.push(';');
+    let start = std::time::Instant::now();
+    assert_eq!(kinds(&source, gnu17()), []);
+    assert!(start.elapsed().as_secs() < 15, "{:?}", start.elapsed());
+}
