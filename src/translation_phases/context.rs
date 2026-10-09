@@ -13,6 +13,8 @@ use std::{
 use rustc_hash::FxBuildHasher;
 
 use super::{
+    ErrorSeverity,
+    GetSeverity,
     TranslationError,
     provenance::{
         SourceArena,
@@ -367,6 +369,12 @@ pub(crate) struct Context<'tu> {
     /// entries. An entry's index is its identity for `#include_next`.
     include_directories: &'tu [&'tu Path],
     quote_include_count: usize,
+    /// The index of the first system entry in `include_directories`.
+    system_include_start: usize,
+    /// Each system header, with the byte offset from which it is one: 0
+    /// for a header found through a system directory, or the position of
+    /// its `#pragma GCC system_header`.
+    system_headers: ArenaMap<'tu, u32, u32>,
     /// Original text of each source file, indexed like `source_files`, kept
     /// so diagnostics can quote the lines they point at.
     source_texts: ArenaVec<'tu, Option<SourceText<'tu>>>,
@@ -427,6 +435,8 @@ impl<'tu> Context<'tu> {
             source_files: DedupArena::new(tu),
             include_directories: &[],
             quote_include_count: 0,
+            system_include_start: 0,
+            system_headers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             source_texts: ArenaVec::new_in(tu),
         }
     }
@@ -1002,7 +1012,7 @@ impl<'tu> Context<'tu> {
 
     #[inline(always)]
     pub(crate) fn missing_final_newline(&mut self, vector: SourceVector) {
-        if !self.ignore_tokenizer_errors() {
+        if !self.ignore_tokenizer_errors() && !self.in_system_header(&vector) {
             self.pending_errors
                 .push_back(TranslationError::InitialProcessing(
                     InitialProcessorError::MissingFinalNewline(vector),
@@ -1011,7 +1021,7 @@ impl<'tu> Context<'tu> {
     }
 
     pub(crate) fn escaped_final_newline(&mut self, vector: SourceVector) {
-        if !self.ignore_tokenizer_errors() {
+        if !self.ignore_tokenizer_errors() && !self.in_system_header(&vector) {
             self.pending_errors
                 .push_back(TranslationError::InitialProcessing(
                     InitialProcessorError::EscapedFinalNewline(vector),
@@ -1043,6 +1053,13 @@ impl<'tu> Context<'tu> {
     #[cold]
     #[inline(never)]
     pub(crate) fn preprocessor_error(&mut self, error: PreprocessorError<'tu>) {
+        if self.withholds(
+            error.severity(),
+            error.error_type.is_extension(),
+            error.source_vectors,
+        ) {
+            return;
+        }
         self.pending_errors
             .push_back(TranslationError::Preprocessing(error));
     }
@@ -1059,6 +1076,9 @@ impl<'tu> Context<'tu> {
     #[cold]
     #[inline(never)]
     pub(crate) fn parser_error(&mut self, error: ParserError<'tu>) {
+        if self.withholds(error.severity, false, error.source_vectors) {
+            return;
+        }
         self.pending_errors
             .push_back(TranslationError::Parsing(error));
     }
@@ -1187,12 +1207,57 @@ impl<'tu> Context<'tu> {
                 .quote
                 .iter()
                 .chain(search.angled)
+                .chain(search.system)
                 .copied()
                 .chain(resource)
-                .chain(search.system.iter().copied())
+                .chain(search.after.iter().copied())
                 .map(|path| Self::alloc_path(tu, path)),
         );
         self.quote_include_count = search.quote.len();
+        self.system_include_start = search.quote.len() + search.angled.len();
+    }
+
+    /// Whether the configured search entry at `index` is a system directory.
+    pub(crate) fn is_system_include_directory(&self, index: usize) -> bool {
+        index >= self.system_include_start
+    }
+
+    /// Makes `file` a system header from byte `from` on. GCC extension
+    /// over the implementation-defined header places of C99 §6.10.2p2-3,
+    /// pp. 149-150; PDF pp. 161-162.
+    pub(crate) fn mark_system_header(&mut self, file: u32, from: u32) {
+        let start = self.system_headers.entry(file).or_insert(from);
+        *start = (*start).min(from);
+    }
+
+    /// Whether any part of `file` is a system header.
+    pub(crate) fn has_system_header_part(&self, file: u32) -> bool {
+        self.system_headers.contains_key(&file)
+    }
+
+    /// Whether `vector` starts in a system header.
+    pub(crate) fn in_system_header(&self, vector: &SourceVector) -> bool {
+        self.system_headers
+            .get(&vector.source_file_index)
+            .is_some_and(|&from| vector.index >= from)
+    }
+
+    /// Whether a diagnostic is withheld because it arises in a system
+    /// header, as GCC and Clang withhold them: a warning, or an extension
+    /// diagnostic at any severity, whose location is spelled in a system
+    /// header. The location's first source vector is its spelling: for a
+    /// token from a macro expansion, the macro's replacement list. Errors
+    /// are never withheld.
+    pub(crate) fn withholds(
+        &self,
+        severity: ErrorSeverity,
+        extension: bool,
+        source_vectors: SourceVectors,
+    ) -> bool {
+        (extension || severity == ErrorSeverity::Warning)
+            && !self.system_headers.is_empty()
+            && source_vectors.length() != 0
+            && self.in_system_header(self.first_source_vector(source_vectors))
     }
 
     /// The configured search entries a lookup visits, with their indices:

@@ -541,9 +541,9 @@ absolute path, the directive warns and searches from the start, exactly as
 `-iquote` directory). GNU `__has_include_next(header)` reports whether that
 `#include_next` would find the header, with the same start and warnings. Like
 `__has_include` it is restricted to conditional expressions, and it reports
-the `IncludeNext` GNU origin under pedantic policy, except inside the resource
-headers, whose `#include_next` and `__has_include_next` belong to the
-implementation.
+the `IncludeNext` GNU origin under pedantic policy; in a system header, such
+as the resource headers, that diagnostic is withheld (see
+[System headers](#system-headers)).
 `#ident`/`#sccs` require a string and are consumed as metadata directives; no
 object-file metadata is emitted. `__COUNTER__` starts at 0 for each translation
 unit and increments only when expanded. MSVC `-fms-pragma` consumes
@@ -552,8 +552,45 @@ provenance, independent of `-fms-va-args` and the selected standard,
 consistent with the
 [MSVC operator documentation](https://learn.microsoft.com/en-us/cpp/preprocessor/pragma-directives-and-the-pragma-keyword?view=msvc-170).
 
+## System headers
+
+A header is a **system header** when it was found through a system directory,
+following GCC's classification ("System Headers" in the GCC preprocessor
+manual): an `-isystem` directory, `C_INCLUDE_PATH`, the resource directory, the
+C library's `--sysroot` directories, or an `-idirafter` directory. A header
+found beside a system header (a `"…"` include from it) is one too. A header
+found through `-iquote`, `-I`, `CPATH` or beside a user file, one named by an
+absolute path, and the primary source file are not. `#pragma GCC
+system_header` (also through `_Pragma`) makes the rest of the current header
+a system header; in the primary source file it is ignored with a warning, as
+in GCC and Clang. A `#line` directive gives the following lines a new file
+identity that is not a system header.
+
+Inside a system header, warnings and extension diagnostics are withheld, the
+latter at every policy level: under `-pedantic-errors` an extension in a system
+header is not reported, matching Clang, where such diagnostics are warnings
+promoted to errors and are not emitted from system headers. Policy-governed
+preprocessor diagnostics (macro redefinitions, `__VA_ARGS__` and `__VA_OPT__`
+outside a variadic macro, empty variadic arguments, the `#if` comma operator,
+a backslash in a quoted header name) count as extensions. Errors, such as
+syntax errors, constraint violations that are errors by default, and `#error`,
+are always reported.
+
+The diagnostic's location decides: its first source vector, which for a token
+produced by macro expansion is where the token is spelled in the macro's
+replacement list. This matches Clang's rule for its spelling location. A
+diagnostic in user code about something a system header declared or defined,
+such as a redefinition of the header's macro, is reported, while a construct
+that a system header's macro spells, like a `long long` it supplies to C89
+code, is not. Suppression happens when the diagnostic is reported, so withheld
+diagnostics are not counted.
+
 ## Decisions
 
+- Macro redefinitions that change the form, parameters or replacement list are
+  warnings, and errors under `-pedantic-errors`, as in GCC and Clang
+  (`-Wmacro-redefined`); C99 §6.10.3p2 requires only a diagnostic. The new
+  definition replaces the old one. A change of form is reported once.
 - C2y `__STDC_VERSION__` is `202400L`, following the
   [Clang user manual](https://clang.llvm.org/docs/UsersManual.html#differences-between-various-standard-modes).
   GCC used `202500L` in its
@@ -614,6 +651,11 @@ consistent with the
   GNU and MSVC programs, disabled gates and malformed cross-phase input.
 - Diagnostics: golden inputs under `tests/fixtures/diagnostics/` take optional
   `.args` sidecars that select mode and policy; see its `COVERAGE.md`.
+- Hosted translation: [`tests/hosted_cli.rs`](tests/hosted_cli.rs) covers the
+  execution environment, the header search order and its options, resource
+  headers chained to the fake glibc-like library under
+  `tests/fixtures/hosted/`, compiler identity per mode against Clang, and the
+  system-header classification of every search group.
 - Allocation: [`tests/allocation_count.rs`](tests/allocation_count.rs) checks
   that ISO, GNU, MSVC and pedantic-suppression parsing, and diagnostic
   rendering, make no global allocations.

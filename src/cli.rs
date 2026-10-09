@@ -478,14 +478,17 @@ fn include_path_from_env(env_var: &str) -> Vec<PathBuf> {
 struct SearchDirectories {
     quote:    Vec<PathBuf>,
     angled:   Vec<PathBuf>,
-    resource: bool,
     system:   Vec<PathBuf>,
+    resource: bool,
+    after:    Vec<PathBuf>,
 }
 
 impl CliHeaderSearch {
     /// Groups the directories in search order. GCC searches `CPATH` like
     /// trailing `-I` directories and `C_INCLUDE_PATH` like trailing
-    /// `-isystem` ones. C99: implementation-defined places, §6.10.2p2-3,
+    /// `-isystem` ones; `-isystem`, `C_INCLUDE_PATH`, the resource
+    /// directory, the library's directories and `-idirafter` are system
+    /// directories. C99: implementation-defined places, §6.10.2p2-3,
     /// pp. 149-150; PDF pp. 161-162.
     #[expect(
         clippy::disallowed_types,
@@ -495,22 +498,23 @@ impl CliHeaderSearch {
     fn directories(&self) -> SearchDirectories {
         let mut angled = self.include.clone();
         angled.extend(include_path_from_env("CPATH"));
-        angled.extend(self.system_include.iter().cloned());
-        angled.extend(include_path_from_env("C_INCLUDE_PATH"));
-        let mut system = Vec::new();
+        let mut system = self.system_include.clone();
+        system.extend(include_path_from_env("C_INCLUDE_PATH"));
+        let mut after = Vec::new();
         if let Some(sysroot) = &self.sysroot
             && !self.nostdinc
             && !self.nostdlibinc
         {
-            system.push(sysroot.join("usr").join("local").join("include"));
-            system.push(sysroot.join("usr").join("include"));
+            after.push(sysroot.join("usr").join("local").join("include"));
+            after.push(sysroot.join("usr").join("include"));
         }
-        system.extend(self.after_include.iter().cloned());
+        after.extend(self.after_include.iter().cloned());
         SearchDirectories {
             quote: self.quote_include.clone(),
             angled,
-            resource: !self.nostdinc && !self.nobuiltininc,
             system,
+            resource: !self.nostdinc && !self.nobuiltininc,
+            after,
         }
     }
 }
@@ -536,8 +540,9 @@ pub fn run() -> Result<(), MainError> {
     let search = HeaderSearch {
         quote:    tu.alloc_slice_fill_iter(directories.quote.iter().map(AsRef::as_ref)),
         angled:   tu.alloc_slice_fill_iter(directories.angled.iter().map(AsRef::as_ref)),
-        resource: directories.resource,
         system:   tu.alloc_slice_fill_iter(directories.system.iter().map(AsRef::as_ref)),
+        resource: directories.resource,
+        after:    tu.alloc_slice_fill_iter(directories.after.iter().map(AsRef::as_ref)),
     };
     let configuration = args.configuration();
     let mut context = Context::with_configuration(&tu, configuration);

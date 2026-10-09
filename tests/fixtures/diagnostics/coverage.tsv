@@ -193,6 +193,7 @@ pp	RightShiftWithoutRhs	pp-right-shift-without-rhs.c	folded
 pp	STDCPragmaDirectiveWithoutArgument	pp-s-t-d-c-pragma-directive-without-argument.c	rendered
 pp	STDCPragmaDirectiveWithoutOnOffSwitch	pp-s-t-d-c-pragma-directive-without-on-off-switch.c	rendered
 pp	SmallUnicodeEscapeSequenceTooShort	pp-small-unicode-escape-sequence-too-short.c	rendered
+pp	SystemHeaderPragmaInMainFile	pp-system-header-pragma-in-main-file.c	rendered
 pp	TernaryOperatorWithoutMhs	pp-ternary-operator-without-mhs.c	rendered
 pp	TernaryOperatorWithoutRhs	pp-ternary-operator-without-rhs.c	rendered
 pp	TildeInsteadOfBinaryOperatorInPreprocessorExpression	pp-tilde-instead-of-binary-operator-in-preprocessor-expression.c	rendered

@@ -149,6 +149,72 @@ mod tests {
     }
 
     #[test]
+    fn headers_from_system_directories_withhold_warnings_and_extensions_but_not_errors() {
+        let root = scratch("system-headers");
+        // One header per search group, each warning about an undefined
+        // name and using `long long`, a C99 extension in C89.
+        let groups = [
+            ("quote", "-iquote", false),
+            ("user", "-I", false),
+            ("cpath", "CPATH", false),
+            ("system", "-isystem", true),
+            ("c-include-path", "C_INCLUDE_PATH", true),
+            ("sysroot/usr/include", "--sysroot", true),
+            ("after", "-idirafter", true),
+        ];
+        let mut source = String::new();
+        for (directory, _, _) in groups {
+            let name = directory.replace(['/', '-'], "_");
+            write(
+                &root.join(directory).join(format!("{name}.h")),
+                &format!("#if UNDEFINED_IN_{name}\n#endif\nlong long {name}_value;\n"),
+            );
+            writeln!(source, "#include \"{name}.h\"").unwrap();
+        }
+        let mut args = vec!["-std=c89".to_owned(), "-pedantic-errors".to_owned()];
+        for (directory, flag, _) in groups {
+            match flag {
+                | "CPATH" | "C_INCLUDE_PATH" => {},
+                | "--sysroot" =>
+                    args.extend([flag.to_owned(), arg(&root.join("sysroot")).to_owned()]),
+                | _ => args.extend([flag.to_owned(), arg(&root.join(directory)).to_owned()]),
+            }
+        }
+        args.extend(["--input".to_owned(), source]);
+        let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(&args)
+            .env("NO_COLOR", "1")
+            .env_remove("CLICOLOR_FORCE")
+            .env("CPATH", root.join("cpath"))
+            .env("C_INCLUDE_PATH", root.join("c-include-path"))
+            .output()
+            .unwrap();
+        let text = stderr(&output);
+        for (directory, flag, system) in groups {
+            let name = directory.replace(['/', '-'], "_");
+            assert_eq!(
+                !text.contains(&format!("UNDEFINED_IN_{name}")),
+                system,
+                "{flag}: {text}"
+            );
+            assert_eq!(
+                !text.contains(&format!("{name}.h:3:6")),
+                system,
+                "{flag}: {text}"
+            );
+        }
+        // Errors are never withheld.
+        write(&root.join("system").join("broken.h"), "int broken = ;\n");
+        let output = bcc(&[
+            "-isystem",
+            arg(&root.join("system")),
+            "--input",
+            "#include <broken.h>\n",
+        ]);
+        assert!(stderr(&output).contains("error:"), "{output:?}");
+    }
+
+    #[test]
     fn float_h_chains_only_for_windows_runtimes_and_keeps_the_targets_values() {
         // MinGW-w64's <float.h> adds Windows definitions and would chain to
         // GCC's own unless that header's guard, `_FLOAT_H___`, is defined.

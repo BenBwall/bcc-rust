@@ -452,13 +452,13 @@ pub fn parse_file_with_library(
 ) -> std::io::Result<ParseBenchmarkSummary> {
     let tu = Bump::new();
     let source = tu.read_to_str_lossy(path)?;
-    let system = [library];
+    let after = [library];
     Ok(summarize_parse(
         &tu,
         path,
         source,
         crate::headers::HeaderSearch {
-            system: &system,
+            after: &after,
             ..crate::headers::HeaderSearch::default()
         },
     ))

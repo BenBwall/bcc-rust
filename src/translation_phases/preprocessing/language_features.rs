@@ -432,12 +432,8 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             .iter()
             .find(|(spelling, _)| *spelling == name)
             .expect("registered language builtin");
-        // The resource headers query the C library behind them as part of
-        // the implementation, not as a user extension.
-        if !(name == "__has_include_next" && self.in_resource_header()) {
-            self.context
-                .report_extension(feature, name, token.source_vectors);
-        }
+        self.context
+            .report_extension(feature, name, token.source_vectors);
         let name = self.context.string_cache.at(token.contents);
         // C23 §6.10.2p11, p. 167; PDF p. 180: these names are
         // conditional-inclusion operators, not ordinary expression macros.
