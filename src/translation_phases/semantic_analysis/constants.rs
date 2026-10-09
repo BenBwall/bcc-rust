@@ -45,7 +45,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return Some(value);
         }
         let value = info.integer?;
-        let text = crate::diagnostics::format_in!(self.scratch, "{}L\0", value.value);
+        let text = crate::diagnostics::format_in!(self.scratch, "{}L\0", value);
         Some(Floating::real(string_to_long_double(text).ok()?))
     }
 

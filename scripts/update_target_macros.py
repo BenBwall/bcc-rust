@@ -27,7 +27,7 @@ def exclusion(name):
         return "Atomic operations, lock-free ABI promises and memory scopes are not implemented."
     if name.startswith("__FPCLASS_"):
         return "Floating classification intrinsics are not implemented."
-    if name in {"__BITINT_MAXWIDTH__", "__SIZEOF_INT128__"}:
+    if name in {"__BITINT_MAXWIDTH__"}:
         return "Extended integer syntax exists but these widths lack semantic types."
     if name in {"__MMX__", "__SSE__", "__SSE2__", "__SSE_MATH__", "__SSE2_MATH__", "__FXSR__", "__GCC_ASM_FLAG_OUTPUTS__", "__GCC_CONSTRUCTIVE_SIZE", "__GCC_DESTRUCTIVE_SIZE", "__SEG_FS", "__SEG_GS", "__seg_fs", "__seg_gs"}:
         return "Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented."

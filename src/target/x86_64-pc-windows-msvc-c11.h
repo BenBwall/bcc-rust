@@ -162,6 +162,7 @@
 #define __SIG_ATOMIC_WIDTH__ 32
 #define __SIZEOF_DOUBLE__ 8
 #define __SIZEOF_FLOAT__ 4
+#define __SIZEOF_INT128__ 16
 #define __SIZEOF_INT__ 4
 #define __SIZEOF_LONG_DOUBLE__ 8
 #define __SIZEOF_LONG_LONG__ 8

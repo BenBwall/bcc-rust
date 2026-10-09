@@ -23,9 +23,21 @@ use super::{
 /// p. 55.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Integer {
+    /// Sign-extended signed value, or the raw unsigned 128-bit pattern.
+    /// Interpret together with `signed`; use Display and checked accessors.
     pub(crate) value:  i128,
     pub(crate) bits:   u32,
     pub(crate) signed: bool,
+}
+
+impl std::fmt::Display for Integer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.signed {
+            self.value.fmt(f)
+        } else {
+            (self.value as u128).fmt(f)
+        }
+    }
 }
 
 impl Integer {
@@ -37,15 +49,38 @@ impl Integer {
         }
     }
 
+    fn mask(self) -> u128 {
+        u128::MAX >> (128 - self.bits)
+    }
+
     fn maximum(self) -> i128 {
-        (1_i128 << (self.bits - u32::from(self.signed))) - 1
+        i128::MAX >> (128 - self.bits)
     }
 
     fn minimum(self) -> i128 {
+        i128::MIN >> (128 - self.bits)
+    }
+
+    /// Mathematical value when it fits i128. Unsigned high-half values must
+    /// never masquerade as negative bounds, addresses or enumerators.
+    /// C99: §6.3.1.3, p. 43; PDF p. 55.
+    pub(crate) fn to_i128(self) -> Option<i128> {
+        (self.signed || self.value >= 0).then_some(self.value)
+    }
+
+    /// Checked nonnegative size/index extraction, without unsigned truncation.
+    /// C99: §6.6p4, p. 95; PDF p. 107; §6.3.1.3, p. 43; PDF p. 55.
+    pub(crate) fn to_u64(self) -> Option<u64> {
+        self.to_i128().and_then(|n| u64::try_from(n).ok())
+    }
+
+    /// Ordered key retaining all unsigned bits, for switch case intervals.
+    /// C99: §6.8.4.2p3, p. 134; PDF p. 146.
+    pub(crate) fn order_key(self) -> i128 {
         if self.signed {
-            -(1_i128 << (self.bits - 1))
+            self.value
         } else {
-            0
+            self.value ^ i128::MIN
         }
     }
 
@@ -58,13 +93,16 @@ impl Integer {
         }
     }
 
+    /// Truncate bits, then sign-extend only signed results. At width 128,
+    /// value is a raw two's-complement pattern for unsigned high-half values.
     /// C99: §6.3.1.3p2-3, p. 43; PDF p. 55.
     fn cast_value(self, value: i128) -> Self {
-        let mask = (1_i128 << self.bits) - 1;
-        let mut value = value & mask;
-        if self.signed && value > self.maximum() {
-            value -= 1_i128 << self.bits;
-        }
+        let raw = (value as u128) & self.mask();
+        let value = if self.signed {
+            ((raw << (128 - self.bits)) as i128) >> (128 - self.bits)
+        } else {
+            raw as i128
+        };
         Self { value, ..self }
     }
 
@@ -81,8 +119,15 @@ impl Integer {
     /// The next implicit enumerator value, which never wraps.
     /// C99: §6.7.2.2p3, p. 105; PDF p. 117.
     pub(crate) fn increment(self) -> Option<Self> {
-        let value = self.value.checked_add(1)?;
-        (value <= self.maximum()).then_some(Self { value, ..self })
+        if self.signed {
+            self.checked(self.value.checked_add(1)?)
+        } else {
+            let raw = (self.value as u128).checked_add(1)?;
+            (raw <= self.mask()).then_some(Self {
+                value: raw as i128,
+                ..self
+            })
+        }
     }
 
     /// C99: §6.3.1.1p2, p. 42; PDF p. 54.
@@ -96,32 +141,31 @@ impl Integer {
 
     /// C99: §6.5.3.3p1-5, pp. 79-80; PDF pp. 91-92.
     pub(crate) fn unary(self, op: UnaryOperator) -> Option<Self> {
-        let value = self.promote();
+        let v = self.promote();
         match op {
-            | UnaryOperator::Plus | UnaryOperator::Extension => Some(value),
-            | UnaryOperator::Minus => value.checked(-value.value),
-            | UnaryOperator::BitwiseNot => Some(value.cast_value(!value.value)),
-            | UnaryOperator::LogicalNot => Some(Self::int(i128::from(value.value == 0))),
+            | UnaryOperator::Plus | UnaryOperator::Extension => Some(v),
+            | UnaryOperator::Minus if v.signed => v.checked(v.value.checked_neg()?),
+            | UnaryOperator::Minus => Some(v.cast_value(v.value.wrapping_neg())),
+            | UnaryOperator::BitwiseNot => Some(v.cast_value(!v.value)),
+            | UnaryOperator::LogicalNot => Some(Self::int(i128::from(v.value == 0))),
             | _ => None,
         }
     }
 
-    /// GCC defines a left shift of a nonnegative signed value into, but not
-    /// past, the sign bit as its two's-complement result, which C99 leaves
-    /// undefined (§6.5.7p4, p. 84; PDF p. 96). Every other failed shift
-    /// stays exceptional.
+    /// GNU sign-bit shift extension to C99 §6.5.7p4, p. 84; PDF p. 96.
     pub(crate) fn sign_bit_shift(self, op: BinaryOperator, right: Self) -> Option<Self> {
         let (l, r) = (self.promote(), right.promote());
         if op != BinaryOperator::LeftShift || !l.signed || l.value < 0 {
             return None;
         }
-        let shift = u32::try_from(r.value).ok().filter(|&n| n < l.bits)?;
-        let shifted = l.value.checked_shl(shift)?;
-        (shifted < 1_i128 << l.bits).then(|| l.cast_value(shifted))
+        let shift = u32::try_from(r.to_i128()?).ok().filter(|&n| n < l.bits)?;
+        let raw = l.value as u128;
+        (raw <= (l.mask() >> shift)).then(|| l.cast_value((raw << shift) as i128))
     }
 
-    /// Usual integer arithmetic conversions using target widths.
-    /// C99: §6.3.1.8p1, p. 45; PDF p. 57.
+    /// Usual integer conversions and checked signed/modular unsigned
+    /// arithmetic. C99: §6.3.1.8p1, p. 45; PDF p. 57; §6.5.5p6, p. 82; PDF
+    /// p. 94.
     pub(crate) fn binary(self, op: BinaryOperator, right: Self) -> Option<Self> {
         use BinaryOperator as B;
         let (mut l, mut r) = (self.promote(), right.promote());
@@ -133,66 +177,62 @@ impl Integer {
             })));
         }
         if matches!(op, B::LeftShift | B::RightShift) {
-            let shift = u32::try_from(r.value).ok().filter(|&n| n < l.bits)?;
+            let shift = u32::try_from(r.to_i128()?).ok().filter(|&n| n < l.bits)?;
             if op == B::RightShift {
-                return Some(Self {
-                    value: l.value >> shift,
-                    ..l
-                });
+                return Some(l.cast_value(if l.signed {
+                    l.value >> shift
+                } else {
+                    ((l.value as u128) >> shift) as i128
+                }));
             }
-            if l.signed && l.value < 0 {
+            if l.signed && (l.value < 0 || (l.value as u128) > ((l.maximum() as u128) >> shift)) {
                 return None;
             }
-            return l.checked(l.value.checked_shl(shift)?);
+            return Some(l.cast_value(((l.value as u128) << shift) as i128));
         }
-        let bits = l.bits.max(r.bits);
-        let signed = if l.signed == r.signed {
-            l.signed
-        } else {
-            let (signed, unsigned) = if l.signed { (l, r) } else { (r, l) };
-            signed.bits > unsigned.bits
-        };
+        let (bits, signed) = common((l.bits, l.signed), (r.bits, r.signed));
         l = l.cast(bits, signed);
         r = r.cast(bits, signed);
+        let comparison = l.order_key().cmp(&r.order_key());
+        let predicate = match op {
+            | B::LessThan => Some(comparison.is_lt()),
+            | B::LessThanOrEqual => Some(!comparison.is_gt()),
+            | B::GreaterThan => Some(comparison.is_gt()),
+            | B::GreaterThanOrEqual => Some(!comparison.is_lt()),
+            | B::Equal => Some(comparison.is_eq()),
+            | B::NotEqual => Some(!comparison.is_eq()),
+            | _ => None,
+        };
+        if let Some(result) = predicate {
+            return Some(Self::int(i128::from(result)));
+        }
+        let (a, b) = (l.value as u128, r.value as u128);
         let value = match op {
-            | B::Addition => l.value.checked_add(r.value)?,
-            | B::Subtraction => l.value.checked_sub(r.value)?,
-            | B::Multiplication if !l.signed => {
-                let mask = (1_u128 << l.bits) - 1;
-                i128::try_from(l.value.unsigned_abs().wrapping_mul(r.value.unsigned_abs()) & mask)
-                    .ok()?
-            },
-            | B::Multiplication => {
-                let magnitude = u128::from(u64::try_from(l.value.unsigned_abs()).ok()?)
-                    .wrapping_mul(u128::from(u64::try_from(r.value.unsigned_abs()).ok()?));
-                let value = i128::try_from(magnitude).ok()?;
-                if (l.value < 0) == (r.value < 0) {
-                    value
-                } else {
-                    -value
-                }
-            },
+            | B::Addition if signed => l.value.checked_add(r.value)?,
+            | B::Subtraction if signed => l.value.checked_sub(r.value)?,
+            | B::Multiplication if signed => l.value.checked_mul(r.value)?,
+            | B::Addition => a.wrapping_add(b) as i128,
+            | B::Subtraction => a.wrapping_sub(b) as i128,
+            | B::Multiplication => a.wrapping_mul(b) as i128,
             | B::Division | B::Modulo => {
-                if r.value == 0 || (l.signed && l.value == l.minimum() && r.value == -1) {
+                if b == 0 || (signed && l.value == l.minimum() && r.value == -1) {
                     return None;
                 }
-                // C99 §6.5.5p6: like Rust's, the quotient truncates toward
-                // zero and the remainder takes the dividend's sign.
-                if op == B::Division {
-                    l.value / r.value
+                if signed {
+                    if op == B::Division {
+                        l.value.checked_div(r.value)?
+                    } else {
+                        l.value.checked_rem(r.value)?
+                    }
+                } else if op == B::Division {
+                    (a / b) as i128
                 } else {
-                    l.value % r.value
+                    (a % b) as i128
                 }
             },
             | B::BitwiseAnd => l.value & r.value,
             | B::BitwiseOr => l.value | r.value,
             | B::BitwiseXor => l.value ^ r.value,
-            | B::LessThan => return Some(Self::int(i128::from(l.value < r.value))),
-            | B::LessThanOrEqual => return Some(Self::int(i128::from(l.value <= r.value))),
-            | B::GreaterThan => return Some(Self::int(i128::from(l.value > r.value))),
-            | B::GreaterThanOrEqual => return Some(Self::int(i128::from(l.value >= r.value))),
-            | B::Equal => return Some(Self::int(i128::from(l.value == r.value))),
-            | B::NotEqual => return Some(Self::int(i128::from(l.value != r.value))),
             | _ => return None,
         };
         l.checked(value)
@@ -350,14 +390,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             mantissa >> shift.unsigned_abs()
         };
-        let magnitude = i128::try_from(magnitude).ok()?;
-        Integer {
+        let model = Integer {
             value: 0,
             bits,
             signed,
+        };
+        let limit = if signed {
+            1_u128 << (bits - 1)
+        } else {
+            model.mask()
+        };
+        if magnitude > limit
+            || (signed && !negative && magnitude == limit)
+            || (!signed && negative && magnitude != 0)
+        {
+            return None;
         }
-        .checked(if negative { -magnitude } else { magnitude })
-        .filter(|v| signed || v.value == if negative { -magnitude } else { magnitude })
+        let raw = if negative {
+            magnitude.wrapping_neg()
+        } else {
+            magnitude
+        };
+        Some(model.cast_value(raw as i128))
     }
 
     /// Computes the conditional's integer common type without evaluating either
@@ -503,6 +557,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | S::UnsignedLong | S::UnsignedLongInt =>
                             self.types.target.integer(Scalar::UnsignedLong),
                         | S::UnsignedLongLong | S::UnsignedLongLongInt => Some((64, false)),
+                        | S::Extended(super::ExtendedType::Int128 { signedness }) =>
+                            Some((128, signedness != &Some(false))),
                         | S::TypedefName(name) => self
                             .lookup(Namespace::Ordinary, name.name)
                             .and_then(|e| self.integer_type(self.bindings[e.binding].ty)),
