@@ -556,7 +556,6 @@ fn defined_expansion_outcome(source: &str, policy: ExtensionPolicy) -> (Vec<Stri
                     let severity = match error.severity() {
                         | ErrorSeverity::Error => "error",
                         | ErrorSeverity::Warning => "warning",
-                        | ErrorSeverity::Note => "note",
                     };
                     format!("{kind}:{severity}")
                 })

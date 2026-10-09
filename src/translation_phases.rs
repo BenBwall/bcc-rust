@@ -139,12 +139,10 @@ impl StrExt for str {
     }
 }
 
-#[expect(dead_code, reason = "We aren't using the Note variant yet")]
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum ErrorSeverity {
     Warning,
     Error,
-    Note,
 }
 
 pub(crate) trait GetSeverity {

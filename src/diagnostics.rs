@@ -522,7 +522,6 @@ impl Renderer {
         match severity {
             | ErrorSeverity::Error => Style::new().bright_red().bold(),
             | ErrorSeverity::Warning => Style::new().bright_yellow().bold(),
-            | ErrorSeverity::Note => Style::new().bright_green().bold(),
         }
     }
 
@@ -623,7 +622,6 @@ impl Renderer {
         let severity = match diagnostic.severity {
             | ErrorSeverity::Error => "error:",
             | ErrorSeverity::Warning => "warning:",
-            | ErrorSeverity::Note => "note:",
         };
         let _ = writeln!(
             out,
