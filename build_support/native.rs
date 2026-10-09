@@ -124,7 +124,7 @@ pub(super) fn compile(out_dir: &str) {
     _ = native
         .compiler(&clang)
         .archiver(&archiver)
-        .file("float_parsing.c")
+        .file("build_support/float_parsing.c")
         .opt_level(3)
         .debug(true)
         .inherit_rustflags(false)
@@ -139,9 +139,9 @@ pub(super) fn compile(out_dir: &str) {
     }
     native.compile("float_parsing");
     bindgen::Builder::default()
-        .header("float_parsing.h")
+        .header("build_support/float_parsing.h")
         .clang_args(&clang_args)
-        .allowlist_file("float_parsing.h")
+        .allowlist_file("build_support/float_parsing.h")
         .allowlist_item("ERANGE")
         .rust_edition(bindgen::RustEdition::Edition2024)
         .generate()

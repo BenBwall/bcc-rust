@@ -38,8 +38,8 @@ mod native;
 fn main() {
     println!("Running build script...");
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=float_parsing.c");
-    println!("cargo:rerun-if-changed=float_parsing.h");
+    println!("cargo:rerun-if-changed=build_support/float_parsing.c");
+    println!("cargo:rerun-if-changed=build_support/float_parsing.h");
     println!("cargo:rerun-if-changed=build_support/native.rs");
     println!("cargo:rerun-if-changed=build_support/llvm.rs");
     native::compile(&OUT_DIR);
