@@ -128,7 +128,7 @@ fn inline_is_invalid_on_parameter_declarations() {
                     matches!(
                         errors[0],
                         TranslationError::Semantic(SemanticError {
-                            kind: SemanticErrorKind::InvalidInline,
+                            kind: SemanticErrorKind::InlineParameter,
                             ..
                         })
                     ),

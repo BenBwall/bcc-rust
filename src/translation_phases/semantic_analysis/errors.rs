@@ -42,9 +42,9 @@ pub(crate) enum SemanticErrorKind {
     InvalidFunctionDefinition,
     /// C99: §6.9.1p4, p. 141; PDF p. 153.
     FunctionDefinitionStorage,
-    /// GNU extension: nested functions have no linkage and reject
-    /// extern/static. C99: §6.9p1, p. 140; PDF p. 152 limits definitions to
-    /// external declarations.
+    /// C99: §6.7.1p5, p. 98; PDF p. 110 forbids static on a block-scope
+    /// function. GNU nested definitions have no linkage, so GCC rejects
+    /// extern on them too.
     NestedFunctionStorage,
     /// C99: §6.9.1p3, p. 141; PDF p. 153.
     IncompleteFunctionReturn,
@@ -177,6 +177,8 @@ pub(crate) enum SemanticErrorKind {
     QualifiedFunction,
     /// C99: §6.7.4p2-4, p. 112; PDF p. 124.
     InvalidInline,
+    /// C99: §6.7.4p2, p. 112; PDF p. 124. A parameter declares an object.
+    InlineParameter,
     /// C99: §6.7.5.2p1; 6.7.5.3p1, p. 116-118; PDF p. 128-130.
     InvalidDerivedType,
     /// C99: §6.7.5.2p1, p. 116; PDF p. 128.
@@ -262,6 +264,7 @@ impl SemanticErrorKind {
             | Self::InvalidRestrict => "restrict on a non-object pointer",
             | Self::QualifiedFunction => "function type qualifiers are ignored",
             | Self::InvalidInline => "inline applies only to functions other than main",
+            | Self::InlineParameter => "parameters are objects, not functions",
             | Self::InvalidDerivedType => "invalid element or return type",
             | Self::InvalidArrayBound => "invalid array size",
             | Self::InvalidStarBound => "`[*]` is not allowed here",
@@ -335,8 +338,8 @@ impl SemanticErrorKind {
             ),
             | Self::NestedFunctionStorage => (
                 "invalid storage class in nested function definition",
-                "GNU extension: nested functions have no linkage; extern and static are not \
-                 permitted",
+                "C99 §6.7.1p5: a function declared in a block has no explicit storage class other \
+                 than extern; GCC also rejects extern on a nested definition, which has no linkage",
             ),
             | Self::IncompleteFunctionReturn => (
                 "function definition requires a complete return object type",
@@ -660,6 +663,11 @@ impl SemanticErrorKind {
             | Self::InvalidInline => (
                 "inline requires a function other than main",
                 "C99 §6.7.4p2-4: inline applies only to function identifiers other than main",
+            ),
+            | Self::InlineParameter => (
+                "inline is not allowed on a parameter",
+                "C99 §6.7.4p2: function specifiers are used only in the declaration of an \
+                 identifier for a function",
             ),
             | Self::InvalidDerivedType => (
                 "invalid array element or function return type",

@@ -1033,7 +1033,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 // declarators adjusted from function types.
                 if p.declaration_specifiers.function_specifiers.is_inline {
                     self.error(
-                        SemanticErrorKind::InvalidInline,
+                        SemanticErrorKind::InlineParameter,
                         p.source_vectors,
                         name.map(|n| n.name),
                         None,

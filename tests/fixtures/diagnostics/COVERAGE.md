@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **349 top-level C inputs and 349 stderr snapshots**, plus two supporting headers and 114 mode/policy `.args` sidecars. Ninety-eight of the inputs cover semantic analysis (twenty-six for declarations, twenty-eight for expressions and initializers, forty for statements and functions, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **136 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 117 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **351 top-level C inputs and 351 stderr snapshots**, plus two supporting headers and 114 mode/policy `.args` sidecars. One hundred of the inputs cover semantic analysis (twenty-seven for declarations, twenty-eight for expressions and initializers, forty-one for statements and functions, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **136 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 117 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -491,6 +491,7 @@ snapshot at `tests/fixtures/semantic/types.stderr`.
 | `InvalidRestrict` | [restrict](sema-restrict.c) | Restrict needs an object/incomplete-target pointer. |
 | `QualifiedFunction` | [function qualifier](sema-function-qualifier.c) | Warning for undefined behavior from qualifying a function typedef; qualifiers are ignored. |
 | `InvalidInline` | [inline](sema-inline.c) | Inline objects, typedef names and main. |
+| `InlineParameter` | [inline-parameter](sema-inline-parameter.c) | Inline on named and unnamed parameters. |
 | `InvalidDerivedType` | [derived](sema-derived.c) | Invalid array elements/function results. |
 | `InvalidArrayBound` | [bound](sema-array-bound.c) | Negative constant and non-integer bounds. Zero bounds use shared extension policy. |
 | `InvalidStarBound` | [star bound](sema-star-bound.c) | `[*]` outside function prototype scope; a definition's parameters use `DefinitionStarArray`. |
@@ -589,6 +590,7 @@ pinned by the `.args` sidecars.
 | --- | --- |
 | `InvalidFunctionDefinition` | [function-declarator](sema3-function-declarator.c) |
 | `FunctionDefinitionStorage` | [function-storage](sema3-function-storage.c) |
+| `NestedFunctionStorage` | [nested-function-storage](sema-nested-function-storage.c) |
 | `IncompleteFunctionReturn` | [function-return](sema3-function-return.c) |
 | `InvalidDefinitionParameterList` | [parameter-list](sema3-parameter-list.c) |
 | `UnnamedDefinitionParameter` | [parameter-name](sema3-parameter-name.c) |
