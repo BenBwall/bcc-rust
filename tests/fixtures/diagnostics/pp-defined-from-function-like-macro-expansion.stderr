@@ -1,0 +1,17 @@
+warning: macro expansion producing `defined` has undefined behavior
+ --> pp-defined-from-function-like-macro-expansion.c:5:6
+  |
+5 | #if !PROLOG(_foo) && PROLOG(_bar)
+  |      ^^^^^^ this macro expansion produces `defined`
+  |
+  = note: C99 §6.10.1p4: the behavior is undefined if macro replacement generates `defined`; it is evaluated as GCC and Clang do
+
+warning: macro expansion producing `defined` has undefined behavior
+ --> pp-defined-from-function-like-macro-expansion.c:5:22
+  |
+5 | #if !PROLOG(_foo) && PROLOG(_bar)
+  |                      ^^^^^^ this macro expansion produces `defined`
+  |
+  = note: C99 §6.10.1p4: the behavior is undefined if macro replacement generates `defined`; it is evaluated as GCC and Clang do
+
+2 warnings generated.

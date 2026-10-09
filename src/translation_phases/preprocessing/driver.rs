@@ -67,8 +67,14 @@ use crate::{
 pub(super) enum TokenizerFrameType<'a> {
     /// Tokens replayed ahead of the frame below: the remainder of a
     /// boundary-crossing macro call, rejected lookahead, or the output of a
-    /// builtin query or `#embed`.
-    Rescan,
+    /// builtin query or `#embed`, or a macro-replaced argument substituted
+    /// for its parameter.
+    Rescan {
+        /// Whether the tokens are a substituted argument.
+        ///
+        /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
+        argument: bool,
+    },
     /// Already collected query arguments, replayed without macro replacement
     /// until their enclosing embed parameter is evaluated.
     /// C23: §6.10.4.2p3, p. 174; PDF p. 187.
@@ -219,7 +225,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     return Some(invocation_end.clone()),
                 | TokenizerFrameType::FunctionLikeMacroArgument { .. }
                 | TokenizerFrameType::SourceFile { .. } => return None,
-                | TokenizerFrameType::Rescan | TokenizerFrameType::DeferredQuery => (),
+                | TokenizerFrameType::Rescan { .. } | TokenizerFrameType::DeferredQuery => (),
             }
         }
         None
@@ -233,7 +239,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     return invocation.clone(),
                 | TokenizerFrameType::FunctionLikeMacroArgument { .. }
                 | TokenizerFrameType::SourceFile { .. } => break,
-                | TokenizerFrameType::Rescan | TokenizerFrameType::DeferredQuery => (),
+                | TokenizerFrameType::Rescan { .. } | TokenizerFrameType::DeferredQuery => (),
             }
         }
         self.context
@@ -346,7 +352,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         }
     }
 
-    fn expect_token_preserving_rejected<const SHOULD_IGNORE_WHITESPACE: bool>(
+    pub(super) fn expect_token_preserving_rejected<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
         is_correct_token: impl FnMut(&mut Self, PreprocessorToken) -> bool,
         on_wrong_token_type: impl FnMut(
@@ -417,7 +423,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                                     location,
                                 );
                                 self.push_tokenizer_frame(TokenizerFrame {
-                                    frame_type: TokenizerFrameType::Rescan,
+                                    frame_type: TokenizerFrameType::Rescan { argument: false },
                                     tokenizer,
                                 });
                             }

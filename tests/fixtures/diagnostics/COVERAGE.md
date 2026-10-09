@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **354 top-level C inputs and 354 stderr snapshots**, plus five supporting headers and 115 mode/policy `.args` sidecars. One hundred of the inputs cover semantic analysis (twenty-seven for declarations, twenty-eight for expressions and initializers, forty-one for statements and functions, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **138 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 119 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **356 top-level C inputs and 356 stderr snapshots**, plus five supporting headers and 116 mode/policy `.args` sidecars. One hundred of the inputs cover semantic analysis (twenty-seven for declarations, twenty-eight for expressions and initializers, forty-one for statements and functions, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **140 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 121 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -161,6 +161,8 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `MissingOpeningParenthesisOrIdentifierInDefinedDirective` | rendered | [pp-missing-opening-parenthesis-or-identifier-in-defined-directive.c](pp-missing-opening-parenthesis-or-identifier-in-defined-directive.c) |
 | `MissingIdentifierInDefinedDirective` | rendered | [pp-missing-identifier-in-defined-directive.c](pp-missing-identifier-in-defined-directive.c) |
 | `MissingClosingParenthesisInDefinedDirective` | rendered | [pp-missing-closing-parenthesis-in-defined-directive.c](pp-missing-closing-parenthesis-in-defined-directive.c) |
+| `DefinedFromObjectLikeMacroExpansion` | rendered | [pp-defined-from-object-like-macro-expansion.c](pp-defined-from-object-like-macro-expansion.c) is the warning, which every policy keeps a warning, as in Clang; [pp-system-header-diagnostics.c](pp-system-header-diagnostics.c) reports it where the main file expands a system macro and withholds it inside the system header. |
+| `DefinedFromFunctionLikeMacroExpansion` | rendered | [pp-defined-from-function-like-macro-expansion.c](pp-defined-from-function-like-macro-expansion.c) uses `-pedantic` for MinGW-w64's `##`-formed operand; the default policy allows it. [pp-system-header-diagnostics.c](pp-system-header-diagnostics.c) shows the `-pedantic-errors` error in the main file and withholds it inside the system header. |
 | `NoConditionInIfDirective` | rendered | [pp-no-condition-in-if-directive.c](pp-no-condition-in-if-directive.c) |
 | `NoConditionInElifDirective` | rendered | [pp-no-condition-in-elif-directive.c](pp-no-condition-in-elif-directive.c) |
 | `MoreIfDirectivesThanEndifDirectives` | rendered | [pp-more-if-directives-than-endif-directives.c](pp-more-if-directives-than-endif-directives.c) |
@@ -680,7 +682,11 @@ redefinition of the predefined `__INT64_C` and `long long` are withheld, while
 file keeps its own warning and errors, including the redefinition of a system
 header's macro. The `long long` that the system macro `NOISY_WIDE` supplies is
 withheld even where the main file uses it, because it is spelled in the system
-header.
+header. A `defined` that the system macros `NOISY_PROLOG` and `NOISY_DEFINED`
+produce is withheld in `noisy.h` but reported where the main file expands
+them, because that diagnostic is placed at the outermost invocation, as GCC and
+Clang place it; the snapshot gained those two diagnostics and the `#error`
+moved to line 16.
 
 The three macro-redefinition snapshots changed from errors to warnings when
 redefinitions took GCC's and Clang's severity.

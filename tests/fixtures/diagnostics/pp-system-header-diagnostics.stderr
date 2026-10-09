@@ -1,7 +1,7 @@
 error: #error a system header still reports errors
-  --> system-headers\noisy.h:12:2
+  --> system-headers\noisy.h:16:2
    |
-12 | #error a system header still reports errors
+16 | #error a system header still reports errors
    |  ^^^^^ `#error` directive
 
 warning: `UNDEFINED_BEFORE_PRAGMA` is not defined; it evaluates to 0
@@ -31,10 +31,27 @@ warning: `UNDEFINED_IN_USER_FILE` is not defined; it evaluates to 0
   = note: C99 §6.10.1p4: identifiers that are not macro names are replaced with `0` in `#if`
   = help: use `defined(UNDEFINED_IN_USER_FILE)` to test whether it is defined
 
+error: macro expansion producing `defined` has undefined behavior
+  --> pp-system-header-diagnostics.c:12:5
+   |
+12 | #if NOISY_PROLOG(y) && NOISY_DEFINED
+   |     ^^^^^^^^^^^^ this macro expansion produces `defined`
+   |
+   = note: C99 §6.10.1p4: the behavior is undefined if macro replacement generates `defined`; it is evaluated as GCC and Clang do
+
+warning: macro expansion producing `defined` has undefined behavior
+  --> pp-system-header-diagnostics.c:12:24
+   |
+12 | #if NOISY_PROLOG(y) && NOISY_DEFINED
+   |                        ^^^^^^^^^^^^^ this macro expansion produces `defined`
+   |
+   = note: C99 §6.10.1p4: the behavior is undefined if macro replacement generates `defined`; it is evaluated as GCC and Clang do
+   = help: test the macro name in `#if defined(NAME)` and define this macro as `1` or `0` instead
+
 error: 'long long' is a C99 extension
  --> pp-system-header-diagnostics.c:6:6
   |
 6 | long long user_long_long;
   |      ^^^^
 
-3 errors and 2 warnings generated.
+4 errors and 3 warnings generated.
