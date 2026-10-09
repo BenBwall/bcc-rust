@@ -9,7 +9,7 @@ parser	DeclarationSpecifierNotAllowedHere	parser-declaration-specifier-not-allow
 parser	DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis	parser-direct-declarator-must-start-with-identifier-or-opening-parenthesis.c	rendered
 parser	DuplicateDefaultLabel	parser-duplicate-default-label.c	rendered
 parser	EmptyDeclarationSpecifiers	parser-empty-declaration-specifiers.c	rendered
-parser	EmptyStructDeclarator	parser-empty-struct-declarator.c	rendered
+parser	MemberDeclaresNothing	parser-empty-struct-declarator.c	rendered
 parser	EmptyTranslationUnit	parser-empty-translation-unit.c	rendered
 parser	EnumSpecifierWithoutNameAndBody	parser-enum-specifier-without-name-and-body.c	rendered
 parser	ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator	parser-expected-assignment-expression-after-static-in-array-direct-declarator.c	rendered
@@ -54,7 +54,6 @@ parser	ExpectedStatementExpression	parser-expected-statement-expression-operand.
 parser	ExpectedStatementExpression	parser-expected-statement-expression-operator.c	rendered
 parser	ExpectedStatementExpression	parser-expected-statement-expression.c	rendered
 parser	ExpectedStatement	parser-expected-statement.c	rendered
-parser	ExpectedStructDeclarationBeforeClosingCurlyBrace	parser-expected-struct-declaration-before-closing-curly-brace.c	rendered
 parser	ExpectedWhileAfterDoBody	parser-expected-while-after-do-body.c	rendered
 parser	InlineSpecifiedTwice	parser-inline-specified-twice.c	rendered
 parser	KAndRFunctionDeclaratorMixedWithModernDeclarator	parser-k-and-r-function-declarator-mixed-with-modern-declarator.c	rendered
@@ -89,6 +88,8 @@ pp	BitwiseXorWithoutRhs	pp-bitwise-xor-without-rhs.c	folded
 pp	CannotUseHashHashAfterFunctionLikeMacroCall	pp-cannot-use-hash-hash-after-function-like-macro-call.c	rendered
 pp	CharacterInsteadOfBinaryOperatorInPreprocessorExpression	pp-character-instead-of-binary-operator-in-preprocessor-expression.c	rendered
 pp	ColonWithoutMatchingQuestionMark	pp-colon-without-matching-question-mark.c	rendered
+pp	DefinedFromFunctionLikeMacroExpansion	pp-defined-from-function-like-macro-expansion.c	rendered
+pp	DefinedFromObjectLikeMacroExpansion	pp-defined-from-object-like-macro-expansion.c	rendered
 pp	DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression	pp-defined-operator-instead-of-binary-operator-in-preprocessor-expression.c	rendered
 pp	DereferenceOperatorNotSupportedInPreprocessorExpression	pp-dereference-operator-not-supported-in-preprocessor-expression.c	rendered
 pp	DivideByZero	pp-divide-by-zero.c	rendered
@@ -97,6 +98,7 @@ pp	DivideWithoutRhs	pp-divide-without-rhs.c	folded
 pp	ElifDirectiveWithoutIfDirective	pp-elif-directive-without-if-directive.c	rendered
 pp	ElseDirectiveWithoutIfDirective	pp-else-directive-without-if-directive.c	rendered
 pp	EmptyParenthesesInPreprocessorExpression	pp-empty-parentheses-in-preprocessor-expression.c	rendered
+pp	EncodedStringInLineDirective	pp-encoded-string-in-line-directive.c	rendered
 pp	EqualsWithoutRhs	pp-equals-without-rhs.c	folded
 pp	ErrorDirective	pp-error-directive.c	rendered
 pp	ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression	pp-exclamation-mark-instead-of-binary-operator-in-preprocessor-expression.c	rendered
@@ -109,6 +111,7 @@ pp	ExpectedIdentifierInMacroDefinition	pp-expected-identifier-in-macro-definitio
 pp	ExpectedIdentifierInUndefDirective	pp-expected-identifier-in-undef-directive.c	rendered
 pp	ExpectedIncludeStringOrAngleBracketString	pp-expected-include-string-or-angle-bracket-string.c	rendered
 pp	ExpectedNewlineAfterUndefDirective	pp-expected-newline-after-undef-directive.c	rendered
+pp	ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression	pp-colon-in-operand-position.c	rendered
 pp	ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression	pp-expected-right-hand-side-of-binary-operator-in-preprocessor-expression.c	rendered
 pp	ExtraTokensAfterIfdefDirective	pp-extra-tokens-after-ifdef-directive.c	rendered
 pp	ExtraTokensAfterIfndefDirective	pp-extra-tokens-after-ifndef-directive.c	rendered
@@ -134,6 +137,8 @@ pp	HeaderNotFound	pp-header-not-found-backslash.c	rendered
 pp	HexEscapeSequenceTooLarge	pp-hex-escape-sequence-too-large.c	rendered
 pp	IdentifierInsteadOfBinaryOperatorInPreprocessorExpression	pp-identifier-instead-of-binary-operator-in-preprocessor-expression.c	rendered
 pp	IdentifierNotMacroArgumentAfterHashOperator	pp-identifier-not-macro-argument-after-hash-operator.c	rendered
+pp	IncludeNextInPrimarySource	pp-include-next-in-primary-source.c	rendered
+pp	IncludeNextWithoutSearchEntry	pp-include-next-without-search-entry.c	rendered
 pp	IntegerLiteralOverflow	pp-integer-literal-overflow.c	rendered
 pp	InvalidCharacterInHeaderName	pp-invalid-character-in-header-name.c	rendered
 pp	InvalidBinaryIntegerLiteral	pp-invalid-binary-integer-literal.c	rendered
@@ -191,6 +196,7 @@ pp	RightShiftWithoutRhs	pp-right-shift-without-rhs.c	folded
 pp	STDCPragmaDirectiveWithoutArgument	pp-s-t-d-c-pragma-directive-without-argument.c	rendered
 pp	STDCPragmaDirectiveWithoutOnOffSwitch	pp-s-t-d-c-pragma-directive-without-on-off-switch.c	rendered
 pp	SmallUnicodeEscapeSequenceTooShort	pp-small-unicode-escape-sequence-too-short.c	rendered
+pp	SystemHeaderPragmaInMainFile	pp-system-header-pragma-in-main-file.c	rendered
 pp	TernaryOperatorWithoutMhs	pp-ternary-operator-without-mhs.c	rendered
 pp	TernaryOperatorWithoutRhs	pp-ternary-operator-without-rhs.c	rendered
 pp	TildeInsteadOfBinaryOperatorInPreprocessorExpression	pp-tilde-instead-of-binary-operator-in-preprocessor-expression.c	rendered
@@ -227,3 +233,12 @@ tokenizer	UnknownToken	tokenizer-unknown-token-nul.c	rendered
 tokenizer	UnknownToken	tokenizer-unknown-token.c	rendered
 tokenizer	UnterminatedCharacter	tokenizer-unterminated-character.c	rendered
 tokenizer	UnterminatedString	tokenizer-unterminated-string.c	rendered
+parser	ExpectedGnuSyntax	parser-gnu-asm.c	rendered
+pp	VaOptOutsideVariadicMacro	pp-va-opt-outside-variadic-macro.c	rendered
+pp	EmbeddedResourceNotFound	pp-embedded-resource-not-found.c	rendered
+pp	VaOptUnavailable	pp-va-opt-unavailable.c	rendered
+pp	MissingOpeningParenthesisAfterVaOpt	pp-missing-opening-parenthesis-after-va-opt.c	rendered
+pp	NestedVaOpt	pp-nested-va-opt.c	rendered
+pp	UnterminatedVaOpt	pp-unterminated-va-opt.c	rendered
+pp	HashHashAtVaOptBoundary	pp-hash-hash-at-va-opt-boundary.c	rendered
+pp	DeprecatedMacro	sema-atomic-deprecated.c	rendered

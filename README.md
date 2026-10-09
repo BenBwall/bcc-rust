@@ -1,9 +1,20 @@
 # bcc-rust
 
 `bcc-rust` is an experimental Rust implementation of a C compiler front end
-targeting C99 syntax. Its non-recursive language parser is complete for the
-declared syntax scope, but semantic analysis and code generation are not yet
-implemented.
+supporting C89/C90, C95, C99, C11, C17/C18, C23 and a documented C2y draft
+subset, plus GNU and opt-in MSVC extensions. Its non-recursive language parser
+builds syntax trees; semantic analysis covers declarations, expressions,
+initializers, statements and functions. Code generation is not implemented.
+
+See [language-standards.md](language-standards.md) for language modes, extension
+flags, shared configuration, implementation details and remaining semantic
+boundaries. The CLI defaults to `gnu17`; library configuration defaults to strict
+C99. Pass `-std=c23`, `-std=c2y`, or any documented GCC standard alias to select a
+mode. `-pedantic`/`-Wpedantic` warn on extensions; `-pedantic-errors` makes them
+errors. MSVC syntax is independently enabled with `-fms-extensions` or its ten
+individual feature flags; later flags win. Translation targets a hosted
+execution environment by default; `-ffreestanding` selects a freestanding one
+and `-fhosted` restores hosted, the later flag winning.
 
 ## Current status
 
@@ -40,16 +51,20 @@ Malformed input retains repaired syntax where meaningful, produces a
 provenance-only external error node for pure top-level garbage, and emits
 structured FIFO diagnostics with recovery context.
 
-Parser resource accounting includes source provenance, with a default budget
-of 40 million stored segments per translation unit. Extreme nesting can
-produce a `SourceSegments` resource diagnostic; flat syntax lists collect
-their provenance once instead of repeatedly copying their growing prefix.
+Parser resource limits follow representation bounds: `usize` for root and
+syntax-node counts, `u32` for frame/scope depth, and each provenance arena's
+`u32` index space. There is no fixed aggregate source-segment budget. Flat syntax
+lists collect provenance once instead of repeatedly copying their growing prefix.
 
 Phase 05 is complete. The parser meets the parser-relevant C99 minimum
-translation floors, diagnoses excluded extensions and invalid phase-7 input,
-and has deterministic truncation/property coverage. Semantic analysis—including
-type/lvalue constraints, constant-expression evaluation, initializer
-current-object rules, and linkage—and code generation remain unimplemented.
+translation floors, diagnoses invalid phase-7 input, and has deterministic
+truncation/property coverage. The integrated language modes also cover C23
+attributes and feature queries, resource embedding into initializers, modern
+literals, GNU macros/keywords/imaginary constants, and MSVC macro pragmas and
+empty variadic calls through the CLI. Declaration semantic analysis now follows parsing in the default CLI mode;
+`--semantic-types` inspects resolved declaration types, linkage and duration.
+See [semantic-analysis.md](semantic-analysis.md) for implemented boundaries and
+validation gaps. Code generation remains unimplemented.
 This is not yet a production-ready or conforming C99 compiler.
 
 ## Prerequisites
@@ -156,6 +171,15 @@ host's backend is enabled. Rust uses
 the Rust/C boundary. The [Rust LTO documentation](https://doc.rust-lang.org/rustc/linker-plugin-lto.html)
 describes this combination and why matching LLVM versions matters.
 
+Under this combination, code generation can introduce calls to
+`compiler_builtins` functions after LTO has already discarded
+`rust_eh_personality`, which their unwind tables reference. Signed 128-bit
+division and `f128` arithmetic are examples. The linker would then fail with
+`undefined symbol: rust_eh_personality`. The Windows GNU and Linux flags in
+[`.cargo/config.toml`](.cargo/config.toml) therefore force those objects in
+before LTO, and [`tests/late_builtins.rs`](tests/late_builtins.rs) fails to link
+if the list stops covering them.
+
 Cargo selects the source-built linker directly from `target/llvm/bin/`.
 The C compiler, archiver, libclang, and linker all come from that pinned
 build; no setup script or linker wrapper is needed. The shared LLVM cache is
@@ -200,7 +224,79 @@ cargo run -- --tokens --input '#define N 3
 N + 1'
 ```
 
-Use `--iquote <directory>` (`-q`) and `--isystem <directory>` (`-s`) to add include search paths. Header lookup follows GCC and Clang: `#include "name"` looks beside the including file (the working directory for `--input`), then each `--iquote` directory; both forms then search `CPATH`, each `--isystem` directory, and `C_INCLUDE_PATH`. The working directory is never searched implicitly. The environment variables use the platform path separator, and, as in GCC, an empty element names the working directory. A missing header's diagnostic lists every directory searched. `__DATE__` and `__TIME__` are fixed once per translation unit. For reproducible output, `--source-date-epoch <seconds>` or the `SOURCE_DATE_EPOCH` variable pins them to that UTC time; the flag wins, a malformed variable is ignored, and a malformed flag value is an error. Files under [`test-programs/`](test-programs/) are useful manual inspection inputs, but they are not an automated conformance suite.
+Header lookup follows Clang. `#include "name"` looks beside the including
+file (the working directory for `--input`), then in each `-iquote` directory;
+both forms then search, in order, each `-I` directory, `CPATH`, each
+`-isystem` directory, `C_INCLUDE_PATH`, the embedded `<built-in>` resource
+directory, the C library's directories, and each `-idirafter` directory. User
+headers therefore take precedence over resource headers, and a resource header
+can `#include_next` the C library's header of the same name. `--sysroot <dir>`
+names the C library's directories `<dir>/usr/local/include` and
+`<dir>/usr/include`; without it no library directory is searched, so a C
+library elsewhere (MinGW-w64, the MSVC UCRT, a multiarch
+`/usr/include/x86_64-linux-gnu`) is added with `-idirafter` or `-isystem`.
+Target-driven discovery of these directories is future work. `-nostdinc`
+removes the resource and library directories, `-nostdlibinc` only the library
+directories, and `-nobuiltininc` only the resource directory; `-idirafter`
+directories stay. The GCC single-dash spellings `-iquote`, `-isystem` and
+`-idirafter` take their directory separately or joined, as `-I` does;
+`--iquote`/`-q` and `--isystem`/`-s` remain. The working directory is never
+searched implicitly. The environment variables use the platform path separator,
+and, as in GCC, an empty element names the working directory. A missing
+header's diagnostic lists every directory searched.
+
+Build-system options `-D NAME`, `-DNAME`, `-D NAME=VALUE`, `-DNAME=VALUE`,
+`-U NAME`, `-UNAME`, and `-include FILE` are supported. An omitted value means
+`1`; an explicit empty value stays empty, and values may contain spaces and
+additional `=` characters. Quote each argument for your shell. Function-like
+definitions such as `'-DF(x)=((x)+1)'` use the normal macro parser. Definitions
+and undefinitions run in their command-line order after predefined macros;
+forced includes then run in their command-line order, as in GCC/Clang. A forced
+include starts lookup in the working directory and then uses the quoted include
+search path. Definitions and startup diagnostics have stable `<command line>`
+provenance. Builtin protections still apply. `-imacros` is not implemented.
+
+Headers found through `-isystem`, `C_INCLUDE_PATH`, the resource directory, the
+C library's directories or `-idirafter`, and headers that use `#pragma GCC
+system_header`, are system headers, as in GCC: their warnings and extension
+diagnostics are withheld, even under `-pedantic-errors`, while errors are
+still reported. See
+[language-standards.md](language-standards.md#system-headers) for the rule,
+including how macro expansions are attributed. Macro redefinitions are
+warnings, and errors under `-pedantic-errors`, as in GCC and Clang. `__DATE__` and `__TIME__` are fixed once per translation unit. For reproducible output, `--source-date-epoch <seconds>` or the `SOURCE_DATE_EPOCH` variable pins them to that UTC time; the flag wins, a malformed variable is ignored, and a malformed flag value is an error. Files under [`test-programs/`](test-programs/) are useful manual inspection inputs, but they are not an automated conformance suite.
+
+The resource directory holds the seven headers a freestanding implementation
+provides: `<float.h>`, `<iso646.h>`, `<limits.h>`, `<stdarg.h>`, `<stdbool.h>`,
+`<stddef.h>` and `<stdint.h>` (C99 §4p6, printed p. 7; PDF p. 19). `<stdalign.h>`
+and `<stdnoreturn.h>` are also available, with the Clang language-mode macro
+gates documented in [language-standards.md](language-standards.md).
+`<mm_malloc.h>`, which GCC and Clang ship and MinGW-w64's `<malloc.h>`
+includes, defines `_mm_malloc` and `_mm_free` over the C library's aligned
+allocators. These are
+embedded compiler resources; with `-ffreestanding`, or when no C library is
+configured, no on-disk include directory is required. Hosted, each behaves like
+Clang's resource header of the same name: `<limits.h>` and `<stdint.h>` chain
+to the C library's header with `#include_next` (`<float.h>` too for MinGW-w64
+and the MSVC runtime), and `<stddef.h>` and `<stdarg.h>` answer the partial
+`__need_*` requests that glibc's headers make. Diagnostics and token dumps name
+them `<built-in>/name.h`.
+
+Select the C ABI with `--target`: `x86_64-unknown-linux-gnu` (default),
+`x86_64-unknown-linux-musl`, `x86_64-w64-windows-gnu`, or
+`x86_64-pc-windows-msvc`. MinGW also accepts `x86_64-w64-mingw32` and
+`x86_64-pc-windows-gnu`. The selected ABI controls long widths, long-double
+precision, wide literals, record bit-fields, stdarg types and the
+target-description and OS/ABI macros, in all language modes and independently
+of the compiler host and language-extension flags. Compiler identity is a
+separate contract that follows Clang: every language mode, including strict
+ISO modes, claims GCC 4.2.1 (`__GNUC__` `4`), with `__GNUC_GNU_INLINE__`
+before C99 and `__GNUC_STDC_INLINE__` from C99 on. `__STRICT_ANSI__` is
+defined only in strict modes. `-fms-extensions` claims MSVC 19.33
+(`_MSC_VER` `1933`), and every mode defines `__bcc__`; `__clang__` is never
+defined. See
+[language-standards.md](language-standards.md) for the full list.
+`offsetof` and the varargs intrinsics have semantic types; this front end does
+not generate the code that performs varargs operations.
 
 The preprocessor permits 200 simultaneously nested included headers, excluding
 the main source file. An include beyond that limit produces a diagnostic and
@@ -208,12 +304,15 @@ processing continues with the remaining input. This exceeds C99's required
 minimum of 15 nested includes; the ceiling also makes an unguarded recursive
 include terminate without exhausting the process.
 
-Preprocessing uses a freestanding execution model: `__STDC__` is `1`,
-`__STDC_VERSION__` is `199901L`, and `__STDC_HOSTED__` is `0`.
+`__STDC__` is `1` and `__STDC_VERSION__` is `199901L` (or the selected
+revision's value). `__STDC_HOSTED__` is `1` in the default hosted execution
+environment and `0` with `-ffreestanding` (C99 §4p6, §5.1.2). A hosted
+translation checks the portable signatures of `main` (§5.1.2.2.1); a
+freestanding one leaves its startup function implementation-defined.
 `__STDC_MB_MIGHT_NEQ_WC__` is `1`, permitting multibyte and wide-character
 codes to differ. These predefined values describe the front end's selected
-language and execution model; semantic analysis, runtime support, and code
-generation remain unfinished.
+language and execution model; runtime support and code generation remain
+unfinished.
 
 Literal values use UTF-8 for source characters in ordinary strings and 8-bit
 codes for numeric escapes (`\xFF` is one byte). Wide literals use 32-bit
@@ -327,6 +426,91 @@ execute C programs. It is a corpus survey rather than a conformance gate.
 See the [compiler corpus research](compiler-test-corpus-research.md) and
 [recorded parser results](gcc-torture-parser-results.md) for comparison profiles,
 known discrepancies, and interpretation limits.
+
+### libc header survey
+
+The header survey measures how many of a C library's public headers bcc
+compiles, taking Clang for the same target as the reference. It covers four
+configurations: `glibc-x86_64-linux`, `musl-x86_64-linux`, `mingw-w64`, and
+`msvc-ucrt`.
+
+```sh
+python scripts/fetch_libc_sysroots.py
+cargo build --bin bcc-rust
+python scripts/libc_header_survey.py --output target/libc-survey/new-run
+```
+
+`fetch_libc_sysroots.py` downloads about 10 MB of pinned distribution packages:
+Debian 13 `libc6-dev` and `linux-libc-dev` from `snapshot.debian.org`, and
+Alpine 3.20 `musl-dev` and `linux-headers`. It checks each against its recorded
+SHA-256 before reading it, then extracts only `usr/include/` into
+`target/sysroots/<configuration>/`, where a `sysroot.json` manifest records
+the packages. Python reads the archives directly, and nothing from a package
+is executed. Links inside the header tree become copies of their targets;
+links that leave the sysroot abort the extraction. A few Linux headers differ
+only in case (`xt_MARK.h` and `xt_mark.h`); on a case-insensitive file system
+the second is skipped and listed in the manifest. `--list` prints the pinned
+URLs, versions, sizes, and hashes.
+
+The MinGW-w64 configuration takes its include directories from
+`gcc -xc -E -v` on `PATH`, leaving out GCC's private `lib/gcc/...` directories.
+The MSVC configuration takes them from `INCLUDE` when it is set, and otherwise
+from `vswhere.exe` and the Windows Kits registry key (the Visual C++ `include`
+directory, then the SDK's `ucrt`, `shared`, `um`, and `winrt` directories).
+A configuration whose headers are missing is skipped unless `--config` names
+it.
+
+Each selected header becomes a translation unit holding only its `#include`
+and one declaration. The selection is the C17 standard headers, the C23
+headers the library ships, the common POSIX headers for glibc and musl, and
+`windows.h` with other common Win32 and CRT headers for MinGW-w64 and MSVC
+(Win32 headers such as `shellapi.h`, which need `windows.h`'s types, include
+it first).
+`--all-headers` adds every `.h` under the library's include roots. One more
+unit includes all the standard headers together. Clang runs first with the
+configuration's target and include flags and `-fsyntax-only`, in `-std=gnu17`
+and, for the standard headers, also `-std=c17`. Clang's verdict decides which
+headers are valid: bcc does not run on headers that Clang rejects, and the
+results record why Clang rejected them. bcc exits 0 even after reporting
+errors, so the survey counts its rendered diagnostics instead. A crash or
+timeout makes the survey exit nonzero. `--config`, `--match` (a header glob),
+`--jobs`, and `--timeout` narrow or tune a run.
+
+bcc's arguments come from a template. The default,
+`--target={triple} {flags} --std={std} "-idirafter {dir}"`, selects each
+configuration's target and passes the library's include directories after
+bcc's built-in resource headers, the order Clang uses, so the resource
+headers can wrap the library's (`#include_next`). The separate word
+`{flags}` expands to the configuration's equivalent bcc flags: `--sysroot`
+for glibc and musl (as their Clang command passes), `-fms-extensions` for
+MSVC, and no extra flags for MinGW-w64.
+The other placeholders are `{triple}`, `{sysroot}`, `{std}`, `{config}`, `{dir}`,
+and `{input}`. A word containing `{dir}` repeats once for each include directory, and a word
+whose placeholder is empty is dropped (the MSVC configuration has no sysroot;
+MinGW-w64's is the GCC installation root). The translation unit is appended
+unless `{input}` appears. Override the template for every configuration or
+for one, for example to rely on `--sysroot` lookup alone:
+
+```sh
+python scripts/libc_header_survey.py --output target/libc-survey/hosted \
+  --bcc-args "--target={triple} {flags} --sysroot={sysroot} --std={std}" \
+  --bcc-args-for msvc-ucrt "--target={triple} {flags} --std={std} '--isystem {dir}'" \
+  --compare target/libc-survey/baseline/results.json
+```
+
+Each output directory holds `results.json` (run metadata, a per-configuration
+summary, and one row per header and language mode), `results.jsonl` (rows as
+they finish), the generated units under `tu/`, and the Clang and bcc output
+under `logs/`. The metadata records the bcc binary's SHA-256, the Git head,
+the Clang version, each configuration's flags and include directories, and
+the package versions and hashes. The printed table gives, per configuration
+and mode, the headers surveyed, those Clang accepts, those bcc also accepts,
+and the combined unit's verdicts, followed by bcc's most common first errors.
+The survey refuses an output directory that already has results.
+`--compare OLD/results.json` lists the headers that bcc newly accepts or newly
+rejects relative to an earlier run, and adding `--against NEW/results.json`
+compares two finished runs without surveying. Run the scripts' tests with
+`python -m unittest discover -s scripts -p "test_*.py"`.
 
 ### Branch cleanup
 

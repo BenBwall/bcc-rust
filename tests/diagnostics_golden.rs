@@ -48,7 +48,9 @@ mod tests {
     }
 
     fn run(fixture: &Path) -> Output {
+        let flags = fs::read_to_string(fixture.with_extension("args")).unwrap_or_default();
         Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(flags.split_whitespace())
             .arg(fixture.file_name().expect("fixture must have a file name"))
             .current_dir(fixture_directory())
             .env("NO_COLOR", "1")
@@ -58,6 +60,30 @@ mod tests {
             .env_remove("C_INCLUDE_PATH")
             .output()
             .expect("the bcc-rust test binary must run")
+    }
+
+    /// A location joined from a search directory uses the host's path
+    /// separator (`system-headers\noisy.h` on Windows). Golden files spell
+    /// location paths with `/` so that they match on every host.
+    fn portable_locations(stderr: &[u8]) -> Vec<u8> {
+        let text = String::from_utf8_lossy(stderr);
+        let mut portable = String::with_capacity(text.len());
+        for line in text.split_inclusive('\n') {
+            if line.trim_start().starts_with("--> ") {
+                portable.push_str(&line.replace('\\', "/"));
+            } else {
+                portable.push_str(line);
+            }
+        }
+        portable.into_bytes()
+    }
+
+    #[test]
+    fn location_paths_are_portable() {
+        assert_eq!(
+            portable_locations(b"error: x\n  --> dir\\file.h:1:2\n   |\nnote: a\\b\n"),
+            b"error: x\n  --> dir/file.h:1:2\n   |\nnote: a\\b\n"
+        );
     }
 
     #[test]
@@ -76,9 +102,10 @@ mod tests {
                 "{} produced no diagnostic",
                 fixture.display()
             );
+            let stderr = portable_locations(&output.stderr);
             let expected_path = fixture.with_extension("stderr");
             if bless {
-                fs::write(&expected_path, &output.stderr).expect("golden file must be writable");
+                fs::write(&expected_path, &stderr).expect("golden file must be writable");
             } else {
                 let expected = fs::read(&expected_path).unwrap_or_else(|error| {
                     panic!(
@@ -86,11 +113,11 @@ mod tests {
                         expected_path.display()
                     )
                 });
-                if output.stderr != expected {
+                if stderr != expected {
                     failures.push(format!(
                         "{}: stderr differs; actual:\n{}\nexpected:\n{}",
                         fixture.display(),
-                        String::from_utf8_lossy(&output.stderr),
+                        String::from_utf8_lossy(&stderr),
                         String::from_utf8_lossy(&expected)
                     ));
                 }

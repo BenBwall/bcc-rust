@@ -1,0 +1,9 @@
+error: block-scope declaration with linkage cannot have an initializer: `a`
+ --> sema-linked-initializer.c:1:31
+  |
+1 | void f(void) { extern int a = 3; }
+  |                               ^ initializer is not allowed here
+  |
+  = note: C99 §6.7.8p5: a block-scope declaration of an identifier with external or internal linkage has no initializer
+
+1 error generated.

@@ -66,13 +66,15 @@ pub(super) struct CompoundStatementFrame<'tu, 'p> {
     starting_error_count:      usize,
     entry_scope_depth:         Option<usize>,
     function_body:             bool,
+    has_statement:             bool,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(super) enum CompoundStatementPhase {
+enum CompoundStatementPhase {
     Start,
     ItemOrClose,
     AwaitDeclaration,
+    AwaitFunctionDefinition,
     AwaitStatement,
     Finish,
 }
@@ -91,6 +93,7 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
             starting_error_count,
             entry_scope_depth: None,
             function_body,
+            has_statement: false,
         }
     }
 
@@ -145,9 +148,22 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                     // C99 §6.8.1p1: `identifier :` begins a labeled
                     // statement even when the identifier names a typedef;
                     // labels have their own name space (§6.2.3p1).
-                    let is_label = token.is_some_and(|token| token.kind == TokenType::Identifier)
+                    let is_label = token
+                        .is_some_and(|token| matches!(token.kind, TokenType::Identifier))
                         && is_operator(parser.cursor.following(), OperatorTokenType::Colon);
-                    if !is_label && token.is_some_and(|token| parser.declaration_starter(token)) {
+                    if !is_label
+                        && token.is_some_and(|token| parser.declaration_starter(token))
+                        && parser.extension_precedes_declaration()
+                        && (!parser.attribute_starter(token)
+                            || parser.attributes_precede_declaration())
+                    {
+                        if self.has_statement {
+                            parser.extension(
+                                crate::configuration::Feature::MixedDeclarations,
+                                "mixed declarations and code",
+                                token.expect("declaration starts here"),
+                            );
+                        }
                         self.phase = CompoundStatementPhase::AwaitDeclaration;
                         ParseAction::Push(ParseFrame::Declaration(DeclarationFrame::new(
                             parser.arena,
@@ -156,10 +172,10 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                         )))
                     } else {
                         self.phase = CompoundStatementPhase::AwaitStatement;
-                        ParseAction::Push(ParseFrame::Statement(StatementFrame::new(
-                            parser.hard_error_count,
-                            None,
-                        )))
+                        ParseAction::Push(ParseFrame::Statement(
+                            StatementFrame::new(parser.hard_error_count, None)
+                                .with_block_item(true),
+                        ))
                     }
                 }
             },
@@ -167,9 +183,42 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     panic!("block declaration returned an unexpected value: {returned:?}");
                 };
+                if declaration.is_definition_head() {
+                    let mut extension = declaration.declaration_specifiers.extensions;
+                    let mut suppressed = false;
+                    while let Some(item) = extension {
+                        suppressed |=
+                            item.kind == super::modern::SpecifierExtensionKind::ExtensionMarker;
+                        extension = item.next;
+                    }
+                    if !suppressed && let Some(token) = token {
+                        parser.extension(
+                            crate::configuration::Feature::NestedFunctions,
+                            "nested function definition",
+                            token,
+                        );
+                    }
+                    self.phase = CompoundStatementPhase::AwaitFunctionDefinition;
+                    return ParseAction::Push(ParseFrame::FunctionDefinition(
+                        super::function_definition::FunctionDefinitionFrame::new(
+                            parser.arena,
+                            declaration,
+                            parser.hard_error_count,
+                        ),
+                    ));
+                }
                 let source = declaration.source_vectors;
                 self.source_vectors.push(source);
                 self.items.push(BlockItem::Declaration(declaration));
+                self.phase = CompoundStatementPhase::ItemOrClose;
+                ParseAction::Continue
+            },
+            | CompoundStatementPhase::AwaitFunctionDefinition => {
+                let Some(ParseValue::FunctionDefinition(definition)) = returned else {
+                    panic!("nested function child protocol");
+                };
+                self.source_vectors.push(definition.source_vectors);
+                self.items.push(BlockItem::FunctionDefinition(definition));
                 self.phase = CompoundStatementPhase::ItemOrClose;
                 ParseAction::Continue
             },
@@ -180,6 +229,9 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                 let source = statement.source_vectors;
                 self.source_vectors.push(source);
                 self.items.push(BlockItem::Statement(statement));
+                // A GNU `__label__` declaration opens the block before its
+                // declarations; it is not code that they follow.
+                self.has_statement |= !matches!(statement.kind, StatementType::LocalLabels(_));
                 self.phase = CompoundStatementPhase::ItemOrClose;
                 ParseAction::Continue
             },

@@ -1,0 +1,11 @@
+error: tag is already defined: `S`
+ --> sema-tag-redefinition.c:2:1
+  |
+1 | struct S {int x;};
+  |        - previous declaration is here
+2 | struct S {int y;};
+  | ^^^^^^^^^^^^^^^^^ defined again here
+  |
+  = note: C99 §6.7.2.3p1: a specific type has its contents defined at most once
+
+1 error generated.

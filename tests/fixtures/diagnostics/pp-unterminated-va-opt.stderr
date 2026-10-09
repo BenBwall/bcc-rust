@@ -1,0 +1,9 @@
+error: unterminated `__VA_OPT__` replacement
+ --> pp-unterminated-va-opt.c:1:16
+  |
+1 | #define V(...) __VA_OPT__(x
+  |                ^^^^^^^^^^ no matching `)` before the end of the definition
+  |
+  = note: C23 §6.10.5.1p3: the macro is not defined
+
+1 error generated.

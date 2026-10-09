@@ -1,45 +1,25 @@
 //! Regression tests for verified driver bugs found by the overnight bug hunt.
 
-use std::{
-    fmt::Write,
-    path::PathBuf,
-};
+use std::fmt::Write;
 
+use super::{
+    syntax_tree,
+    with_parsed,
+};
 use crate::{
-    translation_phases::{
-        Context,
-        parsing::{
-            Parser,
-            inspection::InspectionOptions,
-        },
-        preprocessing::Preprocessor,
-    },
-    util::shared::SharedVec,
+    configuration::CompilerConfiguration,
+    translation_phases::parsing::inspection::InspectionOptions,
 };
 
 /// Parses `source` and renders its located syntax tree.
 fn located_tree(source: &str) -> String {
-    let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
-    let preprocess_arena = crate::util::bump::Bump::new();
-    let parse_arena = crate::util::bump::Bump::new();
-    let preprocessor = Preprocessor::new(
-        &preprocess_arena,
-        &mut context,
-        PathBuf::from("<located-tree-test>").into_boxed_path(),
+    syntax_tree(
         source,
-        SharedVec::default(),
-        SharedVec::default(),
-    );
-    let unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
-    unit.inspect(
-        context.tu_arena(),
-        &context,
+        CompilerConfiguration::default(),
         InspectionOptions {
             show_locations: true,
         },
     )
-    .to_owned()
 }
 
 #[test]
@@ -58,17 +38,10 @@ fn recovered_nodes_keep_their_locations() {
         snapshot.push_str(&located_tree(source));
     }
     // Recorded while the streaming and batch pipelines still had to agree.
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/inspection/recovered_locations.snap");
-    if std::env::var_os("BLESS").is_some_and(|value| value == "1") {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, &snapshot).unwrap();
-        return;
-    }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!("{}: {error}; run with BLESS=1 to create it", path.display())
-    });
-    pretty_assertions::assert_eq!(expected, snapshot);
+    crate::test_support::assert_snapshot(
+        "tests/fixtures/inspection/recovered_locations.snap",
+        &snapshot,
+    );
 }
 
 #[test]
@@ -85,20 +58,7 @@ fn missing_and_error_nodes_are_located_at_the_offending_token() {
 /// Parses `source` and returns how many source segments the context holds
 /// afterwards.
 fn source_segments_after_parsing(source: &str) -> usize {
-    let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
-    let preprocess_arena = crate::util::bump::Bump::new();
-    let parse_arena = crate::util::bump::Bump::new();
-    let preprocessor = Preprocessor::new(
-        &preprocess_arena,
-        &mut context,
-        PathBuf::from("<segment-test>").into_boxed_path(),
-        source,
-        SharedVec::default(),
-        SharedVec::default(),
-    );
-    let _unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
-    context.source_segment_count()
+    with_parsed(source, |_, context| context.source_segment_count())
 }
 
 #[test]
@@ -191,32 +151,21 @@ fn missing_semicolon_help_uses_macro_invocations_after_full_batch_preprocessing(
         let source = format!(
             "{definition}\nstruct S {{\n{call}\nint b;\n}};\nstruct T {{\n{call}\nint b;\n}};\n"
         );
-        let tu = crate::util::bump::Bump::new();
-        let mut context = Context::new(&tu);
-        let preprocess_arena = crate::util::bump::Bump::new();
-        let parse_arena = crate::util::bump::Bump::new();
-        let preprocessor = Preprocessor::new(
-            &preprocess_arena,
-            &mut context,
-            PathBuf::from("<macro-help>").into_boxed_path(),
-            &source,
-            SharedVec::default(),
-            SharedVec::default(),
-        );
-        let _unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
-        let insertions: Vec<_> = context
-            .take_pending_errors()
-            .into_iter()
-            .filter_map(|error| match error {
-                | crate::translation_phases::TranslationError::Parsing(error) =>
-                    error.insertion_point,
-                | _ => None,
-            })
-            .map(|source| {
-                let vector = &context.get_source_vectors(source)[0];
-                (vector.line, vector.column)
-            })
-            .collect();
+        let insertions: Vec<_> = with_parsed(&source, |_, context| {
+            context
+                .take_pending_errors()
+                .into_iter()
+                .filter_map(|error| match error {
+                    | crate::translation_phases::TranslationError::Parsing(error) =>
+                        error.insertion_point,
+                    | _ => None,
+                })
+                .map(|source| {
+                    let vector = &context.get_source_vectors(source)[0];
+                    (vector.line, vector.column)
+                })
+                .collect()
+        });
         assert_eq!(
             insertions,
             [

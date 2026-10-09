@@ -1,0 +1,9 @@
+error: multiplicative operator requires arithmetic operands
+ --> sema2-arithmetic.c:1:25
+  |
+1 | void f(void) { int *p; p*p; }
+  |                         ^ operands are not arithmetic
+  |
+  = note: C99 §6.5.5p2: multiplicative operators require arithmetic operands; remainder requires integers
+
+1 error generated.

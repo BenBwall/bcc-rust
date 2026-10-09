@@ -1,0 +1,35 @@
+error: incompatible string literal encoding prefixes
+ --> lexpp-c23-constraints.c:1:16
+  |
+1 | char *a = u"a" U"b";
+  |                ^^^^
+
+error: character constant must encode exactly one code unit
+ --> lexpp-c23-constraints.c:2:9
+  |
+2 | int b = u8'é';
+  |         ^^^^^
+
+error: `##` cannot begin or end a `__VA_OPT__` replacement
+ --> lexpp-c23-constraints.c:3:16
+  |
+3 | #define V(...) __VA_OPT__(##)
+  |                ^^^^^^^^^^ the macro is not defined
+  |
+  = note: C23 §6.10.5.1p3: the replacement must form a valid replacement list, which `##` cannot begin or end (§6.10.5.3p1)
+
+error: cannot find embedded resource `missing-lexpp-resource.bin`
+ --> lexpp-c23-constraints.c:4:2
+  |
+4 | #embed "missing-lexpp-resource.bin"
+  |  ^^^^^ not found in any search directory
+  |
+  = note: C23 §6.10.4.1p3: `#embed` must identify a resource it can process
+
+error: resource and C attribute queries require a preprocessing conditional expression
+ --> lexpp-c23-constraints.c:5:13
+  |
+5 | int query = __has_include("missing.h");
+  |             ^^^^^^^^^^^^^
+
+5 errors generated.

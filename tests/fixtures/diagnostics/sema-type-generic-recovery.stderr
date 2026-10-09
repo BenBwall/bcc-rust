@@ -1,0 +1,67 @@
+error: identifier has no visible declaration: `missing`
+ --> sema-type-generic-recovery.c:1:51
+  |
+1 | void choose(void) { int x = __builtin_choose_expr(missing, 1, 2); int following; }
+  |                                                   ^^^^^^^ not declared
+  |
+  = note: C99 §6.5.1p2: an identifier expression designates a declared object, function or enumeration constant
+
+error: generic selection requires unique eligible associations and a matching type or default
+ --> sema-type-generic-recovery.c:5:11
+  |
+5 |     (void)_Generic(0, P: 1, default: 0); int following;
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ invalid generic association list
+  |
+  = note: C11 §6.5.1.1p2: associations name complete non-variably-modified object types; compatible types and defaults cannot be repeated
+
+error: invalid vector operation
+ --> sema-type-generic-recovery.c:8:25
+  |
+8 | int *lane(V v) { return &_Generic(1, int: v[0]); }
+  |                         ^^^^^^^^^^^^^^^^^^^^^^^ invalid vector operands
+  |
+  = note: Clang Language Extensions: vector operators require valid element types and matching widths; scalar operands must convert without truncation
+
+error: invalid vector operation
+  --> sema-type-generic-recovery.c:9:32
+   |
+ 9 | int *choice_lane(V v) { return &__builtin_choose_expr(1, v[0], 0); }
+   |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ invalid vector operands
+   |
+   = note: Clang Language Extensions: vector operators require valid element types and matching widths; scalar operands must convert without truncation
+
+error: static-storage initializer requires a constant expression
+  --> sema-type-generic-recovery.c:12:25
+   |
+12 | double imaginary_real = __imag__ runtime_real();
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^ not a constant expression
+   |
+   = note: C99 §6.7.8p4: every expression in an initializer for an object of static storage duration is constant or a string literal
+
+error: static-storage initializer requires a constant expression
+  --> sema-type-generic-recovery.c:13:25
+   |
+13 | int imaginary_integer = __imag__ runtime_integer();
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^ not a constant expression
+   |
+   = note: C99 §6.7.8p4: every expression in an initializer for an object of static storage duration is constant or a string literal
+
+error: an integer constant expression is required: `imaginary_ice`
+  --> sema-type-generic-recovery.c:14:10
+   |
+14 | enum E { imaginary_ice = __imag__ runtime_integer() };
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not an integer constant expression
+   |
+   = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
+
+error: goto enters the scope of a variably modified identifier: `L`
+ --> sema-type-generic-recovery.c:2:25
+  |
+2 | void jump(int n) { goto L; _Atomic(int (*)[n]) p; L: ; int following; }
+  |                         ^                      - variably modified identifier is declared here
+  |                         |
+  |                         jumps into a variably modified scope
+  |
+  = note: C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified identifier to inside that scope
+
+8 errors generated.

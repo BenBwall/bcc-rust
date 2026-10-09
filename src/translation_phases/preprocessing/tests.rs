@@ -1,9 +1,12 @@
 mod conditional_boundary_regressions;
+mod deprecated_macros;
+mod dialect_regressions;
 mod directive_regressions;
 mod encoding_regressions;
 mod expression_regressions;
 mod header_name_regressions;
 mod keyword_regressions;
+mod language_modes;
 mod literal_regressions;
 mod macro_regressions;
 mod observables;
@@ -645,7 +648,7 @@ fn identical_redefinitions_and_empty_definitions_are_accepted() {
             assert!(matches!(
                 errors,
                 [TranslationError::Preprocessing(PreprocessorError {
-                    error_type: PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(_),
+                    error_type: PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(..),
                     ..
                 })]
             ));
@@ -663,11 +666,9 @@ fn function_like_macro_names_without_parentheses_are_not_invocations() {
 
 #[test]
 fn quoted_includes_search_beside_the_including_file_not_the_working_directory() {
-    let directory = std::env::temp_dir().join(format!("bcc-include-search-{}", std::process::id()));
-    let nested = directory.join("nested");
-    std::fs::create_dir_all(&nested).unwrap();
-    std::fs::write(nested.join("sibling.h"), "from_sibling\n").unwrap();
-    let main = nested.join("main.c");
+    let directory = crate::test_support::TempDir::new("include-search");
+    directory.write("nested/sibling.h", "from_sibling\n");
+    let main = directory.join("nested").join("main.c");
 
     with_tokens_of(
         "#include \"sibling.h\"\n#include <sibling.h>\n",
@@ -695,12 +696,11 @@ fn quoted_includes_search_beside_the_including_file_not_the_working_directory() 
             );
         },
     );
-    drop(std::fs::remove_dir_all(&directory));
 }
 
 /// Preprocesses `source`, spelling each token as written in C source with a
 /// space between tokens.
-fn expansion_of<R>(source: &str, inspect: impl FnOnce(String, &[TranslationError<'_>]) -> R) -> R {
+fn expansion_of<R>(source: &str, inspect: impl FnOnce(&str, &[TranslationError<'_>]) -> R) -> R {
     with_tokens_of(source, "<test>", |tokens, context| {
         let spellings: Vec<String> = tokens
             .iter()
@@ -719,7 +719,7 @@ fn expansion_of<R>(source: &str, inspect: impl FnOnce(String, &[TranslationError
             })
             .collect();
         let errors = context.take_pending_errors();
-        inspect(spellings.join(" "), &errors)
+        inspect(&spellings.join(" "), &errors)
     })
 }
 

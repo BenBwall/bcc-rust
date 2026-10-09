@@ -13,7 +13,8 @@ error: cannot find header `stdio.h`
 1 | #include <stdio.h
   |          ^^^^^^^^ not found in any search directory
   |
-  = note: the path is absolute; no directory was searched
+  = note: searched these directories:
+            <built-in>
   = help: add the directory containing it with `--isystem <dir>`
 
 2 errors generated.

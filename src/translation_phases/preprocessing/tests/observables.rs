@@ -6,10 +6,7 @@
 
 use std::{
     fmt::Write,
-    path::{
-        Path,
-        PathBuf,
-    },
+    path::PathBuf,
 };
 
 use proptest::prelude::*;
@@ -90,6 +87,7 @@ fn edge_cases_preserve_tokens_diagnostics_and_provenance() {
         "#pragma ignored tokens\nafter\n",
         "\"a\\q\" \"b\" 0xg identifier\n",
         "#define C(a,b) a ## b\n#define M(x) C(x,0) C(x,1)\nM(int value)\n",
+        "#define J(a,b,c) a##b##c\nJ(x,_,y) J(m n,o,p q) J(,,z) J(.,.,.)\n",
         "int sentinel; /* unterminated\n",
         "#error text here\nafter\n",
         "??=define X 1\r\nX ??/\r\n+ 2\r\n",
@@ -103,16 +101,10 @@ fn edge_cases_preserve_tokens_diagnostics_and_provenance() {
             snapshot.push('\n');
         }
     }
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/lexing/preprocessing_edge_cases.snap");
-    if std::env::var_os("BLESS").is_some_and(|value| value == "1") {
-        std::fs::write(&path, &snapshot).unwrap();
-        return;
-    }
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!("{}: {error}; run with BLESS=1 to create it", path.display())
-    });
-    pretty_assertions::assert_eq!(expected, snapshot);
+    crate::test_support::assert_snapshot(
+        "tests/fixtures/lexing/preprocessing_edge_cases.snap",
+        &snapshot,
+    );
 }
 
 #[test]

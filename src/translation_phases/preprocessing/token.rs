@@ -5,8 +5,8 @@
 //! item 7, p. 10; PDF p. 22, and the `token` categories of §6.4 paragraphs
 //! 1 and 3, p. 49; PDF p. 61 (also §A.1.1, p. 403; PDF p. 415).
 //!
-//! Types and values assume an LP64 target: `int` has 32 bits, `long` and
-//! `long long` have 64, and `char` has 8. Those widths are
+//! Literal carriers hold up to 64 bits; conversion selects types and bounds
+//! values using the configured target. Those widths are
 //! implementation-defined (§5.2.4.2.1 paragraph 1, pp. 21-22; PDF
 //! pp. 33-34).
 
@@ -18,6 +18,12 @@ use std::fmt::{
 };
 
 use crate::{
+    configuration::{
+        CStandard,
+        CompilerConfiguration,
+        Feature,
+        FeatureOrigin,
+    },
     diagnostics::quote_spelling,
     float_parsing::LongDouble,
     translation_phases::{
@@ -72,11 +78,29 @@ pub(crate) enum IntegerSuffix {
 /// A phase-7 `token`, with its spelling and provenance.
 ///
 /// C99: §6.4 paragraph 1, p. 49; PDF p. 61.
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Token {
     pub(crate) kind:           TokenType,
     pub(crate) source_vectors: SourceVectors,
     pub(crate) contents:       StringCacheId,
+}
+
+// Syntax and diagnostic structures compare complete tokens; parser dispatch
+// compares the scalar kind directly instead of invoking this full comparison.
+impl PartialEq for Token {
+    fn eq(&self, other: &Self) -> bool {
+        let same_kind = match (self.kind, other.kind) {
+            | (TokenType::Integer(left), TokenType::Integer(right)) => left == right,
+            | (TokenType::Float(left), TokenType::Float(right)) => left == right,
+            | (TokenType::Identifier, TokenType::Identifier) => true,
+            | (TokenType::Keyword(left), TokenType::Keyword(right)) => left == right,
+            | (TokenType::Operator(left), TokenType::Operator(right)) => left == right,
+            | (TokenType::String(left), TokenType::String(right)) => left == right,
+            | (TokenType::Character(left), TokenType::Character(right)) => left == right,
+            | _ => false,
+        };
+        same_kind && self.source_vectors == other.source_vectors && self.contents == other.contents
+    }
 }
 
 impl GetPosition for Token {
@@ -93,12 +117,12 @@ impl GetSourceVectors for Token {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-/// 8-byte values are [`Packed`] so tokens and constants stay 4-byte aligned.
-///
 /// An `integer-constant` with the type its value and suffix give it.
 ///
+/// 8-byte values are [`Packed`] so tokens and constants stay 4-byte aligned.
+///
 /// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum IntegerTokenType {
     Int(i32),
     Long(Packed<i64>),
@@ -106,13 +130,41 @@ pub(crate) enum IntegerTokenType {
     UnsignedInt(u32),
     UnsignedLong(Packed<u64>),
     UnsignedLongLong(Packed<u64>),
+    /// C23 bit-precise suffix: magnitude, minimum width, unsignedness.
+    BitInt(Packed<u64>, u8, bool),
+    /// GNU imaginary integer constant.
+    Imaginary(Packed<u64>, ImaginaryIntegerKind),
 }
 
+/// GNU imaginary integer component types (extension to C99 §6.4.4.1).
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub(crate) enum ImaginaryIntegerKind {
+    Int,
+    Long,
+    LongLong,
+    UnsignedInt,
+    UnsignedLong,
+    UnsignedLongLong,
+}
+impl ImaginaryIntegerKind {
+    pub(crate) fn type_name(self) -> &'static str {
+        match self {
+            | Self::Int => "int _Complex",
+            | Self::Long => "long _Complex",
+            | Self::LongLong => "long long _Complex",
+            | Self::UnsignedInt => "unsigned int _Complex",
+            | Self::UnsignedLong => "unsigned long _Complex",
+            | Self::UnsignedLongLong => "unsigned long long _Complex",
+        }
+    }
+}
 impl From<IntegerTokenType> for i128 {
     fn from(v: IntegerTokenType) -> Self {
         match v {
-            | IntegerTokenType::UnsignedLong(v) | IntegerTokenType::UnsignedLongLong(v) =>
-                i128::from(v.get()),
+            | IntegerTokenType::UnsignedLong(v)
+            | IntegerTokenType::UnsignedLongLong(v)
+            | IntegerTokenType::BitInt(v, _, _)
+            | IntegerTokenType::Imaginary(v, _) => i128::from(v.get()),
             | IntegerTokenType::Long(v) | IntegerTokenType::LongLong(v) => i128::from(v.get()),
             | IntegerTokenType::UnsignedInt(v) => i128::from(v),
             | IntegerTokenType::Int(v) => i128::from(v),
@@ -129,6 +181,12 @@ pub(crate) enum FloatTokenType {
     Float(f32),
     Double(Packed<f64>),
     LongDouble(LongDouble),
+    /// GNU imaginary floating constants preserve their component precision.
+    ImaginaryFloat(f32),
+    ImaginaryDouble(Packed<f64>),
+    ImaginaryLongDouble(LongDouble),
+    Float128(crate::binary128::Binary128),
+    ImaginaryFloat128(crate::binary128::Binary128),
 }
 
 impl FloatTokenType {
@@ -138,6 +196,11 @@ impl FloatTokenType {
             | Self::Float(_) => "float",
             | Self::Double(_) => "double",
             | Self::LongDouble(_) => "long double",
+            | Self::Float128(_) => "__float128",
+            | Self::ImaginaryFloat128(_) => "__float128 _Complex",
+            | Self::ImaginaryFloat(_) => "float _Complex",
+            | Self::ImaginaryDouble(_) => "double _Complex",
+            | Self::ImaginaryLongDouble(_) => "long double _Complex",
         }
     }
 }
@@ -146,8 +209,13 @@ impl Display for FloatTokenType {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             | Self::Float(v) => write!(f, "{v}"),
+            | Self::ImaginaryFloat(v) => write!(f, "{v}i"),
             | Self::Double(v) => write!(f, "{v}"),
+            | Self::ImaginaryDouble(v) => write!(f, "{v}i"),
             | Self::LongDouble(v) => write!(f, "{v}"),
+            | Self::ImaginaryLongDouble(v) => write!(f, "{v}i"),
+            | Self::Float128(v) => write!(f, "{v}"),
+            | Self::ImaginaryFloat128(v) => write!(f, "{v}i"),
         }
     }
 }
@@ -155,6 +223,8 @@ impl Display for FloatTokenType {
 /// A `keyword`.
 ///
 /// C99: §6.4.1 paragraph 1, p. 50; PDF p. 62.
+/// C11: §6.4.1p1, p. 58; PDF p. 76. C23: §6.4.1p1, p. 53;
+/// PDF p. 66. GNU/MSVC entries and C2y `_Countof` are extensions.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum KeywordTokenType {
     Auto,
@@ -194,6 +264,65 @@ pub(crate) enum KeywordTokenType {
     Bool,
     Complex,
     Imaginary,
+    Alignas,
+    Alignof,
+    Atomic,
+    Generic,
+    Noreturn,
+    StaticAssert,
+    ThreadLocal,
+    BitInt,
+    Decimal32,
+    Decimal64,
+    Decimal128,
+    Constexpr,
+    True,
+    False,
+    Nullptr,
+    Typeof,
+    TypeofUnqual,
+    Countof,
+    Attribute,
+    Asm,
+    Extension,
+    BuiltinVaArg,
+    BuiltinVaStart,
+    BuiltinVaEnd,
+    BuiltinVaCopy,
+    BuiltinOffsetof,
+    BuiltinTypesCompatible,
+    BuiltinChooseExpr,
+    LocalLabel,
+    Int128,
+    AutoType,
+    Real,
+    Imag,
+    Declspec,
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    Cdecl,
+    Stdcall,
+    Fastcall,
+    Vectorcall,
+    Thiscall,
+    Ptr32,
+    Ptr64,
+    Unaligned,
+    W64,
+    Sptr,
+    Uptr,
+    Forceinline,
+    Try,
+    Except,
+    Finally,
+    Leave,
+    MsAsm,
+    Pragma,
+    Float128,
+    BuiltinConvertVector,
+    BuiltinBitCast,
 }
 
 /// A `punctuator`. Digraphs map to the punctuators they behave as (§6.4.6
@@ -267,6 +396,31 @@ pub(crate) enum LiteralUnit {
     Numeric(u32),
 }
 
+/// Literal encodings introduced by C11 §6.4.5p1 and C23 §6.4.4.4p1.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum LiteralEncoding {
+    Utf8,
+    Utf16,
+    Utf32,
+}
+impl LiteralEncoding {
+    pub(crate) fn prefix(self) -> &'static str {
+        match self {
+            | Self::Utf8 => "u8",
+            | Self::Utf16 => "u",
+            | Self::Utf32 => "U",
+        }
+    }
+
+    pub(crate) fn type_name(self) -> &'static str {
+        match self {
+            | Self::Utf8 => "char8_t",
+            | Self::Utf16 => "char16_t",
+            | Self::Utf32 => "char32_t",
+        }
+    }
+}
+
 /// A character or wide `string-literal`, decoded into literal units.
 ///
 /// C99: §6.4.5 paragraphs 1-2, p. 62; PDF p. 74.
@@ -274,6 +428,8 @@ pub(crate) enum LiteralUnit {
 pub(crate) enum StringTokenType {
     String(LiteralId),
     WideString(LiteralId),
+    /// C11/C23 encoding-prefixed literal, retaining code-point/numeric units.
+    EncodedString(LiteralId, LiteralEncoding),
 }
 
 /// A `character-constant` and its value.
@@ -285,6 +441,7 @@ pub(crate) enum CharacterTokenType {
     /// A narrow constant of one byte, held as that byte.
     Char(char),
     WideChar(u32),
+    EncodedChar(u32, LiteralEncoding),
     /// Packed integer value of an ordinary multi-character constant.
     ///
     /// The value is implementation-defined (§6.4.4.4 paragraph 10): each
@@ -292,7 +449,26 @@ pub(crate) enum CharacterTokenType {
     MultiChar(i32),
 }
 
-/// The value `#if` gives a character constant. A one-byte narrow constant is
+impl CharacterTokenType {
+    /// Interpret a wide code unit in the target's `wchar_t` representation.
+    /// Narrow preprocessing values retain the existing implementation choice.
+    /// C99: §6.4.4.4p11, p. 61; PDF p. 73; §6.10.1p4, p. 148; PDF p. 160.
+    pub(crate) fn target_value(self, target: &crate::target::TargetLayout) -> i64 {
+        let Self::WideChar(unit) = self else {
+            return self.into();
+        };
+        let (bits, signed) = target.integer(target.wchar_t).unwrap();
+        let value = i64::from(unit & (u32::MAX >> (32 - bits)));
+        if signed && value >= 1_i64 << (bits - 1) {
+            value - (1_i64 << bits)
+        } else {
+            value
+        }
+    }
+}
+
+/// The stored value before target-wide signedness is applied. A one-byte
+/// narrow constant is
 /// never negative here, which C99 leaves implementation-defined (§6.10.1
 /// paragraph 4, p. 148; PDF p. 160). Whether plain `char` is signed in
 /// phase 7 (§6.2.5 paragraph 15, p. 35; PDF p. 47) is left to semantic
@@ -301,7 +477,8 @@ impl From<CharacterTokenType> for i64 {
     fn from(v: CharacterTokenType) -> Self {
         match v {
             | CharacterTokenType::Char(c) => i64::from(u32::from(c)),
-            | CharacterTokenType::WideChar(c) => i64::from(c),
+            | CharacterTokenType::WideChar(c) | CharacterTokenType::EncodedChar(c, _) =>
+                i64::from(c),
             | CharacterTokenType::MultiChar(value) => i64::from(value),
         }
     }
@@ -311,7 +488,10 @@ impl From<CharacterTokenType> for i64 {
 ///
 /// C99: §6.4 paragraph 3, p. 49; PDF p. 61. An `enumeration-constant` is an
 /// identifier until declarations are analyzed (§6.4.4.3, p. 59; PDF p. 71).
-#[derive(Debug, PartialEq, Clone, Copy)]
+// Structural equality remains available to unit tests, but production parser
+// code must name the particular category and payload it needs to inspect.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(test, derive(PartialEq))]
 pub(crate) enum TokenType {
     Integer(IntegerTokenType),
     Float(FloatTokenType),
@@ -322,7 +502,115 @@ pub(crate) enum TokenType {
     Character(CharacterTokenType),
 }
 
+/// When an alternate keyword spelling is a keyword.
+#[derive(Debug, Clone, Copy)]
+enum AliasGate {
+    /// A reserved spelling, a keyword in every mode.
+    Always,
+    /// An ordinary identifier unless GNU extensions are enabled.
+    GnuExtensions,
+    /// A keyword where the configuration accepts the feature.
+    Feature(Feature),
+}
+
+/// An alternate spelling of a keyword: the keyword it spells, when it is
+/// one, and the origin its extension diagnostics name.
+#[derive(Debug, Clone, Copy)]
+struct KeywordAlias {
+    spelling: &'static str,
+    kind:     KeywordTokenType,
+    gate:     AliasGate,
+    origin:   FeatureOrigin,
+}
+
+const fn alias(
+    spelling: &'static str,
+    kind: KeywordTokenType,
+    gate: AliasGate,
+    origin: FeatureOrigin,
+) -> KeywordAlias {
+    KeywordAlias {
+        spelling,
+        kind,
+        gate,
+        origin,
+    }
+}
+
+/// A C23 keyword spelled differently from an earlier keyword with the same
+/// meaning, gated by C23 keywords. C23: §6.4.1 paragraph 3, p. 53; PDF
+/// p. 66.
+const fn c23_alias(spelling: &'static str, kind: KeywordTokenType) -> KeywordAlias {
+    alias(
+        spelling,
+        kind,
+        AliasGate::Feature(Feature::C23Keywords),
+        FeatureOrigin::Standard(CStandard::C23),
+    )
+}
+
+/// A GNU spelling reserved to the implementation, so a keyword in every
+/// mode. C99: §7.1.3 paragraph 1, p. 166; PDF p. 178.
+const fn gnu_alias(spelling: &'static str, kind: KeywordTokenType) -> KeywordAlias {
+    alias(spelling, kind, AliasGate::Always, FeatureOrigin::Gnu)
+}
+
+/// Alternate keyword spellings, in the order their IDs follow
+/// [`KeywordTokenType::ALL`] in the reserved interner prefix.
+const KEYWORD_ALIASES: [KeywordAlias; 28] = {
+    use KeywordTokenType as K;
+    [
+        c23_alias("bool", K::Bool),
+        c23_alias("alignas", K::Alignas),
+        c23_alias("alignof", K::Alignof),
+        c23_alias("static_assert", K::StaticAssert),
+        c23_alias("thread_local", K::ThreadLocal),
+        gnu_alias("__inline", K::Inline),
+        gnu_alias("__inline__", K::Inline),
+        gnu_alias("__restrict", K::Restrict),
+        gnu_alias("__restrict__", K::Restrict),
+        gnu_alias("__const", K::Const),
+        gnu_alias("__const__", K::Const),
+        gnu_alias("__volatile", K::Volatile),
+        gnu_alias("__volatile__", K::Volatile),
+        gnu_alias("__signed", K::Signed),
+        gnu_alias("__signed__", K::Signed),
+        gnu_alias("__alignof", K::Alignof),
+        gnu_alias("__alignof__", K::Alignof),
+        gnu_alias("__complex", K::Complex),
+        gnu_alias("__complex__", K::Complex),
+        gnu_alias("__real", K::Real),
+        gnu_alias("__imag", K::Imag),
+        gnu_alias("__typeof", K::Typeof),
+        gnu_alias("__typeof__", K::Typeof),
+        gnu_alias("__typeof_unqual", K::TypeofUnqual),
+        gnu_alias("__typeof_unqual__", K::TypeofUnqual),
+        gnu_alias("__attribute", K::Attribute),
+        // Not reserved, so an identifier in strict modes.
+        alias("asm", K::Asm, AliasGate::GnuExtensions, FeatureOrigin::Gnu),
+        alias(
+            "_asm",
+            K::MsAsm,
+            AliasGate::Feature(Feature::MsAsm),
+            Feature::MsAsm.origin(),
+        ),
+    ]
+};
+
+const fn alias_spellings() -> [&'static str; KEYWORD_ALIASES.len()] {
+    let mut spellings = [""; KEYWORD_ALIASES.len()];
+    let mut index = 0;
+    while index < spellings.len() {
+        spellings[index] = KEYWORD_ALIASES[index].spelling;
+        index += 1;
+    }
+    spellings
+}
+
 impl KeywordTokenType {
+    /// Alias spellings occupy the rest of the reserved interner prefix, in
+    /// the order of [`KEYWORD_ALIASES`].
+    pub(crate) const ALIASES: &'static [&'static str] = &alias_spellings();
     /// Contexts reserve this contiguous prefix before interning source text.
     /// Keep this in discriminant order; the constructor and regression test
     /// verify that each spelling has its well-known ID.
@@ -364,17 +652,277 @@ impl KeywordTokenType {
         Self::Bool,
         Self::Complex,
         Self::Imaginary,
+        Self::Alignas,
+        Self::Alignof,
+        Self::Atomic,
+        Self::Generic,
+        Self::Noreturn,
+        Self::StaticAssert,
+        Self::ThreadLocal,
+        Self::BitInt,
+        Self::Decimal32,
+        Self::Decimal64,
+        Self::Decimal128,
+        Self::Constexpr,
+        Self::True,
+        Self::False,
+        Self::Nullptr,
+        Self::Typeof,
+        Self::TypeofUnqual,
+        Self::Countof,
+        Self::Attribute,
+        Self::Asm,
+        Self::Extension,
+        Self::BuiltinVaArg,
+        Self::BuiltinVaStart,
+        Self::BuiltinVaEnd,
+        Self::BuiltinVaCopy,
+        Self::BuiltinOffsetof,
+        Self::BuiltinTypesCompatible,
+        Self::BuiltinChooseExpr,
+        Self::LocalLabel,
+        Self::Int128,
+        Self::AutoType,
+        Self::Real,
+        Self::Imag,
+        Self::Declspec,
+        Self::Int8,
+        Self::Int16,
+        Self::Int32,
+        Self::Int64,
+        Self::Cdecl,
+        Self::Stdcall,
+        Self::Fastcall,
+        Self::Vectorcall,
+        Self::Thiscall,
+        Self::Ptr32,
+        Self::Ptr64,
+        Self::Unaligned,
+        Self::W64,
+        Self::Sptr,
+        Self::Uptr,
+        Self::Forceinline,
+        Self::Try,
+        Self::Except,
+        Self::Finally,
+        Self::Leave,
+        Self::MsAsm,
+        Self::Pragma,
+        Self::Float128,
+        Self::BuiltinConvertVector,
+        Self::BuiltinBitCast,
     ];
+
+    /// Classifies an identifier after preprocessing has finished. It is an
+    /// integer-index lookup and cheap configuration tests: no cache access
+    /// or string comparison is needed for ordinary identifiers.
+    /// C99: a token that could be a keyword or an identifier is a keyword,
+    /// §6.4.2.1p4, p. 51; PDF p. 63. Later/non-ISO keywords are
+    /// extensions; reserved aliases retain their own diagnostic origin.
+    pub(crate) fn classify(
+        id: StringCacheId,
+        configuration: CompilerConfiguration,
+    ) -> Option<KeywordClassification> {
+        let index = id.to_u32().checked_sub(1)? as usize;
+        if let Some(&kind) = Self::ALL.get(index) {
+            // The reserved GNU alias overlaps MSVC's statement introducer.
+            // With MS assembly enabled, its grammar owner selects the origin.
+            if kind == Self::MsAsm {
+                let msvc = configuration.accepts(Feature::MsAsm);
+                return Some(KeywordClassification {
+                    kind:     if msvc { Self::MsAsm } else { Self::Asm },
+                    origin:   if msvc { None } else { Some(FeatureOrigin::Gnu) },
+                    spelling: kind.spelling(),
+                });
+            }
+            let (enabled, origin) = match kind {
+                | Self::Inline => (
+                    configuration.accepts(Feature::Inline),
+                    Some(Feature::Inline.origin()),
+                ),
+                | Self::Restrict => (
+                    configuration.accepts(Feature::Restrict),
+                    Some(Feature::Restrict.origin()),
+                ),
+                | Self::Bool => (true, Some(Feature::Bool.origin())),
+                | Self::Complex => (true, Some(Feature::Complex.origin())),
+                | Self::Imaginary => (true, Some(Feature::Imaginary.origin())),
+                | Self::Alignas => (
+                    configuration.accepts(Feature::Alignas),
+                    Some(Feature::Alignas.origin()),
+                ),
+                | Self::Alignof => (
+                    configuration.accepts(Feature::Alignof),
+                    Some(Feature::Alignof.origin()),
+                ),
+                | Self::Atomic => (
+                    configuration.accepts(Feature::Atomic),
+                    Some(Feature::Atomic.origin()),
+                ),
+                | Self::Generic => (
+                    configuration.accepts(Feature::Generic),
+                    Some(Feature::Generic.origin()),
+                ),
+                | Self::Noreturn => (
+                    configuration.accepts(Feature::Noreturn),
+                    Some(Feature::Noreturn.origin()),
+                ),
+                | Self::StaticAssert => (
+                    configuration.accepts(Feature::StaticAssert),
+                    Some(Feature::StaticAssert.origin()),
+                ),
+                | Self::ThreadLocal => (
+                    configuration.accepts(Feature::ThreadLocal),
+                    Some(Feature::ThreadLocal.origin()),
+                ),
+                | Self::BitInt => (
+                    configuration.accepts(Feature::BitInt),
+                    Some(Feature::BitInt.origin()),
+                ),
+                | Self::Decimal32 | Self::Decimal64 | Self::Decimal128 => (
+                    configuration.accepts(Feature::DecimalTypes),
+                    Some(Feature::DecimalTypes.origin()),
+                ),
+
+                | Self::Constexpr
+                | Self::True
+                | Self::False
+                | Self::Nullptr
+                | Self::TypeofUnqual => (
+                    configuration.accepts(Feature::C23Keywords),
+                    Some(Feature::C23Keywords.origin()),
+                ),
+
+                // Before C23, GNU modes accept GCC's own `typeof`.
+                | Self::Typeof if configuration.accepts(Feature::C23Keywords) =>
+                    (true, Some(Feature::C23Keywords.origin())),
+                | Self::Typeof => (
+                    configuration.gnu_extensions(),
+                    Some(Feature::GnuTypeof.origin()),
+                ),
+
+                | Self::Countof => (
+                    configuration.accepts(Feature::Countof),
+                    Some(Feature::Countof.origin()),
+                ),
+                | Self::Attribute => (
+                    configuration.accepts(Feature::GnuAttribute),
+                    Some(Feature::GnuAttribute.origin()),
+                ),
+                | Self::Asm => (
+                    configuration.accepts(Feature::GnuAsm),
+                    Some(Feature::GnuAsm.origin()),
+                ),
+                | Self::Extension => (
+                    configuration.accepts(Feature::ExtensionMarker),
+                    Some(Feature::ExtensionMarker.origin()),
+                ),
+                | Self::BuiltinTypesCompatible => (
+                    configuration.accepts(Feature::BuiltinTypesCompatible),
+                    Some(Feature::BuiltinTypesCompatible.origin()),
+                ),
+                | Self::BuiltinConvertVector | Self::BuiltinBitCast => (
+                    configuration.accepts(Feature::VectorBuiltins),
+                    Some(Feature::VectorBuiltins.origin()),
+                ),
+                | Self::BuiltinChooseExpr => (
+                    configuration.accepts(Feature::BuiltinChooseExpr),
+                    Some(Feature::BuiltinChooseExpr.origin()),
+                ),
+                | Self::LocalLabel => (
+                    configuration.accepts(Feature::LocalLabels),
+                    Some(Feature::LocalLabels.origin()),
+                ),
+                | Self::Float128 => (
+                    configuration.accepts(Feature::Float128),
+                    Some(Feature::Float128.origin()),
+                ),
+                | Self::Int128 => (
+                    configuration.accepts(Feature::Int128),
+                    Some(Feature::Int128.origin()),
+                ),
+                | Self::AutoType => (
+                    configuration.accepts(Feature::AutoType),
+                    Some(Feature::AutoType.origin()),
+                ),
+                | Self::Real | Self::Imag => (
+                    configuration.accepts(Feature::RealImag),
+                    Some(Feature::RealImag.origin()),
+                ),
+
+                | Self::Declspec => (
+                    configuration.accepts(Feature::MsDeclspec),
+                    Some(Feature::MsDeclspec.origin()),
+                ),
+                | Self::Int8 | Self::Int16 | Self::Int32 | Self::Int64 => (
+                    configuration.accepts(Feature::MsIntTypes),
+                    Some(Feature::MsIntTypes.origin()),
+                ),
+
+                | Self::Cdecl
+                | Self::Stdcall
+                | Self::Fastcall
+                | Self::Vectorcall
+                | Self::Thiscall => (
+                    configuration.accepts(Feature::MsCallingConventions),
+                    Some(Feature::MsCallingConventions.origin()),
+                ),
+
+                | Self::Ptr32
+                | Self::Ptr64
+                | Self::Unaligned
+                | Self::W64
+                | Self::Sptr
+                | Self::Uptr => (
+                    configuration.accepts(Feature::MsTypeQualifiers),
+                    Some(Feature::MsTypeQualifiers.origin()),
+                ),
+
+                | Self::Forceinline => (
+                    configuration.accepts(Feature::MsInline),
+                    Some(Feature::MsInline.origin()),
+                ),
+                | Self::Try | Self::Except | Self::Finally | Self::Leave => (
+                    configuration.accepts(Feature::MsSeh),
+                    Some(Feature::MsSeh.origin()),
+                ),
+
+                | Self::MsAsm => (
+                    configuration.accepts(Feature::MsAsm),
+                    Some(Feature::MsAsm.origin()),
+                ),
+                | Self::Pragma => (
+                    configuration.accepts(Feature::MsPragma),
+                    Some(Feature::MsPragma.origin()),
+                ),
+                | _ => (true, None),
+            };
+            return enabled.then_some(KeywordClassification {
+                kind,
+                origin,
+                spelling: kind.spelling(),
+            });
+        }
+        let alias = KEYWORD_ALIASES.get(index.checked_sub(Self::ALL.len())?)?;
+        let enabled = match alias.gate {
+            | AliasGate::Always => true,
+            | AliasGate::GnuExtensions => configuration.gnu_extensions(),
+            | AliasGate::Feature(feature) => configuration.accepts(feature),
+        };
+        enabled.then_some(KeywordClassification {
+            kind:     alias.kind,
+            origin:   Some(alias.origin),
+            spelling: alias.spelling,
+        })
+    }
 
     pub(crate) const fn cache_id(self) -> StringCacheId {
         StringCacheId::from_u32(self as u32 + 1)
     }
 
-    /// Only identifiers are classified here, after preprocessing has finished.
-    /// No cache access or string comparison is needed for ordinary identifiers.
-    ///
-    /// C99: a token that could be a keyword or an identifier is a keyword,
-    /// §6.4.2.1 paragraph 4, p. 51; PDF p. 63.
+    /// The keyword whose interned spelling is `id`, the inverse of
+    /// [`Self::cache_id`].
+    #[cfg(test)]
     pub(crate) fn from_cache_id(id: StringCacheId) -> Option<Self> {
         Self::ALL.get((id.to_u32() - 1) as usize).copied()
     }
@@ -419,6 +967,65 @@ impl KeywordTokenType {
             | Self::Bool => "_Bool",
             | Self::Complex => "_Complex",
             | Self::Imaginary => "_Imaginary",
+            | Self::Alignas => "_Alignas",
+            | Self::Alignof => "_Alignof",
+            | Self::Atomic => "_Atomic",
+            | Self::Generic => "_Generic",
+            | Self::Noreturn => "_Noreturn",
+            | Self::StaticAssert => "_Static_assert",
+            | Self::ThreadLocal => "_Thread_local",
+            | Self::BitInt => "_BitInt",
+            | Self::Decimal32 => "_Decimal32",
+            | Self::Decimal64 => "_Decimal64",
+            | Self::Decimal128 => "_Decimal128",
+            | Self::Constexpr => "constexpr",
+            | Self::True => "true",
+            | Self::False => "false",
+            | Self::Nullptr => "nullptr",
+            | Self::Typeof => "typeof",
+            | Self::TypeofUnqual => "typeof_unqual",
+            | Self::Countof => "_Countof",
+            | Self::Attribute => "__attribute__",
+            | Self::Asm => "__asm__",
+            | Self::Extension => "__extension__",
+            | Self::BuiltinVaArg => "__builtin_va_arg",
+            | Self::BuiltinVaStart => "__builtin_va_start",
+            | Self::BuiltinVaEnd => "__builtin_va_end",
+            | Self::BuiltinVaCopy => "__builtin_va_copy",
+            | Self::BuiltinOffsetof => "__builtin_offsetof",
+            | Self::BuiltinTypesCompatible => "__builtin_types_compatible_p",
+            | Self::BuiltinChooseExpr => "__builtin_choose_expr",
+            | Self::BuiltinConvertVector => "__builtin_convertvector",
+            | Self::BuiltinBitCast => "__builtin_bit_cast",
+            | Self::LocalLabel => "__label__",
+            | Self::Int128 => "__int128",
+            | Self::Float128 => "__float128",
+            | Self::AutoType => "__auto_type",
+            | Self::Real => "__real__",
+            | Self::Imag => "__imag__",
+            | Self::Declspec => "__declspec",
+            | Self::Int8 => "__int8",
+            | Self::Int16 => "__int16",
+            | Self::Int32 => "__int32",
+            | Self::Int64 => "__int64",
+            | Self::Cdecl => "__cdecl",
+            | Self::Stdcall => "__stdcall",
+            | Self::Fastcall => "__fastcall",
+            | Self::Vectorcall => "__vectorcall",
+            | Self::Thiscall => "__thiscall",
+            | Self::Ptr32 => "__ptr32",
+            | Self::Ptr64 => "__ptr64",
+            | Self::Unaligned => "__unaligned",
+            | Self::W64 => "__w64",
+            | Self::Sptr => "__sptr",
+            | Self::Uptr => "__uptr",
+            | Self::Forceinline => "__forceinline",
+            | Self::Try => "__try",
+            | Self::Except => "__except",
+            | Self::Finally => "__finally",
+            | Self::Leave => "__leave",
+            | Self::MsAsm => "__asm",
+            | Self::Pragma => "__pragma",
         }
     }
 }
@@ -484,7 +1091,14 @@ impl TokenType {
     pub(crate) fn found(self, spelling: Option<&str>) -> impl Display {
         std::fmt::from_fn(move |f| {
             let kind = match self {
-                | Self::Keyword(keyword) => return write!(f, "keyword `{}`", keyword.spelling()),
+                | Self::Keyword(keyword) =>
+                    return write!(
+                        f,
+                        "keyword `{}`",
+                        spelling
+                            .filter(|text| !text.is_empty())
+                            .unwrap_or_else(|| keyword.spelling())
+                    ),
                 | Self::Operator(operator) => return write!(f, "`{}`", operator.spelling()),
                 | Self::Identifier => "identifier",
                 | Self::Integer(_) => "integer constant",
@@ -517,4 +1131,12 @@ impl UnsignedIntegerLiteralType {
             | Self::UnsignedLongLong => "unsigned long long",
         }
     }
+}
+
+/// Classification retains spelling origin independently of the parser kind.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct KeywordClassification {
+    pub(crate) spelling: &'static str,
+    pub(crate) kind:     KeywordTokenType,
+    pub(crate) origin:   Option<FeatureOrigin>,
 }

@@ -1,0 +1,13 @@
+error: declaration does not declare anything
+ --> parser-member-declares-nothing-deny.c:3:13
+  |
+3 | struct S { T; int; int y; };
+  |             ^ this declaration declares a type but no member
+
+error: declaration does not declare anything
+ --> parser-member-declares-nothing-deny.c:3:18
+  |
+3 | struct S { T; int; int y; };
+  |                  ^ this declaration declares a type but no member
+
+2 errors generated.

@@ -1,0 +1,9 @@
+error: `__VA_OPT__` cannot be nested
+ --> pp-nested-va-opt.c:1:29
+  |
+1 | #define V(...) __VA_OPT__(a __VA_OPT__(b))
+  |                             ^^^^^^^^^^ inside another `__VA_OPT__` replacement
+  |
+  = note: C23 §6.10.5.1p3: the pp-tokens of a `__VA_OPT__` replacement shall not contain `__VA_OPT__`; the macro is not defined
+
+1 error generated.

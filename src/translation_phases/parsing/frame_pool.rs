@@ -27,16 +27,27 @@ use super::{
         InitDeclarator,
         InitializerElement,
         ParameterDeclaration,
+        PointerLevel,
         StructDeclaration,
         StructDeclarator,
-        TypeQualifiers,
     },
     expression::{
         CallState,
         ExpressionOperand,
     },
     expression_operators::LanguageExpressionOperator,
+    gnu::{
+        AsmOperand,
+        GnuFrame,
+        OffsetMember,
+    },
     initializer::DesignationState,
+    modern::{
+        GenericAssociation,
+        ModernFrame,
+        SyntaxOperand,
+    },
+    msvc::MsvcFrame,
     parameter_list::ParameterListFrame,
     struct_or_union::StructOrUnionSpecifierFrame,
     syntax::{
@@ -45,7 +56,10 @@ use super::{
     },
 };
 use crate::{
-    translation_phases::SourceVectors,
+    translation_phases::{
+        SourceVectors,
+        preprocessing::OperatorTokenType,
+    },
     util::bump::{
         ArenaVec,
         Bump,
@@ -131,7 +145,7 @@ pub(super) struct FramePools<'tu, 'p> {
     pub(super) source_vectors: VecPool<'p, SourceVectors>,
     pub(super) operands: VecPool<'p, ExpressionOperand<'tu>>,
     pub(super) operators: VecPool<'p, LanguageExpressionOperator<'tu>>,
-    pub(super) pointer_qualifiers: VecPool<'p, TypeQualifiers>,
+    pub(super) pointer_levels: VecPool<'p, PointerLevel<'tu>>,
     pub(super) direct_declarators: VecPool<'p, DirectDeclarator<'tu>>,
     pub(super) init_declarators: VecPool<'p, InitDeclarator<'tu>>,
     pub(super) block_items: VecPool<'p, BlockItem<'tu>>,
@@ -146,6 +160,15 @@ pub(super) struct FramePools<'tu, 'p> {
     pub(super) calls: BoxPool<'p, CallState<'tu, 'p>>,
     /// Designation states, reused with the capacity of their lists.
     pub(super) designations: BoxPool<'p, DesignationState<'tu, 'p>>,
+    pub(super) opaque_tokens: VecPool<'p, crate::translation_phases::preprocessing::Token>,
+    pub(super) asm_operands: VecPool<'p, AsmOperand<'tu>>,
+    pub(super) builtin_operands: VecPool<'p, SyntaxOperand<'tu>>,
+    pub(super) modern_associations: VecPool<'p, GenericAssociation<'tu>>,
+    pub(super) delimiters: VecPool<'p, OperatorTokenType>,
+    pub(super) offset_members: VecPool<'p, OffsetMember<'tu>>,
+    pub(super) gnu_frames: BoxPool<'p, GnuFrame<'tu, 'p>>,
+    pub(super) modern_frames: BoxPool<'p, ModernFrame<'tu, 'p>>,
+    pub(super) msvc_frames: BoxPool<'p, MsvcFrame<'tu, 'p>>,
     pub(super) parameter_lists: BoxPool<'p, ParameterListFrame<'tu, 'p>>,
     pub(super) struct_or_union_specifiers: BoxPool<'p, StructOrUnionSpecifierFrame<'tu, 'p>>,
     /// Flags shared along a chain of parenthesized declarators.
@@ -159,7 +182,7 @@ impl<'tu, 'p> FramePools<'tu, 'p> {
             source_vectors: VecPool::new_in(arena),
             operands: VecPool::new_in(arena),
             operators: VecPool::new_in(arena),
-            pointer_qualifiers: VecPool::new_in(arena),
+            pointer_levels: VecPool::new_in(arena),
             direct_declarators: VecPool::new_in(arena),
             init_declarators: VecPool::new_in(arena),
             block_items: VecPool::new_in(arena),
@@ -173,6 +196,15 @@ impl<'tu, 'p> FramePools<'tu, 'p> {
             calls: BoxPool::new_in(arena),
             designations: BoxPool::new_in(arena),
             parameter_lists: BoxPool::new_in(arena),
+            gnu_frames: BoxPool::new_in(arena),
+            opaque_tokens: VecPool::new_in(arena),
+            asm_operands: VecPool::new_in(arena),
+            builtin_operands: VecPool::new_in(arena),
+            modern_associations: VecPool::new_in(arena),
+            delimiters: VecPool::new_in(arena),
+            offset_members: VecPool::new_in(arena),
+            modern_frames: BoxPool::new_in(arena),
+            msvc_frames: BoxPool::new_in(arena),
             struct_or_union_specifiers: BoxPool::new_in(arena),
             chain_flags: ArenaVec::new_in(arena),
         }
@@ -189,6 +221,21 @@ impl<'tu, 'p> FramePools<'tu, 'p> {
         let arena = self.arena;
         self.designations
             .take(arena, || DesignationState::new_in(arena))
+    }
+
+    pub(super) fn gnu(&mut self, frame: GnuFrame<'tu, 'p>) -> PoolBox<'p, GnuFrame<'tu, 'p>> {
+        self.gnu_frames.boxed(self.arena, frame)
+    }
+
+    pub(super) fn modern(
+        &mut self,
+        frame: ModernFrame<'tu, 'p>,
+    ) -> PoolBox<'p, ModernFrame<'tu, 'p>> {
+        self.modern_frames.boxed(self.arena, frame)
+    }
+
+    pub(super) fn msvc(&mut self, frame: MsvcFrame<'tu, 'p>) -> PoolBox<'p, MsvcFrame<'tu, 'p>> {
+        self.msvc_frames.boxed(self.arena, frame)
     }
 
     pub(super) fn parameter_list(

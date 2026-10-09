@@ -11,6 +11,10 @@
 //! translation limits, and the remaining resource ceilings are
 //! representation bounds only.
 
+use std::cell::Cell;
+
+use rustc_hash::FxBuildHasher;
+
 #[cfg(test)]
 use super::{
     FrameTrace,
@@ -37,6 +41,10 @@ use super::{
         ParseFrame,
         ParseFrameKind,
         ParseValue,
+    },
+    modern::{
+        ModernFrame,
+        ModernKind,
     },
     recovery::{
         DelimiterDepth,
@@ -71,6 +79,7 @@ use crate::{
         GetSeverity,
         GetSourceFileIndex,
         SourcePosition,
+        SourceVector,
         SourceVectors,
         TranslationError,
         preprocessing::{
@@ -85,6 +94,8 @@ use crate::{
     util::{
         arena_list::ArenaList,
         bump::{
+            ArenaMap,
+            ArenaQueue,
             ArenaVec,
             Bump,
         },
@@ -92,7 +103,51 @@ use crate::{
     },
 };
 
+/// Each spelling/provenance pair owns its FIFO of diagnostic occurrences.
+/// Macro replacements can share provenance, so occurrences must not be merged.
+/// C99: §5.1.1.3, p. 11; PDF p. 23. GNU extension markers suppress only
+/// diagnostics in their owning parser frame, without reordering the queue.
+pub(super) type TokenDiagnostics<'tu, 'p> = ArenaMap<
+    'p,
+    (&'tu str, &'p [SourceVector], Option<SourceVector>),
+    ArenaQueue<'p, TokenDiagnostic<'tu>>,
+>;
+
+/// One pending diagnostic that the frame consuming its token may withdraw.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum TokenDiagnostic<'tu> {
+    /// An extension diagnostic, suppressed through its marker.
+    Extension(&'tu Cell<bool>),
+    /// A phase-7 constant-conversion error at its pending-queue position,
+    /// which MSVC assembly withdraws (see
+    /// [`super::msvc::constant_diagnostic`]).
+    Constant(usize),
+}
+
+/// A borrowed lookup keeps temporary context borrows out of stored key
+/// lifetimes.
+#[derive(Hash)]
+struct DiagnosticLookup<'a> {
+    spelling: &'a str,
+    vectors:  &'a [SourceVector],
+    user_end: Option<SourceVector>,
+}
+impl hashbrown::Equivalent<(&str, &[SourceVector], Option<SourceVector>)> for DiagnosticLookup<'_> {
+    fn equivalent(&self, key: &(&str, &[SourceVector], Option<SourceVector>)) -> bool {
+        self.spelling == key.0 && self.vectors == key.1 && self.user_end == key.2
+    }
+}
+
 impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
+    /// Reuses the parser arena's pooled storage for a modern syntax frame.
+    pub(super) fn pooled_modern_frame(&mut self, kind: ModernKind) -> ParseFrame<'tu, 'p> {
+        ParseFrame::Modern(self.pools.modern(ModernFrame::new(
+            self.arena,
+            kind,
+            self.hard_error_count,
+        )))
+    }
+
     /// Preprocesses the whole translation unit, then creates an idle parser
     /// over the result. Every preprocessing diagnostic is pending in
     /// `context` before any parser diagnostic.
@@ -158,6 +213,48 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     }
 
     fn with_upstream(upstream: Upstream, context: &'c mut Context<'tu>, arena: &'p Bump) -> Self {
+        let mut token_diagnostics: TokenDiagnostics<'tu, 'p> =
+            ArenaMap::with_hasher_in(FxBuildHasher, arena);
+        for (index, error) in context.pending_errors.iter().enumerate() {
+            let (spelling, source, occurrence) = match error {
+                | TranslationError::Extension(error) => (
+                    error.spelling(),
+                    error.source_vectors,
+                    TokenDiagnostic::Extension(error.suppressed),
+                ),
+                | TranslationError::Preprocessing(error) => {
+                    let Some(spelling) = super::msvc::constant_diagnostic(&error.error_type) else {
+                        continue;
+                    };
+                    (
+                        spelling,
+                        error.source_vectors,
+                        TokenDiagnostic::Constant(index),
+                    )
+                },
+                | _ => continue,
+            };
+            let vectors =
+                arena.alloc_slice_fill_iter(context.get_source_vectors(source).iter().cloned());
+            token_diagnostics
+                .entry((spelling, &*vectors, context.user_source_end(source)))
+                .or_insert_with(|| ArenaQueue::new_in(arena))
+                .push_back(occurrence);
+        }
+        // Reserved resource-header type is present even without <stdarg.h>.
+        // C99: implementation extension supporting §7.15p3, p. 249; PDF p. 261.
+        let mut scopes = ScopeStack::new_in(arena);
+        scopes.publish(
+            context.string_cache.intern("__builtin_va_list"),
+            super::scope::NameClass::Typedef,
+        );
+        // GNU reserved builtin typedefs (C99 §4p6 extension).
+        for name in ["__int128_t", "__uint128_t"] {
+            scopes.publish(
+                context.string_cache.intern(name),
+                super::scope::NameClass::Typedef,
+            );
+        }
         Self {
             cursor: TokenCursor::new(upstream),
             arena,
@@ -171,13 +268,16 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             syntax: super::SyntaxLog::default(),
             syntax_nodes: 0,
             emitted_roots: RegionVec::new(),
-            scopes: ScopeStack::new_in(arena),
+            scopes,
             label_scopes: LabelScopes::new_in(arena),
             func_name: None,
             switch_scopes: ArenaVec::new_in(arena),
             binding_scan: ArenaVec::new_in(arena),
             recovery: RecoveryState::new_in(arena),
             hard_error_count: 0,
+            pedantic_suppression: 0,
+            token_diagnostics,
+            switch_floor: 0,
             active_frame: ParseFrameKind::ExternalDeclaration,
             has_external_declaration: false,
             reported_empty_translation_unit: false,
@@ -277,6 +377,22 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                     }
                     return None;
                 }
+                // C99 §6.9p1 has no empty external declaration. GNU
+                // extension: a `;` between external declarations, such as one
+                // an empty macro leaves behind, declares nothing. As in Clang,
+                // it keeps the translation unit from being empty.
+                if let Some(token) = self.cursor.current()
+                    && is_operator(Some(token), OperatorTokenType::Semicolon)
+                {
+                    self.extension(
+                        crate::configuration::Feature::ExtraSemicolons,
+                        "extra semicolon outside a function",
+                        token,
+                    );
+                    self.has_external_declaration = true;
+                    self.cursor.consume();
+                    continue;
+                }
                 if self.external_declaration_count >= self.limits.external_declarations {
                     return self.resource_failure(
                         ParserResource::ExternalDeclarations,
@@ -358,7 +474,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
 
             match action {
                 | ParseAction::Consume =>
-                    if token.is_some() {
+                    if let Some(token) = token {
+                        self.suppress_token_diagnostic(token);
                         self.cursor.consume();
                     } else {
                         self.report(
@@ -401,6 +518,60 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                         .merge_recovered_sources(self.context, recovered_source_vectors);
                 },
             }
+        }
+    }
+
+    /// Advances the diagnostic occurrence cursor even on recovery skips.
+    fn suppress_token_diagnostic(&mut self, token: Token) {
+        if self.token_diagnostics.is_empty() {
+            return;
+        }
+        match token.kind {
+            | TokenType::Keyword(_) => {
+                self.suppress_diagnostic_occurrence(token, None);
+            },
+            | TokenType::Integer(_) | TokenType::Float(_) => {
+                for spelling in [
+                    "imaginary constant",
+                    "long long integer constant",
+                    "hexadecimal floating constant",
+                    "binary integer constant",
+                ]
+                .into_iter()
+                .chain(super::msvc::CONSTANT_DIAGNOSTICS)
+                {
+                    self.suppress_diagnostic_occurrence(token, Some(spelling));
+                }
+            },
+            | _ => {},
+        }
+    }
+
+    fn suppress_diagnostic_occurrence(&mut self, token: Token, spelling: Option<&str>) {
+        let spelling = spelling.unwrap_or_else(|| self.context.string_cache.at(token.contents));
+        let vectors = self.context.get_source_vectors(token.source_vectors);
+        let user_end = self.context.user_source_end(token.source_vectors);
+        // A diagnostic about a macro argument can lack the invocation that
+        // the token carries; the argument's spelling already places it.
+        let occurrence = [user_end, vectors.last().cloned()]
+            .into_iter()
+            .find_map(|user_end| {
+                self.token_diagnostics
+                    .get_mut(&DiagnosticLookup {
+                        spelling,
+                        vectors,
+                        user_end,
+                    })
+                    .and_then(ArenaQueue::pop_front)
+            });
+        match occurrence {
+            | Some(TokenDiagnostic::Extension(suppressed))
+                if self.pedantic_suppression != 0
+                    || matches!(token.kind, TokenType::Keyword(KeywordTokenType::Extension)) =>
+                self.context.suppress_extension(suppressed),
+            | Some(TokenDiagnostic::Constant(index)) if self.active_frame == ParseFrameKind::Msvc =>
+                self.context.withdraw_pending_error(index),
+            | _ => {},
         }
     }
 
@@ -530,6 +701,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         self.scopes.clear_retained_bindings();
         self.label_scopes.exit_all();
         self.switch_scopes.clear();
+        self.switch_floor = 0;
+        self.pedantic_suppression = 0;
         Some(ExternalDeclaration::Error(source_vectors))
     }
 
@@ -557,13 +730,13 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 brackets:    state.brackets,
                 braces:      state.braces,
             };
-            let colon_matches_conditional = token.kind
-                == TokenType::Operator(OperatorTokenType::Colon)
-                && state
-                    .questions
-                    .iter()
-                    .rev()
-                    .any(|question| *question == delimiter_depth);
+            let colon_matches_conditional =
+                matches!(token.kind, TokenType::Operator(OperatorTokenType::Colon))
+                    && state
+                        .questions
+                        .iter()
+                        .rev()
+                        .any(|question| *question == delimiter_depth);
             let at_unambiguous_owning_delimiter = !colon_matches_conditional
                 && recovery_set.kind.stops_before_despite_unbalanced_child(
                     token.kind,
@@ -599,7 +772,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 || consumed_tokens > 0 && stops_at_declaration_after_malformed_prefix)
                 && at_top_level
                 && self.declaration_starter(token)
-                && !(token.kind == TokenType::Identifier
+                && !(matches!(token.kind, TokenType::Identifier)
                     && matches!(
                         state.last_token,
                         Some(TokenType::Operator(
@@ -609,13 +782,13 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             let at_next_k_and_r_identifier =
                 matches!(recovery_set.kind, SynchronizationKind::KAndRParameter)
                     && at_top_level
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                     && !self.scopes.is_typedef(token.contents);
             let at_next_enumerator =
                 matches!(recovery_set.kind, SynchronizationKind::EnumeratorValue)
                     && at_top_level
                     && recovery_set.target == ParseFrameKind::EnumSpecifier
-                    && token.kind == TokenType::Identifier;
+                    && matches!(token.kind, TokenType::Identifier);
             let has_pending_conditional_at_depth = state.questions.contains(&delimiter_depth);
             let at_next_identifier_label =
                 (matches!(
@@ -626,7 +799,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                         && consumed_tokens > 0)
                     && at_top_level
                     && !has_pending_conditional_at_depth
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                     && is_operator(self.cursor.following(), OperatorTokenType::Colon);
             let at_statement_body_brace = (matches!(
                 recovery_set.kind,
@@ -637,14 +810,18 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 recovery_set.kind,
                 SynchronizationKind::BlockDeclaration | SynchronizationKind::ForInitializer
             )) && at_top_level
-                && token.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
-                && (state.last_token
-                    != Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
-                    || !state.last_closed_parenthesis_was_type_name
+                && matches!(
+                    token.kind,
+                    TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                )
+                && (!matches!(
+                    state.last_token,
+                    Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
+                ) || !state.last_closed_parenthesis_was_type_name
                     || state.last_closed_parenthesis_was_sizeof_type_name
                         && self.cursor.following().is_some_and(|following| {
                             is_statement_keyword(following.kind)
-                                || following.kind != TokenType::Identifier
+                                || !matches!(following.kind, TokenType::Identifier)
                                     && self.declaration_starter(following)
                                 || matches!(
                                     following.kind,
@@ -674,12 +851,13 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 break;
             }
 
-            let opens_type_name = token.kind
-                == TokenType::Operator(OperatorTokenType::OpeningParenthesis)
-                && self
-                    .cursor
-                    .following()
-                    .is_some_and(|following| self.declaration_starter(following));
+            let opens_type_name = matches!(
+                token.kind,
+                TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+            ) && self
+                .cursor
+                .following()
+                .is_some_and(|following| self.declaration_starter(following));
             self.recovery.consume(token.kind, opens_type_name);
 
             #[cfg(test)]
@@ -690,6 +868,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 depth,
             });
             self.merge_source(&mut source_vectors, token);
+            self.suppress_token_diagnostic(token);
             self.cursor.consume();
             consumed_tokens += 1;
         }
@@ -744,10 +923,10 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             match token.kind {
                 | TokenType::String(StringTokenType::String(contents)) => self
                     .context
-                    .literal_spelling_in(self.context.tu_arena(), self.arena, contents, false),
+                    .literal_spelling_in(self.context.tu_arena(), self.arena, contents, ""),
                 | TokenType::String(StringTokenType::WideString(contents)) => self
                     .context
-                    .literal_spelling_in(self.context.tu_arena(), self.arena, contents, true),
+                    .literal_spelling_in(self.context.tu_arena(), self.arena, contents, "L"),
                 | _ => self.context.diagnostic_text(
                     self.context
                         .string_cache
@@ -760,6 +939,15 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             | Some(token) => token.source_vectors,
             | None => self.missing_syntax_source(),
         };
+        // Clang's missing-declarations warning remains suppressible in system
+        // headers even when -pedantic-errors promotes it to an error.
+        if matches!(error_type, ParserErrorType::MemberDeclaresNothing)
+            && self
+                .context
+                .withholds(ErrorSeverity::Warning, false, source_vectors)
+        {
+            return;
+        }
         let insertion_point = if error_type.expects_terminating_semicolon() {
             self.semicolon_insertion_point(token)
         } else {
@@ -767,7 +955,14 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         };
         self.context.parser_error(ParserError {
             code: error_type.code(),
-            severity: error_type.severity(),
+            severity: if matches!(error_type, ParserErrorType::MemberDeclaresNothing)
+                && self.context.configuration.extension_policy()
+                    == crate::configuration::ExtensionPolicy::Deny
+            {
+                ErrorSeverity::Error
+            } else {
+                error_type.severity()
+            },
             warning_group,
             frame: self.active_frame,
             expected: error_type.expected_syntax(),
@@ -851,6 +1046,175 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         }));
     }
 
+    /// Reports a syntax feature through the shared mode policy.
+    /// C99: §5.1.1.3, p. 11; PDF p. 23. Later ISO syntax is an extension.
+    pub(super) fn extension(
+        &mut self,
+        feature: crate::configuration::Feature,
+        spelling: &'static str,
+        token: Token,
+    ) {
+        self.extension_source(feature, spelling, token.source_vectors);
+    }
+
+    pub(super) fn extension_source(
+        &mut self,
+        feature: crate::configuration::Feature,
+        spelling: &'static str,
+        source: SourceVectors,
+    ) {
+        if self.pedantic_suppression == 0 {
+            self.context.report_extension(feature, spelling, source);
+        }
+    }
+
+    /// Reports whether the token after any leading GNU `__extension__`
+    /// markers starts a declaration, so `__extension__ x` stays an
+    /// expression.
+    pub(super) fn extension_precedes_declaration(&self) -> bool {
+        let mut offset = 0;
+        let mut token = self.cursor.current();
+        while token
+            .is_some_and(|x| matches!(x.kind, TokenType::Keyword(KeywordTokenType::Extension)))
+        {
+            token = self.cursor.lookahead(offset);
+            offset += 1;
+        }
+        token.is_some_and(|x| self.declaration_starter(x))
+    }
+
+    /// Reports unambiguous C99 grammar absent from the grouped feature table.
+    /// C99: array declarators §6.7.5 paragraph 1, p. 114; PDF p. 126.
+    pub(super) fn c99_syntax_extension(&mut self, spelling: &'static str, token: Token) {
+        if self.pedantic_suppression == 0 {
+            self.context.report_extension_since(
+                spelling,
+                crate::configuration::FeatureOrigin::Standard(crate::configuration::CStandard::C99),
+                token.source_vectors,
+            );
+        }
+    }
+
+    /// Reports whether a declaration, not a statement, follows the attribute
+    /// specifiers (and `__extension__` markers) starting at the current token.
+    pub(super) fn attributes_precede_declaration(&self) -> bool {
+        let mut offset = 0;
+        let mut token = self.cursor.current();
+        loop {
+            let parenthesized = token.is_some_and(|x| {
+                matches!(
+                    x.kind,
+                    TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec)
+                )
+            });
+            let mut depth = 0usize;
+            let mut opened = false;
+            while let Some(current) = token {
+                match current.kind {
+                    | TokenType::Operator(OperatorTokenType::OpeningParenthesis) if parenthesized =>
+                    {
+                        depth += 1;
+                        opened = true;
+                    },
+                    | TokenType::Operator(OperatorTokenType::ClosingParenthesis) if parenthesized =>
+                        depth = depth.saturating_sub(1),
+                    | TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                        if !parenthesized =>
+                    {
+                        depth += 1;
+                        opened = true;
+                    },
+                    | TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                        if !parenthesized =>
+                        depth = depth.saturating_sub(1),
+                    | TokenType::Operator(
+                        OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace,
+                    ) => return false,
+                    | _ => {},
+                }
+                token = self.cursor.lookahead(offset);
+                offset += 1;
+                if opened && depth == 0 {
+                    break;
+                }
+            }
+            let Some(mut current) = token else {
+                return false;
+            };
+            while matches!(
+                current.kind,
+                TokenType::Keyword(KeywordTokenType::Extension)
+            ) {
+                token = self.cursor.lookahead(offset);
+                offset += 1;
+                let Some(next) = token else { return false };
+                current = next;
+            }
+            if matches!(
+                current.kind,
+                TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec)
+            ) || matches!(
+                current.kind,
+                TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+            ) && self.cursor.lookahead(offset).is_some_and(|x| {
+                matches!(
+                    x.kind,
+                    TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                )
+            }) {
+                continue;
+            }
+            return self.declaration_starter(current);
+        }
+    }
+
+    /// Reports whether `token`, the current token, begins an attribute
+    /// specifier: `__attribute__`, `__declspec`, or `[[`.
+    ///
+    /// C23 (N3220): attribute-specifier is §6.7.13.2 paragraph 1,
+    /// pp. 142-143; PDF pp. 155-156. `__attribute__` and `__declspec` are GNU
+    /// and MSVC extensions.
+    pub(super) fn attribute_starter(&self, token: Option<Token>) -> bool {
+        token.is_some_and(|token| Self::attribute_starter_before(token, self.cursor.following()))
+    }
+
+    /// Reports whether `token`, followed by `next`, begins an attribute
+    /// specifier. A `[` starts one only when another `[` follows it.
+    fn attribute_starter_before(token: Token, next: Option<Token>) -> bool {
+        match token.kind {
+            | TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec) => true,
+            | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) =>
+                next.is_some_and(|next| {
+                    matches!(
+                        next.kind,
+                        TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+                    )
+                }),
+            | _ => false,
+        }
+    }
+
+    /// [`Self::attribute_starter_before`] for a token the caller may have
+    /// read by lookahead. The token after a `[` is known only when the `[` is
+    /// the current token or the one following it; at any later position the
+    /// `[` is not taken as an attribute start.
+    fn attribute_starter_in_lookahead(&self, token: Token) -> bool {
+        if !matches!(
+            token.kind,
+            TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+        ) {
+            return Self::attribute_starter_before(token, None);
+        }
+        let next = if Some(token) == self.cursor.current() {
+            self.cursor.following()
+        } else if Some(token) == self.cursor.following() {
+            self.cursor.lookahead(1)
+        } else {
+            None
+        };
+        Self::attribute_starter_before(token, next)
+    }
+
     /// Reports whether `token` can begin declaration specifiers in the current
     /// typedef environment.
     ///
@@ -859,11 +1223,40 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// (§6.7.2, p. 99; PDF p. 111), type qualifiers (§6.7.3, p. 108;
     /// PDF p. 120), and `inline` (§6.7.4, p. 112; PDF p. 124); typedef-name
     /// is a type-specifier under §6.7.2, p. 99; PDF p. 111. `_Imaginary` is
-    /// accepted here so the specifier frame can diagnose it.
+    /// accepted here so the specifier frame can diagnose it. Later-standard
+    /// specifiers, `_Static_assert`, attribute specifiers, and the GNU and
+    /// MSVC specifier keywords also start one; a `[` counts only as described
+    /// on [`Self::attribute_starter_in_lookahead`].
     pub(super) fn declaration_starter(&self, token: Token) -> bool {
         match token.kind {
             | TokenType::Keyword(
-                KeywordTokenType::Auto
+                KeywordTokenType::Alignas
+                | KeywordTokenType::Atomic
+                | KeywordTokenType::Noreturn
+                | KeywordTokenType::ThreadLocal
+                | KeywordTokenType::BitInt
+                | KeywordTokenType::Decimal32
+                | KeywordTokenType::Decimal64
+                | KeywordTokenType::Decimal128
+                | KeywordTokenType::Constexpr
+                | KeywordTokenType::Int128
+                | KeywordTokenType::Float128
+                | KeywordTokenType::Int8
+                | KeywordTokenType::Int16
+                | KeywordTokenType::Int32
+                | KeywordTokenType::Int64
+                | KeywordTokenType::Ptr32
+                | KeywordTokenType::Ptr64
+                | KeywordTokenType::Unaligned
+                | KeywordTokenType::W64
+                | KeywordTokenType::Sptr
+                | KeywordTokenType::Uptr
+                | KeywordTokenType::AutoType
+                | KeywordTokenType::Extension
+                | KeywordTokenType::Typeof
+                | KeywordTokenType::TypeofUnqual
+                | KeywordTokenType::StaticAssert
+                | KeywordTokenType::Auto
                 | KeywordTokenType::Char
                 | KeywordTokenType::Complex
                 | KeywordTokenType::Const
@@ -873,6 +1266,12 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Float
                 | KeywordTokenType::Imaginary
                 | KeywordTokenType::Inline
+                | KeywordTokenType::Forceinline
+                | KeywordTokenType::Cdecl
+                | KeywordTokenType::Stdcall
+                | KeywordTokenType::Fastcall
+                | KeywordTokenType::Vectorcall
+                | KeywordTokenType::Thiscall
                 | KeywordTokenType::Int
                 | KeywordTokenType::Long
                 | KeywordTokenType::Register
@@ -889,7 +1288,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Bool,
             ) => true,
             | TokenType::Identifier => self.scopes.is_typedef(token.contents),
-            | _ => false,
+            | _ => self.attribute_starter_in_lookahead(token),
         }
     }
 
@@ -902,7 +1301,28 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     pub(super) fn type_name_starter(&self, token: Token) -> bool {
         match token.kind {
             | TokenType::Keyword(
-                KeywordTokenType::Char
+                KeywordTokenType::Alignas
+                | KeywordTokenType::Atomic
+                | KeywordTokenType::BitInt
+                | KeywordTokenType::Decimal32
+                | KeywordTokenType::Decimal64
+                | KeywordTokenType::Decimal128
+                | KeywordTokenType::Int128
+                | KeywordTokenType::Float128
+                | KeywordTokenType::Int8
+                | KeywordTokenType::Int16
+                | KeywordTokenType::Int32
+                | KeywordTokenType::Int64
+                | KeywordTokenType::Ptr32
+                | KeywordTokenType::Ptr64
+                | KeywordTokenType::Unaligned
+                | KeywordTokenType::W64
+                | KeywordTokenType::Sptr
+                | KeywordTokenType::Uptr
+                | KeywordTokenType::AutoType
+                | KeywordTokenType::Typeof
+                | KeywordTokenType::TypeofUnqual
+                | KeywordTokenType::Char
                 | KeywordTokenType::Complex
                 | KeywordTokenType::Const
                 | KeywordTokenType::Double
@@ -922,13 +1342,17 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Bool,
             ) => true,
             | TokenType::Identifier => self.scopes.is_typedef(token.contents),
-            | _ => false,
+            | _ => self.attribute_starter_in_lookahead(token),
         }
     }
 
     pub(super) fn declaration_recovery_starts_here(&mut self, token: Token) -> bool {
+        if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Extension)) {
+            return self.extension_precedes_declaration();
+        }
         self.declaration_starter(token)
-            && (token.kind != TokenType::Identifier || self.typedef_name_continues_specifiers())
+            && (!matches!(token.kind, TokenType::Identifier)
+                || self.typedef_name_continues_specifiers())
     }
 
     /// Returns whether the declaration starting at the current token
@@ -990,7 +1414,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         let Some(following) = self.cursor.following() else {
             return false;
         };
-        following.kind == TokenType::Identifier
+        matches!(following.kind, TokenType::Identifier)
             || is_operator(Some(following), OperatorTokenType::Asterisk)
             || self.parenthesized_declarator_follows_typedef()
             || self.declaration_starter(following)
@@ -1050,11 +1474,16 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     fn expression_children_recovered(kind: &ExpressionType<'tu>) -> bool {
         let expression_recovered = |expression: &Expression<'_>| expression.recovered;
         match kind {
+            | ExpressionType::StatementExpression(x) => x.recovered,
+            | ExpressionType::Builtin(x) => x.recovered,
+            | ExpressionType::OmittedConditional(x) =>
+                x.condition_expression.recovered || x.else_expression.recovered,
             | ExpressionType::Parenthesized { expression }
             | ExpressionType::Unary {
                 operand_expression: expression,
                 ..
             }
+            | ExpressionType::AlignofExpr(expression)
             | ExpressionType::SizeofExpr(expression) => expression_recovered(expression),
             | ExpressionType::Conditional(ConditionalExpression {
                 condition_expression,
@@ -1087,12 +1516,28 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 type_name,
                 initializer,
             } => type_name.recovered || initializer.recovered,
-            | ExpressionType::SizeofType(type_name) => type_name.recovered,
+            | ExpressionType::SizeofType(type_name) | ExpressionType::AlignofType(type_name) =>
+                type_name.recovered,
+            | ExpressionType::Countof(operand) => match operand {
+                | super::modern::SyntaxOperand::Type(x) => x.recovered,
+                | super::modern::SyntaxOperand::Expression(x) => x.recovered,
+            },
+            | ExpressionType::Generic(selection) =>
+                (match selection.controlling {
+                    | super::modern::SyntaxOperand::Type(x) => x.recovered,
+                    | super::modern::SyntaxOperand::Expression(x) => x.recovered,
+                }) || selection
+                    .associations
+                    .iter()
+                    .any(|x| x.expression.recovered || x.type_name.is_some_and(|x| x.recovered)),
             | ExpressionType::Cast {
                 target_type,
                 operand_expression,
             } => target_type.recovered || expression_recovered(operand_expression),
             | ExpressionType::Error => true,
+            | ExpressionType::LabelAddress(_)
+            | ExpressionType::Boolean(_)
+            | ExpressionType::Nullptr
             | ExpressionType::Identifier(..)
             | ExpressionType::Constant(..)
             | ExpressionType::StringLiteral(..) => false,

@@ -17,8 +17,8 @@
 === "#define A F\n#define F(x) x\nA(yes)\n"
 <test>:3:3: identifier `yes` [SourceVector { index: 29, column: 3, line: 3, source_file_index: 0, length: 3 }]
 === "#line 10 \"logical.c\"\n__FILE__ __LINE__\n"
-logical.c:10:1: string literal "logical.c" [SourceVector { index: 21, column: 1, line: 10, source_file_index: 1, length: 8 }]
-logical.c:10:10: integer constant `10` = 10 (int) [SourceVector { index: 30, column: 10, line: 10, source_file_index: 1, length: 8 }]
+logical.c:10:1: string literal "logical.c" [SourceVector { index: 21, column: 1, line: 10, source_file_index: 2, length: 8 }]
+logical.c:10:10: integer constant `10` = 10 (int) [SourceVector { index: 30, column: 10, line: 10, source_file_index: 2, length: 8 }]
 === "#if (1)\nyes\n#endif\n"
 <test>:2:1: identifier `yes` [SourceVector { index: 8, column: 1, line: 2, source_file_index: 0, length: 3 }]
 === "#if (1 ? -1 : 0U) > 0\nyes\n#endif\n"
@@ -56,6 +56,33 @@ error: invalid hexadecimal integer constant `0xg`
 <test>:3:7: identifier `value0` [SourceVector { index: 55, column: 7, line: 3, source_file_index: 0, length: 5 }, SourceVector { index: 39, column: 18, line: 2, source_file_index: 0, length: 1 }]
 <test>:3:3: keyword `int` [SourceVector { index: 51, column: 3, line: 3, source_file_index: 0, length: 3 }]
 <test>:3:7: identifier `value1` [SourceVector { index: 55, column: 7, line: 3, source_file_index: 0, length: 5 }, SourceVector { index: 46, column: 25, line: 2, source_file_index: 0, length: 1 }]
+=== "#define J(a,b,c) a##b##c\nJ(x,_,y) J(m n,o,p q) J(,,z) J(.,.,.)\n"
+[SourceVector { index: 56, column: 32, line: 2, source_file_index: 0, length: 1 }, SourceVector { index: 58, column: 34, line: 2, source_file_index: 0, length: 1 }]
+error: pasting `.` and `.` does not give a valid token
+ --> <test>:2:32
+  |
+2 | J(x,_,y) J(m n,o,p q) J(,,z) J(.,.,.)
+  |                                ^^^ invalid token paste
+  |
+  = note: C99 §6.10.3.3p3: the result of `##` must be a single valid preprocessing token
+
+
+[SourceVector { index: 56, column: 32, line: 2, source_file_index: 0, length: 1 }, SourceVector { index: 60, column: 36, line: 2, source_file_index: 0, length: 1 }]
+error: pasting `.` and `.` does not give a valid token
+ --> <test>:2:32
+  |
+2 | J(x,_,y) J(m n,o,p q) J(,,z) J(.,.,.)
+  |                                ^^^^^ invalid token paste
+  |
+  = note: C99 §6.10.3.3p3: the result of `##` must be a single valid preprocessing token
+
+
+<test>:2:3: identifier `x_y` [SourceVector { index: 27, column: 3, line: 2, source_file_index: 0, length: 1 }, SourceVector { index: 29, column: 5, line: 2, source_file_index: 0, length: 1 }, SourceVector { index: 31, column: 7, line: 2, source_file_index: 0, length: 1 }]
+<test>:2:12: identifier `m` [SourceVector { index: 36, column: 12, line: 2, source_file_index: 0, length: 1 }]
+<test>:2:14: identifier `nop` [SourceVector { index: 38, column: 14, line: 2, source_file_index: 0, length: 1 }, SourceVector { index: 40, column: 16, line: 2, source_file_index: 0, length: 1 }, SourceVector { index: 42, column: 18, line: 2, source_file_index: 0, length: 1 }]
+<test>:2:20: identifier `q` [SourceVector { index: 44, column: 20, line: 2, source_file_index: 0, length: 1 }]
+<test>:2:27: identifier `z` [SourceVector { index: 51, column: 27, line: 2, source_file_index: 0, length: 1 }]
+<test>:2:32: punctuator `.` [SourceVector { index: 56, column: 32, line: 2, source_file_index: 0, length: 1 }]
 === "int sentinel; /* unterminated\n"
 [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 16 }]
 error: unterminated block comment

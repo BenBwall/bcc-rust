@@ -39,11 +39,11 @@ error: pasting `"s"` and `'c'` does not give a valid token
 === <test> "#if 0\n#include <a'b.h>\n\"unterminated\n#else\nok\n#endif\n"
 <test>:5:1: identifier `ok` [SourceVector { index: 43, column: 1, line: 5, source_file_index: 0, length: 2 }]
 === <test> "#line 100 \"renamed.c\"\n__LINE__ __FILE__ x\n"
-renamed.c:100:1: integer constant `100` = 100 (int) [SourceVector { index: 22, column: 1, line: 100, source_file_index: 1, length: 8 }]
-renamed.c:100:10: string literal "renamed.c" [SourceVector { index: 31, column: 10, line: 100, source_file_index: 1, length: 8 }]
-renamed.c:100:19: identifier `x` [SourceVector { index: 40, column: 19, line: 100, source_file_index: 1, length: 1 }]
+renamed.c:100:1: integer constant `100` = 100 (int) [SourceVector { index: 22, column: 1, line: 100, source_file_index: 2, length: 8 }]
+renamed.c:100:10: string literal "renamed.c" [SourceVector { index: 31, column: 10, line: 100, source_file_index: 2, length: 8 }]
+renamed.c:100:19: identifier `x` [SourceVector { index: 40, column: 19, line: 100, source_file_index: 2, length: 1 }]
 === <test> "_Pragma(\"once\") after\n"
-diagnostic [SourceVector { index: 0, column: 1, line: 1, source_file_index: 1, length: 4 }]
+diagnostic [SourceVector { index: 0, column: 1, line: 1, source_file_index: 2, length: 4 }]
 warning: `#pragma once` in main file
  --> <pragma string>:1:1
   |
@@ -64,7 +64,8 @@ error: cannot find header `stdio.h`
 1 | #define H <stdio.h>
   |           ^^^^^^^^^ not found in any search directory
   |
-  = note: the path is absolute; no directory was searched
+  = note: searched these directories:
+            <built-in>
   = help: add the directory containing it with `--isystem <dir>`
 
 

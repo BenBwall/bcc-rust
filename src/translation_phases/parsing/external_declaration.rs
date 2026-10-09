@@ -54,7 +54,8 @@ use crate::translation_phases::{
 pub(super) struct ExternalDeclarationFrame {
     /// Current root-frame transition.
     phase:                     ExternalDeclarationPhase,
-    /// Hard-error count at entry, used only to classify the yielded AST.
+    /// Hard-error count at entry, used to classify the yielded AST and handed
+    /// to a function-definition child.
     starting_error_count:      usize,
     /// Pending-diagnostic boundary used to attach root-level recovery context
     /// to the primary diagnostic for this external declaration.
@@ -65,9 +66,10 @@ pub(super) struct ExternalDeclarationFrame {
 ///
 /// C99: §6.9, p. 140; PDF p. 152. The phase split is an implementation detail.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum ExternalDeclarationPhase {
+enum ExternalDeclarationPhase {
     /// Push the declaration child without consuming its first token.
     Start,
+    AwaitAsm,
     /// Classify the completed declaration from diagnostics emitted since entry.
     AwaitDeclaration,
     /// Receive a function definition selected from the completed declaration
@@ -91,7 +93,36 @@ impl<'tu, 'p> ExternalDeclarationFrame {
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
         match self.phase {
+            | ExternalDeclarationPhase::AwaitAsm => {
+                let Some(ParseValue::Gnu(super::gnu::GnuValue::Asm(asm))) = returned else {
+                    panic!("file asm child protocol");
+                };
+                ParseAction::Reduce(ParseValue::ExternalDeclaration(ExternalDeclaration::Asm(
+                    asm,
+                )))
+            },
             | ExternalDeclarationPhase::Start => {
+                if token.is_some_and(|x| {
+                    matches!(
+                        x.kind,
+                        crate::translation_phases::preprocessing::TokenType::Keyword(
+                            crate::translation_phases::preprocessing::KeywordTokenType::Asm,
+                        )
+                    ) || matches!(
+                        x.kind,
+                        crate::translation_phases::preprocessing::TokenType::Keyword(
+                            crate::translation_phases::preprocessing::KeywordTokenType::MsAsm,
+                        )
+                    ) && x.contents
+                        == crate::translation_phases::preprocessing::KeywordTokenType::MsAsm
+                            .cache_id()
+                }) {
+                    self.phase = ExternalDeclarationPhase::AwaitAsm;
+                    return super::gnu::GnuFrame::push(
+                        parser,
+                        super::gnu::GnuKind::Asm { label: false },
+                    );
+                }
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"

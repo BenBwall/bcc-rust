@@ -1,0 +1,9 @@
+warning: qualifiers on a function type are ignored
+ --> sema-function-qualifier.c:2:1
+  |
+2 | const Function f;
+  | ^^^^^^^^^^^^^^ function type qualifiers are ignored
+  |
+  = note: C99 §6.7.3p8: qualifying a function type has undefined behavior
+
+1 warning generated.

@@ -7,10 +7,12 @@ use proptest::prelude::*;
 use super::{
     Parsed,
     parser_errors,
+    syntax_tree,
     with_parse,
     with_parsed,
 };
 use crate::{
+    configuration::CompilerConfiguration,
     translation_phases::{
         Context,
         GetSourceVectors,
@@ -30,32 +32,22 @@ use crate::{
 
 #[test]
 fn complete_syntax_tree_accepts_parser_issued_empty_lists() {
-    let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
-    let preprocess_arena = crate::util::bump::Bump::new();
-    let parse_arena = crate::util::bump::Bump::new();
-    let preprocessor = Preprocessor::new(
-        &preprocess_arena,
-        &mut context,
-        PathBuf::from("<empty-syntax-lists-test>").into_boxed_path(),
+    with_parsed(
         "int f(); int (*pointer)(); int g(void);\n",
-        SharedVec::default(),
-        SharedVec::default(),
+        |unit, context| {
+            assert_eq!(unit.external_declarations().len(), 3);
+            assert!(
+                context
+                    .take_pending_errors()
+                    .iter()
+                    .all(|error| { !matches!(error, TranslationError::Parsing(_)) })
+            );
+            let output = unit.inspect(context.tu_arena(), context, InspectionOptions::default());
+            for name in ["f", "pointer", "g"] {
+                assert!(output.contains(&format!("declarator {name}")), "{output}");
+            }
+        },
     );
-
-    let unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
-
-    assert_eq!(unit.external_declarations().len(), 3);
-    assert!(
-        context
-            .take_pending_errors()
-            .iter()
-            .all(|error| { !matches!(error, TranslationError::Parsing(_)) })
-    );
-    let output = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
-    for name in ["f", "pointer", "g"] {
-        assert!(output.contains(&format!("declarator {name}")), "{output}");
-    }
 }
 
 #[test]
@@ -162,7 +154,8 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
     assert!(
         include_vectors
             .iter()
-            .all(|vector| vector.source_file_index == 1)
+            .all(|vector| context.get_source_file(vector.source_file_index)
+                == include_directory.join("identifier-provenance.h"))
     );
     assert_eq!((include_vectors[0].line, include_vectors[0].column), (1, 5));
 
@@ -190,22 +183,11 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
 
 #[test]
 fn deterministic_inspection_uses_spellings_and_marks_recovery() {
-    let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
-    let source = "int good = 1; } int after;\n";
-    let preprocess_arena = crate::util::bump::Bump::new();
-    let parse_arena = crate::util::bump::Bump::new();
-    let preprocessor = Preprocessor::new(
-        &preprocess_arena,
-        &mut context,
-        PathBuf::from("<inspection-test>").into_boxed_path(),
-        source,
-        SharedVec::default(),
-        SharedVec::default(),
-    );
-    let unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
-    let first = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
-    let second = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
+    let (first, second) = with_parsed("int good = 1; } int after;\n", |unit, context| {
+        let first = unit.inspect(context.tu_arena(), context, InspectionOptions::default());
+        let second = unit.inspect(context.tu_arena(), context, InspectionOptions::default());
+        (first.to_owned(), second.to_owned())
+    });
 
     assert_eq!(first, second);
     let good = first.find("declarator good").expect("good declaration");
@@ -220,21 +202,11 @@ fn deterministic_inspection_uses_spellings_and_marks_recovery() {
 
 #[test]
 fn inspection_traverses_declarators_tags_parameters_and_designations() {
-    let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
-    let source = "struct S { int member : 3; }; int values[2] = { [1] = 7 }; int f(int arg);\n";
-    let preprocess_arena = crate::util::bump::Bump::new();
-    let parse_arena = crate::util::bump::Bump::new();
-    let preprocessor = Preprocessor::new(
-        &preprocess_arena,
-        &mut context,
-        PathBuf::from("<inspection-shapes-test>").into_boxed_path(),
-        source,
-        SharedVec::default(),
-        SharedVec::default(),
+    let output = syntax_tree(
+        "struct S { int member : 3; }; int values[2] = { [1] = 7 }; int f(int arg);\n",
+        CompilerConfiguration::default(),
+        InspectionOptions::default(),
     );
-    let unit = Parser::new(preprocessor, &mut context, &parse_arena).parse_translation_unit();
-    let output = unit.inspect(context.tu_arena(), &context, InspectionOptions::default());
 
     for expected in [
         "struct S",
@@ -250,23 +222,9 @@ fn inspection_traverses_declarators_tags_parameters_and_designations() {
         assert!(output.contains(expected), "missing {expected:?}:\n{output}");
     }
 
-    let tu = crate::util::bump::Bump::new();
-    let mut multi_context = Context::new(&tu);
-    let preprocess_arena = crate::util::bump::Bump::new();
-    let parse_arena = crate::util::bump::Bump::new();
-    let preprocessor = Preprocessor::new(
-        &preprocess_arena,
-        &mut multi_context,
-        PathBuf::from("<inspection-order-test>").into_boxed_path(),
+    let multi = syntax_tree(
         "int a = 1, b = 2;\n",
-        SharedVec::default(),
-        SharedVec::default(),
-    );
-    let multi =
-        Parser::new(preprocessor, &mut multi_context, &parse_arena).parse_translation_unit();
-    let multi = multi.inspect(
-        multi_context.tu_arena(),
-        &multi_context,
+        CompilerConfiguration::default(),
         InspectionOptions::default(),
     );
     let a = multi.find("declarator a").expect("first declarator");

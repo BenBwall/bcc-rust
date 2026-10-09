@@ -1,0 +1,9 @@
+error: invalid operand or target type for cast
+ --> sema2-cast.c:1:34
+  |
+1 | struct S {int x;}; void f(void) {(struct S)1;}
+  |                                  ^^^^^^^^^^ invalid conversion
+  |
+  = note: C99 §6.5.4p2-4: casts require scalar operands and targets except conversion to void; floating and pointer types cannot be interconverted
+
+1 error generated.

@@ -16,6 +16,7 @@
 
 use std::{
     ffi::OsStr,
+    fmt::Write as _,
     ops::ControlFlow,
     path::{
         Component,
@@ -25,6 +26,7 @@ use std::{
 
 use super::{
     Expander,
+    MacroDeprecation,
     driver::{
         TokenizerFrame,
         TokenizerFrameType,
@@ -41,14 +43,16 @@ use super::{
 };
 use crate::{
     configuration::{
-        CStandard,
         ExtensionPolicy,
+        Feature,
     },
     translation_phases::{
         Context,
+        ErrorSeverity,
         SourcePosition,
         SourceVectors,
         StrExt,
+        TranslationError,
         TranslationPhase,
         preprocessor_tokenizer::{
             LogicalCharacter,
@@ -80,28 +84,46 @@ use crate::{
 /// p. 33.
 const MAX_INCLUDE_NESTING: usize = 200;
 
-/// Compares one position of two macro definitions under C99 §6.10.3p2: the
-/// tokens must be spelled identically, while any two whitespace separations
-/// are equivalent and a line end matches the end of input.
+/// Whether `name` is a macro the implementation predefines beyond the names
+/// of C99 §6.10.8, p. 160; PDF p. 172. §6.10.8 paragraph 4 does not protect
+/// it, so `#undef` and `#define` apply as to any macro, as in GCC.
+fn implementation_macro(name: &str) -> bool {
+    name == "__STRICT_ANSI__"
+}
+
+/// Reads the next token of a macro definition's replacement list from
+/// `source`, with whether whitespace separates it from the token before it.
+/// Returns `None` at the line's end, so trailing whitespace is not part of
+/// the list.
 ///
-/// C99: §6.10.3 paragraphs 1-2, p. 151; PDF p. 163.
+/// C99: §6.10.3 paragraphs 1 and 7, p. 151; PDF p. 163. A comment
+/// is already part of the whitespace token that replaces it (§5.1.1.2
+/// paragraph 1, phase 3, p. 10; PDF p. 22).
+fn next_replacement_token(
+    context: &mut Context<'_>,
+    source: &mut TokenSource<'_>,
+) -> Option<(PreprocessorToken, bool)> {
+    let mut separated = false;
+    loop {
+        match source.next_item(context)? {
+            | token if token.kind == PreprocessorTokenType::Whitespace => separated = true,
+            | token if token.kind == PreprocessorTokenType::Newline => return None,
+            | token => return Some((token, separated)),
+        }
+    }
+}
+
+/// Whether two replacement-list tokens are the same preprocessing token with
+/// the same spelling.
+///
+/// C99: §6.10.3 paragraph 1, p. 151; PDF p. 163.
 fn same_replacement_token(
     context: &Context<'_>,
-    old: Option<&PreprocessorToken>,
-    new: Option<&PreprocessorToken>,
+    old: &PreprocessorToken,
+    new: &PreprocessorToken,
 ) -> bool {
-    let ends = |token: Option<&PreprocessorToken>| {
-        token.is_none_or(|token| token.kind == PreprocessorTokenType::Newline)
-    };
-    match (old, new) {
-        | _ if ends(old) && ends(new) => true,
-        | (Some(old), Some(new)) =>
-            old.kind == new.kind
-                && (old.kind == PreprocessorTokenType::Whitespace
-                    || context.string_cache.at(old.contents)
-                        == context.string_cache.at(new.contents)),
-        | _ => false,
-    }
+    old.kind == new.kind
+        && context.string_cache.at(old.contents) == context.string_cache.at(new.contents)
 }
 
 /// How an `#include` operand is written, judged from its first token.
@@ -288,15 +310,7 @@ fn header_name_from_source<'a>(
     }
 }
 
-#[expect(
-    clippy::needless_continue,
-    reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
-)]
-#[expect(
-    clippy::while_let_loop,
-    reason = "The macro-parameter loop has multiple semantic exit conditions."
-)]
-impl<'x> Expander<'_, '_, '_, 'x> {
+impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     /// Executes the directive that `token`, a `#`, introduces.
     ///
     /// C99: §6.10 paragraphs 1-3, pp. 145-147; PDF pp. 157-159. A `#` begins
@@ -320,8 +334,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         match directive.kind {
             // Null directive (C99 §6.10.7p1).
             | PreprocessorTokenType::Newline => {
-                self.last_was_newline = true;
-                self.current_is_newline = true;
+                self.resume_at_line_start();
                 return;
             },
             // This is the general case. We handle it in the function body.
@@ -343,19 +356,78 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             | "ifdef" => self.parse_ifdef_directive(directive),
             | "ifndef" => self.parse_ifndef_directive(directive),
             | "elif" => self.parse_elif_directive(directive),
+            | name @ ("elifdef" | "elifndef")
+                if self.context.configuration.accepts(Feature::Elifdef) =>
+            {
+                self.context.report_extension(
+                    Feature::Elifdef,
+                    if name == "elifdef" {
+                        "#elifdef"
+                    } else {
+                        "#elifndef"
+                    },
+                    directive.source_vectors,
+                );
+                self.parse_elif_directive(directive);
+            },
             | "else" => self.parse_else_directive(directive),
             | "endif" => self.parse_endif_directive(directive),
             | "include" => self.parse_include_directive(directive),
-            | "define" => self.parse_define_directive(directive),
-            | "undef" => self.parse_undef_directive(directive),
-            | "line" => self.parse_line_directive(directive),
-            | "error" => self.parse_error_directive(directive),
-            | "pragma" => {
-                if !self.parse_pragma_directive(directive) {
+            | "include_next" => {
+                self.context.report_extension(
+                    Feature::IncludeNext,
+                    "#include_next",
+                    directive.source_vectors,
+                );
+                self.parse_include_directive(directive);
+            },
+            | "embed" if self.context.configuration.accepts(Feature::Embed) =>
+                self.parse_embed_directive(directive),
+            | "ident" | "sccs" => {
+                self.context.report_extension(
+                    Feature::IdentDirective,
+                    "#ident/#sccs",
+                    directive.source_vectors,
+                );
+                let operand = Self::next_ignore_whitespace(&mut self.tokenizer, self.context);
+                if operand.is_none_or(|t| t.kind != PreprocessorTokenType::String) {
+                    self.language_error(
+                        "expected a string literal after #ident/#sccs",
+                        directive.source_vectors,
+                    );
+                }
+                if operand.is_none_or(|t| t.kind != PreprocessorTokenType::Newline) {
                     self.skip_until_newline();
                 }
-                self.last_was_newline = true;
-                self.current_is_newline = true;
+                self.resume_at_line_start();
+            },
+            | "define" => self.parse_define_directive(),
+            | "undef" => self.parse_undef_directive(),
+            | "line" => self.parse_line_directive(),
+            | "error" => self.parse_error_directive(directive),
+            | "warning"
+                if self
+                    .context
+                    .configuration
+                    .accepts(Feature::WarningDirective) =>
+            {
+                self.context.report_extension(
+                    Feature::WarningDirective,
+                    "#warning",
+                    directive.source_vectors,
+                );
+                self.parse_error_directive(directive);
+                self.resume_at_line_start();
+            },
+            | "pragma" => {
+                let from = self
+                    .context
+                    .first_source_vector(directive.source_vectors)
+                    .index;
+                if !self.parse_pragma_directive(from) {
+                    self.skip_until_newline();
+                }
+                self.resume_at_line_start();
             },
             | _ => {
                 self.context.preprocessor_error(PreprocessorError {
@@ -431,20 +503,113 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         unsafe { std::str::from_utf8_unchecked(text) }
     }
 
-    /// Resolves an include name the way GCC and Clang do (C99 §6.10.2p2-3
-    /// leave the places implementation-defined):
-    ///
-    /// 1. `"name"` first looks beside the file containing the directive (for
-    ///    `--input`, whose name has no directory, that is the working
-    ///    directory), then in each `--iquote` directory.
-    /// 2. Both forms then search each `--isystem` directory, `CPATH`, and
-    ///    `C_INCLUDE_PATH`.
+    /// The places a lookup of a header named in `including_file` visits, in
+    /// order, each with its configured entry index (`None` for the including
+    /// file's own directory). A `"…"` name first looks beside the including
+    /// file (the working directory for `--input`, whose name has no
+    /// directory), then in every configured entry; a `<…>` name skips both
+    /// and the `-iquote` entries. An `#include_next` lookup that continues
+    /// after a configured entry passes `start` and visits only the entries
+    /// from it. See [`HeaderSearch`](crate::headers::HeaderSearch) for the
+    /// order of the configured entries.
     ///
     /// The process working directory is never searched implicitly, so the
     /// result depends on the source tree rather than where the compiler runs.
     ///
+    /// C99: the places are implementation-defined, §6.10.2 paragraphs 2-3,
+    /// pp. 149-150; PDF pp. 161-162.
+    pub(super) fn header_search_places(
+        &self,
+        including_file: u32,
+        is_system_header: bool,
+        start: Option<usize>,
+    ) -> impl Iterator<Item = (Option<usize>, &'tu Path)> + Clone + use<'tu> {
+        let local = (start.is_none() && !is_system_header)
+            .then(|| self.context.get_source_file(including_file).parent())
+            .flatten();
+        local.into_iter().map(|directory| (None, directory)).chain(
+            self.context
+                .configured_include_directories(is_system_header, start)
+                .map(|(index, directory)| (Some(index), directory)),
+        )
+    }
+
+    /// The configured search entry of the innermost open source file, which
+    /// `#include_next` continues after. Each opening carries its own entry,
+    /// so one file reached through different entries continues from each.
+    /// As in Clang, a header found beside its includer takes the includer's
+    /// entry; the primary source file, a header found by an absolute path,
+    /// and one found beside either have none.
+    pub(super) fn including_search_index(&self) -> Option<usize> {
+        self.tokenizer_stack
+            .iter()
+            .rev()
+            .find_map(|frame| match frame.frame_type {
+                | TokenizerFrameType::SourceFile {
+                    include_search_index,
+                    ..
+                } => Some(include_search_index),
+                | _ => None,
+            })
+            .flatten()
+    }
+
+    /// Where an `#include_next` or `__has_include_next` (`spelling`) lookup
+    /// starts, following Clang: after the configured entry of this opening
+    /// of the current file. With no entry to continue after, in the primary
+    /// source file or in a header with none, it warns and searches exactly
+    /// as `#include` would (`None`).
+    ///
+    /// C99: an extension (§4p6, p. 7; PDF p. 19) over the
+    /// implementation-defined places of §6.10.2 paragraphs 2-3, pp. 149-150;
+    /// PDF pp. 161-162.
+    pub(super) fn include_next_start(
+        &mut self,
+        spelling: &'static str,
+        source_vectors: SourceVectors,
+    ) -> Option<usize> {
+        let error_type = if !self.current_is_header() {
+            PreprocessorErrorType::IncludeNextInPrimarySource(spelling)
+        } else if let Some(index) = self.including_search_index() {
+            return Some(index + 1);
+        } else {
+            PreprocessorErrorType::IncludeNextWithoutSearchEntry(spelling)
+        };
+        self.context.preprocessor_error(PreprocessorError {
+            error_type,
+            source_vectors,
+        });
+        None
+    }
+
+    /// The file `path` names in `directory`, interned, when it exists there.
+    /// The resource directory holds exactly the embedded headers.
+    pub(super) fn probe_header(&mut self, directory: &Path, path: &Path) -> Option<u32> {
+        if directory == Path::new(crate::headers::DIRECTORY) {
+            return crate::headers::text(path)
+                .is_some()
+                .then(|| self.context.intern_builtin_header(path));
+        }
+        // Each candidate is spelled in the expansion arena and taken back
+        // before the next one, so a lookup leaves nothing there.
+        let mut buffer = ArenaVec::new_in(self.scratch);
+        let candidate = join_path(&mut buffer, directory, path);
+        candidate
+            .is_file()
+            .then(|| self.context.intern_source_file(candidate))
+    }
+
+    /// Resolves an include name through [`Self::header_search_places`], as
+    /// GCC and Clang do (C99 §6.10.2p2-3 leave the places
+    /// implementation-defined). An absolute name is used as written.
+    /// `#include_next` passes where its lookup starts, from
+    /// [`Self::include_next_start`].
+    ///
     /// `including_file` is the file containing the directive, captured before
-    /// a macro-expanded operand can switch to its definition's tokenizer.
+    /// a macro-expanded operand can switch to its definition's tokenizer. The
+    /// result pairs the header with the configured entry its own
+    /// `#include_next` continues after: the entry that provided it, or, for
+    /// a header found beside its includer, the includer's, as in Clang.
     ///
     /// A header that cannot be found violates the constraint of C99 §6.10.2
     /// paragraph 1, p. 149; PDF p. 161. A file that `#pragma once` marked,
@@ -456,29 +621,37 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         operand: SourceVectors,
         path: &Path,
         is_system_header: bool,
-    ) -> Option<u32> {
-        let source_file_index = if path.is_absolute() {
+        start: Option<usize>,
+    ) -> Option<(u32, Option<usize>)> {
+        let found = if path.is_absolute() {
             path.is_file()
-                .then(|| self.context.intern_source_file(path))
+                .then(|| (self.context.intern_source_file(path), None))
         } else {
-            // The including file's directory and the quote directories come
-            // first for `"…"` names.
-            let directories = self
-                .context
-                .include_search_directories(including_file, is_system_header);
+            let places = self.header_search_places(including_file, is_system_header, start);
             let mut found = None;
-            for directory in directories.clone() {
-                // Each candidate is spelled in the expansion arena and taken
-                // back before the next one, so a lookup leaves nothing there.
-                let mut buffer = ArenaVec::new_in(self.scratch);
-                let candidate = join_path(&mut buffer, directory, path);
-                if candidate.is_file() {
-                    found = Some(self.context.intern_source_file(candidate));
+            for (search_index, directory) in places.clone() {
+                if let Some(index) = self.probe_header(directory, path) {
+                    // As in GCC, a header found through a system directory
+                    // is a system header, and so is one found beside a
+                    // system header.
+                    let system = if let Some(search_index) = search_index {
+                        self.context.is_system_include_directory(search_index)
+                    } else {
+                        self.context.has_system_header_part(including_file)
+                    };
+                    if system {
+                        self.context.mark_system_header(index, 0);
+                    }
+                    let origin = search_index.or_else(|| self.including_search_index());
+                    found = Some((index, origin));
                     break;
                 }
             }
             if found.is_none() {
-                let searched = self.context.tu_arena().alloc_slice_fill_iter(directories);
+                let searched = self
+                    .context
+                    .tu_arena()
+                    .alloc_slice_fill_iter(places.map(|(_, directory)| directory));
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::HeaderNotFound {
                         name: self.context.diagnostic_text(&path.to_string_lossy()),
@@ -491,7 +664,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             }
             found
         };
-        let Some(source_file_index) = source_file_index else {
+        let Some((source_file_index, search_index)) = found else {
             self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::HeaderNotFound {
                     name: self.context.diagnostic_text(&path.to_string_lossy()),
@@ -505,8 +678,24 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         if self.state.once_set.contains(&source_file_index) {
             None
         } else {
-            Some(source_file_index)
+            Some((source_file_index, search_index))
         }
+    }
+
+    /// `#pragma GCC system_header`: the rest of the current header is a
+    /// system header, as in GCC and Clang. The primary source file never is.
+    /// C99: an implementation-defined pragma, §6.10.6 paragraph 1, p. 159;
+    /// PDF p. 171.
+    fn pragma_system_header(&mut self, source_vectors: SourceVectors, from: u32) {
+        if !self.current_is_header() {
+            self.context.preprocessor_error(PreprocessorError {
+                error_type: PreprocessorErrorType::SystemHeaderPragmaInMainFile,
+                source_vectors,
+            });
+            return;
+        }
+        let file = self.physical_source_file_index();
+        self.context.mark_system_header(file, from);
     }
 
     /// Judges an `#include` operand by its first token as written, without
@@ -538,6 +727,21 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         }
     }
 
+    /// Withdraws the extension diagnostics reported since the first
+    /// `reported` while lexing a written `<...>` header name as tokens: its
+    /// characters form no tokens (C99 §6.4.7p1, p. 64; PDF p. 76), so `$`
+    /// there is no identifier character. Other diagnostics stay.
+    #[cold]
+    fn withdraw_header_name_extensions(&mut self, reported: usize) {
+        let mut kept = ArenaVec::new_in(self.scratch);
+        kept.extend(
+            self.context
+                .split_off_pending_errors(reported)
+                .filter(|error| !matches!(error, TranslationError::Extension(_))),
+        );
+        self.context.append_pending_errors(kept);
+    }
+
     /// Reads a `<…>` operand as written: tokens through the first one that
     /// contains `>`. The name is the source text between the delimiters, so
     /// it keeps the whitespace that the tokens between them do not spell.
@@ -559,7 +763,15 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let mut closing = None;
         let mut extra_after_closing = None;
         loop {
-            let Some(token) = self.tokenizer.next_item(self.context) else {
+            let reported = self.context.pending_error_count();
+            let token = self.tokenizer.next_item(self.context);
+            // A comment before the new-line ends the operand's text.
+            if self.context.pending_error_count() != reported
+                && token.is_some_and(|token| token.kind != PreprocessorTokenType::Newline)
+            {
+                self.withdraw_header_name_extensions(reported);
+            }
+            let Some(token) = token else {
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing include directive",
@@ -582,7 +794,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     .context
                     .source_text(physical)
                     .expect("source files record their text");
-                let characters = logical_characters(self.scratch, source, vector.range());
+                let characters = logical_characters(
+                    self.scratch,
+                    source,
+                    vector.range(),
+                    self.context.configuration.accepts(Feature::Trigraphs),
+                );
                 closing = characters
                     .iter()
                     .position(|character| character.character == '>')
@@ -608,12 +825,21 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 .context
                 .source_text(physical)
                 .expect("source files record their text");
-            let open_index = logical_characters(self.scratch, source, open_vector.range())
-                .first()
-                .expect("the operand starts with `<`")
-                .index;
-            let characters =
-                logical_characters(self.scratch, source, open_index + 1..closing.unwrap_or(end));
+            let open_index = logical_characters(
+                self.scratch,
+                source,
+                open_vector.range(),
+                self.context.configuration.accepts(Feature::Trigraphs),
+            )
+            .first()
+            .expect("the operand starts with `<`")
+            .index;
+            let characters = logical_characters(
+                self.scratch,
+                source,
+                open_index + 1..closing.unwrap_or(end),
+                self.context.configuration.accepts(Feature::Trigraphs),
+            );
             let written = header_name_from_source(self.scratch, source, anchor, &characters, true);
             let unclosed_at = closing
                 .is_none()
@@ -679,14 +905,22 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             line:   vector.line,
             column: vector.column,
         };
-        let allow_backslash =
-            self.context.configuration.extension_policy() != ExtensionPolicy::Deny;
+        let allow_backslash = self.context.configuration.extension_policy()
+            != ExtensionPolicy::Deny
+            || self
+                .context
+                .withholds(ErrorSeverity::Error, true, token.source_vectors);
         let (written, unclosed_at, escaped_closing_quote, trailing) = {
             let source = self
                 .context
                 .source_text(physical)
                 .expect("source files record their text");
-            let characters = logical_characters(self.scratch, source, vector.range());
+            let characters = logical_characters(
+                self.scratch,
+                source,
+                vector.range(),
+                self.context.configuration.accepts(Feature::Trigraphs),
+            );
             // The first character is the opening quote. With the backslash
             // extension, a backslash is ordinary header-name text, so the
             // first following quote closes the header even if phase 3 lexed
@@ -988,23 +1222,30 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         // A backslash in a `"…"` name is undefined by C99 §6.4.7p3; reading
         // it as a path character is an extension (§4p6).
         if let Some(source_vectors) = header.backslash {
-            let policy = match self.context.configuration.standard() {
-                | CStandard::C99 => self.context.configuration.extension_policy(),
-            };
+            let policy = self.context.configuration.extension_policy();
             if policy != ExtensionPolicy::Allow {
                 self.context.preprocessor_error(PreprocessorError {
                     error_type: PreprocessorErrorType::BackslashInQuotedHeaderName(policy),
                     source_vectors,
                 });
             }
-            look_up = policy != ExtensionPolicy::Deny;
+            look_up = policy != ExtensionPolicy::Deny
+                || self
+                    .context
+                    .withholds(ErrorSeverity::Error, true, source_vectors);
         }
+        let start = if self.context.string_cache.at(directive.contents) == "include_next" {
+            self.include_next_start("#include_next", directive.source_vectors)
+        } else {
+            None
+        };
         let header_source_index = if look_up {
             self.find_header_from_path(
                 including_file,
                 header.source_vectors,
                 Path::new(header.name),
                 header.is_system_header,
+                start,
             )
         } else {
             None
@@ -1035,7 +1276,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         {
             self.skip_and_expand_until_newline();
         }
-        let Some(header_source_index) = header_source_index else {
+        let Some((header_source_index, include_search_index)) = header_source_index else {
             return;
         };
         // The main source contributes one frame. Macro frames and headers
@@ -1044,7 +1285,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let source_depth = self
             .tokenizer_stack
             .iter()
-            .filter(|frame| matches!(frame.frame_type, TokenizerFrameType::SourceFile { .. }))
+            .filter(|frame| {
+                matches!(frame.frame_type, TokenizerFrameType::SourceFile {
+                physical_source_file_index, ..
+            } if Some(physical_source_file_index) != self.state.command_line_file)
+            })
             .count();
         if source_depth > MAX_INCLUDE_NESTING {
             self.context.preprocessor_error(PreprocessorError {
@@ -1075,13 +1320,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 .open(self.context, header_source_index, header_string);
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::SourceFile {
-                conditional_base:           self.state.open_conditionals.len(),
+                conditional_base: self.state.open_conditionals.len(),
                 physical_source_file_index: header_source_index,
+                include_search_index,
             },
             tokenizer,
         });
-        self.last_was_newline = true;
-        self.current_is_newline = true;
+        self.resume_at_line_start();
     }
 
     /// Defines an object-like or function-like macro.
@@ -1100,7 +1345,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// list (§6.10.3.3 paragraph 1, p. 154; PDF p. 166) is an error that
     /// discards the definition, as GCC does, so its uses do not expand into
     /// further errors.
-    fn parse_define_directive(&mut self, _directive: PreprocessorToken) {
+    fn parse_define_directive(&mut self) {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             |_, t| t.kind.is_identifier(),
             |_, token| {
@@ -1127,6 +1372,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             | Some(ref v) => match v {
                 | MacroDefinition::FunctionLike { tokenizer, .. }
                 | MacroDefinition::ObjectLike { tokenizer, .. } => Some(tokenizer.clone()),
+                // Not one of the names C99 §6.10.8 predefines, so it may be
+                // redefined, as in GCC.
+                | MacroDefinition::BuiltIn
+                    if implementation_macro(self.context.string_cache.at(name.contents)) =>
+                    None,
                 | MacroDefinition::BuiltIn => {
                     // C99 §6.10.8p4: predefined macro names cannot be
                     // redefined, so the built-in definition stays in effect.
@@ -1137,8 +1387,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         ),
                         source_vectors: name.source_vectors,
                     });
-                    self.skip_until_newline();
-                    return;
+                    if !super::language_features::overridable_gnu_builtin(
+                        self.context.string_cache.at(name.contents),
+                    ) {
+                        self.skip_until_newline();
+                        return;
+                    }
+                    None
                 },
             },
         };
@@ -1180,24 +1435,26 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         // Collected in the expansion arena; the definition keeps a copy.
         let mut argument_names = ArenaVec::new_in(self.scratch);
         let mut is_variadic = false;
+        let mut variadic_alias = None;
         let is_function_like =
             probe.is_some_and(|token| token.kind == PreprocessorTokenType::OpeningParenthesis);
         let (body, first) = if is_function_like {
             if old_definition.as_ref().is_some_and(|d| match d {
                 | MacroDefinition::ObjectLike { .. } => true,
-                | MacroDefinition::FunctionLike { .. } => false,
-                | MacroDefinition::BuiltIn => {
-                    unreachable!("The case where name is a built-in macro is handled above")
-                },
+                // Overridable GNU builtins have no source macro shape.
+                | MacroDefinition::FunctionLike { .. } | MacroDefinition::BuiltIn => false,
             }) {
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:
                         PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(
                             self.context
                                 .diagnostic_text(self.context.string_cache.at(name.contents)),
+                            self.context.configuration.extension_policy(),
                         ),
                     source_vectors: name.source_vectors,
                 });
+                // Already diagnosed; comparing the lists would repeat it.
+                old_tokenizer = None;
             }
             loop {
                 let Some(name_or_ellipsis) = self.expect_token_from_previous_phase::<true>(
@@ -1218,9 +1475,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     },
                     "parsing macro definition",
                 ) else {
+                    is_valid = false;
                     break;
                 };
                 if is_variadic {
+                    is_valid = false;
                     self.context.preprocessor_error(PreprocessorError {
                         error_type:     PreprocessorErrorType::VariadicMacroMustBeLastParameter(
                             self.context
@@ -1252,7 +1511,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     break;
                 }
                 let Some(comma_or_closing_parent) = self.expect_token_from_previous_phase::<true>(
-                    |_, t| t.kind == PreprocessorTokenType::Comma || t.kind == PreprocessorTokenType::ClosingParenthesis,
+                    |_, t| t.kind == PreprocessorTokenType::Comma || t.kind == PreprocessorTokenType::ClosingParenthesis || (t.kind == PreprocessorTokenType::Ellipsis && !is_variadic),
                     |_, token|
                         ControlFlow::Break(PreprocessorError {
                                 error_type:     PreprocessorErrorType::ExpectedCommaOrClosingParenthesisInMacroDefinition(token.kind),
@@ -1261,7 +1520,36 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         )
                     ,
                     "parsing macro definition",
-                ) else {break;};
+                ) else {is_valid = false; break;};
+                if comma_or_closing_parent.kind == PreprocessorTokenType::Ellipsis {
+                    variadic_alias = argument_names.pop();
+                    is_variadic = true;
+                    self.context.report_extension(
+                        Feature::NamedVariadicMacros,
+                        "named variadic macro",
+                        name_or_ellipsis.source_vectors,
+                    );
+                    let Some(closing) = self.expect_token_from_previous_phase::<true>(
+                        |_, t| t.kind == PreprocessorTokenType::ClosingParenthesis,
+                        |this, token| {
+                            ControlFlow::Break(PreprocessorError {
+                                error_type:
+                                    PreprocessorErrorType::VariadicMacroMustBeLastParameter(
+                                        this.context.diagnostic_text(
+                                            this.context.string_cache.at(name.contents),
+                                        ),
+                                    ),
+                                source_vectors: token.source_vectors,
+                            })
+                        },
+                        "parsing named variadic macro",
+                    ) else {
+                        is_valid = false;
+                        break;
+                    };
+                    _ = closing;
+                    break;
+                }
                 if comma_or_closing_parent.kind == PreprocessorTokenType::ClosingParenthesis {
                     break;
                 }
@@ -1269,29 +1557,33 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             (self.tokenizer.clone(), None)
         } else {
             if old_definition.as_ref().is_some_and(|d| match d {
-                | MacroDefinition::ObjectLike { .. } => false,
                 | MacroDefinition::FunctionLike { .. } => true,
-                | MacroDefinition::BuiltIn => {
-                    unreachable!("The case where name is a built-in macro is handled above")
-                },
+                // Overridable GNU builtins have no source macro shape.
+                | MacroDefinition::ObjectLike { .. } | MacroDefinition::BuiltIn => false,
             }) {
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:
                         PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(
                             self.context
                                 .diagnostic_text(self.context.string_cache.at(name.contents)),
+                            self.context.configuration.extension_policy(),
                         ),
                     source_vectors: name.source_vectors,
                 });
+                // Already diagnosed; comparing the lists would repeat it.
+                old_tokenizer = None;
             }
             // The probe already read the replacement list's first token.
             (tokenizer, probe)
         };
-        let (list_is_valid, lists_match) =
-            self.read_replacement_list(first, is_variadic, old_tokenizer.as_mut());
+        let (list_is_valid, lists_match) = self.read_replacement_list(
+            first,
+            is_variadic,
+            is_variadic && variadic_alias.is_none(),
+            old_tokenizer.as_mut(),
+        );
         if !(is_valid && list_is_valid) {
-            self.last_was_newline = true;
-            self.current_is_newline = true;
+            self.resume_at_line_start();
             return;
         }
         // C99 §6.10.3p2: a redefinition repeats the parameters and the
@@ -1300,19 +1592,41 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             | Some(MacroDefinition::FunctionLike {
                 argument_names: old_argument_names,
                 is_variadic: old_is_variadic,
+                variadic_alias: old_alias,
                 ..
             }) if is_function_like =>
-                argument_names[..] == old_argument_names[..] && is_variadic == *old_is_variadic,
+                argument_names[..] == old_argument_names[..]
+                    && is_variadic == *old_is_variadic
+                    && variadic_alias == *old_alias,
             | _ => true,
         };
-        if old_tokenizer.is_some() && !(parameters_match && lists_match) {
+        // A change of form was already reported above; as a warning it is
+        // not folded into this one, so it is not repeated.
+        let form_changed = match &old_definition {
+            | Some(MacroDefinition::ObjectLike { .. }) => is_function_like,
+            | Some(MacroDefinition::FunctionLike { .. }) => !is_function_like,
+            | _ => false,
+        };
+        if old_tokenizer.is_some() && !form_changed && !(parameters_match && lists_match) {
             self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
                     self.context
                         .diagnostic_text(self.context.string_cache.at(name.contents)),
+                    self.context.configuration.extension_policy(),
                 ),
                 source_vectors: name.source_vectors,
             });
+        }
+        if is_variadic {
+            self.context.report_extension(
+                Feature::VariadicMacros,
+                "variadic macro",
+                name.source_vectors,
+            );
+        }
+        if !self.validate_variadic_body(body.clone(), is_variadic) {
+            self.resume_at_line_start();
+            return;
         }
         let tokenizer = self.state.lexed_files.persist(&body);
         let definition = if is_function_like {
@@ -1320,6 +1634,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 tokenizer,
                 argument_names: self.state.arena.alloc_slice_copy(&argument_names),
                 is_variadic,
+                variadic_alias,
             }
         } else {
             MacroDefinition::ObjectLike { tokenizer }
@@ -1328,8 +1643,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             .state
             .macro_definitions
             .insert(name.identifier_id(self.context), definition);
-        self.last_was_newline = true;
-        self.current_is_newline = true;
+        // Clang's implementation-defined pragma mark follows the name across
+        // redefinitions (including C99 §6.10.3p2 identical definitions).
+        // Only #undef ends it, as it ends the definition (§6.10.3.5p1).
+        self.resume_at_line_start();
     }
 
     /// Reads a `#define` directive's replacement list through its new-line,
@@ -1349,30 +1666,52 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         &mut self,
         mut first: Option<PreprocessorToken>,
         is_variadic: bool,
+        allows_va_args: bool,
         mut old: Option<&mut TokenSource<'_>>,
     ) -> (bool, bool) {
         let mut lists_match = true;
         let mut first_operand = None;
         let mut last_operand = None;
         let mut operands = 0usize;
+        // C99 §6.10.3p1: whitespace separations match whatever their amount,
+        // and §6.10.3p7 leaves leading and trailing whitespace out of the
+        // list, so the lists are compared token by token, each with whether
+        // whitespace separates it from the token before it.
+        let mut separated = false;
         loop {
             let next = match first.take() {
                 | Some(token) => Some(token),
                 | None => self.tokenizer.next_item(self.context),
             };
-            if lists_match && let Some(old) = old.as_deref_mut() {
-                let old_next = old.next_item(self.context);
-                lists_match =
-                    same_replacement_token(self.context, old_next.as_ref(), next.as_ref());
-            }
             let Some(token) = next.filter(|token| token.kind != PreprocessorTokenType::Newline)
             else {
+                if lists_match && let Some(old) = old.as_deref_mut() {
+                    lists_match = next_replacement_token(self.context, old).is_none();
+                }
                 break;
             };
             if token.kind == PreprocessorTokenType::Whitespace {
+                separated = true;
                 continue;
             }
-            if !is_variadic {
+            if lists_match && let Some(old) = old.as_deref_mut() {
+                lists_match = next_replacement_token(self.context, old).is_some_and(
+                    |(old_token, old_separated)| {
+                        (operands == 0 || old_separated == separated)
+                            && same_replacement_token(self.context, &old_token, &token)
+                    },
+                );
+            }
+            separated = false;
+            if !is_variadic
+                || (!allows_va_args
+                    && token.kind.is_identifier()
+                    && self
+                        .context
+                        .string_cache
+                        .at(token.identifier_id(self.context))
+                        == "__VA_ARGS__")
+            {
                 self.check_va_args_use(token);
             }
             _ = first_operand.get_or_insert(token);
@@ -1400,22 +1739,27 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         (is_valid, lists_match)
     }
 
-    /// Warns when `token`, read in a `#define` directive, is `__VA_ARGS__`
+    /// Diagnoses when `token`, read in a `#define` directive, is `__VA_ARGS__`
+    /// or `__VA_OPT__`
     /// where it may not appear; the caller allows a variadic macro's
     /// replacement list.
     ///
-    /// C99: §6.10.3 paragraph 5, p. 151; PDF p. 163.
-    fn check_va_args_use(&mut self, token: PreprocessorToken) {
-        if token.kind.is_identifier()
-            && self
+    /// C99: §6.10.3 paragraph 5, p. 151; PDF p. 163. C23 adds
+    /// `__VA_OPT__`, §6.10.5p5, p. 178; PDF p. 191.
+    pub(super) fn check_va_args_use(&mut self, token: PreprocessorToken) {
+        if token.kind.is_identifier() {
+            let policy = self.context.configuration.extension_policy();
+            let error_type = match self
                 .context
                 .string_cache
                 .at(token.identifier_id(self.context))
-                .trim_end_matches('\0')
-                == "__VA_ARGS__"
-        {
+            {
+                | "__VA_ARGS__" => PreprocessorErrorType::VaArgsOutsideVariadicMacro(policy),
+                | "__VA_OPT__" => PreprocessorErrorType::VaOptOutsideVariadicMacro(policy),
+                | _ => return,
+            };
             self.context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::VaArgsOutsideVariadicMacro,
+                error_type,
                 source_vectors: token.source_vectors,
             });
         }
@@ -1427,7 +1771,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// predefined name, which §6.10.8 paragraph 4, p. 161; PDF p. 173
     /// forbids, is diagnosed and leaves the name defined, as a redefinition
     /// does.
-    fn parse_undef_directive(&mut self, _directive: PreprocessorToken) {
+    fn parse_undef_directive(&mut self) {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             |_, t| t.kind.is_identifier(),
             |_, token| {
@@ -1444,10 +1788,12 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             return;
         };
         let name_id = name.identifier_id(self.context);
+        _ = self.state.deprecated_macros.remove(&name_id);
         if matches!(
             self.state.macro_definitions.get(&name_id),
             Some(MacroDefinition::BuiltIn)
-        ) {
+        ) && !implementation_macro(self.context.string_cache.at(name.contents))
+        {
             // C99 §6.10.8p4: predefined macro names cannot be undefined, so
             // the built-in definition stays in effect.
             self.context.preprocessor_error(PreprocessorError {
@@ -1457,6 +1803,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 ),
                 source_vectors: name.source_vectors,
             });
+            if super::language_features::overridable_gnu_builtin(
+                self.context.string_cache.at(name.contents),
+            ) {
+                _ = self.state.macro_definitions.remove(&name_id);
+            }
         } else {
             _ = self.state.macro_definitions.remove(&name_id);
         }
@@ -1477,8 +1828,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         {
             self.skip_until_newline();
         }
-        self.last_was_newline = true;
-        self.current_is_newline = true;
+        self.resume_at_line_start();
     }
 
     /// Sets the presumed line number, and with a string literal the presumed
@@ -1488,9 +1838,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// C99: §6.10.4 paragraphs 1 and 3-5, p. 158; PDF p. 170. The line number
     /// must be a digit sequence from 1 to 2147483647; one outside that range
     /// is diagnosed and ignored. The string literal is decoded like any
-    /// other; a wide one, which paragraph 1 forbids, is diagnosed and its
-    /// name ignored.
-    fn parse_line_directive(&mut self, _directive: PreprocessorToken) {
+    /// other; a wide or encoded one is diagnosed and its name ignored.
+    /// C11: §6.10.4 paragraph 1, p. 173; PDF p. 191, retains the character
+    /// string literal requirement for the newly available encoded literals.
+    fn parse_line_directive(&mut self) {
         let Some(token) = self.expect_token_without_rewind::<true>(
             |_, t| t.kind == PreprocessorTokenType::Number,
             |_, t| {
@@ -1593,6 +1944,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                             error_type:     PreprocessorErrorType::WideStringInLineDirective,
                             source_vectors: token.source_vectors,
                         }),
+                    | TokenType::String(StringTokenType::EncodedString(_, encoding)) =>
+                        self.context.preprocessor_error(PreprocessorError {
+                            error_type:     PreprocessorErrorType::EncodedStringInLineDirective(
+                                encoding.prefix(),
+                            ),
+                            source_vectors: token.source_vectors,
+                        }),
                     | _ => {},
                 }
             }
@@ -1621,7 +1979,16 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             self.set_line(value);
         }
         if let Some(filename) = filename {
-            let source_file_index = self.context.intern_source_file(Path::new(filename));
+            // Naming the physical file itself keeps its identity, and so its
+            // quoted source text; any other name gets an identity of its own
+            // whose system-header status still follows the physical file.
+            let physical = self.physical_source_file_index();
+            let filename = Path::new(filename);
+            let source_file_index = if self.context.get_source_file(physical) == filename {
+                physical
+            } else {
+                self.context.add_presumed_source_file(filename, physical)
+            };
             self.set_source_file_index(source_file_index);
         }
     }
@@ -1647,9 +2014,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             );
         }
         self.context.preprocessor_error(PreprocessorError {
-            error_type:     PreprocessorErrorType::ErrorDirective(
-                self.context.diagnostic_text(&contents),
-            ),
+            error_type:     if self.context.string_cache.at(directive.contents) == "warning" {
+                PreprocessorErrorType::WarningDirective(self.context.diagnostic_text(&contents))
+            } else {
+                PreprocessorErrorType::ErrorDirective(self.context.diagnostic_text(&contents))
+            },
             source_vectors: directive.source_vectors,
         });
     }
@@ -1661,10 +2030,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// C99: §6.10.6 paragraphs 1-2, p. 159; PDF p. 171. `STDC` pragmas must
     /// name `FP_CONTRACT`, `FENV_ACCESS`, or `CX_LIMITED_RANGE` and an
     /// `on-off-switch`; they are checked but have no effect yet. `#pragma
-    /// once` is bcc's one implementation-defined pragma. Other pragmas are
-    /// ignored (paragraph 1), and one that does not begin with an identifier
-    /// draws a warning first.
-    pub(super) fn parse_pragma_directive(&mut self, _directive: PreprocessorToken) -> bool {
+    /// once` and `#pragma GCC system_header` are bcc's implementation-defined
+    /// pragmas. Other pragmas are ignored (paragraph 1), and one that does
+    /// not begin with an identifier draws a warning first.
+    /// `from` is the physical invocation's byte offset, including when
+    /// `_Pragma` supplies tokens from a synthetic string (C99 §6.10.9p1,
+    /// p. 161; PDF p. 173).
+    pub(super) fn parse_pragma_directive(&mut self, from: u32) -> bool {
         let mut consumed_newline = false;
         let mut completed_stdc = false;
         'base: loop {
@@ -1680,7 +2052,6 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 break 'base;
             };
             match token.kind {
-                | PreprocessorTokenType::Whitespace => continue 'base,
                 | PreprocessorTokenType::Newline => {
                     consumed_newline = true;
                     break 'base;
@@ -1704,13 +2075,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                                     consumed_newline = true;
                                     break 'base;
                                 },
-                                | Some(t) => {
+                                | Some(extra) => {
                                     self.context.preprocessor_error(PreprocessorError {
                                         error_type:
                                             PreprocessorErrorType::ExtraTokensAfterPragmaOnce(
-                                                t.kind,
+                                                extra.kind,
                                             ),
-                                        source_vectors: token.source_vectors,
+                                        source_vectors: extra.source_vectors,
                                     });
                                     break 'base;
                                 },
@@ -1725,6 +2096,37 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                                     break 'base;
                                 },
                             }
+                        },
+                        | "clang" => {
+                            if !self.pragma_deprecated_macro() {
+                                let line_state = (self.last_was_newline, self.current_is_newline);
+                                self.skip_until_newline();
+                                (self.last_was_newline, self.current_is_newline) = line_state;
+                            }
+                            consumed_newline = true;
+                            break 'base;
+                        },
+                        | "GCC" => {
+                            let Some(operand) =
+                                Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
+                            else {
+                                break 'base;
+                            };
+                            if operand.kind == PreprocessorTokenType::Newline {
+                                consumed_newline = true;
+                                break 'base;
+                            }
+                            if operand.kind.is_identifier()
+                                && self.context.string_cache.at(operand.contents) == "system_header"
+                            {
+                                self.pragma_system_header(operand.source_vectors, from);
+                            }
+                            // Other GCC pragmas, and any operands, are ignored.
+                            let line_state = (self.last_was_newline, self.current_is_newline);
+                            self.skip_until_newline();
+                            (self.last_was_newline, self.current_is_newline) = line_state;
+                            consumed_newline = true;
+                            break 'base;
                         },
                         | "STDC" => {
                             match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
@@ -1827,5 +2229,173 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             }
         }
         consumed_newline
+    }
+
+    /// Clang's implementation-defined macro deprecation pragma.
+    /// C99: §6.10.6p1, p. 159; PDF p. 171.
+    /// <https://clang.llvm.org/docs/LanguageExtensions.html#deprecating-macros>
+    fn pragma_deprecated_macro(&mut self) -> bool {
+        let Some(kind) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context) else {
+            return false;
+        };
+        if !kind.kind.is_identifier() || self.context.string_cache.at(kind.contents) != "deprecated"
+        {
+            return kind.kind == PreprocessorTokenType::Newline;
+        }
+        if let Err(consumed_newline) = self.deprecated_pragma_token(
+            |_, token| token.kind == PreprocessorTokenType::OpeningParenthesis,
+            "expected ( in #pragma clang deprecated",
+        ) {
+            return consumed_newline;
+        }
+        let name = match self.deprecated_pragma_token(
+            |_, token| token.kind.is_identifier(),
+            "expected macro name in #pragma clang deprecated",
+        ) {
+            | Ok(name) => name,
+            | Err(consumed_newline) => return consumed_newline,
+        };
+        let name_id = name.identifier_id(self.context);
+        if !self.state.macro_definitions.contains_key(&name_id) {
+            self.context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::LanguageConstraint(
+                    self.context.diagnostic_format(format_args!(
+                        "no macro named `{}`",
+                        self.context.string_cache.at(name.contents),
+                    )),
+                ),
+                source_vectors: name.source_vectors,
+            });
+            return false;
+        }
+        let mut closing = match self.deprecated_pragma_token(
+            |_, token| {
+                matches!(
+                    token.kind,
+                    PreprocessorTokenType::Comma | PreprocessorTokenType::ClosingParenthesis
+                )
+            },
+            "expected ) in #pragma clang deprecated",
+        ) {
+            | Ok(token) => token,
+            | Err(consumed_newline) => return consumed_newline,
+        };
+        let mut message = None;
+        if closing.kind == PreprocessorTokenType::Comma {
+            let mut text = ArenaString::new_in(self.scratch);
+            let mut literal = match self.deprecated_pragma_token(
+                Self::is_deprecation_message_literal,
+                "expected string literal in #pragma clang deprecated",
+            ) {
+                | Ok(token) => token,
+                | Err(consumed_newline) => return consumed_newline,
+            };
+            loop {
+                self.append_deprecation_message(literal, &mut text);
+                let next = match self.deprecated_pragma_token(
+                    |this, token| {
+                        this.is_deprecation_message_literal(token)
+                            || token.kind == PreprocessorTokenType::ClosingParenthesis
+                    },
+                    "expected ) in #pragma clang deprecated",
+                ) {
+                    | Ok(token) => token,
+                    | Err(consumed_newline) => return consumed_newline,
+                };
+                if next.kind == PreprocessorTokenType::ClosingParenthesis {
+                    closing = next;
+                    break;
+                }
+                literal = next;
+            }
+            message = Some(&*self.state.arena.alloc_str(&text));
+        }
+        _ = self.state.deprecated_macros.insert(
+            name_id,
+            MacroDeprecation {
+                message,
+                location: self
+                    .context
+                    .first_source_vector(closing.source_vectors)
+                    .clone(),
+            },
+        );
+        false
+    }
+
+    /// A pragma operand, with recovery that preserves the following line.
+    /// C99: implementation-defined pragma grammar, §6.10.6p1, p. 159;
+    /// PDF p. 171. Unknown Clang pragmas are still ignored by the caller.
+    fn deprecated_pragma_token(
+        &mut self,
+        accepts: impl Fn(&Self, PreprocessorToken) -> bool,
+        message: &'static str,
+    ) -> Result<PreprocessorToken, bool> {
+        let token = Self::next_ignore_whitespace(&mut self.tokenizer, self.context);
+        if let Some(token) = token
+            && accepts(self, token)
+        {
+            return Ok(token);
+        }
+        let source_vectors =
+            token.map_or_else(|| self.current_location(), |token| token.source_vectors);
+        self.context.preprocessor_error(PreprocessorError {
+            error_type: PreprocessorErrorType::LanguageConstraint(message),
+            source_vectors,
+        });
+        Err(token.is_none_or(|token| token.kind == PreprocessorTokenType::Newline))
+    }
+
+    /// Clang permits only ordinary, unexpanded string literals in messages.
+    /// C99: §6.4.5p1, p. 62; PDF p. 74, as an implementation-defined
+    /// pragma operand (§6.10.6p1, p. 159; PDF p. 171).
+    fn is_deprecation_message_literal(&self, token: PreprocessorToken) -> bool {
+        token.kind == PreprocessorTokenType::String
+            && self
+                .context
+                .string_cache
+                .at(token.contents)
+                .starts_with('"')
+    }
+
+    /// Decode and concatenate message literals, escaping non-printing bytes
+    /// as Clang does so diagnostics never carry a raw NUL. This pragma uses
+    /// ordinary phase-5 decoding and phase-6 concatenation rules.
+    /// C99: §6.4.5p4, p. 62; PDF p. 74; implementation-defined pragma
+    /// behavior §6.10.6p1, p. 159; PDF p. 171.
+    fn append_deprecation_message(&mut self, token: PreprocessorToken, text: &mut ArenaString<'_>) {
+        let Some(token) = self.map_preprocessor_token(token) else {
+            return;
+        };
+        let TokenType::String(StringTokenType::String(contents)) = token.kind else {
+            return;
+        };
+        let append = |text: &mut ArenaString<'_>, character: char| {
+            if character.is_control() && !matches!(character, '\n' | '\r' | '\t') {
+                let _ = write!(text, "<U+{:04X}>", u32::from(character));
+            } else {
+                text.push(character);
+            }
+        };
+        if let Some(decoded) = self.context.literal_text_in(self.scratch, contents, false) {
+            for character in decoded.chars() {
+                append(text, character);
+            }
+        } else {
+            // Non-UTF-8 execution bytes are still valid message contents.
+            for unit in self.context.literal_units(contents) {
+                match *unit {
+                    | super::LiteralUnit::Character(character) => append(text, character),
+                    | super::LiteralUnit::Numeric(value) if value < 128 => {
+                        if let Some(character) = char::from_u32(value) {
+                            append(text, character);
+                        }
+                    },
+                    | super::LiteralUnit::Numeric(value) => {
+                        let _ = write!(text, "<{value:02X}>");
+                    },
+                }
+            }
+        }
     }
 }

@@ -1,0 +1,9 @@
+warning: static function is declared but never defined: `f`
+ --> sema3-static-unused.c:1:12
+  |
+1 | static int f(void);
+  |            ^ never defined
+  |
+  = note: C99 §6.9p3: an unused internal function declaration need not be defined; this warning identifies a likely missing body
+
+1 warning generated.

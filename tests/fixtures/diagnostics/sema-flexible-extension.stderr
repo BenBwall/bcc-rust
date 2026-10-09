@@ -1,0 +1,25 @@
+error: 'flexible array member in a union' is a GNU extension
+ --> sema-flexible-extension.c:1:21
+  |
+1 | union U {int a; int b[];};
+  |                     ^
+
+error: 'structure with a flexible array member nested in a structure' is a GNU extension
+ --> sema-flexible-extension.c:3:20
+  |
+3 | struct G {struct F f;};
+  |                    ^
+
+error: 'array of structures with a flexible array member' is a GNU extension
+ --> sema-flexible-extension.c:4:10
+  |
+4 | struct F array[2];
+  |          ^^^^^^^^
+
+error: 'flexible array member in an otherwise empty structure' is a GNU extension
+ --> sema-flexible-extension.c:5:15
+  |
+5 | struct E {int only[];};
+  |               ^^^^
+
+4 errors generated.

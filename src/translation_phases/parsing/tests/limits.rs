@@ -446,7 +446,7 @@ fn assert_resource_limit_cleanup(parsed: &super::Parsed<'_, '_>) {
 #[test]
 fn mixed_declarator_translation_floor_uses_the_typed_tree() {
     fn count_derivations(declarator: Declarator<'_>) -> (usize, usize, usize) {
-        let mut counts = (declarator.pointer.type_qualifiers_list.len(), 0, 0);
+        let mut counts = (declarator.pointer.levels.len(), 0, 0);
         for direct in declarator.kind {
             match *direct {
                 | DirectDeclarator::Parenthesized(parenthesized) => {
@@ -458,7 +458,10 @@ fn mixed_declarator_translation_floor_uses_the_typed_tree() {
                 | DirectDeclarator::Array { .. } => counts.1 += 1,
                 | DirectDeclarator::Function { .. }
                 | DirectDeclarator::KAndRStyleFunction { .. } => counts.2 += 1,
-                | DirectDeclarator::Identifier(_) => {},
+                | DirectDeclarator::AsmLabel(_)
+                | DirectDeclarator::Identifier(_)
+                | DirectDeclarator::Attributes(_)
+                | DirectDeclarator::MsModifier(..) => {},
             }
         }
         counts

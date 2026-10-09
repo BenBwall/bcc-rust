@@ -40,20 +40,10 @@ fn record_token(token: Token, context: &Context<'_>, observation: &mut Observati
     match token.kind {
         | TokenType::Integer(value) => observation.integers.push(value),
         | TokenType::Character(value) => observation.characters.push(value),
-        | TokenType::String(StringTokenType::String(contents)) => observation.strings.push((
-            false,
-            context
-                .literal_text_in(context.tu_arena(), contents, false)
-                .expect("UTF-8 test literal")
-                .to_owned(),
-        )),
-        | TokenType::String(StringTokenType::WideString(contents)) => observation.strings.push((
-            true,
-            context
-                .literal_text_in(context.tu_arena(), contents, true)
-                .expect("UTF-8 test literal")
-                .to_owned(),
-        )),
+        | TokenType::String(StringTokenType::String(_) | StringTokenType::WideString(_)) =>
+            observation
+                .strings
+                .push(super::string_value(context, token)),
         | _ => {},
     }
 }
@@ -72,8 +62,18 @@ fn record_errors(context: &mut Context<'_>, observation: &mut Observation) {
 }
 
 fn observe(source: &str) -> Observation {
+    observe_with_configuration(
+        source,
+        crate::configuration::CompilerConfiguration::default(),
+    )
+}
+
+fn observe_with_configuration(
+    source: &str,
+    configuration: crate::configuration::CompilerConfiguration,
+) -> Observation {
     let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = Context::with_configuration(&tu, configuration);
     let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
         &preprocess_arena,
@@ -229,8 +229,13 @@ fn integer_constant_types_follow_the_list_for_their_radix_and_suffix() {
         ("18446744073709551615ULL", unsigned_long_long(u64::MAX)),
     ] {
         let source = format!("{spelling}; after\n");
-        let actual = observe(&source);
-        // Widening warnings have their own test.
+        let actual = observe_with_configuration(
+            &source,
+            crate::configuration::CompilerConfiguration::default()
+                .with_gnu_extensions(spelling.starts_with("0b")),
+        );
+        // Widening warnings have their own test. Binary constants are a GNU
+        // extension before C23; this test isolates integer type selection.
         assert!(
             actual
                 .errors

@@ -4,7 +4,8 @@ error: cannot find header `missing-diagnostics-header.h`
 1 | #include <missing-diagnostics-header.h>
   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in any search directory
   |
-  = note: the path is absolute; no directory was searched
+  = note: searched these directories:
+            <built-in>
   = help: add the directory containing it with `--isystem <dir>`
 
 1 error generated.

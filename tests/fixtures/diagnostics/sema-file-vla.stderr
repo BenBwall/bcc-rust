@@ -1,0 +1,17 @@
+error: variably modified type is not permitted here: `a`
+ --> sema-file-vla.c:2:5
+  |
+2 | int a[n];
+  |     ^^^^ variably modified type
+  |
+  = note: C99 §6.7.5.2p2: only an ordinary identifier with block or prototype scope and no linkage has a variably modified type; members never do (§6.7.2.1p8)
+
+error: variably modified type is not permitted here: `p`
+ --> sema-file-vla.c:3:37
+  |
+3 | void member(int m) { struct { int (*p)[m]; } s; }
+  |                                     ^ variably modified type
+  |
+  = note: C99 §6.7.5.2p2: only an ordinary identifier with block or prototype scope and no linkage has a variably modified type; members never do (§6.7.2.1p8)
+
+2 errors generated.

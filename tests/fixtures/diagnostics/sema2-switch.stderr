@@ -1,0 +1,9 @@
+error: switch controlling expression requires integer type
+ --> sema2-switch.c:1:22
+  |
+1 | void f(void) {switch(1.0) {} }
+  |                      ^^^ controlling expression is not an integer
+  |
+  = note: C99 §6.8.4.2p1: the controlling expression of a switch has integer type
+
+1 error generated.

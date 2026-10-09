@@ -16,11 +16,13 @@
 //! The rest of phase 7, syntactic and semantic analysis, belongs to the
 //! parser and later work.
 
+mod command_line;
 mod conditional;
 mod directives;
 mod driver;
 mod errors;
 mod expression;
+mod language_features;
 mod macro_expansion;
 #[cfg(test)]
 #[expect(
@@ -77,6 +79,7 @@ use token_conversion::LiteralScratch;
 #[cfg(test)]
 use crate::util::shared::SharedVec;
 use crate::{
+    headers::HeaderSearch,
     translation_phases::{
         Context,
         GetPosition,
@@ -84,6 +87,7 @@ use crate::{
         SetPosition,
         SetSourceFileIndex,
         SourcePosition,
+        SourceVector,
         TranslationError,
         preprocessor_tokenizer::{
             LexedFiles,
@@ -108,7 +112,7 @@ use crate::{
 /// defined names of §6.10.8 paragraph 2, p. 161; PDF p. 173, is defined.
 /// `_Pragma` is an operator (§6.10.9, p. 161; PDF p. 173), not a macro; it
 /// is registered here so that rescanning recognizes it.
-const PREDEFINED_MACRO_NAMES: [&str; 9] = [
+const PREDEFINED_MACRO_NAMES: [&str; 10] = [
     "__LINE__",
     "__FILE__",
     "__DATE__",
@@ -116,6 +120,7 @@ const PREDEFINED_MACRO_NAMES: [&str; 9] = [
     "_Pragma",
     "__STDC__",
     "__STDC_VERSION__",
+    "__STRICT_ANSI__",
     "__STDC_HOSTED__",
     "__STDC_MB_MIGHT_NEQ_WC__",
 ];
@@ -133,17 +138,36 @@ enum OutputPurpose {
     Parsing,
 }
 
+/// Whether conditional queries are evaluated or retained for a later embed
+/// parameter evaluation. C23: §6.10.4.2p3, p. 174; PDF p. 187.
+#[derive(Clone, Copy, PartialEq)]
+enum QueryExpansion {
+    Evaluate,
+    Defer,
+}
+
 /// State kept from the start of preprocessing to its end.
 struct PreprocessorState<'pp> {
+    counter:               u64,
+    /// Reserved optional-replacement marker, checked by ID on token paths.
+    va_opt_name:           StringCacheId,
+    query_depth:           usize,
+    conditional_queries:   bool,
+    /// Directives end at their first new-line (C99 §6.10p2).
+    in_directive:          bool,
+    retain_placeholders:   bool,
     arena:                 &'pp Bump,
     once_set:              ArenaSet<'pp, u32>,
     macro_definitions:     ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,
+    /// Implementation-defined pragma markers (C99 §6.10.6p1).
+    deprecated_macros:     ArenaMap<'pp, StringCacheId, MacroDeprecation<'pp>>,
     /// Every source file opened, including the main file and headers.
     lexed_files:           LexedFiles<'pp>,
     /// Source-file frames, outermost first, while no expansion is active.
     /// During an expansion segment they live on the expander's stack and
     /// this vector stays empty, keeping its capacity.
     file_frames:           ArenaVec<'pp, FileFrame<'pp>>,
+    command_line_file:     Option<u32>,
     /// Provenance of open conditionals is owned because token iteration
     /// compacts temporary preprocessor provenance while groups remain open.
     open_conditionals:     ArenaVec<'pp, ConditionalGroup<'pp>>,
@@ -151,6 +175,15 @@ struct PreprocessorState<'pp> {
     translation_timestamp: Option<TranslationTimestamp<'pp>>,
     /// Storage that string-literal conversion reuses.
     literal_scratch:       LiteralScratch<'pp>,
+}
+
+/// Clang's macro deprecation message and the end of its pragma payload.
+/// Own the location across preprocessor provenance compaction.
+/// C99: implementation-defined pragma behavior, §6.10.6p1, p. 159; PDF p. 171.
+#[derive(Debug, Clone)]
+struct MacroDeprecation<'pp> {
+    message:  Option<&'pp str>,
+    location: SourceVector,
 }
 
 impl Debug for PreprocessorState<'_> {
@@ -171,6 +204,7 @@ impl Debug for PreprocessorState<'_> {
 struct FileFrame<'pp> {
     conditional_base:           usize,
     physical_source_file_index: u32,
+    include_search_index:       Option<usize>,
     tokenizer:                  TokenSource<'pp>,
 }
 
@@ -219,14 +253,14 @@ impl Debug for Preprocessor<'_, '_> {
 
 /// The preprocessor while it reads input: its long-lived state plus the
 /// expansion state, whose memory comes from the expansion arena `'x`.
-pub(crate) struct Expander<'c, 'tu, 'pp: 'x, 'x> {
+struct Expander<'c, 'tu, 'pp: 'x, 'x> {
     /// The translation context, borrowed while this expander runs.
-    pub(crate) context:    &'c mut Context<'tu>,
+    context:               &'c mut Context<'tu>,
     state:                 PreprocessorState<'pp>,
     /// Source and include frames remain between expansions. Macro frames
     /// share this stack until the current expansion finishes.
     tokenizer_stack:       ArenaVec<'x, TokenizerFrame<'x>>,
-    pub(crate) tokenizer:  TokenSource<'x>,
+    tokenizer:             TokenSource<'x>,
     /// Expansion working memory, reset between top-level expansions.
     scratch:               &'x Bump,
     hash_hash_stack:       ArenaVec<'x, HashHash>,
@@ -236,12 +270,17 @@ pub(crate) struct Expander<'c, 'tu, 'pp: 'x, 'x> {
     output_purpose:        OutputPurpose,
     last_was_newline:      bool,
     generate_placeholders: bool,
+    /// C23 §6.10.4.2p3: queries in embed operands wait for limit evaluation.
+    query_expansion:       QueryExpansion,
     /// The tokenizer-stack depth of the `#` or `##` operand being replaced,
     /// at which reading stops when that operand ends, or 0 outside such
     /// replacement.
     operand_fence:         usize,
     /// Argument prescan stops here without suppressing expansion within it.
     expansion_fence:       usize,
+    /// The tokenizer-stack depth from which no name is macro-replaced, or 0.
+    /// A `__VA_OPT__` result is substituted but not rescanned.
+    verbatim_fence:        usize,
     expression_parser:     PreprocessorExpressionParser<'pp>,
     pending_parser_token:  Option<Token>,
     pending_parser_errors: ArenaVec<'pp, TranslationError<'tu>>,
@@ -311,8 +350,18 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             .iter()
             .map(PathBuf::as_path)
             .collect();
-        let preprocessor =
-            Self::new_inner(pp, context, &source_name, source, None, &quote, &system);
+        let preprocessor = Self::new_inner(
+            pp,
+            context,
+            &source_name,
+            source,
+            None,
+            HeaderSearch {
+                quote: &quote,
+                angled: &system,
+                ..HeaderSearch::default()
+            },
+        );
         drop((quote, system));
         drop((
             source_name,
@@ -327,18 +376,9 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         context: &mut Context<'tu>,
         source_name: &Path,
         source: &'tu str,
-        quote_include_directories: &[&Path],
-        system_include_directories: &[&Path],
+        search: HeaderSearch<'_>,
     ) -> Self {
-        Self::new_inner(
-            pp,
-            context,
-            source_name,
-            source,
-            Some(source),
-            quote_include_directories,
-            system_include_directories,
-        )
+        Self::new_inner(pp, context, source_name, source, Some(source), search)
     }
 
     fn new_inner(
@@ -347,14 +387,25 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         source_name: &Path,
         source: &str,
         arena_source: Option<&'tu str>,
-        quote_include_directories: &[&Path],
-        system_include_directories: &[&Path],
+        search: HeaderSearch<'_>,
     ) -> Self {
-        context.set_include_directories(quote_include_directories, system_include_directories);
+        context.set_header_search(search);
         let mut macro_definitions = ArenaMap::with_hasher_in(FxBuildHasher, pp);
         for name in PREDEFINED_MACRO_NAMES {
+            if (name == "__STDC_VERSION__"
+                && context.configuration.standard().version_macro().is_none())
+                || (name == "__STRICT_ANSI__" && !context.configuration.strict_ansi())
+            {
+                continue;
+            }
             _ = macro_definitions
                 .insert(context.string_cache.intern(name), MacroDefinition::BuiltIn);
+        }
+        for &(name, feature) in language_features::LANGUAGE_BUILTINS {
+            if context.configuration.accepts(feature) {
+                _ = macro_definitions
+                    .insert(context.string_cache.intern(name), MacroDefinition::BuiltIn);
+            }
         }
         let source_file_index = context.intern_source_file(source_name);
         let mut lexed_files = LexedFiles::new_in(pp);
@@ -363,6 +414,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         file_frames.push(FileFrame {
             conditional_base:           0,
             physical_source_file_index: source_file_index,
+            include_search_index:       None,
             tokenizer:                  tokenizer.clone(),
         });
         if let Some(source) = arena_source {
@@ -371,14 +423,56 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             context.record_source_text(source_file_index, source);
         }
         let end = (tokenizer.position(context), source_file_index);
+        // The stack is read from the top: builtins, command line, main file.
+        let command_line = command_line::source(context);
+        let command_line_file = (!command_line.is_empty()).then(|| {
+            let index =
+                context.add_synthetic_source_file(Path::new("<command line>"), command_line);
+            file_frames.push(FileFrame {
+                conditional_base:           0,
+                physical_source_file_index: index,
+                include_search_index:       None,
+                tokenizer:                  lexed_files.open_command_line(
+                    context,
+                    index,
+                    command_line,
+                ),
+            });
+            index
+        });
+        let definitions = language_features::with_identity_macros(
+            context.tu_arena(),
+            context
+                .configuration
+                .target()
+                .predefined_macros(context.tu_arena(), context.configuration.gnu_extensions()),
+            context.configuration,
+        );
+        let builtin_index =
+            context.add_synthetic_source_file(Path::new("<built-in>/predefined.h"), definitions);
+        let tokenizer = lexed_files.open(context, builtin_index, definitions);
+        file_frames.push(FileFrame {
+            conditional_base:           0,
+            physical_source_file_index: builtin_index,
+            include_search_index:       None,
+            tokenizer:                  tokenizer.clone(),
+        });
         Self {
             resting: Some(Resting {
                 state: PreprocessorState {
+                    counter: 0,
+                    va_opt_name: context.string_cache.intern("__VA_OPT__"),
+                    query_depth: 0,
+                    conditional_queries: false,
+                    in_directive: false,
+                    retain_placeholders: false,
                     arena: pp,
                     once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),
                     macro_definitions,
+                    deprecated_macros: ArenaMap::with_hasher_in(FxBuildHasher, pp),
                     lexed_files,
                     file_frames,
+                    command_line_file,
                     open_conditionals: ArenaVec::new_in(pp),
                     translation_timestamp: None,
                     literal_scratch: LiteralScratch::new(pp),
@@ -424,7 +518,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
     ///
     /// When `step` breaks inside an expansion, that expansion's state is
     /// released with its arena and preprocessing cannot resume.
-    pub(crate) fn run<B>(
+    fn run<B>(
         &mut self,
         context: &mut Context<'tu>,
         mut step: impl for<'c, 'x> FnMut(&mut Expander<'c, 'tu, 'pp, 'x>) -> ControlFlow<B>,
@@ -567,6 +661,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             frame_type: TokenizerFrameType::SourceFile {
                 conditional_base:           frame.conditional_base,
                 physical_source_file_index: frame.physical_source_file_index,
+                include_search_index:       frame.include_search_index,
             },
             tokenizer:  frame.tokenizer,
         }));
@@ -581,8 +676,10 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             output_purpose,
             last_was_newline,
             generate_placeholders: false,
+            query_expansion: QueryExpansion::Evaluate,
             operand_fence: 0,
             expansion_fence: 0,
+            verbatim_fence: 0,
             expression_parser,
             pending_parser_token,
             pending_parser_errors,
@@ -596,6 +693,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
     fn is_between_expansions(&self) -> bool {
         self.operand_fence == 0
             && self.expansion_fence == 0
+            && self.verbatim_fence == 0
             && self.hash_hash_stack.is_empty()
             && self
                 .tokenizer_stack
@@ -628,6 +726,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             let TokenizerFrameType::SourceFile {
                 conditional_base,
                 physical_source_file_index,
+                include_search_index,
             } = frame.frame_type
             else {
                 unreachable!("only source-file frames remain between expansions");
@@ -636,6 +735,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             state.file_frames.push(FileFrame {
                 conditional_base,
                 physical_source_file_index,
+                include_search_index,
                 tokenizer,
             });
         }
@@ -693,7 +793,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
     /// Adjacent-string concatenation may already have mapped a later token or
     /// EOF diagnostic. Source-vector compaction therefore belongs to the
     /// producer that owns that buffered work, not to each iterator consumer.
-    pub(crate) fn next_iterator_item(&mut self) -> Option<Token> {
+    fn next_iterator_item(&mut self) -> Option<Token> {
         if self.next_iterator_item_compacts() {
             self.context.compact_preprocessor_vectors();
         }
@@ -706,7 +806,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
     ///
     /// A `##` operand held while the other operand's argument expands still
     /// refers to the arena, so compaction waits until every paste completes.
-    pub(crate) fn next_iterator_item_compacts(&self) -> bool {
+    fn next_iterator_item_compacts(&self) -> bool {
         self.pending_parser_token.is_none()
             && self.pending_parser_errors.is_empty()
             && self
@@ -721,7 +821,7 @@ impl Expander<'_, '_, '_, '_> {
     /// concatenated.
     ///
     /// C99: §5.1.1.2 paragraph 1 item 6, p. 10; PDF p. 22.
-    pub(crate) fn next_item(&mut self) -> Option<Token> {
+    fn next_item(&mut self) -> Option<Token> {
         let token = self.next_parser_token()?;
         Some(self.concatenate_adjacent_strings(token))
     }

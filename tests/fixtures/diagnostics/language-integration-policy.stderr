@@ -1,0 +1,31 @@
+warning: 'imaginary constant' is a GNU extension
+ --> language-integration-policy.c:1:15
+  |
+1 | #define VALUE 2j
+  |               ^^
+
+warning: '__has_c_attribute' is a C23 extension
+ --> language-integration-policy.c:2:5
+  |
+2 | #if __has_c_attribute(maybe_unused)
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: '__pragma' is an MSVC extension
+ --> language-integration-policy.c:3:1
+  |
+3 | __pragma(STDC FP_CONTRACT ON)
+  | ^^^^^^^^
+
+warning: '[[...]]' is a C23 extension
+ --> language-integration-policy.c:4:1
+  |
+4 | [[maybe_unused]] __declspec(dllexport) double _Complex value = VALUE;
+  | ^
+
+warning: '__declspec' is an MSVC extension
+ --> language-integration-policy.c:4:18
+  |
+4 | [[maybe_unused]] __declspec(dllexport) double _Complex value = VALUE;
+  |                  ^^^^^^^^^^
+
+5 warnings generated.

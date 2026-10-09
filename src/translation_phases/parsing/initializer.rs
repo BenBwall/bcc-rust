@@ -88,6 +88,7 @@ pub(super) struct InitializerFrame<'tu, 'p> {
     /// frame is pushed and take it back, reset, when the frame pops.
     pub(super) designation: Option<PoolBox<'p, DesignationState<'tu, 'p>>>,
     starting_error_count: usize,
+    range_lower: Option<ConstantExpression<'tu>>,
     /// Whether `)` belongs to an enclosing expression or `for` header.
     closing_parenthesis_is_caller_boundary: bool,
     /// Whether `]` belongs to an enclosing expression.
@@ -115,7 +116,7 @@ pub(super) struct DesignationState<'tu, 'p> {
 /// C99: the designator form is `[ constant-expression ]`, §6.7.8
 /// paragraph 1, p. 125; PDF p. 137.
 #[derive(Debug, Clone, Copy)]
-pub(super) struct SynchronizedDesignator<'tu> {
+struct SynchronizedDesignator<'tu> {
     expression:              ConstantExpression<'tu>,
     source_vectors:          SourceVectors,
     depth:                   DelimiterDepth,
@@ -153,13 +154,14 @@ impl<'p> DesignationState<'_, 'p> {
 ///
 /// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum InitializerPhase<'tu> {
+enum InitializerPhase<'tu> {
     Start,
     PushScalar,
     AwaitScalar,
     ElementOrClose,
     Designation,
     FieldDesignator,
+    OldFieldColon,
     PushArrayDesignator,
     AwaitArrayDesignator,
     CloseArrayDesignator(ConstantExpression<'tu>, bool),
@@ -203,9 +205,150 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             closing_brace_source_vectors: None,
             designation: None,
             starting_error_count,
+            range_lower: None,
             closing_parenthesis_is_caller_boundary,
             closing_square_bracket_is_caller_boundary,
         }
+    }
+
+    /// Continues an array designator into a GNU range when `...` follows its
+    /// first constant expression, as in `[1 ... 3]`.
+    /// C99: extension to §6.7.8, p. 125; PDF p. 137.
+    fn continue_range(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        index: ConstantExpression<'tu>,
+    ) -> Option<ParseAction<'tu, 'p>> {
+        if let Some(token) = token
+            && matches!(token.kind, TokenType::Operator(OperatorTokenType::Ellipsis))
+        {
+            if self.range_lower.is_some() {
+                parser.report(
+                    ParserErrorType::ExpectedGnuSyntax(
+                        "one range per designator",
+                        Some(token.kind),
+                    ),
+                    Some(token),
+                );
+            } else {
+                self.range_lower = Some(index);
+            }
+            parser.extension(
+                crate::configuration::Feature::GnuDesignators,
+                "array range designator",
+                token,
+            );
+            self.merge_designation_source(parser.context, index.expression().source_vectors);
+            self.merge_designation_source(parser.context, token.source_vectors);
+            let opening = self
+                .designation_state()
+                .current_designator_source
+                .unwrap_or_default();
+            let lower = parser
+                .context
+                .merge_vectors(opening, index.expression().source_vectors);
+            self.designation_state().current_designator_source =
+                Some(parser.context.merge_vectors(lower, token.source_vectors));
+            self.phase = InitializerPhase::PushArrayDesignator;
+            return Some(ParseAction::Consume);
+        }
+        None
+    }
+
+    fn finish_old_field(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+    ) -> ParseAction<'tu, 'p> {
+        if let Some(token) = token {
+            self.merge_designation_source(parser.context, token.source_vectors);
+            let designator = self
+                .designation_state()
+                .current_designators
+                .last_mut()
+                .expect("old field has a designator");
+            designator.source_vectors = parser
+                .context
+                .merge_vectors(designator.source_vectors, token.source_vectors);
+        }
+        self.finish_designation(parser);
+        self.phase = InitializerPhase::PushElement;
+        ParseAction::Consume
+    }
+
+    fn step_designation(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+    ) -> ParseAction<'tu, 'p> {
+        if let Some(token) = token
+            && matches!(token.kind, TokenType::Identifier)
+            && parser
+                .cursor
+                .following()
+                .is_some_and(|x| matches!(x.kind, TokenType::Operator(OperatorTokenType::Colon)))
+        {
+            parser.extension(
+                crate::configuration::Feature::GnuDesignators,
+                "old-style field designator",
+                token,
+            );
+            self.merge_designation_source(parser.context, token.source_vectors);
+            self.designation_state()
+                .current_designators
+                .push(Designator {
+                    kind: DesignatorType::GnuField(Identifier::from_token(token)),
+                    operator_source_vectors: token.source_vectors,
+                    closing_bracket_source_vectors: None,
+                    source_vectors: token.source_vectors,
+                    recovered: false,
+                });
+            self.phase = InitializerPhase::OldFieldColon;
+            return ParseAction::Consume;
+        }
+        if let Some(designator) = token
+            && matches!(
+                designator.kind,
+                TokenType::Operator(OperatorTokenType::Period)
+            )
+        {
+            parser.extension(
+                crate::configuration::Feature::DesignatedInitializers,
+                "designated initializer",
+                designator,
+            );
+            self.merge_designation_source(parser.context, designator.source_vectors);
+            self.designation_state().current_designator_source = Some(designator.source_vectors);
+            self.phase = InitializerPhase::FieldDesignator;
+            return ParseAction::Consume;
+        }
+        if let Some(designator) = token
+            && matches!(
+                designator.kind,
+                TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+            )
+        {
+            parser.extension(
+                crate::configuration::Feature::DesignatedInitializers,
+                "designated initializer",
+                designator,
+            );
+            self.merge_designation_source(parser.context, designator.source_vectors);
+            self.designation_state().current_designator_source = Some(designator.source_vectors);
+            self.phase = InitializerPhase::PushArrayDesignator;
+            return ParseAction::Consume;
+        }
+        self.phase = if self
+            .designation
+            .as_ref()
+            .is_none_or(|designation| designation.current_designators.is_empty())
+        {
+            InitializerPhase::PushElement
+        } else {
+            InitializerPhase::DesignationEquals
+        };
+        ParseAction::Reprocess
     }
 
     #[expect(
@@ -222,7 +365,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             | InitializerPhase::Start => {
                 debug_assert!(returned.is_none());
                 if let Some(opening) = token
-                    && opening.kind == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                    && matches!(
+                        opening.kind,
+                        TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                    )
                 {
                     self.opening_brace_source_vectors = Some(opening.source_vectors);
                     self.source_vectors.push((opening).source_vectors);
@@ -259,17 +405,18 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             | InitializerPhase::ElementOrClose => {
                 debug_assert!(returned.is_none());
                 if let Some(close) = token
-                    && close.kind == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+                    && matches!(
+                        close.kind,
+                        TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+                    )
                 {
                     // C99 §6.7.8p1: an initializer-list has at least one
                     // initializer; `{}` is not C99.
                     if self.elements.is_empty() {
-                        parser.report(
-                            ParserErrorType::ExpectedStatementExpression(
-                                "nonempty initializer list",
-                                Some(close.kind),
-                            ),
-                            Some(close),
+                        parser.extension(
+                            crate::configuration::Feature::EmptyInitializers,
+                            "empty initializer",
+                            close,
                         );
                     }
                     self.closing_brace_source_vectors = Some(close.source_vectors);
@@ -321,41 +468,12 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 self.phase = InitializerPhase::Designation;
                 ParseAction::Continue
             },
-            | InitializerPhase::Designation => {
-                debug_assert!(returned.is_none());
-                if let Some(designator) = token
-                    && designator.kind == TokenType::Operator(OperatorTokenType::Period)
-                {
-                    self.merge_designation_source(parser.context, designator.source_vectors);
-                    self.designation_state().current_designator_source =
-                        Some(designator.source_vectors);
-                    self.phase = InitializerPhase::FieldDesignator;
-                    return ParseAction::Consume;
-                }
-                if let Some(designator) = token
-                    && designator.kind
-                        == TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
-                {
-                    self.merge_designation_source(parser.context, designator.source_vectors);
-                    self.designation_state().current_designator_source =
-                        Some(designator.source_vectors);
-                    self.phase = InitializerPhase::PushArrayDesignator;
-                    return ParseAction::Consume;
-                }
-                self.phase = if self
-                    .designation
-                    .as_ref()
-                    .is_none_or(|designation| designation.current_designators.is_empty())
-                {
-                    InitializerPhase::PushElement
-                } else {
-                    InitializerPhase::DesignationEquals
-                };
-                ParseAction::Reprocess
-            },
+            | InitializerPhase::OldFieldColon => self.finish_old_field(parser, token),
+            | InitializerPhase::Designation => self.step_designation(parser, token),
             | InitializerPhase::FieldDesignator => {
                 debug_assert!(returned.is_none());
-                let Some(identifier) = token.filter(|token| token.kind == TokenType::Identifier)
+                let Some(identifier) =
+                    token.filter(|token| matches!(token.kind, TokenType::Identifier))
                 else {
                     // C99 §6.7.8p1: designator `. identifier`.
                     parser.report(
@@ -422,6 +540,9 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 else {
                     panic!("array designator returned an unexpected value: {returned:?}");
                 };
+                if let Some(action) = self.continue_range(parser, token, index) {
+                    return action;
+                }
                 self.phase = InitializerPhase::CloseArrayDesignator(index, recovered);
                 ParseAction::Reprocess
             },
@@ -437,13 +558,17 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     .merge_vectors(operator_source_vectors, expression_source);
                 self.merge_designation_source(parser.context, expression_source);
                 if let Some(close) = token
-                    && close.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    && matches!(
+                        close.kind,
+                        TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    )
                 {
                     source_vectors = parser
                         .context
                         .merge_vectors(source_vectors, close.source_vectors);
                     self.merge_designation_source(parser.context, close.source_vectors);
                     self.push_array_designator(
+                        parser,
                         expression,
                         source_vectors,
                         Some(close.source_vectors),
@@ -463,11 +588,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                         Some(SynchronizedDesignator {
                             expression,
                             source_vectors,
-                            depth: DelimiterDepth {
-                                parentheses: 0,
-                                brackets:    0,
-                                braces:      0,
-                            },
+                            depth: DelimiterDepth::default(),
                             closing_bracket_follows,
                         });
                     self.phase = InitializerPhase::SynchronizeArrayDesignator;
@@ -487,7 +608,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     .take()
                     .expect("array-designator synchronization retains its state");
                 if let Some(token) = token
-                    && token.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    && matches!(
+                        token.kind,
+                        TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    )
                 {
                     source_vectors = parser
                         .context
@@ -495,6 +619,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     self.merge_designation_source(parser.context, token.source_vectors);
                     if depth.brackets == 0 {
                         self.push_array_designator(
+                            parser,
                             expression,
                             source_vectors,
                             Some(token.source_vectors),
@@ -519,18 +644,15 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 // surrounding initializer. Owning
                 // outer boundaries still stop the scan despite an
                 // unmatched sibling delimiter.
-                if self.at_array_designator_sync_boundary(
-                    parser,
-                    token,
-                    depth,
-                    closing_bracket_follows,
-                ) {
-                    self.push_array_designator(expression, source_vectors, None, true);
-                    self.phase = InitializerPhase::Designation;
-                    return ParseAction::Reprocess;
-                }
-                let Some(token) = token else {
-                    self.push_array_designator(expression, source_vectors, None, true);
+                let Some(token) = token.filter(|&token| {
+                    !self.at_array_designator_sync_boundary(
+                        parser,
+                        token,
+                        depth,
+                        closing_bracket_follows,
+                    )
+                }) else {
+                    self.push_array_designator(parser, expression, source_vectors, None, true);
                     self.phase = InitializerPhase::Designation;
                     return ParseAction::Reprocess;
                 };
@@ -572,13 +694,37 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             | InitializerPhase::DesignationEquals => {
                 debug_assert!(returned.is_none());
                 let consume = if let Some(equals) = token
-                    && equals.kind == TokenType::Operator(OperatorTokenType::Equals)
+                    && matches!(equals.kind, TokenType::Operator(OperatorTokenType::Equals))
                 {
                     // C99 §6.7.8p1: designation is `designator-list =`.
                     self.designation_state().designation_equals_source_vectors =
                         Some(equals.source_vectors);
                     self.merge_designation_source(parser.context, equals.source_vectors);
                     true
+                } else if self.designation.as_ref().is_some_and(|designation| {
+                    // C99 §6.7.8p1 requires `=` after a designator-list.
+                    // GNU omission applies only to one array designator,
+                    // including a range; fields use the separate `field:` form.
+                    matches!(
+                        designation.current_designators.as_slice(),
+                        [Designator {
+                            kind: DesignatorType::Array(_) | DesignatorType::Range(_),
+                            ..
+                        }]
+                    )
+                }) && token.is_some_and(|x| {
+                    super::expression_operators::is_expression_operand_starter(x.kind)
+                        || matches!(
+                            x.kind,
+                            TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                        )
+                }) {
+                    parser.extension(
+                        crate::configuration::Feature::GnuDesignators,
+                        "designator without equals",
+                        token.expect("initializer exists"),
+                    );
+                    false
                 } else {
                     parser.report(
                         ParserErrorType::ExpectedEqualsAfterInitializerDesignation(
@@ -653,9 +799,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     ) => nesting = nesting.saturating_sub(1),
                     | _ => {},
                 }
-                source = Some(source.map_or(token.source_vectors, |existing| {
-                    parser.context.merge_vectors(existing, token.source_vectors)
-                }));
+                parser.context.merge_into(&mut source, token.source_vectors);
                 self.phase = InitializerPhase::SkipMalformedElement(nesting, source);
                 ParseAction::Consume
             },
@@ -664,7 +808,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 // C99 §6.7.8p1: `,` continues the list, and a `,` before `}`
                 // is the trailing-comma form.
                 if let Some(comma) = token
-                    && comma.kind == TokenType::Operator(OperatorTokenType::Comma)
+                    && matches!(comma.kind, TokenType::Operator(OperatorTokenType::Comma))
                 {
                     self.elements
                         .last_mut()
@@ -675,7 +819,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     return ParseAction::Consume;
                 }
                 if let Some(close) = token
-                    && close.kind == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+                    && matches!(
+                        close.kind,
+                        TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+                    )
                 {
                     self.closing_brace_source_vectors = Some(close.source_vectors);
                     self.source_vectors.push((close).source_vectors);
@@ -786,14 +933,25 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
 
     fn push_array_designator(
         &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
         expression: ConstantExpression<'tu>,
         source_vectors: SourceVectors,
         closing_bracket_source_vectors: Option<SourceVectors>,
         recovered: bool,
     ) {
+        let kind = if let Some(lower) = self.range_lower.take() {
+            DesignatorType::Range(
+                parser.alloc_syntax(super::declaration_syntax::RangeDesignator {
+                    lower,
+                    upper: expression,
+                }),
+            )
+        } else {
+            DesignatorType::Array(expression)
+        };
         let designation = self.designation_state();
         designation.current_designators.push(Designator {
-            kind: DesignatorType::Array(expression),
+            kind,
             operator_source_vectors: designation
                 .current_designator_source
                 .take()
@@ -808,14 +966,11 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
     fn at_array_designator_sync_boundary(
         &self,
         parser: &mut Parser<'_, 'tu, 'p>,
-        token: Option<Token>,
+        token: Token,
         depth: DelimiterDepth,
         closing_bracket_follows: bool,
     ) -> bool {
-        let Some(token) = token else {
-            return true;
-        };
-        let at_top_level = depth.parentheses == 0 && depth.brackets == 0 && depth.braces == 0;
+        let at_top_level = depth.is_top_level();
         at_top_level
             && !closing_bracket_follows
             && matches!(
@@ -830,7 +985,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             )
             || self.closing_parenthesis_is_caller_boundary
                 && depth.parentheses == 0
-                && token.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                && matches!(
+                    token.kind,
+                    TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                )
             || at_top_level
                 && (is_statement_keyword(token.kind)
                     || ExpressionFrame::is_strong_grammar_boundary_for(
@@ -850,17 +1008,13 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
     /// scan is bounded so repeated errors in one long list stay linear.
     fn closing_bracket_follows(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>) -> bool {
         const SCAN_LIMIT: usize = 32;
-        let mut depth = DelimiterDepth {
-            parentheses: 0,
-            brackets:    0,
-            braces:      0,
-        };
+        let mut depth = DelimiterDepth::default();
         let mut next = token;
         for index in 0..SCAN_LIMIT {
             let Some(token) = next else {
                 return false;
             };
-            let at_top_level = depth.parentheses == 0 && depth.brackets == 0 && depth.braces == 0;
+            let at_top_level = depth.is_top_level();
             match token.kind {
                 | TokenType::Operator(OperatorTokenType::ClosingSquareBracket) => {
                     if depth.brackets == 0 {
@@ -892,7 +1046,8 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 | TokenType::Operator(OperatorTokenType::Semicolon) => return false,
                 | kind if at_top_level
                     && (is_statement_keyword(kind)
-                        || kind != TokenType::Identifier && parser.declaration_starter(token)) =>
+                        || !matches!(kind, TokenType::Identifier)
+                            && parser.declaration_starter(token)) =>
                 {
                     return false;
                 },
@@ -925,20 +1080,34 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
 
     fn at_caller_boundary(&self, token: Option<Token>) -> bool {
         token.is_none_or(|token| {
-            token.kind == TokenType::Operator(OperatorTokenType::Semicolon)
-                || self.closing_parenthesis_is_caller_boundary
-                    && token.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+            matches!(
+                token.kind,
+                TokenType::Operator(OperatorTokenType::Semicolon)
+            ) || self.closing_parenthesis_is_caller_boundary
+                && matches!(
+                    token.kind,
+                    TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                )
                 || self.closing_square_bracket_is_caller_boundary
-                    && token.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    && matches!(
+                        token.kind,
+                        TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    )
         })
     }
 
     fn is_unowned_closing_delimiter(&self, token: Option<Token>) -> bool {
         token.is_some_and(|token| {
             !self.closing_parenthesis_is_caller_boundary
-                && token.kind == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                && matches!(
+                    token.kind,
+                    TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                )
                 || !self.closing_square_bracket_is_caller_boundary
-                    && token.kind == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    && matches!(
+                        token.kind,
+                        TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                    )
         })
     }
 
@@ -953,14 +1122,23 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
         let Some(token) = token else {
             return ListBoundary::MissingClose;
         };
-        if token.kind == TokenType::Identifier
+        if matches!(token.kind, TokenType::Identifier)
             && parser.cursor.following().is_some_and(|following| {
-                following.kind == TokenType::Operator(OperatorTokenType::Colon)
+                matches!(
+                    following.kind,
+                    TokenType::Operator(OperatorTokenType::Colon)
+                )
             })
         {
-            return ListBoundary::MissingClose;
+            return if matches!(self.phase, InitializerPhase::ElementOrClose)
+                && Self::gnu_designator_element_follows(parser)
+            {
+                ListBoundary::None
+            } else {
+                ListBoundary::MissingClose
+            };
         }
-        let identifier_continues_initializer = token.kind == TokenType::Identifier
+        let identifier_continues_initializer = matches!(token.kind, TokenType::Identifier)
             && parser.cursor.following().is_some_and(|following| {
                 binary_operator(following.kind).is_some() || is_postfix_starter(following.kind)
             });
@@ -982,6 +1160,58 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
         } else {
             ListBoundary::MissingClose
         }
+    }
+
+    /// Whether the current `identifier :` begins a GNU `field: value`
+    /// element rather than a label after an unclosed list: its value ends at
+    /// a `,` or `}` before any `;` or statement keyword at depth zero.
+    /// A scan that runs out of lookahead keeps the element, so long values
+    /// stay initializers.
+    ///
+    /// C99: labels are §6.8.1 paragraph 1, p. 131; PDF p. 143. The
+    /// initializer-list grammar (§6.7.8 paragraph 1, p. 125; PDF p. 137)
+    /// has no top-level `;`. GNU `field:` designators and statement-expression
+    /// values extend that grammar; nested delimiters may contain statements.
+    fn gnu_designator_element_follows(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
+        const SCAN_LIMIT: usize = 64;
+        let mut parentheses = 0_u32;
+        let mut braces = 0_u32;
+        // Lookahead 0 is the colon.
+        for index in 1..SCAN_LIMIT {
+            let Some(token) = parser.cursor.lookahead(index) else {
+                return false;
+            };
+            match token.kind {
+                | TokenType::Operator(
+                    OperatorTokenType::OpeningParenthesis | OperatorTokenType::OpeningSquareBracket,
+                ) => parentheses += 1,
+                | TokenType::Operator(
+                    OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
+                ) => {
+                    if parentheses == 0 {
+                        return false;
+                    }
+                    parentheses -= 1;
+                },
+                | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => braces += 1,
+                | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) => {
+                    if braces == 0 {
+                        return parentheses == 0;
+                    }
+                    braces -= 1;
+                },
+                | TokenType::Operator(OperatorTokenType::Comma)
+                    if parentheses == 0 && braces == 0 =>
+                    return true,
+                | TokenType::Operator(OperatorTokenType::Semicolon)
+                    if parentheses == 0 && braces == 0 =>
+                    return false,
+                | kind if parentheses == 0 && braces == 0 && is_statement_keyword(kind) =>
+                    return false,
+                | _ => {},
+            }
+        }
+        true
     }
 
     /// Whether this list's `}` follows the current token before a `;`, a

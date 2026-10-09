@@ -1,0 +1,11 @@
+error: case values overlap after conversion
+ --> sema3-case-duplicate.c:1:42
+  |
+1 | void f(unsigned n) {switch(n) {case -1:; case 4294967295U:;}}
+  |                                --------- ^^^^^^^^^^^^^^^^^^ case value repeated here
+  |                                |
+  |                                previous label is here
+  |
+  = note: C99 §6.8.4.2p3: case constants are converted to the promoted switch type and no two case values may be equal
+
+1 error generated.

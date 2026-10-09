@@ -1,65 +1,28 @@
 //! C99 macro replacement regressions.
 
-use std::{
-    fmt::Write,
-    path::PathBuf,
-};
+use std::fmt::Write;
 
-use super::Preprocessor;
-use crate::{
-    translation_phases::{
-        Context,
-        TranslationError,
-        preprocessing::{
-            PreprocessorError,
-            PreprocessorErrorType,
-            StringTokenType,
-            TokenType,
-        },
+use super::{
+    assert_expansion,
+    expansion_of,
+    with_tokens_of,
+};
+use crate::translation_phases::{
+    TranslationError,
+    preprocessing::{
+        PreprocessorError,
+        PreprocessorErrorType,
     },
-    util::shared::SharedVec,
 };
 
-fn with_expansion<R>(source: &str, inspect: impl FnOnce(&str, &[TranslationError<'_>]) -> R) -> R {
-    let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
-    let preprocess_arena = crate::util::bump::Bump::new();
-    let mut preprocessor = Preprocessor::new(
-        &preprocess_arena,
-        &mut context,
-        PathBuf::from("<macro regression>").into_boxed_path(),
-        source,
-        SharedVec::default(),
-        SharedVec::default(),
+#[test]
+fn pasted_multi_token_argument_rescans_only_after_its_last_token_is_pasted() {
+    // glibc tgmath passes a cast and a function name as the left operand.
+    // C99 6.10.3.3p2-3: paste the last argument token before rescanning.
+    assert_expansion(
+        "#define TYPE(x) double\n#define JOIN(f) f ## f128\nJOIN((TYPE(1)) sqrt)\n",
+        "( double ) sqrtf128",
     );
-    let tokens = preprocessor.preprocess_all(&mut context);
-    let spellings: Vec<_> = tokens
-        .iter()
-        .map(|token| match token.kind {
-            | TokenType::String(StringTokenType::String(contents)) => format!(
-                "{:?}",
-                context
-                    .literal_text_in(context.tu_arena(), contents, false)
-                    .expect("UTF-8 test literal")
-            ),
-            | _ => context
-                .string_cache
-                .at(token.contents)
-                .trim_end_matches('\0')
-                .to_owned(),
-        })
-        .collect();
-    let spelling = spellings.join(" ");
-    let errors = context.take_pending_errors();
-    inspect(&spelling, &errors)
-}
-
-#[track_caller]
-fn assert_expansion(source: &str, expected: &str) {
-    with_expansion(source, |actual, errors| {
-        assert_eq!(actual, expected, "{source}");
-        assert!(errors.is_empty(), "{source}: {errors:#?}");
-    });
 }
 
 #[test]
@@ -95,7 +58,7 @@ fn arity_diagnostics_count_every_supplied_argument() {
         ("#define F(x) marker\nF(a,b,c)\n", 1, 3),
         ("#define F(x,y) marker\nF(a,b,c,d,e)\n", 2, 5),
     ] {
-        with_expansion(source, |actual, errors| {
+        expansion_of(source, |actual, errors| {
             assert_eq!(actual, "marker", "{source}");
             assert!(
                 matches!(
@@ -163,7 +126,7 @@ fn pasted_hash_hash_is_a_token_in_later_stringification() {
 
 #[test]
 fn mixed_hash_spellings_do_not_form_a_single_pasted_token() {
-    with_expansion("#define CAT(a,b) a##b\nCAT(#,%:)\n", |_, errors| {
+    expansion_of("#define CAT(a,b) a##b\nCAT(#,%:)\n", |_, errors| {
         assert!(
             errors.iter().any(|error| matches!(
                 error,
@@ -207,6 +170,291 @@ fn generated_wide_literal_pastes_accept_values_starting_with_l() {
         "#define W(x) L ## x\n#define XW(x) W(x)\n#define S(x) #x\n#define XS(x) \
          S(x)\nXS(XW(S(Long))) ; XS(XW(S(foo)))\n",
         "\"L\\\"Long\\\"\" ; \"L\\\"foo\\\"\"",
+    );
+}
+
+// C99 §6.10.3.3p3 leaves the order of `##` evaluation unspecified, but each
+// operator pastes the operands written beside it: a parameter stands for its
+// argument as written and an empty argument for a placemarker. Expected
+// spellings come from `clang -E -P`.
+
+#[test]
+fn paste_chains_replace_every_parameter_operand() {
+    for (source, expected) in [
+        ("#define P(a,b) a##c##b\nP(x,y)\n", "xcy"),
+        ("#define P(a,b) a##_##b\nP(x,y)\n", "x_y"),
+        ("#define P(a,b) a##b##c\nP(x,y)\n", "xyc"),
+        ("#define P(N,I,J) N##I##J\nP(d,0,0)\n", "d00"),
+        (
+            "#define F(type,n) type type##_##n\nF(float,min1)\n",
+            "float float_min1",
+        ),
+        // Three and four operators.
+        ("#define C(a,b,c,d) a##b##c##d\nC(w,x,y,z)\n", "wxyz"),
+        ("#define C(a,b) a##_##b##_##a\nC(p,q)\n", "p_q_p"),
+        (
+            "#define C(a,b,c,d,e) a ## b ## c ## d ## e\nC(v,w,x,y,z) C(1,2,3,4,5)\n",
+            "vwxyz 12345",
+        ),
+        // Only the last token of a left argument and the first of a right one
+        // take part.
+        ("#define J(a,b,c) a##b##c\nJ(p q, r s, t u)\n", "p qr st u"),
+        // Results that are not identifiers.
+        (
+            "#define J(a,b,c) a##b##c\n#define S(x) #x\n#define XS(x) S(x)\nXS(J(1,.,5)) ; \
+             XS(J(<,<,=)) ; XS(J(1,e,+))\n",
+            "\"1.5\" ; \"<<=\" ; \"1e+\"",
+        ),
+    ] {
+        assert_expansion(source, expected);
+    }
+}
+
+#[test]
+fn paste_chains_treat_empty_arguments_as_placemarkers() {
+    // C99 §6.10.3.3p2-3: an empty argument operand is a placemarker, which
+    // pastes to the other operand, and two placemarkers paste to one.
+    for (invocations, expected) in [
+        ("J(,,) end", "end"),
+        ("J(x,,) J(,y,) J(,,z) J(x,,z)", "x y z xz"),
+        ("J(, y z ,) J( ,  , ) end", "y z end"),
+        ("U(,) U(x,) U(,y)", "_ x_ _y"),
+        ("M(,) M(x,) M(,y)", "c xc cy"),
+        ("T(,) end", "__ end"),
+        ("Q(,b,,) end", "b end"),
+    ] {
+        assert_expansion(
+            &format!(
+                "#define J(a,b,c) a##b##c\n#define U(a,b) a##_##b\n#define M(a,b) \
+                 a##c##b\n#define T(a,b) a##_##b##_##a\n#define Q(a,b,c,d) \
+                 a##b##c##d\n{invocations}\n"
+            ),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn paste_chains_take_stringified_operands() {
+    // C99 §6.10.3.2p2: here `#` applies before an adjacent `##`.
+    assert_expansion(
+        "#define W(p,a,s) p ## #a ## s\n#define H(a,b) #a ## b ## b\nW(, x y, ) ; W( ,, ) ; H(x \
+         y, ) ; H(, )\n",
+        "\"x y\" ; \"\" ; \"x y\" ; \"\"",
+    );
+    assert_expansion("#define W(p,a,s) p ## #a ## s\nW(L, x y, )\n", "L\"x y\"");
+}
+
+#[test]
+fn paste_chains_take_variadic_arguments() {
+    for (source, expected) in [
+        (
+            "#define V(a, ...) a##_##__VA_ARGS__\nV(p, q) V(p) V(p,) V(p, q r)\n",
+            "p_q p_ p_ p_q r",
+        ),
+        (
+            "#define V(...) pre##__VA_ARGS__##post\nV(x) V() V(a,b)\n",
+            "prexpost prepost prea , bpost",
+        ),
+        (
+            "#define V(a, ...) a##__VA_ARGS__##a\nV(m,n) V(m)\n",
+            "mnm mm",
+        ),
+    ] {
+        assert_expansion(source, expected);
+    }
+}
+
+#[test]
+fn paste_chain_operands_are_not_macro_replaced() {
+    // C99 §6.10.3.1p1: a `##` operand is its argument as written. The
+    // result is rescanned with the rest of the replacement list
+    // (§6.10.3.4p1).
+    for (invocations, expected) in [
+        ("P(x,y) J(x,y,_)", "done xy_"),
+        ("J(_,FOO,_) J(F,O,O)", "_FOO_ bar"),
+        ("U(FOO,x)", "FOO_x"),
+    ] {
+        assert_expansion(
+            &format!(
+                "#define x 1\n#define y 2\n#define FOO bar\n#define xcy done\n#define P(a,b) \
+                 a##c##b\n#define J(a,b,c) a##b##c\n#define U(a,b) a##_##b\n{invocations}\n"
+            ),
+            expected,
+        );
+    }
+    // A chain written in an argument of a nested invocation pastes the
+    // enclosing macro's arguments.
+    for (source, expected) in [
+        (
+            "#define CAT(a,b) a##b\n#define Q(a) CAT(a##b##c, a)\nQ(k)\n",
+            "kbck",
+        ),
+        (
+            "#define J(a,b,c) a##b##c\n#define R(a,b) J(a,b,z)\nR(m n, o)\n",
+            "m noz",
+        ),
+        // The result is a `#` operand as written, but rescanned elsewhere.
+        (
+            "#define S(x) #x\n#define I(x) x\n#define kbc oops\n#define Q(a) S(a##b##c) \
+             I(a##b##c)\nQ(k)\n",
+            "\"kbc\" oops",
+        ),
+    ] {
+        assert_expansion(source, expected);
+    }
+}
+
+#[test]
+fn paste_chain_calls_expand_arguments_from_the_rest_of_source() {
+    // C99 §6.10.3.4p2 excludes the rest of the source from the enclosing
+    // replacement's disabled macros, even when a paste produces the callee.
+    for (source, expected) in [
+        (
+            "#define CAT3(a,b,c) a##b##c\n#define foo(x) [x]\nCAT3(f,o,o)(CAT3(1,2,3))\n",
+            "[ 123 ]",
+        ),
+        (
+            "#define CAT3(a,b,c) a##b##c\n#define foo(x) [x]\nCAT3(f,o,o)(x CAT3(1,2,3))\n",
+            "[ x 123 ]",
+        ),
+        (
+            "#define L(a,b,c) a##b##c\n#define abc(x) x\nL(a,b,c)(L(a,b,c))\n",
+            "abc",
+        ),
+        (
+            "#define C2(a,b) a##b\n#define foo(x) [x]\nC2(fo,o)(C2(1,2))\n",
+            "[ 12 ]",
+        ),
+    ] {
+        assert_expansion(source, expected);
+    }
+}
+
+#[test]
+fn substituted_calls_expand_arguments_from_the_rest_of_source() {
+    assert_expansion(
+        "#define ID(x) x\n#define foo(x) [x]\nID(foo)(ID(1))\n",
+        "[ 1 ]",
+    );
+}
+
+#[test]
+fn object_paste_calls_expand_arguments_from_the_rest_of_source() {
+    assert_expansion(
+        "#define OBJ fo##o\n#define foo(x) [x]\nOBJ(OBJ)\n",
+        "[ foo ]",
+    );
+}
+
+#[test]
+fn cross_frame_calls_preserve_replacement_token_blue_paint() {
+    for (source, expected) in [
+        ("#define FOO F ## O ## O\nFOO\n", "FOO"),
+        (
+            "#define ID(x) x\n#define foo(x) [x]\n#define WRAP ID(foo)(WRAP)\nWRAP\n",
+            "[ WRAP ]",
+        ),
+        // The first argument comes from the replacement and the second
+        // comes from source. The former must stay painted after capture.
+        (
+            "#define A foo(A,\n#define foo(x,y) [x][y]\nA 1)\n",
+            "[ A ] [ 1 ]",
+        ),
+        (
+            "#define ID(x) x\n#define foo(x) [x]\n#define WRAP ID(foo)(ID)\nWRAP(1)\n",
+            "[ ID ] ( 1 )",
+        ),
+        // Keep the live replacement frames' disablement while rescanning
+        // g's replacement, even though its argument comes from source.
+        (
+            "#define f(a) a*g\n#define g(a) f(a)\nf(2)(9)\n",
+            "2 * f ( 9 )",
+        ),
+    ] {
+        assert_expansion(source, expected);
+    }
+}
+
+#[test]
+fn paste_chains_report_each_invalid_paste() {
+    // C99 §6.10.3.3p3: each paste that forms no valid preprocessing token is
+    // diagnosed, left to right.
+    expansion_of("#define J(a,b,c) a##b##c\nJ(.,.,.)\n", |_, errors| {
+        let pastes: Vec<_> = errors
+            .iter()
+            .map(|error| match error {
+                | TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::TokenMergingError(lhs, rhs),
+                    ..
+                }) => (*lhs, *rhs),
+                | other => panic!("unexpected diagnostic: {other:#?}"),
+            })
+            .collect();
+        assert_eq!(pastes, [(".", "."), (".", ".")]);
+    });
+    expansion_of("#define J(a,b,c) a##b##c\nJ(x,+,y)\n", |_, errors| {
+        assert!(
+            matches!(
+                errors,
+                [TranslationError::Preprocessing(PreprocessorError {
+                    error_type: PreprocessorErrorType::TokenMergingError("x", "+"),
+                    ..
+                })]
+            ),
+            "{errors:#?}"
+        );
+    });
+}
+
+#[test]
+fn paste_chain_results_locate_every_operand() {
+    // The result spans its operands in order: `x` and `y` in the invocation,
+    // `c` in the definition.
+    with_tokens_of(
+        "#define P(a,b) a##c##b\nP(x,y)\n",
+        "<test>",
+        |tokens, context| {
+            assert!(context.take_pending_errors().is_empty());
+            let [token] = tokens else {
+                panic!("expected one token: {tokens:#?}");
+            };
+            assert_eq!(context.string_cache.at(token.contents), "xcy");
+            let locations: Vec<_> = context
+                .get_source_vectors(token.source_vectors)
+                .iter()
+                .map(|vector| (vector.line, vector.column, vector.length))
+                .collect();
+            assert_eq!(locations, [(2, 3, 1), (1, 19, 1), (2, 5, 1)]);
+        },
+    );
+    // The tokens after a chain's first output token keep their locations
+    // when provenance is compacted between output tokens.
+    with_tokens_of(
+        "#define J(a,b,c) a##b##c\nJ(m n, o, p q)\n",
+        "<test>",
+        |tokens, context| {
+            assert!(context.take_pending_errors().is_empty());
+            let tokens: Vec<_> = tokens
+                .iter()
+                .map(|token| {
+                    let locations: Vec<_> = context
+                        .get_source_vectors(token.source_vectors)
+                        .iter()
+                        .map(|vector| (vector.line, vector.column))
+                        .collect();
+                    (context.string_cache.at(token.contents), locations)
+                })
+                .collect();
+            assert_eq!(
+                tokens,
+                [
+                    ("m", vec![(2, 3)]),
+                    ("nop", vec![(2, 5), (2, 8), (2, 11)]),
+                    ("q", vec![(2, 13)]),
+                ]
+            );
+        },
     );
 }
 
@@ -274,7 +522,7 @@ fn repeated_alias_calls_preserve_locations_through_compaction() {
 #[test]
 fn unterminated_alias_call_reports_a_clean_diagnostic() {
     let source = "#define g(x) [x]\n#define G g\nG(0";
-    with_expansion(source, |_, errors| {
+    expansion_of(source, |_, errors| {
         assert!(
             errors.iter().any(|error| matches!(
                 error,
@@ -384,6 +632,36 @@ char c[2][6] = { str(hello), str() };
     );
     assert_expansion(source, expected);
 }
+
+#[test]
+fn c99_stringification_example_four_matches_normative_output() {
+    // C99 §6.10.3.5 EXAMPLE 4, pp. 156-157; PDF pp. 168-169. The standard
+    // shows `xstr(INCFILE(2).h)` as an `#include` operand; here it is
+    // followed by `;` so the output token stream stays unambiguous.
+    let source = r#"#define str(s) # s
+#define xstr(s) str(s)
+#define debug(s, t) printf("x" # s "= %d, x" # t "= %s", \
+                        x ## s, x ## t)
+#define INCFILE(n) vers ## n
+#define glue(a, b) a ## b
+#define xglue(a, b) glue(a, b)
+#define HIGHLOW "hello"
+#define LOW LOW ", world"
+debug(1, 2);
+fputs(str(strncmp("abc\0d", "abc", '\4') // this goes away
+      == 0) str(: @\n), s);
+xstr(INCFILE(2).h);
+glue(HIGH, LOW);
+xglue(HIGH, LOW)
+"#;
+    let expected = concat!(
+        r#"printf ( "x1= %d, x2= %s" , x1 , x2 ) ; "#,
+        r#"fputs ( "strncmp(\"abc\\0d\", \"abc\", '\\4') == 0: @\n" , s ) ; "#,
+        r#""vers2.h" ; "hello" ; "hello, world""#,
+    );
+    assert_expansion(source, expected);
+}
+
 #[test]
 fn nested_calls_receive_stringified_parent_arguments() {
     for source in [
@@ -397,7 +675,7 @@ fn nested_calls_receive_stringified_parent_arguments() {
 #[test]
 fn failed_cross_frame_lookahead_prescans_each_argument_once() {
     let source = "#define F(x) x\n#define BAD(a,b) a\n#define H(x) F x\nH(BAD(1)) after\n";
-    with_expansion(source, |tokens, errors| {
+    expansion_of(source, |tokens, errors| {
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(tokens, "F 1 after");
     });
@@ -409,7 +687,7 @@ fn assert_only_error(
     expected: &str,
     is_expected: impl Fn(&PreprocessorErrorType<'_>) -> bool,
 ) {
-    with_expansion(source, |actual, errors| {
+    expansion_of(source, |actual, errors| {
         assert_eq!(actual, expected, "{source:?}");
         assert!(
             matches!(
@@ -451,7 +729,7 @@ fn va_args_outside_a_variadic_replacement_list_is_diagnosed() {
         ("#define H(__VA_ARGS__) 2\nH(0)\n", "2"),
     ] {
         assert_only_error(source, expected, |error| {
-            matches!(error, PreprocessorErrorType::VaArgsOutsideVariadicMacro)
+            matches!(error, PreprocessorErrorType::VaArgsOutsideVariadicMacro(_))
         });
     }
     assert_expansion("#define V(x, ...) x __VA_ARGS__\nV(1, 2, 3)\n", "1 2 , 3");
@@ -504,12 +782,122 @@ fn definition_on_an_unterminated_last_line_reports_the_missing_newline_once() {
         "#define F(x) x\n#define F(x) x",
         "#define A ##",
     ] {
-        with_expansion(source, |_, errors| {
+        expansion_of(source, |_, errors| {
             let missing_newlines = errors
                 .iter()
                 .filter(|error| matches!(error, TranslationError::InitialProcessing(_)))
                 .count();
             assert_eq!(missing_newlines, 1, "{source:?}: {errors:#?}");
         });
+    }
+}
+
+/// The error types `source` draws, which must all come from the
+/// preprocessor.
+fn preprocessor_errors(source: &str) -> Vec<String> {
+    expansion_of(source, |_, errors| {
+        errors
+            .iter()
+            .map(|error| match error {
+                | TranslationError::Preprocessing(PreprocessorError { error_type, .. }) =>
+                    format!("{error_type:?}"),
+                | _ => panic!("{source:?}: {errors:#?}"),
+            })
+            .collect()
+    })
+}
+
+#[test]
+fn redefinitions_differing_only_in_whitespace_amount_or_comments_are_identical() {
+    // C99 §6.10.3p1-2: all whitespace separations are identical, §6.10.3p7:
+    // leading and trailing whitespace is not part of the replacement list,
+    // and §5.1.1.2 phase 3: each comment is one space character.
+    let failures = [
+        // glibc's <bits/in.h> and Linux's <linux/in.h>.
+        "#define A 49 /* c1 */\n#define A\t\t49\n",
+        "#define A\t\t49\n#define A 49\t/* bool */\n",
+        "#define B 49\n#define B 49 // trailing\n",
+        "#define B 49 // trailing\n#define B 49\n",
+        "#define B 49    \n#define B 49\n",
+        "#define C a + b\n#define C a/**/+/* two */b\n",
+        "#define C a + b\n#define C /* lead */ a \t + \t b /* trail */ // line\n",
+        "#define C a + b\n#define C a /* one\n two */ + b\n",
+        "#define D 1 + 2\n#define D 1 \\\n+ 2\n",
+        "#define D 1 + 2\n#define D 1 + \\\n  2\n",
+        "#define D 1 + 2\n#define D 1\\\n + 2\n",
+        "#define D 1 \\\n+ 2\n#define D 1 + 2\n",
+        "#define D 12 + 2\n#define D 1\\\n2 + 2\n",
+        "#define E\n#define E   \n#define E /* empty */\n#define E // empty\n",
+        "#define F(x, y) x + y\n#define F( x ,y )  x\t+ y  /* sum */\n",
+        "#define F(x, y) x + y\n#define F(x,y)x + y\n",
+        "#define F(x, y) x + y\n#define F(x, y)/**/x + y\n",
+        "#define G() 1\n#define G( ) 1 // one\n",
+        "#define V(a, ...) a __VA_ARGS__\n#define V(a,...) a  __VA_ARGS__ \n",
+        "#define N(args...) f(args)\n#define N(args...)  f(args) \n",
+    ]
+    .into_iter()
+    .filter_map(|source| {
+        let errors = preprocessor_errors(source);
+        (!errors.is_empty()).then(|| format!("{source:?}: {errors:?}"))
+    })
+    .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn redefinitions_with_different_tokens_or_separation_are_diagnosed() {
+    // C99 §6.10.3p1-2: the presence of whitespace between two tokens, the
+    // tokens and their spellings, and a function-like macro's parameters
+    // must all match.
+    for source in [
+        "#define C a+b\n#define C a + b\n",
+        "#define C a + b\n#define C a+b\n",
+        "#define C a+b\n#define C a/**/+b\n",
+        "#define C a+b\n#define C a\\\n +b\n",
+        "#define C a b\n#define C a\\\nb\n",
+        "#define C a + b\n#define C a - b\n",
+        "#define C 49\n#define C 0x31\n",
+        "#define C 1\n#define C\n",
+        "#define C\n#define C 1\n",
+        "#define C 1\n#define C 1 2\n",
+        "#define C 1 2\n#define C 1\n",
+        "#define F(x) x\n#define F(y) y\n",
+        "#define F(x) (x)\n#define F(x) ( x )\n",
+        "#define F(x, y) x+y\n#define F(x, y) x + y\n",
+        "#define F(x) x\n#define F(x, y) x\n",
+        "#define F(x, ...) x\n#define F(x) x\n",
+        "#define F(x) x\n#define F(x) x x\n",
+    ] {
+        let errors = preprocessor_errors(source);
+        let name = &source["#define ".len()..][..1];
+        assert_eq!(
+            errors,
+            [format!(
+                "MacroRedefinedWithDifferentDefinition({name:?}, Allow)"
+            )],
+            "{source:?}"
+        );
+    }
+}
+
+#[test]
+fn whitespace_before_the_parenthesis_changes_the_kind_of_macro() {
+    // C99 §6.10.3p2 and the `lparen` of §6.10p1: `F (x)` is object-like.
+    for (source, expected) in [
+        (
+            "#define F (x) x\n#define F(x) x\n",
+            "RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(\"F\", Allow)",
+        ),
+        (
+            "#define F(x) x\n#define F (x) x\n",
+            "RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(\"F\", Allow)",
+        ),
+        (
+            "#define F(x) x\n#define F /**/(x) x\n",
+            "RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(\"F\", Allow)",
+        ),
+    ] {
+        let errors = preprocessor_errors(source);
+        assert_eq!(errors, [expected], "{source:?}");
     }
 }

@@ -1,0 +1,2 @@
+// errors: 0
+enum { aligned=32,vector_size=32 }; typedef int A __attribute__((vector_size(aligned))); typedef int B __attribute__((vector_size(vector_size))); typedef int C __attribute__((aligned(vector_size),vector_size(16))); _Static_assert(_Alignof(A)==32,"a"); _Static_assert(_Alignof(B)==32,"b"); _Static_assert(_Alignof(C)==32,"c"); typedef int D __attribute__((aligned(vector_size))) __attribute__((vector_size(16))); _Static_assert(_Alignof(D)==32,"separate lists"); D sum(D a,D b){return a+b;} int following;

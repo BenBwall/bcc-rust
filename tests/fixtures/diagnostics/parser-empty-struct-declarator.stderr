@@ -1,9 +1,7 @@
-error: expected a member name
+warning: declaration does not declare anything
  --> parser-empty-struct-declarator.c:1:15
   |
 1 | struct S { int; };
-  |               ^ this member declaration declares nothing
-  |
-  = note: C99 §6.7.2.1: each member declarator names a member or gives a bit-field width
+  |               ^ this declaration declares a type but no member
 
-1 error generated.
+1 warning generated.

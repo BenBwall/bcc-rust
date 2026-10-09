@@ -13,23 +13,12 @@ error: expected `,` or `)` in macro parameter list, found number `1`
   |                ^ expected `,` or `)`
 
 
-diagnostic [SourceVector { index: 117, column: 9, line: 6, source_file_index: 0, length: 3 }]
-error: macro `FOO` redefined differently
- --> test-programs/define.c:6:9
-  |
-6 | #define FOO( C 1
-  |         ^^^ this definition differs from the previous one
-  |
-  = note: C99 §6.10.3p2: a redefinition must have the same parameters and an identical replacement list
-  = help: add `#undef FOO` before this definition
-
-
 test-programs/define.c:8:1: keyword `int` [SourceVector { index: 127, column: 1, line: 8, source_file_index: 0, length: 3 }]
 test-programs/define.c:8:5: identifier `x` [SourceVector { index: 131, column: 5, line: 8, source_file_index: 0, length: 1 }]
 test-programs/define.c:8:7: punctuator `=` [SourceVector { index: 133, column: 7, line: 8, source_file_index: 0, length: 1 }]
-test-programs/define.c:6:16: integer constant `1` = 1 (int) [SourceVector { index: 124, column: 16, line: 6, source_file_index: 0, length: 1 }]
+test-programs/define.c:1:15: integer constant `3` = 3 (int) [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 1 }]
 test-programs/define.c:8:14: punctuator `;` [SourceVector { index: 140, column: 14, line: 8, source_file_index: 0, length: 1 }]
-test-programs/define.c:6:16: integer constant `1` = 1 (int) [SourceVector { index: 124, column: 16, line: 6, source_file_index: 0, length: 1 }]
+test-programs/define.c:1:15: integer constant `3` = 3 (int) [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 1 }]
 test-programs/define.c:10:5: integer constant `5` = 5 (int) [SourceVector { index: 152, column: 5, line: 10, source_file_index: 0, length: 1 }]
 test-programs/define.c:3:21: punctuator `+` [SourceVector { index: 64, column: 21, line: 3, source_file_index: 0, length: 1 }]
 test-programs/define.c:10:8: integer constant `7` = 7 (int) [SourceVector { index: 155, column: 8, line: 10, source_file_index: 0, length: 1 }]
@@ -40,7 +29,7 @@ test-programs/define.c:12:8: integer constant `2` = 2 (int) [SourceVector { inde
 test-programs/define.c:12:9: punctuator `,` [SourceVector { index: 185, column: 9, line: 12, source_file_index: 0, length: 1 }]
 test-programs/define.c:12:11: integer constant `3` = 3 (int) [SourceVector { index: 187, column: 11, line: 12, source_file_index: 0, length: 1 }]
 test-programs/define.c:12:12: punctuator `,` [SourceVector { index: 188, column: 12, line: 12, source_file_index: 0, length: 1 }]
-test-programs/define.c:6:16: integer constant `1` = 1 (int) [SourceVector { index: 124, column: 16, line: 6, source_file_index: 0, length: 1 }]
+test-programs/define.c:1:15: integer constant `3` = 3 (int) [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 1 }]
 === donut.c "             i,j,k,x,y,o,N;\r\n         main(){float z[1760],a\r\n      #define R(t,x,y) f=x;x-=t*y\\\r\n   ;y+=t*f;f=(3-x*x-y*y)/2;x*=f;y*=f;\r\n   =0,e=1,c=1,d=0,f,g,h,G,H,A,t,D;char\r\n b[1760];for(;;){memset(b,32,1760);g=0,\r\nh=1;memset(z,0,7040);for(j=0;j<90;j++){\r\nG=0,H=1;for(i=0;i<314;i++){A=h+2,D=1/(G*\r\nA*a+g*e+5);t=G*A        *e-g*a;x=40+30*D\r\n*(H*A*d-t*c);y=          12+15*D*(H*A*c+\r\nt*d);o=x+80*y;N          =8*((g*a-G*h*e)\r\n*d-G*h*a-g*e-H*h        *c);if(22>y&&y>\r\n 0&&x>0&&80>x&&D>z[o]){z[o]=D;b[o]=(N>0\r\n  ?N:0)[\".,-~:;=!*#$@\"];}R(.02,H,G);}R(\r\n  .07,h,g);}for(k=0;1761>k;k++)putchar\r\n   (k%80?b[k]:10);R(.04,e,a);R(.02,d,\r\n     c);usleep(15000);printf('\\n'+(\r\n        \" donut.c! \\x1b[23A\"));}}\r\n           /*3D-spinning-donut"
 test-programs/donut.c:1:14: identifier `i` [SourceVector { index: 13, column: 14, line: 1, source_file_index: 0, length: 1 }]
 test-programs/donut.c:1:15: punctuator `,` [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 1 }]
@@ -594,6 +583,7 @@ error: cannot find header `stdio.h`
   |
   = note: searched these directories:
             test-programs
+            <built-in>
   = help: add the directory containing it with `--isystem <dir>`
 
 
@@ -606,6 +596,7 @@ error: cannot find header `stdlib.h`
   |
   = note: searched these directories:
             test-programs
+            <built-in>
   = help: add the directory containing it with `--isystem <dir>`
 
 
@@ -644,16 +635,16 @@ warning: no newline at end of file
 === hash-if.c "#if 0\n1\n#elif 1\n2\n#if 0\nint main(void) {}\n#endif\n#endif\n"
 test-programs/hash-if.c:4:1: integer constant `2` = 2 (int) [SourceVector { index: 16, column: 1, line: 4, source_file_index: 0, length: 1 }]
 === include.c "#include \"include.h\"\n\n\"Hello world!\\n\"\n\n#if !defined FOO\n�\n#endif\n"
-test-programs/include.h:2:1: keyword `void` [SourceVector { index: 13, column: 1, line: 2, source_file_index: 1, length: 4 }]
-test-programs/include.h:2:6: identifier `foo` [SourceVector { index: 18, column: 6, line: 2, source_file_index: 1, length: 3 }]
-test-programs/include.h:2:9: punctuator `(` [SourceVector { index: 21, column: 9, line: 2, source_file_index: 1, length: 1 }]
-test-programs/include.h:2:10: keyword `void` [SourceVector { index: 22, column: 10, line: 2, source_file_index: 1, length: 4 }]
-test-programs/include.h:2:14: punctuator `)` [SourceVector { index: 26, column: 14, line: 2, source_file_index: 1, length: 1 }]
-test-programs/include.h:2:15: punctuator `;` [SourceVector { index: 27, column: 15, line: 2, source_file_index: 1, length: 1 }]
+test-programs/include.h:2:1: keyword `void` [SourceVector { index: 13, column: 1, line: 2, source_file_index: 2, length: 4 }]
+test-programs/include.h:2:6: identifier `foo` [SourceVector { index: 18, column: 6, line: 2, source_file_index: 2, length: 3 }]
+test-programs/include.h:2:9: punctuator `(` [SourceVector { index: 21, column: 9, line: 2, source_file_index: 2, length: 1 }]
+test-programs/include.h:2:10: keyword `void` [SourceVector { index: 22, column: 10, line: 2, source_file_index: 2, length: 4 }]
+test-programs/include.h:2:14: punctuator `)` [SourceVector { index: 26, column: 14, line: 2, source_file_index: 2, length: 1 }]
+test-programs/include.h:2:15: punctuator `;` [SourceVector { index: 27, column: 15, line: 2, source_file_index: 2, length: 1 }]
 test-programs/include.c:3:1: string literal "Hello world!\n" [SourceVector { index: 22, column: 1, line: 3, source_file_index: 0, length: 16 }]
 === once.c "#include \"once.h\"\n#include \"once.h\"\n"
-test-programs/once.h:3:1: integer constant `123` = 123 (int) [SourceVector { index: 16, column: 1, line: 3, source_file_index: 1, length: 3 }]
-test-programs/once.h:4:1: string literal "ADSAD" [SourceVector { index: 21, column: 1, line: 4, source_file_index: 1, length: 7 }]
+test-programs/once.h:3:1: integer constant `123` = 123 (int) [SourceVector { index: 16, column: 1, line: 3, source_file_index: 2, length: 3 }]
+test-programs/once.h:4:1: string literal "ADSAD" [SourceVector { index: 21, column: 1, line: 4, source_file_index: 2, length: 7 }]
 === paste.c "#define PASTE(X, Y) X##Y\n\nPASTE(+, +)\nPASTE(1, 2)\nPASTE(=, =)\nPASTE(+, =)\nPASTE(3, )\nPASTE(, 4)\n\nPASTE(A B, C D)\n\n#define X 1##2\n\nX\n"
 test-programs/paste.c:3:7: punctuator `++` [SourceVector { index: 32, column: 7, line: 3, source_file_index: 0, length: 1 }, SourceVector { index: 35, column: 10, line: 3, source_file_index: 0, length: 1 }]
 test-programs/paste.c:4:7: integer constant `12` = 12 (int) [SourceVector { index: 44, column: 7, line: 4, source_file_index: 0, length: 1 }, SourceVector { index: 47, column: 10, line: 4, source_file_index: 0, length: 1 }]
@@ -685,8 +676,8 @@ test-programs/stringify.c:8:18: integer constant `3` = 3 (int) [SourceVector { i
 === test.c "__LINE__\n"
 test-programs/test.c:1:1: integer constant `1` = 1 (int) [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 8 }]
 === triple-paste.c "#define TRIPLE_PASTE(X, Y, Z) X ## Y ## Z\r\n\r\n#define QUANTUPLE_PASTE(X, Y, Z, I, J) X ## Y ## Z ## I ## J\r\n\r\n#define WIDE_STRING(X) L ## #X\r\n\r\nTRIPLE_PASTE(A, B, C)\r\n\r\nQUANTUPLE_PASTE(0x, 1, 2, 3, 4)\r\n\r\nWIDE_STRING(\"ABC DEF\")\r\n"
-test-programs/triple-paste.c:1:31: identifier `XBC` [SourceVector { index: 30, column: 31, line: 1, source_file_index: 0, length: 1 }, SourceVector { index: 159, column: 17, line: 7, source_file_index: 0, length: 1 }, SourceVector { index: 162, column: 20, line: 7, source_file_index: 0, length: 1 }]
-test-programs/triple-paste.c:3:40: identifier `XYZ34` [SourceVector { index: 84, column: 40, line: 3, source_file_index: 0, length: 1 }, SourceVector { index: 89, column: 45, line: 3, source_file_index: 0, length: 1 }, SourceVector { index: 94, column: 50, line: 3, source_file_index: 0, length: 1 }, SourceVector { index: 194, column: 27, line: 9, source_file_index: 0, length: 1 }, SourceVector { index: 197, column: 30, line: 9, source_file_index: 0, length: 1 }]
+test-programs/triple-paste.c:7:14: identifier `ABC` [SourceVector { index: 156, column: 14, line: 7, source_file_index: 0, length: 1 }, SourceVector { index: 159, column: 17, line: 7, source_file_index: 0, length: 1 }, SourceVector { index: 162, column: 20, line: 7, source_file_index: 0, length: 1 }]
+test-programs/triple-paste.c:9:17: integer constant `0x1234` = 4660 (int) [SourceVector { index: 184, column: 17, line: 9, source_file_index: 0, length: 2 }, SourceVector { index: 188, column: 21, line: 9, source_file_index: 0, length: 1 }, SourceVector { index: 191, column: 24, line: 9, source_file_index: 0, length: 1 }, SourceVector { index: 194, column: 27, line: 9, source_file_index: 0, length: 1 }, SourceVector { index: 197, column: 30, line: 9, source_file_index: 0, length: 1 }]
 test-programs/triple-paste.c:5:24: wide string literal L"\"ABC DEF\"" [SourceVector { index: 132, column: 24, line: 5, source_file_index: 0, length: 1 }, SourceVector { index: 137, column: 29, line: 5, source_file_index: 0, length: 1 }]
 === x.c "#define FOO(X, Y) X + Y\r\n\r\n#define BAR 69\r\n\r\nFOO(2, 3)\r\nFOO(,)\r\n\r\nBAR\r\n"
 test-programs/x.c:5:5: integer constant `2` = 2 (int) [SourceVector { index: 49, column: 5, line: 5, source_file_index: 0, length: 1 }]

@@ -62,12 +62,9 @@ impl Clone for StringCache<'_> {
 impl Display for StringCache<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         writeln!(f, "StringCache:")?;
-        for i in 1..=u32::MAX {
-            if let Some(s) = self.get(i) {
-                writeln!(f, "\t{i}: {s}")?;
-            } else {
-                break;
-            }
+        for index in 1..self.ends.len() {
+            let i = u32::try_from(index).expect("string cache index overflow");
+            writeln!(f, "\t{i}: {}", self.at(i))?;
         }
         Ok(())
     }
@@ -220,13 +217,8 @@ impl<'tu> StringCache<'tu> {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Lookup by string is retained for parser test and diagnostic helpers."
-        )
-    )]
+    /// The id of `s` if it has been interned, for tests that look names up.
+    #[cfg(test)]
     pub(crate) fn get_id_from_string(&self, s: impl AsRef<str>) -> Option<StringCacheId> {
         fn inner(interner: &StringCache<'_>, s: &str) -> Option<StringCacheId> {
             let hash = FxBuildHasher.hash_one(s);
@@ -265,13 +257,7 @@ impl<'tu> StringCache<'tu> {
         Self::at_impl(self.data_str(), &self.ends, id.into())
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Resetting a cache is retained for future callers."
-        )
-    )]
+    #[cfg(test)]
     pub(crate) fn clear(&mut self) {
         self.ends.truncate(1);
         self.data.clear();

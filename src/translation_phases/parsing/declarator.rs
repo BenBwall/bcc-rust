@@ -35,6 +35,7 @@ use super::{
         DirectDeclarator,
         ParenthesizedDeclarator,
         PointerDeclarator,
+        PointerLevel,
         TypeQualifiers,
     },
     errors::ParserErrorType,
@@ -55,6 +56,12 @@ use super::{
         ParseFrame,
         ParseFrameKind,
         ParseValue,
+    },
+    modern::{
+        ModernKind,
+        ModernValue,
+        SpecifierExtension,
+        SpecifierExtensionKind,
     },
     parameter_list::ParameterListFrame,
     recovery::{
@@ -111,14 +118,14 @@ pub(super) enum DeclaratorMode {
 pub(super) struct DeclaratorFrame<'tu, 'p> {
     /// Current pointer/base/suffix transition.
     phase: DeclaratorPhase,
+    attribute_resume: DeclaratorPhase,
     /// Whether the declarator requires or permits an identifier.
     mode: DeclaratorMode,
-    /// Qualifiers for completed pointer levels, outermost first.
-    pub(super) pointer_qualifiers: ArenaVec<'p, TypeQualifiers>,
+    /// Pointer levels, outermost first. The last one collects the
+    /// qualifiers and attributes after its `*` while they are parsed.
+    pub(super) pointer_levels: ArenaVec<'p, PointerLevel<'tu>>,
     /// Direct base and suffixes accumulated before arena insertion.
     pub(super) direct_declarators: ArenaVec<'p, DirectDeclarator<'tu>>,
-    /// Qualifiers being collected for the current pointer level.
-    current_qualifiers: TypeQualifiers,
     /// Whether at least one pointer level has been parsed.
     has_pointer_level: bool,
     /// Whether an identifier or parenthesized base has been parsed.
@@ -160,7 +167,10 @@ pub(super) struct DeclaratorFrame<'tu, 'p> {
 /// C99: pointer, array, and function-derived declarator productions are
 /// §6.7.5.1-§6.7.5.3, pp. 115-121; PDF pp. 127-133.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum DeclaratorPhase {
+enum DeclaratorPhase {
+    AwaitAttributes,
+    AwaitAsm,
+    AwaitPointerAttributes,
     /// Decide whether the declarator begins with a pointer or direct base.
     PointerOrBase,
     /// Collect qualifiers for the current pointer level.
@@ -207,10 +217,10 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
     pub(super) fn new(arena: &'p Bump, mode: DeclaratorMode) -> Self {
         Self {
             phase: DeclaratorPhase::PointerOrBase,
+            attribute_resume: DeclaratorPhase::PointerOrBase,
             mode,
-            pointer_qualifiers: ArenaVec::new_in(arena),
+            pointer_levels: ArenaVec::new_in(arena),
             direct_declarators: ArenaVec::new_in(arena),
-            current_qualifiers: TypeQualifiers::empty(),
             has_pointer_level: false,
             has_direct_declarator: false,
             named: false,
@@ -227,13 +237,119 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
         }
     }
 
+    /// C23: §6.7.7.4 paragraph 13, p. 130; PDF p. 143 makes every empty
+    /// function declarator a prototype, as if its parameter list were `void`.
+    fn empty_function(parser: &Parser<'_, 'tu, 'p>, legacy: bool) -> DirectDeclarator<'tu> {
+        if legacy && parser.context.configuration.standard() < crate::configuration::CStandard::C23
+        {
+            DirectDeclarator::KAndRStyleFunction {
+                parameters: ArenaList::empty(),
+            }
+        } else {
+            DirectDeclarator::Function {
+                parameter_list: ArenaList::empty(),
+                is_variadic:    false,
+            }
+        }
+    }
+
+    /// GNU declarator labels and shared attribute attachment points.
+    /// C99: vendor extension to §6.7.5, p. 114; PDF p. 126.
+    fn step_extension(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        returned: Option<ParseValue<'tu>>,
+    ) -> Option<ParseAction<'tu, 'p>> {
+        if matches!(
+            self.phase,
+            DeclaratorPhase::PointerOrBase
+                | DeclaratorPhase::Base
+                | DeclaratorPhase::PointerQualifiers
+                | DeclaratorPhase::Suffix
+        ) && let Some(token) = token
+            && let TokenType::Keyword(keyword) = token.kind
+            && (super::msvc::calling_convention(keyword)
+                || matches!(
+                    self.phase,
+                    DeclaratorPhase::Suffix
+                        | DeclaratorPhase::Base
+                        | DeclaratorPhase::PointerOrBase
+                ) && super::msvc::type_modifier(keyword))
+        {
+            self.direct_declarators
+                .push(DirectDeclarator::MsModifier(keyword, token.source_vectors));
+            parser.merge_source(&mut self.source_vectors, token);
+            return Some(ParseAction::Consume);
+        }
+        if matches!(
+            self.phase,
+            DeclaratorPhase::PointerOrBase | DeclaratorPhase::Base | DeclaratorPhase::Array
+        ) && parser.attribute_starter(token)
+        {
+            self.attribute_resume = self.phase;
+            self.phase = DeclaratorPhase::AwaitAttributes;
+            return Some(ParseAction::Push(
+                parser.pooled_modern_frame(ModernKind::Attributes),
+            ));
+        }
+        match self.phase {
+            | DeclaratorPhase::AwaitAsm => {
+                let Some(ParseValue::Gnu(super::gnu::GnuValue::Asm(asm))) = returned else {
+                    panic!("asm label child protocol");
+                };
+                self.direct_declarators
+                    .push(DirectDeclarator::AsmLabel(asm));
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, asm.source_vectors);
+                self.phase = DeclaratorPhase::Suffix;
+                Some(ParseAction::Continue)
+            },
+            | DeclaratorPhase::AwaitPointerAttributes | DeclaratorPhase::AwaitAttributes => {
+                let Some(ParseValue::Modern(ModernValue::Attributes(attributes))) = returned else {
+                    panic!("declarator attributes protocol: {returned:?}")
+                };
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, attributes.source_vectors);
+                if matches!(self.phase, DeclaratorPhase::AwaitPointerAttributes) {
+                    // C23 §6.7.7.2p1: attributes after a `*` appertain to
+                    // that pointer.
+                    let level = self
+                        .pointer_levels
+                        .last_mut()
+                        .expect("pointer level exists");
+                    level.attributes = Some(parser.alloc_syntax(SpecifierExtension {
+                        kind:           SpecifierExtensionKind::Attributes(attributes),
+                        next:           level.attributes,
+                        source_vectors: attributes.source_vectors,
+                    }));
+                    self.phase = DeclaratorPhase::PointerQualifiers;
+                } else {
+                    self.direct_declarators
+                        .push(DirectDeclarator::Attributes(attributes));
+                    self.phase = self.attribute_resume;
+                }
+                Some(ParseAction::Continue)
+            },
+            | _ => None,
+        }
+    }
+
     pub(super) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
+        if let Some(action) = self.step_extension(parser, token, returned) {
+            return action;
+        }
         match self.phase {
+            | DeclaratorPhase::AwaitAsm
+            | DeclaratorPhase::AwaitPointerAttributes
+            | DeclaratorPhase::AwaitAttributes => unreachable!("extension phases handled above"),
             | DeclaratorPhase::PointerOrBase => {
                 debug_assert!(
                     returned.is_none(),
@@ -243,7 +359,10 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     let token = token.expect("asterisk token exists");
                     parser.merge_source(&mut self.source_vectors, token);
                     self.has_pointer_level = true;
-                    self.current_qualifiers = TypeQualifiers::empty();
+                    self.pointer_levels.push(PointerLevel {
+                        qualifiers: TypeQualifiers::empty(),
+                        attributes: None,
+                    });
                     self.phase = DeclaratorPhase::PointerQualifiers;
                     ParseAction::Consume
                 } else {
@@ -252,6 +371,10 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 }
             },
             | DeclaratorPhase::PointerQualifiers => {
+                if parser.attribute_starter(token) {
+                    self.phase = DeclaratorPhase::AwaitPointerAttributes;
+                    return ParseAction::Push(parser.pooled_modern_frame(ModernKind::Attributes));
+                }
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -259,13 +382,16 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 if let Some(token) = token
                     && let Some(qualifier) = type_qualifier(token.kind)
                 {
+                    let level = self
+                        .pointer_levels
+                        .last_mut()
+                        .expect("pointer level exists");
                     // C99 §6.7.3p4: a repeated qualifier is harmless; warn.
-                    if self.mode != DeclaratorMode::Abstract
-                        && self.current_qualifiers.contains(qualifier)
+                    if self.mode != DeclaratorMode::Abstract && level.qualifiers.contains(qualifier)
                     {
                         report_duplicate_type_qualifier(parser, token, qualifier);
                     }
-                    self.current_qualifiers.insert(qualifier);
+                    level.qualifiers.insert(qualifier);
                     parser.merge_source(&mut self.source_vectors, token);
                     return ParseAction::Consume;
                 }
@@ -274,14 +400,14 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 // current pointer level and starts the
                 // next without involving Rust recursion.
                 if is_operator(token, OperatorTokenType::Asterisk) {
-                    self.pointer_qualifiers.push(self.current_qualifiers);
-                    self.current_qualifiers = TypeQualifiers::empty();
+                    self.pointer_levels.push(PointerLevel {
+                        qualifiers: TypeQualifiers::empty(),
+                        attributes: None,
+                    });
                     let token = token.expect("asterisk token exists");
                     parser.merge_source(&mut self.source_vectors, token);
                     ParseAction::Consume
                 } else {
-                    self.pointer_qualifiers.push(self.current_qualifiers);
-                    self.current_qualifiers = TypeQualifiers::empty();
                     self.phase = DeclaratorPhase::Base;
                     ParseAction::Continue
                 }
@@ -292,7 +418,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     "this frame phase cannot receive a child value"
                 );
                 if let Some(token) = token
-                    && token.kind == TokenType::Identifier
+                    && matches!(token.kind, TokenType::Identifier)
                     && self.mode != DeclaratorMode::Abstract
                 {
                     parser.merge_source(&mut self.source_vectors, token);
@@ -360,14 +486,20 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
                     let token = token.expect("closing-parenthesis token exists");
                     self.direct_declarators
-                        .push(DirectDeclarator::KAndRStyleFunction {
-                            parameters: ArenaList::empty(),
-                        });
+                        .push(Self::empty_function(parser, true));
                     self.has_direct_declarator = true;
                     parser.merge_source(&mut self.source_vectors, token);
                     self.phase = DeclaratorPhase::Suffix;
                     ParseAction::Consume
-                } else if token.is_some_and(|token| parser.declaration_starter(token)) {
+                } else if is_operator(token, OperatorTokenType::Ellipsis)
+                    || if parser.attribute_starter(token) {
+                        // Leading attributes may start a parameter or a
+                        // grouped declarator, so classify what follows them.
+                        parser.attributes_precede_declaration()
+                    } else {
+                        token.is_some_and(|token| parser.declaration_starter(token) && !matches!(token.kind, TokenType::Keyword(k) if super::msvc::calling_convention(k) || super::msvc::type_modifier(k)))
+                    }
+                {
                     self.phase = DeclaratorPhase::AwaitParameterList;
                     Self::push_parameter_list(parser, false)
                 } else {
@@ -390,10 +522,9 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     return ParseAction::Reprocess;
                 };
                 let source_vectors = declarator.source_vectors;
-                self.source_vectors =
-                    Some(self.source_vectors.map_or(source_vectors, |existing| {
-                        parser.context.merge_vectors(existing, source_vectors)
-                    }));
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, source_vectors);
                 self.nested = Some(ParenthesizedDeclarator {
                     declarator,
                     delimiters: self.nested_open.take().unwrap_or_default(),
@@ -414,10 +545,26 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 self.close_nested(parser, token)
             },
             | DeclaratorPhase::Suffix => {
+                if token.is_some_and(|x| {
+                    matches!(x.kind, TokenType::Keyword(KeywordTokenType::Asm))
+                        || matches!(x.kind, TokenType::Keyword(KeywordTokenType::MsAsm))
+                            && x.contents == KeywordTokenType::MsAsm.cache_id()
+                }) {
+                    self.phase = DeclaratorPhase::AwaitAsm;
+                    return super::gnu::GnuFrame::push(
+                        parser,
+                        super::gnu::GnuKind::Asm { label: true },
+                    );
+                }
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
+                if parser.attribute_starter(token) {
+                    self.attribute_resume = DeclaratorPhase::Suffix;
+                    self.phase = DeclaratorPhase::AwaitAttributes;
+                    return ParseAction::Push(parser.pooled_modern_frame(ModernKind::Attributes));
+                }
                 // Direct-declarator suffixes repeat left-to-right.
                 // Re-enter this phase after
                 // every array or function child to preserve
@@ -460,6 +607,9 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     {
                         report_duplicate_type_qualifier(parser, token, qualifier);
                     }
+                    if self.array_qualifiers.is_empty() {
+                        parser.c99_syntax_extension("qualified array parameter", token);
+                    }
                     // C99 §6.7.5p1: qualifiers go before or after `static`,
                     // not both.
                     if self.array_is_static && self.array_qualifiers_before_static {
@@ -475,10 +625,11 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     parser.merge_source(&mut self.source_vectors, token);
                     return ParseAction::Consume;
                 }
-                if token
-                    .is_some_and(|token| token.kind == TokenType::Keyword(KeywordTokenType::Static))
-                {
+                if token.is_some_and(|token| {
+                    matches!(token.kind, TokenType::Keyword(KeywordTokenType::Static))
+                }) {
                     let token = token.expect("static token exists");
+                    parser.c99_syntax_extension("static array parameter", token);
                     if self.array_is_static {
                         parser.report(ParserErrorType::StaticSpecifiedTwice, Some(token));
                     }
@@ -488,6 +639,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 }
                 if is_array_pointer_marker(parser, token) {
                     let token = token.expect("asterisk token exists");
+                    parser.c99_syntax_extension("variable length array marker", token);
                     // C99 §6.7.6p1: an abstract declarator's `[ * ]` takes no
                     // qualifiers, whichever suffixes or grouping precede it.
                     if self.mode != DeclaratorMode::Named
@@ -600,11 +752,11 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                         panic!("array-bound frame returned an unexpected value: {returned:?}");
                     };
                     let source_vectors = index.source_vectors;
+                    check_array_extension(parser, index);
                     self.array_assignment_expression = Some(index);
-                    self.source_vectors =
-                        Some(self.source_vectors.map_or(source_vectors, |existing| {
-                            parser.context.merge_vectors(existing, source_vectors)
-                        }));
+                    parser
+                        .context
+                        .merge_into(&mut self.source_vectors, source_vectors);
                 }
                 if is_operator(token, OperatorTokenType::ClosingSquareBracket) {
                     let token = token.expect("closing-square-bracket token exists");
@@ -669,16 +821,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 // interpret their contents as a prototype.
                 let allow_k_and_r = self.named;
                 if is_operator(token, OperatorTokenType::ClosingParenthesis) {
-                    let direct = if allow_k_and_r {
-                        DirectDeclarator::KAndRStyleFunction {
-                            parameters: ArenaList::empty(),
-                        }
-                    } else {
-                        DirectDeclarator::Function {
-                            parameter_list: ArenaList::empty(),
-                            is_variadic:    false,
-                        }
-                    };
+                    let direct = Self::empty_function(parser, allow_k_and_r);
                     self.direct_declarators.push(direct);
                     self.has_direct_declarator = true;
                     let token = token.expect("closing-parenthesis token exists");
@@ -705,10 +848,9 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 else {
                     panic!("parameter list returned an unexpected value: {returned:?}");
                 };
-                self.source_vectors =
-                    Some(self.source_vectors.map_or(source_vectors, |existing| {
-                        parser.context.merge_vectors(existing, source_vectors)
-                    }));
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, source_vectors);
                 self.direct_declarators.push(direct_declarator);
                 self.has_direct_declarator = true;
                 self.phase = DeclaratorPhase::Suffix;
@@ -734,11 +876,11 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 // Commit both flat component lists atomically before
                 // returning the value that
                 // references their stable slices.
-                let pointer_start = parser.alloc_syntax_list(&mut self.pointer_qualifiers);
+                let pointer_start = parser.alloc_syntax_list(&mut self.pointer_levels);
                 let direct_start = parser.alloc_syntax_list(&mut self.direct_declarators);
                 let declarator = Declarator {
                     pointer:        PointerDeclarator {
-                        type_qualifiers_list: pointer_start,
+                        levels: pointer_start,
                     },
                     kind:           direct_start,
                     source_vectors: self.source_vectors.unwrap_or_default(),
@@ -831,9 +973,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
     /// Returns this popped frame's lists and, if it began its chain, the
     /// chain flag. Every nested declarator of the chain has popped by then.
     pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
-        pools
-            .pointer_qualifiers
-            .reclaim(&mut self.pointer_qualifiers);
+        pools.pointer_levels.reclaim(&mut self.pointer_levels);
         pools
             .direct_declarators
             .reclaim(&mut self.direct_declarators);
@@ -843,5 +983,21 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
             self.owns_chain_named = false;
             pools.reclaim_chain_flag(chain_named);
         }
+    }
+}
+fn check_array_extension<'tu>(parser: &mut Parser<'_, 'tu, '_>, index: &'tu Expression<'tu>) {
+    let mut operand = index;
+    while let super::syntax::ExpressionType::Parenthesized { expression, .. } = operand.kind {
+        operand = expression;
+    }
+    if let super::syntax::ExpressionType::Constant(super::syntax::Constant::Integer(value)) =
+        operand.kind
+        && i128::from(value) == 0
+    {
+        parser.extension_source(
+            crate::configuration::Feature::ZeroLengthArrays,
+            "zero-length array",
+            index.source_vectors,
+        );
     }
 }

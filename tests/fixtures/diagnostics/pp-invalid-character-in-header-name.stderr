@@ -21,7 +21,8 @@ error: cannot find header `it's.h`
 1 | #include <it's.h>
   |          ^^^^^^^^ not found in any search directory
   |
-  = note: the path is absolute; no directory was searched
+  = note: searched these directories:
+            <built-in>
   = help: add the directory containing it with `--isystem <dir>`
 
 3 errors generated.

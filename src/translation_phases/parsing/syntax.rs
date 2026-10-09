@@ -44,6 +44,7 @@ use crate::{
 pub(crate) enum ExternalDeclaration<'tu> {
     /// Declaration parsed without a hard syntax diagnostic.
     Declaration(&'tu Declaration<'tu>),
+    Asm(&'tu super::gnu::Asm<'tu>),
     /// Repaired declaration produced after at least one hard syntax diagnostic.
     RecoveredDeclaration(&'tu Declaration<'tu>),
     /// Function definition parsed without a hard syntax diagnostic.
@@ -92,6 +93,7 @@ pub(crate) struct FunctionDefinition<'tu> {
 /// C99: `block-item` is §6.8.2 paragraph 1, p. 132; PDF p. 144.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum BlockItem<'tu> {
+    FunctionDefinition(&'tu FunctionDefinition<'tu>),
     Declaration(&'tu Declaration<'tu>),
     Statement(&'tu Statement<'tu>),
 }
@@ -100,6 +102,7 @@ pub(crate) enum BlockItem<'tu> {
 /// required position.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum ExpressionSlot<'tu> {
+    Selection(&'tu SelectionHeader<'tu>),
     Parsed(&'tu Expression<'tu>),
     Missing(SourceVectors),
 }
@@ -129,6 +132,17 @@ pub(crate) struct Statement<'tu> {
 /// productions are §6.8.1-§6.8.6.4, pp. 131-139; PDF pp. 143-151.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum StatementType<'tu> {
+    MsAsm(&'tu super::msvc::MsAsm<'tu>),
+    Seh(&'tu super::msvc::Seh<'tu>),
+    SehLeave,
+    Asm(&'tu super::gnu::Asm<'tu>),
+    ComputedGoto(ExpressionSlot<'tu>),
+    LocalLabels(ArenaList<'tu, Identifier>),
+    Attributed(&'tu AttributedStatement<'tu>),
+    Declaration(&'tu Declaration<'tu>),
+    NamedBreak(Identifier),
+    NamedContinue(Identifier),
+    CaseRange(&'tu CaseRange<'tu>),
     /// C99: §6.8.2, p. 132; PDF p. 144.
     Compound {
         items: ArenaList<'tu, BlockItem<'tu>>,
@@ -177,6 +191,28 @@ pub(crate) enum StatementType<'tu> {
     Default(&'tu Statement<'tu>),
     /// C99: the null statement is §6.8.3 paragraph 3, p. 132; PDF p. 144.
     Null,
+}
+
+/// C2y: selection headers preserve a declaration and an optional explicit
+/// expression (N3388).
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct SelectionHeader<'tu> {
+    pub(crate) declaration: &'tu Declaration<'tu>,
+    pub(crate) expression:  Option<ExpressionSlot<'tu>>,
+}
+/// C23: attributes precede any statement; C99's statement children remain
+/// immutable.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct AttributedStatement<'tu> {
+    pub(crate) attributes: &'tu super::modern::AttributeSpecifier<'tu>,
+    pub(crate) statement:  &'tu Statement<'tu>,
+}
+/// C2y: inclusive case-label ranges extend C99 §6.8.1, p. 131; PDF p. 143.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct CaseRange<'tu> {
+    pub(crate) lower:     ConstantExpressionSlot<'tu>,
+    pub(crate) upper:     ConstantExpressionSlot<'tu>,
+    pub(crate) statement: &'tu Statement<'tu>,
 }
 
 /// The three header clauses and body of a `for` statement. They are kept
@@ -230,8 +266,16 @@ pub(crate) struct Expression<'tu> {
 /// pp. 69-94; PDF pp. 81-106.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum ExpressionType<'tu> {
+    StatementExpression(&'tu Statement<'tu>),
+    Builtin(&'tu super::gnu::Builtin<'tu>),
+    LabelAddress(Identifier),
+    /// GNU omitted middle operand: `then_expression` aliases
+    /// `condition_expression`.
+    OmittedConditional(&'tu ConditionalExpression<'tu>),
     /// C99: `( expression )`, §6.5.1 paragraph 1, p. 69; PDF p. 81.
-    Parenthesized { expression: &'tu Expression<'tu> },
+    Parenthesized {
+        expression: &'tu Expression<'tu>,
+    },
     /// C99: §6.5.15, p. 90; PDF p. 102.
     Conditional(&'tu ConditionalExpression<'tu>),
     /// Binary operators of §6.5.5-§6.5.17, pp. 82-94; PDF pp. 94-106, and
@@ -286,6 +330,12 @@ pub(crate) enum ExpressionType<'tu> {
     /// C99: §6.5.3 paragraph 1, p. 78; PDF p. 90; §6.5.3.4, p. 80;
     /// PDF p. 92.
     SizeofExpr(&'tu Expression<'tu>),
+    AlignofType(&'tu TypeName<'tu>),
+    AlignofExpr(&'tu Expression<'tu>),
+    Countof(super::modern::SyntaxOperand<'tu>),
+    Generic(&'tu super::modern::GenericSelection<'tu>),
+    Boolean(bool),
+    Nullptr,
     /// C99: §6.5.4, p. 81; PDF p. 93.
     Cast {
         target_type:        &'tu TypeName<'tu>,
@@ -366,6 +416,9 @@ pub(crate) enum BinaryOperator {
 /// pp. 69-81; PDF pp. 81-93.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum UnaryOperator {
+    Real,
+    Imag,
+    Extension,
     AddressOf,
     Indirection,
     Plus,

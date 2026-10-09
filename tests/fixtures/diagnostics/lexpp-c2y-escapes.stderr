@@ -1,0 +1,19 @@
+error: invalid delimited escape sequence
+ --> lexpp-c2y-escapes.c:1:9
+  |
+1 | int a = '\x{}';
+  |         ^^^^^^
+
+error: invalid delimited escape sequence
+ --> lexpp-c2y-escapes.c:2:9
+  |
+2 | int b = '\o{8}';
+  |         ^^^^^^^
+
+error: delimited escape sequence is too large
+ --> lexpp-c2y-escapes.c:3:9
+  |
+3 | int c = '\x{100}';
+  |         ^^^^^^^^^
+
+3 errors generated.

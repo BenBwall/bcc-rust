@@ -34,7 +34,7 @@
 mod compound_statement;
 mod declaration;
 mod declaration_specifiers;
-mod declaration_syntax;
+pub(crate) mod declaration_syntax;
 mod declarator;
 mod driver;
 mod enum_specifier;
@@ -44,15 +44,27 @@ mod expression_operators;
 mod external_declaration;
 mod frame_pool;
 mod function_definition;
+mod gnu;
 mod initializer;
 mod inspection;
 mod machine;
+mod modern;
+pub(crate) use modern::{
+    AttributeSpecifier,
+    ExtendedType,
+    GenericSelection,
+    SpecifierExtension,
+    SpecifierExtensionKind,
+    StaticAssertion,
+    SyntaxOperand,
+};
+mod msvc;
 mod parameter_list;
 mod recovery;
 mod scope;
 mod statement;
 mod struct_or_union;
-mod syntax;
+pub(crate) mod syntax;
 mod syntax_log;
 #[cfg(test)]
 #[expect(
@@ -72,6 +84,10 @@ use std::fmt::Debug;
 pub(crate) use declaration_syntax::DirectDeclarator;
 pub(crate) use declaration_syntax::TypeSpecifiers;
 pub(crate) use errors::ParserError;
+pub(crate) use gnu::{
+    Builtin,
+    OffsetMember,
+};
 pub(crate) use inspection::InspectionOptions;
 #[cfg(test)]
 use machine::FrameTraceEvent;
@@ -181,6 +197,15 @@ pub(crate) struct Parser<'c, 'tu, 'p> {
     recovery: RecoveryState<'p>,
     /// Number of hard parser diagnostics emitted so far.
     hard_error_count: usize,
+    /// Open `__extension__` scopes; while any is open, extension diagnostics
+    /// for the tokens read are suppressed.
+    pedantic_suppression: usize,
+    /// Token diagnostics indexed once by spelling, provenance and invocation.
+    token_diagnostics: driver::TokenDiagnostics<'tu, 'p>,
+    /// The number of `switch_scopes` entries that belong to enclosing
+    /// function bodies, so a nested function's `case` labels never attach
+    /// to an outer `switch`.
+    switch_floor: usize,
     /// Frame currently executing, captured into every parser diagnostic.
     active_frame: ParseFrameKind,
     /// Whether at least one external declaration has reduced successfully or
@@ -257,13 +282,6 @@ pub(crate) struct ParsedTranslationUnit<'tu> {
 }
 
 impl<'tu> ParsedTranslationUnit<'tu> {
-    #[cfg_attr(
-        not(any(test, feature = "benchmarking-internals")),
-        expect(
-            dead_code,
-            reason = "The CLI reads roots through inspection; tests and benchmarks read them here."
-        )
-    )]
     pub(crate) fn external_declarations(&self) -> &[ExternalDeclaration<'tu>] {
         &self.roots
     }

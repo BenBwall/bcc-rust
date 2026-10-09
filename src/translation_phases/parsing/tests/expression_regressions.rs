@@ -576,27 +576,18 @@ fn statement_keyword_after_an_operand_ends_the_expression() {
     });
 }
 
-// Round-2 regression from the corpus (gcc.c-torture/compile/20071107-1.c,
-// pr33382.c, pr33173.c): a GNU statement expression `({ ... })` is not C99,
-// but the brace group directly inside a `(` is one error operand. The
-// enclosing call or parenthesis keeps its `)`, and the statements after the
-// expression parse normally.
+// GNU statement expressions keep their compound body and enclosing expression
+// delimiters.
 #[test]
-fn brace_group_directly_inside_parentheses_is_one_error_operand() {
+fn statement_expressions_keep_enclosing_calls_and_following_statements() {
     let source =
         "void w(void);\nint e(int, int);\nvoid g(int r)\n{\n  if (e(__extension__ ({\n    int \
          v;\n    if (r == 1) v = 1;\n    else v = 0;\n    v;\n  }), 1)) {\n  }\n  else w();\n  r \
          = 2;\n}\n";
     with_run(source, |outcome| {
-        assert_eq!(
-            outcome.locations(),
-            [offset_of(source, "{\n    int v")],
-            "{:?}",
-            outcome.errors
-        );
-        assert_eq!(
-            outcome.tree.matches("block-item:").count(),
-            2,
+        assert!(outcome.errors.is_empty(), "{:?}", outcome.errors);
+        assert!(
+            outcome.tree.contains("statement-expression"),
             "{}",
             outcome.tree
         );
@@ -609,21 +600,21 @@ fn brace_group_directly_inside_parentheses_is_one_error_operand() {
     });
 
     for (source, block_items) in [
-        ("int x = ({ 1; });\nint y;\n", 0),
-        ("void g(int a) { a = ({ int t = a; t; }) + 1; a = 2; }\n", 2),
+        ("int x = ({ 1; });\nint y;\n", 1),
+        ("void g(int a) { a = ({ int t = a; t; }) + 1; a = 2; }\n", 4),
         (
             "int f(); void g(int a) { a = f(({ ({ 1; }); }), 2); a = 2; }\n",
-            2,
+            4,
         ),
         (
             "int f(); void g(int a) { while (f(({ for (;;) break; 0; }))) a = 1; a = 2; }\n",
-            2,
+            4,
         ),
     ] {
         with_run(source, |outcome| {
             assert_eq!(
                 outcome.locations().len(),
-                1,
+                0,
                 "{source}: {:?}",
                 outcome.errors
             );
@@ -737,22 +728,18 @@ fn misplaced_binary_operator_keeps_its_right_operand() {
 
 // Corpus (gcc.c-torture/execute/scal-to-vec1.c): a brace list after a
 // parenthesized expression that is not a type name, as in a compound
-// literal with an attribute in its type name, is skipped with the operand
+// literal with a non-type operand, is skipped with the operand
 // instead of leaking its `}` to the enclosing statement.
 #[test]
 fn brace_list_after_a_parenthesized_expression_is_skipped_with_it() {
     for (source, location) in [
         ("void g(int a, int b) { a = (a b){1, 2}; a = 2; }\n", "b){"),
         ("void g(int a) { a = (a){1, 2}; a = 2; }\n", "{1"),
-        (
-            "void g(int a) { a = (__attribute__((x)) float){2., 2.} + 1; a = 2; }\n",
-            "float",
-        ),
     ] {
         with_run(source, |outcome| {
             assert_eq!(
                 outcome.locations(),
-                [offset_of(source, location)],
+                vec![offset_of(source, location)],
                 "{source}: {:?}",
                 outcome.errors
             );

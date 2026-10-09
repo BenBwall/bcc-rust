@@ -45,6 +45,7 @@ use crate::{
         GetSeverity,
         GetSourceVectors,
         SourcePosition,
+        SourceVector,
         SourceVectors,
         preprocessor_tokenizer::PreprocessorTokenType,
     },
@@ -60,6 +61,25 @@ pub(crate) struct PreprocessorError<'tu> {
     pub(crate) source_vectors: SourceVectors,
 }
 
+/// Owned related locations for Clang's implementation-defined pragma warning.
+/// C99: §6.10.6p1, p. 159; PDF p. 171; macro rescanning §6.10.3.4p1,
+/// p. 155; PDF p. 167.
+#[derive(Debug)]
+pub(crate) struct DeprecatedMacroDiagnostic<'tu> {
+    pub(super) name:       &'tu str,
+    pub(super) message:    Option<&'tu str>,
+    pub(super) marked_at:  SourceVector,
+    pub(super) expansions: &'tu [MacroExpansionNote<'tu>],
+}
+
+/// A macro replacement's spelling location, retained independently of frames.
+/// C99: §6.10.3.4p1, p. 155; PDF p. 167.
+#[derive(Debug, Clone)]
+pub(super) struct MacroExpansionNote<'tu> {
+    pub(super) name:     &'tu str,
+    pub(super) location: SourceVector,
+}
+
 impl Display for PreprocessorError<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(f, "{}", self.error_type)
@@ -73,9 +93,23 @@ impl ToDiagnostic for PreprocessorError<'_> {
         source: SourceVectors,
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
-        self.error_type
+        let mut diagnostic = self
+            .error_type
             .explain_in(arena, context.source_spelling(source))
-            .at(self.severity(), source)
+            .at(self.severity(), source);
+        if let PreprocessorErrorType::DeprecatedMacro(deprecation) = &self.error_type {
+            for expansion in deprecation.expansions {
+                diagnostic = diagnostic.secondary_segments(
+                    arena.alloc_slice_fill_iter([expansion.location.clone()]),
+                    format_in!(arena, "expanded from macro `{}`", expansion.name),
+                );
+            }
+            diagnostic = diagnostic.secondary_segments(
+                arena.alloc_slice_fill_iter([deprecation.marked_at.clone()]),
+                "macro marked deprecated here",
+            );
+        }
+        diagnostic
     }
 }
 
@@ -117,7 +151,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::NoConditionInElifDirective
             | PreprocessorErrorType::MoreIfDirectivesThanEndifDirectives
             | PreprocessorErrorType::MoreEndifDirectivesThanIfDirectives
-            | PreprocessorErrorType::ElifDirectiveWithoutIfDirective
+            | PreprocessorErrorType::ElifDirectiveWithoutIfDirective(_)
             | PreprocessorErrorType::ConditionalArmAfterElse(_)
             | PreprocessorErrorType::ElseDirectiveWithoutIfDirective
             | PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(..)
@@ -142,13 +176,10 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence
             | PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall
             | PreprocessorErrorType::MultiCharacterLiteralsUnsupported
-            | PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(..)
-            | PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(..)
             | PreprocessorErrorType::ExpectedIdentifierInMacroDefinition(..)
             | PreprocessorErrorType::VariadicMacroMustBeLastParameter(..)
             | PreprocessorErrorType::DuplicateMacroParameter(..)
             | PreprocessorErrorType::ExpectedCommaOrClosingParenthesisInMacroDefinition(..)
-            | PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(..)
             | PreprocessorErrorType::ExpectedIdentifierInUndefDirective(..)
             | PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(..)
             | PreprocessorErrorType::HashOperatorMustBeFollowedByAMacroArgument(..)
@@ -159,6 +190,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::MissingNumberInLineDirective(..)
             | PreprocessorErrorType::MissingNewlineAfterLineDirective(..)
             | PreprocessorErrorType::WideStringInLineDirective
+            | PreprocessorErrorType::EncodedStringInLineDirective(..)
             | PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(..)
             | PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(..)
             | PreprocessorErrorType::MissingStringLiteralInPragmaOperator(..)
@@ -218,9 +250,20 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(_)
             | PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(..)
             | PreprocessorErrorType::UnexpectedTokenAtPhase7(..)
+            | PreprocessorErrorType::LanguageConstraint(..)
+            | PreprocessorErrorType::WideCharacterOutOfRange
+            | PreprocessorErrorType::EmbeddedResourceNotFound(..)
+            | PreprocessorErrorType::EmbeddedResourceUnreadable { .. }
+            | PreprocessorErrorType::EmbeddedResourceTooLarge(..)
+            | PreprocessorErrorType::VaOptUnavailable
+            | PreprocessorErrorType::MissingOpeningParenthesisAfterVaOpt
+            | PreprocessorErrorType::NestedVaOpt
+            | PreprocessorErrorType::UnterminatedVaOpt
+            | PreprocessorErrorType::HashHashAtVaOptBoundary
             | PreprocessorErrorType::ErrorDirective(..)
              => ErrorSeverity::Error,
             | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(policy)
+            | PreprocessorErrorType::DefinedFromFunctionLikeMacroExpansion(policy)
             | PreprocessorErrorType::MissingVariadicArgument(policy)
             | PreprocessorErrorType::BackslashInQuotedHeaderName(policy) =>
                 match policy {
@@ -230,10 +273,19 @@ impl GetSeverity for PreprocessorError<'_> {
                     | ExtensionPolicy::Warn => ErrorSeverity::Warning,
                     | ExtensionPolicy::Deny => ErrorSeverity::Error,
                 },
+            | PreprocessorErrorType::VaArgsOutsideVariadicMacro(policy)
+            | PreprocessorErrorType::VaOptOutsideVariadicMacro(policy)
+            | PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(_, policy)
+            | PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(_, policy)
+            | PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(_, policy) =>
+                match policy {
+                | ExtensionPolicy::Allow | ExtensionPolicy::Warn => ErrorSeverity::Warning,
+                | ExtensionPolicy::Deny => ErrorSeverity::Error,
+            },
             | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
+            | PreprocessorErrorType::DefinedFromObjectLikeMacroExpansion
             | PreprocessorErrorType::UndefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::MissingWhitespaceAfterMacroName(..)
-            | PreprocessorErrorType::VaArgsOutsideVariadicMacro
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(..)
             | PreprocessorErrorType::FloatConstantOutOfRange { .. }
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
@@ -250,15 +302,74 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::ExtraTokensAfterPragmaOperator
             | PreprocessorErrorType::ExtraTokensAfterIncludeDirective
             | PreprocessorErrorType::ExtraTokensAfterConditionalDirective(_)
-            | PreprocessorErrorType::ExtraTokensAfterIfdefDirective
-            | PreprocessorErrorType::ExtraTokensAfterIfndefDirective
-            | PreprocessorErrorType::PragmaOnceInNonHeader => ErrorSeverity::Warning,
+            | PreprocessorErrorType::ExtraTokensAfterIfdefDirective(_)
+            | PreprocessorErrorType::ExtraTokensAfterIfndefDirective(_)
+            | PreprocessorErrorType::WarningDirective(..)
+            | PreprocessorErrorType::DeprecatedMacro(..)
+            | PreprocessorErrorType::PragmaOnceInNonHeader
+            | PreprocessorErrorType::SystemHeaderPragmaInMainFile
+            | PreprocessorErrorType::IncludeNextInPrimarySource(..)
+            | PreprocessorErrorType::IncludeNextWithoutSearchEntry(..) => ErrorSeverity::Warning,
         }
     }
 }
 
 #[derive(Debug)]
 pub(crate) enum PreprocessorErrorType<'tu> {
+    /// C99: implementation-defined wide encoding §6.4.4.4p11, p. 61;
+    /// PDF p. 73. A UTF-16 wide character must occupy one `wchar_t`.
+    WideCharacterOutOfRange,
+    /// A violated lexical or directive constraint of a later standard, with
+    /// its message.
+    ///
+    /// C99: diagnostics are required by §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    LanguageConstraint(&'tu str),
+    /// An `#embed` resource that no search place holds.
+    ///
+    /// C23: §6.10.4.1 paragraph 3, p. 171; PDF p. 184.
+    EmbeddedResourceNotFound(&'tu str),
+    /// An `#embed` resource that was found but could not be opened, sized,
+    /// or read, with the system's reason.
+    ///
+    /// C23: §6.10.4.1 paragraph 3, p. 171; PDF p. 184.
+    EmbeddedResourceUnreadable {
+        name:   &'tu str,
+        reason: &'tu str,
+    },
+    /// An `#embed` resource larger than the host can address.
+    ///
+    /// C23: §6.10.4.1 paragraph 3, p. 171; PDF p. 184.
+    EmbeddedResourceTooLarge(&'tu str),
+    /// `__VA_OPT__` in a variadic macro's replacement list in a mode that
+    /// lacks it. The definition is discarded.
+    ///
+    /// C23: §6.10.5.1 paragraph 1, p. 179; PDF p. 192.
+    VaOptUnavailable,
+    /// `__VA_OPT__` without its parenthesized replacement. The definition is
+    /// discarded.
+    ///
+    /// C23: §6.10.5.1 paragraphs 1 and 3, p. 179; PDF p. 192.
+    MissingOpeningParenthesisAfterVaOpt,
+    /// `__VA_OPT__` within another's replacement. The definition is
+    /// discarded.
+    ///
+    /// C23: §6.10.5.1 paragraph 3, p. 179; PDF p. 192.
+    NestedVaOpt,
+    /// A `__VA_OPT__` replacement without its closing parenthesis. The
+    /// definition is discarded.
+    ///
+    /// C23: §6.10.5.1 paragraph 3, p. 179; PDF p. 192.
+    UnterminatedVaOpt,
+    /// `##` first or last in a `__VA_OPT__` replacement, which must form a
+    /// valid replacement list. The definition is discarded.
+    ///
+    /// C23: §6.10.5.1 paragraph 3, p. 179; PDF p. 192, and §6.10.5.3
+    /// paragraph 1, p. 181; PDF p. 194.
+    HashHashAtVaOptBoundary,
+    /// A `#warning` and its message, reported like `#error` but without
+    /// failing translation. C23: §6.10.7 paragraph 1, p. 186; PDF p. 199;
+    /// a GNU extension in earlier modes.
+    WarningDirective(&'tu str),
     /// A pp-number with `0x` that is not a `hexadecimal-floating-constant`.
     ///
     /// C99: §6.4 paragraph 2, p. 49; PDF p. 61, and §6.4.4.2 paragraph 1,
@@ -279,7 +390,9 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     // C99: a pp-number that is not an `integer-constant`, §6.4 paragraph 2,
     // p. 49; PDF p. 61, and §6.4.4.1 paragraph 1, pp. 54-55; PDF pp. 66-67.
     InvalidHexadecimalIntegerLiteral,
-    /// Binary constants are an extension (§4p6); C99 has none.
+    /// A malformed binary constant. C99 has none; they are an extension.
+    ///
+    /// C99: extensions are permitted by §4 paragraph 6, p. 7; PDF p. 19.
     InvalidBinaryIntegerLiteral,
     InvalidOctalIntegerLiteral,
     InvalidDecimalIntegerLiteral,
@@ -405,6 +518,20 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     MissingOpeningParenthesisOrIdentifierInDefinedDirective(PreprocessorTokenType),
     MissingIdentifierInDefinedDirective(PreprocessorTokenType),
     MissingClosingParenthesisInDefinedDirective(PreprocessorTokenType),
+    /// A `defined` operator that an object-like macro or a macro argument
+    /// produced. The behavior is undefined; it is evaluated as GCC and Clang
+    /// do, and like Clang's default `-Wexpansion-to-defined` it is a warning
+    /// under every policy.
+    ///
+    /// C99: §6.10.1 paragraph 4, p. 148; PDF p. 160.
+    DefinedFromObjectLikeMacroExpansion,
+    /// A `defined` operator that a function-like macro's replacement list
+    /// produced. The behavior is undefined; it is evaluated as GCC and Clang
+    /// do, and like Clang's pedantic `-Wexpansion-to-defined` it is an
+    /// extension under the policy.
+    ///
+    /// C99: §6.10.1 paragraph 4, p. 148; PDF p. 160.
+    DefinedFromFunctionLikeMacroExpansion(ExtensionPolicy),
     // C99: `# if constant-expression` and `# elif constant-expression`,
     // §6.10 paragraph 1, p. 145; PDF p. 157.
     NoConditionInIfDirective,
@@ -414,16 +541,19 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     // p. 145; PDF p. 157.
     MoreIfDirectivesThanEndifDirectives,
     MoreEndifDirectivesThanIfDirectives,
-    ElifDirectiveWithoutIfDirective,
+    /// An `#elif`, or the named C23 `#elifdef` or `#elifndef`, outside a
+    /// conditional.
+    ElifDirectiveWithoutIfDirective(&'static str),
     ElseDirectiveWithoutIfDirective,
     ConditionalArmAfterElse(&'static str),
     /// C99: `# else new-line` and `# endif new-line`, §6.10 paragraph 1,
     /// p. 145; PDF p. 157, and footnote 147, p. 149; PDF p. 161.
     ExtraTokensAfterConditionalDirective(&'static str),
     // C99: `# ifdef identifier new-line`, §6.10 paragraph 1, p. 145; PDF
-    // p. 157.
-    ExpectedIdentifierInIfdefDirective(PreprocessorTokenType),
-    ExpectedIdentifierInIfndefDirective(PreprocessorTokenType),
+    // p. 157. The name is `ifdef` or `ifndef`, or C23's `elifdef` or
+    // `elifndef`, §6.10.2 paragraph 16, p. 168; PDF p. 181.
+    ExpectedIdentifierInIfdefDirective(&'static str, PreprocessorTokenType),
+    ExpectedIdentifierInIfndefDirective(&'static str, PreprocessorTokenType),
     /// C99: `# define identifier`, §6.10 paragraph 1, p. 146; PDF p. 158.
     ExpectedIdentifierInDefineDirective(PreprocessorTokenType),
     /// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173.
@@ -440,10 +570,15 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     MissingWhitespaceAfterMacroName(&'tu str),
     /// `__VA_ARGS__` in a `#define` other than in the replacement list of a
     /// variadic macro. It is kept as an ordinary identifier, so this is a
-    /// warning, as in GCC.
+    /// warning promoted to an error by pedantic-errors, as in GCC and Clang.
     ///
     /// C99: §6.10.3 paragraph 5, p. 151; PDF p. 163.
-    VaArgsOutsideVariadicMacro,
+    VaArgsOutsideVariadicMacro(ExtensionPolicy),
+    /// `__VA_OPT__` outside a variadic macro replacement list, retained
+    /// as an identifier with a warning promoted to an error by pedantic-errors,
+    /// like GCC and Clang.
+    /// C23: §6.10.5p5, p. 178; PDF p. 191.
+    VaOptOutsideVariadicMacro(ExtensionPolicy),
     /// A function-like macro that names one parameter twice. The definition
     /// is discarded.
     ///
@@ -524,16 +659,22 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     ///
     /// C99: §6.4.4.4 paragraphs 1 and 11, pp. 59-61; PDF pp. 71-73.
     MultiCharacterLiteralsUnsupported,
-    // C99: §6.10.3 paragraph 2, p. 151; PDF p. 163.
-    RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(&'tu str),
-    RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(&'tu str),
+    /// A macro redefined with the other form. C99 §6.10.3 paragraph 2, p.
+    /// 151; PDF p. 163 requires only a diagnostic; like GCC and Clang it is
+    /// a warning, an error under `-pedantic-errors`, and the new definition
+    /// replaces the old.
+    RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(&'tu str, ExtensionPolicy),
+    RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(&'tu str, ExtensionPolicy),
     // C99: the `# define` forms with `identifier-list` and `...`, §6.10
     // paragraph 1, p. 146; PDF p. 158.
     ExpectedIdentifierInMacroDefinition(PreprocessorTokenType),
     VariadicMacroMustBeLastParameter(&'tu str),
     ExpectedCommaOrClosingParenthesisInMacroDefinition(PreprocessorTokenType),
+    /// A macro redefined with different parameters or replacement list; a
+    /// warning, an error under `-pedantic-errors`, as for the variants above.
+    ///
     /// C99: §6.10.3 paragraphs 1-2, p. 151; PDF p. 163.
-    MacroRedefinedWithDifferentDefinition(&'tu str),
+    MacroRedefinedWithDifferentDefinition(&'tu str, ExtensionPolicy),
     // C99: `# undef identifier new-line`, §6.10 paragraph 1, p. 146; PDF
     // p. 158.
     ExpectedIdentifierInUndefDirective(PreprocessorTokenType),
@@ -564,6 +705,11 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     ///
     /// C99: §6.10.4 paragraph 1, p. 158; PDF p. 170.
     WideStringInLineDirective,
+    /// A `u`, `U` or `u8` string literal as the `#line` file name; the name
+    /// is ignored. The field is the encoding prefix.
+    ///
+    /// C11: §6.10.4 paragraph 1, p. 173; PDF p. 191.
+    EncodedStringInLineDirective(&'static str),
     // C99: `_Pragma ( string-literal )`, §6.10.9 paragraph 1, p. 161; PDF
     // p. 173.
     MissingOpeningParenthesisInPragmaOperator(PreprocessorTokenType),
@@ -585,18 +731,41 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// paragraph 4, p. 150; PDF p. 162.
     ExtraTokensAfterIncludeDirective,
     // C99: `# ifdef identifier new-line`, §6.10 paragraph 1, p. 145; PDF
-    // p. 157.
-    ExtraTokensAfterIfdefDirective,
-    ExtraTokensAfterIfndefDirective,
+    // p. 157, named as for `ExpectedIdentifierInIfdefDirective`.
+    ExtraTokensAfterIfdefDirective(&'static str),
+    ExtraTokensAfterIfndefDirective(&'static str),
     // C99: `#pragma STDC` takes a pragma name and an `on-off-switch`,
     // §6.10.6 paragraph 2, p. 159; PDF p. 171.
     STDCPragmaDirectiveWithoutArgument,
     STDCPragmaDirectiveWithoutOnOffSwitch,
     MissingOnOffSwitchInSTDCPragma(&'tu str),
     PragmaOnceInNonHeader,
+    /// `#pragma GCC system_header` in the primary source file, which is never
+    /// a system header; the pragma is ignored, as in GCC and Clang. An
+    /// implementation-defined pragma, C99 §6.10.6 paragraph 1, p. 159; PDF
+    /// p. 171.
+    SystemHeaderPragmaInMainFile,
+    /// `#include_next` or `__has_include_next`, named by the payload, in the
+    /// primary source file, where there is no entry to continue after; the
+    /// lookup searches as `#include` would, as GCC's and Clang's do. The
+    /// directive is an extension (C99 §4p6, p. 7; PDF p. 19) over
+    /// implementation-defined header places, §6.10.2 paragraphs 2-3, pp.
+    /// 149-150; PDF pp. 161-162.
+    IncludeNextInPrimarySource(&'static str),
+    /// `#include_next` or `__has_include_next` in a header with no
+    /// configured search entry to continue after: one found by an absolute
+    /// path, or beside the primary source file or such a header. The lookup
+    /// searches exactly as `#include` would, as Clang's does
+    /// (`-Winclude-next-absolute-path`). C99: §4p6, p. 7; PDF p. 19;
+    /// §6.10.2 paragraphs 2-3, pp. 149-150; PDF pp. 161-162.
+    IncludeNextWithoutSearchEntry(&'static str),
     /// C99: §6.10.5 paragraph 1, p. 159; PDF p. 171; translation fails,
     /// §4 paragraph 4, p. 7; PDF p. 19.
     ErrorDirective(&'tu str),
+    /// Clang `#pragma clang deprecated(name[, message])` warning.
+    /// C99: implementation-defined pragma behavior, §6.10.6p1, p. 159;
+    /// PDF p. 171.
+    DeprecatedMacro(&'tu DeprecatedMacroDiagnostic<'tu>),
 }
 
 /// The directives of C99 §6.10, for suggestions.
@@ -623,11 +792,7 @@ impl PreprocessorErrorType<'_> {
         clippy::too_many_lines,
         reason = "One exhaustive table keeps every preprocessor message reviewable in one place."
     )]
-    pub(crate) fn explain_in<'d>(
-        &self,
-        arena: &'d Bump,
-        spelling: Option<&str>,
-    ) -> Explanation<'d> {
+    fn explain_in<'d>(&self, arena: &'d Bump, spelling: Option<&str>) -> Explanation<'d> {
         let new = |message: &'d str| Explanation::new(arena, message);
         let titled = |title: &'static str| match spelling {
             | Some(spelling) => format_in!(arena, "{title} {}", quote_spelling(spelling)),
@@ -639,6 +804,14 @@ impl PreprocessorErrorType<'_> {
                 "expected an expression {side} `{operator}`"
             ))
             .label(format_in!(arena, "`{operator}` needs an operand here"))
+        };
+        let defined_from_expansion = || {
+            new("macro expansion producing `defined` has undefined behavior")
+                .label("this macro expansion produces `defined`")
+                .note(
+                    "C99 §6.10.1p4: the behavior is undefined if macro replacement generates \
+                     `defined`; it is evaluated as GCC and Clang do",
+                )
         };
         let overflow = |operation: &str| {
             new(format_in!(
@@ -901,6 +1074,11 @@ impl PreprocessorErrorType<'_> {
                 kind.found(spelling)
             ))
             .label("expected `)`"),
+            | Self::DefinedFromObjectLikeMacroExpansion => defined_from_expansion().help(
+                "test the macro name in `#if defined(NAME)` and define this macro as `1` or `0` \
+                 instead",
+            ),
+            | Self::DefinedFromFunctionLikeMacroExpansion(_) => defined_from_expansion(),
             | Self::NoConditionInIfDirective => new("`#if` with no condition")
                 .label("expected an expression")
                 .help("write the condition to test, as in `#if VERSION >= 2`"),
@@ -916,8 +1094,9 @@ impl PreprocessorErrorType<'_> {
             .help("add `#endif` where the conditional section should end"),
             | Self::MoreEndifDirectivesThanIfDirectives =>
                 new("`#endif` without `#if`").label("no conditional directive is open here"),
-            | Self::ElifDirectiveWithoutIfDirective =>
-                new("`#elif` without `#if`").label("no conditional directive is open here"),
+            | Self::ElifDirectiveWithoutIfDirective(name) =>
+                new(format_in!(arena, "`#{name}` without `#if`"))
+                    .label("no conditional directive is open here"),
             | Self::ConditionalArmAfterElse(name) =>
                 new(format_in!(arena, "`#{name}` after `#else`"))
                     .label("the final arm of this conditional has already begun")
@@ -927,15 +1106,10 @@ impl PreprocessorErrorType<'_> {
                     .label("expected the end of the directive"),
             | Self::ElseDirectiveWithoutIfDirective =>
                 new("`#else` without `#if`").label("no conditional directive is open here"),
-            | Self::ExpectedIdentifierInIfdefDirective(kind) => new(format_in!(
+            | Self::ExpectedIdentifierInIfdefDirective(name, kind)
+            | Self::ExpectedIdentifierInIfndefDirective(name, kind) => new(format_in!(
                 arena,
-                "expected a macro name after `#ifdef`, found {}",
-                kind.found(spelling)
-            ))
-            .label("expected a macro name"),
-            | Self::ExpectedIdentifierInIfndefDirective(kind) => new(format_in!(
-                arena,
-                "expected a macro name after `#ifndef`, found {}",
+                "expected a macro name after `#{name}`, found {}",
                 kind.found(spelling)
             ))
             .label("expected a macro name"),
@@ -946,12 +1120,20 @@ impl PreprocessorErrorType<'_> {
             ))
             .label("expected a macro name")
             .note("C99 §6.10.3: a macro name is an identifier"),
+            | Self::RedefinitionOfBuiltInMacro(name)
+                if super::language_features::overridable_gnu_builtin(name) =>
+                new(format_in!(arena, "redefining builtin macro `{name}`"))
+                    .label("replacement overrides the implementation definition"),
             | Self::RedefinitionOfBuiltInMacro(name) => new(format_in!(
                 arena,
                 "cannot redefine predefined macro `{name}`"
             ))
             .label("predefined by the implementation")
             .note("C99 §6.10.8p4: predefined macro names shall not be redefined"),
+            | Self::UndefinitionOfBuiltInMacro(name)
+                if super::language_features::overridable_gnu_builtin(name) =>
+                new(format_in!(arena, "undefining builtin macro `{name}`"))
+                    .label("implementation definition removed"),
             | Self::UndefinitionOfBuiltInMacro(name) => new(format_in!(
                 arena,
                 "cannot undefine predefined macro `{name}`"
@@ -967,11 +1149,18 @@ impl PreprocessorErrorType<'_> {
                 "C99 §6.10.3p3: an object-like macro's name and replacement list are separated by \
                  whitespace",
             ),
-            | Self::VaArgsOutsideVariadicMacro =>
+            | Self::VaArgsOutsideVariadicMacro(_) =>
                 new("`__VA_ARGS__` can only appear in the replacement list of a variadic macro")
                     .label("not in a variadic macro's replacement list")
                     .note(
                         "C99 §6.10.3p5: `__VA_ARGS__` is reserved for macros whose parameters end \
+                         in `...`",
+                    ),
+            | Self::VaOptOutsideVariadicMacro(_) =>
+                new("`__VA_OPT__` can only appear in the replacement list of a variadic macro")
+                    .label("not in a variadic macro's replacement list")
+                    .note(
+                        "C23 §6.10.5p5: `__VA_OPT__` is reserved for macros whose parameters end \
                          in `...`",
                     ),
             | Self::DuplicateMacroParameter(name) =>
@@ -1145,7 +1334,7 @@ impl PreprocessorErrorType<'_> {
                         )
                 }
             },
-            | Self::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(name) => new(format_in!(
+            | Self::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(name, _) => new(format_in!(
                 arena,
                 "function-like macro `{name}` redefined as an object-like macro"
             ))
@@ -1155,7 +1344,7 @@ impl PreprocessorErrorType<'_> {
                 arena,
                 "add `#undef {name}` before this definition"
             )),
-            | Self::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(name) => new(format_in!(
+            | Self::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(name, _) => new(format_in!(
                 arena,
                 "object-like macro `{name}` redefined as a function-like macro"
             ))
@@ -1183,7 +1372,7 @@ impl PreprocessorErrorType<'_> {
                 kind.found(spelling)
             ))
             .label("expected `,` or `)`"),
-            | Self::MacroRedefinedWithDifferentDefinition(name) =>
+            | Self::MacroRedefinedWithDifferentDefinition(name, _) =>
                 new(format_in!(arena, "macro `{name}` redefined differently"))
                     .label("this definition differs from the previous one")
                     .note(
@@ -1261,6 +1450,13 @@ impl PreprocessorErrorType<'_> {
                 .label("not a character string literal")
                 .note("C99 §6.10.4p1: the file name of `#line` shall be a character string literal")
                 .help("remove the `L` prefix"),
+            | Self::EncodedStringInLineDirective(prefix) => new(format_in!(
+                arena,
+                "`#line` file name is a `{prefix}` string literal"
+            ))
+            .label("not a character string literal")
+            .note("C11 §6.10.4p1: the file name of `#line` shall be a character string literal")
+            .help(format_in!(arena, "remove the `{prefix}` prefix")),
             | Self::MissingOpeningParenthesisInPragmaOperator(kind) => new(format_in!(
                 arena,
                 "expected `(` after `_Pragma`, found {}",
@@ -1301,10 +1497,12 @@ impl PreprocessorErrorType<'_> {
                 new("extra tokens after the pragma in `_Pragma`").label("not part of the pragma"),
             | Self::ExtraTokensAfterIncludeDirective =>
                 new("extra tokens at end of `#include` directive").label("ignored"),
-            | Self::ExtraTokensAfterIfdefDirective =>
-                new("extra tokens at end of `#ifdef` directive").label("ignored"),
-            | Self::ExtraTokensAfterIfndefDirective =>
-                new("extra tokens at end of `#ifndef` directive").label("ignored"),
+            | Self::ExtraTokensAfterIfdefDirective(name)
+            | Self::ExtraTokensAfterIfndefDirective(name) => new(format_in!(
+                arena,
+                "extra tokens at end of `#{name}` directive"
+            ))
+            .label("ignored"),
             | Self::STDCPragmaDirectiveWithoutArgument =>
                 new("expected a pragma name after `#pragma STDC`")
                     .label("expected `FP_CONTRACT`, `FENV_ACCESS`, or `CX_LIMITED_RANGE`"),
@@ -1320,6 +1518,90 @@ impl PreprocessorErrorType<'_> {
             .note("C99 §6.10.6p2: each standard pragma takes an on-off switch"),
             | Self::PragmaOnceInNonHeader =>
                 new("`#pragma once` in main file").label("only affects files that are included"),
+            | Self::SystemHeaderPragmaInMainFile =>
+                new("`#pragma GCC system_header` ignored in main file")
+                    .label("only a header can be a system header"),
+            | Self::IncludeNextInPrimarySource(spelling) =>
+                new(format_in!(arena, "`{spelling}` in the primary source file"))
+                    .label("searches from the start of the include path")
+                    .note(
+                        "it continues after the search directory that provided the current \
+                         header, and the primary source file came from none",
+                    )
+                    .help("use `#include` or `__has_include` outside headers"),
+            | Self::IncludeNextWithoutSearchEntry(spelling) => new(format_in!(
+                arena,
+                "`{spelling}` in a file found relative to the primary source file or by an \
+                 absolute path"
+            ))
+            .label("searches from the start of the include path")
+            .note(
+                "it continues after the search directory that provided the current header, and \
+                 this header came from none",
+            ),
+            | Self::LanguageConstraint(message) => new(format_in!(arena, "{message}")),
+            | Self::WideCharacterOutOfRange =>
+                new("wide character constant does not fit in wchar_t")
+                    .label("requires more than one UTF-16 code unit")
+                    .note("C99 §6.4.4.4p11: wide character encoding is implementation-defined"),
+            | Self::EmbeddedResourceNotFound(name) =>
+                new(format_in!(arena, "cannot find embedded resource `{name}`"))
+                    .label("not found in any search directory")
+                    .note("C23 §6.10.4.1p3: `#embed` must identify a resource it can process"),
+            | Self::EmbeddedResourceUnreadable { name, reason } => new(format_in!(
+                arena,
+                "cannot read embedded resource `{name}`: {reason}"
+            ))
+            .label("embedded here")
+            .note("C23 §6.10.4.1p3: `#embed` must identify a resource it can process"),
+            | Self::EmbeddedResourceTooLarge(name) =>
+                new(format_in!(arena, "embedded resource `{name}` is too large"))
+                    .label("its size exceeds the host's address space")
+                    .help("add a `limit` parameter to embed a prefix of the resource"),
+            | Self::VaOptUnavailable => new("`__VA_OPT__` is not available in this mode")
+                .label("the macro is not defined")
+                .help("select C23 or a GNU mode for `__VA_OPT__`"),
+            | Self::MissingOpeningParenthesisAfterVaOpt => new("expected `(` after `__VA_OPT__`")
+                .label("the macro is not defined")
+                .note("C23 §6.10.5.1p1: the form is `__VA_OPT__ ( pp-tokens(opt) )`"),
+            | Self::NestedVaOpt => new("`__VA_OPT__` cannot be nested")
+                .label("inside another `__VA_OPT__` replacement")
+                .note(
+                    "C23 §6.10.5.1p3: the pp-tokens of a `__VA_OPT__` replacement shall not \
+                     contain `__VA_OPT__`; the macro is not defined",
+                ),
+            | Self::UnterminatedVaOpt => new("unterminated `__VA_OPT__` replacement")
+                .label("no matching `)` before the end of the definition")
+                .note("C23 §6.10.5.1p3: the macro is not defined"),
+            | Self::HashHashAtVaOptBoundary =>
+                new("`##` cannot begin or end a `__VA_OPT__` replacement")
+                    .label("the macro is not defined")
+                    .note(
+                        "C23 §6.10.5.1p3: the replacement must form a valid replacement list, \
+                         which `##` cannot begin or end (§6.10.5.3p1)",
+                    ),
+            | Self::WarningDirective(message) => {
+                let message = message.trim();
+                new(if message.is_empty() {
+                    "#warning"
+                } else {
+                    format_in!(arena, "#warning {message}")
+                })
+                .label("`#warning` directive")
+            },
+            | Self::DeprecatedMacro(deprecation) => {
+                let message = format_in!(
+                    arena,
+                    "macro `{}` has been marked as deprecated",
+                    deprecation.name,
+                );
+                new(match deprecation.message {
+                    | Some(detail) if !detail.is_empty() =>
+                        format_in!(arena, "{message}: {detail}"),
+                    | _ => message,
+                })
+                .label("deprecated macro")
+            },
             | Self::ErrorDirective(message) => {
                 let message = message.trim();
                 new(if message.is_empty() {
@@ -1330,6 +1612,25 @@ impl PreprocessorErrorType<'_> {
                 .label("`#error` directive")
             },
         }
+    }
+}
+
+impl PreprocessorErrorType<'_> {
+    /// Whether the diagnostic reports a construct the extension policy
+    /// governs, so a system header withholds it at every severity.
+    pub(crate) fn is_extension(&self) -> bool {
+        matches!(
+            self,
+            Self::CommaOperatorInPreprocessorExpression(_)
+                | Self::DefinedFromFunctionLikeMacroExpansion(_)
+                | Self::MissingVariadicArgument(_)
+                | Self::BackslashInQuotedHeaderName(_)
+                | Self::VaArgsOutsideVariadicMacro(_)
+                | Self::VaOptOutsideVariadicMacro(_)
+                | Self::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(..)
+                | Self::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(..)
+                | Self::MacroRedefinedWithDifferentDefinition(..)
+        )
     }
 }
 

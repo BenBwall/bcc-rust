@@ -1,0 +1,9 @@
+error: function call has the wrong number of arguments
+ --> sema2-argument-count.c:1:27
+  |
+1 | int f(int); void g(void) {f();}
+  |                           ^^^ wrong number of arguments
+  |
+  = note: C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis permits additional arguments
+
+1 error generated.

@@ -1,0 +1,7 @@
+warning: '__int128' is a GNU extension
+ --> language-extension-suppression.c:1:14
+  |
+1 | #define WIDE __int128
+  |              ^^^^^^^^
+
+1 warning generated.

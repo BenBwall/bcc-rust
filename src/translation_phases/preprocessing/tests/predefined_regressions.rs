@@ -55,6 +55,40 @@ fn observe(source: &str) -> Observation {
     observe_with(source, CompilerConfiguration::default())
 }
 
+#[test]
+fn freestanding_resources_and_suffix_helpers_expand() {
+    let observation = observe(
+        "#include <iso646.h>\n#include <stdbool.h>\n#include <limits.h>\n#include \
+         <stdint.h>\n#include <float.h>\nINT8_C(1) UINT32_C(2) INT64_C(3) UINT64_C(4) INTMAX_C(5) \
+         UINTMAX_C(6)\nCHAR_BIT MB_LEN_MAX FLT_MANT_DIG DBL_MANT_DIG LDBL_MANT_DIG\ntrue false \
+         not and or xor\n",
+    );
+    assert!(observation.errors.is_empty(), "{:?}", observation.errors);
+    assert!(observation.spellings.iter().any(|s| s == "3L"));
+    assert!(observation.spellings.iter().any(|s| s == "4UL"));
+    assert!(observation.spellings.iter().any(|s| s == "!"));
+    assert!(observation.spellings.iter().any(|s| s == "&&"));
+    assert!(
+        observation
+            .sources
+            .iter()
+            .flatten()
+            .any(|s| s.source_file_index != 0)
+    );
+}
+
+#[test]
+fn resource_queries_and_target_macro_override_follow_normal_lookup() {
+    let observation = observe_with(
+        "#if !__has_include(<stddef.h>) || !__has_include(<stdarg.h>)\n#error missing \
+         resource\n#endif\n#if __has_include(<absent-resource.h>)\n#error unexpected \
+         resource\n#endif\n#undef __CHAR_BIT__\n#define __CHAR_BIT__ 16\n__CHAR_BIT__\n",
+        CompilerConfiguration::default().with_gnu_extensions(true),
+    );
+    assert!(observation.errors.is_empty(), "{:?}", observation.errors);
+    assert_eq!(observation.spellings, ["16"]);
+}
+
 fn observe_with(source: &str, configuration: CompilerConfiguration) -> Observation {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::with_configuration(&tu, configuration);
@@ -107,13 +141,13 @@ fn standard_macros_expand_to_required_numeric_types_and_values() {
         [
             IntegerTokenType::Int(1),
             IntegerTokenType::Long(Packed::new(199_901)),
-            IntegerTokenType::Int(0),
+            IntegerTokenType::Int(1),
             IntegerTokenType::Int(1),
         ]
     );
     assert_eq!(
         observation.spellings,
-        ["1", ";", "199901L", ";", "0", ";", "1", ";", "after"]
+        ["1", ";", "199901L", ";", "1", ";", "1", ";", "after"]
     );
     for (index, column, length) in [(0, 1, 8), (2, 11, 16), (4, 29, 15), (6, 46, 24)] {
         let source = &observation.sources[index][0];
@@ -154,16 +188,22 @@ fn required_standard_macros_are_available_to_ifdef() {
 }
 
 #[test]
-fn standard_macro_values_select_c99_freestanding_branch() {
-    let source = "#if __STDC__ == 1 && __STDC_VERSION__ == 199901L && __STDC_HOSTED__ == 0 && \
-                  __STDC_MB_MIGHT_NEQ_WC__ == \
-                  1\nright_values\n#else\nwrong_values\n#endif\nafter\n";
-    let observation = observe(source);
-    assert_eq!(
-        identifier_spellings(&observation),
-        ["right_values", "after"]
-    );
-    assert!(observation.errors.is_empty(), "{observation:#?}");
+fn standard_macro_values_select_the_configured_execution_environment() {
+    for (hosted, expected) in [(true, 1), (false, 0)] {
+        let source = format!(
+            "#if __STDC__ == 1 && __STDC_VERSION__ == 199901L && __STDC_HOSTED__ == {expected} && \
+             __STDC_MB_MIGHT_NEQ_WC__ == 1\nright_values\n#else\nwrong_values\n#endif\nafter\n"
+        );
+        let observation = observe_with(
+            &source,
+            CompilerConfiguration::default().with_hosted(hosted),
+        );
+        assert_eq!(
+            identifier_spellings(&observation),
+            ["right_values", "after"]
+        );
+        assert!(observation.errors.is_empty(), "{observation:#?}");
+    }
 }
 
 #[test]
@@ -283,5 +323,80 @@ fn translation_timestamp_without_a_representable_epoch_spells_the_local_time() {
             is_timestamp_spelling(&date, &time),
             "{source_date_epoch:?}: {date} {time}"
         );
+    }
+}
+
+#[test]
+fn version_strict_ansi_and_identity_macros_follow_every_mode() {
+    use crate::configuration::{
+        CStandard,
+        ExtensionPolicy,
+    };
+    for (standard, version) in [
+        (CStandard::C89, None),
+        (CStandard::C95, Some(199_409)),
+        (CStandard::C99, Some(199_901)),
+        (CStandard::C11, Some(201_112)),
+        (CStandard::C17, Some(201_710)),
+        (CStandard::C23, Some(202_311)),
+        (CStandard::C2y, Some(202_400)),
+    ] {
+        for gnu in [false, true] {
+            let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                .with_gnu_extensions(gnu);
+            let result = observe_with(
+                "#ifdef __STDC_VERSION__\nversion __STDC_VERSION__\n#endif\n#ifdef \
+                 __STRICT_ANSI__\nstrict __STRICT_ANSI__\n#endif\n#ifdef __GNUC__\ngnu __GNUC__ \
+                 __GNUC_MINOR__ __GNUC_PATCHLEVEL__\n#endif\n#ifdef \
+                 __GNUC_GNU_INLINE__\ngnu_inline\n#endif\n#ifdef \
+                 __GNUC_STDC_INLINE__\nstdc_inline\n#endif\n#ifdef _MSC_VER\nbad_ms\n#endif\n#if \
+                 defined(__clang__) || !defined(__bcc__)\nbad_identity\n#endif\n",
+                configuration,
+            );
+            let mut expected = Vec::new();
+            if let Some(version) = version {
+                expected.extend(["version".to_owned(), format!("{version}L")]);
+            }
+            if !gnu {
+                expected.extend(["strict".to_owned(), "1".to_owned()]);
+            }
+            expected.extend(["gnu", "4", "2", "1"].map(str::to_owned));
+            expected.push(
+                if standard < CStandard::C99 {
+                    "gnu_inline"
+                } else {
+                    "stdc_inline"
+                }
+                .to_owned(),
+            );
+            assert_eq!(result.spellings, expected, "{standard:?}, gnu={gnu}");
+            assert!(result.errors.is_empty(), "{:?}", result.errors);
+        }
+    }
+}
+
+#[test]
+fn msvc_identity_follows_the_umbrella_flag_and_identity_macros_can_be_undefined() {
+    let source = "_MSC_VER _MSC_FULL_VER _MSC_BUILD _MSC_EXTENSIONS\n#undef __GNUC__\n#undef \
+                  __bcc__\n#if defined __GNUC__ || defined __bcc__\nbad\n#endif\n";
+    let result = observe_with(
+        source,
+        CompilerConfiguration::default()
+            .with_gnu_extensions(true)
+            .with_msvc_extensions(true),
+    );
+    assert_eq!(result.spellings, ["1933", "193300000", "1", "1"]);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    // A single group is not the umbrella, and the umbrella's opposite
+    // withdraws it.
+    for configuration in [
+        CompilerConfiguration::default()
+            .with_msvc_feature(crate::configuration::MsvcFeature::Declspec, true),
+        CompilerConfiguration::default()
+            .with_msvc_extensions(true)
+            .with_msvc_extensions(false),
+    ] {
+        let result = observe_with("#ifdef _MSC_VER\nbad\n#endif\n", configuration);
+        assert!(result.spellings.is_empty(), "{:?}", result.spellings);
     }
 }

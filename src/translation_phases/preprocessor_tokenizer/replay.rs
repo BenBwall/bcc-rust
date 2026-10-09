@@ -72,6 +72,10 @@ impl<'a> ReplaySources<'a> {
 }
 
 impl<'a> ReplayCursor<'a> {
+    pub(super) fn is_exhausted(&self) -> bool {
+        self.next == self.tokens.len()
+    }
+
     /// Replays the tokens of `parts` in order, keeping them in `arena`;
     /// `empty_location` locates an empty replay.
     pub(super) fn new(

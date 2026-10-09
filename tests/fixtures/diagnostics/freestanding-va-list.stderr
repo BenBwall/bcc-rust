@@ -1,0 +1,33 @@
+error: varargs builtin requires a modifiable va_list operand
+ --> freestanding-va-list.c:2:43
+  |
+2 | void f(int n, ...) { va_list ap; va_start(1, n); va_end(1); va_copy(ap, 1); va_arg(1, int); }
+  |                                           ^ not a modifiable va_list
+  |
+  = note: C99 §7.15p3: ap is an object of type va_list
+
+error: varargs builtin requires a modifiable va_list operand
+ --> freestanding-va-list.c:2:57
+  |
+2 | void f(int n, ...) { va_list ap; va_start(1, n); va_end(1); va_copy(ap, 1); va_arg(1, int); }
+  |                                                         ^ not a modifiable va_list
+  |
+  = note: C99 §7.15p3: ap is an object of type va_list
+
+error: varargs builtin requires a modifiable va_list operand
+ --> freestanding-va-list.c:2:73
+  |
+2 | void f(int n, ...) { va_list ap; va_start(1, n); va_end(1); va_copy(ap, 1); va_arg(1, int); }
+  |                                                                         ^ not a modifiable va_list
+  |
+  = note: C99 §7.15p3: ap is an object of type va_list
+
+error: varargs builtin requires a modifiable va_list operand
+ --> freestanding-va-list.c:2:84
+  |
+2 | void f(int n, ...) { va_list ap; va_start(1, n); va_end(1); va_copy(ap, 1); va_arg(1, int); }
+  |                                                                                    ^ not a modifiable va_list
+  |
+  = note: C99 §7.15p3: ap is an object of type va_list
+
+4 errors generated.

@@ -202,17 +202,18 @@ fn old_style_head_with_recovered_error_keeps_its_declaration_list_and_body() {
         with_parse(source, |parsed| {
             assert_eq!(
                 parser_errors(parsed).count(),
-                1,
+                usize::from(source.starts_with("int f(a b)")),
                 "{source:?}: {:#?}",
                 parsed.errors
             );
             assert_eq!(parsed.items.len(), 1, "{source:?}");
-            assert!(
+            assert_eq!(
                 matches!(
                     parsed.items[0],
                     ExternalDeclaration::RecoveredFunctionDefinition(_)
                 ),
-                "{source:?}"
+                source.starts_with("int f(a b)"),
+                "{source:?}: only the malformed identifier list needs recovery"
             );
             let definition = function_definition(parsed, 0);
             assert_eq!(definition.declaration_list.len(), list_length, "{source:?}");
@@ -300,7 +301,7 @@ fn declaration_continuation_expectations_follow_the_context() {
         "int f(a) int a {}\n",
         "int x\nint main(void) { return 0; }\n",
         "int x, h(void) { return 0; }\n",
-        "void f(void) { int g(void) { return 1; } }\n",
+        "void f(void) { int g = 1 { return 1; } }\n",
         "void f(void) { for (int g(void) { return 1; } }\n",
     ] {
         let (message, label) = continuation_explanation(source);
@@ -357,14 +358,17 @@ fn unknown_type_name_is_reported_once() {
         });
     }
 
-    // A lone identifier is still a declarator lacking its type.
+    // A lone identifier receives implicit int under the default Allow policy.
     with_parse("x;\n", |parsed| {
-        let errors: Vec<_> = parser_errors(parsed).collect();
-        assert_eq!(errors.len(), 1, "{:#?}", parsed.errors);
-        assert!(matches!(
-            errors[0],
-            ParserErrorType::NoTypeSpecifiersInDeclarationSpecifiers(_)
-        ));
+        assert_eq!(parser_errors(parsed).count(), 0);
+        assert_eq!(
+            identifier_name(
+                parsed,
+                declaration(parsed, 0).init_declarators[0].declarator
+            )
+            .as_deref(),
+            Some("x")
+        );
     });
 }
 

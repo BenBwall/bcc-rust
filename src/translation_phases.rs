@@ -7,20 +7,16 @@
 //! p. 11; PDF p. 23.
 
 mod context;
+mod extension;
 pub(crate) mod initial_processing;
 pub(crate) mod parsing;
 pub(crate) mod preprocessing;
 pub(crate) mod preprocessor_tokenizer;
 mod provenance;
+pub(crate) mod semantic_analysis;
 
 use std::{
-    convert::Infallible,
-    fmt::{
-        Debug,
-        Display,
-        Formatter,
-        Result as FmtResult,
-    },
+    fmt::Debug,
     hash::Hash,
 };
 
@@ -58,6 +54,10 @@ pub(crate) enum TranslationError<'tu> {
     Preprocessing(PreprocessorError<'tu>),
     #[error(transparent)]
     Parsing(ParserError<'tu>),
+    #[error(transparent)]
+    Semantic(semantic_analysis::SemanticError),
+    #[error(transparent)]
+    Extension(extension::ExtensionDiagnostic<'tu>),
 }
 
 impl TranslationError<'_> {
@@ -71,6 +71,13 @@ impl TranslationError<'_> {
             | Self::InitialProcessing(_) | Self::PreprocessorTokenizining(_) => {},
             | Self::Preprocessing(error) => visit(&mut error.source_vectors),
             | Self::Parsing(error) => error.for_each_source_vectors_mut(visit),
+            | Self::Semantic(error) => {
+                visit(&mut error.source_vectors);
+                if let Some(previous) = &mut error.previous {
+                    visit(previous);
+                }
+            },
+            | Self::Extension(error) => visit(&mut error.source_vectors),
         }
     }
 }
@@ -82,6 +89,8 @@ impl GetSeverity for TranslationError<'_> {
             | Self::PreprocessorTokenizining(error) => error.severity(),
             | Self::Preprocessing(error) => error.severity(),
             | Self::Parsing(error) => error.severity(),
+            | Self::Semantic(error) => error.severity(),
+            | Self::Extension(error) => error.severity(),
         }
     }
 }
@@ -98,17 +107,8 @@ impl ToDiagnostic for TranslationError<'_> {
             | Self::PreprocessorTokenizining(error) => error.diagnostic_in(context, source, arena),
             | Self::Preprocessing(error) => error.diagnostic_in(context, source, arena),
             | Self::Parsing(error) => error.diagnostic_in(context, source, arena),
-        }
-    }
-}
-
-impl GetPosition for TranslationError<'_> {
-    fn position(&self, context: &Context<'_>) -> SourcePosition {
-        match self {
-            | Self::InitialProcessing(error) => error.position(context),
-            | Self::PreprocessorTokenizining(error) => error.position(context),
-            | Self::Preprocessing(error) => error.position(context),
-            | Self::Parsing(error) => error.position(context),
+            | Self::Semantic(error) => error.diagnostic_in(context, source, arena),
+            | Self::Extension(error) => error.diagnostic_in(context, source, arena),
         }
     }
 }
@@ -120,6 +120,8 @@ impl GetSourceVectors for TranslationError<'_> {
             | Self::PreprocessorTokenizining(error) => error.source_vectors(context),
             | Self::Preprocessing(error) => error.source_vectors(context),
             | Self::Parsing(error) => error.source_vectors(context),
+            | Self::Semantic(error) => error.source_vectors(context),
+            | Self::Extension(error) => error.source_vectors(context),
         }
     }
 }
@@ -137,17 +139,6 @@ impl StrExt for str {
     }
 }
 
-#[doc(hidden)]
-#[macro_export]
-macro_rules! bail {
-    ($e:expr $(,)?) => {
-        match $e {
-            | Ok(v) => v,
-            | Err(e) => return Some(Err(e.into())),
-        }
-    };
-}
-
 #[expect(dead_code, reason = "We aren't using the Note variant yet")]
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum ErrorSeverity {
@@ -156,30 +147,8 @@ pub(crate) enum ErrorSeverity {
     Note,
 }
 
-impl Display for ErrorSeverity {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        match self {
-            | Self::Warning => f.write_str("warning"),
-            | Self::Error => f.write_str("error"),
-            | Self::Note => f.write_str("note"),
-        }
-    }
-}
-
 pub(crate) trait GetSeverity {
     fn severity(&self) -> ErrorSeverity;
-}
-
-impl GetSeverity for ErrorSeverity {
-    fn severity(&self) -> ErrorSeverity {
-        *self
-    }
-}
-
-impl GetSeverity for Infallible {
-    fn severity(&self) -> ErrorSeverity {
-        match *self {}
-    }
 }
 
 pub(crate) trait GetSourceFileIndex {
@@ -196,10 +165,6 @@ pub(crate) trait GetPosition {
     fn column(&self, context: &Context<'_>) -> u32 {
         self.position(context).column
     }
-    #[inline(always)]
-    fn line(&self, context: &Context<'_>) -> u32 {
-        self.position(context).line
-    }
 }
 
 pub(crate) trait GetSourceVectors {
@@ -210,30 +175,6 @@ pub(crate) trait GetSourceVectors {
 /// of the current position through [`GetPosition`].
 pub(crate) trait SetPosition: GetPosition {
     fn set_position(&mut self, position: SourcePosition);
-    #[expect(
-        dead_code,
-        reason = "Position setters are retained for translation-phase implementations."
-    )]
-    #[inline(always)]
-    fn set_index(&mut self, context: &Context<'_>, index: usize) {
-        self.set_position(SourcePosition {
-            index,
-            line: self.line(context),
-            column: self.column(context),
-        });
-    }
-    #[expect(
-        dead_code,
-        reason = "Position setters are retained for translation-phase implementations."
-    )]
-    #[inline(always)]
-    fn set_column(&mut self, context: &Context<'_>, column: u32) {
-        self.set_position(SourcePosition {
-            index: self.index(context),
-            line: self.line(context),
-            column,
-        });
-    }
     #[cfg_attr(
         not(test),
         expect(
@@ -253,13 +194,6 @@ pub(crate) trait SetPosition: GetPosition {
 
 pub(crate) trait SetSourceFileIndex {
     fn set_source_file_index(&mut self, source_file_index: u32);
-}
-
-impl GetPosition for Infallible {
-    #[inline(always)]
-    fn position(&self, _context: &Context<'_>) -> SourcePosition {
-        match *self {}
-    }
 }
 
 /// Reads one stage of the conceptual translation sequence.

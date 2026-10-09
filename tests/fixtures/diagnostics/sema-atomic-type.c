@@ -1,0 +1,12 @@
+typedef int Array[3];
+typedef int Function(void);
+struct Incomplete;
+_Atomic(Array) array;
+_Atomic(Function) function;
+_Atomic(const int) qualified;
+_Atomic(_Atomic(int)) repeated;
+_Atomic(struct Incomplete) incomplete;
+_Atomic(void) empty;
+_Atomic Array qualifier_array;
+_Atomic Function qualifier_function;
+int following;

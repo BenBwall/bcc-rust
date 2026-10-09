@@ -21,6 +21,520 @@ mod tests {
         Output,
     };
 
+    #[test]
+    fn lexpp_cli_modes_convert_modern_literals_and_preserve_old_prefixes() {
+        for (mode, expected) in [
+            ("c99", "identifier `u8`"),
+            ("c11", "u8\"x\""),
+            ("c23", "unsigned _BitInt(3)"),
+            ("c2y", "= 7"),
+        ] {
+            let source = match mode {
+                | "c99" | "c11" => "u8\"x\"\n",
+                | "c23" => "7uwb\n",
+                | _ => "0o7\n",
+            };
+            let flag = format!("-std={mode}");
+            let output = run(&[&flag, "--tokens", "--input", source]);
+            let tokens = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !tokens.contains("error:") && !tokens.contains("warning:"),
+                "{mode}: {output:?}"
+            );
+            assert!(tokens.contains(expected), "{mode}: {output:?}");
+        }
+    }
+
+    #[test]
+    fn lexpp_cli_pedantic_and_independent_ms_flags_reach_preprocessing() {
+        let output = run(&[
+            "-std=c89",
+            "-pedantic-errors",
+            "--tokens",
+            "--input",
+            "1LL\n",
+        ]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("error: 'long long integer constant' is a C99 extension"),
+            "{stderr}"
+        );
+        for flag in ["-fms-pragma", "-fms-extensions"] {
+            let output = run(&[
+                "-std=c89",
+                flag,
+                "--tokens",
+                "--input",
+                "__pragma(STDC FP_CONTRACT ON) after\n",
+            ]);
+            let stdout = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !stdout.contains("error:") && !stdout.contains("warning:"),
+                "{output:?}"
+            );
+            assert!(stdout.contains("identifier `after`"), "{stdout}");
+            assert!(!stdout.contains("__pragma"), "{stdout}");
+        }
+    }
+
+    #[test]
+    fn identical_named_variadic_definitions_expand_without_redefinition_errors() {
+        let output = run(&[
+            "-std=gnu17",
+            "--tokens",
+            "--input",
+            "#define N(args...) args\n#define N(args...) args\nN(1)\n",
+        ]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains("error:") && !stderr.contains("warning:"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("= 1 (int)"), "{stderr}");
+    }
+
+    #[test]
+    fn invalid_standard_prints_exact_clang_notes() {
+        let expected =
+            "error: invalid value 'c98' in '-std=c98'\nnote: use 'c89', 'c90', or 'iso9899:1990' \
+             for 'ISO C 1990' standard\nnote: use 'iso9899:199409' for 'ISO C 1990 with amendment \
+             1' standard\nnote: use 'gnu89' or 'gnu90' for 'ISO C 1990 with GNU extensions' \
+             standard\nnote: use 'c99' or 'iso9899:1999' for 'ISO C 1999' standard\nnote: use \
+             'gnu99' for 'ISO C 1999 with GNU extensions' standard\nnote: use 'c11' or \
+             'iso9899:2011' for 'ISO C 2011' standard\nnote: use 'gnu11' for 'ISO C 2011 with GNU \
+             extensions' standard\nnote: use 'c17', 'iso9899:2017', 'c18', or 'iso9899:2018' for \
+             'ISO C 2017' standard\nnote: use 'gnu17' or 'gnu18' for 'ISO C 2017 with GNU \
+             extensions' standard\nnote: use 'c23' or 'iso9899:2024' for 'ISO C 2023' \
+             standard\nnote: use 'gnu23' for 'ISO C 2023 with GNU extensions' standard\nnote: use \
+             'c2y' for 'Working Draft for ISO C2y' standard\nnote: use 'gnu2y' for 'Working Draft \
+             for ISO C2y with GNU extensions' standard\n";
+        for flag in ["-std=c98", "--std=c98"] {
+            let output = run(&[flag, "--input", "int x;"]);
+            assert_eq!(output.status.code(), Some(2));
+            assert!(output.stdout.is_empty(), "{output:?}");
+            assert_eq!(String::from_utf8_lossy(&output.stderr), expected);
+        }
+    }
+
+    #[test]
+    fn all_standard_spellings_select_the_expected_macro_version() {
+        for (aliases, version, strict) in [
+            ("c89 c90 iso9899:1990", None, true),
+            ("iso9899:199409", Some("199409L"), true),
+            ("gnu89 gnu90", None, false),
+            ("c99 c9x iso9899:1999 iso9899:199x", Some("199901L"), true),
+            ("gnu99 gnu9x", Some("199901L"), false),
+            ("c11 c1x iso9899:2011", Some("201112L"), true),
+            ("gnu11 gnu1x", Some("201112L"), false),
+            ("c17 c18 iso9899:2017 iso9899:2018", Some("201710L"), true),
+            ("gnu17 gnu18", Some("201710L"), false),
+            ("c23 c2x iso9899:2024", Some("202311L"), true),
+            ("gnu23 gnu2x", Some("202311L"), false),
+            ("c2y", Some("202400L"), true),
+            ("gnu2y", Some("202400L"), false),
+        ] {
+            for alias in aliases.split_whitespace() {
+                let flag = format!("-std={alias}");
+                let output = run(&[
+                    &flag,
+                    "--tokens",
+                    "--input",
+                    "#ifdef __STDC_VERSION__\n__STDC_VERSION__\n#endif\n#ifdef \
+                     __STRICT_ANSI__\nstrict\n#endif\n",
+                ]);
+                let stdout = String::from_utf8_lossy(&output.stderr);
+                assert!(output.status.success());
+                assert!(
+                    !stdout.contains("warning:") && !stdout.contains("error:"),
+                    "{alias}: {output:?}"
+                );
+                assert_eq!(
+                    stdout.contains("integer constant"),
+                    version.is_some(),
+                    "{alias}: {stdout}"
+                );
+                if let Some(version) = version {
+                    assert!(stdout.contains(version), "{alias}: {stdout}");
+                }
+                assert_eq!(
+                    stdout.contains("identifier `strict`"),
+                    strict,
+                    "{alias}: {stdout}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pedantic_flags_control_extension_severity() {
+        for (flag, message) in [
+            ("-pedantic", "warning:"),
+            ("-Wpedantic", "warning:"),
+            ("-pedantic-errors", "error:"),
+        ] {
+            let output = run(&[flag, "-std=c89", "--tokens", "--input", "_Static_assert\n"]);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains(&format!("{message} '_Static_assert' is a C11 extension")),
+                "{stderr}"
+            );
+            assert!(String::from_utf8_lossy(&output.stderr).contains("keyword `_Static_assert`"));
+        }
+        for flag in ["-std=c11", "-std=gnu17"] {
+            let output = run(&[
+                flag,
+                "-pedantic-errors",
+                "--tokens",
+                "--input",
+                "_Static_assert\n",
+            ]);
+            assert!(
+                !String::from_utf8_lossy(&output.stderr).contains("extension"),
+                "{output:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn msvc_feature_flags_are_independent_and_last_wins() {
+        for (feature, spelling) in [
+            ("declspec", "__declspec"),
+            ("int-types", "__int64"),
+            ("calling-conventions", "__cdecl"),
+            ("type-qualifiers", "__ptr32"),
+            ("inline", "__forceinline"),
+            ("seh", "__try"),
+            ("asm", "_asm"),
+            ("pragma", "__pragma"),
+        ] {
+            let source = if feature == "pragma" {
+                "__pragma(STDC FP_CONTRACT ON)\n".to_owned()
+            } else {
+                format!("{spelling}\n")
+            };
+            let enable = format!("-fms-{feature}");
+            let disable = format!("-fno-ms-{feature}");
+            for (flags, enabled) in [
+                (vec![enable.as_str()], true),
+                (vec!["-fms-extensions", disable.as_str()], false),
+                (vec![disable.as_str(), "-fms-extensions"], true),
+                (vec![enable.as_str(), "-fno-ms-extensions"], false),
+            ] {
+                let mut arguments = vec!["-std=c89", "--tokens", "--input", &source];
+                arguments.extend(flags);
+                let output = run(&arguments);
+                assert!(output.status.success(), "{output:?}");
+                assert!(
+                    !String::from_utf8_lossy(&output.stderr).contains("warning:"),
+                    "{output:?}"
+                );
+                let stdout = String::from_utf8_lossy(&output.stderr);
+                if feature == "pragma" {
+                    assert_eq!(
+                        stdout.contains("identifier `__pragma`"),
+                        !enabled,
+                        "{stdout}"
+                    );
+                } else {
+                    assert_eq!(stdout.contains("keyword"), enabled, "{feature}: {stdout}");
+                }
+            }
+        }
+        for feature in ["anonymous-structs", "va-args"] {
+            let flag = format!("-fms-{feature}");
+            assert!(run(&[&flag, "--input", "int x;"]).status.success());
+        }
+    }
+
+    #[test]
+    fn shared_extension_diagnostics_match_goldens() {
+        let source = include_str!("fixtures/diagnostics/language/extension.c");
+        for (flag, expected) in [
+            (
+                "-pedantic",
+                include_str!("fixtures/diagnostics/language/extension-warning.stderr"),
+            ),
+            (
+                "-pedantic-errors",
+                include_str!("fixtures/diagnostics/language/extension-error.stderr"),
+            ),
+        ] {
+            let output = run(&[flag, "--input", source]);
+            assert!(output.stdout.is_empty(), "{output:?}");
+            assert_eq!(String::from_utf8_lossy(&output.stderr), expected);
+        }
+    }
+
+    #[test]
+    fn iso_parser_syntax_is_native_in_its_selected_revision() {
+        let c11 = "_Alignas(16) _Atomic(int) x; _Thread_local int t; _Static_assert(1,\"ok\"); \
+                   _Noreturn void f(void){int n=_Generic(x,int:1,default:0)+_Alignof(int); \
+                   return;}\n";
+        for (flag, source) in [
+            ("-std=c89", "extern object; f(void){return 0;}\n"),
+            ("-std=iso9899:199409", "extern object; f(void){return 0;}\n"),
+            (
+                "-std=c99",
+                include_str!("fixtures/diagnostics/language/iso-c89.c"),
+            ),
+            ("-std=c11", c11),
+            ("-std=c17", c11),
+            (
+                "-std=c23",
+                "[[maybe_unused]] constexpr int c=1; static_assert(1); typeof_unqual(const int) \
+                 x; auto n=true; void *p=nullptr;\n",
+            ),
+            (
+                "-std=c2y",
+                include_str!("fixtures/diagnostics/language/iso-c2y.c"),
+            ),
+        ] {
+            let output = run(&[flag, "-pedantic-errors", "--syntax-tree", "--input", source]);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{flag}: {stderr}");
+            assert!(
+                !stderr.contains("error:")
+                    && !stderr.contains("warning:")
+                    && !stderr.contains("recovered"),
+                "{flag}: {stderr}"
+            );
+            assert!(
+                stderr.contains("declaration") || stderr.contains("function"),
+                "{flag}: {stderr}"
+            );
+        }
+    }
+
+    #[test]
+    fn iso_parser_policy_diagnostics_match_goldens() {
+        let source = include_str!("fixtures/diagnostics/language/iso-c89.c");
+        for (flag, expected) in [
+            (
+                "-pedantic",
+                include_str!("fixtures/diagnostics/language/iso-c89-warning.stderr"),
+            ),
+            (
+                "-pedantic-errors",
+                include_str!("fixtures/diagnostics/language/iso-c89-error.stderr"),
+            ),
+        ] {
+            let output = run(&["-std=c89", flag, "--input", source]);
+            assert!(output.stdout.is_empty(), "{output:?}");
+            assert_eq!(String::from_utf8_lossy(&output.stderr), expected);
+        }
+        let output = run(&["-std=c89", "--input", source]);
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+
+    #[test]
+    fn iso_grammar_token_seam_matches_its_snapshot() {
+        // Pins the existing phase-7 tokens consumed by the new parser grammar.
+        // This test changes no lexer or preprocessing behavior.
+        let source = include_str!("fixtures/diagnostics/language/iso-c2y.c");
+        let output = run(&[
+            "-std=c2y",
+            "-pedantic-errors",
+            "--tokens",
+            "--input",
+            source,
+        ]);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            include_str!("fixtures/lexing/iso_parser_token_seam.snap")
+        );
+    }
+
+    #[test]
+    fn gnu_parser_policy_diagnostics_match_goldens() {
+        let source = include_str!("fixtures/diagnostics/language/gnu-parser.c");
+        for (flag, expected) in [
+            (
+                "-pedantic",
+                include_str!("fixtures/diagnostics/language/gnu-parser-warning.stderr"),
+            ),
+            (
+                "-pedantic-errors",
+                include_str!("fixtures/diagnostics/language/gnu-parser-error.stderr"),
+            ),
+        ] {
+            let output = run(&["-std=c17", flag, "--input", source]);
+            assert!(output.stdout.is_empty(), "{output:?}");
+            assert_eq!(String::from_utf8_lossy(&output.stderr), expected);
+        }
+        for mode in ["-std=c17", "-std=gnu17"] {
+            let output = run(&[mode, "--syntax-tree", "--input", source]);
+            let tree = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !tree.contains("error:")
+                    && !tree.contains("warning:")
+                    && !tree.contains("recovered"),
+                "{mode}: {tree}"
+            );
+            assert!(
+                tree.contains("nested-function") && tree.contains("builtin __builtin_va_arg"),
+                "{tree}"
+            );
+        }
+    }
+
+    #[test]
+    fn gnu_grammar_token_seam_matches_its_snapshot() {
+        let source = include_str!("fixtures/diagnostics/language/gnu-parser.c");
+        let output = run(&["-std=gnu17", "--tokens", "--input", source]);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            include_str!("fixtures/lexing/gnu_parser_token_seam.snap")
+        );
+    }
+
+    #[test]
+    fn msvc_parser_flags_are_independent_and_later_disables_win() {
+        for (name, source) in [
+            ("declspec", "__declspec(dllexport) int x;\n"),
+            ("int-types", "__int64 x;\n"),
+            ("calling-conventions", "int (__stdcall *p)(int);\n"),
+            ("type-qualifiers", "int * __ptr64 p;\n"),
+            ("inline", "__forceinline int f(void){return 1;}\n"),
+            ("seh", "int f(void){__try {} __except(1) {}}\n"),
+            ("asm", "int f(void){__asm { nop }}\n"),
+            (
+                "anonymous-structs",
+                "struct T {int x;}; struct S {struct T;};\n",
+            ),
+        ] {
+            let enable = format!("-fms-{name}");
+            let disable = format!("-fno-ms-{name}");
+            let enabled = run(&["-std=c17", &enable, "--syntax-tree", "--input", source]);
+            let tree = String::from_utf8_lossy(&enabled.stderr);
+            assert!(
+                enabled.status.success() && !tree.contains("error:") && !tree.contains("recovered"),
+                "{name}: {tree}"
+            );
+            for flags in [
+                vec!["-std=c17"],
+                vec!["-std=c17", "-fms-extensions", &disable],
+            ] {
+                let mut args = flags;
+                args.extend(["--input", source]);
+                let disabled = run(&args);
+                assert!(
+                    String::from_utf8_lossy(&disabled.stderr).contains(
+                        if name == "anonymous-structs" {
+                            "warning: declaration does not declare anything"
+                        } else {
+                            "error:"
+                        }
+                    ),
+                    "{name}: {disabled:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn msvc_parser_policy_diagnostics_and_token_seam_match_goldens() {
+        let source = include_str!("fixtures/diagnostics/language/msvc-parser.c");
+        for (flag, expected) in [
+            (
+                "-pedantic",
+                include_str!("fixtures/diagnostics/language/msvc-parser-warning.stderr"),
+            ),
+            (
+                "-pedantic-errors",
+                include_str!("fixtures/diagnostics/language/msvc-parser-error.stderr"),
+            ),
+        ] {
+            let output = run(&["-std=c17", "-fms-extensions", flag, "--input", source]);
+            assert!(output.stdout.is_empty(), "{output:?}");
+            assert_eq!(String::from_utf8_lossy(&output.stderr), expected);
+        }
+        for enabled in [true, false] {
+            let output = run(&[
+                "-std=c17",
+                if enabled {
+                    "-fms-extensions"
+                } else {
+                    "-fno-ms-extensions"
+                },
+                "--tokens",
+                "--input",
+                source,
+            ]);
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stderr),
+                if enabled {
+                    include_str!("fixtures/lexing/msvc_parser_enabled.snap")
+                } else {
+                    include_str!("fixtures/lexing/msvc_parser_disabled.snap")
+                }
+            );
+        }
+        let output = run(&[
+            "-std=c17",
+            "-fms-extensions",
+            "--syntax-tree",
+            "--input",
+            source,
+        ]);
+        let tree = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success()
+                && !tree.contains("error:")
+                && !tree.contains("warning:")
+                && !tree.contains("recovered"),
+            "{tree}"
+        );
+        for text in [
+            "__declspec(...)",
+            "unsigned __int64",
+            "__w64",
+            "__ptr32",
+            "__ptr64",
+            "__sptr",
+            "__uptr",
+            "__unaligned",
+            "__stdcall",
+            "__cdecl",
+            "__forceinline",
+            "seh",
+            "guarded",
+            "except",
+            "finally",
+            "filter",
+            "__leave",
+            "ms-asm block",
+            "ms-asm line",
+            "token mov",
+        ] {
+            assert!(tree.contains(text), "missing {text}: {tree}");
+        }
+    }
+
+    #[test]
+    fn malformed_msvc_syntax_matches_its_recovery_golden() {
+        let source = include_str!("fixtures/diagnostics/language/msvc-recovery.c");
+        let output = run(&["-std=c17", "-fms-extensions", "--input", source]);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            include_str!("fixtures/diagnostics/language/msvc-recovery.stderr")
+        );
+        let output = run(&[
+            "-std=c17",
+            "-fms-extensions",
+            "--syntax-tree",
+            "--input",
+            source,
+        ]);
+        let tree = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            tree.contains("recovered") && tree.contains("following"),
+            "{tree}"
+        );
+    }
+
     fn run(arguments: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
             .args(arguments)
@@ -38,9 +552,7 @@ mod tests {
         let error = stderr
             .find("error: expected an expression")
             .expect("parser error");
-        let warning = stderr
-            .find("warning: unknown preprocessing directive")
-            .expect("warning");
+        let warning = stderr.find("warning: #warning late").expect("warning");
         assert!(error < warning, "{stderr}");
         assert!(
             stderr.contains("1 error and 1 warning generated"),
@@ -58,9 +570,7 @@ mod tests {
         let first = stderr
             .find("error: expected an expression, found `;`")
             .expect("first error");
-        let warning = stderr
-            .find("warning: unknown preprocessing directive")
-            .expect("warning");
+        let warning = stderr.find("warning: #warning middle").expect("warning");
         let last = stderr
             .find("error: expected an expression, found `)`")
             .expect("macro error");
@@ -268,6 +778,43 @@ mod tests {
              constant `1.5L` = 0x1.8p+0 (long double)\n<input>:1:11: integer constant `7u` = 7 \
              (unsigned int)\n<input>:1:14: string literal \"s\"\n"
         );
+    }
+
+    fn check_encoded_string_inspection(flag: &str, label_separator: &str) {
+        for standard in [None, Some("-std=c11")] {
+            for (source, kind, expected) in [
+                (r#"u"\x100""#, "char16_t", "u\"\u{100}\""),
+                (r#"u"\777""#, "char16_t", "u\"\u{1ff}\""),
+                (r#"U"\x12345""#, "char32_t", "U\"\u{12345}\""),
+                (r#"u"\xd800""#, "char16_t", r#"u"\xd800""#),
+                (r#"U"\x110000""#, "char32_t", r#"U"\x110000""#),
+                (r#"u8"\xc4\x80""#, "char8_t", "u8\"\u{100}\""),
+                (r#"u8"\xff""#, "char8_t", r#"u8"\377""#),
+            ] {
+                let declaration = format!("void f(void) {{ (void){source}; }}\n");
+                let mut arguments = vec![flag, "--input", &declaration];
+                arguments.extend(standard);
+                let output = run(&arguments);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(output.status.success(), "{arguments:?}: {stderr}");
+                assert!(
+                    !stderr.contains("error:") && !stderr.contains("warning:"),
+                    "{stderr}"
+                );
+                let label = format!("{kind}{label_separator} {expected}");
+                assert!(stderr.contains(&label), "{arguments:?}: {stderr}");
+            }
+        }
+    }
+
+    #[test]
+    fn token_dump_renders_encoded_string_code_units() {
+        check_encoded_string_inspection("--tokens", " string literal");
+    }
+
+    #[test]
+    fn syntax_tree_renders_encoded_string_code_units() {
+        check_encoded_string_inspection("--syntax-tree", "-string");
     }
 
     #[test]

@@ -1,0 +1,25 @@
+error: va_arg requires a complete object type
+ --> freestanding-va-type.c:3:45
+  |
+3 | void f(int n, ...) { va_list ap; va_arg(ap, void); va_arg(ap, struct incomplete); va_arg(ap, int[2]); }
+  |                                             ^^^^ not a complete object type
+  |
+  = note: C99 §7.15.1.1p2: type permits a pointer to an object of that type
+
+error: va_arg requires a complete object type
+ --> freestanding-va-type.c:3:63
+  |
+3 | void f(int n, ...) { va_list ap; va_arg(ap, void); va_arg(ap, struct incomplete); va_arg(ap, int[2]); }
+  |                                                               ^^^^^^^^^^^^^^^^^ not a complete object type
+  |
+  = note: C99 §7.15.1.1p2: type permits a pointer to an object of that type
+
+error: va_arg requires a complete object type
+ --> freestanding-va-type.c:3:94
+  |
+3 | void f(int n, ...) { va_list ap; va_arg(ap, void); va_arg(ap, struct incomplete); va_arg(ap, int[2]); }
+  |                                                                                              ^^^^^^ not a complete object type
+  |
+  = note: C99 §7.15.1.1p2: type permits a pointer to an object of that type
+
+3 errors generated.

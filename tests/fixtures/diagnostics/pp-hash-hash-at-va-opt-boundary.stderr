@@ -1,0 +1,9 @@
+error: `##` cannot begin or end a `__VA_OPT__` replacement
+ --> pp-hash-hash-at-va-opt-boundary.c:1:19
+  |
+1 | #define V(x, ...) __VA_OPT__(x ##)
+  |                   ^^^^^^^^^^ the macro is not defined
+  |
+  = note: C23 §6.10.5.1p3: the replacement must form a valid replacement list, which `##` cannot begin or end (§6.10.5.3p1)
+
+1 error generated.

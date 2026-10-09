@@ -1,0 +1,9 @@
+error: identifier has no visible declaration: `missing`
+ --> sema2-undeclared.c:1:16
+  |
+1 | void f(void) { missing + 1; }
+  |                ^^^^^^^ not declared
+  |
+  = note: C99 §6.5.1p2: an identifier expression designates a declared object, function or enumeration constant
+
+1 error generated.

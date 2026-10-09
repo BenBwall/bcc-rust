@@ -1,0 +1,17 @@
+error: inline is not allowed on a parameter: `x`
+ --> sema-inline-parameter.c:1:7
+  |
+1 | int f(inline int x);
+  |       ^^^^^^^^^^^^ parameters are objects, not functions
+  |
+  = note: C99 §6.7.4p2: function specifiers are used only in the declaration of an identifier for a function
+
+error: inline is not allowed on a parameter
+ --> sema-inline-parameter.c:2:23
+  |
+2 | int g(int (*callback)(inline int));
+  |                       ^^^^^^^^^^ parameters are objects, not functions
+  |
+  = note: C99 §6.7.4p2: function specifiers are used only in the declaration of an identifier for a function
+
+2 errors generated.

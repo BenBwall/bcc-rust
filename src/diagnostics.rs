@@ -112,7 +112,7 @@ impl<'d> LabelSource<'d> {
 impl<'d> Diagnostic<'d> {
     /// Adds the range the diagnostic is about. Its first location becomes the
     /// `-->` location.
-    pub(crate) fn primary(mut self, source: SourceVectors, label: Option<&'d str>) -> Self {
+    fn primary(mut self, source: SourceVectors, label: Option<&'d str>) -> Self {
         self.labels.push(Label {
             source:  LabelSource::Range(source),
             message: label,

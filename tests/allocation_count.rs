@@ -19,7 +19,8 @@
 //! translation phases 1 through 7 under the batch pipeline for one
 //! translation unit and then drops all of its arenas. The inputs are the
 //! generated benchmark inputs that are C, a source written to reach the
-//! rarer paths of every phase, and a main file with headers read from disk.
+//! rarer paths of every phase, a main file with headers read from disk, and
+//! a probe whose resource headers chain to a fake C library on disk.
 //! Every input must produce no diagnostics; reporting them is covered by
 //! `reporting_golden_diagnostics_makes_no_global_allocations` above. Not
 //! covered: `__DATE__` and `__TIME__` (which the benchmark API pins to the
@@ -280,7 +281,7 @@ mod tests {
     /// Compiles `path`, counting the global allocations of `measured` steps.
     fn compile(path: &Path, measured: &[CompileStep], capture: bool) -> Vec<(CompileStep, Totals)> {
         let mut totals = Vec::new();
-        bcc_rust::compile_file_measured(path, &mut io::sink(), |step, run| {
+        compile_fixture(path, &mut io::sink(), |step, run| {
             if measured.contains(&step) {
                 totals.push((step, count(capture, run)));
             } else {
@@ -289,6 +290,24 @@ mod tests {
         })
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         totals
+    }
+
+    fn compile_fixture(
+        path: &Path,
+        out: &mut dyn io::Write,
+        measure: impl FnMut(CompileStep, &mut dyn FnMut()),
+    ) -> io::Result<()> {
+        match fs::read_to_string(path.with_extension("args")) {
+            | Ok(arguments) => bcc_rust::compile_file_with_arguments_measured(
+                path,
+                &arguments.split_whitespace().collect::<Vec<_>>(),
+                out,
+                measure,
+            ),
+            | Err(error) if error.kind() == io::ErrorKind::NotFound =>
+                bcc_rust::compile_file_measured(path, out, measure),
+            | Err(error) => Err(error),
+        }
     }
 
     /// The counter sees an allocation made through the global allocator, so a
@@ -308,7 +327,7 @@ mod tests {
             // Room for the whole report, so writing it does not allocate.
             let mut stderr = Vec::with_capacity(1 << 20);
             let mut totals = (0, 0);
-            bcc_rust::compile_file_measured(&fixture, &mut stderr, |step, run| {
+            compile_fixture(&fixture, &mut stderr, |step, run| {
                 if step == CompileStep::Report {
                     totals = count(sites_requested(), run);
                 } else {
@@ -476,6 +495,243 @@ mod measurements {
         }
     }
 
+    #[test]
+    fn declaration_semantics_allocates_only_from_arenas() {
+        for input in BenchmarkInput::ALL
+            .into_iter()
+            .chain(BenchmarkInput::PARSER_STRESS)
+        {
+            _ = input.bytes();
+            let (summary, allocations) = count_compile(|| bcc_rust::sema(input));
+            assert_eq!(
+                summary.diagnostics,
+                0,
+                "{} must analyze cleanly",
+                input.name()
+            );
+            assert_no_allocations(input.name(), summary, &allocations);
+        }
+        let source = "enum E {A=1, B=(A<<3)+sizeof(long), C=B?B:1/0}; typedef const int I; struct \
+                      S {char a; int b:3; unsigned c:5; int :0; long d; int flexible[];}; union U \
+                      {long a; double b;}; static int x; extern int x; void f(int a[static const \
+                      4]) {int n; int v[n]; {typedef I T; T *p;} for(int i=0;i<3;i++) {int j;} }\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("declaration and layout paths", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0, "valid semantic input");
+    }
+
+    #[test]
+    fn freestanding_headers_and_intrinsics_allocate_only_from_arenas() {
+        let source = include_str!("fixtures/freestanding/conformance.c");
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("freestanding headers and intrinsics", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+        let source = "#include <stdarg.h>\nvoid f(void) {va_list ap; va_start(ap, ap); va_arg(ap, \
+                      void); va_end(1);}\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(allocations.calls, 0, "invalid varargs intrinsics");
+        assert!(summary.diagnostics >= 3);
+    }
+
+    #[test]
+    fn int128_types_constants_and_diagnostics_allocate_only_from_arenas() {
+        let source = include_str!("fixtures/targets/int128.c");
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("128-bit types and arithmetic", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+        let source = "#define MIN \
+                      (-(__int128)(((__uint128_t)-1)>>1)-1)\n_Static_assert(MIN/-1,\"overflow\"); \
+                      _Static_assert(MIN%-1,\"overflow\"); int huge[(__uint128_t)-1]; struct B \
+                      {__int128 b:129;};\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(allocations.calls, 0, "128-bit exceptional constants");
+        assert!(summary.diagnostics >= 4);
+    }
+
+    #[test]
+    fn atomic_types_builtins_and_generic_selection_allocate_only_from_arenas() {
+        let source = include_str!("fixtures/targets/atomic.c");
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("atomic types and builtins", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+    }
+
+    #[test]
+    fn binary128_and_type_generic_paths_allocate_only_from_arenas() {
+        let source = include_str!("fixtures/targets/float128.c");
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("binary128 and type selections", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+        let source = "__float128 a=0.1q, b=0x1p-16494q, c=1.0q+2.0q, d=__builtin_fabsf128(-1.0q), \
+                      e=(__float128)__builtin_huge_val(); int n; int f(void) { return \
+                      __builtin_choose_expr(n,1,2); } int g(void) { return _Generic(1, double: \
+                      0); }\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(
+            allocations.calls, 0,
+            "binary128 parsing and selection diagnostics"
+        );
+        assert_eq!(summary.diagnostics, 2);
+    }
+
+    #[test]
+    fn type_generic_selections_allocate_only_from_arenas() {
+        let source = "int a[2]; _Atomic(_Bool) b=&a; _Complex double z; double *r=&__real__ z; \
+                      _Static_assert(__builtin_types_compatible_p(const int[2][3],int[2][3]), \
+                      \"array\"); _Static_assert(_Generic(1,int:&a[1])-&a[0]==1,\"selection\"); \
+                      _Static_assert(!__atomic_always_lock_free(-1,0),\"size\");\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("array qualification and selections", summary, &allocations);
+        let source = include_str!("fixtures/diagnostics/sema-type-generic-recovery.c");
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(allocations.calls, 0, "type-generic dependent diagnostics");
+        assert_eq!(summary.diagnostics, 8);
+    }
+
+    #[test]
+    fn vectors_and_x86_resources_allocate_only_from_arenas() {
+        let (summary, allocations) =
+            count_compile(|| bcc_rust::sema_source(include_str!("fixtures/targets/vector.c")));
+        assert_no_allocations("vector types and operators", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+        let source = "#define __BCC_MM_MALLOC_H\n#include <x86intrin.h>\n__m128 f(__m128 a) \
+                      {return _mm_add_ps(a,a);}\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("x86 header builtins", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+    }
+
+    #[test]
+    fn vector_fixture_paths_allocate_only_from_arenas() {
+        for (source, diagnostics) in [
+            (include_str!("fixtures/semantic/vectors/control.c"), 0),
+            (
+                include_str!("fixtures/semantic/vectors/scalar_condition_vector_alternatives.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/vector_builtin_unknown_operands.c"),
+                5,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/attribute_argument_identifiers.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/alignment_belongs_to_declared_pointer.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/braced_whole_vector_initializer.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/binary128_vector_splats.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/complex_binary128_is_not_vector_element.c"),
+                1,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/integer_vector_operands_and_shift_lanes.c"),
+                10,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/atomic_vector_controls.c"),
+                3,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/atomic_vector_value_conversion.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/shuffle_without_indices.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/parenthesized_vector_builtin_callees.c"),
+                1,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/x86_immediate_parameter_conversion.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/elementwise_min_max_exclude_bool.c"),
+                2,
+            ),
+        ] {
+            let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+            assert_eq!(allocations.calls, 0, "vector fixture regressions: {source}");
+            assert_eq!(summary.diagnostics, diagnostics, "{source}");
+        }
+    }
+
+    #[test]
+    fn mingw_member_and_inline_paths_allocate_only_from_arenas() {
+        for (source, diagnostics) in [
+            (
+                "struct S { struct T { int x; }; int y; }; _Static_assert(sizeof(struct \
+                 S)==sizeof(int), \"tag adds no storage\");\n",
+                1,
+            ),
+            (
+                "extern inline __attribute__((gnu_inline)) void f(void) {} static void f(void) \
+                 {}\n",
+                0,
+            ),
+            (include_str!("fixtures/targets/x86-baseline-macros.c"), 0),
+        ] {
+            let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+            assert_eq!(
+                allocations.calls, 0,
+                "MinGW reductions: {} global allocation bytes",
+                allocations.bytes
+            );
+            assert_eq!(summary.diagnostics, diagnostics);
+            assert!(summary.external_declarations > 0);
+        }
+    }
+
+    #[test]
+    fn expressions_and_initializers_allocate_only_from_arenas() {
+        let source = "struct S {int a[2]; int b;}; struct S s={1,2,3}; int a[][2]={[2][1]=3,4,5}; \
+                      char c[]=\"abc\"; int *p=&s.a[1]; double d=1.5*2.0; int fun(const int \
+                      *,int,...); void f(int n) {int v[n]; int x=sizeof s; const int *q=p; \
+                      x+=fun(q,(short)1,(float)2); x=n?x:2L; ((struct S){.b=1}).b; sizeof v; \
+                      switch(x) {case sizeof s:break;} }\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("expression and current-object paths", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0, "valid stage-2 source");
+        let source =
+            "void f(void) { int *p; const int *q; p=q; missing+1; p[1.0]; } int a[2]={1,2,3};\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(allocations.calls, 0, "expression diagnostic paths");
+        assert!(summary.diagnostics >= 4, "invalid stage-2 source");
+    }
+
+    #[test]
+    fn statements_and_functions_allocate_only_from_arenas() {
+        let source = "int a[]; extern int a[3]; static int helper(int); int (*fp(int a))(int b) \
+                      {int b=a; return 0;} inline int in(int n) {static const int k=1; return \
+                      k+n;} static int helper(int n) {int a[n]; goto L; L: switch(n) {case 0 ... \
+                      2: return n; default: break;} for(int i=0;i<n;i++) {if(i) continue; break;} \
+                      return sizeof __func__;} int old(a,b) int a,b; {return a+b;}\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("statement and function paths", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0, "valid stage-3 source");
+        let source = "static int missing(void); int f(int n) {goto L; int a[n]; L:; switch(n) \
+                      {case 1:; case 1:;} break; continue; return missing();} int x=1; int x=2;\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(allocations.calls, 0, "statement diagnostic paths");
+        assert!(summary.diagnostics >= 6, "invalid stage-3 source");
+        let source = format!("void f(void) {{{};}}\n", "if(1)while(1)".repeat(10_000));
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(&source));
+        assert_no_allocations("deep statement paths", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+    }
+
     /// Reaches the paths the generated inputs leave out.
     const FEATURE_SOURCE: &str = concat!(
         "#define STR(x) #x\r\n",
@@ -514,6 +770,77 @@ mod measurements {
         let (summary, allocations) = count_compile(|| bcc_rust::parse_source(FEATURE_SOURCE));
         assert!(summary.external_declarations > 0);
         assert_no_allocations("feature source", summary, &allocations);
+    }
+
+    #[test]
+    fn compiling_iso_syntax_allocates_only_from_arenas() {
+        // Reserved spellings and unambiguous grammar are extensions under the
+        // library's C99/Allow default, so this also traverses policy seams.
+        let source = "[[vendor::tag((1),[2],{3})]] _Alignas(16) _Atomic(int) object; \
+                      _Thread_local int thread; _Static_assert(1,\"message\"); unsigned \
+                      _BitInt(16) bits; enum E : unsigned { A [[deprecated]] }; int f(int) { int \
+                      a[3]; int n=_Generic(a,int*:1,default:0); n+=_Alignof(int)+_Countof a; \
+                      if(int x=1;x) n=x; switch(n){case 1 ... 3:break;} outer: for(;;){break \
+                      outer;} label: int x=(static int){}; return n; }\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::parse_source(source));
+        assert_eq!(summary.external_declarations, 6);
+        assert_no_allocations("ISO syntax source", summary, &allocations);
+    }
+
+    #[test]
+    fn compiling_gnu_syntax_allocates_only_from_arenas() {
+        let source = "__attribute__((used)) unsigned __int128 wide[0]; __typeof__(wide) copy; \
+                      __auto_type value=1; struct Empty {}; __asm__(\"nop\"); int \
+                      f(void){__label__ L; int nested(int x){return x;} int a[4]={[1 ... 3]=2}; \
+                      struct S{int x;}; struct S s={x:1}; __asm__ \
+                      volatile(\"\":[out]\"=r\"(value):\"r\"(value):\"memory\"); __asm__ \
+                      goto(\"\"::::L); void *p=&&L; goto *p; L: return __extension__ ({ \
+                      __builtin_va_arg(ap,int)+__builtin_offsetof(struct \
+                      S,x)+__builtin_types_compatible_p(int,long)+__builtin_choose_expr(1,\
+                      __real__ value,__imag__ value); }) ?: 2;}\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::parse_source(source));
+        assert_eq!(summary.external_declarations, 6);
+        assert_no_allocations("GNU syntax source", summary, &allocations);
+    }
+
+    #[test]
+    fn compiling_pedantic_suppression_allocates_only_from_arenas() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/diagnostics/language-extension-suppression.c");
+        let mut parse_calls = None;
+        let mut report_calls = None;
+        bcc_rust::compile_file_with_arguments_measured(
+            &path,
+            &["-std=c17", "-pedantic"],
+            &mut std::io::sink(),
+            |step, run| {
+                let totals = count(false, run);
+                match step {
+                    | bcc_rust::CompileStep::Parse => parse_calls = Some(totals),
+                    | bcc_rust::CompileStep::Report => report_calls = Some(totals),
+                }
+            },
+        )
+        .expect("suppression fixture compiles and renders");
+        assert_eq!(parse_calls, Some((0, 0)));
+        assert_eq!(report_calls, Some((0, 0)));
+    }
+
+    #[test]
+    fn compiling_msvc_syntax_allocates_only_from_arenas() {
+        let source = include_str!("fixtures/diagnostics/language/msvc-parser.c");
+        let (summary, allocations) = count_compile(|| bcc_rust::parse_msvc_source(source));
+        assert_eq!(summary.external_declarations, 8);
+        assert_no_allocations("MSVC syntax source", summary, &allocations);
+        let (summary, allocations) = count_compile(|| {
+            bcc_rust::parse_msvc_source(
+                "int f(void) { __try {} __except() {} __asm mov eax, [ebx\nreturn 0; } int \
+                 following;\n",
+            )
+        });
+        assert_eq!(summary.external_declarations, 2);
+        assert!(summary.diagnostics > 0);
+        assert_eq!(allocations.calls, 0);
     }
 
     /// Recovery paths also belong to the zero-global-allocation contract.
@@ -592,6 +919,28 @@ mod measurements {
             allocations.bytes = allocations.stacks.iter().map(|(size, _)| size).sum();
         }
         assert_eq!(summary.external_declarations, 5);
+        assert_no_allocations(&main.display().to_string(), summary, &allocations);
+    }
+
+    /// The hosted resource headers chain to a glibc-like C library with
+    /// `#include_next` and `__has_include_next`, and satisfy its partial
+    /// `<stddef.h>` and `<stdarg.h>` requests.
+    #[test]
+    fn chaining_resource_headers_to_a_c_library_allocates_only_from_arenas_and_std_file_system() {
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hosted");
+        let main = fixtures.join("probe.c");
+        let library = fixtures.join("sysroot/usr/include");
+        let (summary, mut allocations) = count_compile(|| {
+            bcc_rust::parse_file_with_library(&main, &library).expect("the probe is readable")
+        });
+        if allocations.calls <= KEPT_STACKS {
+            allocations
+                .stacks
+                .retain(|(_, stack)| !in_std_file_system(stack));
+            allocations.calls = allocations.stacks.len();
+            allocations.bytes = allocations.stacks.iter().map(|(size, _)| size).sum();
+        }
         assert_no_allocations(&main.display().to_string(), summary, &allocations);
     }
 }

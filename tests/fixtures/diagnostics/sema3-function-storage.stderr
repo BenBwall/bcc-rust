@@ -1,0 +1,9 @@
+error: invalid storage class in function definition: `f`
+ --> sema3-function-storage.c:1:1
+  |
+1 | typedef int f(void) { return 0; }
+  | ^^^^^^^^^^^ storage class is not allowed on a definition
+  |
+  = note: C99 §6.9.1p4: a function definition permits only extern or static storage-class specifiers
+
+1 error generated.

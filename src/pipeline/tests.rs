@@ -35,7 +35,7 @@ use crate::{
 };
 
 /// Preprocesses `source` as the CLI's `--tokens` does and scopes its tokens
-/// and context together for a future translation-unit arena.
+/// and context together, since the tokens borrow the translation-unit arena.
 fn with_preprocessed_with<R>(
     source: &str,
     configuration: CompilerConfiguration,
@@ -87,6 +87,26 @@ fn with_parser<R>(source: &str, inspect: impl FnOnce(&mut LanguageParser<'_, '_,
         &mut context,
         &parse_arena,
     ))
+}
+
+#[test]
+fn library_startup_options_share_the_cli_directive_path() {
+    use crate::configuration::PreprocessingOption::{
+        Define,
+        Undefine,
+    };
+    let tu = Bump::new();
+    let mut context = Context::new(&tu);
+    context.preprocessing_options = &[Define("VALUE=3"), Undefine("VALUE"), Define("VALUE=7")];
+    let source = "#if VALUE != 7\n#error option order\n#endif\nint value = VALUE;\n";
+    let unit = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        source,
+        HeaderSearch::default(),
+    );
+    assert_eq!(context.pending_error_count(), 0);
+    assert_eq!(unit.external_declarations().len(), 1);
 }
 
 #[test]
@@ -402,7 +422,7 @@ fn compilation_peak(source: &str, path: &Path) -> crate::util::vm::accounting::U
         let tu = Bump::new();
         let mut context = Context::new(&tu);
         let source = tu.alloc_str(source);
-        let _unit = parse_translation_unit(&mut context, path, source, &[], &[]);
+        let _unit = parse_translation_unit(&mut context, path, source, HeaderSearch::default());
         let mut renderer = Renderer::new(RenderColor::Plain);
         for error in context.take_pending_errors() {
             let location = error.source_vectors(&mut context);
@@ -423,34 +443,17 @@ fn compilation_peak(source: &str, path: &Path) -> crate::util::vm::accounting::U
 }
 
 /// A directory with a header that includes itself until the nesting limit.
-struct RecursiveHeader(PathBuf);
+struct RecursiveHeader(crate::test_support::TempDir);
 
 impl RecursiveHeader {
     fn new() -> Self {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let directory = std::env::temp_dir().join(format!(
-            "bcc-region-budget-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        drop(std::fs::remove_dir_all(&directory));
-        std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(
-            directory.join("loop.h"),
-            "#include \"loop.h\"\nint header_after;\n",
-        )
-        .unwrap();
+        let directory = crate::test_support::TempDir::new("region-budget");
+        directory.write("loop.h", "#include \"loop.h\"\nint header_after;\n");
         Self(directory)
     }
 
     fn main(&self) -> PathBuf {
         self.0.join("main.c")
-    }
-}
-
-impl Drop for RecursiveHeader {
-    fn drop(&mut self) {
-        drop(std::fs::remove_dir_all(&self.0));
     }
 }
 
@@ -546,8 +549,7 @@ fn parse_arena_high_water(source: &str) -> (usize, usize) {
         &mut context,
         Path::new("<parse-arena-test>"),
         source,
-        &[],
-        &[],
+        HeaderSearch::default(),
         |preprocessor, context, _pp| Parser::preprocess(preprocessor, context),
     );
     let parse = Bump::new();

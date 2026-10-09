@@ -1,0 +1,17 @@
+error: invalid vector builtin
+ --> sema-vector-builtin.c:2:24
+  |
+2 | void f(V v, int i) { v=__builtin_shufflevector(v,v,i,1,2,3); v=__builtin_convertvector(v,int); }
+  |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ invalid vector builtin operands
+  |
+  = note: Clang Language Extensions: shufflevector requires matching vectors and constant indices; convertvector requires equal lane counts
+
+error: invalid vector builtin
+ --> sema-vector-builtin.c:2:64
+  |
+2 | void f(V v, int i) { v=__builtin_shufflevector(v,v,i,1,2,3); v=__builtin_convertvector(v,int); }
+  |                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ invalid vector builtin operands
+  |
+  = note: Clang Language Extensions: shufflevector requires matching vectors and constant indices; convertvector requires equal lane counts
+
+2 errors generated.

@@ -1,0 +1,9 @@
+error: expected matching attribute argument delimiter, found `]`
+ --> parser-iso-attribute.c:1:19
+  |
+1 | [[vendor::broken(a]b)]] int broken;
+  |                   ^---- skipped to recover
+  |                   |
+  |                   expected matching attribute argument delimiter
+
+1 error generated.

@@ -1,0 +1,43 @@
+error: bit-field width is negative or exceeds its type: `too_wide`
+ --> sema-int128-constraints.c:1:33
+  |
+1 | struct Bits { unsigned __int128 too_wide:129; __int128 named_zero:0; };
+  |                                 ^^^^^^^^^^^^ invalid width
+  |
+  = note: C99 §6.7.2.1p3: the width is a nonnegative integer constant expression no wider than the bit-field's type
+
+error: named bit-field has zero width: `named_zero`
+ --> sema-int128-constraints.c:1:56
+  |
+1 | struct Bits { unsigned __int128 too_wide:129; __int128 named_zero:0; };
+  |                                                        ^^^^^^^^^^^^ named zero-width bit-field
+  |
+  = note: C99 §6.7.2.1p3: a zero-width bit-field has no declarator
+
+error: object type is too large
+ --> sema-int128-constraints.c:2:5
+  |
+2 | int enormous[(__uint128_t)-1];
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^ too large
+  |
+  = note: C99 §5.2.4.1: this implementation limits an object to PTRDIFF_MAX bytes so that pointer differences within it are representable (§6.5.6p9)
+
+error: enumeration values have no common supported integer type: `huge`
+ --> sema-int128-constraints.c:3:19
+  |
+3 | enum OutOfRange { huge = (__uint128_t)-1 };
+  |                   ^^^^^^^^^^^^^^^^^^^^^^ no supported enum type holds this value with the others
+  |
+  = note: C99 §6.7.2.2p4: an enumerated type is compatible with an integer type that represents every member; this implementation requires a common type of at most 64 bits
+
+error: case values overlap after conversion
+ --> sema-int128-constraints.c:7:9
+  |
+6 |         case ((__uint128_t)1 << 127) ... (__uint128_t)-1: break;
+  |         -------------------------------------------------------- previous label is here
+7 |         case (__uint128_t)-1: break;
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ case value repeated here
+  |
+  = note: C99 §6.8.4.2p3: case constants are converted to the promoted switch type and no two case values may be equal
+
+5 errors generated.

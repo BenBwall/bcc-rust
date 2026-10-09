@@ -1,0 +1,49 @@
+error: __builtin_choose_expr requires an integer constant expression
+ --> sema-type-generic.c:2:27
+  |
+2 | int choose(void) { return __builtin_choose_expr(variable, 1, 2); }
+  |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not an integer constant expression
+  |
+  = note: GCC Other Builtins: __builtin_choose_expr selects its second or third operand using an integer constant expression, preserving the selected type
+
+error: generic selection requires unique eligible associations and a matching type or default
+ --> sema-type-generic.c:3:30
+  |
+3 | int duplicate(void) { return _Generic(1, int: 1, int: 2); }
+  |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^ invalid generic association list
+  |
+  = note: C11 §6.5.1.1p2: associations name complete non-variably-modified object types; compatible types and defaults cannot be repeated
+
+error: generic selection requires unique eligible associations and a matching type or default
+ --> sema-type-generic.c:4:28
+  |
+4 | int missing(void) { return _Generic(1, double: 1); }
+  |                            ^^^^^^^^^^^^^^^^^^^^^^ invalid generic association list
+  |
+  = note: C11 §6.5.1.1p2: associations name complete non-variably-modified object types; compatible types and defaults cannot be repeated
+
+error: generic selection requires unique eligible associations and a matching type or default
+ --> sema-type-generic.c:5:31
+  |
+5 | int incomplete(void) { return _Generic(1, int[]: 1, default: 2); }
+  |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ invalid generic association list
+  |
+  = note: C11 §6.5.1.1p2: associations name complete non-variably-modified object types; compatible types and defaults cannot be repeated
+
+error: invalid operand type for unary operator
+ --> sema-type-generic.c:6:34
+  |
+6 | int nonarithmetic(void) { return __real__ &variable; }
+  |                                  ^^^^^^^^ operand type is not allowed here
+  |
+  = note: C99 §6.5.3p1: unary operators require their specified arithmetic, scalar or pointer operands
+
+error: function call has the wrong number of arguments
+ --> sema-type-generic.c:7:49
+  |
+7 | int arity(void) { return __builtin_classify_type(); }
+  |                                                 ^^ wrong number of arguments
+  |
+  = note: C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis permits additional arguments
+
+6 errors generated.

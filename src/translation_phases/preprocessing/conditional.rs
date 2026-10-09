@@ -22,6 +22,7 @@ use super::{
     },
 };
 use crate::{
+    configuration::Feature,
     translation_phases::{
         Context,
         SourceVector,
@@ -58,12 +59,22 @@ impl<'pp> ConditionalGroup<'pp> {
     }
 }
 
+/// The spelling of a conditional directive's name, for its diagnostics.
+fn conditional_directive_name(context: &Context<'_>, directive: PreprocessorToken) -> &'static str {
+    match context.string_cache.at(directive.contents) {
+        | "else" => "else",
+        | "elifdef" => "elifdef",
+        | "elifndef" => "elifndef",
+        | _ => "elif",
+    }
+}
+
 /// How far [`Expander::skip_over_dead_code`] skips.
 ///
 /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161: only the first group whose
 /// condition is true is processed, else the `#else` group if any.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SkipMode {
+enum SkipMode {
     /// A group whose condition was false: stop at the matching `#elif` whose
     /// condition holds, at `#else`, or at `#endif`.
     FalseGroup,
@@ -158,12 +169,36 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         PreprocessorErrorType::NoConditionInElifDirective,
                     );
                     if taken {
-                        self.last_was_newline = true;
-                        self.current_is_newline = true;
+                        self.resume_at_line_start();
                         return;
                     }
                     self.context.set_ignore_tokenizer_errors(true);
                     at_line_start = true;
+                },
+                | "elifdef" | "elifndef"
+                    if innermost && self.context.configuration.accepts(Feature::Elifdef) =>
+                {
+                    if !self.check_conditional_arm(name, false) || mode == SkipMode::ToEndif {
+                        continue 'lines;
+                    }
+                    self.context.set_ignore_tokenizer_errors(false);
+                    let directive = conditional_directive_name(self.context, name);
+                    self.context.report_extension(
+                        Feature::Elifdef,
+                        if directive == "elifdef" {
+                            "#elifdef"
+                        } else {
+                            "#elifndef"
+                        },
+                        name.source_vectors,
+                    );
+                    let taken = self.eval_macro_test(directive);
+                    at_line_start = true;
+                    if taken {
+                        self.resume_at_line_start();
+                        return;
+                    }
+                    self.context.set_ignore_tokenizer_errors(true);
                 },
                 | "else" if innermost => {
                     let valid = self.check_conditional_arm(name, true);
@@ -182,8 +217,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         if !at_line_start {
             self.skip_until_newline();
         }
-        self.last_was_newline = true;
-        self.current_is_newline = true;
+        self.resume_at_line_start();
     }
 
     /// Opens a conditional and processes its group when the controlling
@@ -197,8 +231,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             directive,
         ));
         if self.eval_preprocessor_expression(PreprocessorErrorType::NoConditionInIfDirective) {
-            self.last_was_newline = true;
-            self.current_is_newline = true;
+            self.resume_at_line_start();
         } else {
             self.skip_over_dead_code(true, SkipMode::FalseGroup);
         }
@@ -210,12 +243,17 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161. The skipped `#elif`'s
     /// expression is not evaluated.
     pub(super) fn parse_elif_directive(&mut self, directive: PreprocessorToken) {
+        let name = conditional_directive_name(self.context, directive);
         self.skip_remaining_groups(
             directive,
-            PreprocessorErrorType::ElifDirectiveWithoutIfDirective,
+            PreprocessorErrorType::ElifDirectiveWithoutIfDirective(name),
         );
     }
 
+    /// Handles `#else`: the group it controls is processed only when no
+    /// earlier condition held, which reaching it here rules out.
+    ///
+    /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161.
     pub(super) fn parse_else_directive(&mut self, directive: PreprocessorToken) {
         self.skip_remaining_groups(
             directive,
@@ -223,6 +261,12 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         );
     }
 
+    /// Skips the remaining `#elif` and `#else` groups of a conditional whose
+    /// processed group has ended; an unmatched directive is diagnosed with
+    /// `unmatched_error` instead.
+    ///
+    /// C99: only the first group whose condition holds is processed,
+    /// §6.10.1 paragraph 6, p. 149; PDF p. 161.
     fn skip_remaining_groups(
         &mut self,
         directive: PreprocessorToken,
@@ -254,11 +298,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         };
         if group.saw_else {
             self.context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::ConditionalArmAfterElse(if is_else {
-                    "else"
-                } else {
-                    "elif"
-                }),
+                error_type:     PreprocessorErrorType::ConditionalArmAfterElse(
+                    conditional_directive_name(self.context, directive),
+                ),
                 source_vectors: directive.source_vectors,
             });
             return false;
@@ -281,10 +323,13 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             });
             self.skip_until_newline();
         }
-        self.last_was_newline = true;
-        self.current_is_newline = true;
+        self.resume_at_line_start();
     }
 
+    /// Handles `#endif`, which closes the innermost open conditional of the
+    /// current file.
+    ///
+    /// C99: `endif-line`, §6.10 paragraph 1, p. 145; PDF p. 157.
     pub(super) fn parse_endif_directive(&mut self, directive: PreprocessorToken) {
         if self.state.open_conditionals.len() <= self.current_file_conditional_base() {
             self.context.preprocessor_error(PreprocessorError {
@@ -297,33 +342,58 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         self.finish_conditional_directive("endif");
     }
 
+    /// C99: `# ifdef identifier new-line`, §6.10.1 paragraph 5, pp. 148-149;
+    /// PDF pp. 160-161.
     pub(super) fn parse_ifdef_directive(&mut self, directive: PreprocessorToken) {
-        self.parse_macro_test_directive(directive, true);
+        self.parse_macro_test_directive(directive, "ifdef");
     }
 
+    /// C99: `# ifndef identifier new-line`, §6.10.1 paragraph 5, pp. 148-149;
+    /// PDF pp. 160-161.
     pub(super) fn parse_ifndef_directive(&mut self, directive: PreprocessorToken) {
-        self.parse_macro_test_directive(directive, false);
+        self.parse_macro_test_directive(directive, "ifndef");
     }
 
-    /// Handles `#ifdef` (`wants_defined`) and `#ifndef`. A missing macro name
+    /// Handles `#ifdef` and `#ifndef`, as `name` says. A missing macro name
     /// is diagnosed and the group is skipped, as GCC and Clang do.
     ///
     /// C99: §6.10.1 paragraph 5, pp. 148-149; PDF pp. 160-161: the same
     /// tests as `#if defined identifier` and `#if !defined identifier`.
-    fn parse_macro_test_directive(&mut self, directive: PreprocessorToken, wants_defined: bool) {
+    fn parse_macro_test_directive(&mut self, directive: PreprocessorToken, name: &'static str) {
         self.state.open_conditionals.push(ConditionalGroup::new(
             self.state.arena,
             self.context,
             directive,
         ));
+        if self.eval_macro_test(name) {
+            self.resume_at_line_start();
+        } else {
+            self.skip_over_dead_code(true, SkipMode::FalseGroup);
+        }
+    }
+
+    /// Reads the macro name that `#ifdef`, `#ifndef`, `#elifdef`, or
+    /// `#elifndef` (named by `directive`) tests, and returns whether the
+    /// test holds.
+    ///
+    /// C99: §6.10.1p5, pp. 148-149; PDF pp. 160-161. C23: §6.10.2p16,
+    /// p. 168; PDF p. 181: elifdef tests a macro name directly. Clang's
+    /// implementation-defined deprecation pragma also checks these uses
+    /// (C99 §6.10.6p1, p. 159; PDF p. 171).
+    fn eval_macro_test(&mut self, directive: &'static str) -> bool {
+        let wants_defined = matches!(directive, "ifdef" | "elifdef");
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             |_, t| t.kind.is_identifier(),
             |_, token| {
                 ControlFlow::Break(PreprocessorError {
                     error_type:     if wants_defined {
-                        PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(token.kind)
+                        PreprocessorErrorType::ExpectedIdentifierInIfdefDirective(
+                            directive, token.kind,
+                        )
                     } else {
-                        PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(token.kind)
+                        PreprocessorErrorType::ExpectedIdentifierInIfndefDirective(
+                            directive, token.kind,
+                        )
                     },
                     source_vectors: token.source_vectors,
                 })
@@ -334,18 +404,21 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 "parsing ifndef directive"
             },
         ) else {
-            self.skip_over_dead_code(false, SkipMode::FalseGroup);
-            return;
+            if !self.current_is_newline {
+                self.skip_until_newline();
+            }
+            return false;
         };
+        self.warn_deprecated_macro(name);
         if self
             .expect_token_from_previous_phase::<true>(
                 |_, t| t.kind == PreprocessorTokenType::Newline,
                 |_, t| {
                     ControlFlow::Break(PreprocessorError {
                         error_type:     if wants_defined {
-                            PreprocessorErrorType::ExtraTokensAfterIfdefDirective
+                            PreprocessorErrorType::ExtraTokensAfterIfdefDirective(directive)
                         } else {
-                            PreprocessorErrorType::ExtraTokensAfterIfndefDirective
+                            PreprocessorErrorType::ExtraTokensAfterIfndefDirective(directive)
                         },
                         source_vectors: t.source_vectors,
                     })
@@ -356,16 +429,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         {
             self.skip_until_newline();
         }
-        if self
-            .state
+        self.state
             .macro_definitions
             .contains_key(&name.identifier_id(self.context))
             == wants_defined
-        {
-            self.last_was_newline = true;
-            self.current_is_newline = true;
-        } else {
-            self.skip_over_dead_code(true, SkipMode::FalseGroup);
-        }
     }
 }

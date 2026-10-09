@@ -1,0 +1,32 @@
+/* MinGW's predefined spellings in declaration, pointer and typedef positions. */
+void __cdecl debugbreak(void);
+void __stdcall stdcall_function(void);
+void __fastcall fastcall_function(void);
+void __pascal pascal_function(void);
+void __thiscall thiscall_function(void);
+void _cdecl cdecl_alias(void);
+void _stdcall stdcall_alias(void);
+void _fastcall fastcall_alias(void);
+void _pascal pascal_alias(void);
+void _thiscall thiscall_alias(void);
+typedef int (__stdcall *callback)(int);
+typedef void __cdecl function_type(void);
+void takes_callback(int (__fastcall *parameter)(int));
+int (* __attribute__((__ms_abi__)) pointer)(int);
+struct S { void (__thiscall *member)(void); };
+__declspec(dllimport) int imported(void);
+__declspec(dllexport) int exported(void);
+__declspec(noreturn) void stop(void);
+__declspec(nothrow) void safe(void);
+__declspec(selectany) int selected = 0;
+__declspec(restrict) void *allocate_object(void);
+__declspec(deprecated("use other = function")) int old_function(void);
+__declspec(align(16)) struct Aligned { int member; } aligned_object;
+__declspec(noinline) void slow(void);
+__declspec(naked) void raw(void);
+__declspec(allocate(".section")) int section_object;
+struct __declspec(uuid("01234567-89ab-cdef-0123-456789abcdef")) Uuid { int x; };
+void __attribute__((__sysv_abi__)) sysv_function(void);
+/* A convention must preserve the canonical function type on x86-64. */
+int __stdcall compatible(int);
+int compatible(int);

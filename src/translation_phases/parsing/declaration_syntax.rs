@@ -57,6 +57,7 @@ use crate::{
     reason = "The C grammar's declaration-specifiers term is the precise field name."
 )]
 pub(crate) struct Declaration<'tu> {
+    pub(crate) assertion:                   Option<&'tu super::modern::StaticAssertion<'tu>>,
     pub(crate) declaration_specifiers:      DeclarationSpecifiers<'tu>,
     /// init-declarator-list
     pub(crate) init_declarators:            ArenaList<'tu, InitDeclarator<'tu>>,
@@ -168,6 +169,8 @@ pub(crate) struct Designator<'tu> {
 /// left to semantic analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum DesignatorType<'tu> {
+    GnuField(Identifier),
+    Range(&'tu RangeDesignator<'tu>),
     Array(ConstantExpression<'tu>),
     Field(Identifier),
     Error,
@@ -186,10 +189,17 @@ bitflags::bitflags! {
     /// repeated qualifier behaves as if it appeared once (paragraph 4,
     /// p. 108; PDF p. 120). The `restrict` constraint of paragraph 2,
     /// p. 108; PDF p. 120, is left to semantic analysis.
-    pub(crate) struct TypeQualifiers: u8 {
+    pub(crate) struct TypeQualifiers: u16 {
         const CONST = 1 << 0;
         const VOLATILE = 1 << 1;
         const RESTRICT = 1 << 2;
+        const ATOMIC = 1 << 3;
+        const PTR32 = 1 << 4;
+        const PTR64 = 1 << 5;
+        const UNALIGNED = 1 << 6;
+        const W64 = 1 << 7;
+        const SPTR = 1 << 8;
+        const UPTR = 1 << 9;
     }
 }
 
@@ -227,6 +237,7 @@ bitflags::bitflags! {
 pub(crate) enum TypeSpecifiers<'tu> {
     #[default]
     Empty,
+    Extended(&'tu super::modern::ExtendedType<'tu>),
     Void,
     Char,
     SignedChar,
@@ -271,6 +282,41 @@ pub(crate) enum TypeSpecifiers<'tu> {
 impl Display for TypeSpecifiers<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
+            | TypeSpecifiers::Extended(x) => f.write_str(match x {
+                | super::modern::ExtendedType::Atomic(_) => "_Atomic",
+                | super::modern::ExtendedType::Typeof {
+                    unqualified: true, ..
+                } => "typeof_unqual",
+                | super::modern::ExtendedType::Typeof { .. } => "typeof",
+                | super::modern::ExtendedType::BitInt {
+                    signedness: Some(false),
+                    ..
+                } => "unsigned _BitInt",
+                | super::modern::ExtendedType::BitInt { .. } => "_BitInt",
+                | super::modern::ExtendedType::Decimal32 => "_Decimal32",
+                | super::modern::ExtendedType::Decimal64 => "_Decimal64",
+                | super::modern::ExtendedType::Decimal128 => "_Decimal128",
+                | super::modern::ExtendedType::Inferred => "<inferred>",
+                | super::modern::ExtendedType::AutoType => "__auto_type",
+                | super::modern::ExtendedType::MsInteger { width, signedness } =>
+                    return write!(
+                        f,
+                        "{}__int{width}",
+                        if *signedness == Some(false) {
+                            "unsigned "
+                        } else if *signedness == Some(true) {
+                            "signed "
+                        } else {
+                            ""
+                        }
+                    ),
+                | super::modern::ExtendedType::Int128 {
+                    signedness: Some(false),
+                } => "unsigned __int128",
+                | super::modern::ExtendedType::Int128 { .. } => "__int128",
+                | super::modern::ExtendedType::Float128 { complex: false } => "__float128",
+                | super::modern::ExtendedType::Float128 { complex: true } => "__float128 _Complex",
+            }),
             | TypeSpecifiers::Empty => write!(f, "<no type specifier>"),
             | TypeSpecifiers::Char => write!(f, "char"),
             | TypeSpecifiers::SignedChar => write!(f, "signed char"),
@@ -616,7 +662,7 @@ impl<'tu> TypeSpecifiers<'tu> {
 
     /// Reports `conflicting` against the accumulated specifiers using
     /// source spellings, so rendered diagnostics never expose syntax nodes.
-    fn report_conflict(
+    pub(super) fn report_conflict(
         self,
         parser: &mut Parser<'_, 'tu, '_>,
         conflicting: StringCacheId,
@@ -671,6 +717,7 @@ impl<'tu> TypeSpecifiers<'tu> {
 /// analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct StructOrUnionSpecifier<'tu> {
+    pub(crate) attributes:              Option<&'tu super::modern::SpecifierExtension<'tu>>,
     pub(crate) struct_or_union:         StructOrUnion,
     pub(crate) identifier:              Option<Identifier>,
     /// None indicates that the body is missing. An empty vector indicates an
@@ -699,6 +746,8 @@ pub(crate) enum StructOrUnion {
 /// C99: §6.7.2.1 paragraph 1, p. 101; PDF p. 113.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct StructDeclaration<'tu> {
+    pub(crate) assertion:              Option<&'tu super::modern::StaticAssertion<'tu>>,
+    pub(crate) extensions:             Option<&'tu super::modern::SpecifierExtension<'tu>>,
     pub(crate) type_qualifiers:        TypeQualifiers,
     pub(crate) type_specifiers:        TypeSpecifiers<'tu>,
     pub(crate) struct_declarator_list: ArenaList<'tu, StructDeclarator<'tu>>,
@@ -714,6 +763,7 @@ pub(crate) struct StructDeclaration<'tu> {
 /// semantic analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct StructDeclarator<'tu> {
+    pub(crate) attributes:     Option<&'tu super::modern::SpecifierExtension<'tu>>,
     pub(crate) declarator:     Option<Declarator<'tu>>,
     pub(crate) bitfield_width: Option<ConstantExpression<'tu>>,
     pub(crate) source_vectors: SourceVectors,
@@ -730,6 +780,8 @@ pub(crate) struct StructDeclarator<'tu> {
 /// semantic analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct EnumSpecifier<'tu> {
+    pub(crate) underlying_type:  Option<&'tu TypeName<'tu>>,
+    pub(crate) attributes:       Option<&'tu super::modern::SpecifierExtension<'tu>>,
     pub(crate) name:             Option<Identifier>,
     pub(crate) enumeration_list: Option<ArenaList<'tu, Enumerator<'tu>>>,
     pub(crate) source_vectors:   SourceVectors,
@@ -744,6 +796,7 @@ pub(crate) struct EnumSpecifier<'tu> {
 /// to semantic analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Enumerator<'tu> {
+    pub(crate) attributes:     Option<&'tu super::modern::SpecifierExtension<'tu>>,
     pub(crate) name:           Identifier,
     pub(crate) expression:     Option<ConstantExpression<'tu>>,
     pub(crate) source_vectors: SourceVectors,
@@ -758,7 +811,8 @@ pub(crate) struct Enumerator<'tu> {
 /// left to semantic analysis.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 pub(crate) struct FunctionSpecifiers {
-    pub(crate) is_inline: bool,
+    pub(crate) is_noreturn: bool,
+    pub(crate) is_inline:   bool,
 }
 
 /// declaration-specifiers:
@@ -775,13 +829,22 @@ pub(crate) struct FunctionSpecifiers {
 /// specified by §6.7.1-§6.7.4, pp. 98-113; PDF pp. 110-125.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct DeclarationSpecifiers<'tu> {
+    pub(crate) implicit_int:            bool,
+    pub(crate) extensions:              Option<&'tu super::modern::SpecifierExtension<'tu>>,
     /// `None` preserves the grammatical absence of a storage-class specifier;
     /// it is not equivalent to an explicitly written `auto`.
-    pub(crate) storage_class:       Option<StorageClass>,
-    pub(crate) type_qualifiers:     TypeQualifiers,
-    pub(crate) type_specifiers:     TypeSpecifiers<'tu>,
-    pub(crate) function_specifiers: FunctionSpecifiers,
-    pub(crate) source_vectors:      SourceVectors,
+    pub(crate) storage_class:           Option<StorageClass>,
+    /// Whether `auto` was written beside the specifier in `storage_class`.
+    ///
+    /// C23 (N3220): §6.7.2 paragraph 2, p. 99; PDF p. 112 lets `auto`
+    /// appear with every other storage-class specifier except `typedef`.
+    /// Paragraph 4 restricts that pairing to inferred types, a constraint
+    /// left to semantic analysis.
+    pub(crate) auto_with_storage_class: bool,
+    pub(crate) type_qualifiers:         TypeQualifiers,
+    pub(crate) type_specifiers:         TypeSpecifiers<'tu>,
+    pub(crate) function_specifiers:     FunctionSpecifiers,
+    pub(crate) source_vectors:          SourceVectors,
 }
 
 impl Default for DeclarationSpecifiers<'_> {
@@ -793,11 +856,31 @@ impl Default for DeclarationSpecifiers<'_> {
 impl DeclarationSpecifiers<'_> {
     pub(super) fn new() -> Self {
         Self {
-            storage_class:       None,
-            type_qualifiers:     TypeQualifiers::empty(),
-            type_specifiers:     TypeSpecifiers::Empty,
-            function_specifiers: FunctionSpecifiers { is_inline: false },
-            source_vectors:      VectorSlice::empty(),
+            extensions:              None,
+            implicit_int:            false,
+            storage_class:           None,
+            auto_with_storage_class: false,
+            type_qualifiers:         TypeQualifiers::empty(),
+            type_specifiers:         TypeSpecifiers::Empty,
+            function_specifiers:     FunctionSpecifiers {
+                is_inline:   false,
+                is_noreturn: false,
+            },
+            source_vectors:          VectorSlice::empty(),
+        }
+    }
+
+    /// The storage-class specifiers as written: `none`, one keyword, or a
+    /// C23 pairing such as `auto static`.
+    /// Recovered `auto` and `typedef` use their own spelling even if the
+    /// pairing flag is set.
+    pub(super) fn storage_spelling(&self) -> &'static str {
+        match (self.storage_class, self.auto_with_storage_class) {
+            | (None, _) => "none",
+            | (Some(StorageClass::Register), true) => "auto register",
+            | (Some(StorageClass::Static), true) => "auto static",
+            | (Some(StorageClass::Extern), true) => "auto extern",
+            | (Some(class), _) => class.spelling(),
         }
     }
 }
@@ -806,18 +889,28 @@ impl DeclarationSpecifiers<'_> {
 /// - \* type-qualifier-list?
 /// - \* type-qualifier-list? pointer
 ///
-/// Each element in the `type_qualifiers_list` represents the type qualifiers
-/// for one level of indirection. For example, this declaration: `*const
-/// *volatile *x` would be parsed as: `[TypeQualifiers::CONST,
-/// TypeQualifiers::VOLATILE, TypeQualifiers::empty()]`
+/// Each element in `levels` is one level of indirection, outermost first. For
+/// example, `*const *volatile *x` has the qualifiers `[TypeQualifiers::CONST,
+/// TypeQualifiers::VOLATILE, TypeQualifiers::empty()]`.
 ///
 /// C99: §6.7.5 paragraph 1, p. 114; PDF p. 126, and pointer derivation
 /// §6.7.5.1 paragraph 1, p. 115; PDF p. 127.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct PointerDeclarator<'tu> {
-    /// Each element represents the type qualifiers for one level of
-    /// indirection.
-    pub(crate) type_qualifiers_list: ArenaList<'tu, TypeQualifiers>,
+    pub(crate) levels: ArenaList<'tu, PointerLevel<'tu>>,
+}
+
+/// One `*` with the qualifiers and attributes written after it.
+///
+/// C99: §6.7.5.1 paragraph 1, p. 115; PDF p. 127. C23: the attributes after
+/// a `*` appertain to that pointer, §6.7.7.2 paragraph 1, p. 127;
+/// PDF p. 140. GNU and MSVC attributes in the same place share it.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct PointerLevel<'tu> {
+    pub(crate) qualifiers: TypeQualifiers,
+    /// Attribute specifiers in reverse source order, as in
+    /// [`super::modern::SpecifierExtension`] chains.
+    pub(crate) attributes: Option<&'tu super::modern::SpecifierExtension<'tu>>,
 }
 
 /// declarator:
@@ -866,6 +959,13 @@ pub(crate) struct Declarator<'tu> {
 /// Direct abstract declarators are §6.7.6, p. 122; PDF p. 134.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum DirectDeclarator<'tu> {
+    /// MSVC calling convention / modifier at this declarator position.
+    MsModifier(
+        crate::translation_phases::preprocessing::KeywordTokenType,
+        SourceVectors,
+    ),
+    AsmLabel(&'tu super::gnu::Asm<'tu>),
+    Attributes(&'tu super::modern::AttributeSpecifier<'tu>),
     Identifier(Identifier),
     Parenthesized(&'tu ParenthesizedDeclarator<'tu>),
     /// `( identifier-list? )`: C99 §6.7.5.3 paragraph 14, p. 119; PDF p. 131.
@@ -920,8 +1020,6 @@ pub(crate) struct ParameterDeclaration<'tu> {
     pub(crate) declarator:             Option<Declarator<'tu>>,
     pub(crate) source_vectors:         SourceVectors,
 }
-
-// The Phase 03 parser machine is implemented below the retained syntax model.
 
 /// A parsed type-name syntax node.
 ///
@@ -996,6 +1094,39 @@ impl<'tu> Declarator<'tu> {
         }
     }
 
+    /// Whether the first derivation from the identifier is an unsized array.
+    /// C99: flexible members §6.7.2.1 paragraph 16, p. 103; PDF p. 115.
+    /// Pointer-to-array members do not use this later-standard form.
+    pub(super) fn is_unsized_array(self) -> bool {
+        let mut declarator = self;
+        let mut suffix = None;
+        loop {
+            let mut direct = declarator.kind.iter().filter(|x| {
+                !matches!(
+                    x,
+                    DirectDeclarator::Attributes(_) | DirectDeclarator::MsModifier(..)
+                )
+            });
+            let first = direct.next();
+            if let Some(candidate) = direct.next() {
+                suffix = Some(*candidate);
+            } else if !declarator.pointer.levels.is_empty() {
+                suffix = None;
+            }
+            let Some(DirectDeclarator::Parenthesized(parenthesized)) = first else {
+                return matches!(
+                    suffix,
+                    Some(DirectDeclarator::Array {
+                        assignment_expression: None,
+                        is_pointer: false,
+                        ..
+                    })
+                );
+            };
+            declarator = parenthesized.declarator;
+        }
+    }
+
     /// The function suffix that applies to the declared identifier, looking
     /// through parenthesized declarators.
     ///
@@ -1005,8 +1136,14 @@ impl<'tu> Declarator<'tu> {
         let mut declarator = self;
         let mut suffix = None;
         loop {
-            let direct = declarator.kind;
-            if let Some(candidate) = direct.get(1).copied()
+            let mut direct = declarator.kind.iter().filter(|x| {
+                !matches!(
+                    x,
+                    DirectDeclarator::Attributes(_) | DirectDeclarator::MsModifier(..)
+                )
+            });
+            let first = direct.next();
+            if let Some(candidate) = direct.next().copied()
                 && matches!(
                     candidate,
                     DirectDeclarator::Function { .. } | DirectDeclarator::KAndRStyleFunction { .. }
@@ -1014,7 +1151,7 @@ impl<'tu> Declarator<'tu> {
             {
                 suffix = Some(candidate);
             }
-            let Some(DirectDeclarator::Parenthesized(parenthesized)) = direct.first() else {
+            let Some(DirectDeclarator::Parenthesized(parenthesized)) = first else {
                 return suffix;
             };
             declarator = parenthesized.declarator;
@@ -1076,4 +1213,12 @@ impl TypeSpecifiers<'_> {
             }
         }
     }
+}
+
+/// GNU inclusive array designator range; evaluation belongs to later analysis.
+/// C99: extension to §6.7.8, p. 125; PDF p. 137.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct RangeDesignator<'tu> {
+    pub(crate) lower: ConstantExpression<'tu>,
+    pub(crate) upper: ConstantExpression<'tu>,
 }

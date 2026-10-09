@@ -1,16 +1,6 @@
-use std::{
-    path::{
-        Path,
-        PathBuf,
-    },
-    sync::atomic::{
-        AtomicU64,
-        Ordering,
-    },
-    time::{
-        SystemTime,
-        UNIX_EPOCH,
-    },
+use std::path::{
+    Path,
+    PathBuf,
 };
 
 use super::{
@@ -24,41 +14,15 @@ use super::{
     Token,
     TokenType,
     TranslationError,
+    with_tokens_of,
 };
-use crate::translation_phases::{
-    ErrorSeverity,
-    GetSeverity,
+use crate::{
+    test_support::TempDir,
+    translation_phases::{
+        ErrorSeverity,
+        GetSeverity,
+    },
 };
-#[derive(Debug)]
-struct TemporaryHeaders(PathBuf);
-
-impl TemporaryHeaders {
-    fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let directory = std::env::temp_dir().join(format!(
-            "bcc-directive-{}-{stamp}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed),
-        ));
-        std::fs::create_dir(&directory).unwrap();
-        Self(directory)
-    }
-
-    fn write(&self, name: &str, source: &str) {
-        std::fs::write(self.0.join(name), source).unwrap();
-    }
-}
-
-impl Drop for TemporaryHeaders {
-    fn drop(&mut self) {
-        drop(std::fs::remove_dir_all(&self.0));
-    }
-}
-
 fn with_directive_tokens_at_path<R>(
     source: &str,
     path: &Path,
@@ -100,28 +64,6 @@ fn with_directive_tokens_with_system_directory<R>(
     inspect(&tokens, &mut context)
 }
 
-fn with_directive_tokens<R>(
-    source: &str,
-    inspect: impl FnOnce(&[Token], &mut Context<'_>) -> R,
-) -> R {
-    let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
-    let preprocess_arena = crate::util::bump::Bump::new();
-    let mut preprocessor = Preprocessor::new(
-        &preprocess_arena,
-        &mut context,
-        PathBuf::from("<directive-test>").into_boxed_path(),
-        source,
-        SharedVec::default(),
-        SharedVec::default(),
-    );
-    let mut tokens = Vec::new();
-    preprocessor.for_each_item(&mut context, |_, token| {
-        tokens.push(token);
-    });
-    inspect(&tokens, &mut context)
-}
-
 #[test]
 fn pragma_destringizing_preserves_non_special_escapes() {
     for (literal, expected) in [
@@ -160,7 +102,7 @@ fn pragma_destringizing_preserves_non_special_escapes() {
 fn enormous_line_number_diagnoses_without_panicking_and_retains_its_digits() {
     let digits = "9".repeat(1000);
     let source = format!("#line {digits}\nafter\n");
-    with_directive_tokens(&source, |tokens, context| {
+    with_tokens_of(&source, "<directive-test>", |tokens, context| {
         assert_eq!(tokens.len(), 1);
         assert_eq!(context.string_cache.at(tokens[0].contents), "after");
         let errors = context.take_pending_errors();
@@ -212,7 +154,7 @@ fn missing_line_number_preserves_the_following_line() {
 
 #[test]
 fn pragma_expectations_preserve_tokens_across_source_boundaries() {
-    let headers = TemporaryHeaders::new();
+    let headers = TempDir::new("directive");
     headers.write(
         "macros.h",
         "#define BAD 123\n#define TEXT \"STDC FP_CONTRACT ON\"\n#define OPEN (\n#define CLOSE \
@@ -231,7 +173,7 @@ fn pragma_expectations_preserve_tokens_across_source_boundaries() {
         ("P OPEN TEXT CLOSE\n", vec![], 0, false),
     ] {
         let source = format!("#include \"macros.h\"\n{operand}int after;\n");
-        with_directive_tokens_at_path(&source, &headers.0.join("main.c"), |tokens, context| {
+        with_directive_tokens_at_path(&source, &headers.join("main.c"), |tokens, context| {
             let mut expected = recovered;
             expected.extend(["int", "after", ";"]);
             assert_eq!(
@@ -250,7 +192,7 @@ fn pragma_expectations_preserve_tokens_across_source_boundaries() {
             let after = context.first_source_vector(tokens[tokens.len() - 2].source_vectors);
             assert_eq!(
                 context.get_source_file(after.source_file_index),
-                headers.0.join("main.c").as_path(),
+                headers.join("main.c").as_path(),
                 "{source:?}"
             );
             assert_eq!(after.line, if operand.ends_with('\n') { 3 } else { 2 });
@@ -267,7 +209,7 @@ fn pragma_expectations_preserve_tokens_across_source_boundaries() {
                         | PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(_)
                 ));
                 let location = context.first_source_vector(error.source_vectors);
-                let expected_file = headers.0.join(if error_in_header {
+                let expected_file = headers.join(if error_in_header {
                     "macros.h"
                 } else {
                     "main.c"
@@ -285,7 +227,7 @@ fn pragma_expectations_preserve_tokens_across_source_boundaries() {
 #[test]
 fn unfinished_pragma_expectations_terminate_at_end_of_input() {
     for source in ["_Pragma", "_Pragma(", "_Pragma(\"STDC FP_CONTRACT ON\""] {
-        with_directive_tokens(source, |tokens, context| {
+        with_tokens_of(source, "<directive-test>", |tokens, context| {
             assert!(tokens.is_empty(), "{source:?}: {tokens:#?}");
             assert!(!context.take_pending_errors().is_empty(), "{source:?}");
         });
@@ -298,7 +240,7 @@ fn line_directive_applies_to_the_following_line_and_strips_file_delimiters() {
         "#line 10 \"logical.c\"\n__FILE__; __LINE__\n",
         "#define NUMBER 10\n#define FILE \"logical.c\"\n#line NUMBER FILE\n__FILE__; __LINE__\n",
     ] {
-        with_directive_tokens(source, |tokens, context| {
+        with_tokens_of(source, "<directive-test>", |tokens, context| {
             assert_eq!(tokens.len(), 3, "{tokens:#?}");
             let TokenType::String(StringTokenType::String(contents)) = tokens[0].kind else {
                 panic!("expected __FILE__ string: {tokens:#?}");
@@ -336,7 +278,7 @@ fn direct_pragmas_consume_the_entire_directive_line() {
         "#pragma STDC FP_CONTRACT ON\nafter\n",
         "_Pragma(\"unknown token token2\")\nafter\n",
     ] {
-        with_directive_tokens(source, |tokens, context| {
+        with_tokens_of(source, "<directive-test>", |tokens, context| {
             assert_eq!(
                 tokens.len(),
                 1,
@@ -355,8 +297,9 @@ fn direct_pragmas_consume_the_entire_directive_line() {
 
 #[test]
 fn repeated_line_directives_replace_the_presumed_line() {
-    with_directive_tokens(
+    with_tokens_of(
         "#line 30\n__LINE__\n#line 70\n__LINE__\n",
+        "<directive-test>",
         |tokens, context| {
             assert_eq!(tokens.len(), 2);
             assert_eq!(
@@ -374,8 +317,9 @@ fn repeated_line_directives_replace_the_presumed_line() {
 
 #[test]
 fn line_filename_escapes_follow_string_literal_rules() {
-    with_directive_tokens(
+    with_tokens_of(
         "#line 10 \"dir\\\\file.c\"\n__FILE__\n",
+        "<directive-test>",
         |tokens, context| {
             let TokenType::String(StringTokenType::String(contents)) = tokens[0].kind else {
                 panic!("expected file name: {tokens:#?}");
@@ -471,12 +415,42 @@ fn malformed_line_tails_do_not_escape_or_remap_the_directive_line() {
 }
 
 #[test]
+fn extra_tokens_after_pragma_once_are_reported_at_the_first_extra_token() {
+    with_directive_tokens_at_path(
+        "#pragma once  extra 1\nafter\n",
+        Path::new("<directive-test>"),
+        |tokens, context| {
+            assert_eq!(tokens.len(), 1);
+            assert_eq!(context.string_cache.at(tokens[0].contents), "after");
+            let errors = context.take_pending_errors();
+            let extra = errors
+                .iter()
+                .filter_map(|error| match error {
+                    | TranslationError::Preprocessing(
+                        error @ PreprocessorError {
+                            error_type: PreprocessorErrorType::ExtraTokensAfterPragmaOnce(..),
+                            ..
+                        },
+                    ) => Some(error),
+                    | _ => None,
+                })
+                .collect::<Vec<_>>();
+            let [error] = extra.as_slice() else {
+                panic!("expected one extra-token diagnostic: {errors:#?}");
+            };
+            let vector = &context.get_source_vectors(error.source_vectors)[0];
+            assert_eq!((vector.line, vector.column, vector.length), (1, 15, 5));
+        },
+    );
+}
+
+#[test]
 fn recursive_include_reports_limit_once_and_preserves_surviving_input() {
-    let headers = TemporaryHeaders::new();
+    let headers = TempDir::new("directive");
     headers.write("loop.h", "#include \"loop.h\"\nheader_after\n");
     with_directive_tokens_at_path(
         "#include \"loop.h\"\ncaller_after\n",
-        &headers.0.join("main.c"),
+        &headers.join("main.c"),
         |tokens, context| {
             assert_eq!(
                 tokens.len(),
@@ -505,18 +479,18 @@ fn recursive_include_reports_limit_once_and_preserves_surviving_input() {
 
 #[test]
 fn include_nesting_supports_at_least_fifteen_header_levels() {
-    let headers = TemporaryHeaders::new();
+    let headers = TempDir::new("directive");
     for level in 0..15 {
         let source = if level == 14 {
             format!("level_{level}\n")
         } else {
             format!("#include \"level{}.h\"\nlevel_{level}\n", level + 1)
         };
-        headers.write(&format!("level{level}.h"), &source);
+        headers.write(format!("level{level}.h"), &source);
     }
     with_directive_tokens_at_path(
         "#include \"level0.h\"\ncaller_after\n",
-        &headers.0.join("main.c"),
+        &headers.join("main.c"),
         |tokens, context| {
             let actual: Vec<_> = tokens
                 .iter()
@@ -535,10 +509,10 @@ fn include_nesting_supports_at_least_fifteen_header_levels() {
 
 #[test]
 fn repeated_nonrecursive_includes_do_not_count_toward_nesting_limit() {
-    let headers = TemporaryHeaders::new();
+    let headers = TempDir::new("directive");
     headers.write("plain.h", "included\n");
     let source = format!("{}caller_after\n", "#include \"plain.h\"\n".repeat(250));
-    with_directive_tokens_at_path(&source, &headers.0.join("main.c"), |tokens, context| {
+    with_directive_tokens_at_path(&source, &headers.join("main.c"), |tokens, context| {
         assert_eq!(tokens.len(), 251);
         assert!(
             tokens[..250]
@@ -601,14 +575,14 @@ fn null_and_undef_directives_preserve_start_of_line() {
 
 #[test]
 fn line_remapping_preserves_physical_include_lookup_and_pragma_once() {
-    let headers = TemporaryHeaders::new();
+    let headers = TempDir::new("directive");
     headers.write(
         "header.h",
         "#line 30 \"virtual/header.c\"\n#pragma once\nfirst\n",
     );
     let source =
         "#line 10 \"virtual/main.c\"\n#include \"header.h\"\n#include \"header.h\"\nafter\n";
-    with_directive_tokens_at_path(source, &headers.0.join("main.c"), |tokens, context| {
+    with_directive_tokens_at_path(source, &headers.join("main.c"), |tokens, context| {
         let names = tokens
             .iter()
             .filter(|token| token.kind == TokenType::Identifier)
@@ -621,10 +595,10 @@ fn line_remapping_preserves_physical_include_lookup_and_pragma_once() {
 
 #[test]
 fn stringified_include_operands_resolve_headers_and_consume_their_tail() {
-    let headers = TemporaryHeaders::new();
-    std::fs::write(headers.0.join("generated.h"), "inside\n").unwrap();
+    let headers = TempDir::new("directive");
+    std::fs::write(headers.join("generated.h"), "inside\n").unwrap();
     let source = "#define S(x) #x\n#include S(generated.h)\nafter\n";
-    with_directive_tokens_at_path(source, &headers.0.join("main.c"), |tokens, context| {
+    with_directive_tokens_at_path(source, &headers.join("main.c"), |tokens, context| {
         assert!(context.take_pending_errors().is_empty());
         assert_eq!(
             tokens
@@ -638,7 +612,7 @@ fn stringified_include_operands_resolve_headers_and_consume_their_tail() {
 
 #[test]
 fn macro_include_tails_are_checked_in_the_callers_source_file() {
-    let headers = TemporaryHeaders::new();
+    let headers = TempDir::new("directive");
     headers.write("a.h", "int inside;\n");
     for (definitions, operand) in [
         ("#define H \"a.h\"\n", "H"),
@@ -651,8 +625,8 @@ fn macro_include_tails_are_checked_in_the_callers_source_file() {
                 format!("#define EMPTY\n{definitions}#include {operand}{tail}\nint after;\n");
             with_directive_tokens_with_system_directory(
                 &source,
-                &headers.0.join("main.c"),
-                &headers.0,
+                &headers.join("main.c"),
+                headers.path(),
                 |tokens, context| {
                     assert_eq!(
                         tokens
@@ -679,7 +653,7 @@ fn macro_include_tails_are_checked_in_the_callers_source_file() {
                     assert_eq!(location.column as usize, operand.len() + 11);
                     assert_eq!(
                         context.get_source_file(location.source_file_index),
-                        headers.0.join("main.c").as_path()
+                        headers.join("main.c").as_path()
                     );
                 },
             );
@@ -706,7 +680,7 @@ fn unfinished_include_does_not_consume_the_following_line() {
 
 #[test]
 fn terminal_angle_include_stays_in_its_source_file() {
-    let headers = TemporaryHeaders::new();
+    let headers = TempDir::new("directive");
     headers.write("a.h", "from_header\n");
     for (nested, found) in [(false, true), (false, false), (true, true), (true, false)] {
         let name = if found { "a.h" } else { "missing.h" };
@@ -719,8 +693,8 @@ fn terminal_angle_include_stays_in_its_source_file() {
         };
         with_directive_tokens_with_system_directory(
             &source,
-            &headers.0.join("main.c"),
-            &headers.0,
+            &headers.join("main.c"),
+            headers.path(),
             |tokens, context| {
                 let names: Vec<_> = tokens
                     .iter()
@@ -764,7 +738,7 @@ fn terminal_angle_include_stays_in_its_source_file() {
 
 #[test]
 fn terminal_include_variants_stay_in_their_source_file() {
-    let headers = TemporaryHeaders::new();
+    let headers = TempDir::new("directive");
     headers.write("a.h", "from_header\n");
     for found in [true, false] {
         let name = if found { "a.h" } else { "missing.h" };
@@ -783,8 +757,8 @@ fn terminal_include_variants_stay_in_their_source_file() {
                 };
                 with_directive_tokens_with_system_directory(
                     &source,
-                    &headers.0.join("main.c"),
-                    &headers.0,
+                    &headers.join("main.c"),
+                    headers.path(),
                     |tokens, context| {
                         let names: Vec<_> = tokens
                             .iter()
@@ -910,7 +884,7 @@ fn undefining_a_predefined_macro_is_diagnosed_and_keeps_it() {
     // C99 §6.10.8p4: predefined macro names cannot be undefined.
     for name in ["__LINE__", "__FILE__", "__STDC__", "__STDC_VERSION__"] {
         let source = format!("#undef {name}\n#ifdef {name}\nkept\n#endif\n");
-        with_directive_tokens(&source, |tokens, context| {
+        with_tokens_of(&source, "<directive-test>", |tokens, context| {
             assert_eq!(
                 tokens
                     .iter()
@@ -934,8 +908,12 @@ fn undefining_a_predefined_macro_is_diagnosed_and_keeps_it() {
             assert_eq!(error.severity(), ErrorSeverity::Warning);
         });
     }
-    with_directive_tokens("#define M 1\n#undef M\nM\n", |tokens, context| {
-        assert_eq!(context.string_cache.at(tokens[0].contents), "M");
-        assert!(context.take_pending_errors().is_empty());
-    });
+    with_tokens_of(
+        "#define M 1\n#undef M\nM\n",
+        "<directive-test>",
+        |tokens, context| {
+            assert_eq!(context.string_cache.at(tokens[0].contents), "M");
+            assert!(context.take_pending_errors().is_empty());
+        },
+    );
 }

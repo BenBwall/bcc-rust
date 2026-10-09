@@ -8,7 +8,7 @@
 //! pp. 118-121; PDF pp. 130-133.
 //!
 //! The list opens function prototype scope (§6.2.1 paragraph 4, p. 30;
-//! PDF p. 42); a file-level list keeps the bindings a later definition body
+//! PDF p. 42); every list keeps the bindings a later definition body
 //! needs. An identifier that could be a typedef name or a parameter name is
 //! taken as a typedef name (§6.7.5.3 paragraph 11, p. 119; PDF p. 131).
 //! Left to semantic analysis: the storage-class constraint of paragraph 2
@@ -23,10 +23,7 @@ use std::fmt::Debug;
 
 use super::{
     Parser,
-    declaration_specifiers::{
-        DeclarationSpecifiersFrame,
-        SpecifierMode,
-    },
+    declaration_specifiers::DeclarationSpecifiersFrame,
     declaration_syntax::{
         DeclarationSpecifiers,
         Declarator,
@@ -114,13 +111,17 @@ pub(super) struct ParameterListFrame<'tu, 'p> {
     /// Whether a prototype parameter inside this identifier list was already
     /// diagnosed, so a trailing `...` is part of the same mistake.
     diagnosed_mixed_parameter: bool,
+    /// `__extension__` suppression depth on entry. Every separator and exit
+    /// restores it, so a marker covers only the parameter it begins (GNU
+    /// extension; C99 §5.1.1.3, p. 11; PDF p. 23).
+    suppression_entry: usize,
 }
 
 /// State transitions for prototype and K&R parameter-list forms.
 ///
 /// C99: §6.7.5 and §6.7.5.3, pp. 114 and 118-121; PDF pp. 126 and 130-133.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum ParameterListPhase {
+enum ParameterListPhase {
     /// Enter prototype scope and select K&R versus prototype syntax.
     ///
     /// C99: a visible typedef name selects a parameter declaration
@@ -171,6 +172,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
             entry_scope_depth: None,
             parameter_name_bindings: 0,
             diagnosed_mixed_parameter: false,
+            suppression_entry: 0,
         }
     }
 
@@ -242,14 +244,44 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 // identifier can select the legacy identifier-list
                 // branch.
                 self.entry_scope_depth = Some(parser.scopes.depth());
+                self.suppression_entry = parser.pedantic_suppression;
                 parser.scopes.enter_scope(ScopeKind::FunctionPrototype);
+                // C23: §6.7.7.1 paragraph 1, pp. 126-127; PDF pp. 139-140
+                // permits an ellipsis without a preceding parameter-list.
+                if is_operator(token, OperatorTokenType::Ellipsis) {
+                    let token = token.expect("ellipsis exists");
+                    parser.extension(
+                        crate::configuration::Feature::C23Keywords,
+                        "variadic function without named parameters",
+                        token,
+                    );
+                    self.is_variadic = true;
+                    self.source_vectors.push(token.source_vectors);
+                    self.phase = ParameterListPhase::ExpectCloseAfterEllipsis;
+                    return ParseAction::Consume;
+                }
                 if self.allow_k_and_r
                     && token.is_some_and(|token| {
-                        token.kind == TokenType::Identifier
+                        matches!(token.kind, TokenType::Identifier)
                             && !parser.scopes.is_typedef(token.contents)
                     })
                     && !Self::unknown_type_name_starts_prototype(parser)
                 {
+                    // C23: §6.7.7.1 paragraph 1, pp. 126-127; PDF
+                    // pp. 139-140 removes identifier-list declarators.
+                    // Retain the legacy shape for recovery, but never
+                    // present it as native C23 grammar.
+                    if parser.context.configuration.standard()
+                        >= crate::configuration::CStandard::C23
+                    {
+                        parser.report(
+                            ParserErrorType::ExpectedIsoSyntax(
+                                "a prototype parameter list in C23",
+                                token.map(|x| x.kind),
+                            ),
+                            token,
+                        );
+                    }
                     self.phase = ParameterListPhase::KAndRIdentifier;
                 } else {
                     self.phase = ParameterListPhase::PrototypeParameter;
@@ -288,7 +320,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     self.diagnosed_mixed_parameter = true;
                     self.phase = ParameterListPhase::KAndRMixedSpecifiers;
                     return ParseAction::Push(ParseFrame::DeclarationSpecifiers(
-                        DeclarationSpecifiersFrame::new(SpecifierMode::Declaration),
+                        DeclarationSpecifiersFrame::parameter(),
                     ));
                 }
                 // After a diagnosed prototype parameter, a trailing `...`
@@ -302,7 +334,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     return ParseAction::Consume;
                 }
                 // Typedef names are declaration starters, handled above.
-                if token.kind != TokenType::Identifier {
+                if !matches!(token.kind, TokenType::Identifier) {
                     parser.report(
                         ParserErrorType::ExpectedIdentifierInKAndRFunctionDeclaratorParameterList(
                             Some(token.kind),
@@ -349,6 +381,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 ParseAction::Continue
             },
             | ParameterListPhase::KAndRSeparator => {
+                parser.pedantic_suppression = self.suppression_entry;
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -364,7 +397,8 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     self.source_vectors.push(token.source_vectors);
                     self.phase = ParameterListPhase::FinishKAndR;
                     ParseAction::Consume
-                } else if is_operator(token, OperatorTokenType::Semicolon)
+                } else if token.is_none()
+                    || is_operator(token, OperatorTokenType::Semicolon)
                     || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
                 {
                     parser.report(
@@ -375,17 +409,9 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
             );
                     self.phase = ParameterListPhase::FinishKAndR;
                     ParseAction::Reprocess
-                } else if token.is_none() {
-                    parser.report(
-                ParserErrorType::ExpectedCommaOrClosingParenthesisInKAndRFunctionDeclaratorParameterList(
-                    None,
-                ),
-                None,
-            );
-                    self.phase = ParameterListPhase::FinishKAndR;
-                    ParseAction::Reprocess
                 } else if token.is_some_and(|token| {
-                    token.kind == TokenType::Identifier && !parser.scopes.is_typedef(token.contents)
+                    matches!(token.kind, TokenType::Identifier)
+                        && !parser.scopes.is_typedef(token.contents)
                 }) {
                     // Repair an omitted comma without discarding the
                     // next parameter name:
@@ -437,7 +463,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 );
                 self.phase = ParameterListPhase::AwaitSpecifiers;
                 ParseAction::Push(ParseFrame::DeclarationSpecifiers(
-                    DeclarationSpecifiersFrame::new(SpecifierMode::Declaration),
+                    DeclarationSpecifiersFrame::parameter(),
                 ))
             },
             | ParameterListPhase::AwaitSpecifiers => {
@@ -505,6 +531,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 ParseAction::Continue
             },
             | ParameterListPhase::PrototypeSeparator => {
+                parser.pedantic_suppression = self.suppression_entry;
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -520,7 +547,8 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     }
                     self.phase = ParameterListPhase::AfterComma;
                     ParseAction::Consume
-                } else if is_operator(token, OperatorTokenType::Semicolon)
+                } else if token.is_none()
+                    || is_operator(token, OperatorTokenType::Semicolon)
                     || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
                 {
                     parser.report(
@@ -528,15 +556,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     token.map(|token| token.kind),
                 ),
                 token,
-            );
-                    self.phase = ParameterListPhase::FinishPrototype;
-                    ParseAction::Reprocess
-                } else if token.is_none() {
-                    parser.report(
-                ParserErrorType::ExpectedCommaOrClosingParenthesisInFunctionDeclaratorParameterList(
-                    None,
-                ),
-                None,
             );
                     self.phase = ParameterListPhase::FinishPrototype;
                     ParseAction::Reprocess
@@ -622,21 +641,10 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     self.source_vectors.push(token.source_vectors);
                     self.phase = ParameterListPhase::FinishPrototype;
                     ParseAction::Consume
-                } else if is_operator(token, OperatorTokenType::Semicolon)
-                    || is_operator(token, OperatorTokenType::ClosingCurlyBrace)
-                {
-                    let token = token.expect("unwind token exists");
-                    parser.report(
-                ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
-                    token.kind,
-                ),
-                Some(token),
-            );
-                    self.phase = ParameterListPhase::FinishPrototype;
-                    ParseAction::Reprocess
                 } else if let Some(token) = token
-                    && self.can_unwind_variadic_recovery
-                    && parser.declaration_starter(token)
+                    && (is_operator(Some(token), OperatorTokenType::Semicolon)
+                        || is_operator(Some(token), OperatorTokenType::ClosingCurlyBrace)
+                        || self.can_unwind_variadic_recovery && parser.declaration_starter(token))
                 {
                     parser.report(
                 ParserErrorType::ExpectedClosingParenthesisAfterEllipsisInFunctionDeclaratorParameterList(
@@ -644,13 +652,6 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 ),
                 Some(token),
             );
-                    self.phase = ParameterListPhase::FinishPrototype;
-                    ParseAction::Reprocess
-                } else if token.is_none() {
-                    parser.report(
-                        ParserErrorType::UnexpectedEndOfVariadicFunctionDeclaratorParameterList,
-                        None,
-                    );
                     self.phase = ParameterListPhase::FinishPrototype;
                     ParseAction::Reprocess
                 } else if let Some(token) = token {
@@ -671,10 +672,16 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                         target: ParseFrameKind::ParameterList,
                     })
                 } else {
-                    unreachable!("EOF is handled before malformed variadic tokens")
+                    parser.report(
+                        ParserErrorType::UnexpectedEndOfVariadicFunctionDeclaratorParameterList,
+                        None,
+                    );
+                    self.phase = ParameterListPhase::FinishPrototype;
+                    ParseAction::Reprocess
                 }
             },
             | ParameterListPhase::FinishKAndR => {
+                parser.pedantic_suppression = self.suppression_entry;
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -693,13 +700,14 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                 }))
             },
             | ParameterListPhase::FinishPrototype => {
+                parser.pedantic_suppression = self.suppression_entry;
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
                 // Mirror the K&R exit: never leak prototype bindings
-                // into the enclosing file or parameter scope. A file-level
-                // list may still belong to a function definition, whose body
+                // into the enclosing scope. A list at any nesting depth
+                // may still belong to a function definition, whose body
                 // must see every name declared in its parameter declarations
                 // (C99 §6.2.1p4). Names a definition can rebuild from its
                 // parameter declarators need no copy; anything else, such as
@@ -708,9 +716,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     .entry_scope_depth
                     .expect("parameter list entered prototype scope");
                 let start = parser.alloc_syntax_list(&mut self.parameters);
-                if entry_scope_depth == 0
-                    && parser.scopes.innermost_binding_count() > self.parameter_name_bindings
-                {
+                if parser.scopes.innermost_binding_count() > self.parameter_name_bindings {
                     parser.scopes.retain_innermost_bindings(list_key(&start));
                 }
                 parser.scopes.restore_depth(entry_scope_depth);

@@ -17,6 +17,7 @@ use std::path::Path;
 mod tests;
 
 use crate::{
+    headers::HeaderSearch,
     translation_phases::{
         Context,
         TranslationError,
@@ -36,46 +37,48 @@ use crate::{
     },
 };
 
+/// The semantic half of phase 7 starts after syntax parsing has completed.
+/// Inspection callers may stop at `parse_translation_unit` to keep syntax modes
+/// unchanged. C99: §5.1.1.2p1, p. 10; PDF p. 22.
+pub(crate) fn analyze_translation_unit<'tu>(
+    context: &mut Context<'tu>,
+    unit: &ParsedTranslationUnit<'tu>,
+) -> crate::translation_phases::semantic_analysis::SemanticTranslationUnit<'tu> {
+    crate::translation_phases::semantic_analysis::analyze(context, unit)
+}
+
 /// Completes preprocessing before constructing the parser. The parser-facing
 /// token stream owns its region and lives until phase 7 ends.
 pub(crate) fn parse_translation_unit<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     source: &'tu str,
-    quote_include: &[&Path],
-    system_include: &[&Path],
+    search: HeaderSearch<'_>,
 ) -> ParsedTranslationUnit<'tu> {
     let preprocessed = with_preprocessor(
         context,
         source_filename,
         source,
-        quote_include,
-        system_include,
+        search,
         |preprocessor, context, _pp| Parser::preprocess(preprocessor, context),
     );
     let parse = Bump::new();
     parse_with_arena(preprocessed, context, &parse)
 }
 
-/// Keeps phase-4 working storage within preprocessing. The arena is passed to
-/// the phase callback so stage 6 can move its state without changing callers.
+/// Keeps phase-4 working storage within preprocessing: the preprocessing
+/// arena is dropped when `run` returns. `run` also receives that arena, so a
+/// measurement can read its high-water mark.
 pub(crate) fn with_preprocessor<'tu, R>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     source: &'tu str,
-    quote_include: &[&Path],
-    system_include: &[&Path],
+    search: HeaderSearch<'_>,
     run: impl for<'pp> FnOnce(Preprocessor<'tu, 'pp>, &mut Context<'tu>, &'pp Bump) -> R,
 ) -> R {
     let pp = Bump::new();
-    let preprocessor = Preprocessor::new_with_arena_source(
-        &pp,
-        context,
-        source_filename,
-        source,
-        quote_include,
-        system_include,
-    );
+    let preprocessor =
+        Preprocessor::new_with_arena_source(&pp, context, source_filename, source, search);
     run(preprocessor, context, &pp)
 }
 

@@ -92,7 +92,10 @@ fn lexers_preserve_other_tokens_before_preprocessing() {
     );
     let mut spellings = Vec::new();
     preprocessor.run(&mut context, |preprocessor| {
-        while let Some(token) = preprocessor.tokenizer.next_item(preprocessor.context) {
+        // This test observes the main file before phase 4, not the target
+        // definitions which are now the initial active source-file frame.
+        let mut tokenizer = preprocessor.tokenizer_stack[0].tokenizer.clone();
+        while let Some(token) = tokenizer.next_item(preprocessor.context) {
             spellings.push(
                 preprocessor
                     .context
@@ -142,7 +145,6 @@ fn unused_other_preprocessing_tokens_do_not_diagnose() {
 fn surviving_other_tokens_keep_their_actual_character_locations() {
     for (source, character, index, line, column, length) in [
         ("@ after\n", '@', 0, 1, 1, 1),
-        ("$ after\n", '$', 0, 1, 1, 1),
         ("` after\n", '`', 0, 1, 1, 1),
         ("\u{1} after\n", '\u{1}', 0, 1, 1, 1),
         ("\\\n@ after\n", '@', 2, 2, 1, 1),

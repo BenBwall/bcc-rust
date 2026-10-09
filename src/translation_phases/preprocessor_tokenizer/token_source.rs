@@ -52,6 +52,12 @@ impl Default for TokenSource<'_> {
 }
 
 impl<'a> TokenSource<'a> {
+    /// Whether all tokens of a replay have been consumed. File sources retain
+    /// their own EOF and missing-final-newline processing.
+    pub(crate) fn is_exhausted_replay(&self) -> bool {
+        matches!(self, Self::Replay(cursor) if cursor.is_exhausted())
+    }
+
     /// Lexes all of `source` (translation phases 1 through 3) into `arena`
     /// and opens it.
     /// C99: §5.1.1.2p1-3, pp. 9-10; PDF pp. 21-22.
@@ -322,7 +328,7 @@ impl<'a> LexedCursor<'a> {
                 (start, self.file.end_index(entry) - start.index)
             };
             start.line = start.line.wrapping_add(self.line_delta);
-            let vector = context.push_source_vector(start, self.source_file_index, length);
+            let vector = context.push_lexed_source_vector(start, self.source_file_index, length);
             return Some(PreprocessorToken {
                 kind,
                 source_vectors: SourceVectors::new(vector, vector + 1),
@@ -348,7 +354,7 @@ impl<'a> LexedCursor<'a> {
         self.final_newline_withheld = true;
         self.finished = true;
         let length = self.file.eof().index - start.index;
-        let vector = context.push_source_vector(start, self.source_file_index, length);
+        let vector = context.push_lexed_source_vector(start, self.source_file_index, length);
         PreprocessorToken {
             kind:           super::PreprocessorTokenType::Newline,
             source_vectors: SourceVectors::new(vector, vector + 1),
@@ -402,6 +408,18 @@ impl<'pp> LexedFiles<'pp> {
         let file = &*self.arena.alloc(file);
         self.files.push(file);
         file
+    }
+
+    /// Opens GCC command-line directives directly at translation phase 3.
+    /// C99: command-line extension to §5.1.1.2p3, p. 10; PDF p. 22.
+    pub(crate) fn open_command_line(
+        &mut self,
+        context: &mut Context<'_>,
+        source_file_index: u32,
+        source: &str,
+    ) -> TokenSource<'pp> {
+        let file = LexedFile::lex_command_line(context, self.arena, source_file_index, source);
+        TokenSource::File(LexedCursor::new(self.register(file)))
     }
 
     /// `source` in the run's lifetime. A cursor over a file opened here is

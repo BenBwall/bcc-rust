@@ -246,8 +246,7 @@ pub fn preprocess(input: BenchmarkInput) -> usize {
         &mut context,
         Path::new("<input>"),
         input.source(),
-        &[],
-        &[],
+        crate::headers::HeaderSearch::default(),
         |mut preprocessor, context, _pp| {
             let mut tokens = crate::util::region_vec::RegionVec::new();
             let _ = preprocessor.preprocess_into_arena(context, usize::MAX, &mut tokens);
@@ -293,8 +292,7 @@ pub fn arena_usage(input: BenchmarkInput) -> ArenaUsage {
             &mut context,
             Path::new("<input>"),
             input.source(),
-            &[],
-            &[],
+            crate::headers::HeaderSearch::default(),
             |mut preprocessor, context, pp| {
                 let mut tokens = crate::util::region_vec::RegionVec::new();
                 let _ = preprocessor.preprocess_into_arena(context, usize::MAX, &mut tokens);
@@ -316,8 +314,7 @@ pub fn arena_usage(input: BenchmarkInput) -> ArenaUsage {
             &mut context,
             Path::new("<input>"),
             input.source(),
-            &[],
-            &[],
+            crate::headers::HeaderSearch::default(),
         );
         _ = unit.external_declarations().len();
         tu.high_water()
@@ -348,7 +345,44 @@ pub struct ParseBenchmarkSummary {
 #[must_use]
 pub fn parse(input: BenchmarkInput) -> ParseBenchmarkSummary {
     let tu = Bump::new();
-    summarize_parse(&tu, Path::new("<input>"), input.source())
+    summarize_parse(
+        &tu,
+        Path::new("<input>"),
+        input.source(),
+        crate::headers::HeaderSearch::default(),
+    )
+}
+
+/// Runs the full pipeline including declaration semantic analysis.
+#[doc(hidden)]
+#[must_use]
+pub fn sema(input: BenchmarkInput) -> ParseBenchmarkSummary {
+    let tu = Bump::new();
+    summarize_semantic(&tu, input.source())
+}
+
+/// Runs declaration semantic analysis over an arena copy of source.
+#[doc(hidden)]
+#[must_use]
+pub fn sema_source(source: &str) -> ParseBenchmarkSummary {
+    let tu = Bump::new();
+    let source = tu.alloc_str(source);
+    summarize_semantic(&tu, source)
+}
+
+fn summarize_semantic<'tu>(tu: &'tu Bump, source: &'tu str) -> ParseBenchmarkSummary {
+    let mut context = benchmark_context(tu);
+    let unit = crate::pipeline::parse_translation_unit(
+        &mut context,
+        Path::new("<input>"),
+        source,
+        crate::headers::HeaderSearch::default(),
+    );
+    let _semantic = crate::pipeline::analyze_translation_unit(&mut context, &unit);
+    ParseBenchmarkSummary {
+        external_declarations: unit.external_declarations().len(),
+        diagnostics:           context.pending_error_count(),
+    }
 }
 
 /// Runs translation phases 1 through 7 over `source`, copied into the
@@ -359,7 +393,32 @@ pub fn parse(input: BenchmarkInput) -> ParseBenchmarkSummary {
 pub fn parse_source(source: &str) -> ParseBenchmarkSummary {
     let tu = Bump::new();
     let source = tu.alloc_str(source);
-    summarize_parse(&tu, Path::new("<input>"), source)
+    summarize_parse(
+        &tu,
+        Path::new("<input>"),
+        source,
+        crate::headers::HeaderSearch::default(),
+    )
+}
+
+/// Runs phases 1 through 7 with all MSVC groups enabled, for allocation tests.
+#[doc(hidden)]
+#[must_use]
+pub fn parse_msvc_source(source: &str) -> ParseBenchmarkSummary {
+    let tu = Bump::new();
+    let source = tu.alloc_str(source);
+    let mut context = benchmark_context(&tu);
+    context.configuration = context.configuration.with_msvc_extensions(true);
+    let unit = crate::pipeline::parse_translation_unit(
+        &mut context,
+        Path::new("<input>"),
+        source,
+        crate::headers::HeaderSearch::default(),
+    );
+    ParseBenchmarkSummary {
+        external_declarations: unit.external_declarations().len(),
+        diagnostics:           context.pending_error_count(),
+    }
 }
 
 /// Reads `path` and runs translation phases 1 through 7 over it as the CLI
@@ -372,12 +431,47 @@ pub fn parse_source(source: &str) -> ParseBenchmarkSummary {
 pub fn parse_file(path: &Path) -> std::io::Result<ParseBenchmarkSummary> {
     let tu = Bump::new();
     let source = tu.read_to_str_lossy(path)?;
-    Ok(summarize_parse(&tu, path, source))
+    Ok(summarize_parse(
+        &tu,
+        path,
+        source,
+        crate::headers::HeaderSearch::default(),
+    ))
 }
 
-fn summarize_parse<'tu>(tu: &'tu Bump, path: &Path, source: &'tu str) -> ParseBenchmarkSummary {
+/// Like [`parse_file`], with `library` as the C library's include directory
+/// after the resource directory, so the resource headers chain to it.
+///
+/// # Errors
+///
+/// When `path` cannot be read.
+#[doc(hidden)]
+pub fn parse_file_with_library(
+    path: &Path,
+    library: &Path,
+) -> std::io::Result<ParseBenchmarkSummary> {
+    let tu = Bump::new();
+    let source = tu.read_to_str_lossy(path)?;
+    let after = [library];
+    Ok(summarize_parse(
+        &tu,
+        path,
+        source,
+        crate::headers::HeaderSearch {
+            after: &after,
+            ..crate::headers::HeaderSearch::default()
+        },
+    ))
+}
+
+fn summarize_parse<'tu>(
+    tu: &'tu Bump,
+    path: &Path,
+    source: &'tu str,
+    search: crate::headers::HeaderSearch<'_>,
+) -> ParseBenchmarkSummary {
     let mut context = benchmark_context(tu);
-    let unit = crate::pipeline::parse_translation_unit(&mut context, path, source, &[], &[]);
+    let unit = crate::pipeline::parse_translation_unit(&mut context, path, source, search);
     ParseBenchmarkSummary {
         external_declarations: unit.external_declarations().len(),
         diagnostics:           context.pending_error_count(),
@@ -425,8 +519,7 @@ fn prepare_parse_in_context(
         context,
         Path::new("<input>"),
         input.source(),
-        &[],
-        &[],
+        crate::headers::HeaderSearch::default(),
         |preprocessor, context, _pp| Parser::preprocess(preprocessor, context),
     )
 }

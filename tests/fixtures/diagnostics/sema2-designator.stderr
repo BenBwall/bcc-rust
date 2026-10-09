@@ -1,0 +1,9 @@
+error: designator does not identify an available subobject
+ --> sema2-designator.c:1:11
+  |
+1 | int a[2]={[2]=1};
+  |           ^^^^ no such subobject
+  |
+  = note: C99 §6.7.8p6-7: array indices are nonnegative integer constants within bounds and field designators name record members
+
+1 error generated.

@@ -1,0 +1,45 @@
+target x86_64-sysv-lp64 size_t="unsigned long" ptrdiff_t=long wchar_t=int char=signed
+scope 0 file
+  object a type="int [3]" linkage=external duration=static size=12 align=4
+  function f type="int (const int *, int)" prototype linkage=external
+  scope 2 function
+    parameter p type="const int *" size=8 align=8
+    parameter n type=int size=4 align=4
+    object __func__ type="const char [2]" duration=static size=2 align=1
+    object x type=int duration=automatic size=4 align=4
+expression 0 type=int category=rvalue value=1 ice constant=arithmetic
+expression 1 type=int category=rvalue value=2 ice constant=arithmetic
+expression 2 type=int category=rvalue value=3 ice constant=arithmetic
+expression 3 type=int category=modifiable-lvalue binding=n
+expression 4 type=int category=rvalue value=1 ice constant=arithmetic
+expression 5 type=int category=rvalue
+expression 6 type=int category=modifiable-lvalue binding=x
+expression 7 type="const int *" category=modifiable-lvalue binding=p
+expression 8 type=int category=rvalue value=0 ice constant=arithmetic
+expression 9 type="const int" category=lvalue
+expression 10 type=int category=rvalue operation=int
+expression 11 type=int category=modifiable-lvalue binding=x
+expression 12 type=int category=modifiable-lvalue binding=x
+expression 13 type="int [3]" category=lvalue binding=a
+expression 14 type="unsigned long" category=rvalue value=12 ice constant=arithmetic
+expression 15 type="unsigned long" category=rvalue
+convert expression 0 kind=assignment type=int
+convert expression 1 kind=assignment type=int
+convert expression 2 kind=assignment type=int
+convert expression 3 kind=lvalue type=int
+convert expression 3 kind=arithmetic type=int
+convert expression 4 kind=arithmetic type=int
+convert expression 5 kind=assignment type=int
+convert expression 7 kind=lvalue type="const int *"
+convert expression 6 kind=lvalue type=int
+convert expression 9 kind=lvalue type=int
+convert expression 6 kind=arithmetic type=int
+convert expression 9 kind=arithmetic type=int
+convert expression 10 kind=assignment type=int
+convert expression 11 kind=lvalue type=int
+convert expression 12 kind=lvalue type=int
+convert expression 12 kind=arithmetic type="unsigned long"
+convert expression 14 kind=arithmetic type="unsigned long"
+convert expression 12 kind=arithmetic type="unsigned long"
+convert expression 14 kind=arithmetic type="unsigned long"
+convert expression 15 kind=assignment type=int

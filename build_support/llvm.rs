@@ -10,9 +10,19 @@ pub(super) fn build(version: &str) -> PathBuf {
     println!("cargo:rerun-if-changed=vendor/rust");
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let prefix = root.join("target/llvm");
+    // A completed installation records its version last, so a restored cache
+    // or an unchanged checkout skips reconfiguring the LLVM build tree. This
+    // first check takes no lock and writes nothing, so a read-only cache works:
+    // a shared installation reached through a link, or a sandbox that may not
+    // write outside the checkout.
+    let stamp = prefix.join(".installed-version");
+    let installed = || fs::read_to_string(&stamp).is_ok_and(|installed| installed == version);
+    if installed() {
+        return prefix;
+    }
     fs::create_dir_all(&prefix).unwrap();
     // Cargo profiles share this cache; hold the lock until installation
-    // finishes.
+    // finishes, and check again under it in case another build just did.
     let lock = fs::File::options()
         .write(true)
         .create(true)
@@ -20,10 +30,7 @@ pub(super) fn build(version: &str) -> PathBuf {
         .open(prefix.join(".build-lock"))
         .unwrap();
     lock.lock().unwrap();
-    // A completed installation records its version, so a restored cache or
-    // an unchanged checkout skips reconfiguring the LLVM build tree.
-    let stamp = prefix.join(".installed-version");
-    if fs::read_to_string(&stamp).is_ok_and(|installed| installed == version) {
+    if installed() {
         return prefix;
     }
 

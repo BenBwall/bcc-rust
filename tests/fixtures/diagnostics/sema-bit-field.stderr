@@ -1,0 +1,25 @@
+error: bit-field width is negative or exceeds its type: `x`
+ --> sema-bit-field.c:2:17
+  |
+2 | struct Bad {int x:33; float f:2; int z:0;};
+  |                 ^^^^ invalid width
+  |
+  = note: C99 §6.7.2.1p3: the width is a nonnegative integer constant expression no wider than the bit-field's type
+
+error: bit-field requires an integer type: `f`
+ --> sema-bit-field.c:2:29
+  |
+2 | struct Bad {int x:33; float f:2; int z:0;};
+  |                             ^^^ not an integer type
+  |
+  = note: C99 §6.7.2.1p4: a bit-field has _Bool, signed int, unsigned int or another implementation-defined integer type
+
+error: named bit-field has zero width: `z`
+ --> sema-bit-field.c:2:38
+  |
+2 | struct Bad {int x:33; float f:2; int z:0;};
+  |                                      ^^^ named zero-width bit-field
+  |
+  = note: C99 §6.7.2.1p3: a zero-width bit-field has no declarator
+
+3 errors generated.

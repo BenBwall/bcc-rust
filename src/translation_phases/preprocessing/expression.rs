@@ -14,9 +14,10 @@
 //! unsigned.
 //!
 //! Behavior C99 leaves open: a `defined` produced by macro replacement is
-//! undefined (§6.10.1 paragraph 4) and is evaluated like a written one, as
-//! GCC does. An evaluated comma operator (§6.6 paragraph 3) is an extension
-//! under the extension policy.
+//! undefined (§6.10.1 paragraph 4) and is evaluated like a written one once
+//! parameters are replaced and `##` applied, as GCC and Clang do; it is
+//! diagnosed as Clang's `-Wexpansion-to-defined` is. An evaluated comma
+//! operator (§6.6 paragraph 3) is an extension under the extension policy.
 
 use std::{
     fmt::Debug,
@@ -27,6 +28,7 @@ use std::{
 
 use super::{
     Expander,
+    driver::TokenizerFrameType,
     errors::{
         PreprocessorError,
         PreprocessorErrorType,
@@ -57,7 +59,7 @@ use crate::{
 };
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(super) enum PreprocessorExpressionParserState {
+enum PreprocessorExpressionParserState {
     Unary,
     Binary,
 }
@@ -104,12 +106,62 @@ pub(crate) enum PreprocessorExpressionOperator {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(super) enum PreprocessorExpressionAssociativity {
+enum PreprocessorExpressionAssociativity {
     Left,
     Right,
 }
 
 impl PreprocessorExpressionOperator {
+    /// The diagnostic for a unary operator with no operand.
+    fn unary_operand_missing<'tu>(self) -> Option<PreprocessorErrorType<'tu>> {
+        match self {
+            | Self::UnaryPlus => Some(PreprocessorErrorType::UnaryPlusWithoutOperand),
+            | Self::UnaryMinus => Some(PreprocessorErrorType::UnaryMinusWithoutOperand),
+            | Self::BitwiseNot => Some(PreprocessorErrorType::BitwiseNotWithoutOperand),
+            | Self::LogicalNot => Some(PreprocessorErrorType::LogicalNotWithoutOperand),
+            | _ => None,
+        }
+    }
+
+    /// The diagnostic for an operand that is missing after this operator
+    /// where the expression or a group ends.
+    fn operand_missing_while_reading<'tu>(self) -> PreprocessorErrorType<'tu> {
+        self.unary_operand_missing().unwrap_or(
+            PreprocessorErrorType::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(
+                self,
+            ),
+        )
+    }
+
+    /// The diagnostic for an operand found missing when this operator is
+    /// reduced.
+    fn operand_missing_at_reduction<'tu>(self) -> PreprocessorErrorType<'tu> {
+        if let Some(error) = self.unary_operand_missing() {
+            return error;
+        }
+        match self {
+            | Self::BinaryPlus => PreprocessorErrorType::BinaryPlusWithoutRhs,
+            | Self::BinaryMinus => PreprocessorErrorType::BinaryMinusWithoutRhs,
+            | Self::Multiply => PreprocessorErrorType::MultiplyWithoutRhs,
+            | Self::Divide => PreprocessorErrorType::DivideWithoutRhs,
+            | Self::Modulo => PreprocessorErrorType::ModuloWithoutRhs,
+            | Self::LessThan => PreprocessorErrorType::LessThanWithoutRhs,
+            | Self::LessThanEquals => PreprocessorErrorType::LessThanEqualsWithoutRhs,
+            | Self::GreaterThan => PreprocessorErrorType::GreaterThanWithoutRhs,
+            | Self::GreaterThanEquals => PreprocessorErrorType::GreaterThanEqualsWithoutRhs,
+            | Self::Equals => PreprocessorErrorType::EqualsWithoutRhs,
+            | Self::NotEquals => PreprocessorErrorType::NotEqualsWithoutRhs,
+            | Self::LeftShift => PreprocessorErrorType::LeftShiftWithoutRhs,
+            | Self::RightShift => PreprocessorErrorType::RightShiftWithoutRhs,
+            | Self::BitwiseAnd => PreprocessorErrorType::BitwiseAndWithoutRhs,
+            | Self::BitwiseXor => PreprocessorErrorType::BitwiseXorWithoutRhs,
+            | Self::BitwiseOr => PreprocessorErrorType::BitwiseOrWithoutRhs,
+            | Self::LogicalAnd => PreprocessorErrorType::LogicalAndWithoutRhs,
+            | Self::LogicalOr => PreprocessorErrorType::LogicalOrWithoutRhs,
+            | other => unreachable!("{other:?} takes no operands from the stack"),
+        }
+    }
+
     /// The operator as written in C source.
     pub(super) fn spelling(self) -> &'static str {
         match self {
@@ -283,12 +335,21 @@ pub(crate) struct PreprocessorExpressionParser<'pp> {
 ///
 /// C99: §6.10.1 paragraph 4, p. 148; PDF p. 160.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum PreprocessorExpressionOperand {
+enum PreprocessorExpressionOperand {
     Signed(i64),
     Unsigned(u64),
 }
 
 impl PreprocessorExpressionOperand {
+    /// The value whose bits are `bits`, unsigned or signed.
+    fn of_type(is_unsigned: bool, bits: i64) -> Self {
+        if is_unsigned {
+            Self::Unsigned(bits as u64)
+        } else {
+            Self::Signed(bits)
+        }
+    }
+
     fn as_signed(self) -> i64 {
         match self {
             | Self::Signed(v) => v,
@@ -337,8 +398,11 @@ impl PreprocessorExpressionOperand {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(super) struct EvaluatedPreprocessorExpressionOperand {
+struct EvaluatedPreprocessorExpressionOperand {
     value:                    PreprocessorExpressionOperand,
+    /// Recovery supplies a value for reduction, not a real arithmetic operand.
+    /// C99: §6.10.1 paragraph 1, pp. 147-148; PDF pp. 159-160.
+    is_recovered:             bool,
     contains_evaluated_comma: bool,
     arithmetic_faults:        Option<NonZeroU32>,
 }
@@ -347,6 +411,7 @@ impl From<PreprocessorExpressionOperand> for EvaluatedPreprocessorExpressionOper
     fn from(value: PreprocessorExpressionOperand) -> Self {
         Self {
             value,
+            is_recovered: false,
             contains_evaluated_comma: false,
             arithmetic_faults: None,
         }
@@ -354,12 +419,21 @@ impl From<PreprocessorExpressionOperand> for EvaluatedPreprocessorExpressionOper
 }
 
 impl EvaluatedPreprocessorExpressionOperand {
+    fn recovered_zero() -> Self {
+        Self {
+            is_recovered: true,
+            ..PreprocessorExpressionOperand::Signed(0).into()
+        }
+    }
+
     fn with_comma_liveness(
         value: PreprocessorExpressionOperand,
         contains_evaluated_comma: bool,
+        is_recovered: bool,
     ) -> Self {
         Self {
             value,
+            is_recovered,
             contains_evaluated_comma,
             arithmetic_faults: None,
         }
@@ -397,7 +471,7 @@ impl EvaluatedPreprocessorExpressionOperand {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(super) struct PreprocessorExpressionOperandStack<'pp> {
+struct PreprocessorExpressionOperandStack<'pp> {
     values:                    ArenaVec<'pp, EvaluatedPreprocessorExpressionOperand>,
     floor:                     usize,
     pending_evaluated_comma:   bool,
@@ -604,610 +678,32 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// pp. 91-106. Unsigned arithmetic wraps and never overflows (§6.2.5
     /// paragraph 9, p. 34; PDF p. 46); comparisons and logical operators
     /// yield a signed 0 or 1.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "This function is long because it contains the logic for evaluating an operator \
-                  in a constant expression. I don't think splitting it up would anything clearer."
-    )]
     fn handle_expression_operator(&mut self, operator: LocatedExpressionOperator) {
+        use PreprocessorExpressionOperator as Op;
         match operator.kind {
-            | PreprocessorExpressionOperator::UnaryPlus => {
-                if self.expression_parser.operand_stack.is_empty() {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::UnaryPlusWithoutOperand,
-                        source_vectors,
-                    });
-                }
-            },
-            | PreprocessorExpressionOperator::UnaryMinus => {
-                let Some(operand) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::UnaryMinusWithoutOperand,
-                        source_vectors,
-                    });
-                    return;
-                };
-                let (new, did_overflow) = operand.as_signed().overflowing_neg();
-                if operand.is_signed() && did_overflow {
-                    self.expression_parser.operand_stack.record_fault(
-                        ArithmeticFaultKind::UnaryMinusOverflow,
-                        operator.source_vectors,
-                    );
-                }
-                self.expression_parser
-                    .operand_stack
-                    .push(operand.set_signed(new));
-            },
-            | PreprocessorExpressionOperator::BitwiseNot => {
-                let Some(operand) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::BitwiseNotWithoutOperand,
-                        source_vectors,
-                    });
-                    return;
-                };
-                self.expression_parser
-                    .operand_stack
-                    .push(operand.map_unsigned(|v| !v));
-            },
-            | PreprocessorExpressionOperator::LogicalNot => {
-                let Some(operand) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::LogicalNotWithoutOperand,
-                        source_vectors,
-                    });
-                    return;
-                };
-                self.expression_parser
-                    .operand_stack
-                    .push(PreprocessorExpressionOperand::Signed(i64::from(
-                        operand.as_signed() == 0,
-                    )));
-            },
-            | PreprocessorExpressionOperator::BinaryPlus => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::BinaryPlusWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
-                let (new, did_overflow) = lhs.as_signed().overflowing_add(rhs.as_signed());
-                if did_overflow && !is_unsigned {
-                    self.expression_parser.operand_stack.record_fault(
-                        ArithmeticFaultKind::BinaryPlusOverflow,
-                        operator.source_vectors,
-                    );
-                }
-                self.expression_parser.operand_stack.push(if is_unsigned {
-                    PreprocessorExpressionOperand::Unsigned(new as u64)
-                } else {
-                    PreprocessorExpressionOperand::Signed(new)
-                });
-            },
-            | PreprocessorExpressionOperator::BinaryMinus => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::BinaryMinusWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
-                let (new, did_overflow) = lhs.as_signed().overflowing_sub(rhs.as_signed());
-                if did_overflow && !is_unsigned {
-                    self.expression_parser.operand_stack.record_fault(
-                        ArithmeticFaultKind::BinaryMinusOverflow,
-                        operator.source_vectors,
-                    );
-                }
-                self.expression_parser.operand_stack.push(if is_unsigned {
-                    PreprocessorExpressionOperand::Unsigned(new as u64)
-                } else {
-                    PreprocessorExpressionOperand::Signed(new)
-                });
-            },
-            | PreprocessorExpressionOperator::Multiply => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::MultiplyWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
-                let (new, did_overflow) = lhs.as_signed().overflowing_mul(rhs.as_signed());
-                if did_overflow && !is_unsigned {
-                    self.expression_parser.operand_stack.record_fault(
-                        ArithmeticFaultKind::MultiplyOverflow,
-                        operator.source_vectors,
-                    );
-                }
-                self.expression_parser.operand_stack.push(if is_unsigned {
-                    PreprocessorExpressionOperand::Unsigned(new as u64)
-                } else {
-                    PreprocessorExpressionOperand::Signed(new)
-                });
-            },
-            | PreprocessorExpressionOperator::Divide => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::DivideWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
-                // C99 §6.5.5p5-6: a zero divisor is undefined, and integer
-                // division truncates toward zero.
-                if rhs.as_signed() == 0 {
-                    self.expression_parser
-                        .operand_stack
-                        .record_fault(ArithmeticFaultKind::DivideByZero, operator.source_vectors);
-                    self.expression_parser.operand_stack.push(if is_unsigned {
-                        PreprocessorExpressionOperand::Unsigned(0)
-                    } else {
-                        PreprocessorExpressionOperand::Signed(0)
-                    });
-                    return;
-                }
-                let (new, did_overflow) = if is_unsigned {
-                    ((lhs.as_unsigned() / rhs.as_unsigned()) as i64, false)
-                } else {
-                    lhs.as_signed().overflowing_div(rhs.as_signed())
-                };
-                if did_overflow && !is_unsigned {
-                    self.expression_parser
-                        .operand_stack
-                        .record_fault(ArithmeticFaultKind::DivideOverflow, operator.source_vectors);
-                }
-                self.expression_parser.operand_stack.push(if is_unsigned {
-                    PreprocessorExpressionOperand::Unsigned(new as u64)
-                } else {
-                    PreprocessorExpressionOperand::Signed(new)
-                });
-            },
-            | PreprocessorExpressionOperator::Modulo => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::ModuloWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
-                if rhs.as_signed() == 0 {
-                    self.expression_parser
-                        .operand_stack
-                        .record_fault(ArithmeticFaultKind::ModuloByZero, operator.source_vectors);
-                    self.expression_parser.operand_stack.push(if is_unsigned {
-                        PreprocessorExpressionOperand::Unsigned(0)
-                    } else {
-                        PreprocessorExpressionOperand::Signed(0)
-                    });
-                    return;
-                }
-                let (new, did_overflow) = if is_unsigned {
-                    ((lhs.as_unsigned() % rhs.as_unsigned()) as i64, false)
-                } else {
-                    lhs.as_signed().overflowing_rem(rhs.as_signed())
-                };
-                if did_overflow && !is_unsigned {
-                    self.expression_parser
-                        .operand_stack
-                        .record_fault(ArithmeticFaultKind::ModuloOverflow, operator.source_vectors);
-                }
-                self.expression_parser.operand_stack.push(if is_unsigned {
-                    PreprocessorExpressionOperand::Unsigned(new as u64)
-                } else {
-                    PreprocessorExpressionOperand::Signed(new)
-                });
-            },
-            | PreprocessorExpressionOperator::LeftShift => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::LeftShiftWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                // C99 §6.5.7: shifts promote each operand independently;
-                // the right operand never changes the result's type. Only the
-                // shift count is checked; a signed left shift that loses bits
-                // (§6.5.7p4) is not diagnosed.
-                let is_unsigned = lhs.is_unsigned();
-                let (new, did_overflow) = {
-                    let did_overflow = u32::try_from(rhs.as_unsigned()).is_err();
-                    let (new, overflow) = lhs.as_signed().overflowing_shl(rhs.as_unsigned() as u32);
-                    (new, did_overflow || overflow)
-                };
-                if did_overflow {
-                    self.expression_parser.operand_stack.record_fault(
-                        ArithmeticFaultKind::LeftShiftOverflow,
-                        operator.source_vectors,
-                    );
-                }
-                self.expression_parser.operand_stack.push(if is_unsigned {
-                    PreprocessorExpressionOperand::Unsigned(new as u64)
-                } else {
-                    PreprocessorExpressionOperand::Signed(new)
-                });
-            },
-            | PreprocessorExpressionOperator::RightShift => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::RightShiftWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                // C99 §6.5.7p5: shifting a negative signed value right is
-                // implementation-defined; here it is arithmetic.
-                let is_unsigned = lhs.is_unsigned();
-                let (new, did_overflow) = {
-                    let did_overflow = u32::try_from(rhs.as_unsigned()).is_err();
-                    let (new, overflow) = if is_unsigned {
-                        let (new, overflow) =
-                            lhs.as_unsigned().overflowing_shr(rhs.as_unsigned() as u32);
-                        (new as i64, overflow)
-                    } else {
-                        lhs.as_signed().overflowing_shr(rhs.as_unsigned() as u32)
-                    };
-                    (new, did_overflow || overflow)
-                };
-                if did_overflow {
-                    self.expression_parser.operand_stack.record_fault(
-                        ArithmeticFaultKind::RightShiftOverflow,
-                        operator.source_vectors,
-                    );
-                }
-                self.expression_parser.operand_stack.push(if is_unsigned {
-                    PreprocessorExpressionOperand::Unsigned(new as u64)
-                } else {
-                    PreprocessorExpressionOperand::Signed(new)
-                });
-            },
-            | PreprocessorExpressionOperator::LessThan => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::LessThanWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
-                let result = if is_unsigned {
-                    lhs.as_unsigned() < rhs.as_unsigned()
-                } else {
-                    lhs.as_signed() < rhs.as_signed()
-                };
-                self.expression_parser
-                    .operand_stack
-                    .push(PreprocessorExpressionOperand::Signed(i64::from(result)));
-            },
-            | PreprocessorExpressionOperator::LessThanEquals => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::LessThanEqualsWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
-                let result = if is_unsigned {
-                    lhs.as_unsigned() <= rhs.as_unsigned()
-                } else {
-                    lhs.as_signed() <= rhs.as_signed()
-                };
-                self.expression_parser
-                    .operand_stack
-                    .push(PreprocessorExpressionOperand::Signed(i64::from(result)));
-            },
-            | PreprocessorExpressionOperator::GreaterThan => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::GreaterThanWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
-                let result = if is_unsigned {
-                    lhs.as_unsigned() > rhs.as_unsigned()
-                } else {
-                    lhs.as_signed() > rhs.as_signed()
-                };
-                self.expression_parser
-                    .operand_stack
-                    .push(PreprocessorExpressionOperand::Signed(i64::from(result)));
-            },
-            | PreprocessorExpressionOperator::GreaterThanEquals => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::GreaterThanEqualsWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
-                let result = if is_unsigned {
-                    lhs.as_unsigned() >= rhs.as_unsigned()
-                } else {
-                    lhs.as_signed() >= rhs.as_signed()
-                };
-                self.expression_parser
-                    .operand_stack
-                    .push(PreprocessorExpressionOperand::Signed(i64::from(result)));
-            },
-            | PreprocessorExpressionOperator::Equals => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::EqualsWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                self.expression_parser
-                    .operand_stack
-                    .push(PreprocessorExpressionOperand::Signed(i64::from(
-                        lhs.as_signed() == rhs.as_signed(),
-                    )));
-            },
-            | PreprocessorExpressionOperator::NotEquals => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::NotEqualsWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                self.expression_parser
-                    .operand_stack
-                    .push(PreprocessorExpressionOperand::Signed(i64::from(
-                        lhs.as_signed() != rhs.as_signed(),
-                    )));
-            },
-            | PreprocessorExpressionOperator::BitwiseAnd => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::BitwiseAndWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
-                let result = lhs.as_signed() & rhs.as_signed();
-                self.expression_parser.operand_stack.push(if is_unsigned {
-                    PreprocessorExpressionOperand::Unsigned(result as u64)
-                } else {
-                    PreprocessorExpressionOperand::Signed(result)
-                });
-            },
-            | PreprocessorExpressionOperator::BitwiseXor => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::BitwiseXorWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
-                let result = lhs.as_signed() ^ rhs.as_signed();
-                self.expression_parser.operand_stack.push(if is_unsigned {
-                    PreprocessorExpressionOperand::Unsigned(result as u64)
-                } else {
-                    PreprocessorExpressionOperand::Signed(result)
-                });
-            },
-            | PreprocessorExpressionOperator::BitwiseOr => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::BitwiseOrWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
-                let result = lhs.as_signed() | rhs.as_signed();
-                self.expression_parser.operand_stack.push(if is_unsigned {
-                    PreprocessorExpressionOperand::Unsigned(result as u64)
-                } else {
-                    PreprocessorExpressionOperand::Signed(result)
-                });
-            },
-            | PreprocessorExpressionOperator::LogicalAnd => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop_isolated()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop_isolated() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::LogicalAndWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                // C99 §6.5.13p4: the right operand is evaluated only when
-                // the left is nonzero, so only then do its faults count.
-                let lhs_is_true = lhs.as_signed() != 0;
-                self.expression_parser
-                    .operand_stack
-                    .retain_faults(lhs.arithmetic_faults);
-                if lhs_is_true {
-                    self.expression_parser
-                        .operand_stack
-                        .retain_faults(rhs.arithmetic_faults);
-                }
-                self.expression_parser.operand_stack.push(
-                    EvaluatedPreprocessorExpressionOperand::with_comma_liveness(
-                        PreprocessorExpressionOperand::Signed(i64::from(
-                            lhs_is_true && rhs.as_signed() != 0,
-                        )),
-                        lhs.contains_evaluated_comma
-                            || (lhs_is_true && rhs.contains_evaluated_comma),
-                    ),
-                );
-            },
-            | PreprocessorExpressionOperator::LogicalOr => {
-                let rhs = self
-                    .expression_parser
-                    .operand_stack
-                    .pop_isolated()
-                    .unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
-                let Some(lhs) = self.expression_parser.operand_stack.pop_isolated() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::LogicalOrWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser.operand_stack.push(rhs);
-                    return;
-                };
-                // C99 §6.5.14p4: the right operand is evaluated only when
-                // the left is zero.
-                let lhs_is_true = lhs.as_signed() != 0;
-                self.expression_parser
-                    .operand_stack
-                    .retain_faults(lhs.arithmetic_faults);
-                if !lhs_is_true {
-                    self.expression_parser
-                        .operand_stack
-                        .retain_faults(rhs.arithmetic_faults);
-                }
-                self.expression_parser.operand_stack.push(
-                    EvaluatedPreprocessorExpressionOperand::with_comma_liveness(
-                        PreprocessorExpressionOperand::Signed(i64::from(
-                            lhs_is_true || rhs.as_signed() != 0,
-                        )),
-                        lhs.contains_evaluated_comma
-                            || (!lhs_is_true && rhs.contains_evaluated_comma),
-                    ),
-                );
-            },
+            | Op::UnaryPlus | Op::UnaryMinus | Op::BitwiseNot | Op::LogicalNot =>
+                self.apply_unary_operator(operator),
+            | Op::BinaryPlus
+            | Op::BinaryMinus
+            | Op::Multiply
+            | Op::Divide
+            | Op::Modulo
+            | Op::LeftShift
+            | Op::RightShift
+            | Op::LessThan
+            | Op::LessThanEquals
+            | Op::GreaterThan
+            | Op::GreaterThanEquals
+            | Op::Equals
+            | Op::NotEquals
+            | Op::BitwiseAnd
+            | Op::BitwiseXor
+            | Op::BitwiseOr => self.apply_binary_operator(operator),
+            | Op::LogicalAnd | Op::LogicalOr => self.apply_logical_operator(operator.kind),
             // C99 §6.6p3 forbids an evaluated comma operator; it is reported
             // once the whole expression is known (an extension under the
             // extension policy).
-            | PreprocessorExpressionOperator::Comma => {
+            | Op::Comma => {
                 let Some(rhs) = self.expression_parser.operand_stack.pop_isolated() else {
                     return;
                 };
@@ -1222,10 +718,14 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     .operand_stack
                     .retain_faults(rhs.arithmetic_faults);
                 self.expression_parser.operand_stack.push(
-                    EvaluatedPreprocessorExpressionOperand::with_comma_liveness(rhs.value, true),
+                    EvaluatedPreprocessorExpressionOperand::with_comma_liveness(
+                        rhs.value,
+                        true,
+                        rhs.is_recovered,
+                    ),
                 );
             },
-            | PreprocessorExpressionOperator::QuestionMark => {
+            | Op::QuestionMark => {
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::TernaryOperatorWithoutColon,
                     source_vectors: operator.source_vectors,
@@ -1236,71 +736,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 _ = self.expression_parser.operand_stack.pop();
                 self.expression_parser
                     .operand_stack
-                    .push(PreprocessorExpressionOperand::Signed(0));
+                    .push(EvaluatedPreprocessorExpressionOperand::recovered_zero());
             },
-            | PreprocessorExpressionOperator::Conditional => {
-                let Some(final_operand) = self.expression_parser.operand_stack.pop_isolated()
-                else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::TernaryOperatorWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser
-                        .operand_stack
-                        .push(PreprocessorExpressionOperand::Signed(0));
-                    return;
-                };
-                let Some(middle_operand) = self.expression_parser.operand_stack.pop_isolated()
-                else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::TernaryOperatorWithoutMhs,
-                        source_vectors,
-                    });
-                    self.expression_parser
-                        .operand_stack
-                        .push(PreprocessorExpressionOperand::Signed(0));
-                    return;
-                };
-                let Some(condition) = self.expression_parser.operand_stack.pop_isolated() else {
-                    let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::TernaryOperatorWithoutRhs,
-                        source_vectors,
-                    });
-                    self.expression_parser
-                        .operand_stack
-                        .push(PreprocessorExpressionOperand::Signed(0));
-                    return;
-                };
-                // The unselected arm still participates in the usual
-                // arithmetic conversions (C99 §6.5.15p5).
-                let is_unsigned = middle_operand.is_unsigned() || final_operand.is_unsigned();
-                let selected_operand = if condition.as_signed() != 0 {
-                    middle_operand
-                } else {
-                    final_operand
-                };
-                self.expression_parser
-                    .operand_stack
-                    .retain_faults(condition.arithmetic_faults);
-                self.expression_parser
-                    .operand_stack
-                    .retain_faults(selected_operand.arithmetic_faults);
-                self.expression_parser.operand_stack.push(
-                    EvaluatedPreprocessorExpressionOperand::with_comma_liveness(
-                        if is_unsigned {
-                            PreprocessorExpressionOperand::Unsigned(selected_operand.as_unsigned())
-                        } else {
-                            selected_operand.value
-                        },
-                        condition.contains_evaluated_comma
-                            || selected_operand.contains_evaluated_comma,
-                    ),
-                );
-            },
-            | PreprocessorExpressionOperator::OpeningParenthesis => {
+            | Op::Conditional => self.apply_conditional_operator(),
+            | Op::OpeningParenthesis => {
                 let source_vectors = operator.source_vectors;
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnterminatedOpeningParenthesisInPreprocessorExpression,
@@ -1311,30 +750,336 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         }
     }
 
+    /// Reports that `operator`'s operand is missing as it is reduced.
+    fn report_missing_operand(&mut self, operator: PreprocessorExpressionOperator) {
+        let source_vectors = self.current_location();
+        self.context.preprocessor_error(PreprocessorError {
+            error_type: operator.operand_missing_at_reduction(),
+            source_vectors,
+        });
+    }
+
+    /// Applies a unary arithmetic operator.
+    ///
+    /// C99: §6.5.3.3 paragraphs 2-5, p. 79; PDF p. 91.
+    fn apply_unary_operator(&mut self, operator: LocatedExpressionOperator) {
+        use PreprocessorExpressionOperator as Op;
+        // Unary `+` leaves its operand in place.
+        if operator.kind == Op::UnaryPlus {
+            if self.expression_parser.operand_stack.is_empty() {
+                self.report_missing_operand(operator.kind);
+            }
+            return;
+        }
+        let Some(operand) = self.expression_parser.operand_stack.pop() else {
+            self.report_missing_operand(operator.kind);
+            return;
+        };
+        let mut result = match operator.kind {
+            | Op::UnaryMinus => {
+                let (new, did_overflow) = operand.as_signed().overflowing_neg();
+                if operand.is_signed() && did_overflow && !operand.is_recovered {
+                    self.expression_parser.operand_stack.record_fault(
+                        ArithmeticFaultKind::UnaryMinusOverflow,
+                        operator.source_vectors,
+                    );
+                }
+                operand.set_signed(new)
+            },
+            | Op::BitwiseNot => operand.map_unsigned(|v| !v),
+            | Op::LogicalNot =>
+                PreprocessorExpressionOperand::Signed(i64::from(operand.as_signed() == 0)).into(),
+            | other => unreachable!("{other:?} is not a unary operator"),
+        };
+        result.is_recovered = operand.is_recovered;
+        self.expression_parser.operand_stack.push(result);
+    }
+
+    /// Pops the two operands of a binary `operator`. A missing right operand
+    /// reads as 0; a missing left one is reported and leaves the right one
+    /// on the stack as the result. `isolated` pops keep each operand's
+    /// faults and comma liveness with it rather than with the result.
+    fn pop_binary_operands(
+        &mut self,
+        operator: PreprocessorExpressionOperator,
+        isolated: bool,
+    ) -> Option<(
+        EvaluatedPreprocessorExpressionOperand,
+        EvaluatedPreprocessorExpressionOperand,
+    )> {
+        let stack = &mut self.expression_parser.operand_stack;
+        let mut pop = || {
+            if isolated {
+                stack.pop_isolated()
+            } else {
+                stack.pop()
+            }
+        };
+        let rhs = pop().unwrap_or_else(EvaluatedPreprocessorExpressionOperand::recovered_zero);
+        let Some(lhs) = pop() else {
+            self.report_missing_operand(operator);
+            self.expression_parser.operand_stack.push(rhs);
+            return None;
+        };
+        Some((lhs, rhs))
+    }
+
+    /// Applies a binary arithmetic, shift, relational, equality, or bitwise
+    /// operator after the usual arithmetic conversions.
+    ///
+    /// C99: §6.5.5-§6.5.12, pp. 82-89; PDF pp. 94-101.
+    fn apply_binary_operator(&mut self, operator: LocatedExpressionOperator) {
+        use ArithmeticFaultKind as Fault;
+        use PreprocessorExpressionOperand as Operand;
+        use PreprocessorExpressionOperator as Op;
+        let Some((lhs, rhs)) = self.pop_binary_operands(operator.kind, false) else {
+            return;
+        };
+        let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+        let is_recovered = lhs.is_recovered || rhs.is_recovered;
+        let truth = |value: bool| (Operand::Signed(i64::from(value)), None);
+        // Unsigned results never overflow (C99 §6.2.5p9).
+        let arithmetic = |(new, did_overflow): (i64, bool), fault: Fault| {
+            (
+                Operand::of_type(is_unsigned, new),
+                (did_overflow && !is_unsigned).then_some(fault),
+            )
+        };
+        let (result, fault) = match operator.kind {
+            | Op::BinaryPlus => arithmetic(
+                lhs.as_signed().overflowing_add(rhs.as_signed()),
+                Fault::BinaryPlusOverflow,
+            ),
+            | Op::BinaryMinus => arithmetic(
+                lhs.as_signed().overflowing_sub(rhs.as_signed()),
+                Fault::BinaryMinusOverflow,
+            ),
+            | Op::Multiply => arithmetic(
+                lhs.as_signed().overflowing_mul(rhs.as_signed()),
+                Fault::MultiplyOverflow,
+            ),
+            // C99 §6.5.5p5-6: a zero divisor is undefined, and integer
+            // division truncates toward zero.
+            | Op::Divide | Op::Modulo if rhs.as_signed() == 0 => (
+                Operand::of_type(is_unsigned, 0),
+                Some(if operator.kind == Op::Divide {
+                    Fault::DivideByZero
+                } else {
+                    Fault::ModuloByZero
+                }),
+            ),
+            | Op::Divide if is_unsigned => (
+                Operand::Unsigned(lhs.as_unsigned() / rhs.as_unsigned()),
+                None,
+            ),
+            | Op::Divide => arithmetic(
+                lhs.as_signed().overflowing_div(rhs.as_signed()),
+                Fault::DivideOverflow,
+            ),
+            | Op::Modulo if is_unsigned => (
+                Operand::Unsigned(lhs.as_unsigned() % rhs.as_unsigned()),
+                None,
+            ),
+            | Op::Modulo => arithmetic(
+                lhs.as_signed().overflowing_rem(rhs.as_signed()),
+                Fault::ModuloOverflow,
+            ),
+            // C99 §6.5.7: shifts promote each operand independently; the
+            // right operand never changes the result's type. Only the shift
+            // count is checked; a signed left shift that loses bits (§6.5.7p4)
+            // is not diagnosed.
+            | Op::LeftShift => {
+                let count_overflows = u32::try_from(rhs.as_unsigned()).is_err();
+                let (new, overflow) = lhs.as_signed().overflowing_shl(rhs.as_unsigned() as u32);
+                (
+                    Operand::of_type(lhs.is_unsigned(), new),
+                    (count_overflows || overflow).then_some(Fault::LeftShiftOverflow),
+                )
+            },
+            // C99 §6.5.7p5: shifting a negative signed value right is
+            // implementation-defined; here it is arithmetic.
+            | Op::RightShift => {
+                let count_overflows = u32::try_from(rhs.as_unsigned()).is_err();
+                let (new, overflow) = if lhs.is_unsigned() {
+                    let (new, overflow) =
+                        lhs.as_unsigned().overflowing_shr(rhs.as_unsigned() as u32);
+                    (new as i64, overflow)
+                } else {
+                    lhs.as_signed().overflowing_shr(rhs.as_unsigned() as u32)
+                };
+                (
+                    Operand::of_type(lhs.is_unsigned(), new),
+                    (count_overflows || overflow).then_some(Fault::RightShiftOverflow),
+                )
+            },
+            | Op::LessThan if is_unsigned => truth(lhs.as_unsigned() < rhs.as_unsigned()),
+            | Op::LessThan => truth(lhs.as_signed() < rhs.as_signed()),
+            | Op::LessThanEquals if is_unsigned => truth(lhs.as_unsigned() <= rhs.as_unsigned()),
+            | Op::LessThanEquals => truth(lhs.as_signed() <= rhs.as_signed()),
+            | Op::GreaterThan if is_unsigned => truth(lhs.as_unsigned() > rhs.as_unsigned()),
+            | Op::GreaterThan => truth(lhs.as_signed() > rhs.as_signed()),
+            | Op::GreaterThanEquals if is_unsigned => truth(lhs.as_unsigned() >= rhs.as_unsigned()),
+            | Op::GreaterThanEquals => truth(lhs.as_signed() >= rhs.as_signed()),
+            | Op::Equals => truth(lhs.as_signed() == rhs.as_signed()),
+            | Op::NotEquals => truth(lhs.as_signed() != rhs.as_signed()),
+            | Op::BitwiseAnd => (
+                Operand::of_type(is_unsigned, lhs.as_signed() & rhs.as_signed()),
+                None,
+            ),
+            | Op::BitwiseXor => (
+                Operand::of_type(is_unsigned, lhs.as_signed() ^ rhs.as_signed()),
+                None,
+            ),
+            | Op::BitwiseOr => (
+                Operand::of_type(is_unsigned, lhs.as_signed() | rhs.as_signed()),
+                None,
+            ),
+            | other => unreachable!("{other:?} is not a binary arithmetic operator"),
+        };
+        if let Some(fault) = fault
+            && !is_recovered
+        {
+            self.expression_parser
+                .operand_stack
+                .record_fault(fault, operator.source_vectors);
+        }
+        self.expression_parser
+            .operand_stack
+            .push(EvaluatedPreprocessorExpressionOperand {
+                is_recovered,
+                ..result.into()
+            });
+    }
+
+    /// Applies `&&` or `||`.
+    ///
+    /// C99 §6.5.13p4 and §6.5.14p4: the right operand is evaluated only when
+    /// the left one does not decide the result, so only then do its faults
+    /// and evaluated commas count.
+    fn apply_logical_operator(&mut self, operator: PreprocessorExpressionOperator) {
+        let Some((lhs, rhs)) = self.pop_binary_operands(operator, true) else {
+            return;
+        };
+        let is_and = operator == PreprocessorExpressionOperator::LogicalAnd;
+        let lhs_is_true = lhs.as_signed() != 0;
+        let rhs_is_evaluated = lhs_is_true == is_and;
+        self.expression_parser
+            .operand_stack
+            .retain_faults(lhs.arithmetic_faults);
+        if rhs_is_evaluated {
+            self.expression_parser
+                .operand_stack
+                .retain_faults(rhs.arithmetic_faults);
+        }
+        let rhs_is_true = rhs.as_signed() != 0;
+        let value = if is_and {
+            lhs_is_true && rhs_is_true
+        } else {
+            lhs_is_true || rhs_is_true
+        };
+        self.expression_parser.operand_stack.push(
+            EvaluatedPreprocessorExpressionOperand::with_comma_liveness(
+                PreprocessorExpressionOperand::Signed(i64::from(value)),
+                lhs.contains_evaluated_comma || (rhs_is_evaluated && rhs.contains_evaluated_comma),
+                lhs.is_recovered || (rhs_is_evaluated && rhs.is_recovered),
+            ),
+        );
+    }
+
+    /// Pops one operand of a conditional operator, or reports `missing` and
+    /// leaves a 0 in its place.
+    fn pop_conditional_operand(
+        &mut self,
+        missing: PreprocessorErrorType<'tu>,
+    ) -> Option<EvaluatedPreprocessorExpressionOperand> {
+        let operand = self.expression_parser.operand_stack.pop_isolated();
+        if operand.is_none() {
+            let source_vectors = self.current_location();
+            self.context.preprocessor_error(PreprocessorError {
+                error_type: missing,
+                source_vectors,
+            });
+            self.expression_parser
+                .operand_stack
+                .push(EvaluatedPreprocessorExpressionOperand::recovered_zero());
+        }
+        operand
+    }
+
+    /// Applies `? :` once its third operand is known.
+    ///
+    /// C99: §6.5.15 paragraphs 4-5, p. 90; PDF p. 102.
+    fn apply_conditional_operator(&mut self) {
+        let Some(final_operand) =
+            self.pop_conditional_operand(PreprocessorErrorType::TernaryOperatorWithoutRhs)
+        else {
+            return;
+        };
+        let Some(middle_operand) =
+            self.pop_conditional_operand(PreprocessorErrorType::TernaryOperatorWithoutMhs)
+        else {
+            return;
+        };
+        let Some(condition) =
+            self.pop_conditional_operand(PreprocessorErrorType::TernaryOperatorWithoutRhs)
+        else {
+            return;
+        };
+        // The unselected arm still participates in the usual
+        // arithmetic conversions (C99 §6.5.15p5).
+        let is_unsigned = middle_operand.is_unsigned() || final_operand.is_unsigned();
+        let selected_operand = if condition.as_signed() != 0 {
+            middle_operand
+        } else {
+            final_operand
+        };
+        self.expression_parser
+            .operand_stack
+            .retain_faults(condition.arithmetic_faults);
+        self.expression_parser
+            .operand_stack
+            .retain_faults(selected_operand.arithmetic_faults);
+        self.expression_parser.operand_stack.push(
+            EvaluatedPreprocessorExpressionOperand::with_comma_liveness(
+                if is_unsigned {
+                    PreprocessorExpressionOperand::Unsigned(selected_operand.as_unsigned())
+                } else {
+                    selected_operand.value
+                },
+                condition.contains_evaluated_comma || selected_operand.contains_evaluated_comma,
+                condition.is_recovered || selected_operand.is_recovered,
+            ),
+        );
+    }
+
     /// Evaluates `defined identifier` or `defined ( identifier )` to 1 when
     /// the identifier is a macro name and 0 otherwise. The identifier is read
     /// before macro replacement.
     ///
     /// C99: §6.10.1 paragraph 1, p. 148; PDF p. 160, and paragraph 4.
-    fn parse_defined_operator(&mut self) {
-        let Some(ident_or_opening_paren) = self.expect_token_from_previous_phase::<true>(|_, t| matches!(t.kind, PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::OpeningParenthesis),
-            |_, t|
-                ControlFlow::Break(PreprocessorError {
-                        error_type:     PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective(t.kind),
-                        source_vectors: t.source_vectors,
-                    },
-                )
-            ,
-            "parsing defined operator",
+    ///
+    /// Undefined behavior C99 leaves open: when macro replacement produced
+    /// `defined` (paragraph 4), its operand comes from the rest of the
+    /// replacement, with parameters replaced and `##` applied, and then from
+    /// the text after it, as in GCC and Clang. Only the operand's own name is
+    /// left unreplaced.
+    fn parse_defined_operator(&mut self, defined: PreprocessorToken) {
+        self.report_defined_from_expansion(defined);
+        let Some(ident_or_opening_paren) = self.defined_operand_token(
+            |t| t.kind.is_identifier() || t.kind == PreprocessorTokenType::OpeningParenthesis,
+            PreprocessorErrorType::MissingOpeningParenthesisOrIdentifierInDefinedDirective,
         ) else {
             // The malformed operator still stands for one operand, so the
             // expression continues in the binary state without cascading.
             self.skip_token_unless_line_end();
-            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+            self.expression_parser
+                .operand_stack
+                .push(PreprocessorExpressionOperand::Signed(0));
             self.expression_parser.state = PreprocessorExpressionParserState::Binary;
             return;
         };
         if ident_or_opening_paren.kind.is_identifier() {
+            self.warn_deprecated_macro(ident_or_opening_paren);
             let is_defined = self
                 .state
                 .macro_definitions
@@ -1350,17 +1095,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             PreprocessorTokenType::OpeningParenthesis,
             "Compiler bug: ident_or_opening_paren should be an opening parenthesis or identifier."
         );
-        let Some(ident) = self.expect_token_from_previous_phase::<true>(
-            |_, t| t.kind.is_identifier(),
-            |_, t| {
-                ControlFlow::Break(PreprocessorError {
-                    error_type:     PreprocessorErrorType::MissingIdentifierInDefinedDirective(
-                        t.kind,
-                    ),
-                    source_vectors: t.source_vectors,
-                })
-            },
-            "parsing defined operator",
+        let Some(ident) = self.defined_operand_token(
+            |t| t.kind.is_identifier(),
+            PreprocessorErrorType::MissingIdentifierInDefinedDirective,
         ) else {
             self.skip_token_unless_line_end();
             self.expression_parser
@@ -1370,17 +1107,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             return;
         };
 
-        _ = self.expect_token_from_previous_phase::<true>(
-            |_, t| matches!(t.kind, PreprocessorTokenType::ClosingParenthesis),
-            |_, t| {
-                ControlFlow::Break(PreprocessorError {
-                    error_type:
-                        PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective(t.kind),
-                    source_vectors: t.source_vectors,
-                })
-            },
-            "parsing defined operator",
+        _ = self.defined_operand_token(
+            |t| t.kind == PreprocessorTokenType::ClosingParenthesis,
+            PreprocessorErrorType::MissingClosingParenthesisInDefinedDirective,
         );
+        self.warn_deprecated_macro(ident);
         let is_defined = self
             .state
             .macro_definitions
@@ -1389,6 +1120,99 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             .operand_stack
             .push(PreprocessorExpressionOperand::Signed(i64::from(is_defined)));
         self.expression_parser.state = PreprocessorExpressionParserState::Binary;
+    }
+
+    /// Reads the next token of a `defined` operator without replacing a macro
+    /// name, or reports `error` and leaves the rejected token to be read
+    /// again.
+    ///
+    /// C99: §6.10.1 paragraph 4, p. 148; PDF p. 160: macro names that
+    /// `defined` modifies are not replaced. Parameters are still replaced and
+    /// `##` applied in a replacement list being read (§6.10.3.1 paragraph 1,
+    /// p. 153; PDF p. 165, and §6.10.3.3 paragraph 3, p. 154; PDF p. 166);
+    /// an argument's prescan replaces macros as usual.
+    fn defined_operand_token(
+        &mut self,
+        is_expected: impl Fn(PreprocessorToken) -> bool,
+        error: fn(PreprocessorTokenType) -> PreprocessorErrorType<'tu>,
+    ) -> Option<PreprocessorToken> {
+        let verbatim_fence = replace(&mut self.verbatim_fence, 1);
+        let token = self.expect_token_preserving_rejected::<true>(
+            |_, t| is_expected(t),
+            |_, t| {
+                ControlFlow::Break(PreprocessorError {
+                    error_type:     error(t.kind),
+                    source_vectors: t.source_vectors,
+                })
+            },
+            "parsing defined operator",
+        );
+        self.verbatim_fence = verbatim_fence;
+        token
+    }
+
+    /// Reports a `defined` operator that macro replacement produced, which
+    /// the frame it was read from shows, as Clang does
+    /// (`-Wexpansion-to-defined`).
+    ///
+    /// C99: §6.10.1 paragraph 4, p. 148; PDF p. 160: the behavior is
+    /// undefined. A function-like replacement list, including a `defined`
+    /// that `##` formed there, is an extension under the policy; an
+    /// object-like one, or an argument, draws a warning in every policy.
+    /// The diagnostic is placed at the outermost invocation, so it belongs
+    /// to the file that uses the macro.
+    fn report_defined_from_expansion(&mut self, defined: PreprocessorToken) {
+        let mut function_like = None;
+        let mut invocation = None;
+        for frame in self.tokenizer_stack.iter().rev() {
+            match &frame.frame_type {
+                // A raw argument is read here only as a `##` operand, so the
+                // `defined` it forms belongs to the replacement list below.
+                // Deferred query arguments replay collected tokens unchanged.
+                | TokenizerFrameType::Rescan { argument: false }
+                | TokenizerFrameType::DeferredQuery
+                | TokenizerFrameType::FunctionLikeMacroArgument { .. } => continue,
+                | TokenizerFrameType::Rescan { argument: true } => {
+                    _ = function_like.get_or_insert(false);
+                    continue;
+                },
+                | TokenizerFrameType::SourceFile { .. } => (),
+                | TokenizerFrameType::ObjectLikeMacroInvocation {
+                    invocation: location,
+                    ..
+                } => {
+                    _ = function_like.get_or_insert(false);
+                    invocation = Some(location.clone());
+                },
+                | TokenizerFrameType::FunctionLikeMacroInvocation {
+                    invocation: location,
+                    ..
+                } => {
+                    _ = function_like.get_or_insert(true);
+                    invocation = Some(location.clone());
+                },
+            }
+            break;
+        }
+        let Some(function_like) = function_like else {
+            return;
+        };
+        let policy = self.context.configuration.extension_policy();
+        let error_type = if !function_like {
+            PreprocessorErrorType::DefinedFromObjectLikeMacroExpansion
+        } else if policy == ExtensionPolicy::Allow {
+            return;
+        } else {
+            PreprocessorErrorType::DefinedFromFunctionLikeMacroExpansion(policy)
+        };
+        let source_vectors = match invocation {
+            | Some(invocation) => self.context.push_source_vectors(&[invocation]),
+            | None => defined.source_vectors,
+        };
+        self.context.preprocessor_error(PreprocessorError {
+            error_type,
+            source_vectors,
+        });
     }
 
     /// Consumes the next token of a directive after it was diagnosed, unless
@@ -1407,7 +1231,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         let stack = &mut self.expression_parser.operand_stack;
         if stack.len() != 1 {
             while stack.pop().is_some() {}
-            stack.push(PreprocessorExpressionOperand::Signed(0));
+            stack.push(EvaluatedPreprocessorExpressionOperand::recovered_zero());
         }
         stack.floor = self.expression_parser.open_parentheses.pop().unwrap_or(0);
     }
@@ -1426,6 +1250,54 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         &mut self,
         on_no_expression_error: PreprocessorErrorType<'tu>,
     ) -> bool {
+        let conditional_queries = replace(&mut self.state.conditional_queries, true);
+        let result = self
+            .eval_preprocessor_value(on_no_expression_error, true)
+            .is_none_or(|value| value.as_signed() != 0);
+        self.state.conditional_queries = conditional_queries;
+        result
+    }
+
+    /// C23: #embed limit uses conditional inclusion without `defined`.
+    /// §6.10.4.2 paragraphs 1, 3, p. 174; PDF p. 187.
+    pub(super) fn eval_resource_limit(&mut self) -> Option<u64> {
+        let saved_parser = replace(
+            &mut self.expression_parser,
+            PreprocessorExpressionParser::new(self.state.arena),
+        );
+        let newlines = (self.last_was_newline, self.current_is_newline);
+        let before = self.context.pending_error_count();
+        let result = self.eval_preprocessor_value(
+            PreprocessorErrorType::LanguageConstraint("expected embed limit expression"),
+            false,
+        );
+        self.expression_parser = saved_parser;
+        (self.last_was_newline, self.current_is_newline) = newlines;
+        let mut diagnostics = ArenaVec::new_in(self.scratch);
+        diagnostics.extend(self.context.split_off_pending_errors(before));
+        let failed = diagnostics.iter().any(|error| {
+            crate::translation_phases::GetSeverity::severity(error)
+                == crate::translation_phases::ErrorSeverity::Error
+        });
+        self.context.append_pending_errors(diagnostics);
+        if failed {
+            return None;
+        }
+        match result? {
+            | PreprocessorExpressionOperand::Signed(value) if value < 0 => {
+                let source = self.current_location();
+                self.language_error("embed limit must be nonnegative", source);
+                None
+            },
+            | value => Some(value.as_unsigned()),
+        }
+    }
+
+    fn eval_preprocessor_value(
+        &mut self,
+        on_no_expression_error: PreprocessorErrorType<'tu>,
+        allow_defined: bool,
+    ) -> Option<PreprocessorExpressionOperand> {
         const UNARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Unary;
         const BINARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Binary;
         self.expression_parser.reset();
@@ -1510,12 +1382,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         }
                         if state == UNARY {
                             let error_type = match self.expression_parser.operator_stack.last().map(|operator| operator.kind) {
-                                | Some(PreprocessorExpressionOperator::UnaryPlus) => PreprocessorErrorType::UnaryPlusWithoutOperand,
-                                | Some(PreprocessorExpressionOperator::UnaryMinus) => PreprocessorErrorType::UnaryMinusWithoutOperand,
-                                | Some(PreprocessorExpressionOperator::BitwiseNot) => PreprocessorErrorType::BitwiseNotWithoutOperand,
-                                | Some(PreprocessorExpressionOperator::LogicalNot) => PreprocessorErrorType::LogicalNotWithoutOperand,
                                 | Some(PreprocessorExpressionOperator::OpeningParenthesis) | None => PreprocessorErrorType::EmptyParenthesesInPreprocessorExpression,
-                                | Some(operator) => PreprocessorErrorType::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(operator),
+                                | Some(operator) => operator.operand_missing_while_reading(),
                             };
                             self.context.preprocessor_error(PreprocessorError {
                                 error_type,
@@ -1523,7 +1391,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             });
                             // An invalid group still contributes one recovered
                             // operand, so following operators cannot underflow.
-                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+                            self.expression_parser.operand_stack.push(EvaluatedPreprocessorExpressionOperand::recovered_zero());
                         }
                         self.expression_parser.state = BINARY;
                         while let Some(op) = self.expression_parser.operator_stack.pop() {
@@ -1534,8 +1402,14 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             self.handle_expression_operator(op);
                         }
                     }
+                    (PreprocessorTokenType::Defined, _) if !allow_defined => {
+                        // C23 §6.10.4.2p3 excludes defined macro expressions,
+                        // not the same characters in a query's header name.
+                        self.language_error("defined is not permitted in an embed limit", token.source_vectors);
+                        return None;
+                    },
                     (PreprocessorTokenType::Defined, UNARY) =>
-                        self.parse_defined_operator(),
+                        self.parse_defined_operator(token),
                     (PreprocessorTokenType::Defined, BINARY) => self.context.preprocessor_error(PreprocessorError {
                             error_type: PreprocessorErrorType::DefinedOperatorInsteadOfBinaryOperatorInPreprocessorExpression,
                             source_vectors: token.source_vectors,
@@ -1552,13 +1426,41 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         },
                     ),
                     (PreprocessorTokenType::Colon, state) => {
-                        if state == UNARY {
+                        // C99 §6.5.15p1: an operand belongs here. The
+                        // operator before the `:` lacks it. Only a matching
+                        // `?` within this group needs a recovered operand
+                        // before reduction; otherwise abandon this expression.
+                        let matched_question_mark = self.expression_parser.operator_stack.iter().rev()
+                            .take_while(|operator| operator.kind != PreprocessorExpressionOperator::OpeningParenthesis)
+                            .any(|operator| operator.kind == PreprocessorExpressionOperator::QuestionMark);
+                        if state == UNARY
+                            && let Some(operator) = self.expression_parser.operator_stack.last().map(|operator| operator.kind)
+                            && operator != PreprocessorExpressionOperator::OpeningParenthesis
+                        {
+                            let error_type = if operator == PreprocessorExpressionOperator::QuestionMark {
+                                PreprocessorErrorType::TernaryOperatorWithoutMhs
+                            } else {
+                                operator.operand_missing_while_reading()
+                            };
                             self.context.preprocessor_error(PreprocessorError {
-                                error_type: PreprocessorErrorType::TernaryOperatorWithoutMhs,
+                                error_type,
                                 source_vectors: token.source_vectors,
                             });
+                            if matched_question_mark {
+                                self.expression_parser.operand_stack.push(EvaluatedPreprocessorExpressionOperand::recovered_zero());
+                            }
                         }
-                        let mut matched_question_mark = false;
+                        if !matched_question_mark {
+                            self.context.preprocessor_error(PreprocessorError {
+                                error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
+                                source_vectors: token.source_vectors,
+                            });
+                            // Abandon evaluation too: deferred faults may belong
+                            // to a branch that would never be selected. Recovery
+                            // supplies a defined false condition for this line.
+                            self.skip_and_expand_until_newline();
+                            return Some(PreprocessorExpressionOperand::Signed(0));
+                        }
                         while let Some(last) = self.expression_parser.operator_stack.last() {
                             match last.kind {
                                 | PreprocessorExpressionOperator::QuestionMark => {
@@ -1566,7 +1468,6 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                         kind: PreprocessorExpressionOperator::Conditional,
                                         source_vectors: token.source_vectors,
                                     };
-                                    matched_question_mark = true;
                                     break;
                                 },
                                 | PreprocessorExpressionOperator::OpeningParenthesis => break,
@@ -1576,17 +1477,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                 },
                             }
                         }
-                        if matched_question_mark {
-                            if state == UNARY {
-                                self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
-                            }
-                            self.expression_parser.state = UNARY;
-                        } else {
-                            self.context.preprocessor_error(PreprocessorError {
-                                error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
-                                source_vectors: token.source_vectors,
-                            });
-                        }
+                        self.expression_parser.state = UNARY;
                     },
                     (
                         | PreprocessorTokenType::ForwardSlash | PreprocessorTokenType::Percent | PreprocessorTokenType::LessThanLessThan |
@@ -1640,10 +1531,13 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             | TokenType::Integer(v) => match v {
                                 | IntegerTokenType::Int(i) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(i64::from(i))),
                                 | IntegerTokenType::Long(l) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(l.get())),
+                                | IntegerTokenType::Imaginary(_, _) => { self.language_error("imaginary constants are not permitted in preprocessing expressions", token.source_vectors); self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0)); },
+                                | IntegerTokenType::BitInt(ll, _, false) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(ll.get() as i64)),
+
                                 | IntegerTokenType::LongLong(ll) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(ll.get())),
                                 | IntegerTokenType::UnsignedInt(ui) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(u64::from(ui))),
                                 | IntegerTokenType::UnsignedLong(ul) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(ul.get())),
-                                | IntegerTokenType::UnsignedLongLong(ull) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(ull.get())),
+                                | IntegerTokenType::UnsignedLongLong(ull) | IntegerTokenType::BitInt(ull, _, true) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(ull.get())),
                             },
                             _ => unreachable!("Compiler bug: parse_number should return a number token."),
                         }
@@ -1655,14 +1549,21 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         },
                     ),
                     (PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::UnavailableIdentifier | PreprocessorTokenType::UnavailableUniversalIdentifier, UNARY) => {
-                        // C99 §6.10.1p4: an identifier left after macro
-                        // replacement, even a keyword, is the pp-number 0.
-                        self.context.preprocessor_error(PreprocessorError {
+                        // C23: §6.10.2p13, p. 167; PDF p. 180 replaces
+                        // remaining `true` with 1 after macro expansion.
+                        // C99 §6.10.1p4 replaces all identifiers with 0.
+                        let spelling = self.context.string_cache.at(token.contents);
+                        let boolean = self.context.configuration.standard() >= CStandard::C23
+                            && matches!(spelling, "true" | "false");
+                        let value = i64::from(boolean && spelling == "true");
+                        if !boolean {
+                            self.context.preprocessor_error(PreprocessorError {
                                     error_type: PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(self.context.diagnostic_text(self.context.string_cache.at(token.contents))),
                                     source_vectors: token.source_vectors,
                                 },
-                        );
-                        self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+                            );
+                        }
+                        self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(value));
                         self.expression_parser.state = BINARY;
                     },
                     (PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier | PreprocessorTokenType::UnavailableIdentifier | PreprocessorTokenType::UnavailableUniversalIdentifier, BINARY) => self.context.preprocessor_error(PreprocessorError {
@@ -1671,8 +1572,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         },
                     ),
                     (PreprocessorTokenType::Character, UNARY) => {
-                        let value = i64::from(self.parse_character(token));
-                        self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(value));
+                        let character = self.parse_character(token);
+                        let value = character.target_value(&self.context.configuration.target().layout());
+                        let unsigned = matches!(character, super::CharacterTokenType::WideChar(_))
+                            && !self.context.configuration.target().layout().integer(self.context.configuration.target().layout().wchar_t).unwrap().1;
+                        self.expression_parser.operand_stack.push(if unsigned { PreprocessorExpressionOperand::Unsigned(value as u64) } else { PreprocessorExpressionOperand::Signed(value) });
                         self.expression_parser.state = BINARY;
                     },
                     (PreprocessorTokenType::Character, BINARY) => self.context.preprocessor_error(PreprocessorError {
@@ -1692,20 +1596,13 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             && let Some(operator) = self.expression_parser.operator_stack.last().copied()
             && operator.kind != PreprocessorExpressionOperator::OpeningParenthesis
         {
-            let error_type = match operator.kind {
-                | PreprocessorExpressionOperator::UnaryPlus => PreprocessorErrorType::UnaryPlusWithoutOperand,
-                | PreprocessorExpressionOperator::UnaryMinus => PreprocessorErrorType::UnaryMinusWithoutOperand,
-                | PreprocessorExpressionOperator::BitwiseNot => PreprocessorErrorType::BitwiseNotWithoutOperand,
-                | PreprocessorExpressionOperator::LogicalNot => PreprocessorErrorType::LogicalNotWithoutOperand,
-                | other => PreprocessorErrorType::ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(other),
-            };
             self.context.preprocessor_error(PreprocessorError {
-                error_type,
+                error_type:     operator.kind.operand_missing_while_reading(),
                 source_vectors: operator.source_vectors,
             });
             self.expression_parser
                 .operand_stack
-                .push(PreprocessorExpressionOperand::Signed(0));
+                .push(EvaluatedPreprocessorExpressionOperand::recovered_zero());
         }
         while let Some(op) = self.expression_parser.operator_stack.pop() {
             self.handle_expression_operator(op);
@@ -1716,9 +1613,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 self.expression_parser
                     .operand_stack
                     .emit_faults(self.context, operand.arithmetic_faults);
-                let extension_policy = match self.context.configuration.standard() {
-                    | CStandard::C99 => self.context.configuration.extension_policy(),
-                };
+                let extension_policy = self.context.configuration.extension_policy();
                 if operand.contains_evaluated_comma && extension_policy != ExtensionPolicy::Allow {
                     let source_vectors = self.current_location();
                     self.context.preprocessor_error(PreprocessorError {
@@ -1728,7 +1623,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         source_vectors,
                     });
                 }
-                operand.as_signed() != 0
+                Some(operand.value)
             },
             | 0 => {
                 let source_vectors = self.current_location();
@@ -1736,7 +1631,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     error_type: on_no_expression_error,
                     source_vectors,
                 });
-                true
+                None
             },
             | _ => {
                 let source_vectors = self.current_location();
@@ -1745,7 +1640,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         PreprocessorErrorType::ExpectedBinaryOperatorInPreprocessorExpression,
                     source_vectors,
                 });
-                true
+                None
             },
         }
     }

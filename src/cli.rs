@@ -37,18 +37,17 @@ use clap::{
     },
     parser::ValueSource,
 };
-use rustc_hash::FxBuildHasher;
 use thiserror::Error;
 
 use crate::{
-    configuration::CompilerConfiguration,
-    diagnostics::{
-        ColorChoice as RenderColor,
-        Diagnostic,
-        Renderer,
-        ToDiagnostic,
-        count_of,
+    configuration::{
+        CompilerConfiguration,
+        ExtensionPolicy,
+        LanguageMode,
+        MsvcFeature,
     },
+    diagnostics::ColorChoice as RenderColor,
+    headers::HeaderSearch,
     pipeline::{
         parse_translation_unit,
         preprocess_with_diagnostics,
@@ -56,10 +55,6 @@ use crate::{
     },
     translation_phases::{
         Context,
-        ErrorSeverity,
-        GetSourceVectors,
-        SourceVector,
-        TranslationError,
         parsing::{
             InspectionOptions,
             ParsedTranslationUnit,
@@ -67,35 +62,49 @@ use crate::{
         preprocessing::{
             CharacterTokenType,
             IntegerTokenType,
-            PreprocessorErrorType,
             StringTokenType,
             Token,
             TokenType,
         },
     },
     util::bump::{
-        ArenaMap,
         ArenaString,
-        ArenaVec,
         Bump,
     },
 };
 
+mod diagnostic_reporter;
+
+use diagnostic_reporter::DiagnosticReporter;
+
 #[derive(Parser)]
-#[command(author, version, about, long_about, color = ColorChoice::Always)]
+#[command(author, version, about, long_about, color = ColorChoice::Always,
+    after_help = "Preprocessing: -D NAME[=VALUE] or -DNAME[=VALUE], -U NAME or -UNAME, -include FILE.\nDefinitions default to 1. -D/-U run in order before forced includes.")]
 #[expect(
     clippy::disallowed_types,
     reason = "clap's derived parser owns the repeated include directories as `Vec<PathBuf>`."
 )]
 struct Cli {
+    /// Select the C target ABI (independent of the compiler host).
+    #[arg(long, default_value = "x86_64-unknown-linux-gnu", value_parser = TargetParser)]
+    target: crate::target::Target,
     #[command(flatten)]
     input: CliInput,
-    /// Add directory to include search path.
-    #[clap(short = 'q', long = "iquote")]
-    quote_include: Vec<PathBuf>,
-    /// Add directory to system include search path.
-    #[clap(short = 's', long = "isystem")]
-    system_include: Vec<PathBuf>,
+    /// Select ISO C or a GNU dialect (also accepts GCC -std=VALUE).
+    #[arg(long = "std", default_value = "gnu17", value_parser = StandardParser, action = clap::ArgAction::Set,
+        overrides_with = "standard")]
+    standard: LanguageMode,
+    /// GCC language flags: -pedantic, -Wpedantic, -pedantic-errors,
+    /// -ffreestanding, -fhosted, -fms-extensions, and
+    /// -f[no-]ms-{declspec,int-types,calling-conventions,type-qualifiers,
+    /// inline,seh,asm,pragma,anonymous-structs,va-args}.
+    #[arg(long, hide = true)]
+    language_option: Vec<String>,
+    /// GCC startup preprocessing options, normalized with their operation.
+    #[arg(long, hide = true, allow_hyphen_values = true, value_parser = preprocessing_option)]
+    preprocessing_option: Vec<String>,
+    #[command(flatten)]
+    search: CliHeaderSearch,
     #[command(flatten)]
     output: CliOutput,
     /// Suppress the `repeated-specifiers` quality warning group.
@@ -115,6 +124,257 @@ struct Cli {
         value_parser = SourceDateEpochParser
     )]
     source_date_epoch: Option<SourceDateEpoch>,
+}
+
+/// Exact clang-style explanation, deliberately omitting deprecated aliases.
+const STANDARD_NOTES: &str =
+    "note: use 'c89', 'c90', or 'iso9899:1990' for 'ISO C 1990' standard\nnote: use \
+     'iso9899:199409' for 'ISO C 1990 with amendment 1' standard\nnote: use 'gnu89' or 'gnu90' \
+     for 'ISO C 1990 with GNU extensions' standard\nnote: use 'c99' or 'iso9899:1999' for 'ISO C \
+     1999' standard\nnote: use 'gnu99' for 'ISO C 1999 with GNU extensions' standard\nnote: use \
+     'c11' or 'iso9899:2011' for 'ISO C 2011' standard\nnote: use 'gnu11' for 'ISO C 2011 with \
+     GNU extensions' standard\nnote: use 'c17', 'iso9899:2017', 'c18', or 'iso9899:2018' for 'ISO \
+     C 2017' standard\nnote: use 'gnu17' or 'gnu18' for 'ISO C 2017 with GNU extensions' \
+     standard\nnote: use 'c23' or 'iso9899:2024' for 'ISO C 2023' standard\nnote: use 'gnu23' for \
+     'ISO C 2023 with GNU extensions' standard\nnote: use 'c2y' for 'Working Draft for ISO C2y' \
+     standard\nnote: use 'gnu2y' for 'Working Draft for ISO C2y with GNU extensions' standard\n";
+
+#[derive(Clone)]
+struct StandardParser;
+
+#[derive(Clone)]
+struct TargetParser;
+
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "Clap owns startup arguments outside compilation arenas."
+)]
+fn preprocessing_option(value: &str) -> Result<String, &'static str> {
+    if matches!(value.as_bytes().first(), Some(b'D' | b'U' | b'I')) {
+        Ok(value.to_owned())
+    } else {
+        Err("invalid startup preprocessing operation")
+    }
+}
+
+impl TypedValueParser for TargetParser {
+    type Value = crate::target::Target;
+
+    fn parse_ref(
+        &self,
+        _cmd: &Command,
+        _arg: Option<&Arg>,
+        value: &OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        value
+            .to_str()
+            .and_then(crate::target::Target::parse)
+            .ok_or_else(|| {
+                clap::Error::raw(
+                    clap::error::ErrorKind::InvalidValue,
+                    "unsupported target triple; supported targets: x86_64-unknown-linux-gnu, \
+                     x86_64-unknown-linux-musl, x86_64-w64-windows-gnu (aliases: \
+                     x86_64-w64-mingw32, x86_64-pc-windows-gnu), x86_64-pc-windows-msvc",
+                )
+            })
+    }
+}
+impl TypedValueParser for StandardParser {
+    type Value = LanguageMode;
+
+    #[expect(
+        clippy::disallowed_macros,
+        reason = "Clap argument errors own their startup message."
+    )]
+    fn parse_ref(
+        &self,
+        _cmd: &Command,
+        _arg: Option<&Arg>,
+        value: &OsStr,
+    ) -> Result<LanguageMode, clap::Error> {
+        value.to_str().and_then(LanguageMode::parse).ok_or_else(|| {
+            clap::Error::raw(
+                clap::error::ErrorKind::InvalidValue,
+                format!(
+                    "invalid value '{}' in '-std={}'\n{STANDARD_NOTES}",
+                    value.to_string_lossy(),
+                    value.to_string_lossy()
+                ),
+            )
+        })
+    }
+}
+
+/// Normalize GCC's single-dash long options before clap. Values and tokens
+/// after `--` are opaque, including an input string that looks like a flag.
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "Startup argv normalization owns OS strings beside clap; never a compilation buffer."
+)]
+fn normalize_language_arguments(
+    arguments: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Vec<std::ffi::OsString> {
+    let mut normalized = Vec::new();
+    let mut opaque_value = true; // argv[0]
+    let mut positional = false;
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        if opaque_value || positional {
+            opaque_value = false;
+            normalized.push(argument);
+            continue;
+        }
+        let Some(text) = argument.to_str() else {
+            normalized.push(argument);
+            continue;
+        };
+        if text == "--" {
+            positional = true;
+        }
+        if matches!(text, "-D" | "-U" | "-include") {
+            let operation = match text {
+                | "-D" => "D",
+                | "-U" => "U",
+                | _ => "I",
+            };
+            if let Some(value) = arguments.next() {
+                let mut value_with_operation = std::ffi::OsString::from(operation);
+                value_with_operation.push(value);
+                normalized.push("--preprocessing-option".into());
+                normalized.push(value_with_operation);
+            } else {
+                // Let clap diagnose the missing operand.
+                normalized.push("--preprocessing-option".into());
+            }
+        } else if text.starts_with("-D") || text.starts_with("-U") {
+            normalized.push(format!("--preprocessing-option={}", &text[1..]).into());
+        } else if let Some(value) = text.strip_prefix("-std=") {
+            normalized.push(format!("--std={value}").into());
+        } else if text == "-std" {
+            normalized.push("--std".into());
+            opaque_value = true;
+        } else if let Some(flag) = SINGLE_DASH_SEARCH_FLAGS
+            .iter()
+            .find(|flag| text.strip_prefix('-') == Some(**flag))
+        {
+            normalized.push(format!("--{flag}").into());
+            opaque_value = !flag.starts_with("no");
+        } else if let Some((flag, value)) = SINGLE_DASH_SEARCH_FLAGS[..3]
+            .iter()
+            .find_map(|flag| Some((flag, text.strip_prefix('-')?.strip_prefix(flag)?)))
+        {
+            normalized.push(format!("--{flag}={value}").into());
+        } else if LanguageFlag::parse(text).is_some() {
+            normalized.push(format!("--language-option={text}").into());
+        } else {
+            opaque_value = matches!(
+                text,
+                "--std"
+                    | "--target"
+                    | "--input"
+                    | "-i"
+                    | "--iquote"
+                    | "-q"
+                    | "-I"
+                    | "--include-directory"
+                    | "--isystem"
+                    | "-s"
+                    | "--idirafter"
+                    | "--sysroot"
+                    | "--source-date-epoch"
+                    | "--language-option"
+                    | "--preprocessing-option"
+            );
+            normalized.push(argument);
+        }
+    }
+    normalized
+}
+/// GCC's single-dash header search options, which clap receives with two
+/// dashes. The first three take a directory, separately or joined.
+const SINGLE_DASH_SEARCH_FLAGS: [&str; 6] = [
+    "iquote",
+    "isystem",
+    "idirafter",
+    "nostdinc",
+    "nostdlibinc",
+    "nobuiltininc",
+];
+
+/// A GCC language flag, which clap receives as `--language-option`.
+#[derive(Clone, Copy)]
+enum LanguageFlag {
+    /// `-pedantic` or `-Wpedantic` (warn), or `-pedantic-errors` (deny).
+    Pedantic(ExtensionPolicy),
+    /// `-fms-extensions` or `-fno-ms-extensions`.
+    MsvcExtensions(bool),
+    /// `-fms-<feature>` or `-fno-ms-<feature>`.
+    MsvcFeature(MsvcFeature, bool),
+    /// `-fhosted` (true) or `-ffreestanding` (false).
+    Hosted(bool),
+}
+
+impl LanguageFlag {
+    fn parse(text: &str) -> Option<Self> {
+        match text {
+            | "-pedantic" | "-Wpedantic" => return Some(Self::Pedantic(ExtensionPolicy::Warn)),
+            | "-pedantic-errors" => return Some(Self::Pedantic(ExtensionPolicy::Deny)),
+            | "-fhosted" => return Some(Self::Hosted(true)),
+            | "-ffreestanding" => return Some(Self::Hosted(false)),
+            | _ => {},
+        }
+        let (name, enabled) = text
+            .strip_prefix("-fms-")
+            .map(|name| (name, true))
+            .or_else(|| text.strip_prefix("-fno-ms-").map(|name| (name, false)))?;
+        if name == "extensions" {
+            Some(Self::MsvcExtensions(enabled))
+        } else {
+            MsvcFeature::parse(name).map(|feature| Self::MsvcFeature(feature, enabled))
+        }
+    }
+
+    fn apply(self, configuration: CompilerConfiguration) -> CompilerConfiguration {
+        match self {
+            | Self::Pedantic(policy) => configuration.with_extension_policy(policy),
+            | Self::MsvcExtensions(enabled) => configuration.with_msvc_extensions(enabled),
+            | Self::MsvcFeature(feature, enabled) =>
+                configuration.with_msvc_feature(feature, enabled),
+            | Self::Hosted(hosted) => configuration.with_hosted(hosted),
+        }
+    }
+}
+
+impl Cli {
+    fn configure_preprocessing(&self, context: &mut Context<'_>) {
+        let tu = context.tu_arena();
+        context.preprocessing_options =
+            tu.alloc_slice_fill_iter(self.preprocessing_option.iter().map(|option| {
+                use crate::configuration::PreprocessingOption;
+                let value = tu.alloc_str(&option[1..]);
+                match option.as_bytes()[0] {
+                    | b'D' => PreprocessingOption::Define(value),
+                    | b'U' => PreprocessingOption::Undefine(value),
+                    | _ => PreprocessingOption::Include(value),
+                }
+            }));
+    }
+
+    fn configuration(&self) -> CompilerConfiguration {
+        let configuration =
+            CompilerConfiguration::new(self.standard.standard, ExtensionPolicy::Allow)
+                .with_gnu_extensions(self.standard.gnu);
+        let configuration = configuration.with_target(self.target);
+        self.language_option
+            .iter()
+            .filter_map(|option| LanguageFlag::parse(option))
+            .fold(configuration, |configuration, flag| {
+                flag.apply(configuration)
+            })
+            .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
+    }
 }
 
 /// The seconds since the Unix epoch that `__DATE__` and `__TIME__` spell,
@@ -168,6 +428,45 @@ impl TypedValueParser for SourceDateEpochParser {
     }
 }
 
+/// Header search options, in GCC and Clang spellings. Lookup order:
+/// `"…"` names look beside the including file and in `-iquote`; both forms
+/// then search `-I`, `CPATH`, `-isystem`, `C_INCLUDE_PATH`, the built-in
+/// resource directory, the C library's directories, and `-idirafter`.
+#[derive(Args)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "clap's derived parser owns the repeated directories as `Vec<PathBuf>`."
+)]
+struct CliHeaderSearch {
+    /// Add directory to the search path for `"…"` includes only.
+    #[clap(short = 'q', long = "iquote", value_name = "DIR")]
+    quote_include:  Vec<PathBuf>,
+    /// Add directory to the include search path.
+    #[clap(short = 'I', long = "include-directory", value_name = "DIR")]
+    include:        Vec<PathBuf>,
+    /// Add directory to the system include search path, before the built-in
+    /// headers.
+    #[clap(short = 's', long = "isystem", value_name = "DIR")]
+    system_include: Vec<PathBuf>,
+    /// Add directory to the end of the search path, after the built-in
+    /// headers and the C library's directories.
+    #[clap(long = "idirafter", value_name = "DIR")]
+    after_include:  Vec<PathBuf>,
+    /// Use `DIR/usr/local/include` and `DIR/usr/include` as the C library's
+    /// include directories.
+    #[clap(long, value_name = "DIR")]
+    sysroot:        Option<PathBuf>,
+    /// Do not search the built-in headers or the C library's directories.
+    #[clap(long)]
+    nostdinc:       bool,
+    /// Do not search the C library's directories.
+    #[clap(long)]
+    nostdlibinc:    bool,
+    /// Do not search the built-in headers.
+    #[clap(long)]
+    nobuiltininc:   bool,
+}
+
 #[derive(Args)]
 struct CliOutput {
     /// Print preprocessor tokens instead of parser output.
@@ -178,7 +477,14 @@ struct CliOutput {
 }
 
 #[derive(Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Clap owns independent inspection flags with explicit conflicts."
+)]
 struct ParserOutput {
+    /// Print resolved declarations, types, linkage and storage duration.
+    #[clap(long, conflicts_with_all = ["tokens", "syntax_tree", "raw_syntax"])]
+    semantic_types:   bool,
     /// Print a deterministic, source-oriented C syntax tree.
     #[clap(long, conflicts_with = "tokens")]
     syntax_tree:      bool,
@@ -198,7 +504,7 @@ struct ParserOutput {
 )]
 struct CliInput {
     /// Input string to be parsed.
-    #[clap(short, long, conflicts_with = "input_file")]
+    #[clap(short, long, conflicts_with = "input_file", allow_hyphen_values = true)]
     input:      Option<String>,
     /// Input file to be parsed.
     #[clap(conflicts_with = "input")]
@@ -244,9 +550,59 @@ fn include_path_from_env(env_var: &str) -> Vec<PathBuf> {
     }
 }
 
+/// The directories of each header search group, owned beside clap's
+/// arguments until `run` copies them into the translation-unit arena.
+#[expect(
+    clippy::disallowed_types,
+    reason = "Startup owns the directories from argv and the environment as `Vec<PathBuf>`."
+)]
+struct SearchDirectories {
+    quote:    Vec<PathBuf>,
+    angled:   Vec<PathBuf>,
+    system:   Vec<PathBuf>,
+    resource: bool,
+    after:    Vec<PathBuf>,
+}
+
+impl CliHeaderSearch {
+    /// Groups the directories in search order. GCC searches `CPATH` like
+    /// trailing `-I` directories and `C_INCLUDE_PATH` like trailing
+    /// `-isystem` ones; `-isystem`, `C_INCLUDE_PATH`, the resource
+    /// directory, the library's directories and `-idirafter` are system
+    /// directories. C99: implementation-defined places, §6.10.2p2-3,
+    /// pp. 149-150; PDF pp. 161-162.
+    #[expect(
+        clippy::disallowed_types,
+        clippy::disallowed_methods,
+        reason = "Startup owns the directories from argv and the environment as `Vec<PathBuf>`."
+    )]
+    fn directories(&self) -> SearchDirectories {
+        let mut angled = self.include.clone();
+        angled.extend(include_path_from_env("CPATH"));
+        let mut system = self.system_include.clone();
+        system.extend(include_path_from_env("C_INCLUDE_PATH"));
+        let mut after = Vec::new();
+        if let Some(sysroot) = &self.sysroot
+            && !self.nostdinc
+            && !self.nostdlibinc
+        {
+            after.push(sysroot.join("usr").join("local").join("include"));
+            after.push(sysroot.join("usr").join("include"));
+        }
+        after.extend(self.after_include.iter().cloned());
+        SearchDirectories {
+            quote: self.quote_include.clone(),
+            angled,
+            system,
+            resource: !self.nostdinc && !self.nobuiltininc,
+            after,
+        }
+    }
+}
+
 #[doc(hidden)]
 pub fn run() -> Result<(), MainError> {
-    let mut args = Cli::try_parse()?;
+    let args = Cli::try_parse_from(normalize_language_arguments(std::env::args_os()))?;
     let tu = Bump::new();
     let (input_string, source_filename): (&str, &Path) =
         match (&args.input.input, &args.input.input_file) {
@@ -261,32 +617,26 @@ pub fn run() -> Result<(), MainError> {
             },
             | _ => unreachable!("clap requires exactly one input source"),
         };
-    // GCC searches `CPATH` like `-I` (before `-isystem`) and
-    // `C_INCLUDE_PATH` like a trailing `-isystem`.
-    let mut system_include = include_path_from_env("CPATH");
-    system_include.append(&mut args.system_include);
-    system_include.extend(include_path_from_env("C_INCLUDE_PATH"));
-    let quote_include = tu.alloc_slice_fill_iter(args.quote_include.iter().map(Path::new));
-    let system_include = tu.alloc_slice_fill_iter(system_include.iter().map(Path::new));
-    let configuration = CompilerConfiguration::default()
-        .with_source_date_epoch(args.source_date_epoch.and_then(|epoch| epoch.0));
+    let directories = args.search.directories();
+    let search = HeaderSearch {
+        quote:    tu.alloc_slice_fill_iter(directories.quote.iter().map(AsRef::as_ref)),
+        angled:   tu.alloc_slice_fill_iter(directories.angled.iter().map(AsRef::as_ref)),
+        system:   tu.alloc_slice_fill_iter(directories.system.iter().map(AsRef::as_ref)),
+        resource: directories.resource,
+        after:    tu.alloc_slice_fill_iter(directories.after.iter().map(AsRef::as_ref)),
+    };
+    let configuration = args.configuration();
     let mut context = Context::with_configuration(&tu, configuration);
+    args.configure_preprocessing(&mut context);
 
     if args.output.tokens {
-        print_preprocessor_output(
-            &mut context,
-            source_filename,
-            input_string,
-            quote_include,
-            system_include,
-        );
+        print_preprocessor_output(&mut context, source_filename, input_string, search);
     } else {
         print_parser_output(
             &mut context,
             source_filename,
             input_string,
-            quote_include,
-            system_include,
+            search,
             &args.output.parser,
             !args.no_repeated_specifier_warnings,
         );
@@ -300,8 +650,7 @@ fn print_preprocessor_output<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     input_string: &'tu str,
-    quote_include: &[&Path],
-    system_include: &[&Path],
+    search: HeaderSearch<'_>,
 ) {
     let mut reporter_arena = Bump::new();
     let mut stderr = io::stderr();
@@ -309,8 +658,7 @@ fn print_preprocessor_output<'tu>(
         context,
         source_filename,
         input_string,
-        quote_include,
-        system_include,
+        search,
         TokenOutput {
             out:            &mut stderr,
             reporter_arena: &mut reporter_arena,
@@ -331,8 +679,7 @@ fn print_preprocessor_output_in<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     input_string: &'tu str,
-    quote_include: &[&Path],
-    system_include: &[&Path],
+    search: HeaderSearch<'_>,
     TokenOutput {
         out,
         reporter_arena,
@@ -344,8 +691,7 @@ fn print_preprocessor_output_in<'tu>(
         context,
         source_filename,
         input_string,
-        quote_include,
-        system_include,
+        search,
         |preprocessor, context, _pp| preprocess_with_diagnostics(preprocessor, context),
     );
     let mut items = items.into_iter();
@@ -405,10 +751,12 @@ pub(crate) fn describe_token<'a>(
         .at(token.contents)
         .trim_end_matches('\0');
     let literal = match token.kind {
+        | TokenType::String(StringTokenType::EncodedString(contents, encoding)) =>
+            context.literal_spelling_in(scratch, scratch, contents, encoding.prefix()),
         | TokenType::String(StringTokenType::String(contents)) =>
-            context.literal_spelling_in(scratch, scratch, contents, false),
+            context.literal_spelling_in(scratch, scratch, contents, ""),
         | TokenType::String(StringTokenType::WideString(contents)) =>
-            context.literal_spelling_in(scratch, scratch, contents, true),
+            context.literal_spelling_in(scratch, scratch, contents, "L"),
         | _ => "",
     };
     let mut line = ArenaString::new_in(scratch);
@@ -423,13 +771,17 @@ pub(crate) fn describe_token<'a>(
     }
     _ = match token.kind {
         | TokenType::Identifier => write!(line, "identifier `{spelling}`"),
-        | TokenType::Keyword(keyword) => write!(line, "keyword `{}`", keyword.spelling()),
+        | TokenType::Keyword(_) => write!(line, "keyword `{spelling}`"),
         | TokenType::Operator(operator) => write!(line, "punctuator `{}`", operator.spelling()),
+        | TokenType::String(StringTokenType::EncodedString(_, encoding)) =>
+            write!(line, "{} string literal {literal}", encoding.type_name()),
         | TokenType::String(StringTokenType::String(_)) => write!(line, "string literal {literal}"),
         | TokenType::String(StringTokenType::WideString(_)) =>
             write!(line, "wide string literal {literal}"),
         | TokenType::Character(character) => {
             let (value, type_name) = match character {
+                | CharacterTokenType::EncodedChar(c, encoding) =>
+                    (i64::from(c), encoding.type_name()),
                 | CharacterTokenType::Char(c) => (i64::from(u32::from(c)), "int"),
                 | CharacterTokenType::WideChar(c) => (i64::from(c), "wchar_t"),
                 | CharacterTokenType::MultiChar(value) => (i64::from(value), "int"),
@@ -441,6 +793,27 @@ pub(crate) fn describe_token<'a>(
         },
         | TokenType::Integer(integer) => {
             let (value, type_name) = match integer {
+                | IntegerTokenType::BitInt(value, width, unsigned) => {
+                    _ = write!(
+                        line,
+                        "integer constant `{spelling}` = {} ({}_BitInt({width}))",
+                        value.get(),
+                        if unsigned { "unsigned " } else { "" }
+                    );
+                    return line.into_str();
+                },
+                | IntegerTokenType::Imaginary(value, component) => {
+                    // GNU imaginary integer constants extend C99 §6.4.4.1
+                    // under §4p6; preserve the imaginary component as for
+                    // floats.
+                    _ = write!(
+                        line,
+                        "integer constant `{spelling}` = {}i ({})",
+                        value.get(),
+                        component.type_name()
+                    );
+                    return line.into_str();
+                },
                 | IntegerTokenType::Int(value) => (i128::from(value), "int"),
                 | IntegerTokenType::Long(value) => (i128::from(value.get()), "long"),
                 | IntegerTokenType::LongLong(value) => (i128::from(value.get()), "long long"),
@@ -468,21 +841,16 @@ fn print_parser_output<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     input_string: &'tu str,
-    quote_include: &[&Path],
-    system_include: &[&Path],
+    search: HeaderSearch<'_>,
     output: &ParserOutput,
     repeated_specifier_warnings: bool,
 ) {
     context.configuration = context
         .configuration
         .with_repeated_specifier_warnings(repeated_specifier_warnings);
-    let unit = parse_translation_unit(
-        context,
-        source_filename,
-        input_string,
-        quote_include,
-        system_include,
-    );
+    let unit = parse_translation_unit(context, source_filename, input_string, search);
+    let semantic = (output.semantic_types || (!output.syntax_tree && !output.raw_syntax))
+        .then(|| crate::pipeline::analyze_translation_unit(context, &unit));
     let reporter_arena = Bump::new();
     let mut reporter = DiagnosticReporter::new(
         &reporter_arena,
@@ -508,6 +876,12 @@ fn print_parser_output<'tu>(
     if output.raw_syntax {
         print_raw_syntax(&unit);
     }
+    if let Some(semantic) = semantic
+        && output.semantic_types
+    {
+        let inspection = Bump::new();
+        eprint!("{}", semantic.inspect(context, &inspection));
+    }
     expect_stderr(reporter.finish(context, stderr));
 }
 
@@ -521,7 +895,7 @@ pub enum CompileStep {
     Report,
 }
 
-/// Compiles the file at `path` as the CLI does without options, writing its
+/// Compiles the file at `path` in the library's default mode, writing its
 /// diagnostics and their summary to `out` without color. Each step runs
 /// inside `measure`, so a caller can observe one step alone; the allocation
 /// tests count the global allocations each makes.
@@ -533,13 +907,55 @@ pub enum CompileStep {
 pub fn compile_file_measured(
     path: &Path,
     out: &mut dyn Write,
+    measure: impl FnMut(CompileStep, &mut dyn FnMut()),
+) -> io::Result<()> {
+    compile_file_configured_measured(path, CompilerConfiguration::default(), out, measure, |_| {})
+}
+
+/// Measures compilation with CLI language and startup preprocessing arguments.
+/// Argument parsing runs before either measured interval. Include-path and
+/// output options are not applied by this diagnostic measurement adapter.
+///
+/// # Errors
+///
+/// Invalid CLI arguments, reading `path`, or writing to `out` can fail.
+#[doc(hidden)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "CLI argument normalization owns OS strings before measured compiler intervals."
+)]
+pub fn compile_file_with_arguments_measured(
+    path: &Path,
+    arguments: &[&str],
+    out: &mut dyn Write,
+    measure: impl FnMut(CompileStep, &mut dyn FnMut()),
+) -> io::Result<()> {
+    let args = Cli::try_parse_from(normalize_language_arguments(
+        ["bcc-rust", "--input", ""]
+            .into_iter()
+            .chain(arguments.iter().copied())
+            .map(std::ffi::OsString::from),
+    ))
+    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    compile_file_configured_measured(path, args.configuration(), out, measure, |context| {
+        args.configure_preprocessing(context);
+    })
+}
+
+fn compile_file_configured_measured(
+    path: &Path,
+    configuration: CompilerConfiguration,
+    out: &mut dyn Write,
     mut measure: impl FnMut(CompileStep, &mut dyn FnMut()),
+    configure: impl FnOnce(&mut Context<'_>),
 ) -> io::Result<()> {
     let tu = Bump::new();
     let source = tu.read_to_str_lossy(path)?;
-    let mut context = Context::new(&tu);
+    let mut context = Context::with_configuration(&tu, configuration);
+    configure(&mut context);
     measure(CompileStep::Parse, &mut || {
-        drop(parse_translation_unit(&mut context, path, source, &[], &[]));
+        let unit = parse_translation_unit(&mut context, path, source, HeaderSearch::default());
+        let _semantic = crate::pipeline::analyze_translation_unit(&mut context, &unit);
     });
     let mut result = Ok(());
     measure(CompileStep::Report, &mut || {
@@ -583,206 +999,59 @@ fn print_raw_syntax(unit: &ParsedTranslationUnit<'_>) {
     });
 }
 
-/// Renders diagnostics to stderr and summarizes them at the end, like
-/// `N errors and M warnings generated`.
-///
-/// An error reported at exactly the same place as an earlier error from the
-/// same mistake is folded into it rather than printed again: a parser error
-/// into the parser error just before it when no input was consumed between
-/// them, otherwise into a lexing or preprocessing error at that place; a
-/// preprocessing error into the preprocessing error just before it. The
-/// parser and the preprocessor are considered separately.
-///
-/// Pending diagnostics are built in the translation-unit arena (`'tu`). The
-/// pending list, the folding map, and the locations live in the reporter's
-/// own arena (`'r`). Parser mode keeps it for the whole compilation; token
-/// mode resets it between flushed batches.
-struct DiagnosticReporter<'r, 'tu> {
-    arena:        &'r Bump,
-    diagnostics:  &'tu Bump,
-    renderer:     Renderer,
-    pending:      ArenaVec<'r, PendingDiagnostic<'r, 'tu>>,
-    /// The parser diagnostic reported last: where it was folded or stored,
-    /// and the input the parser had consumed by then.
-    last_parser:  Option<(usize, usize)>,
-    /// Where the preprocessing diagnostic reported last was folded or stored.
-    last_other:   Option<usize>,
-    /// The latest pending preprocessing error at each location.
-    other_errors: ArenaMap<'r, &'r [SourceVector], usize>,
-    errors:       usize,
-    warnings:     usize,
-}
-
-/// One diagnostic awaiting rendering, with any later errors folded in.
-struct PendingDiagnostic<'r, 'tu> {
-    diagnostic: Diagnostic<'tu>,
-    location: &'r [SourceVector],
-    ordering_location: Option<(u32, u32)>,
-    /// Its place among the pending diagnostics when it was reported, which
-    /// keeps the order of diagnostics at one location stable.
-    sequence: usize,
-    /// Whether errors at the same place may be folded into this one.
-    foldable: bool,
-    /// An unclosed angle header and an empty translation unit remain two
-    /// separate diagnostics even when they point at the same EOF position.
-    preserve_empty_translation_unit: bool,
-}
-
-impl PendingDiagnostic<'_, '_> {
-    fn absorbs(&self, location: &[SourceVector]) -> bool {
-        self.foldable
-            && self.diagnostic.severity == ErrorSeverity::Error
-            && self.location == location
-    }
-}
-
-impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
-    fn new(arena: &'r Bump, diagnostics: &'tu Bump, color: RenderColor) -> Self {
-        Self {
-            arena,
-            diagnostics,
-            renderer: Renderer::new(color),
-            pending: ArenaVec::new_in(arena),
-            last_parser: None,
-            last_other: None,
-            other_errors: ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            errors: 0,
-            warnings: 0,
-        }
-    }
-
-    fn report(&mut self, error: &TranslationError<'_>, context: &mut Context<'_>) {
-        let source = error.source_vectors(context);
-        let diagnostic = error.diagnostic_in(context, source, self.diagnostics);
-        let location = context.get_source_vectors(source);
-        let ordering_location = match error {
-            | TranslationError::Parsing(error) => error.ordering_location,
-            // Preprocessing errors may still point into a macro definition.
-            | _ if diagnostic.severity != ErrorSeverity::Warning => None,
-            | _ => location
-                .first()
-                .map(|source| (source.source_file_index, source.index)),
-        };
-        let (parser, consumed, foldable) = match error {
-            | TranslationError::Parsing(error) => (true, error.consumed_tokens, error.may_fold()),
-            | _ => (false, 0, true),
-        };
-        let empty_translation_unit =
-            matches!(error, TranslationError::Parsing(error) if error.is_empty_translation_unit());
-        let target =
-            if diagnostic.severity == ErrorSeverity::Error && foldable && !location.is_empty() {
-                if parser {
-                    self.last_parser
-                        .filter(|&(index, last_consumed)| {
-                            last_consumed == consumed && self.pending[index].absorbs(location)
-                        })
-                        .map(|(index, _)| index)
-                        .or_else(|| {
-                            self.other_errors.get(location).copied().filter(|&index| {
-                                self.pending[index].absorbs(location)
-                                    && !(empty_translation_unit
-                                        && self.pending[index].preserve_empty_translation_unit)
-                            })
-                        })
-                } else {
-                    self.last_other
-                        .filter(|&index| self.pending[index].absorbs(location))
-                }
-            } else {
-                None
-            };
-        let index = if let Some(index) = target {
-            self.pending[index].diagnostic.absorb(diagnostic, context);
-            index
-        } else {
-            let location: &'r [SourceVector] =
-                self.arena.alloc_slice_fill_iter(location.iter().cloned());
-            if !parser && diagnostic.severity == ErrorSeverity::Error && !location.is_empty() {
-                _ = self.other_errors.insert(location, self.pending.len());
-            }
-            self.pending.push(PendingDiagnostic {
-                diagnostic,
-                location,
-                ordering_location,
-                sequence: self.pending.len(),
-                foldable,
-                preserve_empty_translation_unit: matches!(
-                    error,
-                    TranslationError::Preprocessing(error)
-                        if matches!(error.error_type, PreprocessorErrorType::UnterminatedHeaderName('>'))
-                ),
-            });
-            self.pending.len() - 1
-        };
-        if parser {
-            self.last_parser = Some((index, consumed));
-        } else {
-            self.last_other = Some(index);
-        }
-    }
-
-    /// Reports every pending diagnostic of a parsed translation unit, in
-    /// source order, and writes them to `out`.
-    fn report_pending(&mut self, context: &mut Context<'_>, out: &mut dyn Write) -> io::Result<()> {
-        while let Some(error) = context.pop_pending_error() {
-            self.report(&error, context);
-        }
-        self.order_source_runs();
-        self.flush(context, out)
-    }
-
-    /// Lookahead can fetch a warning beyond the current parser error. Order
-    /// each file run only after folding; preprocessing errors, file transitions
-    /// and unknown locations
-    /// remain barriers, and macro diagnostics use their captured invocation.
-    fn order_source_runs(&mut self) {
-        for run in self.pending.chunk_by_mut(|left, right| {
-            left.ordering_location.is_some()
-                && left.ordering_location.map(|(file, _)| file)
-                    == right.ordering_location.map(|(file, _)| file)
-        }) {
-            // Diagnostics at one location keep the order they were reported
-            // in. An unstable sort with that tiebreak needs no buffer.
-            run.sort_unstable_by_key(|diagnostic| {
-                (diagnostic.ordering_location, diagnostic.sequence)
-            });
-        }
-        self.last_parser = None;
-        self.last_other = None;
-        self.other_errors.clear();
-    }
-
-    fn flush(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
-        self.last_parser = None;
-        self.last_other = None;
-        self.other_errors.clear();
-        for PendingDiagnostic { diagnostic, .. } in self.pending.drain(..) {
-            match diagnostic.severity {
-                | ErrorSeverity::Error => self.errors += 1,
-                | ErrorSeverity::Warning => self.warnings += 1,
-                | ErrorSeverity::Note => {},
-            }
-            out.write_all(self.renderer.render_text(&diagnostic, context).as_bytes())?;
-        }
-        Ok(())
-    }
-
-    fn finish(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
-        self.flush(context, out)?;
-        let errors = count_of(self.errors, "error");
-        let warnings = count_of(self.warnings, "warning");
-        match (self.errors, self.warnings) {
-            | (0, 0) => Ok(()),
-            | (_, 0) => writeln!(out, "{errors} generated."),
-            | (0, _) => writeln!(out, "{warnings} generated."),
-            | _ => writeln!(out, "{errors} and {warnings} generated."),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "Startup argv tests use owned OS strings as clap does."
+    )]
+    fn language_flags_apply_in_order_and_input_values_stay_opaque() {
+        for (flags, seh) in [
+            (["-fms-extensions", "-fno-ms-seh", "-fms-seh"], true),
+            (["-fms-seh", "-fms-extensions", "-fno-ms-seh"], false),
+        ] {
+            let arguments = [
+                "bcc-rust",
+                "-std=c89",
+                flags[0],
+                flags[1],
+                flags[2],
+                "-pedantic-errors",
+                "--input",
+                "-std=c98",
+            ];
+            let cli = Cli::try_parse_from(normalize_language_arguments(
+                arguments.map(std::ffi::OsString::from),
+            ))
+            .unwrap();
+            let configuration = cli.configuration();
+            assert_eq!(
+                configuration.standard(),
+                crate::configuration::CStandard::C89
+            );
+            assert_eq!(configuration.extension_policy(), ExtensionPolicy::Deny);
+            assert_eq!(configuration.msvc_feature(MsvcFeature::Seh), seh);
+            assert!(configuration.msvc_feature(MsvcFeature::Declspec));
+            assert_eq!(cli.input.input.as_deref(), Some("-std=c98"));
+        }
+        let repeated =
+            Cli::try_parse_from(["bcc-rust", "--std=c89", "--std=gnu23", "--input", "int x;"])
+                .unwrap();
+        assert_eq!(
+            repeated.configuration().standard(),
+            crate::configuration::CStandard::C23
+        );
+        assert!(repeated.configuration().gnu_extensions());
+        let cli = Cli::try_parse_from(["bcc-rust", "--input", "int x;"]).unwrap();
+        assert_eq!(
+            cli.configuration().standard(),
+            crate::configuration::CStandard::C17
+        );
+        assert!(cli.configuration().gnu_extensions());
+    }
 
     struct CountDiagnostics(usize);
 
@@ -813,8 +1082,7 @@ mod tests {
             &mut context,
             Path::new("<input>"),
             source,
-            &[],
-            &[],
+            HeaderSearch::default(),
             TokenOutput {
                 out:            &mut out,
                 reporter_arena: &mut reporter_arena,

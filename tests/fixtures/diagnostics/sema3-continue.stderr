@@ -1,0 +1,9 @@
+error: continue is outside an iteration statement
+ --> sema3-continue.c:1:15
+  |
+1 | void f(void) {continue;}
+  |               ^^^^^^^^^ not in a loop
+  |
+  = note: C99 §6.8.6.2p1: a continue statement appears only in or as a loop body
+
+1 error generated.

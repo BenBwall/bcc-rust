@@ -1,0 +1,57 @@
+error: #error a system header still reports errors
+  --> system-headers/noisy.h:16:2
+   |
+16 | #error a system header still reports errors
+   |  ^^^^^ `#error` directive
+
+warning: `UNDEFINED_BEFORE_PRAGMA` is not defined; it evaluates to 0
+ --> pragma-system-header.h:3:5
+  |
+3 | #if UNDEFINED_BEFORE_PRAGMA
+  |     ^^^^^^^^^^^^^^^^^^^^^^^ not a macro
+  |
+  = note: C99 §6.10.1p4: identifiers that are not macro names are replaced with `0` in `#if`
+  = help: use `defined(UNDEFINED_BEFORE_PRAGMA)` to test whether it is defined
+
+error: macro `NOISY_VALUE` redefined differently
+ --> pp-system-header-diagnostics.c:5:9
+  |
+5 | #define NOISY_VALUE 2
+  |         ^^^^^^^^^^^ this definition differs from the previous one
+  |
+  = note: C99 §6.10.3p2: a redefinition must have the same parameters and an identical replacement list
+  = help: add `#undef NOISY_VALUE` before this definition
+
+warning: `UNDEFINED_IN_USER_FILE` is not defined; it evaluates to 0
+ --> pp-system-header-diagnostics.c:8:5
+  |
+8 | #if UNDEFINED_IN_USER_FILE
+  |     ^^^^^^^^^^^^^^^^^^^^^^ not a macro
+  |
+  = note: C99 §6.10.1p4: identifiers that are not macro names are replaced with `0` in `#if`
+  = help: use `defined(UNDEFINED_IN_USER_FILE)` to test whether it is defined
+
+error: macro expansion producing `defined` has undefined behavior
+  --> pp-system-header-diagnostics.c:12:5
+   |
+12 | #if NOISY_PROLOG(y) && NOISY_DEFINED
+   |     ^^^^^^^^^^^^ this macro expansion produces `defined`
+   |
+   = note: C99 §6.10.1p4: the behavior is undefined if macro replacement generates `defined`; it is evaluated as GCC and Clang do
+
+warning: macro expansion producing `defined` has undefined behavior
+  --> pp-system-header-diagnostics.c:12:24
+   |
+12 | #if NOISY_PROLOG(y) && NOISY_DEFINED
+   |                        ^^^^^^^^^^^^^ this macro expansion produces `defined`
+   |
+   = note: C99 §6.10.1p4: the behavior is undefined if macro replacement generates `defined`; it is evaluated as GCC and Clang do
+   = help: test the macro name in `#if defined(NAME)` and define this macro as `1` or `0` instead
+
+error: 'long long' is a C99 extension
+ --> pp-system-header-diagnostics.c:6:6
+  |
+6 | long long user_long_long;
+  |      ^^^^
+
+4 errors and 3 warnings generated.

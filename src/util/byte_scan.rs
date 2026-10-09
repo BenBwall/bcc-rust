@@ -14,19 +14,34 @@
 #[cfg(feature = "portable-simd")]
 use std::simd::{
     Mask,
-    Simd,
     cmp::{
         SimdPartialEq,
         SimdPartialOrd,
     },
 };
 
-/// Bytes classified per vector step.
-#[cfg(feature = "portable-simd")]
-const LANES: usize = 32;
+// Portable SIMD fixes the lane count in the vector type. Choose a byte-vector
+// width that fits the integer SIMD instructions enabled for this build target.
+// AVX alone has no 256-bit byte comparisons, so it uses the 128-bit fallback.
+#[cfg(all(feature = "portable-simd", target_feature = "avx512bw"))]
+type Lanes = std::simd::u8x64;
 
+#[cfg(all(
+    feature = "portable-simd",
+    not(target_feature = "avx512bw"),
+    target_feature = "avx2"
+))]
+type Lanes = std::simd::u8x32;
+
+#[cfg(all(
+    feature = "portable-simd",
+    not(any(target_feature = "avx512bw", target_feature = "avx2"))
+))]
+type Lanes = std::simd::u8x16;
+
+/// Bytes classified per vector step, set by the selected SIMD type.
 #[cfg(feature = "portable-simd")]
-type Lanes = Simd<u8, LANES>;
+const LANES: usize = Lanes::LEN;
 
 #[cfg(feature = "portable-simd")]
 type LaneMask = Mask<i8, LANES>;

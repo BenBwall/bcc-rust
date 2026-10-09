@@ -108,11 +108,18 @@ pub(super) struct RecoveryState<'p> {
 /// Delimiter depth at which a conditional question mark was consumed, so a
 /// scan does not mistake the `:` of `? :` (§6.5.15 paragraph 1, p. 90;
 /// PDF p. 102) for a label or `case` colon.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) struct DelimiterDepth {
     pub(super) parentheses: usize,
     pub(super) brackets:    usize,
     pub(super) braces:      usize,
+}
+
+impl DelimiterDepth {
+    /// Whether no delimiter is open.
+    pub(super) fn is_top_level(self) -> bool {
+        self.parentheses == 0 && self.brackets == 0 && self.braces == 0
+    }
 }
 
 /// Delimiter depth and policy for one active recovery scan.
@@ -196,7 +203,10 @@ impl<'p> RecoveryState<'p> {
                 state.parenthesized_type_names.push(opens_type_name);
                 state.parenthesized_sizeof_type_names.push(
                     opens_type_name
-                        && state.last_token == Some(TokenType::Keyword(KeywordTokenType::Sizeof)),
+                        && matches!(
+                            state.last_token,
+                            Some(TokenType::Keyword(KeywordTokenType::Sizeof))
+                        ),
                 );
             },
             | TokenType::Operator(OperatorTokenType::ClosingParenthesis) if state.parentheses > 0 =>
@@ -439,7 +449,10 @@ impl SynchronizationKind {
                     || parentheses == 0
                         && brackets == 0
                         && braces == 0
-                        && token == TokenType::Operator(OperatorTokenType::OpeningCurlyBrace),
+                        && matches!(
+                            token,
+                            TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                        ),
             | Self::ForInitializer =>
                 braces == 0
                     && matches!(
@@ -449,7 +462,10 @@ impl SynchronizationKind {
                         )
                     )
                     || parentheses == 0
-                        && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
+                        && matches!(
+                            token,
+                            TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                        ),
             | Self::EnumeratorValue =>
                 braces == 0
                     && matches!(
@@ -459,7 +475,10 @@ impl SynchronizationKind {
                         )
                     )
                     || parentheses == 0
-                        && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
+                        && matches!(
+                            token,
+                            TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                        ),
             | Self::StructMember =>
                 braces == 0
                     && matches!(
@@ -469,24 +488,42 @@ impl SynchronizationKind {
                         )
                     )
                     || parentheses == 0
-                        && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
+                        && matches!(
+                            token,
+                            TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                        ),
             | Self::ArrayBound =>
-                braces == 0 && token == TokenType::Operator(OperatorTokenType::Semicolon)
+                braces == 0 && matches!(token, TokenType::Operator(OperatorTokenType::Semicolon))
                     || brackets == 0
-                        && token == TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                        && matches!(
+                            token,
+                            TokenType::Operator(OperatorTokenType::ClosingSquareBracket)
+                        )
                     || parentheses == 0
-                        && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                        && matches!(
+                            token,
+                            TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                        )
                     || braces == 0
-                        && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
+                        && matches!(
+                            token,
+                            TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+                        ),
             | Self::Parameter
             | Self::KAndRParameter
             | Self::VariadicParameterList
             | Self::VariadicTrailingParameter =>
-                braces == 0 && token == TokenType::Operator(OperatorTokenType::Semicolon)
+                braces == 0 && matches!(token, TokenType::Operator(OperatorTokenType::Semicolon))
                     || parentheses == 0
-                        && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                        && matches!(
+                            token,
+                            TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                        )
                     || braces == 0
-                        && token == TokenType::Operator(OperatorTokenType::ClosingCurlyBrace),
+                        && matches!(
+                            token,
+                            TokenType::Operator(OperatorTokenType::ClosingCurlyBrace)
+                        ),
             | Self::StatementExpression(terminator) => match terminator {
                 | ExpressionTerminator::Semicolon =>
                     braces == 0
@@ -505,7 +542,10 @@ impl SynchronizationKind {
                             )
                         )
                         || parentheses == 0
-                            && token == TokenType::Operator(OperatorTokenType::ClosingParenthesis),
+                            && matches!(
+                                token,
+                                TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                            ),
                 | ExpressionTerminator::ClosingParenthesis =>
                     parentheses == 0
                         && braces == 0

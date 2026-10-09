@@ -1,0 +1,11 @@
+error: member name is declared more than once: `x`
+ --> sema-duplicate-member.c:1:22
+  |
+1 | struct S {int x; int x;};
+  |               -      ^ member declared again here
+  |               |
+  |               previous declaration is here
+  |
+  = note: C99 §6.7p3 and §6.2.3p1: members have no linkage and a separate namespace per aggregate
+
+1 error generated.

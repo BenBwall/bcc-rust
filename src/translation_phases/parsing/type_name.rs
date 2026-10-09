@@ -46,13 +46,14 @@ pub(super) struct TypeNameFrame<'tu> {
     phase:                  TypeNamePhase<'tu>,
     declaration_specifiers: Option<DeclarationSpecifiers<'tu>>,
     starting_error_count:   usize,
+    compound_literal:       bool,
 }
 
 /// State transitions for [`TypeNameFrame`].
 ///
 /// C99: §6.7.6 paragraph 1, p. 122; PDF p. 134.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum TypeNamePhase<'tu> {
+enum TypeNamePhase<'tu> {
     Start,
     AwaitSpecifiers,
     AwaitDeclarator,
@@ -65,7 +66,13 @@ impl<'tu, 'p> TypeNameFrame<'tu> {
             phase: TypeNamePhase::Start,
             declaration_specifiers: None,
             starting_error_count,
+            compound_literal: false,
         }
+    }
+
+    pub(super) fn with_storage(mut self) -> Self {
+        self.compound_literal = true;
+        self
     }
 
     #[expect(
@@ -83,7 +90,11 @@ impl<'tu, 'p> TypeNameFrame<'tu> {
                 debug_assert!(returned.is_none());
                 self.phase = TypeNamePhase::AwaitSpecifiers;
                 ParseAction::Push(ParseFrame::DeclarationSpecifiers(
-                    DeclarationSpecifiersFrame::new(SpecifierMode::TypeName),
+                    DeclarationSpecifiersFrame::new(if self.compound_literal {
+                        SpecifierMode::CompoundLiteral
+                    } else {
+                        SpecifierMode::TypeName
+                    }),
                 ))
             },
             | TypeNamePhase::AwaitSpecifiers => {

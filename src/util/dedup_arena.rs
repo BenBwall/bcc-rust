@@ -1,3 +1,6 @@
+//! An arena-backed interner: each distinct value is stored once and named by
+//! a `u32` index in insertion order.
+
 use std::{
     borrow::Borrow,
     hash::{
@@ -39,45 +42,17 @@ impl<'a, T, H> DedupArena<'a, T, H> {
         Self::with_hasher(H::default(), arena)
     }
 
-    #[expect(
-        dead_code,
-        reason = "Preallocation support is retained for future arena callers."
-    )]
-    pub(crate) fn with_capacity_and_hasher(capacity: usize, hasher: H, arena: &'a Bump) -> Self {
-        Self {
-            indices: HashTable::with_capacity_in(capacity, arena),
-            data: ArenaVec::with_capacity_in(capacity, arena),
-            hasher,
-        }
-    }
-
-    #[expect(
-        dead_code,
-        reason = "Preallocation support is retained for future arena callers."
-    )]
-    pub(crate) fn with_capacity(capacity: usize, arena: &'a Bump) -> Self
-    where
-        H: Default,
-    {
-        Self::with_capacity_and_hasher(capacity, H::default(), arena)
+    /// The index the next value appended to `data` gets.
+    fn next_index(data: &[T]) -> u32 {
+        u32::try_from(data.len()).expect("DedupArena index exceeds u32::MAX")
     }
 
     /// Appends a value that interning never returns, giving it an identity
     /// distinct from every equal value. Indexed values stay unique.
     pub(crate) fn push_unindexed(&mut self, value: T) -> u32 {
-        let index = u32::try_from(self.data.len()).expect("DedupArena index exceeds u32::MAX");
+        let index = Self::next_index(&self.data);
         self.data.push(value);
         index
-    }
-
-    /// SAFETY: The caller must ensure that the values in the arena remain
-    /// unique.
-    #[expect(
-        dead_code,
-        reason = "Mutable access is retained for future arena callers."
-    )]
-    pub(crate) unsafe fn as_mut_slice(&mut self) -> &mut [T] {
-        self.data.as_mut_slice()
     }
 
     /// Only materialize a value in the arena after checking for an existing
@@ -99,8 +74,7 @@ impl<'a, T, H> DedupArena<'a, T, H> {
         ) {
             | Entry::Occupied(entry) => *entry.get(),
             | Entry::Vacant(entry) => {
-                let index =
-                    u32::try_from(self.data.len()).expect("DedupArena index exceeds u32::MAX");
+                let index = Self::next_index(&self.data);
                 self.data.push(make());
                 _ = entry.insert(index);
                 index
@@ -114,12 +88,6 @@ impl<T, H> std::ops::Index<u32> for DedupArena<'_, T, H> {
 
     fn index(&self, index: u32) -> &T {
         &self.data[index as usize]
-    }
-}
-
-impl<T, H> std::ops::IndexMut<u32> for DedupArena<'_, T, H> {
-    fn index_mut(&mut self, index: u32) -> &mut T {
-        &mut self.data[index as usize]
     }
 }
 

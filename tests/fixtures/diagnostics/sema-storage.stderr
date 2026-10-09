@@ -1,0 +1,9 @@
+error: auto and register are not permitted at file scope: `object`
+ --> sema-storage.c:1:10
+  |
+1 | auto int object;
+  |          ^^^^^^ external declaration
+  |
+  = note: C99 §6.9p2: an external declaration has no auto or register storage class
+
+1 error generated.

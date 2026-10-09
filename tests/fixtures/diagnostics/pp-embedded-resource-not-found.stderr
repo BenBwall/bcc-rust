@@ -1,0 +1,9 @@
+error: cannot find embedded resource `missing-resource.bin`
+ --> pp-embedded-resource-not-found.c:1:2
+  |
+1 | #embed "missing-resource.bin"
+  |  ^^^^^ not found in any search directory
+  |
+  = note: C23 §6.10.4.1p3: `#embed` must identify a resource it can process
+
+1 error generated.

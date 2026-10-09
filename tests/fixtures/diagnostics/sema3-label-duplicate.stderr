@@ -1,0 +1,11 @@
+error: label is defined more than once: `L`
+ --> sema3-label-duplicate.c:1:22
+  |
+1 | void f(void) { L:; { L:; } }
+  |                -     ^ label defined again here
+  |                |
+  |                previous label is here
+  |
+  = note: C99 §6.8.1p3: labels occupy a function-wide namespace and each label is unique within its function
+
+1 error generated.

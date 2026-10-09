@@ -1,0 +1,7 @@
+warning: `#pragma GCC system_header` ignored in main file
+ --> pp-system-header-pragma-in-main-file.c:1:13
+  |
+1 | #pragma GCC system_header
+  |             ^^^^^^^^^^^^^ only a header can be a system header
+
+1 warning generated.

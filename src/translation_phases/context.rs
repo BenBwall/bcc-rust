@@ -13,6 +13,8 @@ use std::{
 use rustc_hash::FxBuildHasher;
 
 use super::{
+    ErrorSeverity,
+    GetSeverity,
     TranslationError,
     provenance::{
         SourceArena,
@@ -24,6 +26,7 @@ use super::{
 };
 use crate::{
     configuration::CompilerConfiguration,
+    headers::HeaderSearch,
     translation_phases::{
         initial_processing::InitialProcessorError,
         parsing::ParserError,
@@ -39,6 +42,7 @@ use crate::{
         bump::{
             ArenaMap,
             ArenaQueue,
+            ArenaSet,
             ArenaString,
             ArenaVec,
             Bump,
@@ -346,6 +350,7 @@ struct SourceText<'tu> {
 pub(crate) struct Context<'tu> {
     tu: &'tu Bump,
     pub(crate) configuration: CompilerConfiguration,
+    pub(crate) preprocessing_options: &'tu [crate::configuration::PreprocessingOption<'tu>],
     pub(crate) source_vectors: SourceVectorStack,
     parser_token_vectors: RegionVec<SourceVector>,
     retained_vectors: RegionVec<SourceVector>,
@@ -356,12 +361,25 @@ pub(crate) struct Context<'tu> {
     expansion_sites: [ExpansionSites<'tu>; 3],
     ignore_tokenizer_errors: bool,
     pub(super) pending_errors: ArenaQueue<'tu, TranslationError<'tu>>,
+    suppressed_errors: usize,
     /// How many leading pending errors no longer refer to the preprocessor
     /// arena, so compaction relocates each error's provenance only once.
     relocated_errors: usize,
-    pub(crate) source_files: DedupArena<'tu, &'tu Path, FxBuildHasher>,
-    quote_include_directories: &'tu [&'tu Path],
-    system_include_directories: &'tu [&'tu Path],
+    source_files: DedupArena<'tu, &'tu Path, FxBuildHasher>,
+    /// Presumed filename identities introduced by `#line`, mapped to the
+    /// physical source file whose bytes their vectors still index.
+    presumed_files: ArenaMap<'tu, u32, u32>,
+    /// Every configured header search entry in order, the resource
+    /// directory included; the first `quote_include_count` are `-iquote`
+    /// entries. An entry's index is its identity for `#include_next`.
+    include_directories: &'tu [&'tu Path],
+    quote_include_count: usize,
+    /// The index of the first system entry in `include_directories`.
+    system_include_start: usize,
+    /// Each system header, with the byte offset from which it is one: 0
+    /// for a header found through a system directory, or the position of
+    /// its `#pragma GCC system_header`.
+    system_headers: ArenaMap<'tu, u32, u32>,
     /// Original text of each source file, indexed like `source_files`, kept
     /// so diagnostics can quote the lines they point at.
     source_texts: ArenaVec<'tu, Option<SourceText<'tu>>>,
@@ -380,15 +398,14 @@ impl<'tu> Context<'tu> {
 
     /// Formats diagnostic text straight into the translation-unit arena.
     pub(crate) fn diagnostic_format(&self, arguments: std::fmt::Arguments<'_>) -> &'tu str {
-        let mut text = ArenaString::new_in(self.tu);
-        std::fmt::Write::write_fmt(&mut text, arguments).expect("arena formatting cannot fail");
-        text.into_str()
+        crate::diagnostics::format_arguments_in(self.tu, arguments)
     }
 
     pub(crate) fn diagnostic_slice<T: Copy>(&self, values: &[T]) -> &'tu mut [T] {
         self.tu.alloc_slice_copy(values)
     }
 
+    #[cfg(test)]
     pub(crate) fn new(tu: &'tu Bump) -> Self {
         Self::with_configuration(tu, CompilerConfiguration::default())
     }
@@ -403,9 +420,13 @@ impl<'tu> Context<'tu> {
                 "keywords must occupy the reserved prefix"
             );
         }
+        for &spelling in KeywordTokenType::ALIASES {
+            _ = string_cache.intern(spelling);
+        }
         Self {
             tu,
             configuration,
+            preprocessing_options: &[],
             source_vectors: SourceVectorStack(RegionVec::new()),
             parser_token_vectors: RegionVec::new(),
             retained_vectors: RegionVec::new(),
@@ -415,10 +436,14 @@ impl<'tu> Context<'tu> {
             expansion_sites: std::array::from_fn(|_| ExpansionSites::new_in(tu)),
             ignore_tokenizer_errors: false,
             pending_errors: ArenaQueue::new_in(tu),
+            suppressed_errors: 0,
             relocated_errors: 0,
             source_files: DedupArena::new(tu),
-            quote_include_directories: &[],
-            system_include_directories: &[],
+            presumed_files: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            include_directories: &[],
+            quote_include_count: 0,
+            system_include_start: 0,
+            system_headers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             source_texts: ArenaVec::new_in(tu),
         }
     }
@@ -489,6 +514,33 @@ impl<'tu> Context<'tu> {
         self.literal_values[id.0]
     }
 
+    /// Execution code units of an L-prefixed string, excluding its terminator.
+    /// Original source units remain available for diagnostics and inspection.
+    /// C99: implementation-defined encoding §6.4.5p5, pp. 62-63; PDF pp. 74-75.
+    pub(crate) fn wide_literal_units(&self, id: LiteralId) -> impl Iterator<Item = u32> + '_ {
+        let utf16 = self.configuration.target().layout().wide_utf16();
+        self.literal_units(id).iter().flat_map(move |unit| {
+            let mut units = [0; 2];
+            let count = match *unit {
+                | LiteralUnit::Character(c) if utf16 => {
+                    let mut encoded = [0; 2];
+                    let n = c.encode_utf16(&mut encoded).len();
+                    units = encoded.map(u32::from);
+                    n
+                },
+                | LiteralUnit::Character(c) => {
+                    units[0] = u32::from(c);
+                    1
+                },
+                | LiteralUnit::Numeric(code) => {
+                    units[0] = code;
+                    1
+                },
+            };
+            units.into_iter().take(count)
+        })
+    }
+
     /// The literal's characters spelled in `arena`, if they are text.
     /// Text-only consumers (filenames and tests) must reject non-UTF-8
     /// values.
@@ -529,19 +581,26 @@ impl<'tu> Context<'tu> {
     /// its characters are text, and as numeric escapes otherwise. The text is
     /// decoded in `scratch` and taken back, unless something else is
     /// allocated there meanwhile.
+    /// `prefix` selects byte decoding for ordinary/UTF-8 strings and full
+    /// code-unit decoding for `L`, `u`, and `U` strings.
+    ///
+    /// C11: numeric escapes use the corresponding character type,
+    /// §6.4.4.4 paragraph 9, p. 69; PDF p. 87; string element types are
+    /// specified by §6.4.5 paragraph 6, p. 71; PDF p. 89.
     pub(crate) fn literal_spelling_in<'a>(
         &self,
         arena: &'a Bump,
         scratch: &Bump,
         id: LiteralId,
-        wide: bool,
+        prefix: &str,
     ) -> &'a str {
+        let wide = matches!(prefix, "L" | "u" | "U");
         let mut spelling = ArenaString::new_in(arena);
         let text = self.decode_literal_text(scratch, id, wide);
         let text = text
             .as_deref()
             .and_then(|text| std::str::from_utf8(text).ok());
-        self.write_literal_spelling(&mut spelling, text, id, wide)
+        self.write_literal_spelling(&mut spelling, text, id, prefix)
             .expect("arena formatting cannot fail");
         spelling.into_str()
     }
@@ -553,12 +612,14 @@ impl<'tu> Context<'tu> {
         out: &mut impl std::fmt::Write,
         text: Option<&str>,
         id: LiteralId,
-        wide: bool,
+        prefix: &str,
     ) -> std::fmt::Result {
+        let wide = matches!(prefix, "L" | "u" | "U");
         if let Some(text) = text {
-            return crate::diagnostics::write_c_quoted(out, if wide { "L" } else { "" }, '"', text);
+            return crate::diagnostics::write_c_quoted(out, prefix, '"', text);
         }
-        out.write_str(if wide { "L\"" } else { "\"" })?;
+        out.write_str(prefix)?;
+        out.write_char('"')?;
         for unit in self.literal_units(id) {
             match *unit {
                 | LiteralUnit::Character(c) if wide => write!(out, "\\x{:x}", u32::from(c))?,
@@ -583,15 +644,39 @@ impl<'tu> Context<'tu> {
         source_file_index: u32,
         length: usize,
     ) -> u32 {
+        self.push_source_vector_value(SourceVector::new(start_position, source_file_index, length))
+    }
+
+    /// The caller read this span from a `LexedFile`, which checked its entire
+    /// original source fits in `u32` before lexing. Its offsets and lengths
+    /// therefore fit without repeated per-token conversion checks.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "LexedFile checked the source length and every span lies within that source"
+    )]
+    pub(crate) fn push_lexed_source_vector(
+        &mut self,
+        start_position: SourcePosition,
+        source_file_index: u32,
+        length: usize,
+    ) -> u32 {
+        self.push_source_vector_value(SourceVector {
+            index: start_position.index as u32,
+            column: start_position.column,
+            line: start_position.line,
+            source_file_index,
+            length: length as u32,
+        })
+    }
+
+    fn push_source_vector_value(&mut self, vector: SourceVector) -> u32 {
         let (index, _) = Self::checked_source_append(
             SourceArena::Preprocessor,
             self.source_vectors.0.len(),
             self.source_vectors.0.len(),
             1,
         );
-        self.source_vectors
-            .0
-            .push(SourceVector::new(start_position, source_file_index, length));
+        self.source_vectors.0.push(vector);
         index
     }
 
@@ -632,6 +717,16 @@ impl<'tu> Context<'tu> {
     ) -> SourceVectors {
         let start_index = self.push_source_vector(start_position, source_file_index, length);
         SourceVectors::new(start_index, start_index + 1)
+    }
+
+    /// Appends `source` to the provenance accumulated in `existing`, which
+    /// is `None` until something has been merged into it.
+    pub(crate) fn merge_into(
+        &mut self,
+        existing: &mut Option<SourceVectors>,
+        source: SourceVectors,
+    ) {
+        *existing = Some(existing.map_or(source, |existing| self.merge_vectors(existing, source)));
     }
 
     /// Joins two provenance ranges, preserving `v1`'s vectors followed by
@@ -808,7 +903,7 @@ impl<'tu> Context<'tu> {
         }
         let mut pending_errors =
             std::mem::replace(&mut self.pending_errors, ArenaQueue::new_in(self.tu));
-        for error in pending_errors.iter_mut().skip(self.relocated_errors) {
+        for error in pending_errors.iter_mut_from(self.relocated_errors) {
             error.for_each_source_vectors_mut(&mut |source_vectors| {
                 *source_vectors = self.retain_preprocessor_range(*source_vectors);
             });
@@ -960,7 +1055,7 @@ impl<'tu> Context<'tu> {
 
     #[inline(always)]
     pub(crate) fn missing_final_newline(&mut self, vector: SourceVector) {
-        if !self.ignore_tokenizer_errors() {
+        if !self.ignore_tokenizer_errors() && !self.in_system_header(&vector) {
             self.pending_errors
                 .push_back(TranslationError::InitialProcessing(
                     InitialProcessorError::MissingFinalNewline(vector),
@@ -969,7 +1064,7 @@ impl<'tu> Context<'tu> {
     }
 
     pub(crate) fn escaped_final_newline(&mut self, vector: SourceVector) {
-        if !self.ignore_tokenizer_errors() {
+        if !self.ignore_tokenizer_errors() && !self.in_system_header(&vector) {
             self.pending_errors
                 .push_back(TranslationError::InitialProcessing(
                     InitialProcessorError::EscapedFinalNewline(vector),
@@ -1001,6 +1096,13 @@ impl<'tu> Context<'tu> {
     #[cold]
     #[inline(never)]
     pub(crate) fn preprocessor_error(&mut self, error: PreprocessorError<'tu>) {
+        if self.withholds(
+            error.severity(),
+            error.error_type.is_extension(),
+            error.source_vectors,
+        ) {
+            return;
+        }
         self.pending_errors
             .push_back(TranslationError::Preprocessing(error));
     }
@@ -1017,6 +1119,9 @@ impl<'tu> Context<'tu> {
     #[cold]
     #[inline(never)]
     pub(crate) fn parser_error(&mut self, error: ParserError<'tu>) {
+        if self.withholds(error.severity, false, error.source_vectors) {
+            return;
+        }
         self.pending_errors
             .push_back(TranslationError::Parsing(error));
     }
@@ -1024,13 +1129,29 @@ impl<'tu> Context<'tu> {
     #[cold]
     #[inline(never)]
     pub(crate) fn pop_pending_error(&mut self) -> Option<TranslationError<'tu>> {
-        let error = self.pending_errors.pop_front();
-        self.relocated_errors = self.relocated_errors.saturating_sub(1);
-        error
+        loop {
+            let error = self.pending_errors.pop_front()?;
+            self.relocated_errors = self.relocated_errors.saturating_sub(1);
+            if matches!(&error, TranslationError::Extension(x) if x.suppressed.get()) {
+                self.suppressed_errors -= 1;
+            } else {
+                return Some(error);
+            }
+        }
     }
 
     pub(crate) fn pending_error_count(&self) -> usize {
-        self.pending_errors.len()
+        if self.pending_errors.is_empty() {
+            return 0;
+        }
+        self.pending_errors.len() - self.suppressed_errors
+    }
+
+    /// Marks one arena-stable occurrence without scanning the diagnostic FIFO.
+    pub(crate) fn suppress_extension(&mut self, marker: &std::cell::Cell<bool>) {
+        if !marker.replace(true) {
+            self.suppressed_errors += 1;
+        }
     }
 
     #[cfg(test)]
@@ -1040,15 +1161,26 @@ impl<'tu> Context<'tu> {
     )]
     pub(crate) fn take_pending_errors(&mut self) -> Vec<TranslationError<'tu>> {
         self.relocated_errors = 0;
-        std::iter::from_fn(|| self.pending_errors.pop_front()).collect()
+        std::iter::from_fn(|| self.pop_pending_error()).collect()
     }
 
     /// Removes and yields the pending errors after the first `keep`, in
     /// order.
+    ///
+    /// `keep` is a raw queue position, and callers take it from
+    /// [`Self::pending_error_count`], which excludes suppressed entries.
+    /// The two agree because only phase 7 suppresses diagnostics, and it
+    /// starts after phases 4-6 have preprocessed the whole translation unit
+    /// into a fresh context. A split with suppressed entries pending would
+    /// land too early and could drop one without updating the count.
     pub(crate) fn split_off_pending_errors(
         &mut self,
         keep: usize,
     ) -> impl Iterator<Item = TranslationError<'tu>> + '_ {
+        debug_assert_eq!(
+            self.suppressed_errors, 0,
+            "pending-error splits happen only before parsing suppresses diagnostics"
+        );
         self.relocated_errors = self.relocated_errors.min(keep);
         self.pending_errors.split_off(keep)
     }
@@ -1080,6 +1212,28 @@ impl<'tu> Context<'tu> {
             .intern_by(path, || Self::alloc_path(tu, path))
     }
 
+    /// Gives a presumed filename its own identity without interning it as an
+    /// opened file. Its system-header classification follows `physical`;
+    /// its rendered name remains `path`.
+    /// C99: §6.10.4 paragraph 4, p. 158; PDF p. 170.
+    pub(crate) fn add_presumed_source_file(&mut self, path: &Path, physical: u32) -> u32 {
+        let index = self
+            .source_files
+            .push_unindexed(Self::alloc_path(self.tu, path));
+        _ = self.presumed_files.insert(index, physical);
+        index
+    }
+
+    /// Stable virtual paths do not depend on the host's path separator.
+    /// C99: implementation-defined headers §6.10.2p2-3, pp. 149-150;
+    /// PDF pp. 161-162.
+    pub(crate) fn intern_builtin_header(&mut self, name: &Path) -> u32 {
+        use std::fmt::Write as _;
+        let mut path = ArenaString::new_in(self.tu);
+        write!(path, "{}/{}", crate::headers::DIRECTORY, name.display()).unwrap();
+        self.intern_source_file(Path::new(&*path))
+    }
+
     /// Registers synthetic source text under a fresh identity, even when
     /// `path` names an earlier input, so diagnostics retained from each
     /// input keep quoting their own text.
@@ -1091,38 +1245,127 @@ impl<'tu> Context<'tu> {
         index
     }
 
-    pub(crate) fn get_source_file(&self, index: u32) -> &Path {
+    pub(crate) fn get_source_file(&self, index: u32) -> &'tu Path {
         self.source_files[index]
     }
 
-    pub(crate) fn set_include_directories(&mut self, quote: &[&Path], system: &[&Path]) {
-        self.quote_include_directories = self
-            .tu
-            .alloc_slice_fill_iter(quote.iter().map(|path| Self::alloc_path(self.tu, path)));
-        self.system_include_directories = self
-            .tu
-            .alloc_slice_fill_iter(system.iter().map(|path| Self::alloc_path(self.tu, path)));
+    /// Records where headers are searched for, in order. As in GCC and
+    /// Clang, an `-I` entry that duplicates a system entry is dropped so the
+    /// directory stays a system directory, and each group keeps only the
+    /// first of its own duplicates; path equality ignores redundant `.`
+    /// components. The `-iquote` group is a separate chain that `<…>`
+    /// lookup skips, so, as in Clang, its entries stay user entries. C99:
+    /// implementation-defined places, §6.10.2p2-3, pp. 149-150; PDF pp.
+    /// 161-162.
+    pub(crate) fn set_header_search(&mut self, search: HeaderSearch<'_>) {
+        let resource = search
+            .resource
+            .then_some(Path::new(crate::headers::DIRECTORY));
+        let tu = self.tu;
+        let system = search
+            .system
+            .iter()
+            .copied()
+            .chain(resource)
+            .chain(search.after.iter().copied());
+        let mut system_paths = ArenaSet::with_hasher_in(FxBuildHasher, tu);
+        system_paths.extend(system.clone());
+        let mut seen = ArenaSet::with_hasher_in(FxBuildHasher, tu);
+        let mut directories = ArenaVec::new_in(tu);
+        for (index, group) in [search.quote, search.angled].into_iter().enumerate() {
+            let quote = index == 0;
+            seen.clear();
+            for &path in group {
+                if (quote || !system_paths.contains(path)) && seen.insert(path) {
+                    directories.push(Self::alloc_path(tu, path));
+                }
+            }
+            if quote {
+                self.quote_include_count = directories.len();
+            }
+        }
+        self.system_include_start = directories.len();
+        for path in system {
+            if seen.insert(path) {
+                directories.push(Self::alloc_path(tu, path));
+            }
+        }
+        self.include_directories = directories.leak();
     }
 
-    /// The directories searched for a header named in a file, in order: for
-    /// a `"…"` name the including file's directory and the quote
-    /// directories, then for both forms the system directories.
-    pub(crate) fn include_search_directories(
+    /// Whether the configured search entry at `index` is a system directory.
+    pub(crate) fn is_system_include_directory(&self, index: usize) -> bool {
+        index >= self.system_include_start
+    }
+
+    /// Makes `file` a system header from byte `from` on. GCC extension
+    /// over the implementation-defined header places of C99 §6.10.2p2-3,
+    /// pp. 149-150; PDF pp. 161-162.
+    pub(crate) fn mark_system_header(&mut self, file: u32, from: u32) {
+        let start = self.system_headers.entry(file).or_insert(from);
+        *start = (*start).min(from);
+    }
+
+    /// Whether any part of `file` is a system header.
+    pub(crate) fn has_system_header_part(&self, file: u32) -> bool {
+        self.system_headers.contains_key(&file)
+    }
+
+    /// Whether `vector` starts in a physical system header, independently
+    /// of its presumed filename.
+    /// C99: presumed filenames, §6.10.4 paragraph 4, p. 158; PDF p. 170.
+    pub(crate) fn in_system_header(&self, vector: &SourceVector) -> bool {
+        let physical = self
+            .presumed_files
+            .get(&vector.source_file_index)
+            .copied()
+            .unwrap_or(vector.source_file_index);
+        self.system_headers
+            .get(&physical)
+            .is_some_and(|&from| vector.index >= from)
+    }
+
+    /// Whether a diagnostic is withheld because it arises in a system
+    /// header, as GCC and Clang withhold them: a warning, or an extension
+    /// diagnostic at any severity, whose location is spelled in a system
+    /// header. The location's first source vector is its spelling: for a
+    /// token from a macro expansion, the macro's replacement list. Errors
+    /// are never withheld.
+    pub(crate) fn withholds(
         &self,
-        including_file: u32,
+        severity: ErrorSeverity,
+        extension: bool,
+        source_vectors: SourceVectors,
+    ) -> bool {
+        (extension || severity == ErrorSeverity::Warning)
+            && !self.system_headers.is_empty()
+            && source_vectors.length() != 0
+            && self.in_system_header(self.first_source_vector(source_vectors))
+    }
+
+    /// The configured search entries a lookup visits, with their indices:
+    /// from `start` when given (`#include_next`), otherwise every entry for
+    /// a `"…"` name and every entry after the `-iquote` ones for a `<…>`
+    /// name. C99: implementation-defined search, §6.10.2p2-3, pp. 149-150;
+    /// PDF pp. 161-162.
+    pub(crate) fn configured_include_directories(
+        &self,
         is_system_header: bool,
-    ) -> impl Iterator<Item = &'tu Path> + Clone + use<'tu> {
-        let including_file: &'tu Path = self.source_files[including_file];
-        let quote_directories: &'tu [&'tu Path] = self.quote_include_directories;
-        let system_directories: &'tu [&'tu Path] = self.system_include_directories;
-        let quote = (!is_system_header).then(|| {
-            let directory = including_file.parent().unwrap_or_else(|| Path::new(""));
-            std::iter::once(directory).chain(quote_directories.iter().copied())
-        });
-        quote
-            .into_iter()
-            .flatten()
-            .chain(system_directories.iter().copied())
+        start: Option<usize>,
+    ) -> impl Iterator<Item = (usize, &'tu Path)> + Clone + use<'tu> {
+        let directories: &'tu [&'tu Path] = self.include_directories;
+        let start = start
+            .unwrap_or(if is_system_header {
+                self.quote_include_count
+            } else {
+                0
+            })
+            .min(directories.len());
+        directories[start..]
+            .iter()
+            .copied()
+            .enumerate()
+            .map(move |(offset, directory)| (start + offset, directory))
     }
 
     fn alloc_path(tu: &'tu Bump, path: &Path) -> &'tu Path {
@@ -1151,6 +1394,27 @@ impl<'tu> Context<'tu> {
 
     /// Reads and retains an included file without a temporary heap string.
     pub(crate) fn read_source_file(&mut self, index: u32) -> std::io::Result<&'tu str> {
+        if let Ok(name) = self
+            .get_source_file(index)
+            .strip_prefix(crate::headers::DIRECTORY)
+            && let Some(text) = crate::headers::text(name)
+        {
+            let text = if let Some((before, after)) = text.split_once("@MB_LEN_MAX@") {
+                use std::fmt::Write as _;
+                let mut rendered = ArenaString::new_in(self.tu);
+                write!(
+                    rendered,
+                    "{before}{}{after}",
+                    self.configuration.target().layout().mb_len_max
+                )
+                .unwrap();
+                rendered.into_str()
+            } else {
+                text
+            };
+            self.record_arena_source_text(index, text);
+            return Ok(text);
+        }
         let text = self.tu.read_to_str_lossy(self.get_source_file(index))?;
         self.record_arena_source_text(index, text);
         Ok(text)

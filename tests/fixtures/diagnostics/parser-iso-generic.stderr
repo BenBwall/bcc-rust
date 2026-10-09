@@ -1,0 +1,7 @@
+error: expected an expression, found `,`
+ --> parser-iso-generic.c:1:38
+  |
+1 | int f(void) { return _Generic(1, int:, default:2); }
+  |                                      ^ expected an expression
+
+1 error generated.

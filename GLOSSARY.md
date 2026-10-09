@@ -35,6 +35,25 @@ _Avoid_: Source span
 The compilation-wide state shared by translation phases, including interned spellings, source files, source vectors, and pending diagnostics. The object running a phase (the parser, or the preprocessor while it reads input) holds the context exclusively for as long as it runs, rather than receiving it with each call.
 _Avoid_: Parser context
 
+**Language mode** (`LanguageMode`):
+An ordered ISO C revision and an independent GNU-dialect bit. C89/C90 share
+one revision; the C95 amendment is distinct. MSVC feature flags are independent
+of the language mode.
+
+**Compiler configuration** (`CompilerConfiguration`):
+The value object held by `Context` that owns language mode, MSVC feature flags,
+extension diagnostic policy, and derived feature bits. Feature acceptance means
+the syntax may be consumed, including as an extension; native availability means
+it belongs to the selected revision or dialect. Neither means its implementation
+is complete; the language-standards.md matrix records that status.
+
+**Extension policy** (`ExtensionPolicy`):
+How an accepted but non-native feature is diagnosed: Allow (silent, the
+default), Warn (`-pedantic`), or Deny (`-pedantic-errors`). Each diagnostic
+names the feature's origin: a later ISO revision, a removed earlier one, GNU,
+or MSVC. GNU and MSVC features stay non-ISO when enabled. Deny reports an
+error but keeps the syntax, so the parser still builds and recovers it.
+
 ## Storage and lifetimes
 
 **Translation-unit arena** (`'tu`):
@@ -173,7 +192,7 @@ The single driver that holds the context and owns the token cursor, control stac
 _Avoid_: Recursive-descent parser
 
 **ParseFrame** *(implemented)*:
-A resumable state machine for one grammar family. Current families cover external declarations, declarations, declarators, parameters, tags, function definitions, compound statements, statements, expressions, type names, and initializers.
+A resumable state machine for one grammar family. Current families cover external declarations, declarations, declarators, parameters, tags, function definitions, compound statements, statements, expressions, type names, and initializers. Three delimiter-owning families serve later and vendor syntax, running their expression, type-name, and compound children on the same stack: `ModernFrame` (ISO C11 through C2y keyword operands such as `_Alignas`, `_Alignof`, `_Atomic(...)`, `typeof`, `_BitInt(...)`, and `_Countof`; generic selections; static assertions; and attribute specifiers in all three syntaxes, `[[...]]`, `__attribute__((...))`, and `__declspec(...)`), `GnuFrame` (GNU assembly, builtins, and `__label__` declarations), and `MsvcFrame` (MSVC SEH and inline-assembly statements). Other extensions add phases to the ordinary families.
 _Avoid_: Grammar call
 
 **ExpressionFrame** *(implemented)*:
@@ -183,7 +202,7 @@ The parse frame that owns the Double-E operator and operand stacks for a languag
 A small owned instruction returned by a frame to the driver: consume input, push a child frame, reduce a value, reprocess lookahead, or recover at a synchronization set. After a forward phase change that needs no driver work, a frame may instead continue: frame dispatch runs it again at once with the same lookahead.
 
 **ParseValue** *(implemented)*:
-The typed result passed from a completed child frame to its parent. Variants cover declarations, function definitions, compound statements, statements, expressions, constant expressions, type names, and initializers.
+The typed result passed from a completed child frame to its parent. Variants cover declarations, function definitions, compound statements, statements, expressions, constant expressions, type names, and initializers, plus the extension frames' results: a modern value (keyword operand, generic selection, static assertion, or attribute specifier) and a GNU value (assembly, builtin, or local-label list). `MsvcFrame` returns an ordinary statement.
 
 **Deferred child** *(historical phase seam)*:
 A present grammar child whose parser belonged to a later phase, retained as a typed source-backed slot rather than confused with syntactic absence. Phase 04 removed these seams from supported C99 grammar paths.
@@ -246,3 +265,150 @@ _Avoid_: Syntax parsing
 **Backend**:
 The post-front-end work that lowers validated program meaning into an executable target representation.
 _Avoid_: Parser
+
+## GNU syntax ownership
+
+**GNU assembly node**:
+Syntax for a GNU assembly statement, file assembly or declarator assembly label.
+Original template, qualifier, constraint and clobber tokens accompany parsed C
+operand expressions and label identifiers; target validation belongs to analysis.
+
+**GNU builtin node**:
+A reserved builtin production with typed expression/type operands and, for
+`__builtin_offsetof`, a member path. It is distinct from an ordinary function call.
+
+**Statement expression**:
+The GNU `({ block-items })` expression. Its compound child owns block scope;
+its expression owner retains the enclosing parentheses. Value/type analysis is deferred.
+
+**Nested function definition**:
+A GNU block item containing a complete function definition. Its parser frames
+isolate function-local label/switch state while preserving enclosing typedef visibility.
+
+**Extension marker**:
+GNU `__extension__` syntax wrapping an expression or declaration and suppressing
+pedantic extension diagnostics within that owner. It does not repair malformed syntax.
+
+## Semantic analysis results
+
+**Semantic translation unit** (`SemanticTranslationUnit<'tu>`):
+The retained result of semantic analysis after parsing: a canonical type graph,
+nominal tags and members, resolved declaration occurrences, scope identities,
+resolved type names, parameter metadata, typed expressions and contextual
+conversions. It borrows the translation-unit arena.
+Syntax remains immutable and separately inspectable.
+
+**Semantic working arena** (`'s`):
+A phase arena for semantic continuations, integer-evaluation values, hash-cons
+lookup, visible-binding lookup and scope restoration. It is dropped before the
+semantic translation unit is returned; no retained result borrows it.
+
+**Canonical type identity** (`TypeId`):
+An unqualified type graph index plus a compact qualifier set. Structurally identical
+derived types share their unqualified identity. Distinct tagged types retain nominal
+identity even when their members/layout are equal. Identity is stronger than C type
+compatibility, which may form a composite type across different array/prototype shapes.
+
+**Nominal tag** (`Tag`):
+The identity and completion state of one structure, union or enumeration. Tag lookup
+has a separate namespace from ordinary bindings; member names belong to their own
+nominal aggregate. Completion adds retained members and layout without changing identity.
+
+**Semantic binding** (`Binding`):
+One source declaration occurrence with its resolved type, semantic scope, ordinary
+binding kind, linkage and storage duration. A semantic scope is independent of the
+parser's typedef-name classification; redeclarations merge compatible linked types.
+
+**Target layout** (`TargetLayout`):
+The explicit scalar, pointer and alias representation used by token conversion and
+semantic layout, defaulting to x86-64 System V LP64. It describes the C target rather
+than Rust's host ABI.
+
+**Unanalyzed type** (`TypeKind::Unknown`):
+A result for failed operands or accepted syntax whose semantics are outside the
+implemented stage. It suppresses dependent constraints without pretending that an
+extension has a C99 scalar representation. Unknown does not certify valid input.
+
+**Typed expression result** (`ExpressionInfo`):
+A retained side-table record borrowing an immutable syntax expression. It carries
+the original type/category, binding and bit-field metadata where applicable,
+constant eligibility and available constant values. Records have deterministic
+child-before-parent order; scratch lookup is keyed by syntax identity.
+
+**Value category** (`ValueCategory`):
+An expression's relationship to an object or value before contextual conversions:
+lvalue, modifiable lvalue, function designator or rvalue. A modifiable lvalue is
+the assignable subset of lvalues, including complete non-const object constraints.
+
+**Contextual conversion** (`Conversion`):
+A retained operation on an expression at a use site: lvalue conversion, decay,
+arithmetic/assignment conversion or default argument promotion. It records the
+destination type without changing the syntax expression's original category.
+
+**Integer constant expression** (ICE):
+An integer expression satisfying C99 operand and operator restrictions as well as
+having an evaluable value. A folded integer value alone does not establish ICE
+eligibility. Enumerators, bit-fields, case labels and designators require ICEs.
+
+**Constant-expression class** (`ConstantClass`):
+Arithmetic, address or nonconstant eligibility for static initialization, distinct
+from strict ICE eligibility. Address eligibility identifies permitted static
+designations without evaluating the stored value of an object.
+
+**Initializer current object** (`Current`):
+An arena cursor identifying the subobject to receive the next initializer under
+its containing brace pair. Designators reset the path; brace elision descends it;
+sequential initialization advances and unwinds it. It validates syntax and infers
+array bounds without materializing backend stores.
+
+**Defining function derivation**:
+The first type derivation outward from a function definition's identifier,
+including through grouping parentheses. Its immutable suffix identity selects
+the body parameters and K&R signature. A function suffix in the return type,
+or a function type obtained solely from a typedef, is not that derivation.
+
+**Definition record** (`Definition`):
+A finalized definition associated with a semantic binding occurrence, separate
+from declarations of the same entity. It distinguishes explicit object/function
+definitions, inline-only bodies, completed tentative objects and synthesized
+function-name arrays. Tentative records use the final composite object type.
+
+**Variable scope path**:
+A persistent chain of declarations of variably modified identifiers currently
+in scope. It includes VLA objects, pointers to VLAs and variably modified typedefs.
+A label or jump retains a path snapshot after lexical scope exit; path comparison
+detects entry into a declaration's scope without recursive tree traversal.
+
+**Function label identity**:
+A label's identity in its separate function-wide namespace. GNU local-label
+declarations introduce lexical identities that can shadow an ordinary label or
+be referenced by a nested function. Label identities are independent of ordinary
+object/function bindings and of label spellings in other functions.
+
+**Inline definition**:
+In the C99 model, a function body with external linkage whose file-scope
+declarations all specify inline without extern. It provides an inline-only body,
+not an external definition. Later declarations can change that classification;
+static inline functions have internal linkage and are not inline definitions in
+this specific sense.
+
+## Freestanding resource directory
+
+The **resource directory** is the compiler's embedded include entry,
+displayed as `<built-in>`. Its header texts live in `src/headers/` and are
+lexed through the ordinary phase 1-4 machinery. A header identity uses the
+stable `<built-in>/name.h` path, independent of the host filesystem. User and
+environment include entries precede it; the C library's **system
+directories** (`--sysroot`) and `-idirafter` entries follow it, so a resource
+header can chain to the library's header with `#include_next`. **Header
+chaining** is that hosted behavior: like Clang's resource headers, `<limits.h>`
+and `<stdint.h>` read the C library's header of the same name when
+`__has_include_next` finds one, then supply what remains. Target-description definitions are
+read, with the compiler-identity macros, from the synthetic
+`<built-in>/predefined.h` before user preprocessing.
+
+The **builtin va-list type** is the reserved `__builtin_va_list` type name,
+available without an include. It represents an array of one opaque complete
+x86-64 System V record, size 24 and alignment 8. Ordinary array decay and
+parameter adjustment apply. `<stdarg.h>` exposes it as `va_list`; the `va_*`
+intrinsics use the GNU builtin syntax node with expression/type operands.

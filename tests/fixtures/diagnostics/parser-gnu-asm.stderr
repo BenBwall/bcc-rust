@@ -1,0 +1,7 @@
+error: expected asm operand after comma, found `)`
+ --> parser-gnu-asm.c:1:35
+  |
+1 | int f(void) { __asm__("" : "r"(x),); }
+  |                                   ^ expected asm operand after comma
+
+1 error generated.

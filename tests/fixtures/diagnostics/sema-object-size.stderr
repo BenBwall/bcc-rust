@@ -1,0 +1,17 @@
+error: object type is too large
+ --> sema-object-size.c:1:6
+  |
+1 | char huge[0x7fffffffffffffffL][4];
+  |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ too large
+  |
+  = note: C99 §5.2.4.1: this implementation limits an object to PTRDIFF_MAX bytes so that pointer differences within it are representable (§6.5.6p9)
+
+error: object type is too large: `b`
+ --> sema-object-size.c:2:47
+  |
+2 | struct Big {char a[0x4000000000000000L]; char b[0x4000000000000000L];};
+  |                                               ^ too large
+  |
+  = note: C99 §5.2.4.1: this implementation limits an object to PTRDIFF_MAX bytes so that pointer differences within it are representable (§6.5.6p9)
+
+2 errors generated.

@@ -1,0 +1,17 @@
+error: invalid storage class in nested function definition: `inner`
+ --> sema-nested-function-storage.c:2:5
+  |
+2 |     static int inner(void) { return 0; }
+  |     ^^^^^^^^^^ storage class is not allowed on a nested definition
+  |
+  = note: C99 §6.7.1p5: a function declared in a block has no explicit storage class other than extern; GCC also rejects extern on a nested definition, which has no linkage
+
+error: invalid storage class in nested function definition: `other`
+ --> sema-nested-function-storage.c:3:5
+  |
+3 |     extern int other(void) { return 1; }
+  |     ^^^^^^^^^^ storage class is not allowed on a nested definition
+  |
+  = note: C99 §6.7.1p5: a function declared in a block has no explicit storage class other than extern; GCC also rejects extern on a nested definition, which has no linkage
+
+2 errors generated.

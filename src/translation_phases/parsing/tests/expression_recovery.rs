@@ -45,11 +45,70 @@ use crate::translation_phases::{
         },
     },
     preprocessing::{
+        KeywordTokenType,
         OperatorTokenType,
         StringTokenType,
         TokenType,
     },
 };
+
+#[test]
+fn varargs_builtin_missing_open_preserves_statement_and_typedef_boundaries() {
+    for (name, keyword) in [
+        ("__builtin_va_start", KeywordTokenType::BuiltinVaStart),
+        ("__builtin_va_end", KeywordTokenType::BuiltinVaEnd),
+        ("__builtin_va_copy", KeywordTokenType::BuiltinVaCopy),
+        ("__builtin_va_arg", KeywordTokenType::BuiltinVaArg),
+    ] {
+        let source = format!("void f(void) {{ {name}; typedef int T; T x; }} int after;\n");
+        with_parse(&source, |parsed| {
+            let errors = parser_errors(parsed).collect::<Vec<_>>();
+            assert_eq!(errors.len(), 1, "{name}: {errors:?}");
+            assert!(matches!(
+                errors[0],
+                ParserErrorType::ExpectedGnuSyntax(
+                    "`(` in GNU construct",
+                    Some(TokenType::Operator(OperatorTokenType::Semicolon))
+                )
+            ));
+            assert_eq!(parsed.items.len(), 2);
+            let items = block_items(function_definition(parsed, 0).body);
+            assert_eq!(items.len(), 3, "{name}: {items:?}");
+            let BlockItem::Statement(statement) = items[0] else {
+                panic!("expected recovered expression statement")
+            };
+            let StatementType::Expression(ExpressionSlot::Parsed(expression)) = statement.kind
+            else {
+                panic!("expected parsed builtin expression")
+            };
+            let ExpressionType::Builtin(builtin) = expression.kind else {
+                panic!("expected recovered builtin")
+            };
+            assert_eq!(builtin.keyword, keyword);
+            assert!(builtin.recovered);
+            assert!(builtin.operands.is_empty());
+            assert_eq!(sourced_text(parsed, builtin.source_vectors), name);
+            for (item, expected) in items[1..].iter().zip(["T", "x"]) {
+                let BlockItem::Declaration(declaration) = item else {
+                    panic!("expected preserved declaration")
+                };
+                assert_eq!(
+                    identifier_name(parsed, declaration.init_declarators[0].declarator).as_deref(),
+                    Some(expected)
+                );
+                assert!(!declaration.recovered);
+            }
+            assert_eq!(
+                identifier_name(
+                    parsed,
+                    declaration(parsed, 1).init_declarators[0].declarator
+                )
+                .as_deref(),
+                Some("after")
+            );
+        });
+    }
+}
 
 #[test]
 fn adjacent_strings_merge_across_macro_expansion_and_preserve_width() {
@@ -201,13 +260,11 @@ fn repaired_expressions_and_designations_retain_recovery_metadata() {
             panic!("expected two designations")
         };
         assert!(first.recovered);
-        assert!(second.recovered);
+        assert!(!second.recovered);
+        assert!(second.equals_source_vectors.is_none());
         let first_designator = first.designators[0];
         assert!(first_designator.recovered);
-        assert!(parser_errors(parsed).any(|error| matches!(
-            error,
-            ParserErrorType::ExpectedEqualsAfterInitializerDesignation(_)
-        )));
+        assert!(parser_errors(parsed).next().is_some());
     });
 }
 

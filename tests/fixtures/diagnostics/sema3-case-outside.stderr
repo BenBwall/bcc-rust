@@ -1,0 +1,17 @@
+error: case or default label is outside a switch
+ --> sema3-case-outside.c:1:15
+  |
+1 | void f(void) {case 1:; default:;}
+  |               ^^^^^^^^ not in a switch statement
+  |
+  = note: C99 §6.8.1p2: a case or default label appears only within a switch statement
+
+error: case or default label is outside a switch
+ --> sema3-case-outside.c:1:24
+  |
+1 | void f(void) {case 1:; default:;}
+  |                        ^^^^^^^^^ not in a switch statement
+  |
+  = note: C99 §6.8.1p2: a case or default label appears only within a switch statement
+
+2 errors generated.

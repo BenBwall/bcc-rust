@@ -1,23 +1,13 @@
 //! Source-file conditional boundary regressions only; no else-order policy.
-//! Scratch draft, not registered or compiled.
 
-use std::{
-    path::{
-        Path,
-        PathBuf,
-    },
-    sync::atomic::{
-        AtomicU64,
-        Ordering,
-    },
-    time::{
-        SystemTime,
-        UNIX_EPOCH,
-    },
+use std::path::{
+    Path,
+    PathBuf,
 };
 
 use super::Preprocessor;
 use crate::{
+    test_support::TempDir,
     translation_phases::{
         Context,
         SourceVector,
@@ -25,36 +15,6 @@ use crate::{
     },
     util::shared::SharedVec,
 };
-
-#[derive(Debug)]
-struct Headers(PathBuf);
-
-impl Headers {
-    fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let directory = std::env::temp_dir().join(format!(
-            "bcc-conditional-{}-{stamp}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed),
-        ));
-        std::fs::create_dir(&directory).unwrap();
-        Self(directory)
-    }
-
-    fn write(&self, name: &str, contents: &str) {
-        std::fs::write(self.0.join(name), contents).unwrap();
-    }
-}
-
-impl Drop for Headers {
-    fn drop(&mut self) {
-        drop(std::fs::remove_dir_all(&self.0));
-    }
-}
 
 #[derive(Debug)]
 struct ErrorRecord {
@@ -121,14 +81,14 @@ fn assert_error(error: &ErrorRecord, kind: &str, path: &Path, line: u32) {
 
 #[test]
 fn header_terminators_cannot_close_or_skip_the_callers_group() {
-    let headers = Headers::new();
-    let main = headers.0.join("main.c");
-    let header = headers.0.join("bad.h");
+    let headers = TempDir::new("conditional");
+    let main = headers.join("main.c");
+    let header = headers.join("bad.h");
     let source = "#if 1\n#include \"bad.h\"\ncaller_inside\n#endif\ncaller_after\n";
     for (directive, error_kind) in [
         ("#endif", "MoreEndifDirectivesThanIfDirectives"),
         ("#else", "ElseDirectiveWithoutIfDirective"),
-        ("#elif 0", "ElifDirectiveWithoutIfDirective"),
+        ("#elif 0", "ElifDirectiveWithoutIfDirective(\"elif\")"),
     ] {
         headers.write("bad.h", &format!("{directive}\nheader_after\n"));
         let actual = observe(source, &main);
@@ -144,9 +104,9 @@ fn header_terminators_cannot_close_or_skip_the_callers_group() {
 
 #[test]
 fn unclosed_header_groups_diagnose_locally_and_restore_the_caller() {
-    let headers = Headers::new();
-    let main = headers.0.join("main.c");
-    let header = headers.0.join("open.h");
+    let headers = TempDir::new("conditional");
+    let main = headers.join("main.c");
+    let header = headers.join("open.h");
     let source =
         "#if 1\n#include \"open.h\"\ncaller_inside\n#else\ncaller_dead\n#endif\ncaller_after\n";
     for (contents, expected) in [
@@ -174,12 +134,12 @@ fn unclosed_header_groups_diagnose_locally_and_restore_the_caller() {
 
 #[test]
 fn header_eof_diagnoses_every_local_opening_once_in_source_order() {
-    let headers = Headers::new();
-    let header = headers.0.join("open.h");
+    let headers = TempDir::new("conditional");
+    let header = headers.join("open.h");
     headers.write("open.h", "#if 1\nouter_header\n#if 1\ninner_header\n");
     let actual = observe(
         "#include \"open.h\"\ncaller_after\n",
-        &headers.0.join("main.c"),
+        &headers.join("main.c"),
     );
     assert_eq!(
         actual.spellings,
@@ -202,7 +162,7 @@ fn header_eof_diagnoses_every_local_opening_once_in_source_order() {
 
 #[test]
 fn valid_nested_header_conditionals_preserve_the_callers_selection() {
-    let headers = Headers::new();
+    let headers = TempDir::new("conditional");
     headers.write(
         "outer.h",
         "#if 1\n#include \"inner.h\"\nouter_header\n#endif\n",
@@ -210,7 +170,7 @@ fn valid_nested_header_conditionals_preserve_the_callers_selection() {
     headers.write("inner.h", "#if 0\ndead\n#else\ninner_header\n#endif\n");
     let actual = observe(
         "#if 1\n#include \"outer.h\"\ncaller_inside\n#else\ncaller_dead\n#endif\ncaller_after\n",
-        &headers.0.join("main.c"),
+        &headers.join("main.c"),
     );
     assert_eq!(
         actual.spellings,
@@ -226,12 +186,12 @@ fn valid_nested_header_conditionals_preserve_the_callers_selection() {
 
 #[test]
 fn unclosed_false_header_without_a_caller_group_preserves_the_remainder() {
-    let headers = Headers::new();
-    let header = headers.0.join("open.h");
+    let headers = TempDir::new("conditional");
+    let header = headers.join("open.h");
     headers.write("open.h", "#if 0\nheader_dead\n");
     let actual = observe(
         "#include \"open.h\"\ncaller_after\n",
-        &headers.0.join("main.c"),
+        &headers.join("main.c"),
     );
     assert_eq!(actual.spellings, ["caller_after"]);
     assert_eq!(actual.errors.len(), 1, "{actual:#?}");
@@ -245,14 +205,14 @@ fn unclosed_false_header_without_a_caller_group_preserves_the_remainder() {
 
 #[test]
 fn macro_frame_pops_do_not_end_a_source_file_conditional() {
-    let headers = Headers::new();
+    let headers = TempDir::new("conditional");
     headers.write(
         "macros.h",
         "#define OBJECT object_token\n#define ID(x) x\n#if 1\nOBJECT ID(argument_token)\n#endif\n",
     );
     let actual = observe(
         "#if 1\n#include \"macros.h\"\ncaller_inside\n#endif\ncaller_after\n",
-        &headers.0.join("main.c"),
+        &headers.join("main.c"),
     );
     assert_eq!(
         actual.spellings,
@@ -268,11 +228,11 @@ fn macro_frame_pops_do_not_end_a_source_file_conditional() {
 
 #[test]
 fn presumed_header_filename_does_not_change_its_conditional_boundary() {
-    let headers = Headers::new();
+    let headers = TempDir::new("conditional");
     headers.write("bad.h", "#line 1 \"mapped.h\"\n#endif\nheader_after\n");
     let actual = observe(
         "#if 1\n#include \"bad.h\"\ncaller_inside\n#endif\ncaller_after\n",
-        &headers.0.join("main.c"),
+        &headers.join("main.c"),
     );
     assert_eq!(
         actual.spellings,
@@ -289,10 +249,10 @@ fn presumed_header_filename_does_not_change_its_conditional_boundary() {
 
 #[test]
 fn skipped_nested_malformed_operands_remain_ignored() {
-    let headers = Headers::new();
+    let headers = TempDir::new("conditional");
     let source = "#if 0\n#unknown ##\n# 123\n#ifdef\n#if + garbage\n#endif ignored\n#endif \
                   also_ignored\n#else\nchosen\n#endif\nafter\n";
-    let actual = observe(source, &headers.0.join("main.c"));
+    let actual = observe(source, &headers.join("main.c"));
     assert_eq!(actual.spellings, ["chosen", "after"]);
     assert!(actual.errors.is_empty(), "{actual:#?}");
 }

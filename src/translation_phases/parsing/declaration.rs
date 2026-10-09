@@ -15,6 +15,8 @@
 //! 2, p. 97; PDF p. 109; the rest of paragraphs 2-4, the definition
 //! semantics of paragraph 5, p. 97; PDF p. 109, and the completeness rule of
 //! paragraph 7, p. 98; PDF p. 110, are left to semantic analysis.
+//! GNU `__auto_type` is an extension that instead defers the identifier's
+//! binding until after its initializer.
 
 use std::fmt::Debug;
 
@@ -29,6 +31,7 @@ use super::{
         DeclarationSpecifiers,
         DirectDeclarator,
         InitDeclarator,
+        TypeSpecifiers,
     },
     declarator::{
         DeclaratorFrame,
@@ -48,6 +51,11 @@ use super::{
         ParseFrameKind,
         ParseValue,
     },
+    modern::{
+        ExtendedType,
+        ModernKind,
+        ModernValue,
+    },
     recovery::{
         SynchronizationKind,
         SynchronizationSet,
@@ -60,6 +68,7 @@ use crate::{
     translation_phases::{
         SourceVectors,
         preprocessing::{
+            KeywordTokenType,
             OperatorTokenType,
             Token,
             TokenType,
@@ -87,6 +96,10 @@ pub(super) struct DeclarationFrame<'tu, 'p> {
     pub(super) init_declarators: ArenaVec<'p, InitDeclarator<'tu>>,
     /// Provenance accumulated across specifiers, declarators, and separators.
     pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
+    /// The parser's pedantic-suppression depth when this frame first ran,
+    /// restored when a leading `__extension__` goes out of scope.
+    suppression_entry: Option<usize>,
+    leading_extension: Option<SourceVectors>,
     /// Hard-error count on entry, used to scope recovery to this declaration.
     starting_error_count: usize,
     /// Provenance of `=` retained while the initializer child runs.
@@ -109,6 +122,7 @@ pub(super) enum DeclarationContext {
     /// PDF p. 147. Its storage-class constraint (paragraph 3, p. 135;
     /// PDF p. 147) is left to semantic analysis.
     ForInitializer,
+    SelectionHeader,
     /// One declaration of a function definition's `declaration-list`: C99
     /// §6.9.1 paragraph 1, p. 141; PDF p. 153.
     OldStyleParameter,
@@ -119,7 +133,8 @@ pub(super) enum DeclarationContext {
 /// C99: §6.7, p. 97; PDF p. 109. The phases encode that production
 /// iteratively.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum DeclarationPhase {
+enum DeclarationPhase {
+    AwaitAssertion,
     /// Push declaration specifiers.
     Start,
     /// Receive specifiers and decide whether a declarator follows.
@@ -134,7 +149,7 @@ pub(super) enum DeclarationPhase {
     AfterDeclarator,
     /// Push the initializer child after consuming `=`.
     PushInitializer,
-    /// Attach a recovered initializer placeholder.
+    /// Attach the initializer child.
     AwaitInitializer,
     /// Push another declarator after consuming `,`.
     BeforeNextDeclarator,
@@ -154,6 +169,8 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
             init_declarators: ArenaVec::new_in(arena),
             source_vectors: ArenaVec::new_in(arena),
             starting_error_count,
+            suppression_entry: None,
+            leading_extension: None,
             initializer_source: None,
             context,
             is_function_definition_head: false,
@@ -166,7 +183,8 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
         let place = match self.context {
             | DeclarationContext::External => DeclarationPlace::External,
             | DeclarationContext::Block => DeclarationPlace::Block,
-            | DeclarationContext::ForInitializer => DeclarationPlace::ForInitializer,
+            | DeclarationContext::ForInitializer | DeclarationContext::SelectionHeader =>
+                DeclarationPlace::ForInitializer,
             | DeclarationContext::OldStyleParameter => DeclarationPlace::OldStyleParameter,
         };
         DeclarationContinuation {
@@ -186,7 +204,8 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
     fn recovery_kind(&self) -> SynchronizationKind {
         match self.context {
             | DeclarationContext::Block => SynchronizationKind::BlockDeclaration,
-            | DeclarationContext::ForInitializer => SynchronizationKind::ForInitializer,
+            | DeclarationContext::ForInitializer | DeclarationContext::SelectionHeader =>
+                SynchronizationKind::ForInitializer,
             | DeclarationContext::External => SynchronizationKind::Declaration,
             | DeclarationContext::OldStyleParameter => SynchronizationKind::OldStyleParameter,
         }
@@ -198,12 +217,45 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
         token: Option<Token>,
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
+        _ = self
+            .suppression_entry
+            .get_or_insert(parser.pedantic_suppression);
         match self.phase {
+            | DeclarationPhase::AwaitAssertion => {
+                parser.pedantic_suppression = self
+                    .suppression_entry
+                    .expect("declaration suppression entry");
+                let Some(ParseValue::Modern(ModernValue::Assertion(assertion))) = returned else {
+                    panic!("assertion declaration protocol: {returned:?}")
+                };
+                ParseAction::Reduce(ParseValue::Declaration(parser.alloc_syntax(Declaration {
+                    assertion:                   Some(assertion),
+                    declaration_specifiers:      DeclarationSpecifiers::new(),
+                    init_declarators:            crate::util::arena_list::ArenaList::empty(),
+                    source_vectors:              assertion.source_vectors,
+                    recovered:                   assertion.recovered,
+                    is_function_definition_head: false,
+                })))
+            },
             | DeclarationPhase::Start => {
+                if let Some(token) = token
+                    && matches!(token.kind, TokenType::Keyword(KeywordTokenType::Extension))
+                {
+                    parser.pedantic_suppression += 1;
+                    parser.merge_source(&mut self.leading_extension, token);
+                    self.source_vectors.push(token.source_vectors);
+                    return ParseAction::Consume;
+                }
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
                 );
+                if token.is_some_and(|x| {
+                    matches!(x.kind, TokenType::Keyword(KeywordTokenType::StaticAssert))
+                }) {
+                    self.phase = DeclarationPhase::AwaitAssertion;
+                    return ParseAction::Push(parser.pooled_modern_frame(ModernKind::Assertion));
+                }
                 // Specifiers are a child production because tag
                 // specifiers may suspend again
                 // for complete struct/union/enum bodies.
@@ -216,6 +268,18 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
                     panic!("specifier frame returned an unexpected value: {returned:?}");
                 };
+                let mut specifiers = specifiers;
+                if let Some(source_vectors) = self.leading_extension {
+                    specifiers.extensions =
+                        Some(parser.alloc_syntax(super::modern::SpecifierExtension {
+                            kind: super::modern::SpecifierExtensionKind::ExtensionMarker,
+                            next: specifiers.extensions,
+                            source_vectors,
+                        }));
+                    specifiers.source_vectors = parser
+                        .context
+                        .merge_vectors(source_vectors, specifiers.source_vectors);
+                }
                 self.declaration_specifiers = Some(specifiers);
                 self.source_vectors.push(specifiers.source_vectors);
                 // A bare `;` completes the grammar's optional
@@ -281,7 +345,16 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 // now so typedef shadowing affects the very next token.
                 // C99 §6.2.1p7; typedef names share the ordinary name space
                 // (§6.7.7p3).
-                if let Some(identifier) = declarator.identifier() {
+                // GNU extension: `__auto_type` keeps outer bindings visible
+                // throughout its initializer (GCC's "Referring to a Type
+                // with typeof" specification).
+                if !self.declaration_specifiers.is_some_and(|specifiers| {
+                    matches!(
+                        specifiers.type_specifiers,
+                        TypeSpecifiers::Extended(ExtendedType::AutoType)
+                    )
+                }) && let Some(identifier) = declarator.identifier()
+                {
                     let class = if self.declaration_specifiers.is_some_and(|specifiers| {
                         specifiers.storage_class == Some(StorageClass::Typedef)
                     }) {
@@ -364,12 +437,39 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     && old_style_parameters.is_some_and(|parameters| {
                         parser.next_declaration_declares_one_of(parameters.as_slice())
                     });
-                let starts_function_definition = self.context == DeclarationContext::External
-                    && has_sole_uninitialized_declarator
-                    && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
-                        || parser.hard_error_count == self.starting_error_count
-                            && token.is_some_and(|token| parser.declaration_starter(token))
-                        || continues_old_style_definition);
+                // A GNU nested function (block context) starts at `{` after a
+                // function declarator, or at a declaration-list that declares
+                // one of its identifier-list parameters. A prototype head
+                // followed by a declaration is a block declaration missing
+                // its `;`, not a definition swallowing the rest of the block.
+                let starts_function_definition = has_sole_uninitialized_declarator
+                    && match self.context {
+                        | DeclarationContext::External =>
+                            is_operator(token, OperatorTokenType::OpeningCurlyBrace)
+                                || parser.hard_error_count == self.starting_error_count
+                                    && token.is_some_and(|token| parser.declaration_starter(token))
+                                || continues_old_style_definition,
+                        | DeclarationContext::Block => match self
+                            .init_declarators
+                            .first()
+                            .and_then(|init| init.declarator.function_suffix())
+                        {
+                            | Some(DirectDeclarator::KAndRStyleFunction { parameters })
+                                if !parameters.is_empty()
+                                    && !is_operator(
+                                        token,
+                                        OperatorTokenType::OpeningCurlyBrace,
+                                    ) =>
+                                token.is_some_and(|token| parser.declaration_starter(token))
+                                    && parser
+                                        .next_declaration_declares_one_of(parameters.as_slice()),
+                            | Some(_) => is_operator(token, OperatorTokenType::OpeningCurlyBrace),
+                            | None => false,
+                        },
+                        | DeclarationContext::ForInitializer
+                        | DeclarationContext::SelectionHeader
+                        | DeclarationContext::OldStyleParameter => false,
+                    };
                 // The same prefix can continue as another
                 // init-declarator, an
                 // initializer, a completed declaration, or a function
@@ -403,8 +503,10 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     self.is_function_definition_head = true;
                     self.phase = DeclarationPhase::Finish;
                     ParseAction::Reprocess
-                } else if self.context == DeclarationContext::ForInitializer
-                    && is_operator(token, OperatorTokenType::ClosingParenthesis)
+                } else if matches!(
+                    self.context,
+                    DeclarationContext::ForInitializer | DeclarationContext::SelectionHeader
+                ) && is_operator(token, OperatorTokenType::ClosingParenthesis)
                 {
                     self.phase = DeclarationPhase::Finish;
                     ParseAction::Reprocess
@@ -457,7 +559,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     self.context,
                     DeclarationContext::Block | DeclarationContext::ForInitializer
                 ) && (is_operator(token, OperatorTokenType::OpeningCurlyBrace)
-                    || token.is_some_and(|token| token.kind == TokenType::Identifier)
+                    || token.is_some_and(|token| matches!(token.kind, TokenType::Identifier))
                         && is_operator(parser.cursor.following(), OperatorTokenType::Colon))
                 {
                     parser.report(
@@ -503,7 +605,10 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 ParseAction::Push(ParseFrame::Initializer(InitializerFrame::new(
                     parser.arena,
                     parser.hard_error_count,
-                    self.context == DeclarationContext::ForInitializer,
+                    matches!(
+                        self.context,
+                        DeclarationContext::ForInitializer | DeclarationContext::SelectionHeader
+                    ),
                     false,
                 )))
             },
@@ -528,6 +633,18 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     init_declarator.source_vectors = parser
                         .context
                         .merge_vectors(init_declarator.source_vectors, initializer_source);
+                    // GNU `__auto_type` is an exception to C99 §6.2.1p7:
+                    // publish only after the initializer child has finished,
+                    // including when that child recovered malformed syntax.
+                    if self.declaration_specifiers.is_some_and(|specifiers| {
+                        matches!(
+                            specifiers.type_specifiers,
+                            TypeSpecifiers::Extended(ExtendedType::AutoType)
+                        )
+                    }) && let Some(identifier) = init_declarator.declarator.identifier()
+                    {
+                        parser.scopes.publish(identifier.name, NameClass::Ordinary);
+                    }
                 }
                 self.phase = DeclarationPhase::AfterDeclarator;
                 ParseAction::Continue
@@ -544,6 +661,9 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 )))
             },
             | DeclarationPhase::Finish => {
+                parser.pedantic_suppression = self
+                    .suppression_entry
+                    .expect("declaration suppression entry");
                 debug_assert!(
                     returned.is_none(),
                     "this frame phase cannot receive a child value"
@@ -554,6 +674,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 let source_vectors = parser.context.merge_vector_list(&self.source_vectors);
                 let init_declarators = parser.alloc_syntax_list(&mut self.init_declarators);
                 let declaration = parser.alloc_syntax(Declaration {
+                    assertion: None,
                     declaration_specifiers: self
                         .declaration_specifiers
                         .expect("a declaration cannot finish without specifiers"),

@@ -1,0 +1,25 @@
+error: expected an expression after `+`
+ --> pp-colon-in-operand-position.c:1:9
+  |
+1 | #if 1 + : 2
+  |         ^ `+` needs an operand here
+
+error: expected an expression after `:`
+ --> pp-colon-in-operand-position.c:3:13
+  |
+3 | #if 1 ? 1 : :
+  |             ^ `:` needs an operand here
+
+error: expected an expression after `*`
+ --> pp-colon-in-operand-position.c:5:17
+  |
+5 | #if 1 ? 2 : 3 * :
+  |                 ^ `*` needs an operand here
+
+error: expected an expression after `-`
+ --> pp-colon-in-operand-position.c:7:11
+  |
+7 | #if 1 ? - : 2
+  |           ^ `-` needs an operand here
+
+4 errors generated.

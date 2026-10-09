@@ -1,0 +1,31 @@
+warning: 'variadic macro' is a C99 extension
+ --> lexpp-c89-extensions.c:2:9
+  |
+2 | #define V(x,...) x
+  |         ^
+
+warning: 'empty macro argument' is a C99 extension
+ --> lexpp-c89-extensions.c:3:16
+  |
+3 | int a = IGNORE();
+  |                ^
+
+warning: 'empty macro argument' is a C99 extension
+ --> lexpp-c89-extensions.c:4:13
+  |
+4 | int b = V(2,);
+  |             ^
+
+warning: 'long long integer constant' is a C99 extension
+ --> lexpp-c89-extensions.c:5:14
+  |
+5 | long value = 1LL;
+  |              ^^^
+
+warning: 'hexadecimal floating constant' is a C99 extension
+ --> lexpp-c89-extensions.c:6:14
+  |
+6 | double hex = 0x1p0;
+  |              ^^^^^
+
+5 warnings generated.

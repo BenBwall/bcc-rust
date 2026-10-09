@@ -1,0 +1,9 @@
+error: block-scope function declaration has a storage class other than extern: `g`
+ --> sema-function-storage.c:1:27
+  |
+1 | void f(void) { static int g(void); extern int ok(void); }
+  |                           ^ function declared in a block
+  |
+  = note: C99 §6.7.1p5: a function declared in a block has no explicit storage class other than extern
+
+1 error generated.
