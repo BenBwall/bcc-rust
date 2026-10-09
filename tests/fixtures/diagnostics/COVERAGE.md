@@ -504,6 +504,7 @@ snapshot at `tests/fixtures/semantic/types.stderr`.
 | `FileScopeVariableType` | [VLA](sema-file-vla.c) | Runtime file bound, linked/static VLA constraints and variably modified members. |
 | `IncompatibleDeclaration` | [incompatible](sema-incompatible.c) | Incompatible redeclaration and previous source. |
 | `DuplicateDeclaration` | [duplicate](sema-duplicate.c) | Repeated no-linkage declarations, including local then extern. |
+| `DuplicateDeclaration` | [typedef redefinition](sema-typedef-redefinition.c) | A typedef repeated with a different type; repeating the same type is the C11 extension before C11, as in GCC and Clang. |
 | `ConflictingLinkage` | [linkage](sema-linkage.c) | Internal/external linkage mix. Positive extern-after-static is in unit tests. |
 | `TagKindMismatch` | [tag kind](sema-tag-kind.c) | Tag namespace kind conflicts. |
 | `TagRedefinition` | [tag definition](sema-tag-redefinition.c) | Completing an already complete tag. |

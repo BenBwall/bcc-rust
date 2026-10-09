@@ -199,6 +199,49 @@ fn unanalyzed_redeclarations_inherit_the_previous_kind() {
 }
 
 #[test]
+fn repeated_typedefs_are_a_c11_extension_before_c11() {
+    // GCC and Clang accept a typedef repeated with the same type in every
+    // mode and report it as a C11 feature only when pedantic, in GNU modes
+    // too. MSVC's vcruntime.h repeats the resource stddef.h's typedefs.
+    let source = "typedef int t; typedef int t; typedef long u; typedef int u;";
+    for standard in [
+        CStandard::C89,
+        CStandard::C99,
+        CStandard::C11,
+        CStandard::C23,
+    ] {
+        for gnu in [false, true] {
+            assert_eq!(
+                kinds(
+                    source,
+                    CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                        .with_gnu_extensions(gnu)
+                ),
+                [SemanticErrorKind::DuplicateDeclaration],
+                "{standard:?} {gnu}"
+            );
+            assert_eq!(
+                extensions("typedef int t; typedef int t;", pedantic(standard, gnu)),
+                if standard < CStandard::C11 {
+                    &["'typedef redefinition' is a C11 extension"][..]
+                } else {
+                    &[]
+                },
+                "{standard:?} {gnu}"
+            );
+        }
+    }
+    // A variably modified typedef is never redefined.
+    assert_eq!(
+        kinds(
+            "void f(int n) { typedef int a[n]; typedef int a[n]; }",
+            gnu17()
+        ),
+        [SemanticErrorKind::DuplicateDeclaration]
+    );
+}
+
+#[test]
 fn members_through_pointers_to_unanalyzed_types_are_opaque() {
     // `->` must not assume that an unanalyzed pointee has no such member, as
     // `.` on an unanalyzed object already does not. shlobj_core.h reads
