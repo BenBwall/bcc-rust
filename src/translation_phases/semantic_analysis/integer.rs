@@ -655,10 +655,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     {
                         return true;
                     }
-                    if matches!(
-                        target_type.declaration_specifiers.type_specifiers,
-                        super::TypeSpecifiers::Extended(_)
-                    ) {
+                    if unanalyzed_extended(target_type.declaration_specifiers.type_specifiers) {
                         return true;
                     }
                     pending.push(operand_expression);
@@ -671,10 +668,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     {
                         return true;
                     }
-                    if matches!(
-                        name.declaration_specifiers.type_specifiers,
-                        super::TypeSpecifiers::Extended(_)
-                    ) {
+                    if unanalyzed_extended(name.declaration_specifiers.type_specifiers) {
                         return true;
                     }
                 },
@@ -864,6 +858,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => self.integers.push(None),
         }
     }
+}
+
+/// Extension type specifiers this phase leaves unanalyzed; MSVC sized
+/// integers are the standard integer types. Extensions follow C99 §4p6,
+/// p. 7; PDF p. 19.
+fn unanalyzed_extended(specifiers: super::TypeSpecifiers<'_>) -> bool {
+    matches!(
+        specifiers,
+        super::TypeSpecifiers::Extended(extended)
+            if !matches!(extended, super::ExtendedType::MsInteger { .. })
+    )
 }
 
 fn common(mut left: (u32, bool), mut right: (u32, bool)) -> (u32, bool) {
