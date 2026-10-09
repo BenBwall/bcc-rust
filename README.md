@@ -245,6 +245,17 @@ searched implicitly. The environment variables use the platform path separator,
 and, as in GCC, an empty element names the working directory. A missing
 header's diagnostic lists every directory searched.
 
+Build-system options `-D NAME`, `-DNAME`, `-D NAME=VALUE`, `-DNAME=VALUE`,
+`-U NAME`, `-UNAME`, and `-include FILE` are supported. An omitted value means
+`1`; an explicit empty value stays empty, and values may contain spaces and
+additional `=` characters. Quote each argument for your shell. Function-like
+definitions such as `'-DF(x)=((x)+1)'` use the normal macro parser. Definitions
+and undefinitions run in their command-line order after predefined macros;
+forced includes then run in their command-line order, as in GCC/Clang. A forced
+include starts lookup in the working directory and then uses the quoted include
+search path. Definitions and startup diagnostics have stable `<command line>`
+provenance. Builtin protections still apply. `-imacros` is not implemented.
+
 Headers found through `-isystem`, `C_INCLUDE_PATH`, the resource directory, the
 C library's directories or `-idirafter`, and headers that use `#pragma GCC
 system_header`, are system headers, as in GCC: their warnings and extension

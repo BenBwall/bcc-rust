@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **361 top-level C inputs and 361 stderr snapshots**, plus five supporting headers and 121 mode/policy `.args` sidecars. One hundred four of the inputs cover semantic analysis (twenty-eight for declarations, twenty-eight for expressions and initializers, forty-one for statements and functions, three for 128-bit integers, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **140 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 121 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **362 top-level C inputs and 362 stderr snapshots**, plus five supporting headers and 122 mode/policy `.args` sidecars. One hundred four of the inputs cover semantic analysis (twenty-eight for declarations, twenty-eight for expressions and initializers, forty-one for statements and functions, three for 128-bit integers, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **140 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 121 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -704,3 +704,8 @@ high-half switch cases. `sema-int128-pedantic.c` pins keyword warnings,
 All use structured existing semantic kinds and C99 notes; following valid
 input survives. Arithmetic/layout positives are in the shared target probe
 and direct semantic unit tests, with allocation coverage for both paths.
+
+### Command-line and MinGW compatibility regressions
+
+- `cli-invalid-definition.c` / `.args` / `.stderr` inspect an invalid `-D1x` name at deterministic `<command line>` provenance, using the existing `ExpectedIdentifierInDefineDirective` diagnostic.
+- `../targets/mingw-callconv.c` is a positive Clang/bcc target probe, not a diagnostic input, and does not contribute to the counts above.
