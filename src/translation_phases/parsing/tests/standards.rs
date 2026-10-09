@@ -351,6 +351,8 @@ fn modern_grammar_truncations_terminate_with_restored_state() {
         "enum E : unsigned int { A [[deprecated]]=1 };",
         "int f(void){if(int x=1;x) return x;}",
         "int f(void){switch(1){case 1 ... 3:break;} end:}",
+        "int f(void){return (static struct { struct { int x; } inner; }){{1}}.inner.x;}",
+        "int f(void){return _Countof (static struct { int x; }[1]){{1}};}",
     ] {
         for end in 0..=source.len() {
             with_parse_configuration(
@@ -979,6 +981,44 @@ fn countof_takes_a_compound_literal_operand() {
             );
         },
     );
+}
+
+#[test]
+fn compound_literal_storage_survives_aggregate_bodies_in_type_names() {
+    for (standard, operand) in [
+        (CStandard::C23, "(static struct { int x; }){1}.x"),
+        (CStandard::C23, "(static union { int x; int y; }){1}.x"),
+        (
+            CStandard::C23,
+            "(static struct { struct { int x; } inner; }){{1}}.inner.x",
+        ),
+        (CStandard::C23, "(static enum { E = (1) }){E}"),
+        (
+            CStandard::C2y,
+            "_Countof (static struct { int x; }[1]){{1}}",
+        ),
+    ] {
+        let source = format!("int f(void) {{ return {operand}; }} int after;");
+        with_parse_configuration(&source, mode(standard, ExtensionPolicy::Deny), |p| {
+            assert!(p.errors.is_empty(), "{source}: {:?}", p.errors);
+            assert_eq!(p.items.len(), 2, "following declaration survives");
+            let literal = p
+                .parser
+                .syntax
+                .iter::<super::super::syntax::Expression<'_>>()
+                .find(|x| matches!(x.kind, ExpressionType::CompoundLiteral { .. }))
+                .expect("compound literal");
+            let ExpressionType::CompoundLiteral { type_name, .. } = literal.kind else {
+                unreachable!("selected compound literal");
+            };
+            assert!(!literal.recovered, "{source}");
+            assert_eq!(
+                type_name.declaration_specifiers.storage_class,
+                Some(super::super::syntax::StorageClass::Static),
+                "{source}"
+            );
+        });
+    }
 }
 
 #[test]

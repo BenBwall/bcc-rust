@@ -216,6 +216,9 @@ enum ExpressionPhase<'tu> {
     CloseStatementExpression(SourceVectors, &'tu super::syntax::Statement<'tu>),
     CountofStart(SourceVectors),
     AwaitCountofExpression(SourceVectors),
+    /// GNU extension: like `sizeof`, C99 §6.5.3p1, p. 78; PDF p. 90.
+    AlignofStart(SourceVectors),
+    AwaitAlignofExpression(SourceVectors),
     Finish,
     RecoverUnexpectedBrace(u32, SourceVectors),
     PushGrouped(SourceVectors),
@@ -689,6 +692,46 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 self.push_operand(index, true, false);
                 self.phase = ExpressionPhase::Parse;
                 return ParseAction::Continue;
+            },
+            | ExpressionPhase::AlignofStart(source) => {
+                // GNU extension to C99 §6.5.3p1: a parenthesized type name
+                // or a unary-expression, including a compound literal.
+                if token.is_some_and(|x| {
+                    matches!(
+                        x.kind,
+                        TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                    )
+                }) && Self::parenthesized_type_name_follows(parser)
+                    && !Self::parenthesized_compound_literal_follows(parser)
+                {
+                    self.phase = ExpressionPhase::AwaitModern(KeywordTokenType::Alignof, source);
+                    let frame = ModernFrame::operand_after_keyword(
+                        parser.arena,
+                        parser.hard_error_count,
+                        source,
+                    );
+                    return ParseAction::Push(ParseFrame::Modern(parser.pools.modern(frame)));
+                }
+                self.phase = ExpressionPhase::AwaitAlignofExpression(source);
+                return ParseAction::Push(ParseFrame::Expression(self.nested(
+                    parser.arena,
+                    ExpressionMode::UnaryExpression,
+                    self.boundary,
+                    parser.hard_error_count,
+                )));
+            },
+            | ExpressionPhase::AwaitAlignofExpression(source) => {
+                let operand = expression_value(returned);
+                let merged = parser.context.merge_vectors(source, operand.source_vectors);
+                let expression = parser.store_expression(
+                    ExpressionType::AlignofExpr(operand),
+                    merged,
+                    Some(source),
+                    parser.hard_error_count > self.starting_error_count,
+                );
+                self.push_operand(expression, true, false);
+                self.phase = ExpressionPhase::Parse;
+                return ParseAction::Reprocess;
             },
             | ExpressionPhase::AwaitModern(keyword, keyword_source) => {
                 let (kind, source) = match returned {
@@ -1472,6 +1515,12 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             ) = token.kind
             {
                 if keyword == KeywordTokenType::Alignof {
+                    if KeywordTokenType::classify(token.contents, parser.context.configuration)
+                        .is_some_and(|x| x.origin == Some(crate::configuration::FeatureOrigin::Gnu))
+                    {
+                        self.phase = ExpressionPhase::AlignofStart(token.source_vectors);
+                        return ParseAction::Consume;
+                    }
                     Self::report_alignof_expression(parser, token);
                 }
                 self.phase = ExpressionPhase::AwaitModern(keyword, token.source_vectors);
@@ -1923,12 +1972,17 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
 
     /// Returns whether the parenthesized type name starting at the current
     /// token belongs to a compound literal: the `)` closing it is followed
-    /// directly by `{`. A `;` or `}` before that `)` ends the scan.
+    /// directly by `{`. A `;` or `}` outside an aggregate body before that
+    /// `)` ends the scan.
     ///
     /// C99: `( type-name ) { initializer-list }`, §6.5.2.5 paragraph 1,
     /// p. 75; PDF p. 87.
+    /// Aggregate bodies: §6.7.2.1 paragraph 1, p. 101; PDF p. 113.
+    /// C23: compound-literal storage, §6.5.3.6 paragraph 1,
+    /// p. 78; PDF p. 91.
     fn type_name_is_compound_literal(parser: &Parser<'_, 'tu, 'p>) -> bool {
         let mut groups = 0usize;
+        let mut braces = 0usize;
         let mut offset = 0usize;
         let mut token = parser.cursor.current();
         while let Some(current) = token {
@@ -1936,7 +1990,8 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 | TokenType::Operator(
                     OperatorTokenType::OpeningParenthesis | OperatorTokenType::OpeningSquareBracket,
                 ) => groups += 1,
-                | TokenType::Operator(OperatorTokenType::ClosingParenthesis) if groups == 0 =>
+                | TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                    if groups == 0 && braces == 0 =>
                     return parser.cursor.lookahead(offset).is_some_and(|x| {
                         matches!(
                             x.kind,
@@ -1946,9 +2001,12 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 | TokenType::Operator(
                     OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
                 ) => groups = groups.saturating_sub(1),
+                | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => braces += 1,
+                | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) if braces != 0 =>
+                    braces -= 1,
                 | TokenType::Operator(
                     OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace,
-                ) => return false,
+                ) if braces == 0 => return false,
                 | _ => {},
             }
             token = parser.cursor.lookahead(offset);
@@ -2000,6 +2058,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             return false;
         }
         let mut groups = 0usize;
+        let mut braces = 0usize;
         let mut index = 0;
         while let Some(token) = parser.cursor.lookahead(index) {
             index += 1;
@@ -2007,7 +2066,8 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 | TokenType::Operator(
                     OperatorTokenType::OpeningParenthesis | OperatorTokenType::OpeningSquareBracket,
                 ) => groups += 1,
-                | TokenType::Operator(OperatorTokenType::ClosingParenthesis) if groups == 0 =>
+                | TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+                    if groups == 0 && braces == 0 =>
                     return parser.cursor.lookahead(index).is_some_and(|x| {
                         matches!(
                             x.kind,
@@ -2017,9 +2077,12 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 | TokenType::Operator(
                     OperatorTokenType::ClosingParenthesis | OperatorTokenType::ClosingSquareBracket,
                 ) => groups = groups.saturating_sub(1),
+                | TokenType::Operator(OperatorTokenType::OpeningCurlyBrace) => braces += 1,
+                | TokenType::Operator(OperatorTokenType::ClosingCurlyBrace) if braces != 0 =>
+                    braces -= 1,
                 | TokenType::Operator(
                     OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace,
-                ) => return false,
+                ) if braces == 0 => return false,
                 | _ => {},
             }
         }

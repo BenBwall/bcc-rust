@@ -18,6 +18,77 @@ use crate::{
 };
 
 #[test]
+fn alignof_aliases_accept_unary_operands_and_preserve_precedence() {
+    use super::super::syntax::{
+        Expression,
+        ExpressionType,
+    };
+
+    for spelling in ["__alignof__", "__alignof"] {
+        for operand in [
+            "x", "*p", "++x", "sizeof x", "x++", "(x + 1)", "(int)", "(int){1}",
+        ] {
+            for gnu in [false, true] {
+                for policy in [
+                    ExtensionPolicy::Allow,
+                    ExtensionPolicy::Warn,
+                    ExtensionPolicy::Deny,
+                ] {
+                    let source =
+                        format!("int f(int x, int *p) {{ return {spelling} {operand} + 1; }}\n");
+                    with_parse_configuration(
+                        &source,
+                        CompilerConfiguration::new(CStandard::C17, policy).with_gnu_extensions(gnu),
+                        |p| {
+                            assert_eq!(parser_errors(p).count(), 0, "{source}: {:?}", p.errors);
+                            let expression = p
+                                .parser
+                                .syntax
+                                .iter::<Expression<'_>>()
+                                .find(|x| {
+                                    matches!(
+                                        x.kind,
+                                        ExpressionType::AlignofExpr(_)
+                                            | ExpressionType::AlignofType(_)
+                                    )
+                                })
+                                .expect("alignment expression");
+                            assert!(!expression.recovered, "{source}");
+                            assert_eq!(
+                                super::sourced_text(
+                                    p,
+                                    expression
+                                        .operator_source_vectors
+                                        .expect("alignment keyword source")
+                                ),
+                                spelling,
+                                "{source}"
+                            );
+                            assert!(p.parser.syntax.iter::<Expression<'_>>().any(|x| {
+                                matches!(x.kind, ExpressionType::Binary { left_expression, .. } if std::ptr::eq(left_expression, expression))
+                            }), "alignment must leave the addition outside its operand: {source}");
+                            assert_eq!(
+                                p.errors.len(),
+                                usize::from(policy != ExtensionPolicy::Allow),
+                                "{:?}",
+                                p.errors
+                            );
+                            assert!(
+                                p.errors
+                                    .iter()
+                                    .all(|x| x.to_string().contains("GNU extension")),
+                                "{:?}",
+                                p.errors
+                            );
+                        },
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn reserved_asm_alias_remains_gnu_with_or_without_msvc_assembly() {
     let source = "__asm(\"file\"); int label __asm(\"external\"); int f(void){ __asm(\"nop\"); \
                   __asm __volatile__ __inline__ (\"nop\"); __asm goto(\"\" : : : : L); L: return \
@@ -304,6 +375,7 @@ fn malformed_gnu_prefixes_terminate_and_restore_machine_state() {
          S,a[1].b)+__builtin_types_compatible_p(int,long)+__builtin_choose_expr(1,2,3);}",
         "int a[4]={[1 ... 3]=2};",
         "__extension__ int f(void){int nested(int x){return x;} return 1;}",
+        "int f(int x,int *p){return __extension__ __alignof__ *p + __alignof(x);}",
     ] {
         for end in 0..=source.len() {
             with_parse_configuration(
