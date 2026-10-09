@@ -48,6 +48,7 @@ pub use benchmarking::{
     lex,
     parse,
     parse_file,
+    parse_file_with_library,
     parse_msvc_source,
     parse_source,
     preprocess,

@@ -19,7 +19,8 @@
 //! translation phases 1 through 7 under the batch pipeline for one
 //! translation unit and then drops all of its arenas. The inputs are the
 //! generated benchmark inputs that are C, a source written to reach the
-//! rarer paths of every phase, and a main file with headers read from disk.
+//! rarer paths of every phase, a main file with headers read from disk, and
+//! a probe whose resource headers chain to a fake C library on disk.
 //! Every input must produce no diagnostics; reporting them is covered by
 //! `reporting_golden_diagnostics_makes_no_global_allocations` above. Not
 //! covered: `__DATE__` and `__TIME__` (which the benchmark API pins to the
@@ -757,6 +758,28 @@ mod measurements {
             allocations.bytes = allocations.stacks.iter().map(|(size, _)| size).sum();
         }
         assert_eq!(summary.external_declarations, 5);
+        assert_no_allocations(&main.display().to_string(), summary, &allocations);
+    }
+
+    /// The hosted resource headers chain to a glibc-like C library with
+    /// `#include_next` and `__has_include_next`, and satisfy its partial
+    /// `<stddef.h>` and `<stdarg.h>` requests.
+    #[test]
+    fn chaining_resource_headers_to_a_c_library_allocates_only_from_arenas_and_std_file_system() {
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hosted");
+        let main = fixtures.join("probe.c");
+        let library = fixtures.join("sysroot/usr/include");
+        let (summary, mut allocations) = count_compile(|| {
+            bcc_rust::parse_file_with_library(&main, &library).expect("the probe is readable")
+        });
+        if allocations.calls <= KEPT_STACKS {
+            allocations
+                .stacks
+                .retain(|(_, stack)| !in_std_file_system(stack));
+            allocations.calls = allocations.stacks.len();
+            allocations.bytes = allocations.stacks.iter().map(|(size, _)| size).sum();
+        }
         assert_no_allocations(&main.display().to_string(), summary, &allocations);
     }
 }

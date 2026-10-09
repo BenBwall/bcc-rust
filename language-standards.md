@@ -86,7 +86,12 @@ is implied by target compatibility.
 
 ### Embedded freestanding headers
 
-All nine headers are discoverable in all language modes, after the `-I`,
+All nine headers are discoverable in all language modes, and each behaves like
+Clang's resource header of the same name, whose logic, not text, they follow.
+In a hosted translation a header that Clang chains to the C library tests
+`__has_include_next` and reads the library's header with `#include_next`
+before supplying what remains; `-ffreestanding` skips the C library entirely.
+The headers are searched after the `-I`,
 `-isystem` and environment directories and before the C library's directories
 (`--sysroot`) and `-idirafter`; quoted lookup additionally gives local and
 `-iquote` headers priority. `-nostdinc` and `-nobuiltininc` remove the resource
@@ -96,13 +101,13 @@ still follows the configured extension policy.
 
 | Header | Contents and mode policy |
 | --- | --- |
-| `float.h` | C99 floating limits; C11 adds true minima, subnormal and decimal-digit macros. `FLT_ROUNDS` is the default round-to-nearest value `1`; `FLT_EVAL_METHOD` is `0`. Runtime changes to the rounding environment require backend support. |
+| `float.h` | C99 floating limits; C11 adds true minima, subnormal and decimal-digit macros. `FLT_ROUNDS` is the default round-to-nearest value `1`; `FLT_EVAL_METHOD` is `0`. Runtime changes to the rounding environment require backend support. Hosted with `__MINGW32__` or `_MSC_VER` defined, it first reads the C library's `<float.h>` and then replaces its characteristics, as Clang does. |
 | `iso646.h` | The eleven C alternative operator macros. |
-| `limits.h` | LP64 signed/unsigned limits and `MB_LEN_MAX == 1`, matching Clang's freestanding resource header. Long-long limits appear from C99 onward. |
-| `stdarg.h` | `va_list` and the four `va_*` macros in every mode. The reserved intrinsic type is an array of one opaque 24-byte, 8-aligned SysV record. |
+| `limits.h` | LP64 signed/unsigned limits; long-long limits from C99 onward. Hosted, it first reads the C library's `<limits.h>` for its POSIX and other additions, defining `_GCC_LIMITS_H_` in GNU modes so glibc does not look for GCC's header, then replaces the integer limits with the target's, as Clang does. `MB_LEN_MAX` is defined only if the C library did not (glibc 16, musl 4, MSVC 5); the fallback is `4`, since bcc's literals are UTF-8 and 4 bytes cover every stateless encoding. Clang's fallback is `1`. |
+| `stdarg.h` | `va_list` and the four `va_*` macros in every mode, plus GNU `__gnuc_va_list` and `__va_copy`. Like Clang's, it may be included repeatedly; `__need___va_list`, `__need_va_list`, `__need_va_arg`, `__need___va_copy` and `__need_va_copy` request one part, and each part keeps its conventional guard (`__GNUC_VA_LIST`, `_VA_LIST`). The reserved intrinsic type is an array of one opaque 24-byte, 8-aligned SysV record. |
 | `stdbool.h` | `__bool_true_false_are_defined`; `bool`, `true`, `false` macros before C23. C23 uses language keywords. |
-| `stddef.h` | `size_t`, `ptrdiff_t`, `wchar_t`, `NULL`, `offsetof`; C11 adds `max_align_t`. |
-| `stdint.h` | All 8/16/32/64 exact, least and fast types, pointer and maximum types, corresponding limits and constant macros; `SIG_ATOMIC`, `SIZE`, `PTRDIFF`, `WCHAR`, `WINT` limits. |
+| `stddef.h` | `size_t`, `ptrdiff_t`, `wchar_t`, `NULL`, `offsetof`; C11 adds `max_align_t`, and `__STDC_WANT_LIB_EXT1__` adds `rsize_t`. Like Clang's, it may be included repeatedly: `__need_size_t`, `__need_ptrdiff_t`, `__need_wchar_t`, `__need_NULL`, `__need_wint_t`, `__need_rsize_t`, `__need_max_align_t` and `__need_offsetof` request one part, as glibc's headers do. Each type keeps its conventional guard (`_SIZE_T`, `_PTRDIFF_T`, `_WCHAR_T`, `_WINT_T`, `_RSIZE_T`), so a definition the C library made first is kept; a requested `NULL` is always restored to `((void *)0)`. |
+| `stdint.h` | All 8/16/32/64 exact, least and fast types, pointer and maximum types, corresponding limits and constant macros; `SIG_ATOMIC`, `SIZE`, `PTRDIFF`, `WCHAR`, `WINT` limits. Hosted, a C library `<stdint.h>` replaces all of these, as with Clang. |
 | `stdalign.h` | Like Clang: `alignas`, `alignof`, and the two indicator macros when `__STDC_VERSION__` exists and precedes C23; empty in C89 and C23/C2y. |
 | `stdnoreturn.h` | Like Clang: `noreturn` and `__noreturn_is_defined` in every mode, retained in C23 despite deprecation. |
 

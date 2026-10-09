@@ -245,13 +245,18 @@ searched implicitly. The environment variables use the platform path separator,
 and, as in GCC, an empty element names the working directory. A missing
 header's diagnostic lists every directory searched. `__DATE__` and `__TIME__` are fixed once per translation unit. For reproducible output, `--source-date-epoch <seconds>` or the `SOURCE_DATE_EPOCH` variable pins them to that UTC time; the flag wins, a malformed variable is ignored, and a malformed flag value is an error. Files under [`test-programs/`](test-programs/) are useful manual inspection inputs, but they are not an automated conformance suite.
 
-The freestanding model (`__STDC_HOSTED__ == 0`) includes the seven C99 resource
-headers: `<float.h>`, `<iso646.h>`, `<limits.h>`, `<stdarg.h>`, `<stdbool.h>`,
+The resource directory holds the seven headers a freestanding implementation
+provides: `<float.h>`, `<iso646.h>`, `<limits.h>`, `<stdarg.h>`, `<stdbool.h>`,
 `<stddef.h>` and `<stdint.h>` (C99 §4p6, printed p. 7; PDF p. 19). `<stdalign.h>`
 and `<stdnoreturn.h>` are also available, with the Clang language-mode macro
 gates documented in [language-standards.md](language-standards.md). These are
-embedded compiler resources; no host C library or on-disk include directory is
-required. Diagnostics and token dumps name them `<built-in>/name.h`.
+embedded compiler resources; with `-ffreestanding`, or when no C library is
+configured, no on-disk include directory is required. Hosted, each behaves like
+Clang's resource header of the same name: `<limits.h>` and `<stdint.h>` chain
+to the C library's header with `#include_next` (`<float.h>` too for MinGW-w64
+and the MSVC runtime), and `<stddef.h>` and `<stdarg.h>` answer the partial
+`__need_*` requests that glibc's headers make. Diagnostics and token dumps name
+them `<built-in>/name.h`.
 Target-description macros describe x86-64 System V LP64 in all language modes,
 independently of the host ABI. Compiler and OS identity macros remain absent.
 `offsetof` and the varargs intrinsics have semantic types; this front end does
