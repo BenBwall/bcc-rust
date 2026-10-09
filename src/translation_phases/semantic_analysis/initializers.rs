@@ -420,6 +420,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let TypeKind::Array(element, bound) = self.types.nodes[target.index] else {
             return None;
         };
+        // An array of arrays receives the string through brace elision into
+        // its first element instead (§6.7.8p20).
+        if self.aggregate(element) {
+            return None;
+        }
         let (literal_element, count) = self.string_type(value)?;
         let compatible = if matches!(
             self.types.nodes[literal_element.index],
