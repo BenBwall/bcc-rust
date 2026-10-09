@@ -32,11 +32,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Structural walking gives selection/iteration statements their C99
-    /// scopes. C99: §6.8.4p3, p. 133; PDF p. 145; §6.8.5p5, p. 135; PDF p.
-    /// 147.
+    /// C99: §6.8.1-§6.8.6.4, pp. 131-139; PDF pp. 143-151.
     pub(super) fn statement(&mut self, s: &'tu Statement<'tu>, new_scope: bool) {
         use StatementType as S;
+
+        use super::statements::StatementWork as W;
+        self.taint(s.recovered);
         match s.kind {
             | S::Compound { items } => {
                 if new_scope {
@@ -49,35 +50,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | S::Declaration(d) => self.work.push(Work::Declaration(d)),
             | S::Attributed(s) => self.work.push(Work::Statement(s.statement, new_scope)),
-            | S::Label(_, s) | S::Default(s) => self.work.push(Work::Statement(s, new_scope)),
-            | S::Case(expression, s) => {
-                self.work.push(Work::Statement(s, new_scope));
-                if let super::super::parsing::syntax::ConstantExpressionSlot::Parsed(e) = expression
-                {
-                    self.work.push(Work::RequireConstant(
-                        e.expression(),
-                        None,
-                        self.semantic_errors,
-                    ));
-                    self.work.push(Work::Eval(e.expression()));
-                    self.work.push(Work::Expression(e.expression()));
-                }
+            | S::Label(name, child) => {
+                self.label(name, true);
+                self.work.push(Work::Statement(child, new_scope));
+            },
+            | S::Goto(name) => self.label(name, false),
+            | S::LocalLabels(names) => self.local_labels(names),
+            | S::Default(child) => {
+                // The parser already diagnoses duplicate defaults, preserving
+                // its established diagnostic and recovery contract.
+                self.switch_label(s.source_vectors);
+                self.work.push(Work::Statement(child, new_scope));
+            },
+            | S::Case(expression, child) => {
+                self.work.push(Work::Statement(child, new_scope));
+                self.case_label(expression, None, s.source_vectors);
             },
             | S::CaseRange(c) => {
                 self.work.push(Work::Statement(c.statement, new_scope));
-                for expression in [c.upper, c.lower] {
-                    if let super::super::parsing::syntax::ConstantExpressionSlot::Parsed(e) =
-                        expression
-                    {
-                        self.work.push(Work::RequireConstant(
-                            e.expression(),
-                            None,
-                            self.semantic_errors,
-                        ));
-                        self.work.push(Work::Eval(e.expression()));
-                        self.work.push(Work::Expression(e.expression()));
-                    }
-                }
+                self.case_label(c.lower, Some(c.upper), s.source_vectors);
             },
             | S::If {
                 condition_expression,
@@ -86,20 +77,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 self.enter(ScopeKind::Block);
                 self.work.push(Work::PopScope);
-                if let Some(s) = else_statement {
-                    self.work.push(Work::Statement(s, true));
+                if let Some(child) = else_statement {
+                    self.work.push(Work::StatementWork(W::Substatement(child)));
                 }
-                self.work.push(Work::Statement(then_statement, true));
-                self.work.push(Work::Condition(
-                    condition_expression,
-                    matches!(s.kind, S::Switch { .. }),
-                ));
+                self.work
+                    .push(Work::StatementWork(W::Substatement(then_statement)));
+                self.work.push(Work::Condition(condition_expression, false));
                 self.expression_slot(condition_expression);
             },
             | S::Switch {
                 condition_expression,
                 body_statement,
-            }
+            } => {
+                self.enter(ScopeKind::Block);
+                self.work.push(Work::PopScope);
+                self.work.push(Work::StatementWork(W::SwitchReady(
+                    condition_expression,
+                    body_statement,
+                )));
+                self.work.push(Work::Condition(condition_expression, true));
+                self.expression_slot(condition_expression);
+            },
             | S::While {
                 condition_expression,
                 body_statement,
@@ -110,17 +108,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 self.enter(ScopeKind::Block);
                 self.work.push(Work::PopScope);
-                self.work.push(Work::Statement(body_statement, true));
-                self.work.push(Work::Condition(
-                    condition_expression,
-                    matches!(s.kind, S::Switch { .. }),
-                ));
-                self.expression_slot(condition_expression);
+                self.work.push(Work::StatementWork(W::LeaveLoop));
+                self.statements.loops += 1;
+                if matches!(s.kind, S::DoWhile { .. }) {
+                    self.work.push(Work::Condition(condition_expression, false));
+                    self.expression_slot(condition_expression);
+                    self.work
+                        .push(Work::StatementWork(W::Substatement(body_statement)));
+                } else {
+                    self.work
+                        .push(Work::StatementWork(W::Substatement(body_statement)));
+                    self.work.push(Work::Condition(condition_expression, false));
+                    self.expression_slot(condition_expression);
+                }
             },
             | S::For(f) => {
                 self.enter(ScopeKind::Block);
                 self.work.push(Work::PopScope);
-                self.work.push(Work::Statement(f.body_statement, true));
+                self.work.push(Work::StatementWork(W::LeaveLoop));
+                self.statements.loops += 1;
+                self.work
+                    .push(Work::StatementWork(W::Substatement(f.body_statement)));
                 if let Some(e) = f.iteration_expression {
                     self.expression_slot(e);
                 }
@@ -130,12 +138,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 if let Some(initializer) = f.initializer {
                     match initializer {
-                        | ForInitializer::Declaration(d) => self.work.push(Work::Declaration(d)),
+                        | ForInitializer::Declaration(d) => {
+                            self.for_declaration(d);
+                            self.work.push(Work::Declaration(d));
+                        },
                         | ForInitializer::Expression(e) => self.expression_slot(e),
                     }
                 }
             },
-            | S::Expression(e) | S::ComputedGoto(e) | S::Return(Some(e)) => self.expression_slot(e),
+            | S::Return(slot) => {
+                self.work
+                    .push(Work::StatementWork(W::ReturnDone(slot, s.source_vectors)));
+                if let Some(ExpressionSlot::Parsed(e)) = slot {
+                    // Assignment compatibility performs the value conversion.
+                    self.work.push(Work::Expression(e));
+                } else if let Some(slot) = slot {
+                    self.expression_slot(slot);
+                }
+            },
+            | S::Break if self.statements.loops == 0 && self.statements.switch.is_none() => self
+                .error(
+                    super::SemanticErrorKind::BreakOutsideLoopOrSwitch,
+                    s.source_vectors,
+                    None,
+                    None,
+                ),
+            | S::Continue if self.statements.loops == 0 => self.error(
+                super::SemanticErrorKind::ContinueOutsideLoop,
+                s.source_vectors,
+                None,
+                None,
+            ),
+            | S::Expression(e) | S::ComputedGoto(e) => self.expression_slot(e),
             | _ => {},
         }
     }
@@ -150,16 +184,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             return;
         }
+        if !e.recovered
+            && let E::LabelAddress(name) = e.kind
+        {
+            self.label_address(name);
+        }
+        if matches!(e.kind, E::SizeofExpr(_) | E::SizeofType(_)) {
+            self.enter_sizeof(e);
+        }
         self.taint(
             e.recovered
                 || matches!(
                     e.kind,
-                    E::Builtin(_)
-                        | E::Generic(_)
-                        | E::Countof(_)
-                        | E::StatementExpression(_)
-                        | E::LabelAddress(_)
-                        | E::Nullptr
+                    E::Builtin(_) | E::Generic(_) | E::Countof(_) | E::Nullptr
                 ),
         );
         self.work.push(Work::ExpressionDone(e));

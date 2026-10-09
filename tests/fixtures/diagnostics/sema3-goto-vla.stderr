@@ -1,0 +1,11 @@
+error: goto enters the scope of a variably modified identifier: `L`
+ --> sema3-goto-vla.c:1:21
+  |
+1 | void f(int n) {goto L; int a[n]; L:;}
+  |                     ^      - variably modified identifier is declared here
+  |                     |
+  |                     statement constraint violated
+  |
+  = note: C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified identifier to inside that scope
+
+1 error generated.

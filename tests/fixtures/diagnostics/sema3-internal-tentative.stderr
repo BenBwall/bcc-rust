@@ -1,0 +1,9 @@
+error: internal tentative definition has incomplete type: `a`
+ --> sema3-internal-tentative.c:1:12
+  |
+1 | static int a[];
+  |            ^ declaration constraint violated
+  |
+  = note: C99 §6.9.2p3: a tentative definition with internal linkage shall not have an incomplete type
+
+1 error generated.

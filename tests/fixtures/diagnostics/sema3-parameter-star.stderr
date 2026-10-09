@@ -1,0 +1,9 @@
+error: star array bound is not permitted in a function definition: `a`
+ --> sema3-parameter-star.c:1:12
+  |
+1 | void f(int a[*]) {}
+  |            ^^^^ declaration constraint violated
+  |
+  = note: C99 §6.7.5.2p4: an unspecified variable-length array bound written as [*] is restricted to prototype scope
+
+1 error generated.

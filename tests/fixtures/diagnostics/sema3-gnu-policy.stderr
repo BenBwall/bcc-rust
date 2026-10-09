@@ -1,0 +1,37 @@
+error: '__label__' is a GNU extension
+ --> sema3-gnu-policy.c:1:14
+  |
+1 | int f(void) {__label__ L; void *p=&&L; int nested(void) {return 0;} goto *p; L: switch(1) {case 1 ... 3:;} return ({int x=1; x;});}
+  |              ^^^^^^^^^
+
+error: 'label address' is a GNU extension
+ --> sema3-gnu-policy.c:1:35
+  |
+1 | int f(void) {__label__ L; void *p=&&L; int nested(void) {return 0;} goto *p; L: switch(1) {case 1 ... 3:;} return ({int x=1; x;});}
+  |                                   ^^
+
+error: 'nested function definition' is a GNU extension
+ --> sema3-gnu-policy.c:1:57
+  |
+1 | int f(void) {__label__ L; void *p=&&L; int nested(void) {return 0;} goto *p; L: switch(1) {case 1 ... 3:;} return ({int x=1; x;});}
+  |                                                         ^
+
+error: 'computed goto' is a GNU extension
+ --> sema3-gnu-policy.c:1:74
+  |
+1 | int f(void) {__label__ L; void *p=&&L; int nested(void) {return 0;} goto *p; L: switch(1) {case 1 ... 3:;} return ({int x=1; x;});}
+  |                                                                          ^
+
+error: 'case range' is a GNU extension
+ --> sema3-gnu-policy.c:1:99
+  |
+1 | int f(void) {__label__ L; void *p=&&L; int nested(void) {return 0;} goto *p; L: switch(1) {case 1 ... 3:;} return ({int x=1; x;});}
+  |                                                                                                   ^^^
+
+error: 'statement expression' is a GNU extension
+ --> sema3-gnu-policy.c:1:115
+  |
+1 | int f(void) {__label__ L; void *p=&&L; int nested(void) {return 0;} goto *p; L: switch(1) {case 1 ... 3:;} return ({int x=1; x;});}
+  |                                                                                                                   ^
+
+6 errors generated.

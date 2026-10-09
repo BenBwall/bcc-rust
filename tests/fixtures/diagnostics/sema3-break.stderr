@@ -1,0 +1,9 @@
+error: break is outside an iteration or switch statement
+ --> sema3-break.c:1:15
+  |
+1 | void f(void) {break;}
+  |               ^^^^^^ statement constraint violated
+  |
+  = note: C99 §6.8.6.3p1: a break statement appears only in or as a loop or switch body
+
+1 error generated.

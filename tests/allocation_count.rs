@@ -536,6 +536,27 @@ mod measurements {
         assert!(summary.diagnostics >= 4, "invalid stage-2 source");
     }
 
+    #[test]
+    fn statements_and_functions_allocate_only_from_arenas() {
+        let source = "int a[]; extern int a[3]; static int helper(int); int (*fp(int a))(int b) \
+                      {int b=a; return 0;} inline int in(int n) {static const int k=1; return \
+                      k+n;} static int helper(int n) {int a[n]; goto L; L: switch(n) {case 0 ... \
+                      2: return n; default: break;} for(int i=0;i<n;i++) {if(i) continue; break;} \
+                      return sizeof __func__;} int old(a,b) int a,b; {return a+b;}\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("statement and function paths", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0, "valid stage-3 source");
+        let source = "static int missing(void); int f(int n) {goto L; int a[n]; L:; switch(n) \
+                      {case 1:; case 1:;} break; continue; return missing();} int x=1; int x=2;\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(allocations.calls, 0, "statement diagnostic paths");
+        assert!(summary.diagnostics >= 6, "invalid stage-3 source");
+        let source = format!("void f(void) {{{};}}\n", "if(1)while(1)".repeat(10_000));
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(&source));
+        assert_no_allocations("deep statement paths", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+    }
+
     /// Reaches the paths the generated inputs leave out.
     const FEATURE_SOURCE: &str = concat!(
         "#define STR(x) #x\r\n",

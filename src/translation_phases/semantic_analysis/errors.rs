@@ -30,6 +30,67 @@ use crate::{
 /// C99: §6.7p3-4, p. 97; PDF p. 109; subsidiary constraints are cited below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SemanticErrorKind {
+    /// C99: §6.9.1p2, p. 141; PDF p. 153.
+    InvalidFunctionDefinition,
+    /// C99: §6.9.1p4, p. 141; PDF p. 153.
+    FunctionDefinitionStorage,
+    /// C99: §6.9.1p3, p. 141; PDF p. 153.
+    IncompleteFunctionReturn,
+    /// C99: §6.9.1p5-6, p. 141; PDF p. 153.
+    InvalidDefinitionParameterList,
+    /// C99: §6.9.1p5, p. 141; PDF p. 153.
+    UnnamedDefinitionParameter,
+    /// C99: §6.7.5.3p4, p. 118; PDF p. 130.
+    IncompleteDefinitionParameter,
+    /// C99: §6.7.5.2p4, p. 117; PDF p. 129.
+    DefinitionStarArray,
+    /// C99: §5.1.2.2.1p1, p. 12; PDF p. 24.
+    MainSignature,
+    /// C99: §6.9.2p3, p. 143; PDF p. 155.
+    IncompleteInternalTentative,
+    /// C99: §6.9p3,p5, p. 140; PDF p. 152.
+    DuplicateDefinition,
+    /// C99: §6.9.2p2, p. 143; PDF p. 155.
+    TentativeArrayAssumedOne,
+    /// C99: §6.9.2p2, p. 143; PDF p. 155.
+    IncompleteTentativeDefinition,
+    /// C99: §6.9p3, p. 140; PDF p. 152.
+    UndefinedInternal,
+    /// C99: §6.9p3, p. 140; PDF p. 152.
+    UnusedStaticFunction,
+    /// C99: §6.7.4p3, p. 112; PDF p. 124.
+    InlineInternalReference,
+    /// C99: §6.7.4p3, p. 112; PDF p. 124.
+    InlineStaticObject,
+    /// C99: §6.8.6.4p1, p. 139; PDF p. 151.
+    VoidReturnValue,
+    /// C99: §6.8.6.4p1, p. 139; PDF p. 151.
+    MissingReturnValue,
+    /// C99: §6.8.6.4p1, p. 139; PDF p. 151.
+    MissingReturnValueWarning,
+    /// C99: §6.8.6.4p3, p. 139; PDF p. 151.
+    InvalidReturnConversion,
+    /// C99: §6.8.5p3, p. 135; PDF p. 147.
+    InvalidForDeclaration,
+    /// C99: §6.8.1p3, p. 131; PDF p. 143.
+    DuplicateLabel,
+    /// C99: §6.8.6.1p1, p. 137; PDF p. 149.
+    UndefinedLabel,
+    /// C99: §6.8.6.1p1, p. 137; PDF p. 149.
+    JumpIntoVariableScope,
+    /// C99: §6.8.4.2p2, p. 134; PDF p. 146.
+    SwitchIntoVariableScope,
+    /// C99: §6.8.1p2, p. 131; PDF p. 143.
+    CaseOutsideSwitch,
+    /// C99: §6.8.4.2p3, p. 134; PDF p. 146.
+    EmptyCaseRange,
+    /// C99: §6.8.6.3p1, p. 138; PDF p. 150.
+    BreakOutsideLoopOrSwitch,
+    /// C99: §6.8.6.2p1, p. 138; PDF p. 150.
+    ContinueOutsideLoop,
+    /// C99: §6.8.4.2p3, p. 134; PDF p. 146.
+    DuplicateCase,
+
     /// C99: §6.7.7, p. 123-124; PDF p. 135-136.
     UnknownTypedef,
     /// C99: §6.5.1p2, p. 69; PDF p. 81.
@@ -133,6 +194,153 @@ pub(crate) enum SemanticErrorKind {
 impl SemanticErrorKind {
     fn explanation(self) -> (&'static str, &'static str) {
         match self {
+            | Self::InvalidFunctionDefinition => (
+                "definition requires a function declarator",
+                "C99 §6.9.1p2: the function type must be specified by the declarator, not solely \
+                 by a typedef",
+            ),
+            | Self::FunctionDefinitionStorage => (
+                "invalid storage class in function definition",
+                "C99 §6.9.1p4: a function definition permits only extern or static storage-class \
+                 specifiers",
+            ),
+            | Self::IncompleteFunctionReturn => (
+                "function definition requires a complete return object type",
+                "C99 §6.9.1p3: a function returns void or an object type other than an array; its \
+                 body requires a complete result type",
+            ),
+            | Self::InvalidDefinitionParameterList => (
+                "invalid function definition parameter list",
+                "C99 §6.9.1p5-6: prototype definitions have no declaration list; identifier-list \
+                 declarations name only listed parameters, with no initializers",
+            ),
+            | Self::UnnamedDefinitionParameter => (
+                "function definition parameter requires a name",
+                "C99 §6.9.1p5: each prototype-definition parameter includes an identifier, except \
+                 the sole void parameter",
+            ),
+            | Self::IncompleteDefinitionParameter => (
+                "function definition parameter has incomplete type",
+                "C99 §6.7.5.3p4: after adjustment, each prototype-definition parameter has \
+                 complete object type",
+            ),
+            | Self::DefinitionStarArray => (
+                "star array bound is not permitted in a function definition",
+                "C99 §6.7.5.2p4: an unspecified variable-length array bound written as [*] is \
+                 restricted to prototype scope",
+            ),
+            | Self::MainSignature => (
+                "main has a nonportable signature",
+                "C99 §5.1.2.2.1p1: hosted main returns int and accepts no parameters or int and \
+                 char **, or an implementation-defined form",
+            ),
+            | Self::IncompleteInternalTentative => (
+                "internal tentative definition has incomplete type",
+                "C99 §6.9.2p3: a tentative definition with internal linkage shall not have an \
+                 incomplete type",
+            ),
+            | Self::DuplicateDefinition => (
+                "identifier is defined more than once",
+                "C99 §6.9p3,p5: an identifier with linkage has at most one external definition in \
+                 a translation unit",
+            ),
+            | Self::TentativeArrayAssumedOne => (
+                "tentative array definition is assumed to have one element",
+                "C99 §6.9.2p2: an incomplete tentative array without an external definition is \
+                 completed at translation-unit end (see example 2)",
+            ),
+            | Self::IncompleteTentativeDefinition => (
+                "tentative definition remains incomplete",
+                "C99 §6.9.2p2: a tentative definition without an external definition behaves as a \
+                 zero-initialized file-scope definition",
+            ),
+            | Self::UndefinedInternal => (
+                "used internal identifier has no definition",
+                "C99 §6.9p3: an internal-linkage identifier used outside a constant sizeof \
+                 operand has exactly one definition in the translation unit",
+            ),
+            | Self::UnusedStaticFunction => (
+                "static function is declared but never defined",
+                "C99 §6.9p3: an unused internal function declaration need not be defined; this \
+                 warning identifies a likely missing body",
+            ),
+            | Self::InlineInternalReference => (
+                "inline definition references an internal-linkage identifier",
+                "C99 §6.7.4p3: an inline definition with external linkage contains no reference \
+                 to an identifier with internal linkage",
+            ),
+            | Self::InlineStaticObject => (
+                "inline definition defines a modifiable static-storage object",
+                "C99 §6.7.4p3: an inline definition with external linkage contains no definition \
+                 of a modifiable object with static storage duration",
+            ),
+            | Self::VoidReturnValue => (
+                "void function returns an expression",
+                "C99 §6.8.6.4p1: a return statement with an expression shall not appear in a \
+                 function returning void",
+            ),
+            | Self::MissingReturnValue => (
+                "non-void function returns without a value",
+                "C99 §6.8.6.4p1: a return statement without an expression appears only in a \
+                 function returning void",
+            ),
+            | Self::MissingReturnValueWarning => (
+                "non-void function returns without a value",
+                "C99 §6.8.6.4p1: C99 requires a value; C89 and GNU modes retain this form with a \
+                 warning",
+            ),
+            | Self::InvalidReturnConversion => (
+                "return expression cannot be converted to the function result type",
+                "C99 §6.8.6.4p3: the return expression is converted as if assigned to an object \
+                 with the function return type",
+            ),
+            | Self::InvalidForDeclaration => (
+                "for initializer declaration permits only automatic objects",
+                "C99 §6.8.5p3: the declaration part of a for statement declares only objects with \
+                 auto or register storage",
+            ),
+            | Self::DuplicateLabel => (
+                "label is defined more than once",
+                "C99 §6.8.1p3: labels occupy a function-wide namespace and each label is unique \
+                 within its function",
+            ),
+            | Self::UndefinedLabel => (
+                "goto target label is not defined",
+                "C99 §6.8.6.1p1: a goto identifier names a label somewhere in the enclosing \
+                 function",
+            ),
+            | Self::JumpIntoVariableScope => (
+                "goto enters the scope of a variably modified identifier",
+                "C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified \
+                 identifier to inside that scope",
+            ),
+            | Self::SwitchIntoVariableScope => (
+                "switch dispatch enters the scope of a variably modified identifier",
+                "C99 §6.8.4.2p2: the entire switch is within the scope of every variably modified \
+                 identifier whose scope contains a case or default label",
+            ),
+            | Self::CaseOutsideSwitch => (
+                "case or default label is outside a switch",
+                "C99 §6.8.1p2: a case or default label appears only within a switch statement",
+            ),
+            | Self::EmptyCaseRange => (
+                "case range is empty after conversion",
+                "C99 §6.8.4.2p3: GNU extension: inclusive case ranges with a lower value greater \
+                 than the upper value match nothing",
+            ),
+            | Self::BreakOutsideLoopOrSwitch => (
+                "break is outside an iteration or switch statement",
+                "C99 §6.8.6.3p1: a break statement appears only in or as a loop or switch body",
+            ),
+            | Self::ContinueOutsideLoop => (
+                "continue is outside an iteration statement",
+                "C99 §6.8.6.2p1: a continue statement appears only in or as a loop body",
+            ),
+            | Self::DuplicateCase => (
+                "case values overlap after conversion",
+                "C99 §6.8.4.2p3: case constants are converted to the promoted switch type and no \
+                 two case values may be equal",
+            ),
             | Self::UndeclaredIdentifier => (
                 "identifier has no visible declaration",
                 "C99 §6.5.1p2: an identifier expression designates a declared object, function or \
@@ -379,7 +587,15 @@ impl fmt::Display for SemanticError {
 impl std::error::Error for SemanticError {}
 impl GetSeverity for SemanticError {
     fn severity(&self) -> ErrorSeverity {
-        if self.kind == SemanticErrorKind::QualifiedFunction {
+        if matches!(
+            self.kind,
+            SemanticErrorKind::QualifiedFunction
+                | SemanticErrorKind::MainSignature
+                | SemanticErrorKind::TentativeArrayAssumedOne
+                | SemanticErrorKind::UnusedStaticFunction
+                | SemanticErrorKind::EmptyCaseRange
+                | SemanticErrorKind::MissingReturnValueWarning
+        ) {
             ErrorSeverity::Warning
         } else {
             ErrorSeverity::Error
@@ -449,13 +665,41 @@ impl ToDiagnostic for SemanticError {
                     | SemanticErrorKind::NonConstantInitializer
             ) {
                 "expression or initializer constraint violated"
+            } else if matches!(
+                self.kind,
+                SemanticErrorKind::VoidReturnValue
+                    | SemanticErrorKind::MissingReturnValue
+                    | SemanticErrorKind::MissingReturnValueWarning
+                    | SemanticErrorKind::InvalidReturnConversion
+                    | SemanticErrorKind::InvalidForDeclaration
+                    | SemanticErrorKind::DuplicateLabel
+                    | SemanticErrorKind::UndefinedLabel
+                    | SemanticErrorKind::JumpIntoVariableScope
+                    | SemanticErrorKind::SwitchIntoVariableScope
+                    | SemanticErrorKind::CaseOutsideSwitch
+                    | SemanticErrorKind::EmptyCaseRange
+                    | SemanticErrorKind::BreakOutsideLoopOrSwitch
+                    | SemanticErrorKind::ContinueOutsideLoop
+                    | SemanticErrorKind::DuplicateCase
+            ) {
+                "statement constraint violated"
+            } else if self.severity() == ErrorSeverity::Warning {
+                "implementation warning"
             } else {
                 "declaration constraint violated"
             })
             .note(note)
             .at(self.severity(), source);
         if let Some(previous) = self.previous {
-            diagnostic = diagnostic.secondary(previous, "previous declaration is here");
+            let label = match self.kind {
+                | SemanticErrorKind::DuplicateLabel | SemanticErrorKind::DuplicateCase =>
+                    "previous label is here",
+                | SemanticErrorKind::JumpIntoVariableScope
+                | SemanticErrorKind::SwitchIntoVariableScope =>
+                    "variably modified identifier is declared here",
+                | _ => "previous declaration is here",
+            };
+            diagnostic = diagnostic.secondary(previous, label);
         }
         diagnostic
     }

@@ -442,7 +442,7 @@ fn undeclared_operand_suppresses_dependent_diagnostics() {
             assert!(
                 matches!(errors[0], TranslationError::Semantic(e) if e.kind == SemanticErrorKind::UndeclaredIdentifier)
             );
-            assert_eq!(unit.bindings.len(), 2);
+            assert_eq!(unit.bindings.len(), 3);
         },
     );
 }

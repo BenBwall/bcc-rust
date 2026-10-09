@@ -2,15 +2,18 @@
 //! C99: §5.1.1.2p1, p. 10; PDF p. 22; scopes/linkage §6.2.1-§6.2.4,
 //! pp. 29-32; PDF pp. 41-44; declarations §6.7, pp. 97-124;
 //! PDF pp. 109-136; expressions/initializers §6.3, §6.5-§6.7.8, pp. 42-128;
-//! PDF pp. 54-140. Remaining statement/function constraints await Stage 3.
+//! PDF pp. 54-140; statements/functions §6.8-§6.9.2, pp. 131-143;
+//! PDF pp. 143-155. Backend control-flow and emitted code are not constructed.
 
 mod constants;
 mod declarations;
 mod errors;
 mod expressions;
+mod functions;
 mod initializers;
 mod inspection;
 mod integer;
+mod statements;
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -167,6 +170,14 @@ pub(crate) struct Scope {
 pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) types:            Types<'tu>,
     pub(crate) bindings:         &'tu [Binding],
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Finalized definitions are retained for backend lowering."
+        )
+    )]
+    pub(crate) definitions:      &'tu [functions::Definition],
     pub(crate) scopes:           &'tu [Scope],
     pub(crate) type_names:       &'tu [(SourceVectors, TypeId)],
     pub(crate) parameters:       &'tu [(SourceVectors, &'tu [Parameter])],
@@ -179,6 +190,7 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
 enum Namespace {
     Ordinary,
     Tag,
+    Label,
 }
 #[derive(Clone, Copy)]
 struct Entry {
@@ -235,6 +247,8 @@ enum Work<'tu, 's> {
     Function(&'tu FunctionDefinition<'tu>),
     FunctionBase(&'tu FunctionDefinition<'tu>),
     FunctionBody(&'tu FunctionDefinition<'tu>),
+    FunctionWork(functions::FunctionWork<'tu>),
+    StatementWork(statements::StatementWork<'tu>),
     Statement(&'tu Statement<'tu>, bool),
     BlockItem(BlockItem<'tu>),
     Expression(&'tu Expression<'tu>),
@@ -252,7 +266,6 @@ enum Work<'tu, 's> {
     Slot(ExpressionSlot<'tu>),
     Initializer(&'tu Initializer<'tu>),
     PopScope,
-    RestoreFunction(Option<Identifier>),
     RestoreTaint(bool),
     RestoreParameterMode(bool),
     OldSignature(&'tu FunctionDefinition<'tu>),
@@ -264,7 +277,7 @@ enum Work<'tu, 's> {
     TypeNameBase(&'tu TypeName<'tu>),
     TypeNameDone(SourceVectors),
     Declarator(Declarator<'tu>, TypeId, bool),
-    Direct(DirectDeclarator<'tu>, SourceVectors, bool),
+    Direct(&'tu DirectDeclarator<'tu>, SourceVectors, bool),
     ArrayDone(
         TypeId,
         TypeQualifiers,
@@ -279,6 +292,7 @@ enum Work<'tu, 's> {
         TypeId,
         bool,
         SourceVectors,
+        usize,
     ),
     ParameterBase(ParameterDeclaration<'tu>),
     ParameterDone(ParameterDeclaration<'tu>, &'s Collection<'s, Parameter>),
@@ -327,6 +341,7 @@ struct Analyzer<'a, 'tu, 's> {
     scratch:             &'s Bump,
     types:               TypeInterner<'tu, 's>,
     bindings:            ArenaVec<'tu, Binding>,
+    definitions:         ArenaVec<'tu, functions::Definition>,
     scopes:              ArenaVec<'tu, Scope>,
     type_names:          ArenaVec<'tu, (SourceVectors, TypeId)>,
     parameter_lists:     ArenaVec<'tu, (SourceVectors, &'tu [Parameter])>,
@@ -335,7 +350,7 @@ struct Analyzer<'a, 'tu, 's> {
     visible:             ArenaMap<'s, (Namespace, StringCacheId), usize>,
     external:            ArenaMap<'s, StringCacheId, usize>,
     scope_entries:       ArenaVec<'s, &'s Collection<'s, usize>>,
-    parameters:          ArenaMap<'s, SourceVectors, (&'tu [Parameter], usize)>,
+    parameters:          ArenaMap<'s, usize, (&'tu [Parameter], usize)>,
     work:                ArenaVec<'s, Work<'tu, 's>>,
     values:              ArenaVec<'s, TypeId>,
     integers:            ArenaVec<'s, Option<Integer>>,
@@ -354,6 +369,8 @@ struct Analyzer<'a, 'tu, 's> {
     const_members:       ArenaMap<'s, usize, bool>,
     register_bindings:   ArenaMap<'s, usize, bool>,
     ice_operands:        ArenaMap<'s, (usize, bool), bool>,
+    functions:           functions::State<'tu, 's>,
+    statements:          statements::State<'s>,
 }
 
 /// Runs declaration analysis only after the complete immutable syntax tree
@@ -370,11 +387,13 @@ pub(crate) fn analyze<'tu>(
     while let Some(work) = analyzer.work.pop() {
         analyzer.step(work);
     }
+    analyzer.finish_translation_unit();
     SemanticTranslationUnit {
         expressions:      analyzer.expressions.leak(),
         conversions:      analyzer.conversions.leak(),
         types:            analyzer.types.finish(),
         bindings:         analyzer.bindings.leak(),
+        definitions:      analyzer.definitions.leak(),
         scopes:           analyzer.scopes.leak(),
         type_names:       analyzer.type_names.leak(),
         parameters:       analyzer.parameter_lists.leak(),
@@ -390,6 +409,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             scratch,
             types: TypeInterner::new(tu, scratch),
             bindings: ArenaVec::new_in(tu),
+            definitions: ArenaVec::new_in(tu),
             scopes: ArenaVec::new_in(tu),
             type_names: ArenaVec::new_in(tu),
             parameter_lists: ArenaVec::new_in(tu),
@@ -417,6 +437,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             const_members: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             register_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             ice_operands: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            functions: functions::State::new(scratch),
+            statements: statements::State::new(scratch),
         };
         analyzer.scopes.push(Scope {
             parent: None,
@@ -456,6 +478,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         });
         self.scope_entries
             .push(self.scratch.alloc(Collection::new()));
+        self.statements.scope_vm.push(self.statements.vm);
         self.scope = next;
     }
 
@@ -473,6 +496,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 _ = self.visible.remove(&(entry.namespace, entry.name.name));
             }
         }
+        self.statements.vm = self.statements.scope_vm[self.scope];
         self.scope = self.scopes[self.scope].parent.unwrap_or(0);
     }
 
@@ -556,7 +580,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             | Work::RestoreTaint(old) => self.tainted = old,
             | Work::RestoreParameterMode(old) => self.old_parameter_mode = old,
             | Work::PopScope => self.leave(),
-            | Work::RestoreFunction(name) => self.function_name = name,
+            | Work::FunctionWork(work) => self.function_work(work),
+            | Work::StatementWork(work) => self.statement_work(work),
             | Work::DiscardType => {
                 _ = self.values.pop();
             },
@@ -582,6 +607,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     return;
                 }
                 self.taint(d.recovered);
+                self.validate_declaration_list_item(d);
                 self.work.push(Work::DeclarationBase(d));
                 self.spec(d.declaration_specifiers, d.init_declarators.is_empty());
             },
@@ -607,75 +633,16 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             },
             | Work::Function(f) => {
                 self.taint(f.recovered);
+                self.prepare_function(f);
                 self.work.push(Work::FunctionBase(f));
                 self.spec(f.declaration_specifiers, false);
             },
             | Work::FunctionBase(f) => {
                 let base = self.take_type();
                 self.work.push(Work::FunctionBody(f));
-                self.work
-                    .push(Work::Bind(f.declarator, f.declaration_specifiers, false));
                 self.work.push(Work::Declarator(f.declarator, base, false));
             },
-            | Work::FunctionBody(f) => {
-                self.work.push(Work::RestoreFunction(self.function_name));
-                self.function_name = f.declarator.identifier();
-                self.enter(ScopeKind::Function);
-                if let Some(&(params, prototype_scope)) =
-                    self.parameters.get(&f.declarator.source_vectors)
-                {
-                    // Parameter-list tags/enumerators have function scope in
-                    // definitions.
-                    let entries: &[usize] = if prototype_scope == 0 {
-                        &[]
-                    } else {
-                        self.scope_entries[prototype_scope].finish(self.scratch, self.scratch)
-                    };
-                    for &index in entries {
-                        let entry = self.entries[index];
-                        if entry.namespace == Namespace::Tag {
-                            self.install(entry.name, entry.namespace, entry.binding);
-                        } else if self.bindings[entry.binding].kind == BindingKind::Enumerator {
-                            let binding = self.bindings[entry.binding];
-                            self.bind(
-                                binding.name,
-                                binding.ty,
-                                binding.kind,
-                                binding.linkage,
-                                binding.duration,
-                                binding.value,
-                            );
-                        }
-                    }
-                    for param in params {
-                        if !f.declaration_list.is_empty() {
-                            continue;
-                        }
-                        if let Some(name) = param.name {
-                            self.bind(
-                                name,
-                                param.ty,
-                                BindingKind::Parameter,
-                                Linkage::None,
-                                Duration::Automatic,
-                                None,
-                            );
-                        }
-                    }
-                }
-                self.work.push(Work::PopScope);
-                self.work.push(Work::Statement(f.body, false));
-                self.work
-                    .push(Work::RestoreParameterMode(self.old_parameter_mode));
-                if !f.declaration_list.is_empty() {
-                    self.work.push(Work::OldSignature(f));
-                }
-                self.old_parameter_mode = !f.declaration_list.is_empty();
-                // Old-style parameter declarations precede the body.
-                for &d in f.declaration_list.iter().rev() {
-                    self.work.push(Work::Declaration(d));
-                }
-            },
+            | Work::FunctionBody(f) => self.function_body(f),
             | Work::OldSignature(f) => self.old_signature(f),
             | Work::BlockItem(item) => match item {
                 | BlockItem::Declaration(d) => self.work.push(Work::Declaration(d)),
@@ -837,7 +804,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     self.validate_qualifiers(base, d.source_vectors);
                 }
                 self.values.push(base);
-                for &direct in d.kind {
+                for direct in d.kind {
                     self.work
                         .push(Work::Direct(direct, d.source_vectors, parameter));
                 }
@@ -890,7 +857,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     .qualified(q);
                 self.values.push(ty);
             },
-            | Work::FunctionParameters(list, index, params, result, variadic, source) =>
+            | Work::FunctionParameters(list, index, params, result, variadic, source, identity) =>
                 if let Some(&p) = list.as_slice().get(index) {
                     self.work.push(Work::FunctionParameters(
                         list,
@@ -899,6 +866,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                         result,
                         variadic,
                         source,
+                        identity,
                     ));
                     self.work.push(Work::ParameterDone(p, params));
                     self.work.push(Work::ParameterBase(p));
@@ -928,7 +896,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     let prototype =
                         !list.is_empty() || self.context.configuration.standard() >= CStandard::C23;
                     let parameters = self.types.tu.alloc_slice_copy(&parameters);
-                    _ = self.parameters.insert(source, (params, scope));
+                    _ = self.parameters.insert(identity, (params, scope));
                     self.parameter_lists.push((source, params));
                     self.values.push(self.types.intern(TypeKind::Function {
                         result,

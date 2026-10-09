@@ -1,0 +1,9 @@
+error: non-void function returns without a value
+ --> sema3-missing-value.c:1:14
+  |
+1 | int f(void) {return;}
+  |              ^^^^^^^ statement constraint violated
+  |
+  = note: C99 §6.8.6.4p1: a return statement without an expression appears only in a function returning void
+
+1 error generated.

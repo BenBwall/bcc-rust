@@ -1,0 +1,7 @@
+error: 'return with a void expression' is a GNU extension
+ --> sema3-gnu-void-return.c:1:31
+  |
+1 | void g(void) {} void f(void) {return g();}
+  |                               ^^^^^^^^^^^
+
+1 error generated.
