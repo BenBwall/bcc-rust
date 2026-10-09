@@ -41,11 +41,14 @@ float string_to_float(char const *s, char **endptr);
 int long_double_classify(long_double_t value);
 
 /* C99 §6.6 / §6.3.1.8: translation-time arithmetic and rounding. Operation
-   codes: 0 add, 1 subtract, 2 multiply, 3 divide; precision: 1 float,
-   2 double, 3 long double. Results use the same padding-free carrier. */
+   codes: 0 add, 1 subtract, 2 multiply, 3 divide, 5 negate the left operand
+   (other codes keep it); precision: 1 float, 2 double, 3 long double.
+   Results use the same padding-free carrier and may be infinite or NaN
+   (Annex F). */
 long_double_t long_double_arithmetic(long_double_t left, long_double_t right,
                                     int operation, int precision);
 long_double_t long_double_from_double(double value);
+/* -1, 0 or 1 for ordered operands; 2 when either is a NaN (Annex F.3). */
 int long_double_compare(long_double_t left, long_double_t right);
 
 /* Writes the exact value as a C99 hexadecimal floating constant without

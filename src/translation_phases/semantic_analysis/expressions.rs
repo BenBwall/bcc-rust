@@ -1102,11 +1102,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .floating_value(operand)
                 .and_then(|value| {
                     if op == U::Minus {
-                        Self::floating_binary(
-                            BinaryOperator::Subtraction,
-                            Floating::real(LongDouble::ZERO),
-                            value,
-                        )
+                        Some(Self::floating_negate(value))
                     } else {
                         Some(value)
                     }

@@ -571,3 +571,26 @@ fn bit_field_constraints_have_distinct_kinds() {
         ]
     );
 }
+
+#[test]
+fn floating_constants_follow_iec_60559() {
+    // Annex F gives infinities, NaNs and signed zeros as constant results.
+    let source = "static double pinf = +1.0 / 0.0; static double ninf = -1.0 / 0.0; static double \
+                  nan = 0.0 / 0.0; const double dnan = 1.0/0.0 - 1.0/0.0; long double big = \
+                  5.9486574767861588254287966331400356538172e4931L + \
+                  5.9486574767861588254287966331400356538172e4931L; double cmp[] = { (0.0 / 0.0), \
+                  0.0 };";
+    for configuration in [gnu17(), CompilerConfiguration::default()] {
+        assert_eq!(kinds(source, configuration), []);
+    }
+    // NaN is unordered; negation keeps the sign of zero.
+    assert_eq!(
+        kinds(
+            "int a[(0.0 / 0.0 != 0.0 / 0.0) ? 1 : -1]; int b[(0.0 / 0.0 == 0.0 / 0.0) ? -1 : 1]; \
+             int c[(0.0 / 0.0 < 1.0 || 0.0 / 0.0 >= 1.0) ? -1 : 1]; int d[(1.0 / -0.0 < 0) ? 1 : \
+             -1]; int e[(1.0 / 0.0 > 1e308) ? 1 : -1];",
+            gnu17()
+        ),
+        []
+    );
+}

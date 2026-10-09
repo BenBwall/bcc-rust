@@ -303,7 +303,9 @@ fn static_storage_arithmetic_and_address_constants() {
     );
     accepts("int x; _Bool b=&x; int *a[1]; void f(void *p, void *q) {p<q;}");
     rejects("int n=1/0;", SemanticErrorKind::ConstantOverflow);
-    rejects("double n=1.0/0.0;", SemanticErrorKind::ConstantOverflow);
+    // Annex F: a floating division by zero is an infinite constant.
+    accepts("double n=1.0/0.0;");
+    rejects("int i=(int)(1.0/0.0);", SemanticErrorKind::ConstantOverflow);
 }
 
 #[test]

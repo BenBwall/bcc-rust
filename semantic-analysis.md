@@ -364,10 +364,14 @@ return expressions.
   generic selections, count queries, attribute-derived types and newer-standard
   special values remain conservative unknowns. Core operator checks do not
   implement GNU void/function-pointer arithmetic.
-- Optional IEC 60559/Annex F and G exceptional floating behavior is not modeled.
-  Nonfinite constant results are diagnosed; Clang may accept such values under
-  its floating extensions. Floating evaluation also depends on the configured
-  native x87 bridge rather than a portable software target-float engine.
+- Floating constants follow the IEC 60559 arithmetic of Annex F, as GCC and
+  Clang do on this target: overflow and division by zero give infinities or
+  NaNs, negation keeps the sign of zero, and a NaN compares unordered. These
+  are valid arithmetic constants; only converting a nonfinite value to an
+  integer type is diagnosed. Annex G complex special cases and floating
+  exception flags are not modeled. Floating evaluation also depends on the
+  configured native x87 bridge rather than a portable software target-float
+  engine.
 - Initializer traversal validates and completes types; it does not emit a
   flattened store plan or materialize implicit zero-filled object bytes. Those
   are backend lowering responsibilities, recoverable from syntax and types.
