@@ -293,15 +293,20 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
     }
 
     /// Whether `token` ends the enclosing declaration rather than continuing
-    /// the attribute: a `;` or `}` outside braces the attribute opened, or a
-    /// `{` that cannot be an argument token. Standard balanced tokens may be
-    /// braces, while GNU and MSVC arguments are expressions.
+    /// the attribute: a `;` outside standard argument delimiters or in an
+    /// argument that does not close, a `}` outside braces the attribute
+    /// opened, or a `{` that cannot be an argument token. Standard balanced
+    /// tokens allow semicolons, while GNU and MSVC arguments are expressions
+    /// and retain semicolons as recovery boundaries.
     /// C23: balanced-token §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-    fn caller_owns(&self, token: Token) -> bool {
+    fn caller_owns(&self, parser: &Parser<'_, 'tu, 'p>, token: Token) -> bool {
         let TokenType::Operator(op) = token.kind else {
             return false;
         };
         match op {
+            | OperatorTokenType::Semicolon if self.attribute_syntax == AttributeSyntax::Standard =>
+                self.delimiters.len() <= self.attribute_outer_depth()
+                    || !self.standard_argument_closes(parser),
             | OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace => !self
                 .delimiters
                 .contains(&OperatorTokenType::ClosingCurlyBrace),
@@ -310,6 +315,47 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     || self.delimiters.len() <= self.attribute_outer_depth(),
             | _ => false,
         }
+    }
+
+    /// Whether the open standard attribute argument closes after the current
+    /// `;`. An unclosed argument leaves the `;` to the enclosing declaration,
+    /// so malformed input cannot swallow the declarations that follow it. The
+    /// scan is bounded; a longer argument is treated as unclosed.
+    /// C23: balanced-token §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
+    fn standard_argument_closes(&self, parser: &Parser<'_, 'tu, 'p>) -> bool {
+        const SCAN_LIMIT: usize = 1024;
+        let mut open = &self.delimiters[self.attribute_outer_depth()..];
+        let mut nested = 0_usize;
+        for offset in 0..SCAN_LIMIT {
+            let Some(token) = parser.cursor.lookahead(offset) else {
+                return false;
+            };
+            let TokenType::Operator(op) = token.kind else {
+                continue;
+            };
+            match op {
+                | OperatorTokenType::OpeningParenthesis
+                | OperatorTokenType::OpeningSquareBracket
+                | OperatorTokenType::OpeningCurlyBrace => nested += 1,
+                | OperatorTokenType::ClosingParenthesis
+                | OperatorTokenType::ClosingSquareBracket
+                | OperatorTokenType::ClosingCurlyBrace =>
+                    if nested > 0 {
+                        nested -= 1;
+                    } else if let Some((&closing, rest)) = open.split_last()
+                        && closing == op
+                    {
+                        open = rest;
+                        if open.is_empty() {
+                            return true;
+                        }
+                    } else {
+                        return false;
+                    },
+                | _ => {},
+            }
+        }
+        false
     }
 
     fn expected(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>, position: &'static str) {
@@ -641,10 +687,9 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     self.phase = Phase::Finish;
                     return ParseAction::Continue;
                 };
-                // A declaration boundary belongs to the enclosing frame at
-                // every argument depth, so an unclosed argument cannot
-                // swallow the declarations that follow it.
-                if self.caller_owns(token) {
+                // Leave caller boundaries unconsumed, but keep semicolons
+                // within standard balanced-token arguments (C23 §6.7.13.2p1).
+                if self.caller_owns(parser, token) {
                     self.attribute_expected(parser, Some(token), self.closer_component());
                     self.phase = Phase::Finish;
                     return ParseAction::Continue;

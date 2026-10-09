@@ -772,8 +772,9 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
         false
     }
 
+    /// Checks member features before ending GNU `__extension__` suppression.
+    /// C99: flexible array members §6.7.2.1 paragraph 16, p. 103; PDF p. 115.
     fn finish_member(&mut self, parser: &mut Parser<'_, 'tu, 'p>) {
-        parser.pedantic_suppression = self.suppression_entry;
         // Commit all declarators for this shared specifier-qualifier-list as a
         // single member declaration with one stable arena slice.
         for member in &self.member_declarators {
@@ -787,6 +788,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 );
             }
         }
+        parser.pedantic_suppression = self.suppression_entry;
         let start = parser.alloc_syntax_list(&mut self.member_declarators);
         let specifiers = self
             .member_specifiers

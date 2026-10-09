@@ -5,7 +5,9 @@
 use super::{
     Parsed,
     declaration,
+    identifier_name,
     parser_errors,
+    sourced_text,
     with_parse_configuration,
 };
 use crate::{
@@ -24,7 +26,11 @@ use crate::{
                 TypeSpecifiers,
             },
             errors::ParserErrorType,
-            modern::ExtendedType,
+            modern::{
+                AttributeSyntax,
+                ExtendedType,
+                SpecifierExtensionKind,
+            },
             syntax::{
                 ExternalDeclaration,
                 StorageClass,
@@ -32,6 +38,7 @@ use crate::{
         },
         preprocessing::{
             KeywordTokenType,
+            OperatorTokenType,
             TokenType,
         },
     },
@@ -139,6 +146,48 @@ fn extension_marker_before_a_member_terminates_and_suppresses_only_that_member()
 }
 
 #[test]
+fn extension_marker_suppresses_flexible_member_checks_until_the_member_finishes() {
+    for (source, unsuppressed) in [
+        ("struct S { int n; __extension__ int data[]; };\n", false),
+        (
+            "struct S { int n; __extension__ int data[]; };\nstruct T { int n; int data[]; \
+             };\nint tail;\n",
+            true,
+        ),
+    ] {
+        for standard in [CStandard::C89, CStandard::C99, CStandard::C23] {
+            for gnu in [false, true] {
+                for policy in [ExtensionPolicy::Warn, ExtensionPolicy::Deny] {
+                    with_parse_configuration(source, mode(standard, gnu, policy), |p| {
+                        assert_clean_parse(p, source);
+                        let expected = if standard == CStandard::C89 && unsuppressed {
+                            vec!["'flexible array member' is a C99 extension"]
+                        } else {
+                            vec![]
+                        };
+                        assert_eq!(extensions(p), expected, "{source}: {:?}", p.errors);
+                        assert_eq!(p.items.len(), if unsuppressed { 3 } else { 1 });
+                        let TypeSpecifiers::StructOrUnion(aggregate) =
+                            declaration(p, 0).declaration_specifiers.type_specifiers
+                        else {
+                            panic!("expected a struct specifier");
+                        };
+                        let members = aggregate.struct_declaration_list.unwrap();
+                        assert_eq!(members.len(), 2);
+                        assert!(
+                            members[1].struct_declarator_list[0]
+                                .declarator
+                                .unwrap()
+                                .is_unsized_array()
+                        );
+                    });
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn bracket_after_an_identifier_is_not_an_attribute() {
     let source = "typedef int T;\nstruct S { char T[16]; };\nvoid g(void) { long T[3]; }\n";
     for standard in [CStandard::C99, CStandard::C23] {
@@ -155,6 +204,92 @@ fn bracket_after_an_identifier_is_not_an_attribute() {
             assert!(declaration(p, 0).declaration_specifiers.implicit_int);
         },
     );
+}
+
+#[test]
+fn semicolons_in_balanced_attribute_arguments_stay_attached_to_the_declaration() {
+    // C23 §6.7.13.2p1 allows every non-delimiter token, including `;`.
+    for arguments in [";", "1;2", "(;)", "[1;2]", "{;}", "[{(;)}]"] {
+        let attribute = format!("[[vendor::attr({arguments})]]");
+        let source = format!("{attribute} int x;\nint tail;\n");
+        for gnu in [false, true] {
+            with_parse_configuration(
+                &source,
+                mode(CStandard::C23, gnu, ExtensionPolicy::Deny),
+                |p| {
+                    assert_clean_parse(p, &source);
+                    assert!(p.errors.is_empty(), "{source}: {:?}", p.errors);
+                    assert_eq!(p.items.len(), 2);
+                    let head = declaration(p, 0);
+                    assert!(!head.recovered);
+                    assert_eq!(
+                        identifier_name(p, head.init_declarators[0].declarator).as_deref(),
+                        Some("x")
+                    );
+                    let SpecifierExtensionKind::Attributes(attributes) =
+                        head.declaration_specifiers.extensions.unwrap().kind
+                    else {
+                        panic!("expected an attribute on x");
+                    };
+                    assert_eq!(attributes.syntax, AttributeSyntax::Standard);
+                    assert!(!attributes.recovered);
+                    assert_eq!(sourced_text(p, attributes.source_vectors), attribute);
+                    let semicolon = attributes
+                        .tokens
+                        .iter()
+                        .find(|token| {
+                            token.kind == TokenType::Operator(OperatorTokenType::Semicolon)
+                        })
+                        .expect("attribute argument retains its semicolon");
+                    assert_eq!(sourced_text(p, semicolon.source_vectors), ";");
+                    let tail = declaration(p, 1);
+                    assert!(!tail.recovered);
+                    assert_eq!(
+                        identifier_name(p, tail.init_declarators[0].declarator).as_deref(),
+                        Some("tail")
+                    );
+                    assert!(tail.declaration_specifiers.extensions.is_none());
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn incomplete_standard_attributes_recover_at_semicolons_outside_arguments() {
+    for attribute in [
+        "[[vendor::attr",
+        "[[vendor::attr(1;2)",
+        "[[vendor::attr([1;2])",
+        "[[vendor::attr(1;2)]",
+    ] {
+        let source = format!("int x {attribute};\nint tail;\n");
+        with_parse_configuration(
+            &source,
+            mode(CStandard::C23, false, ExtensionPolicy::Deny),
+            |p| {
+                assert_eq!(
+                    parser_errors(p).collect::<Vec<_>>(),
+                    [&ParserErrorType::ExpectedIsoSyntax(
+                        "`]]` in attribute specifier",
+                        Some(TokenType::Operator(OperatorTokenType::Semicolon))
+                    )],
+                    "{source}: {:?}",
+                    p.errors
+                );
+                assert!(p.parser.frames.is_empty());
+                assert_eq!(p.parser.pedantic_suppression, 0);
+                assert_eq!(p.items.len(), 2);
+                assert!(declaration(p, 0).recovered);
+                let tail = declaration(p, 1);
+                assert!(!tail.recovered);
+                assert_eq!(
+                    identifier_name(p, tail.init_declarators[0].declarator).as_deref(),
+                    Some("tail")
+                );
+            },
+        );
+    }
 }
 
 #[test]
