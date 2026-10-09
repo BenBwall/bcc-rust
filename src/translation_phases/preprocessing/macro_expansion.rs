@@ -178,6 +178,14 @@ impl<'x> MacroCallCursor<'x> {
         }
     }
 
+    /// The frames enclosing the token just collected, excluding replacement
+    /// frames that lookahead has already exhausted.
+    ///
+    /// C99: §6.10.3.4 paragraphs 1-2, p. 155; PDF p. 167.
+    fn active_frames(&self) -> &[TokenizerFrame<'x>] {
+        &self.frames[..self.index.map_or(0, |index| index + 1)]
+    }
+
     fn next(&mut self, preprocessor: &mut Expander<'_, '_, '_, 'x>) -> Option<PreprocessorToken> {
         loop {
             if let Some(token) = self.pending.get(self.pending_head).copied() {
@@ -800,7 +808,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let mut group_ends = ArenaVec::new_in(self.scratch);
         let mut depth = 1usize;
         let closing = loop {
-            let Some(token) = cursor.next(self) else {
+            let Some(mut token) = cursor.next(self) else {
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing function-like macro invocation",
@@ -824,6 +832,21 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     continue;
                 },
                 | _ => (),
+            }
+            // C99 §6.10.3.4p2: retain the paint of tokens taken from a
+            // replacement, even when the call closes in the rest of source.
+            if matches!(
+                token.kind,
+                PreprocessorTokenType::Identifier | PreprocessorTokenType::UniversalIdentifier
+            ) && Self::macro_is_disabled_in(
+                cursor.active_frames(),
+                token.identifier_id(self.context),
+            ) {
+                token.kind = if token.kind == PreprocessorTokenType::UniversalIdentifier {
+                    PreprocessorTokenType::UnavailableUniversalIdentifier
+                } else {
+                    PreprocessorTokenType::UnavailableIdentifier
+                };
             }
             grouped.push(token);
         };
@@ -882,7 +905,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 });
             }
         }
-        let disabled_macros = self.disabled_macros();
+        // The closing delimiter belongs to the invocation's caller. Keep
+        // exhausted frames on the real stack for replacement rescanning, but
+        // do not let them disable macros in arguments from later tokens.
+        let disabled_macros = self.disabled_macros_in(cursor.active_frames());
         let location = self
             .context
             .get_source_vectors(closing.source_vectors)
@@ -984,7 +1010,14 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     ///
     /// C99: §6.10.3.4 paragraph 2, p. 155; PDF p. 167.
     pub(super) fn macro_is_disabled(&self, name: StringCacheId) -> bool {
-        for frame in self.tokenizer_stack.iter().rev() {
+        Self::macro_is_disabled_in(&self.tokenizer_stack, name)
+    }
+
+    /// Whether `name` is disabled in the frames owning a collected token.
+    ///
+    /// C99: §6.10.3.4 paragraph 2, p. 155; PDF p. 167.
+    fn macro_is_disabled_in(frames: &[TokenizerFrame<'x>], name: StringCacheId) -> bool {
+        for frame in frames.iter().rev() {
             match &frame.frame_type {
                 | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. } => {
                     return argument.disabled_macros.contains(&name);
@@ -1004,7 +1037,14 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     ///
     /// C99: §6.10.3.4 paragraph 2, p. 155; PDF p. 167.
     pub(super) fn disabled_macros(&self) -> &'x [StringCacheId] {
-        if let Some(frame) = self.tokenizer_stack.last() {
+        self.disabled_macros_in(&self.tokenizer_stack)
+    }
+
+    /// The disabled set of the frames supplying an invocation's arguments.
+    ///
+    /// C99: §6.10.3.4 paragraph 2, p. 155; PDF p. 167.
+    fn disabled_macros_in(&self, frames: &[TokenizerFrame<'x>]) -> &'x [StringCacheId] {
+        if let Some(frame) = frames.last() {
             match &frame.frame_type {
                 | TokenizerFrameType::SourceFile { .. } => return &[],
                 | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. } =>
@@ -1013,7 +1053,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             }
         }
         let mut names = ArenaVec::new_in(self.scratch);
-        for frame in self.tokenizer_stack.iter().rev() {
+        for frame in frames.iter().rev() {
             match &frame.frame_type {
                 | TokenizerFrameType::FunctionLikeMacroArgument { argument, .. } => {
                     names.extend_from_slice(argument.disabled_macros);

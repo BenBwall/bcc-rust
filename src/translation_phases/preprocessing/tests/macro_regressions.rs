@@ -296,6 +296,77 @@ fn paste_chain_operands_are_not_macro_replaced() {
 }
 
 #[test]
+fn paste_chain_calls_expand_arguments_from_the_rest_of_source() {
+    // C99 §6.10.3.4p2 excludes the rest of the source from the enclosing
+    // replacement's disabled macros, even when a paste produces the callee.
+    for (source, expected) in [
+        (
+            "#define CAT3(a,b,c) a##b##c\n#define foo(x) [x]\nCAT3(f,o,o)(CAT3(1,2,3))\n",
+            "[ 123 ]",
+        ),
+        (
+            "#define CAT3(a,b,c) a##b##c\n#define foo(x) [x]\nCAT3(f,o,o)(x CAT3(1,2,3))\n",
+            "[ x 123 ]",
+        ),
+        (
+            "#define L(a,b,c) a##b##c\n#define abc(x) x\nL(a,b,c)(L(a,b,c))\n",
+            "abc",
+        ),
+        (
+            "#define C2(a,b) a##b\n#define foo(x) [x]\nC2(fo,o)(C2(1,2))\n",
+            "[ 12 ]",
+        ),
+    ] {
+        assert_expansion(source, expected);
+    }
+}
+
+#[test]
+fn substituted_calls_expand_arguments_from_the_rest_of_source() {
+    assert_expansion(
+        "#define ID(x) x\n#define foo(x) [x]\nID(foo)(ID(1))\n",
+        "[ 1 ]",
+    );
+}
+
+#[test]
+fn object_paste_calls_expand_arguments_from_the_rest_of_source() {
+    assert_expansion(
+        "#define OBJ fo##o\n#define foo(x) [x]\nOBJ(OBJ)\n",
+        "[ foo ]",
+    );
+}
+
+#[test]
+fn cross_frame_calls_preserve_replacement_token_blue_paint() {
+    for (source, expected) in [
+        ("#define FOO F ## O ## O\nFOO\n", "FOO"),
+        (
+            "#define ID(x) x\n#define foo(x) [x]\n#define WRAP ID(foo)(WRAP)\nWRAP\n",
+            "[ WRAP ]",
+        ),
+        // The first argument comes from the replacement and the second
+        // comes from source. The former must stay painted after capture.
+        (
+            "#define A foo(A,\n#define foo(x,y) [x][y]\nA 1)\n",
+            "[ A ] [ 1 ]",
+        ),
+        (
+            "#define ID(x) x\n#define foo(x) [x]\n#define WRAP ID(foo)(ID)\nWRAP(1)\n",
+            "[ ID ] ( 1 )",
+        ),
+        // Keep the live replacement frames' disablement while rescanning
+        // g's replacement, even though its argument comes from source.
+        (
+            "#define f(a) a*g\n#define g(a) f(a)\nf(2)(9)\n",
+            "2 * f ( 9 )",
+        ),
+    ] {
+        assert_expansion(source, expected);
+    }
+}
+
+#[test]
 fn paste_chains_report_each_invalid_paste() {
     // C99 §6.10.3.3p3: each paste that forms no valid preprocessing token is
     // diagnosed, left to right.
@@ -551,6 +622,36 @@ char c[2][6] = { str(hello), str() };
     );
     assert_expansion(source, expected);
 }
+
+#[test]
+fn c99_stringification_example_four_matches_normative_output() {
+    // C99 §6.10.3.5 EXAMPLE 4, pp. 156-157; PDF pp. 168-169. The standard
+    // shows `xstr(INCFILE(2).h)` as an `#include` operand; here it is
+    // followed by `;` so the output token stream stays unambiguous.
+    let source = r#"#define str(s) # s
+#define xstr(s) str(s)
+#define debug(s, t) printf("x" # s "= %d, x" # t "= %s", \
+                        x ## s, x ## t)
+#define INCFILE(n) vers ## n
+#define glue(a, b) a ## b
+#define xglue(a, b) glue(a, b)
+#define HIGHLOW "hello"
+#define LOW LOW ", world"
+debug(1, 2);
+fputs(str(strncmp("abc\0d", "abc", '\4') // this goes away
+      == 0) str(: @\n), s);
+xstr(INCFILE(2).h);
+glue(HIGH, LOW);
+xglue(HIGH, LOW)
+"#;
+    let expected = concat!(
+        r#"printf ( "x1= %d, x2= %s" , x1 , x2 ) ; "#,
+        r#"fputs ( "strncmp(\"abc\\0d\", \"abc\", '\\4') == 0: @\n" , s ) ; "#,
+        r#""vers2.h" ; "hello" ; "hello, world""#,
+    );
+    assert_expansion(source, expected);
+}
+
 #[test]
 fn nested_calls_receive_stringified_parent_arguments() {
     for source in [
