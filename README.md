@@ -258,7 +258,11 @@ and the MSVC runtime), and `<stddef.h>` and `<stdarg.h>` answer the partial
 `__need_*` requests that glibc's headers make. Diagnostics and token dumps name
 them `<built-in>/name.h`.
 Target-description macros describe x86-64 System V LP64 in all language modes,
-independently of the host ABI. Compiler and OS identity macros remain absent.
+independently of the host ABI. Compiler identity follows Clang: GNU modes claim
+GCC 4.2.1 (`__GNUC__` `4`), `-fms-extensions` claims MSVC 19.33 (`_MSC_VER`
+`1933`), and every mode defines `__bcc__`; `__clang__` is never defined. See
+[language-standards.md](language-standards.md) for the full list. OS identity
+macros remain absent.
 `offsetof` and the varargs intrinsics have semantic types; this front end does
 not generate the code that performs varargs operations.
 

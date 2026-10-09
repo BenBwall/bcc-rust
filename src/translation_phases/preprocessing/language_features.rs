@@ -24,6 +24,8 @@ use super::{
 };
 use crate::{
     configuration::{
+        CStandard,
+        CompilerConfiguration,
         Feature,
         FeatureOrigin,
     },
@@ -40,6 +42,7 @@ use crate::{
     util::bump::{
         ArenaString,
         ArenaVec,
+        Bump,
     },
 };
 
@@ -56,6 +59,53 @@ pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
     ("__STDC_EMBED_FOUND__", Feature::Embed),
     ("__STDC_EMBED_EMPTY__", Feature::Embed),
 ];
+
+/// Appends the compiler-identity macros to the target's predefined
+/// `definitions`, as source read before user input. Following Clang, GNU
+/// modes claim GCC 4.2.1 with its inline-semantics macro, and
+/// `-fms-extensions` claims MSVC 19.33, Clang's default
+/// `-fms-compatibility-version`. `__bcc__` and its version are defined in
+/// every mode; `__clang__` never is. They are ordinary macros, so `#undef`
+/// works as in Clang.
+///
+/// C99: further predefined macro names begin with `__` or `_` and an
+/// uppercase letter, §6.10.8 paragraph 4, p. 161; PDF p. 173; reserved
+/// identifiers, §7.1.3 paragraph 1, p. 166; PDF p. 178.
+pub(super) fn with_identity_macros<'a>(
+    arena: &'a Bump,
+    definitions: &str,
+    configuration: CompilerConfiguration,
+) -> &'a str {
+    let mut out = ArenaString::new_in(arena);
+    out.push_str(definitions);
+    _ = write!(
+        out,
+        "#define __bcc__ 1\n#define __bcc_major__ {}\n#define __bcc_minor__ {}\n#define \
+         __bcc_patchlevel__ {}\n#define __bcc_version__ \"{}\"\n",
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR"),
+        env!("CARGO_PKG_VERSION_PATCH"),
+        env!("CARGO_PKG_VERSION"),
+    );
+    if configuration.gnu_extensions() {
+        out.push_str(
+            "#define __GNUC__ 4\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 1\n",
+        );
+        // GNU89 inline semantics before C99, C99 semantics from it on.
+        out.push_str(if configuration.standard() < CStandard::C99 {
+            "#define __GNUC_GNU_INLINE__ 1\n"
+        } else {
+            "#define __GNUC_STDC_INLINE__ 1\n"
+        });
+    }
+    if configuration.msvc_compatibility() {
+        out.push_str(
+            "#define _MSC_VER 1933\n#define _MSC_FULL_VER 193300000\n#define _MSC_BUILD \
+             1\n#define _MSC_EXTENSIONS 1\n",
+        );
+    }
+    out.into_str()
+}
 
 /// GNU builtins can be overridden with a warning, like GCC and Clang. ISO
 /// predefined macros and standard query operators retain their protection.

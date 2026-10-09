@@ -327,7 +327,7 @@ fn translation_timestamp_without_a_representable_epoch_spells_the_local_time() {
 }
 
 #[test]
-fn version_and_strict_ansi_macros_follow_every_mode() {
+fn version_strict_ansi_and_identity_macros_follow_every_mode() {
     use crate::configuration::{
         CStandard,
         ExtensionPolicy,
@@ -346,19 +346,58 @@ fn version_and_strict_ansi_macros_follow_every_mode() {
                 .with_gnu_extensions(gnu);
             let result = observe_with(
                 "#ifdef __STDC_VERSION__\nversion __STDC_VERSION__\n#endif\n#ifdef \
-                 __STRICT_ANSI__\nstrict __STRICT_ANSI__\n#endif\n#ifdef \
-                 __GNUC__\nbad_gnu\n#endif\n#ifdef _MSC_VER\nbad_ms\n#endif\n",
+                 __STRICT_ANSI__\nstrict __STRICT_ANSI__\n#endif\n#ifdef __GNUC__\ngnu __GNUC__ \
+                 __GNUC_MINOR__ __GNUC_PATCHLEVEL__\n#endif\n#ifdef \
+                 __GNUC_GNU_INLINE__\ngnu_inline\n#endif\n#ifdef \
+                 __GNUC_STDC_INLINE__\nstdc_inline\n#endif\n#ifdef _MSC_VER\nbad_ms\n#endif\n#if \
+                 defined(__clang__) || !defined(__bcc__)\nbad_identity\n#endif\n",
                 configuration,
             );
             let mut expected = Vec::new();
             if let Some(version) = version {
                 expected.extend(["version".to_owned(), format!("{version}L")]);
             }
-            if !gnu {
+            if gnu {
+                expected.extend(["gnu", "4", "2", "1"].map(str::to_owned));
+                expected.push(
+                    if standard < CStandard::C99 {
+                        "gnu_inline"
+                    } else {
+                        "stdc_inline"
+                    }
+                    .to_owned(),
+                );
+            } else {
                 expected.extend(["strict".to_owned(), "1".to_owned()]);
             }
             assert_eq!(result.spellings, expected, "{standard:?}, gnu={gnu}");
             assert!(result.errors.is_empty(), "{:?}", result.errors);
         }
+    }
+}
+
+#[test]
+fn msvc_identity_follows_the_umbrella_flag_and_identity_macros_can_be_undefined() {
+    let source = "_MSC_VER _MSC_FULL_VER _MSC_BUILD _MSC_EXTENSIONS\n#undef __GNUC__\n#undef \
+                  __bcc__\n#if defined __GNUC__ || defined __bcc__\nbad\n#endif\n";
+    let result = observe_with(
+        source,
+        CompilerConfiguration::default()
+            .with_gnu_extensions(true)
+            .with_msvc_extensions(true),
+    );
+    assert_eq!(result.spellings, ["1933", "193300000", "1", "1"]);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    // A single group is not the umbrella, and the umbrella's opposite
+    // withdraws it.
+    for configuration in [
+        CompilerConfiguration::default()
+            .with_msvc_feature(crate::configuration::MsvcFeature::Declspec, true),
+        CompilerConfiguration::default()
+            .with_msvc_extensions(true)
+            .with_msvc_extensions(false),
+    ] {
+        let result = observe_with("#ifdef _MSC_VER\nbad\n#endif\n", configuration);
+        assert!(result.spellings.is_empty(), "{:?}", result.spellings);
     }
 }
