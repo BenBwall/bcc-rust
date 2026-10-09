@@ -9,6 +9,209 @@ use crate::configuration::{
 };
 
 #[test]
+fn typeof_expression_pointer_member_suppresses_unanalyzed_target() {
+    with_configuration(
+        "struct S { int x; } s; void f(void) { __typeof__(s) *p = &s; p->x = 1; }",
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+            .with_gnu_extensions(true),
+        assert_clean,
+    );
+}
+
+#[test]
+fn typeof_type_pointer_member_suppresses_unanalyzed_target() {
+    with_configuration(
+        "struct S { int x; }; void f(void) { __typeof__(struct S) *p; p->x; }",
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+            .with_gnu_extensions(true),
+        assert_clean,
+    );
+}
+
+#[test]
+fn typeof_function_pointer_call_suppresses_unanalyzed_target() {
+    with_configuration(
+        "int t(void); __typeof__(t) *q; void f(void) { q(); }",
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+            .with_gnu_extensions(true),
+        assert_clean,
+    );
+}
+
+fn assert_clean(context: &mut Context<'_>, _: &SemanticTranslationUnit<'_>) {
+    assert_eq!(
+        context.pending_error_count(),
+        0,
+        "{:?}",
+        context.take_pending_errors()
+    );
+}
+
+#[test]
+fn unevaluated_commas_preserve_null_pointer_ice() {
+    for expression in [
+        "1 ? 0 : (1,0)",
+        "0 ? (1,0) : 0",
+        "0 && (1,0)",
+        "!(1 || (1,0))",
+    ] {
+        with_configuration(
+            &format!("int *p = {expression};"),
+            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+            |context, unit| {
+                assert_clean(context, unit);
+                let info = unit.expressions.last().unwrap();
+                assert!(info.ice, "{expression}");
+                assert_eq!(info.integer.unwrap().value, 0, "{expression}");
+            },
+        );
+    }
+}
+
+#[test]
+fn evaluated_commas_are_not_null_pointer_ice() {
+    for expression in ["1 ? (1,0) : 0", "0 ? 0 : (1,0)", "1 && (1,0)", "0 || (1,0)"] {
+        with_configuration(
+            &format!("int *p = {expression};"),
+            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+            |context, _| {
+                let errors = context.take_pending_errors();
+                assert!(
+                    errors.iter().any(|error| matches!(
+                        error,
+                        TranslationError::Semantic(error)
+                            if error.kind == SemanticErrorKind::InvalidInitializer
+                    )),
+                    "{expression}: {errors:?}"
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn conditional_ice_requires_integer_result_type() {
+    for expression in ["1 ? 0 : 1.0", "0 ? 1.0 : 0"] {
+        with_configuration(
+            &format!("int *p = {expression};"),
+            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+            |context, unit| {
+                let errors = context.take_pending_errors();
+                assert!(
+                    errors.iter().any(|error| matches!(
+                        error,
+                        TranslationError::Semantic(error)
+                            if error.kind == SemanticErrorKind::InvalidInitializer
+                    )),
+                    "{expression}: {errors:?}"
+                );
+                assert!(!unit.expressions.last().unwrap().ice, "{expression}");
+            },
+        );
+    }
+}
+
+#[test]
+fn vla_alignof_is_an_element_alignment_ice() {
+    for (operator, configuration) in [
+        (
+            "_Alignof",
+            CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Deny),
+        ),
+        (
+            "__alignof__",
+            CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true),
+        ),
+    ] {
+        let source = format!(
+            "void f(int n) {{ int a[n]; enum {{ N = {operator}(int[n]), M = {operator}(int[2][n]) \
+             }}; int *p = {operator}(int[n]) == 4 ? 0 : 1; sizeof(int[n]); sizeof(a); }}"
+        );
+        with_configuration(&source, configuration, |context, unit| {
+            assert_clean(context, unit);
+            for name in ["N", "M"] {
+                let binding = unit
+                    .bindings
+                    .iter()
+                    .find(|binding| context.string_cache.at(binding.name.name) == name)
+                    .unwrap();
+                assert_eq!(binding.value.unwrap().value, 4);
+            }
+            let mut alignments = 0;
+            for info in unit.expressions {
+                if matches!(info.expression.kind, ExpressionType::AlignofType(_)) {
+                    alignments += 1;
+                    assert_eq!(info.integer.unwrap().value, 4);
+                    assert!(info.ice);
+                } else if matches!(
+                    info.expression.kind,
+                    ExpressionType::SizeofType(_) | ExpressionType::SizeofExpr(_)
+                ) {
+                    assert!(info.integer.is_none());
+                    assert!(!info.ice);
+                }
+            }
+            assert_eq!(alignments, 3);
+        });
+    }
+}
+
+#[test]
+fn nested_subscript_type_classification_scales_linearly() {
+    for n in [128, 512] {
+        let source = format!(
+            "int a{}; int f(void) {{ return a{}; }}\n",
+            "[1]".repeat(n),
+            "[0]".repeat(n)
+        );
+        let tu = Bump::new();
+        let scratch = Bump::new();
+        let mut context = Context::new(&tu);
+        let unit = crate::pipeline::parse_translation_unit(
+            &mut context,
+            Path::new("<input>"),
+            tu.alloc_str(&source),
+            &[],
+            &[],
+        );
+        let mut analyzer = Analyzer::new(&mut context, &scratch);
+        for &root in unit.external_declarations().iter().rev() {
+            analyzer.work.push(Work::Root(root));
+        }
+        while let Some(work) = analyzer.work.pop() {
+            analyzer.step(work);
+        }
+        analyzer.finish_translation_unit();
+        assert_eq!(analyzer.context.pending_error_count(), 0);
+        let subscripts = analyzer.expressions.iter().filter(|info| {
+            matches!(
+                info.expression.kind,
+                ExpressionType::Binary {
+                    operator: BinaryOperator::Subscript,
+                    ..
+                }
+            )
+        });
+        assert_eq!(subscripts.count(), n);
+        let last = analyzer.expressions.last().unwrap();
+        assert_eq!(
+            analyzer.types.nodes[last.ty.index],
+            TypeKind::Scalar(Scalar::Int)
+        );
+        assert_eq!(
+            last.category,
+            super::super::expressions::ValueCategory::ModifiableLvalue
+        );
+        let steps = analyzer.types.steps.get();
+        assert!(
+            steps <= 16 * n,
+            "{n} dimensions examined {steps} type nodes"
+        );
+    }
+}
+
+#[test]
 fn offsetof_resolves_anonymous_members_and_unnamed_bit_fields() {
     for (source, expected) in [
         (

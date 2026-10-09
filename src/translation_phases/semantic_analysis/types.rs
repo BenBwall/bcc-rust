@@ -237,13 +237,26 @@ fn layout(
     })
 }
 
+/// Immutable array derivations stop at a scalar, pointer, function or tag.
+/// Tag completion and recovery taint are queried live at that terminal node.
+/// C99: §6.2.5p20, pp. 35-36; PDF pp. 47-48; §6.2.5p22, p. 36; PDF p. 48.
+#[derive(Clone, Copy)]
+struct ArrayTail {
+    index:      usize,
+    incomplete: bool,
+}
+
 /// Working hash-cons table; only its immutable graph escapes into `'tu`.
 pub(crate) struct TypeInterner<'tu, 's> {
+    /// Type nodes examined by completeness and recovery queries in tests.
+    #[cfg(test)]
+    pub(super) steps:  Cell<usize>,
     pub(crate) nodes:  ArenaVec<'tu, TypeKind<'tu>>,
     pub(crate) tags:   ArenaVec<'tu, &'tu Tag<'tu>>,
     keys:              ArenaMap<'s, TypeKind<'tu>, TypeId>,
     /// Variably modified nodes, decided once from immediate children.
     variably_modified: ArenaVec<'s, bool>,
+    array_tails:       ArenaVec<'s, ArrayTail>,
     pub(crate) target: TargetLayout,
     pub(crate) tu:     &'tu Bump,
     scratch:           &'s Bump,
@@ -252,10 +265,13 @@ pub(crate) struct TypeInterner<'tu, 's> {
 impl<'tu, 's> TypeInterner<'tu, 's> {
     pub(crate) fn new(tu: &'tu Bump, scratch: &'s Bump) -> Self {
         let mut result = Self {
+            #[cfg(test)]
+            steps: Cell::new(0),
             nodes: ArenaVec::new_in(tu),
             tags: ArenaVec::new_in(tu),
             keys: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             variably_modified: ArenaVec::new_in(scratch),
+            array_tails: ArenaVec::new_in(scratch),
             target: TargetLayout::LP64,
             tu,
             scratch,
@@ -279,6 +295,23 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
             | TypeKind::Function { result, .. } => self.variably_modified[result.index],
             | _ => false,
         };
+        // C99 §6.2.5p20,22: inherit the immutable tail from the immediate
+        // element, so shared array derivations are never rescanned.
+        #[cfg(test)]
+        self.classification_step();
+        let tail = if let TypeKind::Array(element, bound) = kind {
+            let element_tail = self.array_tails[element.index];
+            ArrayTail {
+                incomplete: element_tail.incomplete || bound == ArrayBound::Incomplete,
+                ..element_tail
+            }
+        } else {
+            ArrayTail {
+                index:      ty.index,
+                incomplete: false,
+            }
+        };
+        self.array_tails.push(tail);
         self.variably_modified.push(variably_modified);
         self.nodes.push(kind);
         _ = self.keys.insert(kind, ty);
@@ -301,20 +334,51 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     }
 
     /// Unmodeled extension layout suppresses dependent constraints.
-    pub(crate) fn unanalyzed(&self, mut ty: TypeId) -> bool {
-        loop {
-            match self.nodes[ty.index] {
-                | TypeKind::Unknown => return true,
-                | TypeKind::Tag(id) => return self.tags[id].tainted.get(),
-                | TypeKind::Array(element, _) => ty = element,
-                | _ => return false,
-            }
+    /// C99: array derivations §6.2.5p20, pp. 35-36; PDF pp. 47-48.
+    pub(crate) fn unanalyzed(&self, ty: TypeId) -> bool {
+        #[cfg(test)]
+        self.classification_step();
+        match self.nodes[self.array_tails[ty.index].index] {
+            | TypeKind::Unknown => true,
+            | TypeKind::Tag(id) => self.tags[id].tainted.get(),
+            | _ => false,
         }
+    }
+
+    /// Array bounds are immutable, but a terminal tag can complete later.
+    /// C99: §6.2.5p22, p. 36; PDF p. 48; §6.7.5.2p1, p. 116; PDF p. 128.
+    pub(crate) fn complete_object(&self, ty: TypeId) -> bool {
+        #[cfg(test)]
+        self.classification_step();
+        let tail = self.array_tails[ty.index];
+        !tail.incomplete
+            && match self.nodes[tail.index] {
+                | TypeKind::Tag(id) => self.tags[id].complete.get(),
+                | TypeKind::Scalar(Scalar::Void)
+                | TypeKind::Function { .. }
+                | TypeKind::Unknown => false,
+                | _ => true,
+            }
+    }
+
+    #[cfg(test)]
+    pub(super) fn classification_step(&self) {
+        self.steps.set(self.steps.get() + 1);
     }
 
     /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
     pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
         layout(&self.nodes, &self.tags, &self.target, ty)
+    }
+
+    /// Array alignment depends on the element, regardless of its extent.
+    /// C11: §6.5.3.4p3, p. 90; PDF p. 108 (an extension in C99).
+    pub(crate) fn alignment(&self, ty: TypeId) -> Option<u64> {
+        let ty = TypeId {
+            index: self.array_tails[ty.index].index,
+            ..ty
+        };
+        self.layout(ty).map(|layout| layout.align)
     }
 
     pub(crate) fn finish(self) -> Types<'tu> {

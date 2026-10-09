@@ -1412,11 +1412,15 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                         self.types.nodes[ty.index],
                         TypeKind::Scalar(Scalar::Void) | TypeKind::Function { .. }
                     );
-                let layout = self
-                    .types
-                    .layout(ty)
-                    .or_else(|| gnu_unit_size.then_some(Layout { size: 1, align: 1 }));
-                if layout.is_none()
+                // C11 §6.5.3.4p3: array alignment is its element alignment,
+                // even when sizeof is runtime-valued (extension in C99).
+                let value = if align {
+                    self.types.alignment(ty)
+                } else {
+                    self.types.layout(ty).map(|layout| layout.size)
+                }
+                .or_else(|| gnu_unit_size.then_some(1));
+                if value.is_none()
                     && !self.types.unanalyzed(ty)
                     && !matches!(
                         self.types.nodes[ty.index],
@@ -1426,8 +1430,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 {
                     self.error(SemanticErrorKind::InvalidConstant, source, None, None);
                 }
-                self.integers.push(layout.map(|l| Integer {
-                    value:  i128::from(if align { l.align } else { l.size }),
+                self.integers.push(value.map(|value| Integer {
+                    value:  i128::from(value),
                     bits:   64,
                     signed: false,
                 }));

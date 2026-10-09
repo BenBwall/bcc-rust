@@ -25,7 +25,6 @@ use super::{
     ExpressionType,
     Identifier,
     Integer,
-    Layout,
     Linkage,
     Namespace,
     Scalar,
@@ -198,22 +197,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             || self.const_members.get(&ty.index).copied().unwrap_or(false)
     }
 
-    pub(super) fn complete_object(&self, mut ty: TypeId) -> bool {
-        loop {
-            match self.types.nodes[ty.index] {
-                | TypeKind::Array(element, bound) => {
-                    if bound == ArrayBound::Incomplete {
-                        return false;
-                    }
-                    ty = element;
-                },
-                | TypeKind::Tag(id) => return self.types.tags[id].complete.get(),
-                | TypeKind::Scalar(Scalar::Void)
-                | TypeKind::Function { .. }
-                | TypeKind::Unknown => return false,
-                | _ => return true,
-            }
-        }
+    /// C99: §6.2.5p22, p. 36; PDF p. 48; §6.7.5.2p1, p. 116; PDF p. 128.
+    pub(super) fn complete_object(&self, ty: TypeId) -> bool {
+        self.types.complete_object(ty)
     }
 
     pub(super) fn arithmetic(&self, ty: TypeId) -> bool {
@@ -1106,6 +1092,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C99: §6.5.3.4p1-5, pp. 80-81; PDF pp. 92-93.
+    /// Alignment: C11 §6.5.3.4p3, p. 90; PDF p. 108 (extension in C99).
     fn type_sizeof(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -1126,13 +1113,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let result = self.types.scalar(self.types.target.size_t);
         let mut info = Self::expression_result(e, result);
-        if let Some(layout) = self
-            .types
-            .layout(ty)
-            .or_else(|| gnu.then_some(Layout { size: 1, align: 1 }))
-        {
+        let value = if align {
+            self.types.alignment(ty)
+        } else {
+            self.types.layout(ty).map(|layout| layout.size)
+        };
+        if let Some(value) = value.or_else(|| gnu.then_some(1)) {
             info.integer = Some(Integer {
-                value:  i128::from(if align { layout.align } else { layout.size }),
+                value:  i128::from(value),
                 bits:   64,
                 signed: false,
             });
@@ -1400,6 +1388,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             ty = target;
         }
+        // C99 §6.5.2.3p2: defer the record constraint for an unmodeled target.
+        if self.types.unanalyzed(ty) {
+            return Self::expression_result(e, self.types.unknown());
+        }
         let TypeKind::Tag(id) = self.types.nodes[ty.index] else {
             return self.invalid_expression(e, SemanticErrorKind::InvalidMemberAccess);
         };
@@ -1454,6 +1446,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(target) = self.pointer_target(ty) else {
             return self.invalid_expression(e, SemanticErrorKind::InvalidCall);
         };
+        // C99 §6.5.2.2p1: defer the function constraint for an unmodeled
+        // target.
+        if self.types.unanalyzed(target) {
+            return Self::expression_result(e, self.types.unknown());
+        }
         let TypeKind::Function {
             result,
             parameters,
@@ -1790,6 +1787,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .is_some_and(|v| (op == B::LogicalAnd && !v) || (op == B::LogicalOr && v))
             {
                 info.integer = Self::constant_truth(left).map(|v| Integer::int(i128::from(v)));
+                // C99 §6.6p3: the unevaluated right operand may contain
+                // operators otherwise forbidden in constant expressions.
+                info.ice = left.ice;
                 if left.constant == ConstantClass::Arithmetic {
                     info.constant = ConstantClass::Arithmetic;
                 }
@@ -1862,6 +1862,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut info = Self::expression_result(e, ty);
         if let Some(truth) = Self::constant_truth(condition) {
             let selected = if truth { left } else { right };
+            // C99 §6.6p3,6: only the selected arm is evaluated (§6.5.15p4),
+            // but an ICE must still have integer type.
+            info.ice = self.integer_type(ty).is_some() && condition.ice && selected.ice;
             info.integer = selected.integer;
             if self.arithmetic(ty) && self.integer_type(ty).is_none() {
                 info.floating = self
@@ -1879,7 +1882,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
             }
         }
-        info.ice = condition.ice && left.ice && right.ice;
         info
     }
 }
