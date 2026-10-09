@@ -1040,10 +1040,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// §5.1.1.3 and footnote 8, p. 11; PDF p. 23. `SourceVectors` is the
     /// implementation's macro/include provenance mechanism.
     pub(super) fn merge_source(&mut self, existing: &mut Option<SourceVectors>, token: Token) {
-        *existing = Some(existing.map_or(token.source_vectors, |source_vectors| {
-            self.context
-                .merge_vectors(source_vectors, token.source_vectors)
-        }));
+        self.context.merge_into(existing, token.source_vectors);
     }
 
     /// Reports a syntax feature through the shared mode policy.

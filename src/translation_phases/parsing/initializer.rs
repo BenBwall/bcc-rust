@@ -924,11 +924,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
 
     fn merge_designation_source(&mut self, context: &mut Context<'_>, source: SourceVectors) {
         let designation = self.designation_state();
-        designation.designation_source_vectors = Some(
-            designation
-                .designation_source_vectors
-                .map_or(source, |existing| context.merge_vectors(existing, source)),
-        );
+        context.merge_into(&mut designation.designation_source_vectors, source);
     }
 
     fn push_array_designator(

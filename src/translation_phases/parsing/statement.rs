@@ -1726,10 +1726,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
 
     fn merge_statement(&mut self, context: &mut Context<'_>, statement: &'tu Statement<'tu>) {
         let source = statement.source_vectors;
-        self.source_vectors = Some(
-            self.source_vectors
-                .map_or(source, |existing| context.merge_vectors(existing, source)),
-        );
+        context.merge_into(&mut self.source_vectors, source);
     }
 
     fn parsed_slot(returned: Option<ParseValue<'tu>>) -> ExpressionSlot<'tu> {
@@ -1763,10 +1760,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | ExpressionSlot::Missing(source) => source,
         };
         if source.length() > 0 {
-            self.source_vectors = Some(
-                self.source_vectors
-                    .map_or(source, |existing| context.merge_vectors(existing, source)),
-            );
+            context.merge_into(&mut self.source_vectors, source);
         }
     }
 
@@ -1780,10 +1774,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | ConstantExpressionSlot::Missing(source) => source,
         };
         if source.length() > 0 {
-            self.source_vectors = Some(
-                self.source_vectors
-                    .map_or(source, |existing| context.merge_vectors(existing, source)),
-            );
+            context.merge_into(&mut self.source_vectors, source);
         }
     }
 
