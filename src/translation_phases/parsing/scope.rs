@@ -92,7 +92,7 @@ struct Binding {
     outer: usize,
 }
 
-/// Ordinary bindings retained from a closed file-level prototype scope, keyed
+/// Ordinary bindings retained from a closed prototype scope, keyed
 /// by the parameter list they belong to.
 #[derive(Debug)]
 struct RetainedPrototype {
@@ -305,8 +305,8 @@ impl<'p> ScopeStack<'p> {
     /// republish them in its own scope.
     ///
     /// C99: identifiers declared in a function definition's parameter
-    /// declarations have block scope ending with the body, §6.2.1p4, p. 29;
-    /// PDF p. 41.
+    /// declarations have block scope ending with the body, §6.2.1p4,
+    /// pp. 29-30; PDF pp. 41-42. GNU nested definitions use the same lifetime.
     pub(super) fn retain_innermost_bindings(&mut self, key: (usize, usize)) {
         let Some(scope) = self.nested_scopes.last() else {
             return;

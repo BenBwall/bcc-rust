@@ -64,6 +64,51 @@ fn assert_clean_parse(parsed: &Parsed<'_, '_>, source: &str) {
 }
 
 #[test]
+fn auto_type_name_enters_scope_after_its_initializer() {
+    let source = "typedef int T; void f(void) { { __auto_type T = (T){1}; T + 1; } T following; } \
+                  T outside;\n";
+    with_parse_configuration(
+        source,
+        mode(CStandard::C17, true, ExtensionPolicy::Allow),
+        |p| {
+            assert_clean_parse(p, source);
+            assert_eq!(p.items.len(), 3);
+            assert!(matches!(
+                p.items[1],
+                ExternalDeclaration::FunctionDefinition(_)
+            ));
+            assert!(matches!(
+                declaration(p, 2).declaration_specifiers.type_specifiers,
+                TypeSpecifiers::TypedefName(_)
+            ));
+        },
+    );
+}
+
+#[test]
+fn nested_function_parameter_bindings_extend_through_its_body() {
+    let source = "typedef int T; void f(void) { void prototype(int a[sizeof(enum { T=2 })]); T \
+                  after_prototype; void g(int a[sizeof(enum { T=1 })]) { T + 1; } T \
+                  after_definition; } T outside;\n";
+    with_parse_configuration(
+        source,
+        mode(CStandard::C11, true, ExtensionPolicy::Allow),
+        |p| {
+            assert_clean_parse(p, source);
+            assert_eq!(p.items.len(), 3);
+            assert!(matches!(
+                p.items[1],
+                ExternalDeclaration::FunctionDefinition(_)
+            ));
+            assert!(matches!(
+                declaration(p, 2).declaration_specifiers.type_specifiers,
+                TypeSpecifiers::TypedefName(_)
+            ));
+        },
+    );
+}
+
+#[test]
 fn extension_marker_before_a_member_terminates_and_suppresses_only_that_member() {
     // glibc's `bits/atomic_wide_counter.h` shape.
     let glibc = "typedef union { __extension__ unsigned long long int __value64; struct { \

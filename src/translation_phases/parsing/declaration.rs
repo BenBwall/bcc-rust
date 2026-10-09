@@ -15,6 +15,8 @@
 //! 2, p. 97; PDF p. 109; the rest of paragraphs 2-4, the definition
 //! semantics of paragraph 5, p. 97; PDF p. 109, and the completeness rule of
 //! paragraph 7, p. 98; PDF p. 110, are left to semantic analysis.
+//! GNU `__auto_type` is an extension that instead defers the identifier's
+//! binding until after its initializer.
 
 use std::fmt::Debug;
 
@@ -29,6 +31,7 @@ use super::{
         DeclarationSpecifiers,
         DirectDeclarator,
         InitDeclarator,
+        TypeSpecifiers,
     },
     declarator::{
         DeclaratorFrame,
@@ -49,6 +52,7 @@ use super::{
         ParseValue,
     },
     modern::{
+        ExtendedType,
         ModernFrame,
         ModernKind,
         ModernValue,
@@ -348,7 +352,16 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 // now so typedef shadowing affects the very next token.
                 // C99 §6.2.1p7; typedef names share the ordinary name space
                 // (§6.7.7p3).
-                if let Some(identifier) = declarator.identifier() {
+                // GNU extension: `__auto_type` keeps outer bindings visible
+                // throughout its initializer (GCC's "Referring to a Type
+                // with typeof" specification).
+                if !self.declaration_specifiers.is_some_and(|specifiers| {
+                    matches!(
+                        specifiers.type_specifiers,
+                        TypeSpecifiers::Extended(ExtendedType::AutoType)
+                    )
+                }) && let Some(identifier) = declarator.identifier()
+                {
                     let class = if self.declaration_specifiers.is_some_and(|specifiers| {
                         specifiers.storage_class == Some(StorageClass::Typedef)
                     }) {
@@ -627,6 +640,18 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     init_declarator.source_vectors = parser
                         .context
                         .merge_vectors(init_declarator.source_vectors, initializer_source);
+                    // GNU `__auto_type` is an exception to C99 §6.2.1p7:
+                    // publish only after the initializer child has finished,
+                    // including when that child recovered malformed syntax.
+                    if self.declaration_specifiers.is_some_and(|specifiers| {
+                        matches!(
+                            specifiers.type_specifiers,
+                            TypeSpecifiers::Extended(ExtendedType::AutoType)
+                        )
+                    }) && let Some(identifier) = init_declarator.declarator.identifier()
+                    {
+                        parser.scopes.publish(identifier.name, NameClass::Ordinary);
+                    }
                 }
                 self.phase = DeclarationPhase::AfterDeclarator;
                 ParseAction::Continue

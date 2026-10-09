@@ -8,7 +8,7 @@
 //! pp. 118-121; PDF pp. 130-133.
 //!
 //! The list opens function prototype scope (§6.2.1 paragraph 4, p. 30;
-//! PDF p. 42); a file-level list keeps the bindings a later definition body
+//! PDF p. 42); every list keeps the bindings a later definition body
 //! needs. An identifier that could be a typedef name or a parameter name is
 //! taken as a typedef name (§6.7.5.3 paragraph 11, p. 119; PDF p. 131).
 //! Left to semantic analysis: the storage-class constraint of paragraph 2
@@ -706,8 +706,8 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     "this frame phase cannot receive a child value"
                 );
                 // Mirror the K&R exit: never leak prototype bindings
-                // into the enclosing file or parameter scope. A file-level
-                // list may still belong to a function definition, whose body
+                // into the enclosing scope. A list at any nesting depth
+                // may still belong to a function definition, whose body
                 // must see every name declared in its parameter declarations
                 // (C99 §6.2.1p4). Names a definition can rebuild from its
                 // parameter declarators need no copy; anything else, such as
@@ -716,9 +716,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     .entry_scope_depth
                     .expect("parameter list entered prototype scope");
                 let start = parser.alloc_syntax_list(&mut self.parameters);
-                if entry_scope_depth == 0
-                    && parser.scopes.innermost_binding_count() > self.parameter_name_bindings
-                {
+                if parser.scopes.innermost_binding_count() > self.parameter_name_bindings {
                     parser.scopes.retain_innermost_bindings(list_key(&start));
                 }
                 parser.scopes.restore_depth(entry_scope_depth);
