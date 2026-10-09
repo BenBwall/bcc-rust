@@ -1,0 +1,11 @@
+error: identifier is defined more than once: `a`
+ --> sema3-definition.c:1:14
+  |
+1 | int a=1; int a=2;
+  |     -        ^ declaration constraint violated
+  |     |
+  |     previous declaration is here
+  |
+  = note: C99 §6.9p3,p5: an identifier with linkage has at most one external definition in a translation unit
+
+1 error generated.

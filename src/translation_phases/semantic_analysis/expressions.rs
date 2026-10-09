@@ -262,7 +262,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C99: §6.3.1.1p2, p. 42; PDF p. 54. Bit-field width can promote an
     /// unsigned int field to int when all its values fit.
-    fn promote(&mut self, info: ExpressionInfo<'tu>, ty: TypeId) -> TypeId {
+    pub(super) fn promote(&mut self, info: ExpressionInfo<'tu>, ty: TypeId) -> TypeId {
         if self.integer_type(ty).is_some_and(|(bits, _)| bits < 32)
             || matches!(self.types.nodes[ty.index], TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Enum)
             || (info.bit_field.is_some_and(|width| width < 32)
@@ -439,6 +439,34 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if let ExpressionType::Identifier(name) = e.kind
             && self.lookup(Namespace::Ordinary, name.name).is_none()
+            && self
+                .context
+                .string_cache
+                .at(name.name)
+                .starts_with("__builtin_")
+        {
+            // Unmodeled GNU compiler intrinsics do not have the C89 implicit
+            // int signature. Preserve an opaque result rather than rejecting
+            // valid pointer/aggregate returns based on an invented int type.
+            let result = self.types.unknown();
+            let ty = self.types.intern(TypeKind::Function {
+                result,
+                parameters: &[],
+                prototype: false,
+                variadic: false,
+            });
+            self.bind(
+                name,
+                ty,
+                BindingKind::Function,
+                Linkage::External,
+                Duration::None,
+                None,
+            );
+            return;
+        }
+        if let ExpressionType::Identifier(name) = e.kind
+            && self.lookup(Namespace::Ordinary, name.name).is_none()
             && (self.context.configuration.standard() < CStandard::C99
                 || self.context.configuration.gnu_extensions())
         {
@@ -503,43 +531,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut info = Self::expression_result(e, self.types.unknown());
         match e.kind {
             | E::Identifier(name) => {
-                if self
-                    .lookup(Namespace::Ordinary, name.name)
-                    .is_none_or(|entry| self.scopes[entry.scope].kind == super::ScopeKind::File)
-                    && self.context.string_cache.at(name.name) == "__func__"
-                    && let Some(function) = self.function_name
-                {
-                    let element = self
-                        .types
-                        .scalar(Scalar::Char)
-                        .qualified(TypeQualifiers::CONST);
-                    let count = self.context.string_cache.at(function.name).len() as u64 + 1;
-                    let ty = self
-                        .types
-                        .intern(TypeKind::Array(element, ArrayBound::Constant(count)));
-                    let current = self.scope;
-                    let mut owner = current;
-                    while self.scopes[owner].kind != super::ScopeKind::Function {
-                        let Some(parent) = self.scopes[owner].parent else {
-                            break;
-                        };
-                        owner = parent;
-                    }
-                    self.scope = owner;
-                    self.bind(
-                        name,
-                        ty,
-                        BindingKind::Object,
-                        Linkage::None,
-                        Duration::Static,
-                        None,
-                    );
-                    self.scope = current;
-                }
                 if let Some(entry) = self.lookup(Namespace::Ordinary, name.name) {
                     let binding = self.bindings[entry.binding];
                     info.ty = binding.ty;
                     info.binding = Some(entry.binding);
+                    self.record_binding_use(entry.binding, name);
                     info.register = self.register_bindings.contains_key(&entry.binding);
                     info.static_address = binding.duration == Duration::Static
                         || binding.kind == BindingKind::Function;

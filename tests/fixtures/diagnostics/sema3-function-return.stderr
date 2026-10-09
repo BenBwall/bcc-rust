@@ -1,0 +1,9 @@
+error: function definition requires a complete return object type: `f`
+ --> sema3-function-return.c:1:20
+  |
+1 | struct S; struct S f(void) {}
+  |                    ^^^^^^^ declaration constraint violated
+  |
+  = note: C99 §6.9.1p3: a function returns void or an object type other than an array; its body requires a complete result type
+
+1 error generated.

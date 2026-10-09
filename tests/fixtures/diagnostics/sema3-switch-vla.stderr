@@ -1,0 +1,21 @@
+error: switch dispatch enters the scope of a variably modified identifier
+ --> sema3-switch-vla.c:1:37
+  |
+1 | void f(int n) {switch(n) {int a[n]; case 1:; default:;}}
+  |                               -     ^^^^^^^^ statement constraint violated
+  |                               |
+  |                               variably modified identifier is declared here
+  |
+  = note: C99 §6.8.4.2p2: the entire switch is within the scope of every variably modified identifier whose scope contains a case or default label
+
+error: switch dispatch enters the scope of a variably modified identifier
+ --> sema3-switch-vla.c:1:46
+  |
+1 | void f(int n) {switch(n) {int a[n]; case 1:; default:;}}
+  |                               -              ^^^^^^^^^ statement constraint violated
+  |                               |
+  |                               variably modified identifier is declared here
+  |
+  = note: C99 §6.8.4.2p2: the entire switch is within the scope of every variably modified identifier whose scope contains a case or default label
+
+2 errors generated.

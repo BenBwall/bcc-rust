@@ -1,0 +1,11 @@
+error: used internal identifier has no definition: `f`
+ --> sema3-internal-undefined.c:1:41
+  |
+1 | static int f(void); int g(void) {return f();}
+  |            -                            ^ declaration constraint violated
+  |            |
+  |            previous declaration is here
+  |
+  = note: C99 §6.9p3: an internal-linkage identifier used outside a constant sizeof operand has exactly one definition in the translation unit
+
+1 error generated.

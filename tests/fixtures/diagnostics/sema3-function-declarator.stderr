@@ -1,0 +1,9 @@
+error: definition requires a function declarator: `f`
+ --> sema3-function-declarator.c:1:24
+  |
+1 | typedef int F(void); F f { return 0; }
+  |                        ^ declaration constraint violated
+  |
+  = note: C99 §6.9.1p2: the function type must be specified by the declarator, not solely by a typedef
+
+1 error generated.

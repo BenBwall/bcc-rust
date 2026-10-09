@@ -12,6 +12,7 @@ scope 0 (File): callbacks: int (*[3])(unsigned long, const char *, ...) [size=24
 scope 0 (File): f: int (int *, int (*)(int)); Function, External, None
 scope 4 (Function): values: int *const  [size=8, align=8]; Parameter, None, Automatic
 scope 4 (Function): cb: int (*)(int) [size=8, align=8]; Parameter, None, Automatic
+scope 4 (Function): __func__: const char [2] [size=2, align=1]; Object, None, Static
 scope 4 (Function): local: int [size=4, align=4]; Object, None, Automatic
 scope 5 (Block): count: const unsigned long [size=8, align=8]; Object, None, Automatic
 scope 5 (Block): values: int [vla]; Object, None, Automatic
@@ -37,3 +38,4 @@ convert expression 6: Arithmetic to int
 convert expression 7: Arithmetic to int
 convert expression 9: Lvalue to int
 convert expression 11: Lvalue to int
+convert expression 11: Assignment to int

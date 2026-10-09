@@ -1,7 +1,7 @@
 //! Phase-7 declaration typing, nominal tags, bindings and aggregate completion.
 //! C99: §6.2.1-§6.2.4, pp. 29-32; PDF pp. 41-44; §6.7-§6.7.7,
 //! pp. 97-124; PDF pp. 109-136. Initializer constraints use initializers.rs;
-//! remaining function-definition constraints await Stage 3.
+//! function-definition constraints use functions.rs.
 
 use super::{
     Analyzer,
@@ -40,63 +40,6 @@ use super::{
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
-    /// Old-style definitions compare promoted declared parameter types to
-    /// prototypes. C99: §6.7.5.3p15, pp. 119-120; PDF pp. 131-132;
-    /// §6.9.1p6, p. 141; PDF p. 153.
-    pub(super) fn old_signature(&mut self, function: &'tu super::FunctionDefinition<'tu>) {
-        let Some(name) = function.declarator.identifier() else {
-            return;
-        };
-        let Some(&index) = self.external.get(&name.name) else {
-            return;
-        };
-        let binding = self.bindings[index];
-        let TypeKind::Function { result, .. } = self.types.nodes[binding.ty.index] else {
-            return;
-        };
-        let Some(&(head, _)) = self.parameters.get(&function.declarator.source_vectors) else {
-            return;
-        };
-        let mut parameters = ArenaVec::new_in(self.scratch);
-        for parameter in head {
-            let declared = parameter
-                .name
-                .and_then(|n| self.lookup(Namespace::Ordinary, n.name))
-                .filter(|e| e.scope == self.scope)
-                .map_or(parameter.ty, |e| self.bindings[e.binding].ty);
-            let promoted = match self.types.nodes[declared.index] {
-                | TypeKind::Scalar(
-                    Scalar::Bool
-                    | Scalar::Char
-                    | Scalar::SignedChar
-                    | Scalar::UnsignedChar
-                    | Scalar::Short
-                    | Scalar::UnsignedShort,
-                ) => self.types.scalar(Scalar::Int),
-                | TypeKind::Scalar(Scalar::Float) => self.types.scalar(Scalar::Double),
-                | _ => declared.unqualified(),
-            };
-            parameters.push(promoted);
-        }
-        let parameters = self.types.tu.alloc_slice_copy(&parameters);
-        let defined = self.types.intern(TypeKind::Function {
-            result,
-            parameters,
-            prototype: false,
-            variadic: false,
-        });
-        if let Some(composite) = self.types.composite(binding.ty, defined) {
-            self.bindings[index].ty = composite;
-        } else {
-            self.error(
-                SemanticErrorKind::IncompatibleDeclaration,
-                name.source_vectors,
-                Some(name.name),
-                None,
-            );
-        }
-    }
-
     /// Resolves the parser's validated specifier multiset into a canonical
     /// type. C99: §6.7.2p2-5, pp. 99-100; PDF pp. 111-112.
     pub(super) fn resolve_spec(
@@ -317,12 +260,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.7.5p4-6, pp. 114-115; PDF pp. 126-127.
     pub(super) fn direct(
         &mut self,
-        direct: DirectDeclarator<'tu>,
+        direct: &'tu DirectDeclarator<'tu>,
         source: SourceVectors,
         parameter: bool,
     ) {
         let base = self.take_type();
-        match direct {
+        match *direct {
             | DirectDeclarator::Parenthesized(p) =>
                 self.work
                     .push(Work::Declarator(p.declarator, base, parameter)),
@@ -388,6 +331,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     base,
                     is_variadic,
                     source,
+                    std::ptr::from_ref(direct).addr(),
                 ));
             },
             | DirectDeclarator::KAndRStyleFunction { parameters } => {
@@ -407,7 +351,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         array_minimum: None,
                     });
                 }
-                _ = self.parameters.insert(source, (list.leak(), 0));
+                _ = self
+                    .parameters
+                    .insert(std::ptr::from_ref(direct).addr(), (list.leak(), 0));
             },
             | DirectDeclarator::Attributes(_) | DirectDeclarator::MsModifier(..) =>
                 self.values.push(self.types.unknown()),
@@ -479,6 +425,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         };
         if self.old_parameter_mode {
+            let ty = if self.validate_old_parameter(name, spec, ty, initialized) {
+                ty
+            } else {
+                self.types.unknown()
+            };
             let ty = match self.types.nodes[ty.index] {
                 | TypeKind::Array(element, _) => self.types.intern(TypeKind::Pointer(element)),
                 | TypeKind::Function { .. } => self.types.intern(TypeKind::Pointer(ty)),
@@ -503,6 +454,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Duration::Automatic,
                 None,
             );
+            self.record_vm(self.bindings.len() - 1);
             return;
         }
         let file = self.scopes[self.scope].kind == ScopeKind::File;
@@ -609,8 +561,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             );
         }
-        // Initializer conversion and incomplete tentative definitions belong to
-        // Stages 2/3.
+        // Initializers complete their objects; functions.rs completes tentative
+        // definitions at translation-unit end.
         if initialized && !file && linkage != Linkage::None {
             self.error(
                 SemanticErrorKind::InvalidStorage,
@@ -620,6 +572,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
         }
         self.bind(name, ty, kind, linkage, duration, None);
+        self.record_declaration(self.bindings.len() - 1, spec, initialized);
         if spec.storage_class == Some(StorageClass::Register) {
             _ = self.register_bindings.insert(self.bindings.len() - 1, true);
         }

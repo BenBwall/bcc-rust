@@ -1,0 +1,11 @@
+error: identifier with no linkage is declared more than once: `__func__`
+ --> sema3-func-redefinition.c:1:18
+  |
+1 | int f(void) {int __func__; return 0;}
+  |     -            ^^^^^^^^ declaration constraint violated
+  |     |
+  |     previous declaration is here
+  |
+  = note: C99 §6.7p3: a no-linkage identifier has at most one declaration in the same scope
+
+1 error generated.

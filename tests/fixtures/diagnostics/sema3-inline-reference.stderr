@@ -1,0 +1,11 @@
+error: inline definition references an internal-linkage identifier: `x`
+ --> sema3-inline-reference.c:1:42
+  |
+1 | static int x; inline int f(void) {return x;}
+  |            -                             ^ declaration constraint violated
+  |            |
+  |            previous declaration is here
+  |
+  = note: C99 §6.7.4p3: an inline definition with external linkage contains no reference to an identifier with internal linkage
+
+1 error generated.

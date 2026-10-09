@@ -4,6 +4,7 @@ scope 0 (File): a: int [3] [size=12, align=4]; Object, External, Static
 scope 0 (File): f: int (const int *, int); Function, External, None
 scope 2 (Function): p: const int * [size=8, align=8]; Parameter, None, Automatic
 scope 2 (Function): n: int [size=4, align=4]; Parameter, None, Automatic
+scope 2 (Function): __func__: const char [2] [size=2, align=1]; Object, None, Static
 scope 2 (Function): x: int [size=4, align=4]; Object, None, Automatic
 expressions: 16
 expression 0: int; Rvalue; integer=1; ICE=true, constant=Arithmetic
@@ -41,3 +42,4 @@ convert expression 12: Arithmetic to unsigned long
 convert expression 14: Arithmetic to unsigned long
 convert expression 12: Arithmetic to unsigned long
 convert expression 14: Arithmetic to unsigned long
+convert expression 15: Assignment to int
