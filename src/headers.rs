@@ -12,6 +12,7 @@ pub(crate) fn text(name: &Path) -> Option<&'static str> {
         | "float.h" => include_str!("headers/float.h"),
         | "iso646.h" => include_str!("headers/iso646.h"),
         | "limits.h" => include_str!("headers/limits.h"),
+        | "mm_malloc.h" => include_str!("headers/mm_malloc.h"),
         | "stdarg.h" => include_str!("headers/stdarg.h"),
         | "stdbool.h" => include_str!("headers/stdbool.h"),
         | "stddef.h" => include_str!("headers/stddef.h"),

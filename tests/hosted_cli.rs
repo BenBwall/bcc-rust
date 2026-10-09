@@ -257,6 +257,68 @@ mod tests {
         assert_eq!(identifiers(&output), ["windows_additions"]);
     }
 
+    #[test]
+    fn mm_malloc_h_allocates_through_each_runtimes_aligned_allocator() {
+        // Strict modes reject a call to an undeclared function, so each
+        // allocator the header calls must be declared for its target.
+        let use_ =
+            "void *f(void) {\n  void *p = _mm_malloc(64, 16);\n  _mm_free(p);\n  return p;\n}\n";
+        let root = scratch("mm-malloc");
+        let stdlib = "#include <stddef.h>\nvoid *malloc(size_t);\nvoid free(void *);\n";
+        // A POSIX library declares posix_memalign only on request; the header
+        // declares it itself, as Clang's does.
+        let posix = root.join("posix");
+        write(&posix.join("stdlib.h"), stdlib);
+        // MinGW-w64's <malloc.h> declares its aligned allocator and then
+        // includes <mm_malloc.h>, which includes <malloc.h> again.
+        let mingw = root.join("mingw");
+        write(&mingw.join("stdlib.h"), stdlib);
+        write(
+            &mingw.join("malloc.h"),
+            "#ifndef _MALLOC_H_\n#define _MALLOC_H_\n#include <stddef.h>\nvoid \
+             *__mingw_aligned_malloc(size_t, size_t);\nvoid __mingw_aligned_free(void \
+             *);\n#include <mm_malloc.h>\n#endif\n",
+        );
+        // The MSVC runtime's <malloc.h> declares `_aligned_malloc`, and may
+        // define both names as macros, which the header then leaves alone.
+        let msvc = root.join("msvc");
+        write(&msvc.join("stdlib.h"), stdlib);
+        write(
+            &msvc.join("malloc.h"),
+            "#include <stddef.h>\nvoid *_aligned_malloc(size_t, size_t);\nvoid _aligned_free(void \
+             *);\n#ifdef MM_MACROS\n#define _mm_malloc(a, b) _aligned_malloc(a, b)\n#define \
+             _mm_free(a) _aligned_free(a)\n#endif\n",
+        );
+        for standard in ["-std=c99", "-std=c17", "-std=gnu17"] {
+            for (flags, library, include) in [
+                (
+                    &["--target=x86_64-unknown-linux-gnu"][..],
+                    &posix,
+                    "mm_malloc.h",
+                ),
+                (&["--target=x86_64-w64-windows-gnu"][..], &mingw, "malloc.h"),
+                (
+                    &["--target=x86_64-w64-windows-gnu"][..],
+                    &mingw,
+                    "mm_malloc.h",
+                ),
+                (
+                    &["--target=x86_64-pc-windows-msvc", "-fms-extensions"][..],
+                    &msvc,
+                    "mm_malloc.h",
+                ),
+            ] {
+                for prefix in ["", "#define MM_MACROS\n"] {
+                    let source = format!("{prefix}#include <{include}>\n{use_}");
+                    let mut args = vec![standard];
+                    args.extend_from_slice(flags);
+                    args.extend(["-idirafter", arg(library), "--input", &source]);
+                    clean(&bcc(&args));
+                }
+            }
+        }
+    }
+
     /// One directory per search group. Each holds `chain.h`, which names
     /// its group and continues with `#include_next`, so a lookup records
     /// every place it visits in order; the last group ends the chain.
