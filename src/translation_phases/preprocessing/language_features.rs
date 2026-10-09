@@ -62,8 +62,8 @@ pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
 ];
 
 /// Appends the compiler-identity macros to the target's predefined
-/// `definitions`, as source read before user input. Following Clang, GNU
-/// modes claim GCC 4.2.1 with its inline-semantics macro, and
+/// `definitions`, as source read before user input. Following Clang, every
+/// language mode claims GCC 4.2.1 with its inline-semantics macro, and
 /// `-fms-extensions` claims MSVC 19.33, Clang's default
 /// `-fms-compatibility-version`. `__bcc__` and its version are defined in
 /// every mode; `__clang__` never is. They are ordinary macros, so `#undef`
@@ -88,17 +88,13 @@ pub(super) fn with_identity_macros<'a>(
         env!("CARGO_PKG_VERSION_PATCH"),
         env!("CARGO_PKG_VERSION"),
     );
-    if configuration.gnu_extensions() {
-        out.push_str(
-            "#define __GNUC__ 4\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 1\n",
-        );
-        // GNU89 inline semantics before C99, C99 semantics from it on.
-        out.push_str(if configuration.standard() < CStandard::C99 {
-            "#define __GNUC_GNU_INLINE__ 1\n"
-        } else {
-            "#define __GNUC_STDC_INLINE__ 1\n"
-        });
-    }
+    out.push_str("#define __GNUC__ 4\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 1\n");
+    // GNU89 inline semantics before C99, C99 semantics from it on.
+    out.push_str(if configuration.standard() < CStandard::C99 {
+        "#define __GNUC_GNU_INLINE__ 1\n"
+    } else {
+        "#define __GNUC_STDC_INLINE__ 1\n"
+    });
     if configuration.msvc_compatibility() {
         out.push_str(
             "#define _MSC_VER 1933\n#define _MSC_FULL_VER 193300000\n#define _MSC_BUILD \

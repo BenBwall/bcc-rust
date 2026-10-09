@@ -357,19 +357,18 @@ fn version_strict_ansi_and_identity_macros_follow_every_mode() {
             if let Some(version) = version {
                 expected.extend(["version".to_owned(), format!("{version}L")]);
             }
-            if gnu {
-                expected.extend(["gnu", "4", "2", "1"].map(str::to_owned));
-                expected.push(
-                    if standard < CStandard::C99 {
-                        "gnu_inline"
-                    } else {
-                        "stdc_inline"
-                    }
-                    .to_owned(),
-                );
-            } else {
+            if !gnu {
                 expected.extend(["strict".to_owned(), "1".to_owned()]);
             }
+            expected.extend(["gnu", "4", "2", "1"].map(str::to_owned));
+            expected.push(
+                if standard < CStandard::C99 {
+                    "gnu_inline"
+                } else {
+                    "stdc_inline"
+                }
+                .to_owned(),
+            );
             assert_eq!(result.spellings, expected, "{standard:?}, gnu={gnu}");
             assert!(result.errors.is_empty(), "{:?}", result.errors);
         }

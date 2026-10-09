@@ -153,8 +153,8 @@ mod tests {
             "#if defined(__clang__) || defined(_MSC_VER)
 #error compiler identity macros must              be absent
 #endif
-#if defined(__GNUC__) != !defined(__STRICT_ANSI__)
-#error              __GNUC__ follows GNU modes
+#if !defined(__GNUC__) || __GNUC__ != 4 || __GNUC_MINOR__ != 2 || __GNUC_PATCHLEVEL__ != 1
+#error              GNU identity must match Clang in every mode
 #endif
 #if !defined(__linux__) ||              defined(_WIN32)
 #error default target must identify Linux

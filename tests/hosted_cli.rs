@@ -557,13 +557,21 @@ mod tests {
     }
 
     #[test]
-    fn gnu_modes_claim_the_gnu_identity_clang_claims_and_strict_modes_none() {
+    fn every_mode_claims_the_gnu_identity_clang_claims() {
         for mode in [
+            "-std=c89",
+            "-std=iso9899:199409",
+            "-std=c99",
+            "-std=c11",
+            "-std=c17",
+            "-std=c23",
+            "-std=c2y",
             "-std=gnu89",
             "-std=gnu99",
             "-std=gnu11",
             "-std=gnu17",
             "-std=gnu23",
+            "-std=gnu2y",
         ] {
             let dump = Command::new(clang())
                 .args([
@@ -593,10 +601,6 @@ mod tests {
             expected.sort();
             actual.sort();
             assert_eq!(actual, expected, "{mode}");
-        }
-        // The user chose GNU identity for GNU modes only, unlike Clang.
-        for mode in ["-std=c89", "-std=c99", "-std=c17", "-std=c23"] {
-            assert!(bcc_gnu_identity(mode).is_empty(), "{mode}");
         }
     }
 
