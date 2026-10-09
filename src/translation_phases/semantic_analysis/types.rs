@@ -157,6 +157,12 @@ pub(crate) enum TypeKind<'tu> {
     Tag(usize),
     /// C11: §6.2.5p20 and §6.7.2.4; distinct from the underlying type.
     Atomic(TypeId),
+    /// GCC Vector Extensions: arithmetic element, lane count and ABI alignment.
+    Vector {
+        element: TypeId,
+        count:   u64,
+        align:   u64,
+    },
 }
 
 /// Durable type graph, retained after semantic working storage is released.
@@ -188,6 +194,23 @@ fn layout(
     let layout = loop {
         match nodes[ty.index] {
             | TypeKind::Scalar(scalar) => break target.scalar(scalar)?,
+            | TypeKind::Vector {
+                element,
+                count,
+                align,
+            } => {
+                let TypeKind::Scalar(scalar) = nodes[element.index] else {
+                    return None;
+                };
+                break Layout {
+                    size: target
+                        .scalar(scalar)?
+                        .size
+                        .checked_mul(count)?
+                        .checked_next_power_of_two()?,
+                    align,
+                };
+            },
             | TypeKind::Pointer(_) => break target.pointer,
             | TypeKind::Tag(id) => break tags[id].layout.get()?,
             | TypeKind::Array(element, ArrayBound::Constant(n)) => {
@@ -355,6 +378,20 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
                         return None;
                     }
                     match (ak, bk) {
+                        | (
+                            TypeKind::Vector {
+                                element: x,
+                                count: n,
+                                ..
+                            },
+                            TypeKind::Vector {
+                                element: y,
+                                count: m,
+                                ..
+                            },
+                        ) if x == y && n == m => {
+                            values.push(a);
+                        },
                         | (TypeKind::Tag(id), TypeKind::Scalar(scalar))
                         | (TypeKind::Scalar(scalar), TypeKind::Tag(id))
                             if self.tags[id].kind == TagKind::Enum

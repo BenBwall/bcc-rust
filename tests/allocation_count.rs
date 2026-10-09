@@ -575,6 +575,19 @@ mod measurements {
     }
 
     #[test]
+    fn vectors_and_x86_resources_allocate_only_from_arenas() {
+        let (summary, allocations) =
+            count_compile(|| bcc_rust::sema_source(include_str!("fixtures/targets/vector.c")));
+        assert_no_allocations("vector types and operators", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+        let source = "#define __BCC_MM_MALLOC_H\n#include <x86intrin.h>\n__m128 f(__m128 a) \
+                      {return _mm_add_ps(a,a);}\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("x86 header builtins", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+    }
+
+    #[test]
     fn expressions_and_initializers_allocate_only_from_arenas() {
         let source = "struct S {int a[2]; int b;}; struct S s={1,2,3}; int a[][2]={[2][1]=3,4,5}; \
                       char c[]=\"abc\"; int *p=&s.a[1]; double d=1.5*2.0; int fun(const int \

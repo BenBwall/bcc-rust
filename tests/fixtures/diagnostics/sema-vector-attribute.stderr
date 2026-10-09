@@ -1,0 +1,17 @@
+error: invalid vector attribute
+ --> sema-vector-attribute.c:1:17
+  |
+1 | typedef int bad __attribute__((vector_size(3)));
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ invalid vector size or element type
+  |
+  = note: GCC Vector Extensions: vector_size requires an integer or real floating element and a positive multiple of its size
+
+error: invalid vector attribute
+ --> sema-vector-attribute.c:2:22
+  |
+2 | typedef void invalid __attribute__((vector_size(16)));
+  |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ invalid vector size or element type
+  |
+  = note: GCC Vector Extensions: vector_size requires an integer or real floating element and a positive multiple of its size
+
+2 errors generated.

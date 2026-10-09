@@ -462,7 +462,9 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                     unreachable!("builtin phase");
                 };
                 let type_operand = match keyword {
-                    | KeywordTokenType::BuiltinVaArg => self.operands.len() == 1,
+                    | KeywordTokenType::BuiltinVaArg | KeywordTokenType::BuiltinConvertVector =>
+                        self.operands.len() == 1,
+                    | KeywordTokenType::BuiltinBitCast => self.operands.is_empty(),
                     | KeywordTokenType::BuiltinOffsetof
                     | KeywordTokenType::BuiltinTypesCompatible => true,
                     | _ => false,

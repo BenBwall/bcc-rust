@@ -421,6 +421,18 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                                 pointer = false;
                                 ty = result;
                             },
+                            | TypeKind::Vector {
+                                element,
+                                count,
+                                align,
+                            } => {
+                                right.push(Part::Text(crate::diagnostics::format_in!(
+                                    arena,
+                                    " __attribute__((vector_size({}), aligned({align})))",
+                                    self.types.layout(element).map_or(0, |l| l.size) * count
+                                )));
+                                ty = element;
+                            },
                             | TypeKind::Unknown => break "<unanalyzed>",
                             | TypeKind::Atomic(value) => {
                                 left.push(Part::Text("_Atomic("));
