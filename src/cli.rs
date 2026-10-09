@@ -47,6 +47,7 @@ use crate::{
         MsvcFeature,
     },
     diagnostics::ColorChoice as RenderColor,
+    headers::HeaderSearch,
     pipeline::{
         parse_translation_unit,
         preprocess_with_diagnostics,
@@ -95,12 +96,8 @@ struct Cli {
     /// inline,seh,asm,pragma,anonymous-structs,va-args}.
     #[arg(long, hide = true)]
     language_option: Vec<String>,
-    /// Add directory to include search path.
-    #[clap(short = 'q', long = "iquote")]
-    quote_include: Vec<PathBuf>,
-    /// Add directory to system include search path.
-    #[clap(short = 's', long = "isystem")]
-    system_include: Vec<PathBuf>,
+    #[command(flatten)]
+    search: CliHeaderSearch,
     #[command(flatten)]
     output: CliOutput,
     /// Suppress the `repeated-specifiers` quality warning group.
@@ -194,6 +191,17 @@ fn normalize_language_arguments(
         } else if text == "-std" {
             normalized.push("--std".into());
             opaque_value = true;
+        } else if let Some(flag) = SINGLE_DASH_SEARCH_FLAGS
+            .iter()
+            .find(|flag| text.strip_prefix('-') == Some(**flag))
+        {
+            normalized.push(format!("--{flag}").into());
+            opaque_value = !flag.starts_with("no");
+        } else if let Some((flag, value)) = SINGLE_DASH_SEARCH_FLAGS[..3]
+            .iter()
+            .find_map(|flag| Some((flag, text.strip_prefix('-')?.strip_prefix(flag)?)))
+        {
+            normalized.push(format!("--{flag}={value}").into());
         } else if LanguageFlag::parse(text).is_some() {
             normalized.push(format!("--language-option={text}").into());
         } else {
@@ -204,8 +212,12 @@ fn normalize_language_arguments(
                     | "-i"
                     | "--iquote"
                     | "-q"
+                    | "-I"
+                    | "--include-directory"
                     | "--isystem"
                     | "-s"
+                    | "--idirafter"
+                    | "--sysroot"
                     | "--source-date-epoch"
                     | "--language-option"
             );
@@ -214,6 +226,17 @@ fn normalize_language_arguments(
     }
     normalized
 }
+/// GCC's single-dash header search options, which clap receives with two
+/// dashes. The first three take a directory, separately or joined.
+const SINGLE_DASH_SEARCH_FLAGS: [&str; 6] = [
+    "iquote",
+    "isystem",
+    "idirafter",
+    "nostdinc",
+    "nostdlibinc",
+    "nobuiltininc",
+];
+
 /// A GCC language flag, which clap receives as `--language-option`.
 #[derive(Clone, Copy)]
 enum LanguageFlag {
@@ -324,6 +347,45 @@ impl TypedValueParser for SourceDateEpochParser {
     }
 }
 
+/// Header search options, in GCC and Clang spellings. Lookup order:
+/// `"…"` names look beside the including file and in `-iquote`; both forms
+/// then search `-I`, `CPATH`, `-isystem`, `C_INCLUDE_PATH`, the built-in
+/// resource directory, the C library's directories, and `-idirafter`.
+#[derive(Args)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "clap's derived parser owns the repeated directories as `Vec<PathBuf>`."
+)]
+struct CliHeaderSearch {
+    /// Add directory to the search path for `"…"` includes only.
+    #[clap(short = 'q', long = "iquote", value_name = "DIR")]
+    quote_include:  Vec<PathBuf>,
+    /// Add directory to the include search path.
+    #[clap(short = 'I', long = "include-directory", value_name = "DIR")]
+    include:        Vec<PathBuf>,
+    /// Add directory to the system include search path, before the built-in
+    /// headers.
+    #[clap(short = 's', long = "isystem", value_name = "DIR")]
+    system_include: Vec<PathBuf>,
+    /// Add directory to the end of the search path, after the built-in
+    /// headers and the C library's directories.
+    #[clap(long = "idirafter", value_name = "DIR")]
+    after_include:  Vec<PathBuf>,
+    /// Use `DIR/usr/local/include` and `DIR/usr/include` as the C library's
+    /// include directories.
+    #[clap(long, value_name = "DIR")]
+    sysroot:        Option<PathBuf>,
+    /// Do not search the built-in headers or the C library's directories.
+    #[clap(long)]
+    nostdinc:       bool,
+    /// Do not search the C library's directories.
+    #[clap(long)]
+    nostdlibinc:    bool,
+    /// Do not search the built-in headers.
+    #[clap(long)]
+    nobuiltininc:   bool,
+}
+
 #[derive(Args)]
 struct CliOutput {
     /// Print preprocessor tokens instead of parser output.
@@ -407,9 +469,55 @@ fn include_path_from_env(env_var: &str) -> Vec<PathBuf> {
     }
 }
 
+/// The directories of each header search group, owned beside clap's
+/// arguments until `run` copies them into the translation-unit arena.
+#[expect(
+    clippy::disallowed_types,
+    reason = "Startup owns the directories from argv and the environment as `Vec<PathBuf>`."
+)]
+struct SearchDirectories {
+    quote:    Vec<PathBuf>,
+    angled:   Vec<PathBuf>,
+    resource: bool,
+    system:   Vec<PathBuf>,
+}
+
+impl CliHeaderSearch {
+    /// Groups the directories in search order. GCC searches `CPATH` like
+    /// trailing `-I` directories and `C_INCLUDE_PATH` like trailing
+    /// `-isystem` ones. C99: implementation-defined places, §6.10.2p2-3,
+    /// pp. 149-150; PDF pp. 161-162.
+    #[expect(
+        clippy::disallowed_types,
+        clippy::disallowed_methods,
+        reason = "Startup owns the directories from argv and the environment as `Vec<PathBuf>`."
+    )]
+    fn directories(&self) -> SearchDirectories {
+        let mut angled = self.include.clone();
+        angled.extend(include_path_from_env("CPATH"));
+        angled.extend(self.system_include.iter().cloned());
+        angled.extend(include_path_from_env("C_INCLUDE_PATH"));
+        let mut system = Vec::new();
+        if let Some(sysroot) = &self.sysroot
+            && !self.nostdinc
+            && !self.nostdlibinc
+        {
+            system.push(sysroot.join("usr").join("local").join("include"));
+            system.push(sysroot.join("usr").join("include"));
+        }
+        system.extend(self.after_include.iter().cloned());
+        SearchDirectories {
+            quote: self.quote_include.clone(),
+            angled,
+            resource: !self.nostdinc && !self.nobuiltininc,
+            system,
+        }
+    }
+}
+
 #[doc(hidden)]
 pub fn run() -> Result<(), MainError> {
-    let mut args = Cli::try_parse_from(normalize_language_arguments(std::env::args_os()))?;
+    let args = Cli::try_parse_from(normalize_language_arguments(std::env::args_os()))?;
     let tu = Bump::new();
     let (input_string, source_filename): (&str, &Path) =
         match (&args.input.input, &args.input.input_file) {
@@ -424,31 +532,24 @@ pub fn run() -> Result<(), MainError> {
             },
             | _ => unreachable!("clap requires exactly one input source"),
         };
-    // GCC searches `CPATH` like `-I` (before `-isystem`) and
-    // `C_INCLUDE_PATH` like a trailing `-isystem`.
-    let mut system_include = include_path_from_env("CPATH");
-    system_include.append(&mut args.system_include);
-    system_include.extend(include_path_from_env("C_INCLUDE_PATH"));
-    let quote_include = tu.alloc_slice_fill_iter(args.quote_include.iter().map(Path::new));
-    let system_include = tu.alloc_slice_fill_iter(system_include.iter().map(Path::new));
+    let directories = args.search.directories();
+    let search = HeaderSearch {
+        quote:    tu.alloc_slice_fill_iter(directories.quote.iter().map(AsRef::as_ref)),
+        angled:   tu.alloc_slice_fill_iter(directories.angled.iter().map(AsRef::as_ref)),
+        resource: directories.resource,
+        system:   tu.alloc_slice_fill_iter(directories.system.iter().map(AsRef::as_ref)),
+    };
     let configuration = args.configuration();
     let mut context = Context::with_configuration(&tu, configuration);
 
     if args.output.tokens {
-        print_preprocessor_output(
-            &mut context,
-            source_filename,
-            input_string,
-            quote_include,
-            system_include,
-        );
+        print_preprocessor_output(&mut context, source_filename, input_string, search);
     } else {
         print_parser_output(
             &mut context,
             source_filename,
             input_string,
-            quote_include,
-            system_include,
+            search,
             &args.output.parser,
             !args.no_repeated_specifier_warnings,
         );
@@ -462,8 +563,7 @@ fn print_preprocessor_output<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     input_string: &'tu str,
-    quote_include: &[&Path],
-    system_include: &[&Path],
+    search: HeaderSearch<'_>,
 ) {
     let mut reporter_arena = Bump::new();
     let mut stderr = io::stderr();
@@ -471,8 +571,7 @@ fn print_preprocessor_output<'tu>(
         context,
         source_filename,
         input_string,
-        quote_include,
-        system_include,
+        search,
         TokenOutput {
             out:            &mut stderr,
             reporter_arena: &mut reporter_arena,
@@ -493,8 +592,7 @@ fn print_preprocessor_output_in<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     input_string: &'tu str,
-    quote_include: &[&Path],
-    system_include: &[&Path],
+    search: HeaderSearch<'_>,
     TokenOutput {
         out,
         reporter_arena,
@@ -506,8 +604,7 @@ fn print_preprocessor_output_in<'tu>(
         context,
         source_filename,
         input_string,
-        quote_include,
-        system_include,
+        search,
         |preprocessor, context, _pp| preprocess_with_diagnostics(preprocessor, context),
     );
     let mut items = items.into_iter();
@@ -657,21 +754,14 @@ fn print_parser_output<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     input_string: &'tu str,
-    quote_include: &[&Path],
-    system_include: &[&Path],
+    search: HeaderSearch<'_>,
     output: &ParserOutput,
     repeated_specifier_warnings: bool,
 ) {
     context.configuration = context
         .configuration
         .with_repeated_specifier_warnings(repeated_specifier_warnings);
-    let unit = parse_translation_unit(
-        context,
-        source_filename,
-        input_string,
-        quote_include,
-        system_include,
-    );
+    let unit = parse_translation_unit(context, source_filename, input_string, search);
     let semantic = (output.semantic_types || (!output.syntax_tree && !output.raw_syntax))
         .then(|| crate::pipeline::analyze_translation_unit(context, &unit));
     let reporter_arena = Bump::new();
@@ -773,7 +863,7 @@ fn compile_file_configured_measured(
     let source = tu.read_to_str_lossy(path)?;
     let mut context = Context::with_configuration(&tu, configuration);
     measure(CompileStep::Parse, &mut || {
-        let unit = parse_translation_unit(&mut context, path, source, &[], &[]);
+        let unit = parse_translation_unit(&mut context, path, source, HeaderSearch::default());
         let _semantic = crate::pipeline::analyze_translation_unit(&mut context, &unit);
     });
     let mut result = Ok(());
@@ -901,8 +991,7 @@ mod tests {
             &mut context,
             Path::new("<input>"),
             source,
-            &[],
-            &[],
+            HeaderSearch::default(),
             TokenOutput {
                 out:            &mut out,
                 reporter_arena: &mut reporter_arena,

@@ -172,8 +172,7 @@ fn nested_subscript_type_classification_scales_linearly() {
             &mut context,
             Path::new("<input>"),
             tu.alloc_str(&source),
-            &[],
-            &[],
+            crate::headers::HeaderSearch::default(),
         );
         let mut analyzer = Analyzer::new(&mut context, &scratch);
         for &root in unit.external_declarations().iter().rev() {

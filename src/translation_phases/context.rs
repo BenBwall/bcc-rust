@@ -24,6 +24,7 @@ use super::{
 };
 use crate::{
     configuration::CompilerConfiguration,
+    headers::HeaderSearch,
     translation_phases::{
         initial_processing::InitialProcessorError,
         parsing::ParserError,
@@ -361,8 +362,11 @@ pub(crate) struct Context<'tu> {
     /// arena, so compaction relocates each error's provenance only once.
     relocated_errors: usize,
     source_files: DedupArena<'tu, &'tu Path, FxBuildHasher>,
-    quote_include_directories: &'tu [&'tu Path],
-    system_include_directories: &'tu [&'tu Path],
+    /// Every configured header search entry in order, the resource
+    /// directory included; the first `quote_include_count` are `-iquote`
+    /// entries. An entry's index is its identity for `#include_next`.
+    include_directories: &'tu [&'tu Path],
+    quote_include_count: usize,
     /// Original text of each source file, indexed like `source_files`, kept
     /// so diagnostics can quote the lines they point at.
     source_texts: ArenaVec<'tu, Option<SourceText<'tu>>>,
@@ -421,8 +425,8 @@ impl<'tu> Context<'tu> {
             suppressed_errors: 0,
             relocated_errors: 0,
             source_files: DedupArena::new(tu),
-            quote_include_directories: &[],
-            system_include_directories: &[],
+            include_directories: &[],
+            quote_include_count: 0,
             source_texts: ArenaVec::new_in(tu),
         }
     }
@@ -1179,54 +1183,50 @@ impl<'tu> Context<'tu> {
         self.source_files[index]
     }
 
-    pub(crate) fn set_include_directories(&mut self, quote: &[&Path], system: &[&Path]) {
-        self.quote_include_directories = self
-            .tu
-            .alloc_slice_fill_iter(quote.iter().map(|path| Self::alloc_path(self.tu, path)));
-        self.system_include_directories = self
-            .tu
-            .alloc_slice_fill_iter(system.iter().map(|path| Self::alloc_path(self.tu, path)));
+    /// Records where headers are searched for, in order. C99:
+    /// implementation-defined places, §6.10.2p2-3, pp. 149-150; PDF pp.
+    /// 161-162.
+    pub(crate) fn set_header_search(&mut self, search: HeaderSearch<'_>) {
+        let resource = search
+            .resource
+            .then_some(Path::new(crate::headers::DIRECTORY));
+        let tu = self.tu;
+        self.include_directories = tu.alloc_slice_fill_iter(
+            search
+                .quote
+                .iter()
+                .chain(search.angled)
+                .copied()
+                .chain(resource)
+                .chain(search.system.iter().copied())
+                .map(|path| Self::alloc_path(tu, path)),
+        );
+        self.quote_include_count = search.quote.len();
     }
 
-    /// Configured include search entries, with stable indices for GNU
-    /// `include_next`. C99: implementation-defined search, §6.10.2p2-3, pp.
-    /// 149-150; PDF pp. 161-162.
+    /// The configured search entries a lookup visits, with their indices:
+    /// from `start` when given (`#include_next`), otherwise every entry for
+    /// a `"…"` name and every entry after the `-iquote` ones for a `<…>`
+    /// name. C99: implementation-defined search, §6.10.2p2-3, pp. 149-150;
+    /// PDF pp. 161-162.
     pub(crate) fn configured_include_directories(
         &self,
-        system: bool,
-    ) -> impl Iterator<Item = (usize, &'tu Path)> + Clone + use<'tu> {
-        let quote_count = self.quote_include_directories.len();
-        let quote: &'tu [&'tu Path] = self.quote_include_directories;
-        let system_directories: &'tu [&'tu Path] = self.system_include_directories;
-        quote
-            .iter()
-            .chain(system_directories)
-            .copied()
-            .chain(std::iter::once(Path::new(crate::headers::DIRECTORY)))
-            .enumerate()
-            .filter(move |(index, _)| !system || *index >= quote_count)
-    }
-
-    /// The directories searched for a header named in a file, in order: for
-    /// a `"…"` name the including file's directory and the quote
-    /// directories, then for both forms the system directories.
-    pub(crate) fn include_search_directories(
-        &self,
-        including_file: u32,
         is_system_header: bool,
-    ) -> impl Iterator<Item = &'tu Path> + Clone + use<'tu> {
-        let including_file: &'tu Path = self.source_files[including_file];
-        let quote_directories: &'tu [&'tu Path] = self.quote_include_directories;
-        let system_directories: &'tu [&'tu Path] = self.system_include_directories;
-        let quote = (!is_system_header).then(|| {
-            let directory = including_file.parent().unwrap_or_else(|| Path::new(""));
-            std::iter::once(directory).chain(quote_directories.iter().copied())
-        });
-        quote
-            .into_iter()
-            .flatten()
-            .chain(system_directories.iter().copied())
-            .chain(std::iter::once(Path::new(crate::headers::DIRECTORY)))
+        start: Option<usize>,
+    ) -> impl Iterator<Item = (usize, &'tu Path)> + Clone + use<'tu> {
+        let directories: &'tu [&'tu Path] = self.include_directories;
+        let start = start
+            .unwrap_or(if is_system_header {
+                self.quote_include_count
+            } else {
+                0
+            })
+            .min(directories.len());
+        directories[start..]
+            .iter()
+            .copied()
+            .enumerate()
+            .map(move |(offset, directory)| (start + offset, directory))
     }
 
     fn alloc_path(tu: &'tu Bump, path: &Path) -> &'tu Path {

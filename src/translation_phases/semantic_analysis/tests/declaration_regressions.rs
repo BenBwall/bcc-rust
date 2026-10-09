@@ -489,8 +489,7 @@ fn anonymous_member_paths_use_linear_retained_storage() {
             &mut context,
             Path::new("<input>"),
             source,
-            &[],
-            &[],
+            crate::headers::HeaderSearch::default(),
         );
         assert_eq!(context.pending_error_count(), 0);
         let before = tu.used();

@@ -17,6 +17,7 @@ use std::path::Path;
 mod tests;
 
 use crate::{
+    headers::HeaderSearch,
     translation_phases::{
         Context,
         TranslationError,
@@ -52,15 +53,13 @@ pub(crate) fn parse_translation_unit<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     source: &'tu str,
-    quote_include: &[&Path],
-    system_include: &[&Path],
+    search: HeaderSearch<'_>,
 ) -> ParsedTranslationUnit<'tu> {
     let preprocessed = with_preprocessor(
         context,
         source_filename,
         source,
-        quote_include,
-        system_include,
+        search,
         |preprocessor, context, _pp| Parser::preprocess(preprocessor, context),
     );
     let parse = Bump::new();
@@ -74,19 +73,12 @@ pub(crate) fn with_preprocessor<'tu, R>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     source: &'tu str,
-    quote_include: &[&Path],
-    system_include: &[&Path],
+    search: HeaderSearch<'_>,
     run: impl for<'pp> FnOnce(Preprocessor<'tu, 'pp>, &mut Context<'tu>, &'pp Bump) -> R,
 ) -> R {
     let pp = Bump::new();
-    let preprocessor = Preprocessor::new_with_arena_source(
-        &pp,
-        context,
-        source_filename,
-        source,
-        quote_include,
-        system_include,
-    );
+    let preprocessor =
+        Preprocessor::new_with_arena_source(&pp, context, source_filename, source, search);
     run(preprocessor, context, &pp)
 }
 

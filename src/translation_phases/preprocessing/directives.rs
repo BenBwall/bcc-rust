@@ -307,7 +307,7 @@ fn header_name_from_source<'a>(
     }
 }
 
-impl<'x> Expander<'_, '_, '_, 'x> {
+impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     /// Executes the directive that `token`, a `#`, introduces.
     ///
     /// C99: §6.10 paragraphs 1-3, pp. 145-147; PDF pp. 157-159. A `#` begins
@@ -496,17 +496,57 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         unsafe { std::str::from_utf8_unchecked(text) }
     }
 
-    /// Resolves an include name the way GCC and Clang do (C99 §6.10.2p2-3
-    /// leave the places implementation-defined):
-    ///
-    /// 1. `"name"` first looks beside the file containing the directive (for
-    ///    `--input`, whose name has no directory, that is the working
-    ///    directory), then in each `--iquote` directory.
-    /// 2. Both forms then search `CPATH`, each `--isystem` directory,
-    ///    `C_INCLUDE_PATH`, and the embedded resource directory.
+    /// The places a lookup of a header named in `including_file` visits, in
+    /// order, each with its configured entry index (`None` for the including
+    /// file's own directory). A `"…"` name first looks beside the including
+    /// file (the working directory for `--input`, whose name has no
+    /// directory), then in every configured entry; a `<…>` name skips both
+    /// and the `-iquote` entries. An `#include_next` lookup that continues
+    /// after a configured entry passes `start` and visits only the entries
+    /// from it. See [`HeaderSearch`](crate::headers::HeaderSearch) for the
+    /// order of the configured entries.
     ///
     /// The process working directory is never searched implicitly, so the
     /// result depends on the source tree rather than where the compiler runs.
+    ///
+    /// C99: the places are implementation-defined, §6.10.2 paragraphs 2-3,
+    /// pp. 149-150; PDF pp. 161-162.
+    pub(super) fn header_search_places(
+        &self,
+        including_file: u32,
+        is_system_header: bool,
+        start: Option<usize>,
+    ) -> impl Iterator<Item = (Option<usize>, &'tu Path)> + Clone + use<'tu> {
+        let local = (start.is_none() && !is_system_header)
+            .then(|| self.context.get_source_file(including_file).parent())
+            .flatten();
+        local.into_iter().map(|directory| (None, directory)).chain(
+            self.context
+                .configured_include_directories(is_system_header, start)
+                .map(|(index, directory)| (Some(index), directory)),
+        )
+    }
+
+    /// The file `path` names in `directory`, interned, when it exists there.
+    /// The resource directory holds exactly the embedded headers.
+    pub(super) fn probe_header(&mut self, directory: &Path, path: &Path) -> Option<u32> {
+        if directory == Path::new(crate::headers::DIRECTORY) {
+            return crate::headers::text(path)
+                .is_some()
+                .then(|| self.context.intern_builtin_header(path));
+        }
+        // Each candidate is spelled in the expansion arena and taken back
+        // before the next one, so a lookup leaves nothing there.
+        let mut buffer = ArenaVec::new_in(self.scratch);
+        let candidate = join_path(&mut buffer, directory, path);
+        candidate
+            .is_file()
+            .then(|| self.context.intern_source_file(candidate))
+    }
+
+    /// Resolves an include name through [`Self::header_search_places`], as
+    /// GCC and Clang do (C99 §6.10.2p2-3 leave the places
+    /// implementation-defined). An absolute name is used as written.
     ///
     /// `including_file` is the file containing the directive, captured before
     /// a macro-expanded operand can switch to its definition's tokenizer.
@@ -531,37 +571,14 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             path.is_file()
                 .then(|| (self.context.intern_source_file(path), None))
         } else {
-            // The including file's directory and the quote directories come
-            // first for `"…"` names.
-            let start = if next {
-                including_search_index.map_or(0, |index| index + 1)
-            } else {
-                0
-            };
-            let local = (!next && !is_system_header)
-                .then(|| self.context.get_source_file(including_file).parent())
-                .flatten();
-            let directories = local.into_iter().map(|directory| (None, directory)).chain(
-                self.context
-                    .configured_include_directories(if next { false } else { is_system_header })
-                    .filter(move |(index, _)| *index >= start)
-                    .map(|(index, directory)| (Some(index), directory)),
-            );
+            // `#include_next` continues after the entry that provided this
+            // opening of the including file, or from the first configured
+            // entry.
+            let start = next.then(|| including_search_index.map_or(0, |index| index + 1));
+            let places = self.header_search_places(including_file, is_system_header, start);
             let mut found = None;
-            for (search_index, directory) in directories.clone() {
-                // Each candidate is spelled in the expansion arena and taken
-                // back before the next one, so a lookup leaves nothing there.
-                let mut buffer = ArenaVec::new_in(self.scratch);
-                let candidate = join_path(&mut buffer, directory, path);
-                if (directory == Path::new(crate::headers::DIRECTORY)
-                    && crate::headers::text(path).is_some())
-                    || (directory != Path::new(crate::headers::DIRECTORY) && candidate.is_file())
-                {
-                    let index = if directory == Path::new(crate::headers::DIRECTORY) {
-                        self.context.intern_builtin_header(path)
-                    } else {
-                        self.context.intern_source_file(candidate)
-                    };
+            for (search_index, directory) in places.clone() {
+                if let Some(index) = self.probe_header(directory, path) {
                     found = Some((index, search_index));
                     break;
                 }
@@ -570,7 +587,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 let searched = self
                     .context
                     .tu_arena()
-                    .alloc_slice_fill_iter(directories.map(|(_, directory)| directory));
+                    .alloc_slice_fill_iter(places.map(|(_, directory)| directory));
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::HeaderNotFound {
                         name: self.context.diagnostic_text(&path.to_string_lossy()),

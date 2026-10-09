@@ -356,7 +356,8 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         None
     }
 
-    /// Resolves a resource without diagnostics or pragma-once filtering.
+    /// Resolves a resource without diagnostics or pragma-once filtering,
+    /// searching the places an `#include` of the same name would.
     /// C99: header search is implementation-defined, §6.10.2p2-3,
     /// pp. 149-150; PDF pp. 161-162. C23: embed queries use the embed
     /// search, §6.10.2p7, pp. 166-167; PDF pp. 179-180.
@@ -367,38 +368,16 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                 .is_file()
                 .then(|| self.context.intern_source_file(path));
         }
-        for directory in self
-            .context
-            .include_search_directories(self.physical_source_file_index(), system)
-        {
+        let places = self.header_search_places(self.physical_source_file_index(), system, None);
+        places.into_iter().find_map(|(_, directory)| {
             // Built-in headers supply source text, not filesystem resources.
             // C23 §6.10.2p7: the query must use the matching #embed search.
             if embed && directory == Path::new(crate::headers::DIRECTORY) {
-                continue;
+                None
+            } else {
+                self.probe_header(directory, path)
             }
-            let mut buffer = ArenaString::new_in(self.scratch);
-            if !directory.as_os_str().is_empty() {
-                _ = write!(
-                    buffer,
-                    "{}{sep}",
-                    directory.display(),
-                    sep = std::path::MAIN_SEPARATOR
-                );
-            }
-            buffer.push_str(name);
-            let candidate = Path::new(&*buffer);
-            if (directory == Path::new(crate::headers::DIRECTORY)
-                && crate::headers::text(path).is_some())
-                || (directory != Path::new(crate::headers::DIRECTORY) && candidate.is_file())
-            {
-                return Some(if directory == Path::new(crate::headers::DIRECTORY) {
-                    self.context.intern_builtin_header(path)
-                } else {
-                    self.context.intern_source_file(candidate)
-                });
-            }
-        }
-        None
+        })
     }
 
     /// Evaluates query operators and consumes the MSVC token-form pragma

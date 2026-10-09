@@ -402,7 +402,7 @@ fn compilation_peak(source: &str, path: &Path) -> crate::util::vm::accounting::U
         let tu = Bump::new();
         let mut context = Context::new(&tu);
         let source = tu.alloc_str(source);
-        let _unit = parse_translation_unit(&mut context, path, source, &[], &[]);
+        let _unit = parse_translation_unit(&mut context, path, source, HeaderSearch::default());
         let mut renderer = Renderer::new(RenderColor::Plain);
         for error in context.take_pending_errors() {
             let location = error.source_vectors(&mut context);
@@ -529,8 +529,7 @@ fn parse_arena_high_water(source: &str) -> (usize, usize) {
         &mut context,
         Path::new("<parse-arena-test>"),
         source,
-        &[],
-        &[],
+        HeaderSearch::default(),
         |preprocessor, context, _pp| Parser::preprocess(preprocessor, context),
     );
     let parse = Bump::new();

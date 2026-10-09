@@ -246,8 +246,7 @@ pub fn preprocess(input: BenchmarkInput) -> usize {
         &mut context,
         Path::new("<input>"),
         input.source(),
-        &[],
-        &[],
+        crate::headers::HeaderSearch::default(),
         |mut preprocessor, context, _pp| {
             let mut tokens = crate::util::region_vec::RegionVec::new();
             let _ = preprocessor.preprocess_into_arena(context, usize::MAX, &mut tokens);
@@ -293,8 +292,7 @@ pub fn arena_usage(input: BenchmarkInput) -> ArenaUsage {
             &mut context,
             Path::new("<input>"),
             input.source(),
-            &[],
-            &[],
+            crate::headers::HeaderSearch::default(),
             |mut preprocessor, context, pp| {
                 let mut tokens = crate::util::region_vec::RegionVec::new();
                 let _ = preprocessor.preprocess_into_arena(context, usize::MAX, &mut tokens);
@@ -316,8 +314,7 @@ pub fn arena_usage(input: BenchmarkInput) -> ArenaUsage {
             &mut context,
             Path::new("<input>"),
             input.source(),
-            &[],
-            &[],
+            crate::headers::HeaderSearch::default(),
         );
         _ = unit.external_declarations().len();
         tu.high_water()
@@ -374,8 +371,7 @@ fn summarize_semantic<'tu>(tu: &'tu Bump, source: &'tu str) -> ParseBenchmarkSum
         &mut context,
         Path::new("<input>"),
         source,
-        &[],
-        &[],
+        crate::headers::HeaderSearch::default(),
     );
     let _semantic = crate::pipeline::analyze_translation_unit(&mut context, &unit);
     ParseBenchmarkSummary {
@@ -407,8 +403,7 @@ pub fn parse_msvc_source(source: &str) -> ParseBenchmarkSummary {
         &mut context,
         Path::new("<input>"),
         source,
-        &[],
-        &[],
+        crate::headers::HeaderSearch::default(),
     );
     ParseBenchmarkSummary {
         external_declarations: unit.external_declarations().len(),
@@ -431,7 +426,12 @@ pub fn parse_file(path: &Path) -> std::io::Result<ParseBenchmarkSummary> {
 
 fn summarize_parse<'tu>(tu: &'tu Bump, path: &Path, source: &'tu str) -> ParseBenchmarkSummary {
     let mut context = benchmark_context(tu);
-    let unit = crate::pipeline::parse_translation_unit(&mut context, path, source, &[], &[]);
+    let unit = crate::pipeline::parse_translation_unit(
+        &mut context,
+        path,
+        source,
+        crate::headers::HeaderSearch::default(),
+    );
     ParseBenchmarkSummary {
         external_declarations: unit.external_declarations().len(),
         diagnostics:           context.pending_error_count(),
@@ -479,8 +479,7 @@ fn prepare_parse_in_context(
         context,
         Path::new("<input>"),
         input.source(),
-        &[],
-        &[],
+        crate::headers::HeaderSearch::default(),
         |preprocessor, context, _pp| Parser::preprocess(preprocessor, context),
     )
 }

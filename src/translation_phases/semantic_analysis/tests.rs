@@ -74,8 +74,7 @@ fn with_configuration(
         &mut context,
         Path::new("<input>"),
         source,
-        &[],
-        &[],
+        crate::headers::HeaderSearch::default(),
     );
     let semantic = analyze(&mut context, &unit);
     run(&mut context, &semantic);

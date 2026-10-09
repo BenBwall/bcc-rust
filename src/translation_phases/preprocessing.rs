@@ -78,6 +78,7 @@ use token_conversion::LiteralScratch;
 #[cfg(test)]
 use crate::util::shared::SharedVec;
 use crate::{
+    headers::HeaderSearch,
     translation_phases::{
         Context,
         GetPosition,
@@ -335,8 +336,18 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             .iter()
             .map(PathBuf::as_path)
             .collect();
-        let preprocessor =
-            Self::new_inner(pp, context, &source_name, source, None, &quote, &system);
+        let preprocessor = Self::new_inner(
+            pp,
+            context,
+            &source_name,
+            source,
+            None,
+            HeaderSearch {
+                quote: &quote,
+                angled: &system,
+                ..HeaderSearch::default()
+            },
+        );
         drop((quote, system));
         drop((
             source_name,
@@ -351,18 +362,9 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         context: &mut Context<'tu>,
         source_name: &Path,
         source: &'tu str,
-        quote_include_directories: &[&Path],
-        system_include_directories: &[&Path],
+        search: HeaderSearch<'_>,
     ) -> Self {
-        Self::new_inner(
-            pp,
-            context,
-            source_name,
-            source,
-            Some(source),
-            quote_include_directories,
-            system_include_directories,
-        )
+        Self::new_inner(pp, context, source_name, source, Some(source), search)
     }
 
     fn new_inner(
@@ -371,10 +373,9 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         source_name: &Path,
         source: &str,
         arena_source: Option<&'tu str>,
-        quote_include_directories: &[&Path],
-        system_include_directories: &[&Path],
+        search: HeaderSearch<'_>,
     ) -> Self {
-        context.set_include_directories(quote_include_directories, system_include_directories);
+        context.set_header_search(search);
         let mut macro_definitions = ArenaMap::with_hasher_in(FxBuildHasher, pp);
         for name in PREDEFINED_MACRO_NAMES {
             if (name == "__STDC_VERSION__"

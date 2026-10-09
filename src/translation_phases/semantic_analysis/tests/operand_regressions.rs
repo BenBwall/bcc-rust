@@ -23,8 +23,7 @@ fn steps(source: &str) -> [usize; 3] {
         &mut context,
         Path::new("<input>"),
         source,
-        &[],
-        &[],
+        crate::headers::HeaderSearch::default(),
     );
     let mut analyzer = Analyzer::new(&mut context, &scratch);
     for &root in unit.external_declarations().iter().rev() {
