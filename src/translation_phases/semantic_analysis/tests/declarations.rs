@@ -659,6 +659,33 @@ fn address_differences_within_one_object_are_constant() {
     for configuration in [gnu17(), CompilerConfiguration::default()] {
         assert_eq!(kinds(source, configuration), []);
     }
+    for (source, expected) in [
+        ("int k[4]; long q = &k[1] - k;", 1),
+        ("int k[4]; long q = k - &k[3];", -3),
+        (
+            "struct {long a; char c;} v; long q = (char*)&v.c - (char*)&v;",
+            8,
+        ),
+    ] {
+        with_configuration(source, gnu17(), |context, s| {
+            let errors = context.take_pending_errors();
+            assert!(errors.is_empty(), "{source}: {errors:?}");
+            let difference = s
+                .expressions
+                .iter()
+                .find(|info| {
+                    matches!(
+                        info.expression.kind,
+                        ExpressionType::Binary {
+                            operator: BinaryOperator::Subtraction,
+                            ..
+                        }
+                    )
+                })
+                .unwrap();
+            assert_eq!(difference.integer.unwrap().value, expected, "{source}");
+        });
+    }
     assert_eq!(
         kinds("int x, y; long d = &x - &y;", gnu17()),
         [SemanticErrorKind::NonConstantInitializer]

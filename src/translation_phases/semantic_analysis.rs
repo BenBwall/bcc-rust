@@ -823,11 +823,13 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     self.error(SemanticErrorKind::QualifiedFunction, source, None, None);
                 } else {
                     ty = ty.qualified(q);
+                    // C99 §6.7.3p2,p8: an array typedef qualifies its
+                    // element, which must itself admit restrict.
+                    self.validate_qualifiers(ty, source);
                 }
                 while let Some(bound) = arrays.pop() {
                     ty = self.types.intern(TypeKind::Array(ty, bound));
                 }
-                self.validate_qualifiers(ty, source);
                 self.values.push(ty);
             },
             | Work::TypeName(name) => {
@@ -1027,6 +1029,16 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 {
                     self.error(
                         SemanticErrorKind::InvalidParameter,
+                        p.source_vectors,
+                        name.map(|n| n.name),
+                        None,
+                    );
+                }
+                // C99 §6.7.4p2: parameters declare objects, including
+                // declarators adjusted from function types.
+                if p.declaration_specifiers.function_specifiers.is_inline {
+                    self.error(
+                        SemanticErrorKind::InvalidInline,
                         p.source_vectors,
                         name.map(|n| n.name),
                         None,
@@ -1422,11 +1434,9 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 .or_else(|| gnu_unit_size.then_some(1));
                 if value.is_none()
                     && !self.types.unanalyzed(ty)
-                    && !matches!(
-                        self.types.nodes[ty.index],
-                        TypeKind::Unknown
-                            | TypeKind::Array(_, ArrayBound::Variable | ArrayBound::Star)
-                    )
+                    // C99 §6.5.3.4p2: sizeof a VLA is not an integer
+                    // constant, including when an inner dimension varies.
+                    && !self.types.variably_modified(ty)
                 {
                     self.error(SemanticErrorKind::InvalidConstant, source, None, None);
                 }

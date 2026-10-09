@@ -8,6 +8,194 @@ use crate::configuration::{
 };
 
 #[test]
+fn sizeof_arrays_with_inner_variable_dimensions_is_not_an_ice() {
+    with_configuration(
+        "void f(int n){int a[sizeof(int[3][n])]; int b[sizeof(int[n][3])];}",
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+        |context, s| {
+            let errors = context.take_pending_errors();
+            assert!(errors.is_empty(), "{errors:?}");
+            for name in ["a", "b"] {
+                let binding = s
+                    .bindings
+                    .iter()
+                    .find(|b| context.string_cache.at(b.name.name) == name)
+                    .unwrap();
+                assert!(matches!(
+                    s.types.nodes[binding.ty.index],
+                    TypeKind::Array(_, ArrayBound::Variable)
+                ));
+            }
+        },
+    );
+}
+
+#[test]
+fn every_array_bound_expression_requires_integer_type() {
+    for source in [
+        "void f(double n){int a[n * 2]; int after[3];}",
+        "void f(double n){int a[-n]; int after[3];}",
+        "void f(int *p){int a[p + 1]; int after[3];}",
+        "int a[1.5 + 1]; int after[3];",
+        "double g(void); void f(void){int a[g()]; int after[3];}",
+        "void f(int n){int a[n ? 1.5 : 2]; int after[3];}",
+        "void f(double n){int a[(1, n)]; int after[3];}",
+        "void f(double *p){int a[p[0]]; int after[3];}",
+        "struct S {double n;}; void f(struct S s){int a[s.n]; int after[3];}",
+        "void f(double n){int a[n]; int after[3];}",
+        "void f(int n){int a[(double)n]; int after[3];}",
+        "int a[1.5]; int after[3];",
+        "void f(void){int a[\"size\"]; int after[3];}",
+    ] {
+        with_configuration(
+            source,
+            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+            |context, s| {
+                let errors = context.take_pending_errors();
+                assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+                assert!(
+                    matches!(
+                        errors[0],
+                        TranslationError::Semantic(SemanticError {
+                            kind: SemanticErrorKind::InvalidArrayBound,
+                            ..
+                        })
+                    ),
+                    "{source}: {errors:?}"
+                );
+                let after = s
+                    .bindings
+                    .iter()
+                    .find(|b| context.string_cache.at(b.name.name) == "after")
+                    .unwrap();
+                assert!(matches!(
+                    s.types.nodes[after.ty.index],
+                    TypeKind::Array(_, ArrayBound::Constant(3))
+                ));
+            },
+        );
+    }
+}
+
+#[test]
+fn integer_and_unknown_array_bound_types_preserve_existing_behavior() {
+    with_configuration(
+        "void f(int n, double d, int *p){int a[n * 2]; int b[-n]; int c[p - p + 1]; int \
+         e[(int)d];}",
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+        |context, _| {
+            let errors = context.take_pending_errors();
+            assert!(errors.is_empty(), "{errors:?}");
+        },
+    );
+    with_source(
+        "void f(void){int a[missing + 1]; int after[3];}",
+        |context, s| {
+            let errors = context.take_pending_errors();
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert!(matches!(
+                errors[0],
+                TranslationError::Semantic(SemanticError {
+                    kind: SemanticErrorKind::UndeclaredIdentifier,
+                    ..
+                })
+            ));
+            assert!(
+                s.bindings
+                    .iter()
+                    .any(|b| context.string_cache.at(b.name.name) == "after")
+            );
+        },
+    );
+}
+
+#[test]
+fn inline_is_invalid_on_parameter_declarations() {
+    for source in [
+        "int f(inline int x); int after;",
+        "int f(inline int); int after;",
+        "int f(inline int x){return x;} int after;",
+        "int f(inline int callback(void)); int after;",
+        "int f(inline int a[3]); int after;",
+    ] {
+        with_configuration(
+            source,
+            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+            |context, s| {
+                let errors = context.take_pending_errors();
+                assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+                assert!(
+                    matches!(
+                        errors[0],
+                        TranslationError::Semantic(SemanticError {
+                            kind: SemanticErrorKind::InvalidInline,
+                            ..
+                        })
+                    ),
+                    "{source}: {errors:?}"
+                );
+                assert!(
+                    s.bindings
+                        .iter()
+                        .any(|b| context.string_cache.at(b.name.name) == "after")
+                );
+            },
+        );
+    }
+    with_source("inline int f(int x){return x;}", |context, _| {
+        let errors = context.take_pending_errors();
+        assert!(errors.is_empty(), "{errors:?}");
+    });
+}
+
+#[test]
+fn restrict_on_array_typedefs_is_validated_on_the_element() {
+    for source in [
+        "typedef int A[3]; restrict A a; int after;",
+        "typedef int A[2][3]; restrict A a; int after;",
+        "typedef int F(void); typedef F *A[3]; restrict A a; int after;",
+    ] {
+        with_configuration(
+            source,
+            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+            |context, s| {
+                let errors = context.take_pending_errors();
+                assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+                assert!(
+                    matches!(
+                        errors[0],
+                        TranslationError::Semantic(SemanticError {
+                            kind: SemanticErrorKind::InvalidRestrict,
+                            ..
+                        })
+                    ),
+                    "{source}: {errors:?}"
+                );
+                assert!(
+                    s.bindings
+                        .iter()
+                        .any(|b| context.string_cache.at(b.name.name) == "after")
+                );
+            },
+        );
+    }
+    with_source("typedef int *P[2][3]; restrict P p;", |context, s| {
+        let errors = context.take_pending_errors();
+        assert!(errors.is_empty(), "{errors:?}");
+        let mut ty = s.bindings.last().unwrap().ty;
+        for bound in [2, 3] {
+            let TypeKind::Array(element, ArrayBound::Constant(n)) = s.types.nodes[ty.index] else {
+                panic!("array typedef shape");
+            };
+            assert_eq!(n, bound);
+            ty = element;
+        }
+        assert!(matches!(s.types.nodes[ty.index], TypeKind::Pointer(_)));
+        assert!(ty.qualifiers.contains(TypeQualifiers::RESTRICT));
+    });
+}
+
+#[test]
 fn hidden_function_prototypes_do_not_constrain_later_calls() {
     for source in [
         "void f(void){extern int h(int);} void g(void){extern int h(); h(1,2);}",

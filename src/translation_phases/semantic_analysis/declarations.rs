@@ -814,36 +814,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.types.variably_modified(ty)
     }
 
-    /// Already-resolved leaf/cast types can reject non-integer bounds without
-    /// requiring the full expression typing planned for Stage 2.
+    /// Rejects non-integer bounds using the already-analyzed expression type,
+    /// suppressing dependent constraints on unanalyzed types.
     /// C99: §6.7.5.2p1, p. 116; PDF p. 128.
-    pub(super) fn non_integer_bound(&self, mut expression: &'tu super::Expression<'tu>) -> bool {
-        use super::{
-            Constant,
-            ExpressionType as E,
-        };
-        while let E::Parenthesized { expression: inner } = expression.kind {
-            expression = inner;
-        }
-        let ty = match expression.kind {
-            | E::Identifier(name) => self
-                .lookup(Namespace::Ordinary, name.name)
-                .map(|e| self.bindings[e.binding].ty),
-            | E::Cast { target_type, .. } => self
-                .resolved_type_names
-                .get(&target_type.source_vectors)
-                .copied(),
-            | E::Constant(Constant::Float(value)) =>
-                return matches!(
-                    value,
-                    super::super::preprocessing::FloatTokenType::Float(_)
-                        | super::super::preprocessing::FloatTokenType::Double(_)
-                        | super::super::preprocessing::FloatTokenType::LongDouble(_)
-                ),
-            | E::StringLiteral(_) => return true,
-            | _ => None,
-        };
-        ty.is_some_and(|ty| !self.types.unanalyzed(ty) && self.integer_type(ty).is_none())
+    pub(super) fn non_integer_bound(&self, expression: &'tu super::Expression<'tu>) -> bool {
+        let ty = self.expression_info(expression).ty;
+        !self.types.unanalyzed(ty) && self.integer_type(ty).is_none()
     }
 
     /// An untagged structure or union specifier with no declarator, or with
