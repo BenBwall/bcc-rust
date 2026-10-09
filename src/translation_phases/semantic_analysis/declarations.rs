@@ -770,12 +770,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Some(old.name.source_vectors),
                 );
             } else if linkage == Linkage::None || old.linkage == Linkage::None {
-                let modern_typedef = kind == BindingKind::Typedef
+                // C11 §6.7p3 lets a typedef name be redefined to denote the
+                // same type, unless it is variably modified; GCC and Clang
+                // accept it earlier as a C11 extension, GNU modes included.
+                let same_typedef = kind == BindingKind::Typedef
                     && old.kind == kind
-                    && (self.context.configuration.standard() >= CStandard::C11
-                        || self.context.configuration.gnu_extensions())
-                    && old.ty == ty;
-                if !modern_typedef {
+                    && old.ty == ty
+                    && !self.variably_modified(ty);
+                if same_typedef {
+                    if !self.tainted {
+                        self.context.report_extension_since(
+                            "typedef redefinition",
+                            crate::configuration::FeatureOrigin::Standard(CStandard::C11),
+                            name.source_vectors,
+                        );
+                    }
+                } else {
                     self.error(
                         SemanticErrorKind::DuplicateDeclaration,
                         name.source_vectors,

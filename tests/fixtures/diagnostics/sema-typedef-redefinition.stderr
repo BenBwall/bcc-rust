@@ -1,0 +1,17 @@
+error: 'typedef redefinition' is a C11 extension
+ --> sema-typedef-redefinition.c:2:28
+  |
+2 | typedef unsigned long long size_type;
+  |                            ^^^^^^^^^
+
+error: identifier with no linkage is declared more than once: `other`
+ --> sema-typedef-redefinition.c:4:14
+  |
+3 | typedef int other;
+  |             ----- previous declaration is here
+4 | typedef long other;
+  |              ^^^^^ declared again here
+  |
+  = note: C99 §6.7p3: a no-linkage identifier has at most one declaration in the same scope
+
+2 errors generated.

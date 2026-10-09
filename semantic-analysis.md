@@ -204,7 +204,9 @@ mixes are diagnosed (§6.2.2p7). Typedefs, enumerators, members and automatic ob
 have no linkage. Objects at file scope, with linkage, or block static have static
 duration; parameters/other local objects have automatic duration. Functions and
 non-object bindings have no object duration. Same-scope no-linkage duplicates are
-rejected; identical repeated typedefs are accepted in C11 and later modes and GNU modes.
+rejected. A typedef repeated with the same, not variably modified, type is
+accepted (C11 §6.7p3); before C11, GNU modes included, it is a C11 extension
+under the pedantic policy, as in GCC and Clang.
 
 Recovered declarations/functions retain useful bindings/types but suppress new
 semantic diagnostics while their recovered subtree is analyzed. Error roots and
