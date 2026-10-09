@@ -512,9 +512,11 @@ snapshot at `tests/fixtures/semantic/types.stderr`.
 | `IncompleteObject` | [object](sema-incomplete-object.c) | Automatic incomplete record and defined void object. |
 
 `UnknownTypedef` is a defensive semantic binding check for a typedef-classified
-syntax node without a semantic binding. Ordinary source cannot deliberately
-reach it through the parser's validated typedef classification; recovery taint
-suppresses already-diagnosed malformed declarations. It is covered with a
+syntax node without a semantic binding, reached only when parser and semantic
+scopes disagree. Well-formed source reached it through a nested-declarator
+function definition until Stage 3 bound the defining parameter list; no other
+well-formed path is known, and recovery taint suppresses already-diagnosed
+malformed declarations. It is covered with a
 constructed semantic-resolution unit test rather than a misleading source golden.
 
 Layout/type identities, old-style promoted parameter compatibility, conditional

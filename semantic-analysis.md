@@ -561,9 +561,13 @@ with `-std=c99 -pedantic-errors` also rejects every fixture. Sample triage:
 The 12 retained syntax torture regressions pass. The Stage 3 survey below also
 exercises the complete semantic CLI.
 
-The defensive `UnknownTypedef` kind cannot be reached by deliberately well-formed
-source through the parser's typedef classification. Its constructed resolver unit
-test replaces a source golden; the other 21 kinds have rendered source goldens.
+The defensive `UnknownTypedef` kind is reached only when the parser's typedef
+classification and semantic scopes disagree. Well-formed source did reach it
+while a nested-declarator function definition bound the wrong parameter list
+(`typedef int b; int (*fp(int a))(int b) { b x = a; }`); Stage 3 binds the
+defining list, and no other well-formed path is known. Its constructed resolver
+unit test replaces a source golden; the other Stage 1 kinds have rendered source
+goldens.
 
 Stage 2 adds 28 diagnostic fixtures, covering every new semantic kind and the
 shared implicit-function extension policy; the existing overflow diagnostic now
