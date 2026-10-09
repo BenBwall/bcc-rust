@@ -378,7 +378,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         source,
                         self.semantic_errors,
                     ));
+                    // A bound whose evaluation is exceptional is not an
+                    // integer constant expression, so it is a variable length
+                    // (§6.7.5.2p4); scopes that forbid one report it then.
+                    self.work.push(Work::RuntimeBound(self.runtime_bound));
                     self.work.push(Work::Eval(expression));
+                    self.work.push(Work::RuntimeBound(true));
                     self.work.push(Work::Expression(expression));
                 } else {
                     let bound = if is_pointer {

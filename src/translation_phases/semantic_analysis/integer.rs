@@ -105,6 +105,20 @@ impl Integer {
         }
     }
 
+    /// GCC defines a left shift of a nonnegative signed value into, but not
+    /// past, the sign bit as its two's-complement result, which C99 leaves
+    /// undefined (§6.5.7p4, p. 84; PDF p. 96). Every other failed shift
+    /// stays exceptional.
+    pub(crate) fn sign_bit_shift(self, op: BinaryOperator, right: Self) -> Option<Self> {
+        let (l, r) = (self.promote(), right.promote());
+        if op != BinaryOperator::LeftShift || !l.signed || l.value < 0 {
+            return None;
+        }
+        let shift = u32::try_from(r.value).ok().filter(|&n| n < l.bits)?;
+        let shifted = l.value.checked_shl(shift)?;
+        (shifted < 1_i128 << l.bits).then(|| l.cast_value(shifted))
+    }
+
     /// Usual integer arithmetic conversions, including LP64 rank distinctions.
     /// C99: §6.3.1.8p1, p. 45; PDF p. 57.
     pub(crate) fn binary(self, op: BinaryOperator, right: Self) -> Option<Self> {

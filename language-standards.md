@@ -276,6 +276,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | Counter | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
 | HasAttribute | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
 | HasBuiltin | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
+| SignBitShifts | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | MsDeclspec | - | - | - | - | - | - | - | MS flag | parser |
 | MsIntTypes | - | - | - | - | - | - | - | MS flag | parser |
 | MsCallingConventions | - | - | - | - | - | - | - | MS flag | parser |

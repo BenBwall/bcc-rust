@@ -253,3 +253,55 @@ fn enumerators_beyond_int_are_a_policy_extension() {
         [SemanticErrorKind::EnumeratorRange]
     );
 }
+
+#[test]
+fn exceptional_array_bounds_are_variable_length_arrays() {
+    let source = "void f(void) { int b[1/0]; int c[(1 << 31) / 4 + 1]; (void)b; }";
+    assert_eq!(
+        kinds(source, gnu17()),
+        [SemanticErrorKind::InvalidArrayBound]
+    );
+    with_configuration(source, gnu17(), |_, s| {
+        let b = s
+            .bindings
+            .iter()
+            .find(|b| b.duration == Duration::Automatic)
+            .unwrap();
+        assert!(matches!(
+            s.types.nodes[b.ty.index],
+            TypeKind::Array(_, ArrayBound::Variable)
+        ));
+    });
+    assert_eq!(
+        kinds(
+            "int g[1/0]; enum { E = 1/0 }; void h(int x) { switch (x) { case 1/0: break; } } \
+             struct S { int w : 1/0; };",
+            gnu17()
+        ),
+        [
+            SemanticErrorKind::FileScopeVariableType,
+            SemanticErrorKind::ConstantOverflow,
+            SemanticErrorKind::ConstantOverflow,
+            SemanticErrorKind::ConstantOverflow,
+        ]
+    );
+}
+
+#[test]
+fn shifting_into_the_sign_bit_is_a_gnu_extension() {
+    let source = "enum { F = 1 << 31 }; int x[(1 << 31) < 0 ? 1 : -1]; static int s = 1 << 31; \
+                  int y[F < 0 ? 1 : -1];";
+    assert_eq!(kinds(source, gnu17()), []);
+    assert_eq!(kinds(source, CompilerConfiguration::default()), []);
+    assert_eq!(
+        extensions(source, pedantic(CStandard::C99, false)),
+        ["'left shift into the sign bit' is a GNU extension"; 3]
+    );
+    assert_eq!(
+        kinds("enum { G = 3 << 31, H = 1 << 32 };", gnu17()),
+        [
+            SemanticErrorKind::ConstantOverflow,
+            SemanticErrorKind::ConstantOverflow,
+        ]
+    );
+}

@@ -271,6 +271,9 @@ enum Work<'tu, 's> {
     PopScope,
     RestoreTaint(bool),
     RestoreParameterMode(bool),
+    /// Sets whether exceptional evaluation makes an array bound variable
+    /// rather than reporting an overflow.
+    RuntimeBound(bool),
     OldSignature(&'tu FunctionDefinition<'tu>),
     DiscardType,
     UnknownType,
@@ -318,6 +321,7 @@ enum Work<'tu, 's> {
         StructDeclarator<'tu>,
         TypeId,
         &'s Collection<'s, Member>,
+        usize,
     ),
     EnumMembers(
         usize,
@@ -360,6 +364,8 @@ struct Analyzer<'a, 'tu, 's> {
     tainted:             bool,
     function_name:       Option<Identifier>,
     old_parameter_mode:  bool,
+    /// Exceptional evaluation yields a variable array bound, not an error.
+    runtime_bound:       bool,
     semantic_errors:     usize,
     member_indices:      ArenaMap<'s, (usize, StringCacheId), usize>,
     member_names:        ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
@@ -453,6 +459,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             tainted: false,
             function_name: None,
             old_parameter_mode: false,
+            runtime_bound: false,
             semantic_errors: 0,
             member_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             member_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
@@ -569,6 +576,16 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         );
     }
 
+    /// Overflow and other exceptional evaluation violate the constant
+    /// expression constraint (§6.6p4, p. 95; PDF p. 107) where an integer
+    /// constant expression is required. An array bound instead becomes
+    /// variable length.
+    fn exceptional_constant(&mut self, source: SourceVectors) {
+        if !self.runtime_bound {
+            self.error(SemanticErrorKind::ConstantOverflow, source, None, None);
+        }
+    }
+
     fn taint(&mut self, recovered: bool) {
         self.work.push(Work::RestoreTaint(self.tainted));
         self.tainted |= recovered;
@@ -618,6 +635,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             },
             | Work::RestoreTaint(old) => self.tainted = old,
             | Work::RestoreParameterMode(old) => self.old_parameter_mode = old,
+            | Work::RuntimeBound(runtime) => self.runtime_bound = runtime,
             | Work::PopScope => self.leave(),
             | Work::FunctionWork(work) => self.function_work(work),
             | Work::StatementWork(work) => self.statement_work(work),
@@ -1056,7 +1074,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             },
             | Work::MemberDone(tag, d, members) => {
                 let ty = self.take_type();
-                self.work.push(Work::MemberWidth(tag, d, ty, members));
+                self.work
+                    .push(Work::MemberWidth(tag, d, ty, members, self.semantic_errors));
                 if let Some(width) = d.bitfield_width {
                     self.work.push(Work::Eval(width.expression()));
                     self.work.push(Work::Expression(width.expression()));
@@ -1064,7 +1083,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     self.integers.push(None);
                 }
             },
-            | Work::MemberWidth(tag, d, ty, members) => {
+            | Work::MemberWidth(tag, d, ty, members, errors_before) => {
                 let value = self.integers.pop().flatten();
                 let width = if d.bitfield_width.is_some() {
                     let valid = value.and_then(|v| u32::try_from(v.value).ok());
@@ -1076,6 +1095,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                         || (valid == Some(0) && name.is_some())
                     {
                         if !self.types.unanalyzed(ty)
+                            && self.semantic_errors == errors_before
                             && !d
                                 .bitfield_width
                                 .is_some_and(|w| self.unanalyzed_constant(w.expression()))
@@ -1237,16 +1257,19 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 let value = self.integers.pop().flatten();
                 let result = value.and_then(|v| v.unary(op));
                 if value.is_some() && result.is_none() {
-                    self.error(SemanticErrorKind::ConstantOverflow, source, None, None);
+                    self.exceptional_constant(source);
                 }
                 self.integers.push(result);
             },
             | Work::Binary(op, source) => {
                 let right = self.integers.pop().flatten();
                 let left = self.integers.pop().flatten();
-                let result = left.zip(right).and_then(|(l, r)| l.binary(op, r));
+                // Expression typing has already reported a sign-bit shift.
+                let result = left
+                    .zip(right)
+                    .and_then(|(l, r)| l.binary(op, r).or_else(|| l.sign_bit_shift(op, r)));
                 if left.is_some() && right.is_some() && result.is_none() {
-                    self.error(SemanticErrorKind::ConstantOverflow, source, None, None);
+                    self.exceptional_constant(source);
                 }
                 self.integers.push(result);
             },
@@ -1301,7 +1324,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                                 | super::preprocessing::FloatTokenType::LongDouble(_)
                         )
                     {
-                        self.error(SemanticErrorKind::ConstantOverflow, source, None, None);
+                        self.exceptional_constant(source);
                     }
                     self.integers.push(result);
                     return;

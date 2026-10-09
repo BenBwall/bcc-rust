@@ -1425,11 +1425,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.integer = Self::floating_comparison(op, left, right);
             }
             info.ice = left.ice && right.ice;
-            if !floating {
-                info.integer = left
-                    .integer
-                    .zip(right.integer)
-                    .and_then(|(l, r)| l.binary(op, r));
+            if !floating && let Some((l, r)) = left.integer.zip(right.integer) {
+                info.integer = l.binary(op, r);
+                if info.integer.is_none()
+                    && let Some(value) = l.sign_bit_shift(op, r)
+                {
+                    info.integer = Some(value);
+                    if !self.tainted {
+                        self.context.report_extension(
+                            crate::configuration::Feature::SignBitShifts,
+                            "left shift into the sign bit",
+                            e.operator_source_vectors.unwrap_or(e.source_vectors),
+                        );
+                    }
+                }
             }
             if matches!(op, B::LogicalAnd | B::LogicalOr) {
                 info.integer = Self::constant_truth(left)
