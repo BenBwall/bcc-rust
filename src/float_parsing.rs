@@ -24,6 +24,7 @@ mod ffi {
         non_camel_case_types,
         non_snake_case,
         dead_code,
+        unreachable_pub,
         unused_results,
         clippy::all,
         clippy::allow_attributes,
