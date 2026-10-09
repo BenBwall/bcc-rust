@@ -1011,8 +1011,13 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                 if (spelling.starts_with("0x") || spelling.starts_with("0X"))
                     && !spelling.contains(['p', 'P']) =>
                 None,
-            | [.., b'i' | b'I' | b'j' | b'J', b'f' | b'F' | b'l' | b'L'] =>
-                Some(spelling.len() - 2),
+            // GNU imaginary and binary128 suffixes extend C99 §6.4.4.2p1;
+            // either suffix order preserves the real component's precision.
+            | [
+                ..,
+                b'i' | b'I' | b'j' | b'J',
+                b'f' | b'F' | b'l' | b'L' | b'q' | b'Q',
+            ] => Some(spelling.len() - 2),
             | _ => None,
         };
         if self

@@ -840,6 +840,16 @@ fn imaginary_suffix_orders_and_invalid_long_suffixes_do_not_recurse() {
 }
 
 #[test]
+fn binary128_imaginary_suffixes_accept_both_orders() {
+    let (tokens, errors) = observe(
+        "1.0iq 1.0jq 0x1p0iQ 1.0qi 1.0qj 0x1p0Qi\n",
+        mode(CStandard::C17),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(spellings(&tokens).matches("__float128 _Complex").count(), 6,);
+}
+
+#[test]
 fn lexical_and_operator_truncations_recover_in_every_revision() {
     let source = "#define V(...) __VA_OPT__(__VA_ARGS__)\nV(1)\nu8\"hello\" 1'234 0o7 \
                   '\\x{41}'\n#if __has_include(\"missing.h\")\n#endif\n__pragma(STDC FP_CONTRACT \

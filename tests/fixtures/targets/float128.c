@@ -3,6 +3,9 @@
 _Static_assert(sizeof(1.0q) == 16, "literal size");
 _Static_assert(_Alignof(__typeof__(1.0q)) == 16, "literal align");
 _Static_assert(sizeof(1.0qi) == 32, "complex literal size");
+_Static_assert(sizeof(1.0iq) == 32, "imaginary before q");
+_Static_assert(__builtin_types_compatible_p(__typeof__(1.0jq), __typeof__(1.0qj)), "j suffix orders");
+_Static_assert(__builtin_types_compatible_p(__typeof__(0x1p0iQ), __typeof__(0x1p0Qi)), "hex suffix orders");
 _Static_assert((__builtin_classify_type)(1.0q) == 8, "parenthesized builtin");
 __typeof__(1.0q) literal_type = 1.0q;
 _Static_assert(__builtin_classify_type(1) == 1, "integer");
