@@ -16,6 +16,16 @@ use crate::translation_phases::{
 };
 
 #[test]
+fn pasted_multi_token_argument_rescans_only_after_its_last_token_is_pasted() {
+    // glibc tgmath passes a cast and a function name as the left operand.
+    // C99 6.10.3.3p2-3: paste the last argument token before rescanning.
+    assert_expansion(
+        "#define TYPE(x) double\n#define JOIN(f) f ## f128\nJOIN((TYPE(1)) sqrt)\n",
+        "( double ) sqrtf128",
+    );
+}
+
+#[test]
 fn stringification_discards_trailing_argument_whitespace() {
     for (argument, expected) in [
         ("a   b   ", "\"a b\""),
