@@ -24,6 +24,7 @@ use super::{
     TagKind,
     TypeId,
     TypeKind,
+    TypeQualifiers,
     expressions::ConversionKind,
 };
 
@@ -96,6 +97,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Some(binding.name.name),
                 None,
             );
+        }
+        // GCC folds a static const, non-volatile integer object's constant
+        // initializer where its value is read in GNU modes.
+        if binding.duration == Duration::Static
+            && ty.qualifiers.contains(TypeQualifiers::CONST)
+            && !ty.qualifiers.contains(TypeQualifiers::VOLATILE)
+            && let Some((bits, signed)) = self.integer_type(ty)
+            && let InitializerType::AssignmentExpression(e) = initializer.kind
+            && let info = self.expression_info(e)
+            && info.constant == ConstantClass::Arithmetic
+            && let Some(value) = info.integer
+        {
+            self.bindings[index].value = Some(value.cast(bits, signed));
         }
     }
 

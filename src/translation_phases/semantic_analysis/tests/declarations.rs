@@ -662,3 +662,24 @@ fn address_differences_within_one_object_are_constant() {
         [SemanticErrorKind::NonConstantInitializer]
     );
 }
+
+#[test]
+fn gnu_modes_fold_static_const_integer_objects() {
+    let source = "const char a = 0x42; const double b = (double) a; double e = a; double j[] = { \
+                  (double) a, a, 1 + a }; static const int k = 4; enum { Z = k }; void f(void) { \
+                  static const double l = 1 + a; }";
+    assert_eq!(kinds(source, gnu17()), []);
+    // Strict C99 reads of objects are not constant expressions (§6.6p7-8).
+    assert!(!kinds(source, CompilerConfiguration::default()).is_empty());
+    assert_eq!(
+        kinds(
+            "volatile const int v = 1; int w = v; void g(void) { const int n = 2; static int s = \
+             n; }",
+            gnu17()
+        ),
+        [
+            SemanticErrorKind::NonConstantInitializer,
+            SemanticErrorKind::NonConstantInitializer,
+        ]
+    );
+}
