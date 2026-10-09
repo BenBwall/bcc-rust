@@ -66,12 +66,12 @@ execution environment and `0` with `-ffreestanding`; `-fhosted` restores
 hosted and the later flag wins. `CompilerConfiguration::default()` is hosted
 as well.
 
-Compiler identity follows Clang's approach. GNU modes (`-std=gnu*`, including
-the default `gnu17`) define `__GNUC__` `4`, `__GNUC_MINOR__` `2` and
+Compiler identity follows Clang's approach. Every language mode, including
+strict ISO modes, defines `__GNUC__` `4`, `__GNUC_MINOR__` `2` and
 `__GNUC_PATCHLEVEL__` `1`, the GCC version Clang claims, and the
 inline-semantics macro Clang defines: `__GNUC_GNU_INLINE__` before C99 and
-`__GNUC_STDC_INLINE__` from C99 on. Strict modes define none of these, unlike
-Clang, which claims GCC 4.2.1 in every mode. `-fms-extensions` defines
+`__GNUC_STDC_INLINE__` from C99 on. Only `__STRICT_ANSI__` distinguishes
+strict modes from GNU modes in these macros. `-fms-extensions` defines
 `_MSC_VER` `1933`, `_MSC_FULL_VER` `193300000`, `_MSC_BUILD` `1` and
 `_MSC_EXTENSIONS` `1`: MSVC 19.33, Clang's default
 `-fms-compatibility-version`. Only the umbrella flag claims MSVC; the

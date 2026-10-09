@@ -288,9 +288,12 @@ Select the C ABI with `--target`: `x86_64-unknown-linux-gnu` (default),
 precision, wide literals, record bit-fields, stdarg types and the
 target-description and OS/ABI macros, in all language modes and independently
 of the compiler host and language-extension flags. Compiler identity is a
-separate contract that follows Clang: GNU modes claim GCC 4.2.1 (`__GNUC__`
-`4`), `-fms-extensions` claims MSVC 19.33 (`_MSC_VER` `1933`), and every mode
-defines `__bcc__`; `__clang__` is never defined. See
+separate contract that follows Clang: every language mode, including strict
+ISO modes, claims GCC 4.2.1 (`__GNUC__` `4`), with `__GNUC_GNU_INLINE__`
+before C99 and `__GNUC_STDC_INLINE__` from C99 on. `__STRICT_ANSI__` is
+defined only in strict modes. `-fms-extensions` claims MSVC 19.33
+(`_MSC_VER` `1933`), and every mode defines `__bcc__`; `__clang__` is never
+defined. See
 [language-standards.md](language-standards.md) for the full list.
 `offsetof` and the varargs intrinsics have semantic types; this front end does
 not generate the code that performs varargs operations.
