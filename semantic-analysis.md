@@ -268,7 +268,9 @@ expression (§6.6p6) is folded where an integer constant expression is required
 and reported through the `ConstantFolding` extension policy. This includes the
 classic `offsetof` macro: the address of a member or element reached from an
 integer-valued pointer constant carries that integer plus the byte offset, and
-converting it to an integer type yields an arithmetic constant. Strict modes
+converting it to an integer type yields an arithmetic constant. Reading a
+static-duration, const, non-volatile integer object with a constant initializer
+also folds to that value. Strict modes
 keep the integer-constant-expression constraint, so such an array bound is
 variable length.
 

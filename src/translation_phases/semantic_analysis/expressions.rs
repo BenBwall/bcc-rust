@@ -830,9 +830,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         },
                         | _ => self.object_category(info.ty),
                     };
-                    info.integer = binding.value;
                     info.ice = binding.kind == BindingKind::Enumerator;
                     if info.ice {
+                        info.integer = binding.value;
+                        info.constant = ConstantClass::Arithmetic;
+                    } else if binding.kind == BindingKind::Object
+                        && binding.value.is_some()
+                        && self.context.configuration.gnu_extensions()
+                    {
+                        // Not a C99 constant expression (§6.6p6-8); GCC folds
+                        // it, as §6.6p10 allows.
+                        info.integer = binding.value;
                         info.constant = ConstantClass::Arithmetic;
                     }
                 } else if !e.recovered && !self.builtin_name(name) {
