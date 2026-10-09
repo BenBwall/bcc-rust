@@ -441,9 +441,13 @@ fn outermost_parameter_arrays_and_flexible_member_constraints() {
             assert_eq!(context.pending_error_count(), 0);
         },
     );
-    with_source(
+    // Nesting and arrays of flexible structures are GNU extensions that the
+    // strict policy rejects.
+    with_configuration(
         "void x; void f(int a[3][static 4]); struct S {int a; int b[];}; struct T {struct S s;}; \
          struct S a[2];",
+        crate::configuration::CompilerConfiguration::default()
+            .with_extension_policy(crate::configuration::ExtensionPolicy::Deny),
         |context, _| {
             assert_eq!(context.pending_error_count(), 4);
         },

@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **339 top-level C inputs and 339 stderr snapshots**, plus two supporting headers and 104 mode/policy `.args` sidecars. Eighty-nine of the inputs cover semantic analysis (twenty-one for declarations, twenty-eight for expressions and initializers, thirty-six for statements and functions, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **135 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 116 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **340 top-level C inputs and 340 stderr snapshots**, plus two supporting headers and 105 mode/policy `.args` sidecars. Ninety of the inputs cover semantic analysis (twenty-two for declarations, twenty-eight for expressions and initializers, thirty-six for statements and functions, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **135 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 116 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -476,7 +476,8 @@ spellings without internal NUL sentinels.
 
 The default CLI appends declaration-semantic diagnostics after preprocessing and
 syntax diagnostics. Syntax/token inspection remains a syntax-only path. Each
-fixture below runs with `-std=c99`; each `.stderr` pins the source range, source
+fixture below runs with `-std=c99`, adding `-pedantic-errors` where it shows an
+extension policy diagnostic; each `.stderr` pins the source range, source
 spelling, previous-declaration label where applicable, and C99 note. Positive
 counterparts live in `semantic_analysis/tests.rs` and the semantic inspection
 snapshot at `tests/fixtures/semantic/types.stderr`.
@@ -499,7 +500,8 @@ snapshot at `tests/fixtures/semantic/types.stderr`.
 | `InvalidConstant` | [constant](sema-constant.c) | Runtime enumerator operand, including unselected conditional/logical arms. |
 | `ConstantOverflow` | [overflow](sema-overflow.c) | Exceptional ICE evaluation; no dependent enumerator cascade. |
 | `EnumeratorRange` | [enum range](sema-enum-range.c) | Members that no 64-bit integer type holds; under `-pedantic-errors` the C23 extension diagnostic for values outside int precedes it. |
-| `InvalidMember` | [member](sema-member.c) | Incomplete/function member and flexible-array nesting. |
+| `InvalidMember` | [member](sema-member.c) | Incomplete/function member and a flexible array that is not the last member. |
+| `Extension(FlexibleArrayExtensions)` | [flexible extension](sema-flexible-extension.c) | GNU flexible arrays in unions or otherwise empty structures, nested flexible structures and arrays of them (§6.7.2.1p2, p16). |
 | `DuplicateMember` | [member name](sema-duplicate-member.c) | Duplicate names in a record member namespace. |
 | `InvalidBitField` | [bit-field](sema-bit-field.c) | Width/type/zero-width-name constraints. |
 | `InvalidParameter` | [parameter](sema-parameter.c) | Parameter storage and non-outermost array static/qualifiers. |

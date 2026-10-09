@@ -364,13 +364,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if matches!(
                     self.types.nodes[base.index],
                     TypeKind::Scalar(Scalar::Void) | TypeKind::Function { .. }
-                ) || matches!(self.types.nodes[base.index],TypeKind::Tag(id) if (!self.types.tags[id].complete.get() || self.types.tags[id].contains_flexible.get()) && !self.types.tags[id].tainted.get())
+                ) || matches!(self.types.nodes[base.index],TypeKind::Tag(id) if !self.types.tags[id].complete.get() && !self.types.tags[id].tainted.get())
                     || matches!(
                         self.types.nodes[base.index],
                         TypeKind::Array(_, ArrayBound::Incomplete)
                     )
                 {
                     self.error(SemanticErrorKind::InvalidDerivedType, source, None, None);
+                }
+                // §6.7.2.1p2 forbids such elements; GCC accepts them.
+                if let TypeKind::Tag(id) = self.types.nodes[base.index]
+                    && self.types.tags[id].contains_flexible.get()
+                    && !self.types.tags[id].tainted.get()
+                {
+                    self.flexible_extension(
+                        "array of structures with a flexible array member",
+                        source,
+                    );
                 }
                 if let Some(expression) = assignment_expression {
                     self.work.push(Work::ArrayDone(
@@ -845,6 +855,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         })
     }
 
+    /// Reports a GNU flexible-array form through the extension policy.
+    /// C99: §4p6, p. 7; PDF p. 19.
+    pub(super) fn flexible_extension(&mut self, spelling: &str, source: SourceVectors) {
+        if !self.tainted {
+            self.context.report_extension(
+                crate::configuration::Feature::FlexibleArrayExtensions,
+                spelling,
+                source,
+            );
+        }
+    }
+
     /// System V records use natural alignment, low-to-high bits and
     /// non-straddling units. C99: implementation-defined bit-field
     /// allocation §6.7.2.1p10-16, pp. 102-103; PDF pp. 114-115.
@@ -852,29 +874,42 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let tag = self.types.tags[id];
         let mut output = ArenaVec::new_in(self.types.tu);
         let (mut bytes, mut alignment, mut bit_end) = (0_u64, 1_u64, 0_u64);
+        let named = members.iter().filter(|m| m.initializable()).count();
         for (index, &member) in members.iter().enumerate() {
+            let source = member
+                .name
+                .map_or_else(SourceVectors::empty, |n| n.source_vectors);
+            // C99 permits a flexible array only as the last member of a
+            // structure with another named member (§6.7.2.1p16). GCC also
+            // accepts one in a union or as a structure's only member.
             let flexible = matches!(
                 self.types.nodes[member.ty.index],
                 TypeKind::Array(_, ArrayBound::Incomplete)
-            ) && index + 1 == members.len()
-                && tag.kind == TagKind::Struct
-                && members.iter().filter(|m| m.initializable()).count() > 1;
+            ) && member.name.is_some()
+                && (tag.kind == TagKind::Union || index + 1 == members.len());
             if flexible {
                 tag.contains_flexible.set(true);
+                let extension = if tag.kind == TagKind::Union {
+                    Some("flexible array member in a union")
+                } else if named < 2 {
+                    Some("flexible array member in an otherwise empty structure")
+                } else {
+                    None
+                };
+                if let Some(spelling) = extension {
+                    self.flexible_extension(spelling, source);
+                }
             }
+            // Nor may such a structure, or a union containing one, be a
+            // structure member (§6.7.2.1p2); GCC accepts that too.
             if let TypeKind::Tag(nested) = self.types.nodes[member.ty.index]
                 && self.types.tags[nested].contains_flexible.get()
             {
                 if tag.kind == TagKind::Struct {
-                    self.error(
-                        SemanticErrorKind::InvalidMember,
-                        member
-                            .name
-                            .map_or_else(SourceVectors::empty, |n| n.source_vectors),
-                        member.name.map(|n| n.name),
-                        None,
+                    self.flexible_extension(
+                        "structure with a flexible array member nested in a structure",
+                        source,
                     );
-                    tag.tainted.set(true);
                 } else {
                     tag.contains_flexible.set(true);
                 }

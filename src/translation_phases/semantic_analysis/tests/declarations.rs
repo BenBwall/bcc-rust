@@ -432,3 +432,32 @@ fn msvc_tagged_anonymous_members_join_the_namespace() {
         []
     );
 }
+
+#[test]
+fn gnu_flexible_array_forms_are_policy_extensions() {
+    let source = "union U { int a; int b[]; }; struct F { int n; int d[]; }; struct G { struct F \
+                  f; int after; }; struct F arr[2]; struct E { int only[]; };";
+    assert_eq!(kinds(source, gnu17()), []);
+    assert_eq!(kinds(source, CompilerConfiguration::default()), []);
+    assert_eq!(
+        extensions(source, pedantic(CStandard::C17, true)),
+        [
+            "'flexible array member in a union' is a GNU extension",
+            "'structure with a flexible array member nested in a structure' is a GNU extension",
+            "'array of structures with a flexible array member' is a GNU extension",
+            "'flexible array member in an otherwise empty structure' is a GNU extension",
+        ]
+    );
+    for (name, size, align) in [("U", 4, 4), ("G", 8, 4), ("E", 0, 4)] {
+        assert_eq!(
+            tag_layout(source, gnu17(), name),
+            Some(Layout { size, align }),
+            "{name}"
+        );
+    }
+    // A flexible array that is not the last structure member stays invalid.
+    assert_eq!(
+        kinds("struct H { int d[]; int n; };", gnu17()),
+        [SemanticErrorKind::InvalidMember]
+    );
+}
