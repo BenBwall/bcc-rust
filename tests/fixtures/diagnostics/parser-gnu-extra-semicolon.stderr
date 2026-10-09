@@ -1,0 +1,19 @@
+warning: 'extra semicolon outside a function' is a GNU extension
+ --> parser-gnu-extra-semicolon.c:3:34
+  |
+3 | DEFINE_ENUM_FLAG_OPERATORS(FLAGS);
+  |                                  ^
+
+warning: 'extra semicolon in a struct or union' is a GNU extension
+ --> parser-gnu-extra-semicolon.c:4:18
+  |
+4 | struct S { int a;; };
+  |                  ^
+
+warning: 'extra semicolon outside a function' is a GNU extension
+ --> parser-gnu-extra-semicolon.c:5:16
+  |
+5 | void f(void) {};
+  |                ^
+
+3 warnings generated.

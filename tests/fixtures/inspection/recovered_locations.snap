@@ -93,7 +93,6 @@ recovered-function-definition b recovered type=int storage=none qualifiers=none 
     identifier b @1:5
   declaration-list: declaration storage=none type=long qualifiers=none function-specifiers=none @1:7
   body: compound recovered @1:13
-root[1] error @1:13
 declaration: declaration storage=none type=int qualifiers=none function-specifiers=none @2:1
   declarator after @2:5
     shape: declarator pointer-levels=0 @2:5

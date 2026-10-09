@@ -377,6 +377,22 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                     }
                     return None;
                 }
+                // C99 §6.9p1 has no empty external declaration. GNU
+                // extension: a `;` between external declarations, such as one
+                // an empty macro leaves behind, declares nothing. As in Clang,
+                // it keeps the translation unit from being empty.
+                if let Some(token) = self.cursor.current()
+                    && is_operator(Some(token), OperatorTokenType::Semicolon)
+                {
+                    self.extension(
+                        crate::configuration::Feature::ExtraSemicolons,
+                        "extra semicolon outside a function",
+                        token,
+                    );
+                    self.has_external_declaration = true;
+                    self.cursor.consume();
+                    continue;
+                }
                 if self.external_declaration_count >= self.limits.external_declarations {
                     return self.resource_failure(
                         ParserResource::ExternalDeclarations,

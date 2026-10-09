@@ -357,6 +357,19 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     );
                     self.phase = StructOrUnionPhase::FinishBody;
                     ParseAction::Reprocess
+                } else if is_operator(token, OperatorTokenType::Semicolon) {
+                    // C99 §6.7.2.1p1: a struct-declaration begins with a
+                    // specifier-qualifier-list. GNU extension: an extra `;` in
+                    // the list declares nothing, so it does not make the list
+                    // nonempty.
+                    let token = token.expect("semicolon token exists");
+                    parser.extension(
+                        crate::configuration::Feature::ExtraSemicolons,
+                        "extra semicolon in a struct or union",
+                        token,
+                    );
+                    self.source_vectors.push(token.source_vectors);
+                    ParseAction::Consume
                 } else {
                     self.member_source = None;
                     self.current_member_declarator_source = None;

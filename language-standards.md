@@ -309,6 +309,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | GnuDesignators | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | UnionCasts | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | EmptyStructs | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| ExtraSemicolons | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | NestedFunctions | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | ImaginaryConstants | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
 | DollarIdentifiers | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
@@ -416,6 +417,11 @@ function body or a parameter. Suppression ends at the owning frame boundary;
 later unsuppressed occurrences, including ones from macro expansions, keep their
 diagnostics. Nested functions isolate typedef, label and switch state. GNU empty
 structures and unions remain complete syntax under every policy.
+An extra `;` between external declarations or between members, such as the
+one an empty macro like the Windows SDK's `DEFINE_ENUM_FLAG_OPERATORS(T);`
+leaves behind in C, declares nothing; GCC and Clang accept it in every mode and
+report it only when pedantic. A translation unit holding only such a `;` is not
+empty, as in Clang.
 
 ## MSVC syntax
 
