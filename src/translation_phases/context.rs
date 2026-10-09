@@ -42,6 +42,7 @@ use crate::{
         bump::{
             ArenaMap,
             ArenaQueue,
+            ArenaSet,
             ArenaString,
             ArenaVec,
             Bump,
@@ -365,6 +366,9 @@ pub(crate) struct Context<'tu> {
     /// arena, so compaction relocates each error's provenance only once.
     relocated_errors: usize,
     source_files: DedupArena<'tu, &'tu Path, FxBuildHasher>,
+    /// Presumed filename identities introduced by `#line`, mapped to the
+    /// physical source file whose bytes their vectors still index.
+    presumed_files: ArenaMap<'tu, u32, u32>,
     /// Every configured header search entry in order, the resource
     /// directory included; the first `quote_include_count` are `-iquote`
     /// entries. An entry's index is its identity for `#include_next`.
@@ -435,6 +439,7 @@ impl<'tu> Context<'tu> {
             suppressed_errors: 0,
             relocated_errors: 0,
             source_files: DedupArena::new(tu),
+            presumed_files: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             include_directories: &[],
             quote_include_count: 0,
             system_include_start: 0,
@@ -1207,6 +1212,18 @@ impl<'tu> Context<'tu> {
             .intern_by(path, || Self::alloc_path(tu, path))
     }
 
+    /// Gives a presumed filename its own identity without interning it as an
+    /// opened file. Its system-header classification follows `physical`;
+    /// its rendered name remains `path`.
+    /// C99: §6.10.4 paragraph 4, p. 158; PDF p. 170.
+    pub(crate) fn add_presumed_source_file(&mut self, path: &Path, physical: u32) -> u32 {
+        let index = self
+            .source_files
+            .push_unindexed(Self::alloc_path(self.tu, path));
+        _ = self.presumed_files.insert(index, physical);
+        index
+    }
+
     /// Stable virtual paths do not depend on the host's path separator.
     /// C99: implementation-defined headers §6.10.2p2-3, pp. 149-150;
     /// PDF pp. 161-162.
@@ -1232,7 +1249,12 @@ impl<'tu> Context<'tu> {
         self.source_files[index]
     }
 
-    /// Records where headers are searched for, in order. C99:
+    /// Records where headers are searched for, in order. As in GCC and
+    /// Clang, an `-I` entry that duplicates a system entry is dropped so the
+    /// directory stays a system directory, and each group keeps only the
+    /// first of its own duplicates; path equality ignores redundant `.`
+    /// components. The `-iquote` group is a separate chain that `<…>`
+    /// lookup skips, so, as in Clang, its entries stay user entries. C99:
     /// implementation-defined places, §6.10.2p2-3, pp. 149-150; PDF pp.
     /// 161-162.
     pub(crate) fn set_header_search(&mut self, search: HeaderSearch<'_>) {
@@ -1240,19 +1262,35 @@ impl<'tu> Context<'tu> {
             .resource
             .then_some(Path::new(crate::headers::DIRECTORY));
         let tu = self.tu;
-        self.include_directories = tu.alloc_slice_fill_iter(
-            search
-                .quote
-                .iter()
-                .chain(search.angled)
-                .chain(search.system)
-                .copied()
-                .chain(resource)
-                .chain(search.after.iter().copied())
-                .map(|path| Self::alloc_path(tu, path)),
-        );
-        self.quote_include_count = search.quote.len();
-        self.system_include_start = search.quote.len() + search.angled.len();
+        let system = search
+            .system
+            .iter()
+            .copied()
+            .chain(resource)
+            .chain(search.after.iter().copied());
+        let mut system_paths = ArenaSet::with_hasher_in(FxBuildHasher, tu);
+        system_paths.extend(system.clone());
+        let mut seen = ArenaSet::with_hasher_in(FxBuildHasher, tu);
+        let mut directories = ArenaVec::new_in(tu);
+        for (index, group) in [search.quote, search.angled].into_iter().enumerate() {
+            let quote = index == 0;
+            seen.clear();
+            for &path in group {
+                if (quote || !system_paths.contains(path)) && seen.insert(path) {
+                    directories.push(Self::alloc_path(tu, path));
+                }
+            }
+            if quote {
+                self.quote_include_count = directories.len();
+            }
+        }
+        self.system_include_start = directories.len();
+        for path in system {
+            if seen.insert(path) {
+                directories.push(Self::alloc_path(tu, path));
+            }
+        }
+        self.include_directories = directories.leak();
     }
 
     /// Whether the configured search entry at `index` is a system directory.
@@ -1273,10 +1311,17 @@ impl<'tu> Context<'tu> {
         self.system_headers.contains_key(&file)
     }
 
-    /// Whether `vector` starts in a system header.
+    /// Whether `vector` starts in a physical system header, independently
+    /// of its presumed filename.
+    /// C99: presumed filenames, §6.10.4 paragraph 4, p. 158; PDF p. 170.
     pub(crate) fn in_system_header(&self, vector: &SourceVector) -> bool {
-        self.system_headers
+        let physical = self
+            .presumed_files
             .get(&vector.source_file_index)
+            .copied()
+            .unwrap_or(vector.source_file_index);
+        self.system_headers
+            .get(&physical)
             .is_some_and(|&from| vector.index >= from)
     }
 

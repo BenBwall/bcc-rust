@@ -46,6 +46,7 @@ use crate::{
     },
     translation_phases::{
         Context,
+        ErrorSeverity,
         SourcePosition,
         SourceVectors,
         StrExt,
@@ -417,7 +418,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                 self.resume_at_line_start();
             },
             | "pragma" => {
-                if !self.parse_pragma_directive() {
+                let from = self
+                    .context
+                    .first_source_vector(directive.source_vectors)
+                    .index;
+                if !self.parse_pragma_directive(from) {
                     self.skip_until_newline();
                 }
                 self.resume_at_line_start();
@@ -673,7 +678,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     /// system header, as in GCC and Clang. The primary source file never is.
     /// C99: an implementation-defined pragma, §6.10.6 paragraph 1, p. 159;
     /// PDF p. 171.
-    fn pragma_system_header(&mut self, source_vectors: SourceVectors) {
+    fn pragma_system_header(&mut self, source_vectors: SourceVectors, from: u32) {
         if !self.current_is_header() {
             self.context.preprocessor_error(PreprocessorError {
                 error_type: PreprocessorErrorType::SystemHeaderPragmaInMainFile,
@@ -682,12 +687,6 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             return;
         }
         let file = self.physical_source_file_index();
-        let vector = self.context.first_source_vector(source_vectors);
-        let from = if vector.source_file_index == file {
-            vector.index
-        } else {
-            0
-        };
         self.context.mark_system_header(file, from);
     }
 
@@ -898,8 +897,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             line:   vector.line,
             column: vector.column,
         };
-        let allow_backslash =
-            self.context.configuration.extension_policy() != ExtensionPolicy::Deny;
+        let allow_backslash = self.context.configuration.extension_policy()
+            != ExtensionPolicy::Deny
+            || self
+                .context
+                .withholds(ErrorSeverity::Error, true, token.source_vectors);
         let (written, unclosed_at, escaped_closing_quote, trailing) = {
             let source = self
                 .context
@@ -1219,7 +1221,10 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     source_vectors,
                 });
             }
-            look_up = policy != ExtensionPolicy::Deny;
+            look_up = policy != ExtensionPolicy::Deny
+                || self
+                    .context
+                    .withholds(ErrorSeverity::Error, true, source_vectors);
         }
         let start = if self.context.string_cache.at(directive.contents) == "include_next" {
             self.include_next_start("#include_next", directive.source_vectors)
@@ -1962,7 +1967,16 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             self.set_line(value);
         }
         if let Some(filename) = filename {
-            let source_file_index = self.context.intern_source_file(Path::new(filename));
+            // Naming the physical file itself keeps its identity, and so its
+            // quoted source text; any other name gets an identity of its own
+            // whose system-header status still follows the physical file.
+            let physical = self.physical_source_file_index();
+            let filename = Path::new(filename);
+            let source_file_index = if self.context.get_source_file(physical) == filename {
+                physical
+            } else {
+                self.context.add_presumed_source_file(filename, physical)
+            };
             self.set_source_file_index(source_file_index);
         }
     }
@@ -2007,7 +2021,10 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     /// once` and `#pragma GCC system_header` are bcc's implementation-defined
     /// pragmas. Other pragmas are ignored (paragraph 1), and one that does
     /// not begin with an identifier draws a warning first.
-    pub(super) fn parse_pragma_directive(&mut self) -> bool {
+    /// `from` is the physical invocation's byte offset, including when
+    /// `_Pragma` supplies tokens from a synthetic string (C99 §6.10.9p1,
+    /// p. 161; PDF p. 173).
+    pub(super) fn parse_pragma_directive(&mut self, from: u32) -> bool {
         let mut consumed_newline = false;
         let mut completed_stdc = false;
         'base: loop {
@@ -2081,7 +2098,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             if operand.kind.is_identifier()
                                 && self.context.string_cache.at(operand.contents) == "system_header"
                             {
-                                self.pragma_system_header(operand.source_vectors);
+                                self.pragma_system_header(operand.source_vectors, from);
                             }
                             // Other GCC pragmas, and any operands, are ignored.
                             let line_state = (self.last_was_newline, self.current_is_newline);

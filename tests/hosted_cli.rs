@@ -89,6 +89,276 @@ mod tests {
         path.to_str().unwrap()
     }
 
+    fn clang_check(root: &Path, flags: &[&str], source: &str) -> Output {
+        let input = root.join("oracle.c");
+        write(&input, source);
+        Command::new(clang())
+            .args([
+                "--target=x86_64-unknown-linux-gnu",
+                "-nostdlibinc",
+                "-fsyntax-only",
+                "-Wnewline-eof",
+            ])
+            .args(flags)
+            .arg(input)
+            .env_remove("CPATH")
+            .env_remove("C_INCLUDE_PATH")
+            .output()
+            .unwrap()
+    }
+
+    #[test]
+    fn system_header_backslash_include_keeps_lookup_under_pedantic_errors() {
+        let system = scratch("backslash-system");
+        write(&system.join("outer.h"), "#include \"sub\\inner.h\"\n");
+        // Use the same spelled path as the include, interpreted by the host.
+        write(&system.join(r"sub\inner.h"), "#define INNER 42\n");
+        let source = "#include <outer.h>\nint x = INNER;\n";
+        clean(&clang_check(
+            &system,
+            &["-std=c17", "-pedantic-errors", "-isystem", arg(&system)],
+            source,
+        ));
+        clean(&bcc(&[
+            "-std=c17",
+            "-pedantic-errors",
+            "-nostdlibinc",
+            "-isystem",
+            arg(&system),
+            "--input",
+            source,
+        ]));
+        // User headers keep the existing policy: allow resolves the name,
+        // whereas deny reports the extension and skips lookup.
+        clean(&bcc(&[
+            "-std=c17",
+            "-nostdlibinc",
+            "-I",
+            arg(&system),
+            "--input",
+            source,
+        ]));
+        let denied = stderr(&bcc(&[
+            "-std=c17",
+            "-pedantic-errors",
+            "-nostdlibinc",
+            "-I",
+            arg(&system),
+            "--input",
+            source,
+        ]));
+        assert!(
+            denied.contains("error: a backslash in a header name is an extension"),
+            "{denied}"
+        );
+        assert!(
+            denied.contains("identifier has no visible declaration: `INNER`"),
+            "{denied}"
+        );
+    }
+
+    #[test]
+    fn duplicate_search_directories_keep_system_precedence() {
+        let root = scratch("duplicate-system");
+        let duplicate = root.join("duplicate");
+        let alias = duplicate.join(".");
+        write(&duplicate.join("ll.h"), "long long v;\n");
+        for user in ["-I", "-iquote"] {
+            for system in ["-isystem", "-idirafter"] {
+                let flags = [
+                    "-std=c89",
+                    "-pedantic-errors",
+                    user,
+                    arg(&duplicate),
+                    system,
+                    arg(&alias),
+                ];
+                let source = "#include \"ll.h\"\n";
+                let mut args = flags.to_vec();
+                args.extend(["-nostdlibinc", "--input", source]);
+                if user == "-I" {
+                    // The -I duplicate is dropped: a system header.
+                    clean(&clang_check(&root, &flags, source));
+                    clean(&bcc(&args));
+                } else {
+                    // -iquote is a separate chain whose entries stay user
+                    // entries, so both compilers report the extension.
+                    assert!(!clang_check(&root, &flags, source).status.success());
+                    let text = stderr(&bcc(&args));
+                    assert!(
+                        text.contains("error: 'long long' is a C99 extension"),
+                        "{text}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn quote_and_angled_search_groups_keep_their_distinct_visibility() {
+        let root = scratch("quote-angled-visibility");
+        write(&root.join("visible.h"), "int visible;\n");
+        let flags = ["-iquote", arg(&root), "-I", arg(&root)];
+        for source in ["#include <visible.h>\n", "#include \"visible.h\"\n"] {
+            clean(&clang_check(&root, &flags, source));
+            let mut args = flags.to_vec();
+            args.extend(["-nostdlibinc", "--input", source]);
+            clean(&bcc(&args));
+        }
+    }
+
+    #[test]
+    fn duplicate_search_directories_do_not_revisit_include_next_wrappers() {
+        let root = scratch("duplicate-next");
+        let duplicate = root.join("duplicate");
+        let final_directory = root.join("final");
+        write(
+            &duplicate.join("w.h"),
+            "struct S { int member; };\n#include_next <w.h>\n",
+        );
+        write(&final_directory.join("w.h"), "int final_value;\n");
+        let source = "#include <w.h>\nstruct S x;\n";
+        for flags in [
+            vec![
+                "-pedantic-errors",
+                "-I",
+                arg(&duplicate),
+                "-isystem",
+                arg(&duplicate),
+                "-isystem",
+                arg(&final_directory),
+            ],
+            vec![
+                "-I",
+                arg(&duplicate),
+                "-I",
+                arg(&duplicate),
+                "-I",
+                arg(&final_directory),
+            ],
+            vec![
+                "-isystem",
+                arg(&duplicate),
+                "-isystem",
+                arg(&duplicate),
+                "-isystem",
+                arg(&final_directory),
+            ],
+            vec![
+                "-idirafter",
+                arg(&duplicate),
+                "-idirafter",
+                arg(&duplicate),
+                "-idirafter",
+                arg(&final_directory),
+            ],
+        ] {
+            clean(&clang_check(&root, &flags, source));
+            let mut args = flags;
+            args.extend(["-nostdlibinc", "--input", source]);
+            clean(&bcc(&args));
+        }
+    }
+
+    #[test]
+    fn pragma_operator_marks_system_header_from_its_physical_invocation() {
+        let root = scratch("pragma-offset");
+        let source = "#define MARK_SYSTEM _Pragma(\"GCC system_header\")\n#include \"ph.h\"\n";
+        for pragma in [
+            "#pragma GCC system_header",
+            "_Pragma(\"GCC system_header\")",
+            "MARK_SYSTEM",
+        ] {
+            write(
+                &root.join("ph.h"),
+                &format!("long long before;\n{pragma}\nlong long after;\n"),
+            );
+            let flags = ["-std=c89", "-pedantic-errors", "-I", arg(&root)];
+            let oracle = clang_check(&root, &flags, source);
+            let expected = stderr(&oracle);
+            assert_eq!(expected.matches("error:").count(), 1, "{expected}");
+            assert!(expected.contains("ph.h:1:1"), "{expected}");
+            let mut args = flags.to_vec();
+            args.extend(["-nostdlibinc", "--input", source]);
+            let text = stderr(&bcc(&args));
+            assert_eq!(
+                text.matches("error: 'long long'").count(),
+                1,
+                "{pragma}: {text}"
+            );
+            assert!(text.contains("ph.h:1:6"), "{pragma}: {text}");
+            assert!(!text.contains("ph.h:3:6"), "{pragma}: {text}");
+        }
+    }
+
+    #[test]
+    fn line_presumed_names_do_not_change_physical_system_header_status() {
+        let root = scratch("line-system-status");
+        for name in ["<built-in>/float.h", "virtual.h"] {
+            let source = format!("#include <float.h>\n#line 10 \"{name}\"\nint $ = 0;");
+            let flags = ["-std=c17", "-pedantic-errors"];
+            let expected = stderr(&clang_check(&root, &flags, &source));
+            assert!(expected.contains("'$' in identifier"), "{expected}");
+            assert!(expected.contains("no newline at end of file"), "{expected}");
+            let text = stderr(&bcc(&[
+                "-std=c17",
+                "-pedantic-errors",
+                "-nostdlibinc",
+                "--input",
+                &source,
+            ]));
+            assert!(text.contains("'$' is a GNU extension"), "{name}: {text}");
+            assert!(text.contains("no newline at end of file"), "{name}: {text}");
+            assert!(text.contains(&format!("{name}:10:")), "{name}: {text}");
+        }
+        // Renaming a physical system header must also retain suppression.
+        write(
+            &root.join("mapped.h"),
+            "#line 10 \"virtual.h\"\nlong long value;",
+        );
+        let flags = ["-std=c89", "-pedantic-errors", "-isystem", arg(&root)];
+        let source = "#include <mapped.h>\n";
+        clean(&clang_check(&root, &flags, source));
+        let mut args = flags.to_vec();
+        args.extend(["-nostdlibinc", "--input", source]);
+        clean(&bcc(&args));
+        // A pragma after a rename still starts suppression at its physical
+        // offset, even for earlier tokens carrying the same presumed identity.
+        write(
+            &root.join("mapped.h"),
+            "long long before;\n#line 10 \"virtual.h\"\nlong long between;\n#pragma GCC \
+             system_header\nlong long after;",
+        );
+        let flags = ["-std=c89", "-pedantic-errors", "-I", arg(&root)];
+        let expected = stderr(&clang_check(&root, &flags, source));
+        assert_eq!(expected.matches("error:").count(), 2, "{expected}");
+        let mut args = flags.to_vec();
+        args.extend(["-nostdlibinc", "--input", source]);
+        let text = stderr(&bcc(&args));
+        assert_eq!(text.matches("error: 'long long'").count(), 2, "{text}");
+        assert!(text.contains("mapped.h:1:6"), "{text}");
+        assert!(text.contains("virtual.h:10:6"), "{text}");
+        assert!(!text.contains("no newline at end of file"), "{text}");
+    }
+
+    #[test]
+    fn line_naming_the_physical_file_keeps_quoting_its_text() {
+        let root = scratch("line-same-file");
+        write(
+            &root.join("same.c"),
+            "int a;\n#line 10 \"same.c\"\nint b = undeclared;\n",
+        );
+        let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(["-nostdlibinc", "same.c"])
+            .current_dir(&root)
+            .env("NO_COLOR", "1")
+            .output()
+            .unwrap();
+        let text = stderr(&output);
+        assert!(text.contains("--> same.c:10:9"), "{text}");
+        assert!(text.contains("int b = undeclared;"), "{text}");
+    }
+
     #[test]
     fn execution_environment_is_hosted_unless_freestanding_and_the_last_flag_wins() {
         let source =

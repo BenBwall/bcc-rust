@@ -231,7 +231,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         None
     }
 
-    fn invocation_location(&self, token: PreprocessorToken) -> SourceVector {
+    pub(super) fn invocation_location(&self, token: PreprocessorToken) -> SourceVector {
         for frame in self.tokenizer_stack.iter().rev() {
             match &frame.frame_type {
                 | TokenizerFrameType::ObjectLikeMacroInvocation { invocation, .. }
@@ -487,7 +487,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
 
     /// Executes the C99 string-form pragma operator.
     /// C99: §6.10.9p1, p. 161; PDF p. 173.
-    fn expand_pragma_operator(&mut self) {
+    fn expand_pragma_operator(&mut self, from: u32) {
         _ =
             self.expect_token_preserving_rejected::<true>(
                 |_, t| t.kind == PreprocessorTokenType::OpeningParenthesis,
@@ -529,7 +529,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             .add_synthetic_source_file(Path::new("<pragma string>"), input);
         self.tokenizer = TokenSource::new(self.context, self.scratch, pragma_string, input);
         self.pushed_frames += 1;
-        _ = self.parse_pragma_directive();
+        _ = self.parse_pragma_directive(from);
         if self.tokenizer.next_item(self.context).is_some() {
             let source_vectors = self.current_location();
             self.context.preprocessor_error(PreprocessorError {
@@ -1120,7 +1120,8 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             // pp-tokens of a `#pragma`, and all four tokens
             // are removed.
             | "_Pragma" => {
-                self.expand_pragma_operator();
+                let from = self.invocation_location(token).index;
+                self.expand_pragma_operator(from);
                 None
             },
             | name if super::language_features::LANGUAGE_BUILTINS

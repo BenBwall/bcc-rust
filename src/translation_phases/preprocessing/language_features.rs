@@ -516,6 +516,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             | "__STDC_EMBED_FOUND__" => 1,
             | "__STDC_EMBED_EMPTY__" => 2,
             | _ => {
+                let from = self.invocation_location(token).index;
                 let tokens = self.query_arguments::<false>(token)?.leak();
                 let name = self.context.string_cache.at(token.contents);
                 if name == "__pragma" {
@@ -533,7 +534,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                             SourceVector::default(),
                         ),
                     );
-                    _ = self.parse_pragma_directive();
+                    _ = self.parse_pragma_directive(from);
                     self.tokenizer = old;
                     return None;
                 }
