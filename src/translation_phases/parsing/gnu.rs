@@ -259,6 +259,22 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                 }
             },
             | Phase::Open => {
+                if matches!(self.kind, GnuKind::Builtin(_))
+                    && token.is_none_or(|x| {
+                        !matches!(
+                            x.kind,
+                            TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+                        )
+                    })
+                {
+                    // Recover the GNU primary-expression extension without
+                    // operands, leaving the caller's statement boundary intact.
+                    // C99 §6.5.1p1, p. 69; PDF p. 81 and §6.8.3p1,
+                    // p. 132; PDF p. 144: the statement owns its semicolon.
+                    Self::expected(parser, token, "`(` in GNU construct");
+                    self.phase = Phase::Finish;
+                    return ParseAction::Continue;
+                }
                 self.phase = if matches!(self.kind, GnuKind::Asm { .. }) {
                     Phase::Template
                 } else {
