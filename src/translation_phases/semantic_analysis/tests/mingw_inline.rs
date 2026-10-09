@@ -58,3 +58,68 @@ fn gnu_extern_inline_can_be_redeclared_static_or_redefined() {
         );
     }
 }
+
+#[test]
+fn gnu_extern_inline_with_inherited_internal_linkage_defines_the_function() {
+    let configuration = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow);
+    assert_eq!(
+        kinds(
+            "static void f(void); extern inline __attribute__((gnu_inline)) void f(void) {} int \
+             main(void) { f(); }",
+            configuration,
+        ),
+        [],
+    );
+    assert_eq!(
+        kinds(
+            "static void f(void); extern inline __attribute__((gnu_inline)) void f(void) {} void \
+             f(void) {} int main(void) { f(); }",
+            configuration,
+        ),
+        [],
+    );
+}
+
+#[test]
+fn invalid_or_late_gnu_inline_does_not_allow_redefinition() {
+    for standard in [CStandard::C99, CStandard::C17, CStandard::C23] {
+        for target in [
+            crate::target::Target::LinuxGnu,
+            crate::target::Target::WindowsGnu,
+        ] {
+            let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true)
+                .with_target(target);
+            for (source, expected) in [
+                (
+                    "__attribute__((gnu_inline)) void f(void); extern inline void f(void) {} void \
+                     f(void) {}",
+                    SemanticErrorKind::DuplicateDefinition,
+                ),
+                (
+                    "void f(void) {} extern inline __attribute__((gnu_inline)) void f(void); \
+                     static void f(void);",
+                    SemanticErrorKind::ConflictingLinkage,
+                ),
+            ] {
+                assert!(kinds(source, configuration).contains(&expected), "{source}");
+            }
+            assert_eq!(
+                kinds(
+                    "inline __attribute__((gnu_inline)) void f(void); extern inline void f(void) \
+                     {} void f(void) {}",
+                    configuration,
+                ),
+                [],
+            );
+            assert_eq!(
+                kinds(
+                    "inline __attribute__((gnu_inline)) void f(void); void f(void) {} extern \
+                     inline void f(void); static void f(void);",
+                    configuration,
+                ),
+                [],
+            );
+        }
+    }
+}

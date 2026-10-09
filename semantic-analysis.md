@@ -1132,6 +1132,15 @@ permission. GNU inline bodies are excluded from the C99 inline-definition
 restrictions. This resolves MinGW's external `__cpuidex` followed by the
 resource `cpuid.h` static definition; Clang includes both definitions too.
 
+`gnu_inline` is retained only from a declaration that itself specifies inline
+and precedes a unique function body, matching Clang's ignored-attribute rules.
+A previously valid attribute can still be inherited by later declarations.
+GNU extern-inline bodies that inherit internal linkage satisfy the required
+definition check (C99 §6.9p3), while retaining Clang's permission to replace
+the body. The regressions in
+`src/translation_phases/semantic_analysis/tests/mingw_inline.rs` cover these cases and the
+duplicate-definition and linkage errors from invalid or late attributes.
+
 All four x86-64 targets now advertise Clang's baseline `__MMX__`, `__SSE__`,
 `__SSE2__`, `__SSE_MATH__` and `__SSE2_MATH__` macros. The previously excluded
 macros selected MinGW's fallback union typedefs for `__m64` and the `__m128`

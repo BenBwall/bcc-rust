@@ -760,6 +760,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C99: §6.9.2p1-3, p. 143; PDF p. 155; §6.7.4p3, p. 112;
     /// PDF p. 124. Definition state is separate from declaration occurrences.
+    /// GNU inline attribute applicability extends §6.7.4p6, pp. 112-113;
+    /// PDF pp. 124-125.
     pub(super) fn record_declaration(
         &mut self,
         index: usize,
@@ -810,7 +812,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         entity.latest = index;
         if self.scopes[binding.scope].kind == ScopeKind::File {
             if binding.kind == BindingKind::Function {
-                entity.gnu_inline |= self.has_gnu_inline(spec, declarator);
+                // GNU attribute applicability extends C99 §6.7.4p6:
+                // Clang ignores it without inline or after a unique body.
+                entity.gnu_inline |= spec.function_specifiers.is_inline
+                    && !matches!(entity.function_body, Some(FunctionBody::Unique(_)))
+                    && self.has_gnu_inline(spec, declarator);
                 entity.can_redefine = spec.function_specifiers.is_inline
                     && spec.storage_class == Some(StorageClass::Extern)
                     && (entity.gnu_inline
@@ -872,6 +878,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125; §6.9p3, p. 140;
+    /// PDF p. 152. Internal bodies satisfy the definition requirement even
+    /// when GNU inline semantics allow replacing them.
     fn record_function_definition(&mut self, index: usize, f: &'tu FunctionDefinition<'tu>) {
         if self.tainted {
             return;
@@ -905,7 +914,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 FunctionBody::Unique(b.name.source_vectors)
             });
         }
-        if !entity.can_redefine
+        // C99 §6.7.4p6 and §6.9p3: an internal inline body supplies the
+        // required definition even when GNU semantics permit its replacement.
+        if (!entity.can_redefine || b.linkage == Linkage::Internal)
             && (b.linkage == Linkage::Internal
                 || !f.declaration_specifiers.function_specifiers.is_inline
                 || f.declaration_specifiers.storage_class == Some(StorageClass::Extern)
