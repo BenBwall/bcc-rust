@@ -630,3 +630,19 @@ fn compound_literals_may_have_pointers_to_variable_arrays() {
         [SemanticErrorKind::InvalidCompoundLiteral]
     );
 }
+
+#[test]
+fn braced_strings_initialize_the_first_nested_array() {
+    assert_eq!(
+        kinds(
+            "const char ca[2][3] = { \"12\" }; char va[2][3] = { \"123\" }; void f(void) { char \
+             l[2][3] = { \"12\" }; }",
+            gnu17()
+        ),
+        []
+    );
+    assert_eq!(
+        kinds("int a[3] = { \"ab\" };", gnu17()),
+        [SemanticErrorKind::InvalidInitializer]
+    );
+}
