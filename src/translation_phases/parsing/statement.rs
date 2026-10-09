@@ -930,8 +930,10 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 if is_operator(token, OperatorTokenType::Ellipsis) {
                     let token = token.expect("ellipsis exists");
                     if parser.pedantic_suppression == 0
-                        && parser.context.configuration.standard()
-                            < crate::configuration::CStandard::C2y
+                        && !parser
+                            .context
+                            .configuration
+                            .is_native(crate::configuration::Feature::CaseRanges)
                     {
                         parser.context.report_extension_since(
                             "case range",

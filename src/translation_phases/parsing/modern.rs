@@ -25,10 +25,7 @@ use super::{
     type_name::TypeNameFrame,
 };
 use crate::{
-    configuration::{
-        CStandard,
-        Feature,
-    },
+    configuration::Feature,
     translation_phases::{
         SourceVectors,
         preprocessing::{
@@ -574,7 +571,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                         self.own(parser, token.expect("comma exists"));
                         ParseAction::Consume
                     } else {
-                        if parser.context.configuration.standard() < CStandard::C23
+                        if !parser.context.configuration.is_native(Feature::C23Keywords)
                             && let Some(token) = token
                         {
                             parser.extension(

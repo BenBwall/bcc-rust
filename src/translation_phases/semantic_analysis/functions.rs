@@ -414,7 +414,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     {
                         _ = self.register_bindings.insert(self.bindings.len() - 1, true);
                     }
-                } else if self.context.configuration.standard() < CStandard::C23 {
+                } else if !self
+                    .context
+                    .configuration
+                    .is_native(crate::configuration::Feature::C23Keywords)
+                {
                     let parser_exempt = syntax.is_some_and(|p| {
                         parameters.len() == 1
                             && p.declarator.is_none()
@@ -619,7 +623,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Duration::Automatic,
                     None,
                 );
-                if self.context.configuration.standard() >= CStandard::C99
+                if !self
+                    .context
+                    .configuration
+                    .is_native(crate::configuration::Feature::ImplicitInt)
                     && !self.context.configuration.gnu_extensions()
                 {
                     self.error(

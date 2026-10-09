@@ -16,7 +16,6 @@ use super::{
     ArrayBound,
     BinaryOperator,
     BindingKind,
-    CStandard,
     ConditionalExpression,
     Constant,
     Duration,
@@ -589,7 +588,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if let ExpressionType::Identifier(name) = e.kind
             && self.lookup(Namespace::Ordinary, name.name).is_none()
-            && (self.context.configuration.standard() < CStandard::C99
+            && (self
+                .context
+                .configuration
+                .is_native(crate::configuration::Feature::ImplicitFunctionDeclaration)
                 || self.context.configuration.gnu_extensions())
         {
             let result = self.types.scalar(Scalar::Int);
