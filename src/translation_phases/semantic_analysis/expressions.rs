@@ -1438,6 +1438,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let Some(target) = self.pointer_target(converted) else {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidMemberAccess);
             };
+            // An unanalyzed pointee may be a record; its members are unknown.
+            if self.types.unanalyzed(target) {
+                return Self::expression_result(e, self.types.unknown());
+            }
             ty = target;
         }
         let TypeKind::Tag(id) = self.types.nodes[ty.index] else {
