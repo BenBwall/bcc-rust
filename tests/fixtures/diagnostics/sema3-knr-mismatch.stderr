@@ -2,7 +2,7 @@ error: redeclaration has an incompatible type: `f`
  --> sema3-knr-mismatch.c:1:18
   |
 1 | int f(int); int (f(a)) double a; {return 0;}
-  |     -            ^ declaration constraint violated
+  |     -            ^ conflicting type
   |     |
   |     previous declaration is here
   |

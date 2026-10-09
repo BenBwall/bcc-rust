@@ -2,7 +2,7 @@ warning: non-void function returns without a value
  --> sema3-missing-value-warning.c:1:14
   |
 1 | int f(void) {return;}
-  |              ^^^^^^^ statement constraint violated
+  |              ^^^^^^^ no return value
   |
   = note: C99 §6.8.6.4p1: C99 requires a value; C89 and GNU modes retain this form with a warning
 

@@ -507,7 +507,7 @@ snapshot at `tests/fixtures/semantic/types.stderr`.
 | `InvalidMember` | [member](sema-member.c) | Incomplete/function member and a flexible array that is not the last member. |
 | `Extension(FlexibleArrayExtensions)` | [flexible extension](sema-flexible-extension.c) | GNU flexible arrays in unions or otherwise empty structures, nested flexible structures and arrays of them (§6.7.2.1p2, p16). |
 | `DuplicateMember` | [member name](sema-duplicate-member.c) | Duplicate names in a record member namespace. |
-| `InvalidBitField` | [bit-field](sema-bit-field.c) | Width/type/zero-width-name constraints. |
+| `InvalidBitFieldWidth`, `InvalidBitFieldType`, `NamedZeroWidthBitField` | [bit-field](sema-bit-field.c) | Width, type and zero-width-name constraints, each with its own message. |
 | `InvalidParameter` | [parameter](sema-parameter.c) | Parameter storage and non-outermost array static/qualifiers. |
 | `IncompleteObject` | [object](sema-incomplete-object.c) | Automatic incomplete record and defined void object. |
 

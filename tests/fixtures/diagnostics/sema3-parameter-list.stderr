@@ -2,7 +2,7 @@ error: invalid function definition parameter list: `b`
  --> sema3-parameter-list.c:1:14
   |
 1 | int f(a) int b; { return 0; }
-  |              ^ declaration constraint violated
+  |              ^ invalid parameter list for a definition
   |
   = note: C99 §6.9.1p5-6: prototype definitions have no declaration list; identifier-list declarations name only listed parameters, with no initializers
 
@@ -10,7 +10,7 @@ error: invalid function definition parameter list: `a`
  --> sema3-parameter-list.c:1:7
   |
 1 | int f(a) int b; { return 0; }
-  |       ^ declaration constraint violated
+  |       ^ invalid parameter list for a definition
   |
   = note: C99 §6.9.1p5-6: prototype definitions have no declaration list; identifier-list declarations name only listed parameters, with no initializers
 

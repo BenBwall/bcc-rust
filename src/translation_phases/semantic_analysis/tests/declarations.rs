@@ -554,3 +554,20 @@ fn storage_constraints_have_distinct_kinds() {
         ]
     );
 }
+
+#[test]
+fn bit_field_constraints_have_distinct_kinds() {
+    assert_eq!(
+        kinds(
+            "int n; struct C { int a:33; float f:2; int x:0; int y:-1; int z:n; unsigned :0; };",
+            gnu17()
+        ),
+        [
+            SemanticErrorKind::InvalidBitFieldWidth,
+            SemanticErrorKind::InvalidBitFieldType,
+            SemanticErrorKind::NamedZeroWidthBitField,
+            SemanticErrorKind::InvalidBitFieldWidth,
+            SemanticErrorKind::InvalidConstant,
+        ]
+    );
+}

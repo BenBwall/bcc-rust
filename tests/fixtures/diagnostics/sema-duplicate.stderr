@@ -2,7 +2,7 @@ error: identifier with no linkage is declared more than once: `x`
  --> sema-duplicate.c:1:26
   |
 1 | void f(void) {int x; int x;}
-  |                   -      ^ declaration constraint violated
+  |                   -      ^ declared again here
   |                   |
   |                   previous declaration is here
   |
@@ -12,7 +12,7 @@ error: identifier with no linkage is declared more than once: `x`
  --> sema-duplicate.c:2:33
   |
 2 | void g(void) {int x; extern int x;}
-  |                   -             ^ declaration constraint violated
+  |                   -             ^ declared again here
   |                   |
   |                   previous declaration is here
   |

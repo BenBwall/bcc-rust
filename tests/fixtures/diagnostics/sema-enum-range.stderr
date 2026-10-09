@@ -14,7 +14,7 @@ error: enumeration values have no common integer type: `U`
  --> sema-enum-range.c:2:15
   |
 2 | enum F {N=-1, U=18446744073709551615ULL};
-  |               ^ declaration constraint violated
+  |               ^ no integer type holds this value with the others
   |
   = note: C99 §6.7.2.2p4: an enumerated type is compatible with an integer type that represents every member; no 64-bit type holds a negative member and this one
 

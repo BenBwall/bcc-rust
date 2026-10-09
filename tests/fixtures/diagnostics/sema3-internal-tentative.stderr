@@ -2,7 +2,7 @@ error: internal tentative definition has incomplete type: `a`
  --> sema3-internal-tentative.c:1:12
   |
 1 | static int a[];
-  |            ^ declaration constraint violated
+  |            ^ still incomplete at the end of the translation unit
   |
   = note: C99 §6.9.2p3: a tentative definition with internal linkage shall not have an incomplete type
 

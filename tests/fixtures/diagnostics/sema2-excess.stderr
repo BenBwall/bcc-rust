@@ -2,7 +2,7 @@ error: excess initializer for the current object
  --> sema2-excess.c:1:15
   |
 1 | int a[2]={1,2,3};
-  |               ^ expression or initializer constraint violated
+  |               ^ no subobject is left to initialize
   |
   = note: C99 §6.7.8p2: an initializer shall not provide a value for an object outside the initialized entity
 

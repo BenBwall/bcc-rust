@@ -2,7 +2,7 @@ warning: main has a nonportable signature: `main`
  --> sema3-main.c:1:6
   |
 1 | void main(void) {}
-  |      ^^^^ implementation warning
+  |      ^^^^ nonportable signature for main
   |
   = note: C99 §5.1.2.2.1p1: hosted main returns int and accepts no parameters or int and char **, or an implementation-defined form
 

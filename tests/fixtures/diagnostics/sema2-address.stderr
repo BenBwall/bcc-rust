@@ -2,7 +2,7 @@ error: address operator requires an addressable object or function
  --> sema2-address.c:1:32
   |
 1 | void f(void) { register int x; &x; }
-  |                                ^ expression or initializer constraint violated
+  |                                ^ cannot take this address
   |
   = note: C99 §6.5.3.2p1: the operand is a function designator, subscript, indirection, or a non-register, non-bit-field lvalue
 

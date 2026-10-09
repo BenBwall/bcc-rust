@@ -203,8 +203,12 @@ pub(crate) enum SemanticErrorKind {
     InvalidMember,
     /// C99: §6.7p3; 6.2.3p1, p. 97; 31; PDF p. 109; 43.
     DuplicateMember,
-    /// C99: §6.7.2.1p3-4, p. 101; PDF p. 113.
-    InvalidBitField,
+    /// C99: §6.7.2.1p4, p. 101; PDF p. 113.
+    InvalidBitFieldType,
+    /// C99: §6.7.2.1p3, p. 101; PDF p. 113.
+    InvalidBitFieldWidth,
+    /// C99: §6.7.2.1p3, p. 101; PDF p. 113.
+    NamedZeroWidthBitField,
     /// C99: §6.7.5.2p1; §6.7.5.3p2 and p10, pp. 116-119; PDF pp. 128-131.
     InvalidParameter,
     /// C99: §6.7p7, p. 98; PDF p. 110.
@@ -212,6 +216,98 @@ pub(crate) enum SemanticErrorKind {
 }
 
 impl SemanticErrorKind {
+    /// The primary label names what is wrong at the labeled source.
+    const fn label(self) -> &'static str {
+        match self {
+            | Self::UnknownTypedef => "not a typedef name in this scope",
+            | Self::UndeclaredIdentifier => "not declared",
+            | Self::InvalidAddressOperand => "cannot take this address",
+            | Self::InvalidUnaryOperand | Self::InvalidAdditiveOperands =>
+                "operand type is not allowed here",
+            | Self::ExpectedModifiableLvalue => "not a modifiable lvalue",
+            | Self::InvalidSubscript => "invalid subscript operands",
+            | Self::InvalidArithmeticOperands => "operands are not arithmetic",
+            | Self::InvalidIntegerOperands => "operands are not integers",
+            | Self::InvalidLogicalOperands => "operands are not scalar",
+            | Self::InvalidComparisonOperands => "operands cannot be compared",
+            | Self::InvalidConditionalOperands => "operands do not have a common type",
+            | Self::InvalidAssignment => "value cannot be assigned to this type",
+            | Self::InvalidCast => "invalid conversion",
+            | Self::InvalidSizeof => "operand has no size",
+            | Self::InvalidMemberAccess => "no such member",
+            | Self::InvalidCall => "not a callable function",
+            | Self::InvalidArgumentCount => "wrong number of arguments",
+            | Self::InvalidArgumentType => "argument does not convert to the parameter type",
+            | Self::InvalidCompoundLiteral => "invalid compound literal type",
+            | Self::InvalidCondition => "condition is not scalar",
+            | Self::InvalidSwitchExpression => "controlling expression is not an integer",
+            | Self::FailedAssertion => "assertion is false",
+            | Self::InvalidInitializer => "invalid initializer",
+            | Self::ExcessInitializer => "no subobject is left to initialize",
+            | Self::InvalidDesignator => "no such subobject",
+            | Self::NonConstantInitializer => "not a constant expression",
+            | Self::InvalidStorage => "external declaration",
+            | Self::InvalidFunctionStorage => "function declared in a block",
+            | Self::LinkedBlockInitializer => "initializer is not allowed here",
+            | Self::InvalidRestrict => "restrict on a non-object pointer",
+            | Self::QualifiedFunction => "function type qualifiers are ignored",
+            | Self::InvalidInline => "inline applies only to functions other than main",
+            | Self::InvalidDerivedType => "invalid element or return type",
+            | Self::InvalidArrayBound => "invalid array size",
+            | Self::InvalidStarBound => "`[*]` is not allowed here",
+            | Self::ObjectTooLarge => "too large",
+            | Self::FileScopeVariableType => "variably modified type",
+            | Self::IncompatibleDeclaration => "conflicting type",
+            | Self::DuplicateDeclaration => "declared again here",
+            | Self::ConflictingLinkage => "linkage conflicts with the previous declaration",
+            | Self::TagKindMismatch => "different tag kind",
+            | Self::TagRedefinition | Self::DuplicateDefinition => "defined again here",
+            | Self::IncompleteEnum => "enum is not yet complete",
+            | Self::InvalidConstant => "not an integer constant expression",
+            | Self::ConstantOverflow => "overflow or invalid operation",
+            | Self::EnumeratorRange => "no integer type holds this value with the others",
+            | Self::InvalidMember => "incomplete member type",
+            | Self::DuplicateMember => "member declared again here",
+            | Self::InvalidBitFieldType => "not an integer type",
+            | Self::InvalidBitFieldWidth => "invalid width",
+            | Self::NamedZeroWidthBitField => "named zero-width bit-field",
+            | Self::InvalidParameter => "invalid parameter declaration",
+            | Self::IncompleteObject => "incomplete type",
+            | Self::InvalidFunctionDefinition => "not a function declarator",
+            | Self::FunctionDefinitionStorage => "storage class is not allowed on a definition",
+            | Self::IncompleteFunctionReturn => "incomplete return type",
+            | Self::InvalidDefinitionParameterList => "invalid parameter list for a definition",
+            | Self::UnnamedDefinitionParameter => "parameter has no name",
+            | Self::IncompleteDefinitionParameter => "incomplete parameter type",
+            | Self::DefinitionStarArray => "`[*]` is not allowed in a definition",
+            | Self::MainSignature => "nonportable signature for main",
+            | Self::IncompleteInternalTentative | Self::IncompleteTentativeDefinition =>
+                "still incomplete at the end of the translation unit",
+            | Self::TentativeArrayAssumedOne => "array assumed to have one element",
+            | Self::UndefinedInternal => "used here but never defined",
+            | Self::UnusedStaticFunction => "never defined",
+            | Self::InlineInternalReference => "internal identifier in an inline definition",
+            | Self::InlineStaticObject => "modifiable static object in an inline definition",
+            | Self::VoidReturnValue => "value returned from a void function",
+            | Self::MissingReturnValue | Self::MissingReturnValueWarning => "no return value",
+            | Self::InvalidReturnConversion => "value cannot be returned as the result type",
+            | Self::InvalidForDeclaration => "not an automatic object",
+            | Self::DuplicateLabel => "label defined again here",
+            | Self::UndefinedLabel => "label is never defined",
+            | Self::JumpIntoVariableScope | Self::SwitchIntoVariableScope =>
+                "jumps into a variably modified scope",
+            | Self::CaseOutsideSwitch => "not in a switch statement",
+            | Self::EmptyCaseRange => "empty case range",
+            | Self::BreakOutsideLoopOrSwitch => "not in a loop or switch",
+            | Self::ContinueOutsideLoop => "not in a loop",
+            | Self::DuplicateCase => "case value repeated here",
+            | Self::InvalidVaList => "not a modifiable va_list",
+            | Self::InvalidVaArgType => "not a complete object type",
+            | Self::VaStartOutsideVariadic => "function is not variadic",
+            | Self::InvalidOffsetof => "invalid member designator",
+        }
+    }
+
     fn explanation(self) -> (&'static str, &'static str) {
         match self {
             | Self::InvalidFunctionDefinition => (
@@ -581,7 +677,7 @@ impl SemanticErrorKind {
                  kind",
             ),
             | Self::TagRedefinition => (
-                "tag is already complete",
+                "tag is already defined",
                 "C99 §6.7.2.3p1: a specific type has its contents defined at most once",
             ),
             | Self::IncompleteEnum => (
@@ -613,10 +709,19 @@ impl SemanticErrorKind {
                 "C99 §6.7p3 and §6.2.3p1: members have no linkage and a separate namespace per \
                  aggregate",
             ),
-            | Self::InvalidBitField => (
-                "invalid bit-field type or width",
-                "C99 §6.7.2.1p3-4: bit-fields require an integer type, a fitting nonnegative \
-                 width, and no name at width zero",
+            | Self::InvalidBitFieldType => (
+                "bit-field requires an integer type",
+                "C99 §6.7.2.1p4: a bit-field has _Bool, signed int, unsigned int or another \
+                 implementation-defined integer type",
+            ),
+            | Self::InvalidBitFieldWidth => (
+                "bit-field width is negative or exceeds its type",
+                "C99 §6.7.2.1p3: the width is a nonnegative integer constant expression no wider \
+                 than the bit-field's type",
+            ),
+            | Self::NamedZeroWidthBitField => (
+                "named bit-field has zero width",
+                "C99 §6.7.2.1p3: a zero-width bit-field has no declarator",
             ),
             | Self::InvalidParameter => (
                 "invalid function parameter declaration",
@@ -691,61 +796,7 @@ impl ToDiagnostic for SemanticError {
             message
         };
         let mut diagnostic = Explanation::new(arena, message)
-            .label(if self.kind == SemanticErrorKind::QualifiedFunction {
-                "function type qualifiers are ignored"
-            } else if matches!(
-                self.kind,
-                SemanticErrorKind::UndeclaredIdentifier
-                    | SemanticErrorKind::InvalidAddressOperand
-                    | SemanticErrorKind::InvalidUnaryOperand
-                    | SemanticErrorKind::ExpectedModifiableLvalue
-                    | SemanticErrorKind::InvalidSubscript
-                    | SemanticErrorKind::InvalidArithmeticOperands
-                    | SemanticErrorKind::InvalidAdditiveOperands
-                    | SemanticErrorKind::InvalidIntegerOperands
-                    | SemanticErrorKind::InvalidLogicalOperands
-                    | SemanticErrorKind::InvalidComparisonOperands
-                    | SemanticErrorKind::InvalidConditionalOperands
-                    | SemanticErrorKind::InvalidAssignment
-                    | SemanticErrorKind::InvalidCast
-                    | SemanticErrorKind::InvalidSizeof
-                    | SemanticErrorKind::InvalidMemberAccess
-                    | SemanticErrorKind::InvalidCall
-                    | SemanticErrorKind::InvalidArgumentCount
-                    | SemanticErrorKind::InvalidArgumentType
-                    | SemanticErrorKind::InvalidCompoundLiteral
-                    | SemanticErrorKind::InvalidCondition
-                    | SemanticErrorKind::InvalidSwitchExpression
-                    | SemanticErrorKind::FailedAssertion
-                    | SemanticErrorKind::InvalidInitializer
-                    | SemanticErrorKind::ExcessInitializer
-                    | SemanticErrorKind::InvalidDesignator
-                    | SemanticErrorKind::NonConstantInitializer
-            ) {
-                "expression or initializer constraint violated"
-            } else if matches!(
-                self.kind,
-                SemanticErrorKind::VoidReturnValue
-                    | SemanticErrorKind::MissingReturnValue
-                    | SemanticErrorKind::MissingReturnValueWarning
-                    | SemanticErrorKind::InvalidReturnConversion
-                    | SemanticErrorKind::InvalidForDeclaration
-                    | SemanticErrorKind::DuplicateLabel
-                    | SemanticErrorKind::UndefinedLabel
-                    | SemanticErrorKind::JumpIntoVariableScope
-                    | SemanticErrorKind::SwitchIntoVariableScope
-                    | SemanticErrorKind::CaseOutsideSwitch
-                    | SemanticErrorKind::EmptyCaseRange
-                    | SemanticErrorKind::BreakOutsideLoopOrSwitch
-                    | SemanticErrorKind::ContinueOutsideLoop
-                    | SemanticErrorKind::DuplicateCase
-            ) {
-                "statement constraint violated"
-            } else if self.severity() == ErrorSeverity::Warning {
-                "implementation warning"
-            } else {
-                "declaration constraint violated"
-            })
+            .label(self.kind.label())
             .note(note)
             .at(self.severity(), source);
         if let Some(previous) = self.previous {

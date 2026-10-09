@@ -2,7 +2,7 @@ error: member name is declared more than once: `x`
  --> sema-duplicate-member.c:1:22
   |
 1 | struct S {int x; int x;};
-  |               -      ^ declaration constraint violated
+  |               -      ^ member declared again here
   |               |
   |               previous declaration is here
   |

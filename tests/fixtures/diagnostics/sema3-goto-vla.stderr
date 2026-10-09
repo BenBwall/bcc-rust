@@ -4,7 +4,7 @@ error: goto enters the scope of a variably modified identifier: `L`
 1 | void f(int n) {goto L; int a[n]; L:;}
   |                     ^      - variably modified identifier is declared here
   |                     |
-  |                     statement constraint violated
+  |                     jumps into a variably modified scope
   |
   = note: C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified identifier to inside that scope
 

@@ -2,7 +2,7 @@ error: incompatible assignment conversion
  --> sema2-assignment.c:1:39
   |
 1 | void f(void) { const int *q; int *p; p=q; }
-  |                                       ^ expression or initializer constraint violated
+  |                                       ^ value cannot be assigned to this type
   |
   = note: C99 §6.5.16.1p1: assignment requires compatible values and cannot discard pointer-target qualifiers
 

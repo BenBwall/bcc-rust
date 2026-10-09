@@ -2,7 +2,7 @@ error: logical operator requires scalar operands
  --> sema2-logical.c:1:48
   |
 1 | struct S {int x;}; void f(void) { struct S s; s&&1; }
-  |                                                ^^ expression or initializer constraint violated
+  |                                                ^^ operands are not scalar
   |
   = note: C99 §6.5.13p2: both operands of a logical operator have scalar type
 

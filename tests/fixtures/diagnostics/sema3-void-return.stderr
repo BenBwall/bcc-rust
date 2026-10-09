@@ -2,7 +2,7 @@ error: void function returns an expression
  --> sema3-void-return.c:1:15
   |
 1 | void f(void) {return 1;}
-  |               ^^^^^^^^^ statement constraint violated
+  |               ^^^^^^^^^ value returned from a void function
   |
   = note: C99 §6.8.6.4p1: a return statement with an expression shall not appear in a function returning void
 

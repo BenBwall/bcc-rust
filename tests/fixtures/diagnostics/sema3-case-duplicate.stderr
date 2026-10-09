@@ -2,7 +2,7 @@ error: case values overlap after conversion
  --> sema3-case-duplicate.c:1:42
   |
 1 | void f(unsigned n) {switch(n) {case -1:; case 4294967295U:;}}
-  |                                --------- ^^^^^^^^^^^^^^^^^^ statement constraint violated
+  |                                --------- ^^^^^^^^^^^^^^^^^^ case value repeated here
   |                                |
   |                                previous label is here
   |

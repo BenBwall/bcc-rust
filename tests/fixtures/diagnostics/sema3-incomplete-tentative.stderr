@@ -2,7 +2,7 @@ error: tentative definition remains incomplete: `value`
  --> sema3-incomplete-tentative.c:1:20
   |
 1 | struct S; struct S value;
-  |                    ^^^^^ declaration constraint violated
+  |                    ^^^^^ still incomplete at the end of the translation unit
   |
   = note: C99 §6.9.2p2: a tentative definition without an external definition behaves as a zero-initialized file-scope definition
 

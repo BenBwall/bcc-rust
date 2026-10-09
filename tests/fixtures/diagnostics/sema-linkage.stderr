@@ -4,7 +4,7 @@ error: identifier has both internal and external linkage: `x`
 1 | int x;
   |     - previous declaration is here
 2 | static int x;
-  |            ^ declaration constraint violated
+  |            ^ linkage conflicts with the previous declaration
   |
   = note: C99 §6.2.2p4 and p7: extern inherits visible linkage; mixing internal and external linkage is undefined
 

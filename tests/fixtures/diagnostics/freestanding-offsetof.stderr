@@ -2,7 +2,7 @@ error: offsetof requires a valid non-bit-field member path
  --> <built-in>/stddef.h:8:32
   |
 8 | #define offsetof(type, member) __builtin_offsetof(type, member)
-  |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ declaration constraint violated
+  |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
  ::: freestanding-offsetof.c:3:18
   |
 3 | int a = offsetof(struct S, bit);
@@ -14,7 +14,7 @@ error: offsetof requires a valid non-bit-field member path
  --> <built-in>/stddef.h:8:32
   |
 8 | #define offsetof(type, member) __builtin_offsetof(type, member)
-  |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ declaration constraint violated
+  |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
  ::: freestanding-offsetof.c:4:18
   |
 4 | int b = offsetof(struct S, absent);
@@ -26,7 +26,7 @@ error: offsetof requires a valid non-bit-field member path
  --> <built-in>/stddef.h:8:32
   |
 8 | #define offsetof(type, member) __builtin_offsetof(type, member)
-  |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ declaration constraint violated
+  |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
  ::: freestanding-offsetof.c:5:18
   |
 5 | int c = offsetof(int, field);
@@ -38,7 +38,7 @@ error: offsetof requires a valid non-bit-field member path
  --> <built-in>/stddef.h:8:32
   |
 8 | #define offsetof(type, member) __builtin_offsetof(type, member)
-  |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ declaration constraint violated
+  |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
  ::: freestanding-offsetof.c:6:18
   |
 6 | int d = offsetof(struct S, array.field);
