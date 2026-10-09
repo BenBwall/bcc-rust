@@ -168,7 +168,7 @@ pub(crate) struct Types<'tu> {
 impl Types<'_> {
     /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
     pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
-        layout(self.nodes, self.tags, self.target, ty)
+        layout(self.nodes, self.tags, &self.target, ty)
     }
 }
 
@@ -178,7 +178,7 @@ impl Types<'_> {
 fn layout(
     nodes: &[TypeKind<'_>],
     tags: &[&Tag<'_>],
-    target: TargetLayout,
+    target: &TargetLayout,
     mut ty: TypeId,
 ) -> Option<Layout> {
     let mut count = 1_u64;
@@ -277,7 +277,7 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
 
     /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
     pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
-        layout(&self.nodes, &self.tags, self.target, ty)
+        layout(&self.nodes, &self.tags, &self.target, ty)
     }
 
     pub(crate) fn finish(self) -> Types<'tu> {

@@ -1248,11 +1248,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.integer_type(ty).is_none() {
             info.floating = self
                 .floating_value(operand)
-                .and_then(|value| {
+                .map(|value| {
                     if op == U::Minus {
-                        Some(Self::floating_negate(value))
+                        Self::floating_negate(value)
                     } else {
-                        Some(value)
+                        value
                     }
                 })
                 .and_then(|value| self.round_floating(value, ty));
