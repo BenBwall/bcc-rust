@@ -88,28 +88,39 @@ fn implementation_macro(name: &str) -> bool {
     name == "__STRICT_ANSI__"
 }
 
-/// Compares one position of two macro definitions under C99 §6.10.3p2: the
-/// tokens must be spelled identically, while any two whitespace separations
-/// are equivalent and a line end matches the end of input.
+/// Reads the next token of a macro definition's replacement list from
+/// `source`, with whether whitespace separates it from the token before it.
+/// Returns `None` at the line's end, so trailing whitespace is not part of
+/// the list.
 ///
-/// C99: §6.10.3 paragraphs 1-2, p. 151; PDF p. 163.
+/// C99: §6.10.3 paragraphs 1 and 7, p. 151; PDF p. 163. A comment
+/// is already part of the whitespace token that replaces it (§5.1.1.2
+/// paragraph 1, phase 3, p. 10; PDF p. 22).
+fn next_replacement_token(
+    context: &mut Context<'_>,
+    source: &mut TokenSource<'_>,
+) -> Option<(PreprocessorToken, bool)> {
+    let mut separated = false;
+    loop {
+        match source.next_item(context)? {
+            | token if token.kind == PreprocessorTokenType::Whitespace => separated = true,
+            | token if token.kind == PreprocessorTokenType::Newline => return None,
+            | token => return Some((token, separated)),
+        }
+    }
+}
+
+/// Whether two replacement-list tokens are the same preprocessing token with
+/// the same spelling.
+///
+/// C99: §6.10.3 paragraph 1, p. 151; PDF p. 163.
 fn same_replacement_token(
     context: &Context<'_>,
-    old: Option<&PreprocessorToken>,
-    new: Option<&PreprocessorToken>,
+    old: &PreprocessorToken,
+    new: &PreprocessorToken,
 ) -> bool {
-    let ends = |token: Option<&PreprocessorToken>| {
-        token.is_none_or(|token| token.kind == PreprocessorTokenType::Newline)
-    };
-    match (old, new) {
-        | _ if ends(old) && ends(new) => true,
-        | (Some(old), Some(new)) =>
-            old.kind == new.kind
-                && (old.kind == PreprocessorTokenType::Whitespace
-                    || context.string_cache.at(old.contents)
-                        == context.string_cache.at(new.contents)),
-        | _ => false,
-    }
+    old.kind == new.kind
+        && context.string_cache.at(old.contents) == context.string_cache.at(new.contents)
 }
 
 /// How an `#include` operand is written, judged from its first token.
@@ -1342,6 +1353,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         ),
                     source_vectors: name.source_vectors,
                 });
+                // Already diagnosed; comparing the lists would repeat it.
+                old_tokenizer = None;
             }
             loop {
                 let Some(name_or_ellipsis) = self.expect_token_from_previous_phase::<true>(
@@ -1456,6 +1469,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         ),
                     source_vectors: name.source_vectors,
                 });
+                // Already diagnosed; comparing the lists would repeat it.
+                old_tokenizer = None;
             }
             // The probe already read the replacement list's first token.
             (tokenizer, probe)
@@ -1546,23 +1561,36 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let mut first_operand = None;
         let mut last_operand = None;
         let mut operands = 0usize;
+        // C99 §6.10.3p1: whitespace separations match whatever their amount,
+        // and §6.10.3p7 leaves leading and trailing whitespace out of the
+        // list, so the lists are compared token by token, each with whether
+        // whitespace separates it from the token before it.
+        let mut separated = false;
         loop {
             let next = match first.take() {
                 | Some(token) => Some(token),
                 | None => self.tokenizer.next_item(self.context),
             };
-            if lists_match && let Some(old) = old.as_deref_mut() {
-                let old_next = old.next_item(self.context);
-                lists_match =
-                    same_replacement_token(self.context, old_next.as_ref(), next.as_ref());
-            }
             let Some(token) = next.filter(|token| token.kind != PreprocessorTokenType::Newline)
             else {
+                if lists_match && let Some(old) = old.as_deref_mut() {
+                    lists_match = next_replacement_token(self.context, old).is_none();
+                }
                 break;
             };
             if token.kind == PreprocessorTokenType::Whitespace {
+                separated = true;
                 continue;
             }
+            if lists_match && let Some(old) = old.as_deref_mut() {
+                lists_match = next_replacement_token(self.context, old).is_some_and(
+                    |(old_token, old_separated)| {
+                        (operands == 0 || old_separated == separated)
+                            && same_replacement_token(self.context, &old_token, &token)
+                    },
+                );
+            }
+            separated = false;
             if !is_variadic
                 || (!allows_va_args
                     && token.kind.is_identifier()

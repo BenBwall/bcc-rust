@@ -203,7 +203,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `VaArgsOutsideVariadicMacro` | rendered | [pp-va-args-outside-variadic-macro.c](pp-va-args-outside-variadic-macro.c) |
 | `VaOptOutsideVariadicMacro` | rendered | [pp-va-opt-outside-variadic-macro.c](pp-va-opt-outside-variadic-macro.c) |
 | `ExpectedCommaOrClosingParenthesisInMacroDefinition` | rendered | [pp-expected-comma-or-closing-parenthesis-in-macro-definition.c](pp-expected-comma-or-closing-parenthesis-in-macro-definition.c) |
-| `MacroRedefinedWithDifferentDefinition` | rendered | [pp-macro-redefined-with-different-definition.c](pp-macro-redefined-with-different-definition.c) |
+| `MacroRedefinedWithDifferentDefinition` | rendered | [pp-macro-redefined-with-different-definition.c](pp-macro-redefined-with-different-definition.c), beside accepted redefinitions that differ only in whitespace amount or comments |
 | `ExpectedIdentifierInUndefDirective` | rendered | [pp-expected-identifier-in-undef-directive.c](pp-expected-identifier-in-undef-directive.c) |
 | `ExpectedNewlineAfterUndefDirective` | rendered | [pp-expected-newline-after-undef-directive.c](pp-expected-newline-after-undef-directive.c) |
 | `HashOperatorMustBeFollowedByAMacroArgument` | rendered | [pp-hash-operator-must-be-followed-by-a-macro-argument.c](pp-hash-operator-must-be-followed-by-a-macro-argument.c) |
