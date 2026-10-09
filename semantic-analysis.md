@@ -177,7 +177,11 @@ conditional evaluation, integer casts and sizeof/alignof of modeled type names.
 It carries widths/signedness, promotes small integers, diagnoses exceptional/overflow
 operations and reports enumerators outside int through the extension policy.
 Positive constant array bounds
-use the same evaluator; runtime bounds at file scope/with linkage are rejected.
+use the same evaluator; runtime bounds at file scope/with linkage are rejected,
+as are variably modified members (§6.7.2.1p8, §6.7.5.2p2) and `[*]` outside a
+prototype that is not a definition (§6.7.5.2p4). Arrays and records larger than
+PTRDIFF_MAX bytes exceed this implementation's object-size limit and are rejected
+without dropping members.
 
 Old-style definition parameter declarations are adjusted and promoted before
 comparison with visible prototypes, and their completed signatures survive later

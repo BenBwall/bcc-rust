@@ -487,3 +487,53 @@ fn gnu_folding_accepts_classic_offsetof_and_constant_p() {
     assert_eq!(kinds(builtin, gnu17()), []);
     assert_eq!(kinds(builtin, CompilerConfiguration::default()), []);
 }
+
+#[test]
+fn members_cannot_have_variably_modified_types() {
+    assert_eq!(
+        kinds(
+            "void f(int n) { struct { int (*p)[n]; int ok; } s; union { int a[n]; } u; }",
+            gnu17()
+        ),
+        [
+            SemanticErrorKind::FileScopeVariableType,
+            SemanticErrorKind::FileScopeVariableType,
+        ]
+    );
+}
+
+#[test]
+fn objects_larger_than_ptrdiff_max_are_rejected() {
+    assert_eq!(
+        kinds(
+            "int big[sizeof(int) - 5]; char huge[0x7fffffffffffffffL][4]; struct H { char \
+             a[0x4000000000000000L]; char b[0x4000000000000000L]; char c[0x4000000000000000L]; \
+             char e; }; char fits[0x7fffffffffffffffL]; struct M { int m; char tail[sizeof(int) - \
+             5]; };",
+            gnu17()
+        ),
+        [
+            SemanticErrorKind::ObjectTooLarge,
+            SemanticErrorKind::ObjectTooLarge,
+            SemanticErrorKind::ObjectTooLarge,
+            SemanticErrorKind::ObjectTooLarge,
+        ]
+    );
+}
+
+#[test]
+fn star_bounds_need_a_prototype_that_is_not_a_definition() {
+    assert_eq!(
+        kinds(
+            "void ok(int a[*], int (*b)[*]); void def(int a[*]) {} void nested(int (*fp)(int \
+             [*])) {} void inner(int (*p)[*]) {} int (*q)[*]; void h(void) { int (*r)[*]; }",
+            gnu17()
+        ),
+        [
+            SemanticErrorKind::InvalidStarBound,
+            SemanticErrorKind::InvalidStarBound,
+            SemanticErrorKind::InvalidStarBound,
+            SemanticErrorKind::InvalidStarBound,
+        ]
+    );
+}

@@ -167,7 +167,14 @@ pub(crate) enum SemanticErrorKind {
     InvalidDerivedType,
     /// C99: §6.7.5.2p1, p. 116; PDF p. 128.
     InvalidArrayBound,
-    /// C99: §6.7.5.2p2, p. 116; PDF p. 128.
+    /// C99: §6.7.5.2p4, pp. 116-117; PDF pp. 128-129; §6.2.1p4, pp. 29-30;
+    /// PDF pp. 41-42.
+    InvalidStarBound,
+    /// Implementation limit, C99: §5.2.4.1p1, pp. 20-21; PDF pp. 32-33;
+    /// §6.5.6p9, pp. 83-84; PDF pp. 95-96.
+    ObjectTooLarge,
+    /// C99: §6.7.5.2p2, p. 116; PDF p. 128; members §6.7.2.1p8, p. 102;
+    /// PDF p. 114.
     FileScopeVariableType,
     /// C99: §6.7p4; 6.2.7p2, p. 97; 40; PDF p. 109; 52.
     IncompatibleDeclaration,
@@ -526,10 +533,20 @@ impl SemanticErrorKind {
                 "C99 §6.7.5.2p1: array sizes have integer type; a constant size shall be greater \
                  than zero",
             ),
+            | Self::InvalidStarBound => (
+                "`[*]` array bound outside a function prototype declaration",
+                "C99 §6.7.5.2p4: a `[*]` size is used only in declarations with function \
+                 prototype scope; a function definition's parameters have block scope (§6.2.1p4)",
+            ),
+            | Self::ObjectTooLarge => (
+                "object type is too large",
+                "C99 §5.2.4.1: this implementation limits an object to PTRDIFF_MAX bytes so that \
+                 pointer differences within it are representable (§6.5.6p9)",
+            ),
             | Self::FileScopeVariableType => (
                 "variably modified type is not permitted here",
-                "C99 §6.7.5.2p2: variably modified types require block or prototype scope and no \
-                 linkage",
+                "C99 §6.7.5.2p2: only an ordinary identifier with block or prototype scope and no \
+                 linkage has a variably modified type; members never do (§6.7.2.1p8)",
             ),
             | Self::IncompatibleDeclaration => (
                 "redeclaration has an incompatible type",
