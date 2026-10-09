@@ -251,6 +251,65 @@ fn reserved_gnu_syntax_keeps_ast_under_every_policy_and_mode() {
 }
 
 #[test]
+fn extra_semicolons_outside_functions_are_a_gnu_extension_in_every_mode() {
+    // GCC and Clang accept the `;` that empty macros leave behind, such as
+    // the Windows SDK's `DEFINE_ENUM_FLAG_OPERATORS(T);` in C, at file scope
+    // and in a member list, and report it only under the pedantic policy.
+    let source = ";\nstruct S { int a;; ; };\nvoid f(void) {};\nstruct E { ; } e;\n;;\n";
+    let outside = "'extra semicolon outside a function' is a GNU extension";
+    let member = "'extra semicolon in a struct or union' is a GNU extension";
+    let empty = "'empty struct or union' is a GNU extension";
+    for standard in [
+        CStandard::C89,
+        CStandard::C99,
+        CStandard::C17,
+        CStandard::C23,
+    ] {
+        for gnu in [false, true] {
+            for policy in [
+                ExtensionPolicy::Allow,
+                ExtensionPolicy::Warn,
+                ExtensionPolicy::Deny,
+            ] {
+                with_parse_configuration(
+                    source,
+                    CompilerConfiguration::new(standard, policy).with_gnu_extensions(gnu),
+                    |p| {
+                        let mode = format!("{standard:?} {gnu} {policy:?}");
+                        assert_eq!(parser_errors(p).count(), 0, "{mode}: {:?}", p.errors);
+                        assert_eq!(p.items.len(), 3, "{mode}");
+                        let expected: &[&str] = if policy == ExtensionPolicy::Allow {
+                            &[]
+                        } else {
+                            &[
+                                outside, member, member, outside, member, empty, outside, outside,
+                            ]
+                        };
+                        assert_eq!(super::extensions(p), expected, "{mode}");
+                        let severity = if policy == ExtensionPolicy::Deny {
+                            crate::translation_phases::ErrorSeverity::Error
+                        } else {
+                            crate::translation_phases::ErrorSeverity::Warning
+                        };
+                        assert!(
+                            super::extension_severities(p)
+                                .iter()
+                                .all(|x| *x == severity),
+                            "{mode}"
+                        );
+                    },
+                );
+            }
+        }
+    }
+    // A translation unit of only a `;` is not empty, as in Clang.
+    with_parse_configuration(";\n", CompilerConfiguration::default(), |p| {
+        assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+        assert_eq!(p.items.len(), 0);
+    });
+}
+
+#[test]
 fn non_reserved_spellings_are_gated_without_stealing_identifiers() {
     for standard in [CStandard::C89, CStandard::C99, CStandard::C17] {
         with_parse_configuration(

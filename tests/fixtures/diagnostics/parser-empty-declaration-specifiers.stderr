@@ -1,10 +1,7 @@
-error: expected a declaration, found `;`
+error: expected a declaration, found `)`
  --> parser-empty-declaration-specifiers.c:1:1
   |
-1 | ;
+1 | )
   | ^ expected a type or storage class
-  |
-  = note: C99 §6.7p2: a declaration must declare something
-  = help: remove this `;`
 
 1 error generated.

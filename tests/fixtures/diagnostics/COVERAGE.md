@@ -401,6 +401,7 @@ covered by `EmptyStructs` warning/error cases in `language/gnu-parser.c`.
 | Builtin type operand | rendered | [parser-gnu-builtin.c](parser-gnu-builtin.c) |
 | GNU attribute parentheses | rendered | [parser-gnu-attribute.c](parser-gnu-attribute.c) |
 | GNU origins and policy severity | rendered | [language/gnu-parser-warning.stderr](language/gnu-parser-warning.stderr), [language/gnu-parser-error.stderr](language/gnu-parser-error.stderr) |
+| Extra `;` at file scope and in a member list | rendered | [parser-gnu-extra-semicolon.c](parser-gnu-extra-semicolon.c), including the `;` an empty Windows SDK macro leaves behind; `parsing::tests::gnu` covers every mode and policy |
 | Extension suppression and macro occurrences | parser-tested | `parsing::tests::gnu` checks scoped suppression and later diagnostics |
 | Recovery, EOF, nesting and provenance | parser-tested | every prefix, malformed children followed by a declaration, explicit AST/inspection checks and deep frame tests |
 

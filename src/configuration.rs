@@ -221,6 +221,7 @@ pub(crate) enum Feature {
     GnuDesignators,
     UnionCasts,
     EmptyStructs,
+    ExtraSemicolons,
     NestedFunctions,
     ImaginaryConstants,
     DollarIdentifiers,
@@ -326,6 +327,7 @@ impl Feature {
         Self::GnuDesignators,
         Self::UnionCasts,
         Self::EmptyStructs,
+        Self::ExtraSemicolons,
         Self::NestedFunctions,
         Self::ImaginaryConstants,
         Self::DollarIdentifiers,
@@ -438,6 +440,7 @@ impl Feature {
             | Self::GnuDesignators
             | Self::UnionCasts
             | Self::EmptyStructs
+            | Self::ExtraSemicolons
             | Self::NestedFunctions
             | Self::ImaginaryConstants
             | Self::DollarIdentifiers
