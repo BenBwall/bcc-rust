@@ -705,6 +705,15 @@ All use structured existing semantic kinds and C99 notes; following valid
 input survives. Arithmetic/layout positives are in the shared target probe
 and direct semantic unit tests, with allocation coverage for both paths.
 
+The `semantic_analysis::tests::int128` unit regressions pair signed and unsigned
+keyword casts with their builtin typedef aliases and `long long` equivalents
+for false static assertions and nonconstant static assertions, enumerators and
+bit-field widths. They check exact diagnostic messages and preservation of the
+following declaration across all supported revisions, GNU settings and targets.
+These unit tests add no golden inputs or snapshots to the inventory above.
+The shared target probe builds the signed minimum using an immediate floating
+cast followed by integer arithmetic, so strict modes do not need GNU folding.
+
 ### Command-line and MinGW compatibility regressions
 
 - `cli-invalid-definition.c` / `.args` / `.stderr` inspect an invalid `-D1x` name at deterministic `<command line>` provenance, using the existing `ExpectedIdentifierInDefineDirective` diagnostic.

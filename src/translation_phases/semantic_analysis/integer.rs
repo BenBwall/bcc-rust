@@ -879,13 +879,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 /// Extension type specifiers this phase leaves unanalyzed; MSVC sized
-/// integers are the standard integer types. Extensions follow C99 §4p6,
-/// p. 7; PDF p. 19.
+/// integers and GNU 128-bit integers have modeled integer types.
+/// C99: §6.6p6, p. 95; PDF p. 107 (integer constant expressions).
+/// C99: §4p6, p. 7; PDF p. 19 (extensions).
 fn unanalyzed_extended(specifiers: super::TypeSpecifiers<'_>) -> bool {
     matches!(
         specifiers,
         super::TypeSpecifiers::Extended(extended)
-            if !matches!(extended, super::ExtendedType::MsInteger { .. })
+            if !matches!(
+                extended,
+                super::ExtendedType::MsInteger { .. } | super::ExtendedType::Int128 { .. }
+            )
     )
 }
 

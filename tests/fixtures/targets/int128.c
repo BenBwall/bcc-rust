@@ -30,7 +30,8 @@ _Static_assert((unsigned long long)UMAX == 0xffffffffffffffffULL, "narrow cast")
 _Static_assert((__int128)UMAX == -1, "signed reinterpretation");
 _Static_assert((_Bool)UMAX == 1, "boolean conversion");
 _Static_assert((__uint128_t)0x1p127 == ((__uint128_t)1 << 127), "float cast");
-_Static_assert((__int128)-0x1p127 == SMIN, "signed float minimum");
+/* C99 6.6p6: the floating constant is the immediate operand of the cast. */
+_Static_assert(-(__int128)0x1p126 * 2 == SMIN, "signed float minimum");
 _Static_assert((__uint128_t)0x1.8p127L == ((__uint128_t)3 << 126),
                "long double high half");
 _Static_assert((1 ? UMAX : 1) == UMAX, "conditional model");

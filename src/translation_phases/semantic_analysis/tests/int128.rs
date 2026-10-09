@@ -10,6 +10,101 @@ use crate::{
     target::Target,
 };
 
+fn check_constant_diagnostics(statement: &str, expected: SemanticErrorKind) {
+    use crate::diagnostics::ToDiagnostic as _;
+
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        for standard in [
+            CStandard::C89,
+            CStandard::C95,
+            CStandard::C99,
+            CStandard::C11,
+            CStandard::C17,
+            CStandard::C23,
+            CStandard::C2y,
+        ] {
+            for gnu in [false, true] {
+                let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                    .with_target(target)
+                    .with_gnu_extensions(gnu);
+                let arena = Bump::new();
+                let mut reference = None;
+                for ty in [
+                    "long long",
+                    "__int128_t",
+                    "__int128",
+                    "unsigned long long",
+                    "__uint128_t",
+                    "unsigned __int128",
+                ] {
+                    let source =
+                        format!("int n; {} int following;", statement.replace("{type}", ty));
+                    with_configuration(&source, configuration, |context, unit| {
+                        let errors = context.take_pending_errors();
+                        assert_eq!(errors.len(), 1, "{source}: {configuration:?}: {errors:?}");
+                        let TranslationError::Semantic(error) = errors[0] else {
+                            panic!("{source}: unexpected {:?}", errors[0]);
+                        };
+                        assert_eq!(error.kind, expected, "{source}: {configuration:?}");
+                        let diagnostic = error.diagnostic_in(context, error.source_vectors, &arena);
+                        if let Some(message) = &reference {
+                            assert_eq!(diagnostic.message, *message, "{source}");
+                        } else {
+                            reference = Some(diagnostic.message);
+                        }
+                        let following = unit
+                            .bindings
+                            .iter()
+                            .find(|b| context.string_cache.at(b.name.name) == "following")
+                            .expect("following declaration survives the diagnostic");
+                        assert_eq!(
+                            unit.types.nodes[following.ty.index],
+                            TypeKind::Scalar(Scalar::Int)
+                        );
+                    });
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn int128_false_static_assertion_matches_standard_integer_diagnostics() {
+    check_constant_diagnostics(
+        "_Static_assert(({type})0, \"false\");",
+        SemanticErrorKind::FailedAssertion,
+    );
+}
+
+#[test]
+fn int128_nonconstant_static_assertion_matches_standard_integer_diagnostics() {
+    check_constant_diagnostics(
+        "_Static_assert(({type})n, \"runtime\");",
+        SemanticErrorKind::InvalidConstant,
+    );
+}
+
+#[test]
+fn int128_nonconstant_enumerator_matches_standard_integer_diagnostics() {
+    check_constant_diagnostics(
+        "enum { E = ({type})n };",
+        SemanticErrorKind::InvalidConstant,
+    );
+}
+
+#[test]
+fn int128_nonconstant_bit_field_matches_standard_integer_diagnostics() {
+    check_constant_diagnostics(
+        "struct S { int width : ({type})n; };",
+        SemanticErrorKind::InvalidConstant,
+    );
+}
+
 #[test]
 fn full_width_integer_operations_and_conversions() {
     use BinaryOperator as B;
