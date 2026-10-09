@@ -1,0 +1,19 @@
+warning: '__int128' is a GNU extension
+ --> sema-int128-pedantic.c:1:1
+  |
+1 | __int128 signed_value;
+  | ^^^^^^^^
+
+warning: '__int128' is a GNU extension
+ --> sema-int128-pedantic.c:2:10
+  |
+2 | unsigned __int128 unsigned_value;
+  |          ^^^^^^^^
+
+warning: 'left shift into the sign bit' is a GNU extension
+ --> sema-int128-pedantic.c:6:31
+  |
+6 | _Static_assert(((__int128_t)1 << 127) < 0, "GNU sign-bit shift");
+  |                               ^^
+
+3 warnings generated.

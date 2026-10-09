@@ -534,6 +534,21 @@ mod measurements {
     }
 
     #[test]
+    fn int128_types_constants_and_diagnostics_allocate_only_from_arenas() {
+        let source = include_str!("fixtures/targets/int128.c");
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("128-bit types and arithmetic", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+        let source = "#define MIN \
+                      (-(__int128)(((__uint128_t)-1)>>1)-1)\n_Static_assert(MIN/-1,\"overflow\"); \
+                      _Static_assert(MIN%-1,\"overflow\"); int huge[(__uint128_t)-1]; struct B \
+                      {__int128 b:129;};\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(allocations.calls, 0, "128-bit exceptional constants");
+        assert!(summary.diagnostics >= 4);
+    }
+
+    #[test]
     fn expressions_and_initializers_allocate_only_from_arenas() {
         let source = "struct S {int a[2]; int b;}; struct S s={1,2,3}; int a[][2]={[2][1]=3,4,5}; \
                       char c[]=\"abc\"; int *p=&s.a[1]; double d=1.5*2.0; int fun(const int \
