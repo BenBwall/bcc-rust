@@ -1107,3 +1107,37 @@ later failures: twelve reach the anonymous-union member parser at
 `objidl.h:9984`, and `intrin.h` reaches the unmodeled GNU atomic pointer return
 at `psdk_inc/intrin-impl.h:1737`. The MSVC C17 `stdatomic.h` and combined-header
 paths remain accepted.
+
+## MinGW Windows header compatibility
+
+Type-only record declarations are accepted with Clang's
+`declaration does not declare anything` warning, promoted to an error by
+`-pedantic-errors`. Tagged records, enums, bare typedefs and scalars introduce
+no member storage or promoted names. Untagged definitions remain C11 anonymous
+members; tagged and typedef record members require the explicitly enabled MS
+anonymous-structures feature. This clears `objidl.h:9984` and the two typedef
+declarations at `mstcpip.h:265-266` without editing MinGW headers.
+
+GNU `extern inline` declarations with `gnu_inline` (or GNU89 inline semantics)
+permit a later static declaration or replacement definition, as Clang's
+`canRedefineFunction` does. Type compatibility still applies, both bodies are
+checked, and an ordinary replacement definition ends the redefinition
+permission. GNU inline bodies are excluded from the C99 inline-definition
+restrictions. This resolves MinGW's external `__cpuidex` followed by the
+resource `cpuid.h` static definition; Clang includes both definitions too.
+
+All four x86-64 targets now advertise Clang's baseline `__MMX__`, `__SSE__`,
+`__SSE2__`, `__SSE_MATH__` and `__SSE2_MATH__` macros. The previously excluded
+macros selected MinGW's fallback union typedefs for `__m64` and the `__m128`
+family even after loading the vector resource headers. These were genuinely
+different types, so typedef identity and linkage diagnostics are not weakened.
+The restored macros describe front-end feature support, without code generation.
+
+The `mingw` survey compares 448 rows against `vector-stacked`: 13 newly accepted
+GNU17 MinGW headers, zero newly rejected headers in either mode. Individual
+MinGW coverage is 57/58 Clang-accepted headers in GNU17 and 27/28 in the C17
+standard-header subset. Separate probes accept all 13 affected Windows and
+intrinsic headers in both modes. The remaining MinGW `tgmath.h` and combined
+standard-header failures require a resource header plus Clang overloadable
+function resolution. Promotion overloads, real/complex overload selection and
+an unavailable variadic fallback make this a separate feature; it is deferred.

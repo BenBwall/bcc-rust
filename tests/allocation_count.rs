@@ -588,6 +588,32 @@ mod measurements {
     }
 
     #[test]
+    fn mingw_member_and_inline_paths_allocate_only_from_arenas() {
+        for (source, diagnostics) in [
+            (
+                "struct S { struct T { int x; }; int y; }; _Static_assert(sizeof(struct \
+                 S)==sizeof(int), \"tag adds no storage\");\n",
+                1,
+            ),
+            (
+                "extern inline __attribute__((gnu_inline)) void f(void) {} static void f(void) \
+                 {}\n",
+                0,
+            ),
+            (include_str!("fixtures/targets/x86-baseline-macros.c"), 0),
+        ] {
+            let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+            assert_eq!(
+                allocations.calls, 0,
+                "MinGW reductions: {} global allocation bytes",
+                allocations.bytes
+            );
+            assert_eq!(summary.diagnostics, diagnostics);
+            assert!(summary.external_declarations > 0);
+        }
+    }
+
+    #[test]
     fn expressions_and_initializers_allocate_only_from_arenas() {
         let source = "struct S {int a[2]; int b;}; struct S s={1,2,3}; int a[][2]={[2][1]=3,4,5}; \
                       char c[]=\"abc\"; int *p=&s.a[1]; double d=1.5*2.0; int fun(const int \
