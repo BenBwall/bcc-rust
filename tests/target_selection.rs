@@ -40,6 +40,13 @@ mod tests {
                     &format!("--target={triple}"),
                     "-std=c11",
                     "-ffreestanding",
+                    // Only Clang's resource headers: for musl and MinGW,
+                    // Clang searches the C library before them even when
+                    // freestanding, and a Linux host has glibc there. The
+                    // fixture sysroot stands in for that library on every
+                    // host, so the probe fails anywhere if it is searched.
+                    "--sysroot=tests/fixtures/hosted/sysroot",
+                    "-nostdlibinc",
                     "-fsyntax-only",
                     probe,
                 ])
