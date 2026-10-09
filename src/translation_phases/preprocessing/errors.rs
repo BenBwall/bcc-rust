@@ -266,7 +266,9 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::ExtraTokensAfterIfdefDirective(_)
             | PreprocessorErrorType::ExtraTokensAfterIfndefDirective(_)
             | PreprocessorErrorType::WarningDirective(..)
-            | PreprocessorErrorType::PragmaOnceInNonHeader => ErrorSeverity::Warning,
+            | PreprocessorErrorType::PragmaOnceInNonHeader
+            | PreprocessorErrorType::IncludeNextInPrimarySource(..)
+            | PreprocessorErrorType::IncludeNextWithoutSearchEntry(..) => ErrorSeverity::Warning,
         }
     }
 }
@@ -669,6 +671,18 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     STDCPragmaDirectiveWithoutOnOffSwitch,
     MissingOnOffSwitchInSTDCPragma(&'tu str),
     PragmaOnceInNonHeader,
+    /// `#include_next` or `__has_include_next`, named by the payload, in the
+    /// primary source file, where there is no entry to continue after; the
+    /// lookup searches from the start, as Clang's does. The directive is an
+    /// extension (C99 §4p6, p. 7; PDF p. 19) over implementation-defined
+    /// header places, §6.10.2 paragraphs 2-3, pp. 149-150; PDF pp. 161-162.
+    IncludeNextInPrimarySource(&'static str),
+    /// `#include_next` or `__has_include_next` in a header that no
+    /// configured search entry provided: one found beside its includer or by
+    /// an absolute path. The lookup searches from the start, as Clang's does.
+    /// C99: §4p6, p. 7; PDF p. 19; §6.10.2 paragraphs 2-3, pp. 149-150; PDF
+    /// pp. 161-162.
+    IncludeNextWithoutSearchEntry(&'static str),
     /// C99: §6.10.5 paragraph 1, p. 159; PDF p. 171; translation fails,
     /// §4 paragraph 4, p. 7; PDF p. 19.
     ErrorDirective(&'tu str),
@@ -1404,6 +1418,23 @@ impl PreprocessorErrorType<'_> {
             .note("C99 §6.10.6p2: each standard pragma takes an on-off switch"),
             | Self::PragmaOnceInNonHeader =>
                 new("`#pragma once` in main file").label("only affects files that are included"),
+            | Self::IncludeNextInPrimarySource(spelling) =>
+                new(format_in!(arena, "`{spelling}` in the primary source file"))
+                    .label("searches from the start of the include path")
+                    .note(
+                        "it continues after the search directory that provided the current \
+                         header, and the primary source file came from none",
+                    )
+                    .help("use `#include` or `__has_include` outside headers"),
+            | Self::IncludeNextWithoutSearchEntry(spelling) => new(format_in!(
+                arena,
+                "`{spelling}` in a file found relative to its includer or by an absolute path"
+            ))
+            .label("searches from the start of the include path")
+            .note(
+                "it continues after the search directory that provided the current header, and \
+                 this header came from none",
+            ),
             | Self::LanguageConstraint(message) => new(format_in!(arena, "{message}")),
             | Self::EmbeddedResourceNotFound(name) =>
                 new(format_in!(arena, "cannot find embedded resource `{name}`"))

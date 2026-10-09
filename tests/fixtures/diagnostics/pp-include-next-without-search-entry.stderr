@@ -1,0 +1,9 @@
+warning: `#include_next` in a file found relative to its includer or by an absolute path
+ --> include-next-relative.h:1:2
+  |
+1 | #include_next <stddef.h>
+  |  ^^^^^^^^^^^^ searches from the start of the include path
+  |
+  = note: it continues after the search directory that provided the current header, and this header came from none
+
+1 warning generated.

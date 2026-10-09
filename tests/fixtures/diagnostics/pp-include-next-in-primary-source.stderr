@@ -1,0 +1,19 @@
+warning: `#include_next` in the primary source file
+ --> pp-include-next-in-primary-source.c:1:2
+  |
+1 | #include_next <stddef.h>
+  |  ^^^^^^^^^^^^ searches from the start of the include path
+  |
+  = note: it continues after the search directory that provided the current header, and the primary source file came from none
+  = help: use `#include` or `__has_include` outside headers
+
+warning: `__has_include_next` in the primary source file
+ --> pp-include-next-in-primary-source.c:2:5
+  |
+2 | #if __has_include_next(<stdbool.h>)
+  |     ^^^^^^^^^^^^^^^^^^ searches from the start of the include path
+  |
+  = note: it continues after the search directory that provided the current header, and the primary source file came from none
+  = help: use `#include` or `__has_include` outside headers
+
+2 warnings generated.

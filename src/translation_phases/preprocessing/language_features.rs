@@ -46,6 +46,7 @@ use crate::{
 pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
     ("__COUNTER__", Feature::Counter),
     ("__has_include", Feature::HasInclude),
+    ("__has_include_next", Feature::IncludeNext),
     ("__has_embed", Feature::HasEmbed),
     ("__has_c_attribute", Feature::HasCAttribute),
     ("__has_attribute", Feature::HasAttribute),
@@ -136,7 +137,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         let mut tokens = ArenaVec::new_in(self.scratch);
         let resource_query = matches!(
             self.context.string_cache.at(operator.contents),
-            "__has_include" | "__has_embed"
+            "__has_include" | "__has_include_next" | "__has_embed"
         );
         if resource_query && !self.collect_written_resource(&mut tokens) {
             self.language_error("unterminated resource query", operator.source_vectors);
@@ -332,14 +333,15 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
     /// searching the places an `#include` of the same name would.
     /// C99: header search is implementation-defined, §6.10.2p2-3,
     /// pp. 149-150; PDF pp. 161-162; C23 queries also inspect empty files.
-    fn find_resource(&mut self, name: &str, system: bool) -> Option<u32> {
+    /// `start` continues an `__has_include_next` lookup.
+    fn find_resource(&mut self, name: &str, system: bool, start: Option<usize>) -> Option<u32> {
         let path = Path::new(name);
         if path.is_absolute() {
             return path
                 .is_file()
                 .then(|| self.context.intern_source_file(path));
         }
-        let places = self.header_search_places(self.physical_source_file_index(), system, None);
+        let places = self.header_search_places(self.physical_source_file_index(), system, start);
         places
             .into_iter()
             .find_map(|(_, directory)| self.probe_header(directory, path))
@@ -380,13 +382,20 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             .iter()
             .find(|(spelling, _)| *spelling == name)
             .expect("registered language builtin");
-        self.context
-            .report_extension(feature, name, token.source_vectors);
+        // The resource headers query the C library behind them as part of
+        // the implementation, not as a user extension.
+        if !(name == "__has_include_next" && self.in_resource_header()) {
+            self.context
+                .report_extension(feature, name, token.source_vectors);
+        }
         let name = self.context.string_cache.at(token.contents);
         // C23 §6.10.2p11, p. 167; PDF p. 180: these names are
         // conditional-inclusion operators, not ordinary expression macros.
-        if matches!(name, "__has_include" | "__has_embed" | "__has_c_attribute")
-            && !self.state.conditional_queries
+        // GNU `__has_include_next` follows `__has_include`.
+        if matches!(
+            name,
+            "__has_include" | "__has_include_next" | "__has_embed" | "__has_c_attribute"
+        ) && !self.state.conditional_queries
         {
             self.language_error(
                 "resource and C attribute queries require a preprocessing conditional expression",
@@ -426,8 +435,20 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                     self.tokenizer = old;
                     return None;
                 }
-                if name == "__has_include" || name == "__has_embed" {
+                if matches!(name, "__has_include" | "__has_include_next" | "__has_embed") {
                     let embed = name == "__has_embed";
+                    // GNU `__has_include_next` answers whether
+                    // `#include_next` would find the header, with its
+                    // diagnostics for a lookup that cannot continue.
+                    let start = (name == "__has_include_next")
+                        .then(|| {
+                            self.include_next_start(
+                                self.physical_source_file_index(),
+                                "__has_include_next",
+                                token.source_vectors,
+                            )
+                        })
+                        .flatten();
                     let (name, system, end) =
                         self.resource_operand(tokens, token.source_vectors)?;
                     let params =
@@ -435,7 +456,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                     if !params.supported {
                         return Some(self.integer_pp_token(0, token.source_vectors));
                     }
-                    if let Some(path) = self.find_resource(name, system) {
+                    if let Some(path) = self.find_resource(name, system, start) {
                         if embed
                             && (params.limit == Some(0)
                                 || std::fs::metadata(self.context.get_source_file(path))
@@ -731,7 +752,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         else {
             return;
         };
-        let Some(path) = self.find_resource(name, system) else {
+        let Some(path) = self.find_resource(name, system, None) else {
             self.embed_error(
                 PreprocessorErrorType::EmbeddedResourceNotFound(self.context.diagnostic_text(name)),
                 directive,

@@ -371,11 +371,15 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             | "endif" => self.parse_endif_directive(directive),
             | "include" => self.parse_include_directive(directive),
             | "include_next" => {
-                self.context.report_extension(
-                    Feature::IncludeNext,
-                    "#include_next",
-                    directive.source_vectors,
-                );
+                // The resource headers are part of the implementation, so
+                // their own `#include_next` is no extension of the user's.
+                if !self.in_resource_header() {
+                    self.context.report_extension(
+                        Feature::IncludeNext,
+                        "#include_next",
+                        directive.source_vectors,
+                    );
+                }
                 self.parse_include_directive(directive);
             },
             | "embed" if self.context.configuration.accepts(Feature::Embed) =>
@@ -527,6 +531,53 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         )
     }
 
+    /// Whether the directive or query being read is in an embedded resource
+    /// header.
+    pub(super) fn in_resource_header(&self) -> bool {
+        self.context
+            .get_source_file(self.physical_source_file_index())
+            .starts_with(crate::headers::DIRECTORY)
+    }
+
+    /// Where an `#include_next` or `__has_include_next` (`spelling`) lookup
+    /// in `including_file` starts, following Clang: after the configured
+    /// entry that provided the file, or from the start of the search, as for
+    /// `#include`, with a warning, in the primary source file or in a file
+    /// that no configured entry provided.
+    ///
+    /// C99: an extension (§4p6, p. 7; PDF p. 19) over the
+    /// implementation-defined places of §6.10.2 paragraphs 2-3, pp. 149-150;
+    /// PDF pp. 161-162.
+    pub(super) fn include_next_start(
+        &mut self,
+        including_file: u32,
+        spelling: &'static str,
+        source_vectors: SourceVectors,
+    ) -> Option<usize> {
+        let (start, warning) = if !self.current_is_header() {
+            (
+                None,
+                Some(PreprocessorErrorType::IncludeNextInPrimarySource(spelling)),
+            )
+        } else if let Some(&index) = self.state.include_origins.get(&including_file) {
+            (Some(index + 1), None)
+        } else {
+            (
+                None,
+                Some(PreprocessorErrorType::IncludeNextWithoutSearchEntry(
+                    spelling,
+                )),
+            )
+        };
+        if let Some(error_type) = warning {
+            self.context.preprocessor_error(PreprocessorError {
+                error_type,
+                source_vectors,
+            });
+        }
+        start
+    }
+
     /// The file `path` names in `directory`, interned, when it exists there.
     /// The resource directory holds exactly the embedded headers.
     pub(super) fn probe_header(&mut self, directory: &Path, path: &Path) -> Option<u32> {
@@ -547,6 +598,8 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     /// Resolves an include name through [`Self::header_search_places`], as
     /// GCC and Clang do (C99 §6.10.2p2-3 leave the places
     /// implementation-defined). An absolute name is used as written.
+    /// `#include_next` passes where its lookup starts, from
+    /// [`Self::include_next_start`].
     ///
     /// `including_file` is the file containing the directive, captured before
     /// a macro-expanded operand can switch to its definition's tokenizer.
@@ -561,20 +614,12 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         operand: SourceVectors,
         path: &Path,
         is_system_header: bool,
-        next: bool,
+        start: Option<usize>,
     ) -> Option<u32> {
         let source_file_index = if path.is_absolute() {
             path.is_file()
                 .then(|| self.context.intern_source_file(path))
         } else {
-            // `#include_next` continues after the entry that provided the
-            // including file, or from the first configured entry.
-            let start = next.then(|| {
-                self.state
-                    .include_origins
-                    .get(&including_file)
-                    .map_or(0, |index| index + 1)
-            });
             let places = self.header_search_places(including_file, is_system_header, start);
             let mut found = None;
             for (search_index, directory) in places.clone() {
@@ -1153,13 +1198,18 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             }
             look_up = policy != ExtensionPolicy::Deny;
         }
+        let start = if self.context.string_cache.at(directive.contents) == "include_next" {
+            self.include_next_start(including_file, "#include_next", directive.source_vectors)
+        } else {
+            None
+        };
         let header_source_index = if look_up {
             self.find_header_from_path(
                 including_file,
                 header.source_vectors,
                 Path::new(header.name),
                 header.is_system_header,
-                self.context.string_cache.at(directive.contents) == "include_next",
+                start,
             )
         } else {
             None

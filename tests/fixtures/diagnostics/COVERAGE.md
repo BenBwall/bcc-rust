@@ -6,7 +6,7 @@ Run `cargo test --test diagnostics_golden`. Use `BLESS=1 cargo test --test diagn
 
 Snapshots record current behavior, including defects. The guard test rejects panics, internal representations, and raw NUL bytes in any output, so a crash or control-byte leak cannot be blessed into a passing snapshot. Fix the compiler instead of normalizing such output.
 
-`clean.h` supports the include-directive test; `included-error.h` contains the included-file parser error. The header files are included by C fixtures, not invoked independently.
+`clean.h` supports the include-directive test; `included-error.h` contains the included-file parser error; `include-next-relative.h` is found beside its includer for the `#include_next` search-start warning. The header files are included by C fixtures, not invoked independently.
 
 ## Coverage
 
@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **348 top-level C inputs and 348 stderr snapshots**, plus two supporting headers and 113 mode/policy `.args` sidecars. Ninety-eight of the inputs cover semantic analysis (twenty-six for declarations, twenty-eight for expressions and initializers, forty for statements and functions, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **135 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 116 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **350 top-level C inputs and 350 stderr snapshots**, plus three supporting headers and 113 mode/policy `.args` sidecars. Ninety-eight of the inputs cover semantic analysis (twenty-six for declarations, twenty-eight for expressions and initializers, forty for statements and functions, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **137 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 118 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -231,6 +231,8 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `STDCPragmaDirectiveWithoutOnOffSwitch` | rendered | [pp-s-t-d-c-pragma-directive-without-on-off-switch.c](pp-s-t-d-c-pragma-directive-without-on-off-switch.c) |
 | `MissingOnOffSwitchInSTDCPragma` | rendered | [pp-missing-on-off-switch-in-s-t-d-c-pragma.c](pp-missing-on-off-switch-in-s-t-d-c-pragma.c) |
 | `PragmaOnceInNonHeader` | rendered | [pp-pragma-once-in-non-header.c](pp-pragma-once-in-non-header.c) |
+| `IncludeNextInPrimarySource` | rendered | [pp-include-next-in-primary-source.c](pp-include-next-in-primary-source.c) covers `#include_next` and `__has_include_next`; both then search from the start, as Clang does. |
+| `IncludeNextWithoutSearchEntry` | rendered | [pp-include-next-without-search-entry.c](pp-include-next-without-search-entry.c), through `include-next-relative.h`, which is found beside its includer. |
 | `ErrorDirective` | rendered | [pp-error-directive.c](pp-error-directive.c) |
 
 ### ParserErrorType
