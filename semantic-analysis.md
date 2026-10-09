@@ -144,8 +144,10 @@ Ordinary identifiers and tags have separate visible maps. An entry remembers its
 previous visible binding; each scope owns an undo list. File, function, block,
 prototype and implicit selection/iteration scopes are independent of parser scopes.
 Bindings retain source occurrences rather than replacing earlier declarations.
-Linked redeclarations form composite types, with a separate translation-unit
-linkage map covering extern declarations across disjoint lexical scopes. A
+Linked redeclarations form composite types only from visible prior declarations
+(§6.2.7p4), with a separate translation-unit linkage map checking compatibility
+across disjoint lexical scopes. Incompatible occurrences remain inspectable but
+do not replace accepted bindings in either lookup map. A
 redeclaration whose type is unanalyzed, such as GNU `__typeof__(f) f`, takes
 the visible function's kind and keeps its type instead of conflicting with it.
 
@@ -156,7 +158,8 @@ mixes are diagnosed (§6.2.2p7). Typedefs, enumerators, members and automatic ob
 have no linkage. Objects at file scope, with linkage, or block static have static
 duration; parameters/other local objects have automatic duration. Functions and
 non-object bindings have no object duration. Same-scope no-linkage duplicates are
-rejected; identical repeated typedefs are accepted in C11 and later modes and GNU modes.
+rejected; C11 and later modes and GNU modes accept identical repeated typedefs
+only when the type is not variably modified (C11 §6.7p3).
 
 Recovered declarations/functions retain useful bindings/types but suppress new
 semantic diagnostics while their recovered subtree is analyzed. Error roots and

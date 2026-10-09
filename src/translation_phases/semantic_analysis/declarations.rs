@@ -699,9 +699,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Merges compatible linked declarations and rejects same-scope no-linkage
-    /// repeats. C99: §6.7p3-4, p. 97; PDF p. 109; §6.2.7p2-4, pp. 40-41;
-    /// PDF pp. 52-53.
+    /// Merges visible compatible linked declarations, checks hidden ones for
+    /// compatibility, and rejects same-scope no-linkage repeats. Incompatible
+    /// occurrences do not replace accepted lookup bindings.
+    /// C99: §6.7p3-4, p. 97; PDF p. 109; §6.2.7p2-4, pp. 40-41;
+    /// PDF pp. 52-53. Repeated typedef exception: C11 §6.7p3, p. 108;
+    /// PDF p. 126.
     pub(super) fn bind(
         &mut self,
         name: Identifier,
@@ -720,7 +723,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .then(|| self.external.get(&name.name).copied())
                     .flatten()
             });
-        if let Some(index) = previous {
+        // C99 §6.2.7p4: only a visible linked declaration supplies a
+        // composite type; hidden linked declarations still check compatibility.
+        let composite_prior = visible
+            .filter(|p| {
+                linkage != Linkage::None && self.bindings[p.binding].linkage != Linkage::None
+            })
+            .map(|p| p.binding);
+        let mut compatible = true;
+        for index in [
+            previous,
+            composite_prior.filter(|&index| Some(index) != previous),
+        ]
+        .into_iter()
+        .flatten()
+        {
             let old = self.bindings[index];
             if old.linkage != linkage && old.linkage != Linkage::None && linkage != Linkage::None {
                 self.error(
@@ -734,7 +751,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && old.kind == kind
                     && (self.context.configuration.standard() >= CStandard::C11
                         || self.context.configuration.gnu_extensions())
-                    && old.ty == ty;
+                    && old.ty == ty
+                    && !self.variably_modified(ty);
                 if !modern_typedef {
                     self.error(
                         SemanticErrorKind::DuplicateDeclaration,
@@ -750,8 +768,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Some(name.name),
                     Some(old.name.source_vectors),
                 );
+                compatible = false;
+                break;
             } else if let Some(composite) = self.types.composite(old.ty, ty) {
-                ty = composite;
+                if Some(index) == composite_prior {
+                    ty = composite;
+                }
             } else {
                 self.error(
                     SemanticErrorKind::IncompatibleDeclaration,
@@ -759,6 +781,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Some(name.name),
                     Some(old.name.source_vectors),
                 );
+                compatible = false;
+                break;
             }
         }
         let index = self.bindings.len();
@@ -771,6 +795,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             duration,
             value,
         });
+        // Retain the rejected occurrence without changing ordinary or linkage
+        // lookup.
+        if !compatible {
+            return;
+        }
         self.install(name, Namespace::Ordinary, index);
         if linkage != Linkage::None {
             _ = self.external.insert(name.name, index);

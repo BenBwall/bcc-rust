@@ -21,8 +21,9 @@ error: redeclaration has an incompatible type: `e`
 error: redeclaration has an incompatible type: `e`
  --> sema-incompatible.c:7:15
   |
+5 | extern enum E e;
+  |               - previous declaration is here
 6 | extern int e;
-  |            - previous declaration is here
 7 | extern enum F e;
   |               ^ conflicting type
   |
