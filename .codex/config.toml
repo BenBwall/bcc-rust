@@ -5,3 +5,9 @@
 command = "python"
 args = ["-c", "import pathlib, runpy, subprocess; root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip(); runpy.run_path(str(pathlib.Path(root) / 'scripts/agentbus/run.py'), run_name='__main__')", "serve"]
 env = { AGENTBUS_AGENT = "codex" }
+
+# CodeGraph serves a code-graph index of the checkout; it needs the `codegraph`
+# CLI on PATH and a `codegraph init` index (see README.md#codegraph-index).
+[mcp_servers.codegraph]
+command = "codegraph"
+args = ["serve", "--mcp"]

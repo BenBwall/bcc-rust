@@ -536,6 +536,27 @@ the merged PR's head commit recognizes squash merges. Commit or stash changes
 before a real cleanup; only local branches are deleted. Run its tests with
 `cargo +nightly -Zscript test --manifest-path scripts/branch-cleanup.rs`.
 
+### CodeGraph index
+
+[CodeGraph](https://github.com/colbymchenry/codegraph) gives coding agents a
+local symbol and call graph of the repository sources. The project configuration in
+`.mcp.json` (Claude Code) and `.codex/config.toml` (Codex) starts its MCP
+server, so agents can query the graph instead of searching file by file. It is
+optional: install the `codegraph` CLI, then index each checkout or worktree
+once:
+
+```sh
+npm install -g @colbymchenry/codegraph
+codegraph init --yes
+```
+
+The index lives in the ignored `.codegraph/` directory and follows file changes
+automatically; `codegraph sync` catches up after edits made while no server ran.
+[`codegraph.json`](codegraph.json) leaves the C inputs under `tests/fixtures/`
+and `test-programs/` out of the graph, since they are compiler test data rather
+than code. Without the CLI, agents report the server as failed to start and
+work as before.
+
 ## Pipeline and code map
 
 | Area | Role |
