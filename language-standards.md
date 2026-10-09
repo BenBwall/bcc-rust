@@ -297,7 +297,8 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 
 Lexer and preprocessor rows also cover exact prefix and suffix recognition,
 `//` in GNU89 pedantic mode, `#elifndef`, `#sccs`, `, ## __VA_ARGS__`, and the
-query predicates for builtins grouped under one row. GNU parser rows cover every
+query predicates for builtins grouped under one row; `IncludeNext` also covers
+`__has_include_next`. GNU parser rows cover every
 GNU attribute position, basic, extended and goto assembly with declarator
 assembly labels, GNU range and old-style designators, and syntax-only nested
 functions.
@@ -510,10 +511,20 @@ argument expands to nothing, following the traditional
 [MSVC behavior](https://learn.microsoft.com/en-us/cpp/preprocessor/variadic-macros?view=msvc-170).
 
 GNU `#include_next` continues after the configured search entry that provided
-the current header, even when the next directive changes quote/angle form. A
-quoted include found next to its including file has no configured entry; its
-`#include_next` starts at the first configured directory, following
-[GCC's search-order description](https://gcc.gnu.org/onlinedocs/cpp/Wrapper-Headers.html).
+the current header, even when the next directive changes quote/angle form, as
+[GCC's search-order description](https://gcc.gnu.org/onlinedocs/cpp/Wrapper-Headers.html)
+explains. Each opening of a header carries its own entry, so a header reached
+through two entries continues after each. A header found beside its includer
+or by an absolute path has no entry, and, as in GCC, its search starts at the
+first configured entry, the `-iquote` directories included (Clang warns and
+searches as `#include` would). In the primary source file the directive warns
+and searches exactly as `#include` would, as both compilers do. GNU
+`__has_include_next(header)` reports whether that `#include_next` would find
+the header, with the same start and warning. Like
+`__has_include` it is restricted to conditional expressions, and it reports
+the `IncludeNext` GNU origin under pedantic policy, except inside the resource
+headers, whose `#include_next` and `__has_include_next` belong to the
+implementation.
 `#ident`/`#sccs` require a string and are consumed as metadata directives; no
 object-file metadata is emitted. `__COUNTER__` starts at 0 for each translation
 unit and increments only when expanded. MSVC `-fms-pragma` consumes

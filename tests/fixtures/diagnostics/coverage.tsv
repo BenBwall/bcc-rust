@@ -135,6 +135,7 @@ pp	HeaderNotFound	pp-header-not-found-backslash.c	rendered
 pp	HexEscapeSequenceTooLarge	pp-hex-escape-sequence-too-large.c	rendered
 pp	IdentifierInsteadOfBinaryOperatorInPreprocessorExpression	pp-identifier-instead-of-binary-operator-in-preprocessor-expression.c	rendered
 pp	IdentifierNotMacroArgumentAfterHashOperator	pp-identifier-not-macro-argument-after-hash-operator.c	rendered
+pp	IncludeNextInPrimarySource	pp-include-next-in-primary-source.c	rendered
 pp	IntegerLiteralOverflow	pp-integer-literal-overflow.c	rendered
 pp	InvalidCharacterInHeaderName	pp-invalid-character-in-header-name.c	rendered
 pp	InvalidBinaryIntegerLiteral	pp-invalid-binary-integer-literal.c	rendered

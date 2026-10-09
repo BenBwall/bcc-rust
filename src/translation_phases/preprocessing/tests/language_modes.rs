@@ -1065,6 +1065,80 @@ fn resource_queries_embed_parameters_and_include_next_use_real_search_paths() {
 }
 
 #[test]
+fn has_include_next_predicts_include_next_with_gccs_start_and_warning() {
+    let temp = crate::test_support::TempDir::new("lexpp-include-next");
+    let a = temp.path().join("a");
+    let b = temp.path().join("b");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    std::fs::write(
+        a.join("w.h"),
+        "#if __has_include_next(<w.h>)\na_sees_next\n#endif\n#if \
+         !__has_include_next(<only_a.h>)\na_skips_itself\n#endif\n#include_next <w.h>\n",
+    )
+    .unwrap();
+    std::fs::write(
+        b.join("w.h"),
+        "#if !__has_include_next(<w.h>)\nb_is_last\n#endif\n",
+    )
+    .unwrap();
+    std::fs::write(a.join("only_a.h"), "").unwrap();
+    // Found beside its includer: as in GCC, the lookup starts at the first
+    // configured entry, so it neither finds the header itself nor warns.
+    std::fs::write(
+        temp.path().join("local.h"),
+        "#if !__has_include_next(\"local.h\") && \
+         __has_include_next(<only_a.h>)\nlocal_starts_at_first_entry\n#endif\n",
+    )
+    .unwrap();
+    std::fs::write(temp.path().join("main.c"), []).unwrap();
+    let source = "#if __has_include_next(<w.h>)\nmain_restarts\n#endif\n#include <w.h>\n#include \
+                  \"local.h\"\nafter\n";
+    let (tokens, errors) = observe_paths(
+        source,
+        mode(CStandard::C23),
+        temp.path().join("main.c"),
+        &[a.clone(), b],
+    );
+    let tokens = spellings(&tokens);
+    for word in [
+        "main_restarts",
+        "a_sees_next",
+        "a_skips_itself",
+        "b_is_last",
+        "local_starts_at_first_entry",
+        "after",
+    ] {
+        assert!(tokens.contains(&format!("identifier `{word}`")), "{tokens}");
+    }
+    assert_eq!(
+        errors,
+        ["Warning: `__has_include_next` in the primary source file"]
+    );
+    // GNU queries report their origin under a pedantic policy, and are
+    // restricted to conditional expressions like `__has_include`.
+    let (_, errors) = observe_paths(
+        "#include <w.h>\n",
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Warn),
+        temp.path().join("main.c"),
+        &[a],
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("'__has_include_next' is a GNU extension")),
+        "{errors:?}"
+    );
+    let (_, errors) = observe("__has_include_next(<w.h>)\n", mode(CStandard::C23));
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("require a preprocessing conditional expression")),
+        "{errors:?}"
+    );
+}
+
+#[test]
 fn mode_snapshot_preserves_token_values_spellings_and_extension_diagnostics() {
     let mut snapshot = String::new();
     for standard in [

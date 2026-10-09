@@ -371,11 +371,15 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             | "endif" => self.parse_endif_directive(directive),
             | "include" => self.parse_include_directive(directive),
             | "include_next" => {
-                self.context.report_extension(
-                    Feature::IncludeNext,
-                    "#include_next",
-                    directive.source_vectors,
-                );
+                // The resource headers are part of the implementation, so
+                // their own `#include_next` is no extension of the user's.
+                if !self.in_resource_header() {
+                    self.context.report_extension(
+                        Feature::IncludeNext,
+                        "#include_next",
+                        directive.source_vectors,
+                    );
+                }
                 self.parse_include_directive(directive);
             },
             | "embed" if self.context.configuration.accepts(Feature::Embed) =>
@@ -527,6 +531,58 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         )
     }
 
+    /// Whether the directive or query being read is in an embedded resource
+    /// header.
+    pub(super) fn in_resource_header(&self) -> bool {
+        self.context
+            .get_source_file(self.physical_source_file_index())
+            .starts_with(crate::headers::DIRECTORY)
+    }
+
+    /// The configured search entry that provided the innermost open source
+    /// file, which `#include_next` continues after. Each opening carries its
+    /// own entry, so one file reached through different entries continues
+    /// from each. A file found beside its includer, by an absolute path, or
+    /// the primary source file has none.
+    pub(super) fn including_search_index(&self) -> Option<usize> {
+        self.tokenizer_stack
+            .iter()
+            .rev()
+            .find_map(|frame| match frame.frame_type {
+                | TokenizerFrameType::SourceFile {
+                    include_search_index,
+                    ..
+                } => Some(include_search_index),
+                | _ => None,
+            })
+            .flatten()
+    }
+
+    /// Where an `#include_next` or `__has_include_next` (`spelling`) lookup
+    /// starts, following GCC: after the configured entry that provided this
+    /// opening of the current file, or from the first configured entry in a
+    /// header that none provided (found beside its includer or by an
+    /// absolute path). In the primary source file it warns and searches as
+    /// `#include` would, as GCC and Clang do.
+    ///
+    /// C99: an extension (§4p6, p. 7; PDF p. 19) over the
+    /// implementation-defined places of §6.10.2 paragraphs 2-3, pp. 149-150;
+    /// PDF pp. 161-162.
+    pub(super) fn include_next_start(
+        &mut self,
+        spelling: &'static str,
+        source_vectors: SourceVectors,
+    ) -> Option<usize> {
+        if self.current_is_header() {
+            return Some(self.including_search_index().map_or(0, |index| index + 1));
+        }
+        self.context.preprocessor_error(PreprocessorError {
+            error_type: PreprocessorErrorType::IncludeNextInPrimarySource(spelling),
+            source_vectors,
+        });
+        None
+    }
+
     /// The file `path` names in `directory`, interned, when it exists there.
     /// The resource directory holds exactly the embedded headers.
     pub(super) fn probe_header(&mut self, directory: &Path, path: &Path) -> Option<u32> {
@@ -547,12 +603,13 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     /// Resolves an include name through [`Self::header_search_places`], as
     /// GCC and Clang do (C99 §6.10.2p2-3 leave the places
     /// implementation-defined). An absolute name is used as written.
+    /// `#include_next` passes where its lookup starts, from
+    /// [`Self::include_next_start`].
     ///
     /// `including_file` is the file containing the directive, captured before
-    /// a macro-expanded operand can switch to its definition's tokenizer.
-    /// `including_search_index` belongs to that opening, not its interned
-    /// identity. GNU `#include_next` continues after it, or starts at the
-    /// first configured entry for local, absolute and main files.
+    /// a macro-expanded operand can switch to its definition's tokenizer. The
+    /// result pairs the header with the configured entry that provided it,
+    /// which its own `#include_next` continues after.
     ///
     /// A header that cannot be found violates the constraint of C99 §6.10.2
     /// paragraph 1, p. 149; PDF p. 161. A file that `#pragma once` marked,
@@ -561,20 +618,15 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     fn find_header_from_path(
         &mut self,
         including_file: u32,
-        including_search_index: Option<usize>,
         operand: SourceVectors,
         path: &Path,
         is_system_header: bool,
-        next: bool,
+        start: Option<usize>,
     ) -> Option<(u32, Option<usize>)> {
         let found = if path.is_absolute() {
             path.is_file()
                 .then(|| (self.context.intern_source_file(path), None))
         } else {
-            // `#include_next` continues after the entry that provided this
-            // opening of the including file, or from the first configured
-            // entry.
-            let start = next.then(|| including_search_index.map_or(0, |index| index + 1));
             let places = self.header_search_places(including_file, is_system_header, start);
             let mut found = None;
             for (search_index, directory) in places.clone() {
@@ -1106,18 +1158,6 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     /// header name do not match any of the forms of paragraphs 2-4.
     fn parse_include_directive(&mut self, directive: PreprocessorToken) {
         let including_file = self.physical_source_file_index();
-        let including_search_index = self
-            .tokenizer_stack
-            .iter()
-            .rev()
-            .find_map(|frame| match frame.frame_type {
-                | TokenizerFrameType::SourceFile {
-                    include_search_index,
-                    ..
-                } => Some(include_search_index),
-                | _ => None,
-            })
-            .flatten();
         let header = match self.peek_include_operand() {
             | IncludeOperand::Angle => Some(self.read_written_angle_header(directive)),
             | IncludeOperand::Quoted => Some(self.read_written_quoted_header()),
@@ -1160,14 +1200,18 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             }
             look_up = policy != ExtensionPolicy::Deny;
         }
+        let start = if self.context.string_cache.at(directive.contents) == "include_next" {
+            self.include_next_start("#include_next", directive.source_vectors)
+        } else {
+            None
+        };
         let header_source_index = if look_up {
             self.find_header_from_path(
                 including_file,
-                including_search_index,
                 header.source_vectors,
                 Path::new(header.name),
                 header.is_system_header,
-                self.context.string_cache.at(directive.contents) == "include_next",
+                start,
             )
         } else {
             None
