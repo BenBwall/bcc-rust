@@ -10,3 +10,4 @@ int f(int values[static const 4], int (*cb)(int)) {
     for (int i=0; i<3; ++i) { struct Node *node; }
     return local;
 }
+struct Bits {char tag; unsigned flags:5; unsigned :0; union {int i; float f;};};

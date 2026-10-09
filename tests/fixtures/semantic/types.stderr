@@ -1,41 +1,58 @@
-target: x86-64 System V LP64; size_t=unsigned long, ptrdiff_t=long, wchar_t=int; 0 resolved type names
-parameter arrays with static minimum: 1
-scope 0 (File): tag Node: struct Node [size=16, align=8]; Tag, None, None
-scope 0 (File): tag Mode: enum Mode [size=4, align=4]; Tag, None, None
-scope 0 (File): Size: unsigned long [size=8, align=8]; Typedef, None, None
-scope 0 (File): Idle: int [size=4, align=4]; Enumerator, None, None
-scope 0 (File): Busy: int [size=4, align=4]; Enumerator, None, None
-scope 0 (File): Done: int [size=4, align=4]; Enumerator, None, None
-scope 0 (File): head: const struct Node * [size=8, align=8]; Object, Internal, Static
-scope 0 (File): head: const struct Node * [size=8, align=8]; Object, Internal, Static
-scope 0 (File): callbacks: int (*[3])(unsigned long, const char *, ...) [size=24, align=8]; Object, External, Static
-scope 0 (File): f: int (int *, int (*)(int)); Function, External, None
-scope 4 (Function): values: int *const  [size=8, align=8]; Parameter, None, Automatic
-scope 4 (Function): cb: int (*)(int) [size=8, align=8]; Parameter, None, Automatic
-scope 4 (Function): __func__: const char [2] [size=2, align=1]; Object, None, Static
-scope 4 (Function): local: int [size=4, align=4]; Object, None, Automatic
-scope 5 (Block): count: const unsigned long [size=8, align=8]; Object, None, Automatic
-scope 5 (Block): values: int [vla]; Object, None, Automatic
-scope 6 (Block): i: int [size=4, align=4]; Object, None, Automatic
-scope 7 (Block): node: struct Node * [size=8, align=8]; Object, None, Automatic
-expressions: 12
-expression 0: int; Rvalue; integer=4; ICE=true, constant=Arithmetic
-expression 1: int; Rvalue; integer=3; ICE=true, constant=Arithmetic
-expression 2: int; Rvalue; integer=4; ICE=true, constant=Arithmetic
-expression 3: int; Rvalue; integer=2; ICE=true, constant=Arithmetic
-expression 4: const unsigned long; Lvalue; ICE=false, constant=None
-expression 5: int; Rvalue; integer=0; ICE=true, constant=Arithmetic
-expression 6: int; ModifiableLvalue; ICE=false, constant=None
-expression 7: int; Rvalue; integer=3; ICE=true, constant=Arithmetic
-expression 8: int; Rvalue; ICE=false, constant=None
-expression 9: int; ModifiableLvalue; ICE=false, constant=None
-expression 10: int; Rvalue; ICE=false, constant=None
-expression 11: int; ModifiableLvalue; ICE=false, constant=None
-convert expression 3: Assignment to unsigned long
-convert expression 5: Assignment to int
-convert expression 6: Lvalue to int
-convert expression 6: Arithmetic to int
-convert expression 7: Arithmetic to int
-convert expression 9: Lvalue to int
-convert expression 11: Lvalue to int
-convert expression 11: Assignment to int
+target x86_64-sysv-lp64 size_t="unsigned long" ptrdiff_t=long wchar_t=int char=signed
+scope 0 file
+  tag struct Node complete size=16 align=8
+    member value type=int offset=0
+    member next type="struct Node *" offset=8
+  tag enum Mode complete size=4 align=4 compatible="unsigned int"
+  tag struct Bits complete size=8 align=4
+    member tag type=char offset=0
+    member flags type="unsigned int" offset=1 bit-offset=0 width=5
+    member <unnamed> type="unsigned int" offset=4 bit-offset=0 width=0
+    member <anonymous> type="union <anonymous>" offset=4
+    field i type=int offset=4
+    field f type=float offset=4
+  tag union <anonymous> complete size=4 align=4
+    member i type=int offset=0
+    member f type=float offset=0
+  typedef Size type="unsigned long"
+  enumerator Idle type=int value=0
+  enumerator Busy type=int value=4
+  enumerator Done type=int value=5
+  object head type="const struct Node *" linkage=internal duration=static size=8 align=8
+  object head type="const struct Node *" linkage=internal duration=static size=8 align=8
+  object callbacks type="int (*[3])(unsigned long, const char *, ...)" linkage=external duration=static size=24 align=8
+  function f type="int (int *, int (*)(int))" prototype linkage=external
+  scope 4 function
+    parameter values type="int *const" static-minimum=4 size=8 align=8
+    parameter cb type="int (*)(int)" size=8 align=8
+    object __func__ type="const char [2]" duration=static size=2 align=1
+    object local type=int duration=automatic size=4 align=4
+    scope 5 block
+      object count type="const unsigned long" duration=automatic size=8 align=8
+      object values type="int [*runtime*]" duration=automatic
+    scope 6 block
+      object i type=int duration=automatic size=4 align=4
+      scope 7 block
+        object node type="struct Node *" duration=automatic size=8 align=8
+expression 0 type=int category=rvalue value=4 ice constant=arithmetic
+expression 1 type=int category=rvalue value=3 ice constant=arithmetic
+expression 2 type=int category=rvalue value=4 ice constant=arithmetic
+expression 3 type=int category=rvalue value=2 ice constant=arithmetic
+expression 4 type="const unsigned long" category=lvalue binding=count
+expression 5 type=int category=rvalue value=0 ice constant=arithmetic
+expression 6 type=int category=modifiable-lvalue binding=i
+expression 7 type=int category=rvalue value=3 ice constant=arithmetic
+expression 8 type=int category=rvalue
+expression 9 type=int category=modifiable-lvalue binding=i
+expression 10 type=int category=rvalue
+expression 11 type=int category=modifiable-lvalue binding=local
+expression 12 type=int category=rvalue value=5 ice constant=arithmetic
+expression 13 type=int category=rvalue value=0 ice constant=arithmetic
+convert expression 3 kind=assignment type="unsigned long"
+convert expression 5 kind=assignment type=int
+convert expression 6 kind=lvalue type=int
+convert expression 6 kind=arithmetic type=int
+convert expression 7 kind=arithmetic type=int
+convert expression 9 kind=lvalue type=int
+convert expression 11 kind=lvalue type=int
+convert expression 11 kind=assignment type=int

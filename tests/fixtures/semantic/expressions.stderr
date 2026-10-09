@@ -1,45 +1,45 @@
-target: x86-64 System V LP64; size_t=unsigned long, ptrdiff_t=long, wchar_t=int; 0 resolved type names
-parameter arrays with static minimum: 0
-scope 0 (File): a: int [3] [size=12, align=4]; Object, External, Static
-scope 0 (File): f: int (const int *, int); Function, External, None
-scope 2 (Function): p: const int * [size=8, align=8]; Parameter, None, Automatic
-scope 2 (Function): n: int [size=4, align=4]; Parameter, None, Automatic
-scope 2 (Function): __func__: const char [2] [size=2, align=1]; Object, None, Static
-scope 2 (Function): x: int [size=4, align=4]; Object, None, Automatic
-expressions: 16
-expression 0: int; Rvalue; integer=1; ICE=true, constant=Arithmetic
-expression 1: int; Rvalue; integer=2; ICE=true, constant=Arithmetic
-expression 2: int; Rvalue; integer=3; ICE=true, constant=Arithmetic
-expression 3: int; ModifiableLvalue; ICE=false, constant=None
-expression 4: int; Rvalue; integer=1; ICE=true, constant=Arithmetic
-expression 5: int; Rvalue; ICE=false, constant=None
-expression 6: int; ModifiableLvalue; ICE=false, constant=None
-expression 7: const int *; ModifiableLvalue; ICE=false, constant=None
-expression 8: int; Rvalue; integer=0; ICE=true, constant=Arithmetic
-expression 9: const int; Lvalue; ICE=false, constant=None
-expression 10: int; Rvalue; operation=int; ICE=false, constant=None
-expression 11: int; ModifiableLvalue; ICE=false, constant=None
-expression 12: int; ModifiableLvalue; ICE=false, constant=None
-expression 13: int [3]; Lvalue; ICE=false, constant=None
-expression 14: unsigned long; Rvalue; integer=12; ICE=true, constant=Arithmetic
-expression 15: unsigned long; Rvalue; ICE=false, constant=None
-convert expression 0: Assignment to int
-convert expression 1: Assignment to int
-convert expression 2: Assignment to int
-convert expression 3: Lvalue to int
-convert expression 3: Arithmetic to int
-convert expression 4: Arithmetic to int
-convert expression 5: Assignment to int
-convert expression 7: Lvalue to const int *
-convert expression 6: Lvalue to int
-convert expression 9: Lvalue to int
-convert expression 6: Arithmetic to int
-convert expression 9: Arithmetic to int
-convert expression 10: Assignment to int
-convert expression 11: Lvalue to int
-convert expression 12: Lvalue to int
-convert expression 12: Arithmetic to unsigned long
-convert expression 14: Arithmetic to unsigned long
-convert expression 12: Arithmetic to unsigned long
-convert expression 14: Arithmetic to unsigned long
-convert expression 15: Assignment to int
+target x86_64-sysv-lp64 size_t="unsigned long" ptrdiff_t=long wchar_t=int char=signed
+scope 0 file
+  object a type="int [3]" linkage=external duration=static size=12 align=4
+  function f type="int (const int *, int)" prototype linkage=external
+  scope 2 function
+    parameter p type="const int *" size=8 align=8
+    parameter n type=int size=4 align=4
+    object __func__ type="const char [2]" duration=static size=2 align=1
+    object x type=int duration=automatic size=4 align=4
+expression 0 type=int category=rvalue value=1 ice constant=arithmetic
+expression 1 type=int category=rvalue value=2 ice constant=arithmetic
+expression 2 type=int category=rvalue value=3 ice constant=arithmetic
+expression 3 type=int category=modifiable-lvalue binding=n
+expression 4 type=int category=rvalue value=1 ice constant=arithmetic
+expression 5 type=int category=rvalue
+expression 6 type=int category=modifiable-lvalue binding=x
+expression 7 type="const int *" category=modifiable-lvalue binding=p
+expression 8 type=int category=rvalue value=0 ice constant=arithmetic
+expression 9 type="const int" category=lvalue
+expression 10 type=int category=rvalue operation=int
+expression 11 type=int category=modifiable-lvalue binding=x
+expression 12 type=int category=modifiable-lvalue binding=x
+expression 13 type="int [3]" category=lvalue binding=a
+expression 14 type="unsigned long" category=rvalue value=12 ice constant=arithmetic
+expression 15 type="unsigned long" category=rvalue
+convert expression 0 kind=assignment type=int
+convert expression 1 kind=assignment type=int
+convert expression 2 kind=assignment type=int
+convert expression 3 kind=lvalue type=int
+convert expression 3 kind=arithmetic type=int
+convert expression 4 kind=arithmetic type=int
+convert expression 5 kind=assignment type=int
+convert expression 7 kind=lvalue type="const int *"
+convert expression 6 kind=lvalue type=int
+convert expression 9 kind=lvalue type=int
+convert expression 6 kind=arithmetic type=int
+convert expression 9 kind=arithmetic type=int
+convert expression 10 kind=assignment type=int
+convert expression 11 kind=lvalue type=int
+convert expression 12 kind=lvalue type=int
+convert expression 12 kind=arithmetic type="unsigned long"
+convert expression 14 kind=arithmetic type="unsigned long"
+convert expression 12 kind=arithmetic type="unsigned long"
+convert expression 14 kind=arithmetic type="unsigned long"
+convert expression 15 kind=assignment type=int
