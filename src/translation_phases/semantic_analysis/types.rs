@@ -80,11 +80,43 @@ pub(crate) enum TagKind {
 }
 
 /// A record member including ABI byte/bit offset and source bit-field width.
+/// An anonymous member is an unnamed structure or union member whose own
+/// members belong to the containing record (C11 §6.7.2.1p13, p. 115; PDF
+/// p. 133; a GNU and MSVC extension before C11).
 /// C99: §6.7.2.1, pp. 101-104; PDF pp. 113-116.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Member {
     pub(crate) name:       Option<super::Identifier>,
     pub(crate) ty:         TypeId,
+    pub(crate) offset:     u64,
+    pub(crate) bit_offset: u32,
+    pub(crate) width:      Option<u32>,
+    pub(crate) anonymous:  bool,
+}
+
+impl Member {
+    /// Unnamed bit-fields do not participate in initialization (C99
+    /// §6.7.8p9, p. 126; PDF p. 138); an anonymous member's members belong
+    /// to the containing record, so it does.
+    pub(crate) const fn initializable(&self) -> bool {
+        self.name.is_some() || self.anonymous
+    }
+}
+
+/// One name in a record's member namespace, including the names an anonymous
+/// member contributes, resolved to the member that declares it. A backend
+/// can lower member access from the byte offset without walking `path`.
+/// C11: §6.7.2.1p13, p. 115; PDF p. 133. C99: §6.5.2.3p3, p. 73; PDF p. 85.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Field<'tu> {
+    pub(crate) name:       super::Identifier,
+    /// Member indices from this record through each anonymous member.
+    pub(crate) path:       &'tu [usize],
+    /// The declaring member's type.
+    pub(crate) ty:         TypeId,
+    /// Qualifiers of the anonymous members on the path.
+    pub(crate) qualifiers: TypeQualifiers,
+    /// Byte offset from the start of this record.
     pub(crate) offset:     u64,
     pub(crate) bit_offset: u32,
     pub(crate) width:      Option<u32>,
@@ -97,6 +129,8 @@ pub(crate) struct Tag<'tu> {
     pub(crate) name:              Option<StringCacheId>,
     pub(crate) kind:              TagKind,
     pub(crate) members:           Cell<&'tu [Member]>,
+    /// The member namespace in declaration order, set at completion.
+    pub(crate) fields:            Cell<&'tu [Field<'tu>]>,
     pub(crate) layout:            Cell<Option<Layout>>,
     pub(crate) complete:          Cell<bool>,
     pub(crate) tainted:           Cell<bool>,

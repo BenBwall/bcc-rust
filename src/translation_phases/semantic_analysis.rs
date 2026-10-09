@@ -1052,6 +1052,11 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             },
             | Work::RecordMemberBase(tag, member, members) => {
                 let base = self.take_type();
+                if member.struct_declarator_list.is_empty()
+                    && let Some(anonymous) = self.anonymous_member(tag, member, base)
+                {
+                    members.push(self.scratch, anonymous);
+                }
                 for &d in member.struct_declarator_list.iter().rev() {
                     self.work.push(Work::MemberBase(tag, d, base, members));
                 }
@@ -1134,6 +1139,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                         width,
                         offset: 0,
                         bit_offset: 0,
+                        anonymous: false,
                     },
                 );
             },
