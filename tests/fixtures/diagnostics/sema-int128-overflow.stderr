@@ -1,0 +1,99 @@
+error: constant expression overflows or has an invalid operation
+ --> sema-int128-overflow.c:1:13
+  |
+1 | #define MAX ((__int128)(((__uint128_t)-1) >> 1))
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ overflow or invalid operation
+2 | #define MIN (-MAX - 1)
+3 | _Static_assert(MAX + 1, "addition overflow");
+  |                    ^^^
+  |
+  = note: C99 §6.6p4: a constant expression is representable in its type; §6.5p5 forbids exceptional evaluation
+
+error: constant expression overflows or has an invalid operation
+ --> sema-int128-overflow.c:2:13
+  |
+1 | #define MAX ((__int128)(((__uint128_t)-1) >> 1))
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2 | #define MIN (-MAX - 1)
+  |             ^^    ^^^^ overflow or invalid operation
+3 | _Static_assert(MAX + 1, "addition overflow");
+4 | _Static_assert(MIN - 1, "subtraction overflow");
+  |                    ^^^
+  |
+  = note: C99 §6.6p4: a constant expression is representable in its type; §6.5p5 forbids exceptional evaluation
+
+error: constant expression overflows or has an invalid operation
+ --> sema-int128-overflow.c:1:13
+  |
+1 | #define MAX ((__int128)(((__uint128_t)-1) >> 1))
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ overflow or invalid operation
+...
+5 | _Static_assert(MAX * 2, "multiplication overflow");
+  |                    ^^^
+  |
+  = note: C99 §6.6p4: a constant expression is representable in its type; §6.5p5 forbids exceptional evaluation
+
+error: constant expression overflows or has an invalid operation
+ --> sema-int128-overflow.c:6:16
+  |
+1 | #define MAX ((__int128)(((__uint128_t)-1) >> 1))
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2 | #define MIN (-MAX - 1)
+  |             ^^    ^^^^
+...
+6 | _Static_assert(-MIN, "negation overflow");
+  |                ^ overflow or invalid operation
+  |
+  = note: C99 §6.6p4: a constant expression is representable in its type; §6.5p5 forbids exceptional evaluation
+
+error: constant expression overflows or has an invalid operation
+ --> sema-int128-overflow.c:2:13
+  |
+1 | #define MAX ((__int128)(((__uint128_t)-1) >> 1))
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2 | #define MIN (-MAX - 1)
+  |             ^^    ^^^^ overflow or invalid operation
+...
+7 | _Static_assert(MIN / -1, "division overflow");
+  |                    ^^^^
+  |
+  = note: C99 §6.6p4: a constant expression is representable in its type; §6.5p5 forbids exceptional evaluation
+
+error: constant expression overflows or has an invalid operation
+ --> sema-int128-overflow.c:2:13
+  |
+1 | #define MAX ((__int128)(((__uint128_t)-1) >> 1))
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2 | #define MIN (-MAX - 1)
+  |             ^^    ^^^^ overflow or invalid operation
+...
+8 | _Static_assert(MIN % -1, "remainder overflow");
+  |                    ^^^^
+  |
+  = note: C99 §6.6p4: a constant expression is representable in its type; §6.5p5 forbids exceptional evaluation
+
+error: constant expression overflows or has an invalid operation
+  --> sema-int128-overflow.c:9:17
+   |
+ 9 | _Static_assert(((__uint128_t)1 << 128), "excessive shift");
+   |                 ^^^^^^^^^^^^^^^^^^^^^ overflow or invalid operation
+   |
+   = note: C99 §6.6p4: a constant expression is representable in its type; §6.5p5 forbids exceptional evaluation
+
+error: constant expression overflows or has an invalid operation
+  --> sema-int128-overflow.c:10:17
+   |
+10 | _Static_assert(((__uint128_t)1 << (__uint128_t)-1), "unsigned shift count");
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ overflow or invalid operation
+   |
+   = note: C99 §6.6p4: a constant expression is representable in its type; §6.5p5 forbids exceptional evaluation
+
+error: constant expression overflows or has an invalid operation
+  --> sema-int128-overflow.c:11:17
+   |
+11 | _Static_assert(((__uint128_t)1 / 0), "zero divisor");
+   |                 ^^^^^^^^^^^^^^^^^^ overflow or invalid operation
+   |
+   = note: C99 §6.6p4: a constant expression is representable in its type; §6.5p5 forbids exceptional evaluation
+
+9 errors generated.

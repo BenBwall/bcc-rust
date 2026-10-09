@@ -4,6 +4,7 @@ use std::path::Path;
 
 use super::*;
 
+mod int128;
 mod targets;
 
 fn with_source(source: &str, run: impl FnOnce(&mut Context<'_>, &SemanticTranslationUnit<'_>)) {
