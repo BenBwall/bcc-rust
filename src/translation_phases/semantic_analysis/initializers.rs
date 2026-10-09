@@ -111,7 +111,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if initializer.recovered || self.types.unanalyzed(ty) {
             return ty;
         }
-        if self.variably_modified(ty)
+        // §6.7.8p3 excludes variable length array types, not pointers to them.
+        if (matches!(self.types.nodes[ty.index], TypeKind::Array(..)) && self.variably_modified(ty))
             || (!self.complete_object(ty)
                 && !matches!(
                     self.types.nodes[ty.index],
