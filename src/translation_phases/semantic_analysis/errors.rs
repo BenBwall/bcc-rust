@@ -185,7 +185,8 @@ pub(crate) enum SemanticErrorKind {
     InvalidConstant,
     /// C99: §6.6p4; 6.5p5, p. 95; 67; PDF p. 107; 79.
     ConstantOverflow,
-    /// C99: §6.7.2.2p2, p. 105; PDF p. 117.
+    /// C99: §6.7.2.2p4, p. 105; PDF p. 117. Values outside int that share
+    /// one 64-bit type are the policy extension of §6.7.2.2p2.
     EnumeratorRange,
     /// C99: §6.7.2.1p2, p. 101; PDF p. 113.
     InvalidMember,
@@ -567,8 +568,9 @@ impl SemanticErrorKind {
                  exceptional evaluation",
             ),
             | Self::EnumeratorRange => (
-                "enumerator value is not representable as int",
-                "C99 §6.7.2.2p2: an enumeration constant has a value representable as int",
+                "enumeration values have no common integer type",
+                "C99 §6.7.2.2p4: an enumerated type is compatible with an integer type that \
+                 represents every member; no 64-bit type holds a negative member and this one",
             ),
             | Self::InvalidMember => (
                 "member requires a complete object type",

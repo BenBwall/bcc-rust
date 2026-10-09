@@ -9,6 +9,16 @@ error: redeclaration has an incompatible type: `x`
   = note: C99 §6.7p4 and §6.2.7p2: declarations of the same entity require compatible types
 
 error: redeclaration has an incompatible type: `e`
+ --> sema-incompatible.c:6:12
+  |
+5 | extern enum E e;
+  |               - previous declaration is here
+6 | extern int e;
+  |            ^ declaration constraint violated
+  |
+  = note: C99 §6.7p4 and §6.2.7p2: declarations of the same entity require compatible types
+
+error: redeclaration has an incompatible type: `e`
  --> sema-incompatible.c:7:15
   |
 6 | extern int e;
@@ -18,4 +28,4 @@ error: redeclaration has an incompatible type: `e`
   |
   = note: C99 §6.7p4 and §6.2.7p2: declarations of the same entity require compatible types
 
-2 errors generated.
+3 errors generated.

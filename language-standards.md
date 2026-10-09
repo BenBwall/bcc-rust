@@ -240,6 +240,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | AutoTypeInference | - | - | - | - | - | Y | Y | extension | parser |
 | Constexpr | - | - | - | - | - | Y | Y | extension | parser |
 | Nullptr | - | - | - | - | - | Y | Y | extension | parser |
+| WideEnumerators | - | - | - | - | - | Y | Y | extension | semantic analysis |
 | Countof | - | - | - | - | - | - | Y | extension | parser |
 | IfSwitchDeclarations | - | - | - | - | - | - | Y | extension | parser |
 | NamedLoops | - | - | - | - | - | - | Y | extension | parser |

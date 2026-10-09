@@ -1,9 +1,21 @@
-error: enumerator value is not representable as int: `B`
+error: 'enumerator value outside the range of int' is a C23 extension
  --> sema-enum-range.c:1:23
   |
 1 | enum E {A=2147483647, B};
-  |                       ^ declaration constraint violated
-  |
-  = note: C99 §6.7.2.2p2: an enumeration constant has a value representable as int
+  |                       ^
 
-1 error generated.
+error: 'enumerator value outside the range of int' is a C23 extension
+ --> sema-enum-range.c:2:15
+  |
+2 | enum F {N=-1, U=18446744073709551615ULL};
+  |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: enumeration values have no common integer type: `U`
+ --> sema-enum-range.c:2:15
+  |
+2 | enum F {N=-1, U=18446744073709551615ULL};
+  |               ^ declaration constraint violated
+  |
+  = note: C99 §6.7.2.2p4: an enumerated type is compatible with an integer type that represents every member; no 64-bit type holds a negative member and this one
+
+3 errors generated.
