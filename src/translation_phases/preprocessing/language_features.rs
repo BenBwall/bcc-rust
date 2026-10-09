@@ -358,8 +358,9 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
 
     /// Resolves a resource without diagnostics or pragma-once filtering.
     /// C99: header search is implementation-defined, §6.10.2p2-3,
-    /// pp. 149-150; PDF pp. 161-162; C23 queries also inspect empty files.
-    fn find_resource(&mut self, name: &str, system: bool) -> Option<u32> {
+    /// pp. 149-150; PDF pp. 161-162. C23: embed queries use the embed
+    /// search, §6.10.2p7, pp. 166-167; PDF pp. 179-180.
+    fn find_resource(&mut self, name: &str, system: bool, embed: bool) -> Option<u32> {
         let path = Path::new(name);
         if path.is_absolute() {
             return path
@@ -370,6 +371,11 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             .context
             .include_search_directories(self.physical_source_file_index(), system)
         {
+            // Built-in headers supply source text, not filesystem resources.
+            // C23 §6.10.2p7: the query must use the matching #embed search.
+            if embed && directory == Path::new(crate::headers::DIRECTORY) {
+                continue;
+            }
             let mut buffer = ArenaString::new_in(self.scratch);
             if !directory.as_os_str().is_empty() {
                 _ = write!(
@@ -504,7 +510,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                     if !params.supported {
                         return Some(self.integer_pp_token(0, token.source_vectors));
                     }
-                    if let Some(path) = self.find_resource(name, system) {
+                    if let Some(path) = self.find_resource(name, system, embed) {
                         if embed
                             && (params.limit == Some(0)
                                 || std::fs::metadata(self.context.get_source_file(path))
@@ -836,7 +842,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         else {
             return;
         };
-        let Some(path) = self.find_resource(name, system) else {
+        let Some(path) = self.find_resource(name, system, true) else {
             self.embed_error(
                 PreprocessorErrorType::EmbeddedResourceNotFound(self.context.diagnostic_text(name)),
                 directive,

@@ -973,6 +973,33 @@ fn c23_allows_basic_and_control_universal_characters_inside_literals() {
 }
 
 #[test]
+fn embed_search_excludes_builtin_headers_but_include_queries_find_them() {
+    let source = "#if __has_include(<stddef.h>) && \
+                  __has_include(\"stddef.h\")\nheader\n#endif\n#if __has_embed(<stddef.h>) == \
+                  __STDC_EMBED_FOUND__\n#embed <stddef.h> limit(1)\n#endif\n#if \
+                  __has_embed(<stddef.h>) == __STDC_EMBED_NOT_FOUND__ && __has_embed(\"stddef.h\" \
+                  limit(0)) == __STDC_EMBED_NOT_FOUND__\nunavailable\n#endif\nafter\n";
+    let (tokens, errors) = observe(source, mode(CStandard::C23));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(tokens.len(), 3, "{tokens:?}");
+    for (token, expected) in tokens.iter().zip(["header", "unavailable", "after"]) {
+        assert!(
+            token.ends_with(&format!("identifier `{expected}`")),
+            "{tokens:?}"
+        );
+    }
+
+    let (tokens, errors) = observe("#embed <stddef.h> limit(1)\nafter\n", mode(CStandard::C23));
+    assert_eq!(tokens.len(), 1, "{tokens:?}");
+    assert!(tokens[0].ends_with("identifier `after`"), "{tokens:?}");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].contains("cannot find embedded resource `stddef.h`"),
+        "{errors:?}"
+    );
+}
+
+#[test]
 fn resource_queries_embed_parameters_and_include_next_use_real_search_paths() {
     let temp = crate::test_support::TempDir::new("lexpp-resources");
     let a = temp.path().join("a");
