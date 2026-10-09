@@ -171,8 +171,8 @@ pub(crate) enum SemanticErrorKind {
     InvalidDerivedType,
     /// C99: §6.7.5.2p1, p. 116; PDF p. 128.
     InvalidArrayBound,
-    /// C99: §6.7.5.2p4, pp. 116-117; PDF pp. 128-129; §6.2.1p4, pp. 29-30;
-    /// PDF pp. 41-42.
+    /// C99: §6.7.5.2p4, pp. 116-117; PDF pp. 128-129. Function definitions
+    /// report `DefinitionStarArray` instead.
     InvalidStarBound,
     /// Implementation limit, C99: §5.2.4.1p1, pp. 20-21; PDF pp. 32-33;
     /// §6.5.6p9, pp. 83-84; PDF pp. 95-96.
@@ -646,7 +646,7 @@ impl SemanticErrorKind {
             | Self::InvalidStarBound => (
                 "`[*]` array bound outside a function prototype declaration",
                 "C99 §6.7.5.2p4: a `[*]` size is used only in declarations with function \
-                 prototype scope; a function definition's parameters have block scope (§6.2.1p4)",
+                 prototype scope",
             ),
             | Self::ObjectTooLarge => (
                 "object type is too large",

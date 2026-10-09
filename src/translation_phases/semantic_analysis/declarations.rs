@@ -524,47 +524,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// A function definition's parameters have block scope, so its own
-    /// parameter declarators cannot use `[*]`; nested prototypes inside them
-    /// still can. The defining parameter list is the function derivation
-    /// that follows the identifier. C99: §6.7.5.2p4, pp. 116-117; PDF pp.
-    /// 128-129; §6.2.1p4, pp. 29-30; PDF pp. 41-42.
-    pub(super) fn definition_star_bounds(&mut self, mut declarator: Declarator<'tu>) {
-        let parameters = loop {
-            match declarator.kind.as_slice() {
-                | [DirectDeclarator::Parenthesized(p), ..] => declarator = p.declarator,
-                | [
-                    DirectDeclarator::Identifier(_),
-                    DirectDeclarator::Function { parameter_list, .. },
-                    ..,
-                ] => break *parameter_list,
-                | _ => return,
-            }
-        };
-        let mut pending = ArenaVec::new_in(self.scratch);
-        for parameter in parameters {
-            if let Some(d) = parameter.declarator {
-                pending.push(d);
-            }
-        }
-        while let Some(d) = pending.pop() {
-            for direct in d.kind {
-                match *direct {
-                    | DirectDeclarator::Parenthesized(p) => pending.push(p.declarator),
-                    | DirectDeclarator::Array {
-                        is_pointer: true, ..
-                    } => self.error(
-                        SemanticErrorKind::InvalidStarBound,
-                        d.source_vectors,
-                        d.identifier().map(|n| n.name),
-                        None,
-                    ),
-                    | _ => {},
-                }
-            }
-        }
-    }
-
     /// Resolves storage class, linkage inheritance and duration independently.
     /// C99: §6.2.2p2-7, pp. 30-31; PDF pp. 42-43; §6.2.4, p. 32; PDF p. 44;
     /// §6.7.1, p. 98; PDF p. 110; §6.7.4p2-4, p. 112; PDF p. 124.

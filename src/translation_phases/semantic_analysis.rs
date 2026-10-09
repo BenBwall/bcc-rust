@@ -691,7 +691,6 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             },
             | Work::FunctionBase(f) => {
                 let base = self.take_type();
-                self.definition_star_bounds(f.declarator);
                 self.work.push(Work::FunctionBody(f));
                 self.work.push(Work::Declarator(f.declarator, base, false));
             },

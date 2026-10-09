@@ -1,9 +1,9 @@
-error: `[*]` array bound outside a function prototype declaration: `a`
+error: star array bound is not permitted in a function definition: `a`
  --> sema3-parameter-star.c:1:12
   |
 1 | void f(int a[*]) {}
-  |            ^^^^ `[*]` is not allowed here
+  |            ^^^^ `[*]` is not allowed in a definition
   |
-  = note: C99 §6.7.5.2p4: a `[*]` size is used only in declarations with function prototype scope; a function definition's parameters have block scope (§6.2.1p4)
+  = note: C99 §6.7.5.2p4: an unspecified variable-length array bound written as [*] is restricted to prototype scope
 
 1 error generated.

@@ -492,7 +492,7 @@ snapshot at `tests/fixtures/semantic/types.stderr`.
 | `InvalidInline` | [inline](sema-inline.c) | Inline objects, typedef names and main. |
 | `InvalidDerivedType` | [derived](sema-derived.c) | Invalid array elements/function results. |
 | `InvalidArrayBound` | [bound](sema-array-bound.c) | Negative constant and non-integer bounds. Zero bounds use shared extension policy. |
-| `InvalidStarBound` | [star bound](sema-star-bound.c) | `[*]` outside a prototype, including a function definition's parameters. |
+| `InvalidStarBound` | [star bound](sema-star-bound.c) | `[*]` outside function prototype scope; a definition's parameters use `DefinitionStarArray`. |
 | `ObjectTooLarge` | [object size](sema-object-size.c) | Arrays and records beyond the PTRDIFF_MAX implementation limit. |
 | `FileScopeVariableType` | [VLA](sema-file-vla.c) | Runtime file bound, linked/static VLA constraints and variably modified members. |
 | `IncompatibleDeclaration` | [incompatible](sema-incompatible.c) | Incompatible redeclaration and previous source. |
