@@ -111,7 +111,6 @@ __STDC_VERSION__	Existing language-mode preprocessor builtin; not a target defin
 __STDC__	Existing language-mode preprocessor builtin; not a target definition.
 __STRICT_ANSI__	Existing language-mode preprocessor builtin; not a target definition.
 __VERSION__	Compiler identity/version or hosted-mode contract owned separately.
-__cdecl	Vendor attribute/calling-convention semantics are not implemented.
 __clang__	Compiler identity/version or hosted-mode contract owned separately.
 __clang_literal_encoding__	Compiler identity/version or hosted-mode contract owned separately.
 __clang_major__	Compiler identity/version or hosted-mode contract owned separately.
@@ -120,19 +119,9 @@ __clang_patchlevel__	Compiler identity/version or hosted-mode contract owned sep
 __clang_version__	Compiler identity/version or hosted-mode contract owned separately.
 __clang_wide_literal_encoding__	Compiler identity/version or hosted-mode contract owned separately.
 __code_model_small__	Code generation, relocation and optimization policy are not implemented.
-__declspec	Vendor attribute/calling-convention semantics are not implemented.
-__fastcall	Vendor attribute/calling-convention semantics are not implemented.
 __llvm__	Compiler identity/version or hosted-mode contract owned separately.
-__pascal	Vendor attribute/calling-convention semantics are not implemented.
 __pic__	Code generation, relocation and optimization policy are not implemented.
 __pie__	Code generation, relocation and optimization policy are not implemented.
 __seg_fs	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __seg_gs	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
-__stdcall	Vendor attribute/calling-convention semantics are not implemented.
-__thiscall	Vendor attribute/calling-convention semantics are not implemented.
 __tune_k8__	Code generation, relocation and optimization policy are not implemented.
-_cdecl	Vendor attribute/calling-convention semantics are not implemented.
-_fastcall	Vendor attribute/calling-convention semantics are not implemented.
-_pascal	Vendor attribute/calling-convention semantics are not implemented.
-_stdcall	Vendor attribute/calling-convention semantics are not implemented.
-_thiscall	Vendor attribute/calling-convention semantics are not implemented.

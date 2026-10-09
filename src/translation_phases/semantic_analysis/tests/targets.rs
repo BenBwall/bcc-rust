@@ -20,6 +20,38 @@ const TARGETS: [Target; 4] = [
 ];
 
 #[test]
+fn mingw_attributes_preserve_types_and_keep_alignment_conservative() {
+    with_configuration(
+        include_str!("../../../../tests/fixtures/targets/mingw-callconv.c"),
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+            .with_gnu_extensions(true)
+            .with_target(Target::WindowsGnu),
+        |context, unit| {
+            assert_eq!(context.pending_error_count(), 0);
+            let ty = |name| {
+                unit.bindings
+                    .iter()
+                    .find(|binding| context.string_cache.at(binding.name.name) == name)
+                    .unwrap()
+                    .ty
+            };
+            assert!(matches!(
+                unit.types.nodes[ty("aligned_object").index],
+                TypeKind::Unknown
+            ));
+            assert!(matches!(
+                unit.types.nodes[ty("compatible").index],
+                TypeKind::Function { .. }
+            ));
+            assert!(matches!(
+                unit.types.nodes[ty("callback").index],
+                TypeKind::Pointer(_)
+            ));
+        },
+    );
+}
+
+#[test]
 fn target_typedefs_and_bit_offsets_match_clang() {
     for target in TARGETS {
         with_configuration(

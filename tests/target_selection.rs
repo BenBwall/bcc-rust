@@ -63,6 +63,29 @@ mod tests {
     }
 
     #[test]
+    fn mingw_calling_conventions_and_declspec_attributes_match_clang() {
+        let probe = "tests/fixtures/targets/mingw-callconv.c";
+        for standard in ["c17", "gnu17", "c23"] {
+            for binary in [clang(), env!("CARGO_BIN_EXE_bcc-rust").into()] {
+                let mut command = Command::new(&binary);
+                _ = command.args([
+                    "--target=x86_64-w64-windows-gnu",
+                    &format!("-std={standard}"),
+                ]);
+                if binary == clang() {
+                    _ = command.arg("-fsyntax-only");
+                }
+                let output = command.arg(probe).output().unwrap();
+                let text = String::from_utf8_lossy(&output.stderr);
+                assert!(
+                    output.status.success() && !text.contains("error:"),
+                    "{standard}: {text}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn every_target_passes_the_int128_clang_and_bcc_probe() {
         let probe = "tests/fixtures/targets/int128.c";
         for triple in TRIPLES {

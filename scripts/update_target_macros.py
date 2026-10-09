@@ -35,8 +35,6 @@ def exclusion(name):
         return "Code generation, relocation and optimization policy are not implemented."
     if name in {"__CONSTANT_CFSTRINGS__", "__OBJC_BOOL_IS_BOOL"}:
         return "Objective-C and CoreFoundation string intrinsics are not implemented."
-    if name in {"__cdecl", "__declspec", "__fastcall", "__pascal", "__stdcall", "__thiscall", "_cdecl", "_fastcall", "_pascal", "_stdcall", "_thiscall"}:
-        return "Vendor attribute/calling-convention semantics are not implemented."
     if name in {"__PRAGMA_REDEFINE_EXTNAME", "_MSVC_CONSTEXPR_ATTRIBUTE"}:
         return "The advertised pragma/attribute semantics are not implemented."
     if name == "_MSVC_TRADITIONAL":
