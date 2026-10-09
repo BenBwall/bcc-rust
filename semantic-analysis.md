@@ -539,7 +539,10 @@ a later non-inline or `extern` declaration can make the body an external
 definition (§6.7.4p3,p6, printed p. 112, PDF p. 124). Inline-only external bodies
 cannot define modifiable static objects or reference internal identifiers,
 including in sizeof operands. Static inline and ordinary external definitions
-are exempt. Const qualification is checked on the object (or array element);
+are exempt. On the `x86_64-pc-windows-msvc` target, as in MSVC and Clang, the
+Microsoft ABI emits every inline function as a discardable external definition,
+so no body is an inline definition and these restrictions do not apply; the
+UCRT's `__inline` functions keep modifiable static locals. Const qualification is checked on the object (or array element);
 a const aggregate member does not protect the aggregate's other members.
 Unmodeled `__builtin_*` calls receive opaque function results rather
 than invented implicit-int return types; explicit visible prototypes still govern

@@ -1032,10 +1032,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.definitions.sort_unstable_by_key(|d| d.binding);
     }
 
+    /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125, unless the target's ABI
+    /// emits inline functions as external definitions.
     fn is_inline_definition(&self, binding: usize) -> bool {
-        self.functions
-            .entities
-            .get(&self.bindings[binding].name.name)
-            .is_some_and(|e| !e.non_inline)
+        self.context.configuration.target().c99_inline_definitions()
+            && self
+                .functions
+                .entities
+                .get(&self.bindings[binding].name.name)
+                .is_some_and(|e| !e.non_inline)
     }
 }
