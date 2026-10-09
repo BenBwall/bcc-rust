@@ -52,6 +52,10 @@ typedef __SIZE_TYPE__ rsize_t;
 #ifdef __need_wchar_t
 #ifndef _WCHAR_T
 #define _WCHAR_T
+/* As in Clang, MSVC's own headers then keep this definition. */
+#ifdef _MSC_EXTENSIONS
+#define _WCHAR_T_DEFINED
+#endif
 typedef __WCHAR_TYPE__ wchar_t;
 #endif
 #undef __need_wchar_t
@@ -66,7 +70,12 @@ typedef __WCHAR_TYPE__ wchar_t;
 #ifdef __need_max_align_t
 #ifndef __BCC_MAX_ALIGN_T_DEFINED
 #define __BCC_MAX_ALIGN_T_DEFINED
+/* Clang's choices: MSVC's `double`, otherwise GCC's record. */
+#ifdef _MSC_VER
+typedef double max_align_t;
+#else
 typedef struct { long long __integer; long double __floating; } max_align_t;
+#endif
 #endif
 #undef __need_max_align_t
 #endif
