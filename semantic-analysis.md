@@ -246,7 +246,19 @@ the underlying category. Ordinary identifiers resolve through the declaration
 binding model. A function's `__func__` is modeled as a static const character array.
 Calls to undeclared names create an unprototyped int-returning function only in
 C89/C95 and GNU modes, using shared removed-feature policy. Strict C99 and later
-diagnose undeclared identifiers.
+diagnose undeclared identifiers. Undeclared reserved `__builtin_*` names are GCC
+builtins in every mode: they are bound as opaque functions without a
+diagnostic, and calls to them have unknown results, except that
+`__builtin_constant_p` folds to whether its operand is an arithmetic constant.
+
+In GNU modes, as in GCC, an arithmetic constant that is not an integer constant
+expression (§6.6p6) is folded where an integer constant expression is required
+and reported through the `ConstantFolding` extension policy. This includes the
+classic `offsetof` macro: the address of a member or element reached from an
+integer-valued pointer constant carries that integer plus the byte offset, and
+converting it to an integer type yields an arithmetic constant. Strict modes
+keep the integer-constant-expression constraint, so such an array bound is
+variable length.
 
 `conversions` retains the syntax expression, destination type and conversion
 kind: lvalue conversion, array/function decay, arithmetic conversion, assignment
@@ -336,7 +348,7 @@ return expressions.
 - Stage 3 implements return conversions, labels/gotos, case dispatch,
   function-definition parameter rules, inline-body restrictions and
   tentative-definition completion.
-- GNU builtins, statement-expression results, union casts, range initializers,
+- Other GNU builtins, statement-expression results, union casts, range initializers,
   generic selections, count queries, attribute-derived types and newer-standard
   special values remain conservative unknowns. Core operator checks do not
   implement GNU void/function-pointer arithmetic.

@@ -461,3 +461,29 @@ fn gnu_flexible_array_forms_are_policy_extensions() {
         [SemanticErrorKind::InvalidMember]
     );
 }
+
+#[test]
+fn gnu_folding_accepts_classic_offsetof_and_constant_p() {
+    let source = "struct S { int a; char b[8]; int c; }; static char buf[((unsigned \
+                  long)&((struct S*)0)->c)]; int chk[sizeof(buf) == 12 ? 1 : -1]; enum { K = \
+                  (unsigned long)&((struct S*)0)->b[3] }; int chk3[K == 7 ? 1 : -1];";
+    assert_eq!(kinds(source, gnu17()), []);
+    assert_eq!(
+        extensions(source, pedantic(CStandard::C17, true)),
+        ["'folded integer constant expression' is a GNU extension"; 2]
+    );
+    // Strict C99 keeps the integer-constant-expression constraint.
+    assert_eq!(
+        kinds(
+            "struct S { int a; int c; }; static char buf[((unsigned long)&((struct S*)0)->c)];",
+            CompilerConfiguration::default()
+        ),
+        [SemanticErrorKind::FileScopeVariableType]
+    );
+    // GCC's builtin is constant in every mode and never implicitly declared.
+    let builtin = "int x; static char b2[__builtin_constant_p(1) ? 4 : 8]; int c2[sizeof(b2) == 4 \
+                   ? 1 : -1]; int c4[__builtin_constant_p(x) ? -1 : 1]; void *f(void *p) { return \
+                   __builtin_memcpy(p, p, 1); }";
+    assert_eq!(kinds(builtin, gnu17()), []);
+    assert_eq!(kinds(builtin, CompilerConfiguration::default()), []);
+}

@@ -649,6 +649,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && info.constant == super::ConstantClass::Arithmetic
             && info.integer.is_some()
         {
+            // GCC folds arithmetic constants that are not integer constant
+            // expressions (§6.6p6) wherever one is required.
+            if !info.ice && !self.tainted {
+                self.context.report_extension(
+                    crate::configuration::Feature::ConstantFolding,
+                    "folded integer constant expression",
+                    expression.source_vectors,
+                );
+            }
             self.integers.push(info.integer);
             return;
         }
