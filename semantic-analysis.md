@@ -319,7 +319,10 @@ Addresses track static storage/function/string/compound-literal designations,
 including members, subscripts, casts and integer offsets, without reading stored
 object values. This is constant eligibility, not backend relocation lowering:
 syntax, binding identity and retained conversions preserve the operands needed
-to lower a symbol plus offset. Scalar initializers additionally apply assignment
+to lower a symbol plus offset. As §6.6p10 permits and GCC does, the difference
+of two addresses within one object (the same binding, identical string
+literals, or integer-valued pointer constants) folds to an arithmetic
+constant. Scalar initializers additionally apply assignment
 conversion. Automatic aggregate copies may use compatible record expressions.
 
 Finite floating arithmetic uses the existing padding-free native `LongDouble`

@@ -646,3 +646,19 @@ fn braced_strings_initialize_the_first_nested_array() {
         [SemanticErrorKind::InvalidInitializer]
     );
 }
+
+#[test]
+fn address_differences_within_one_object_are_constant() {
+    let source = "struct { int a; char c; } v; static long i = ((char*)&(v.c)-(char*)&v); struct \
+                  { char a, b, f[3]; } s; long j = s.f-&s.b; int z = (&\"Foobar\"[1] - \
+                  &\"Foobar\"[0]); typedef struct { int x; char name[8]; } T; unsigned long o = \
+                  (unsigned long) ((unsigned char *) &((T *) 0)->name - (unsigned char *) 0); int \
+                  k[2]; long q = &k[1] - k;";
+    for configuration in [gnu17(), CompilerConfiguration::default()] {
+        assert_eq!(kinds(source, configuration), []);
+    }
+    assert_eq!(
+        kinds("int x, y; long d = &x - &y;", gnu17()),
+        [SemanticErrorKind::NonConstantInitializer]
+    );
+}
