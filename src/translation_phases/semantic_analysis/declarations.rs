@@ -325,6 +325,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         index
     }
 
+    /// Enforces the implementation's PTRDIFF_MAX-byte object-size limit for
+    /// declared bounds and initializer-completed arrays.
+    /// C99: §5.2.4.1p1, pp. 20-21; PDF pp. 32-33 (implementation limit);
+    /// §6.5.6p9, pp. 83-84; PDF pp. 95-96 (representable pointer differences).
+    pub(super) fn validate_array_size(
+        &mut self,
+        element: TypeId,
+        count: i128,
+        source: SourceVectors,
+    ) -> bool {
+        if self.types.layout(element).is_some_and(|layout| {
+            i128::from(layout.size)
+                .checked_mul(count)
+                .is_none_or(|size| size > i128::from(i64::MAX))
+        }) {
+            self.error(SemanticErrorKind::ObjectTooLarge, source, None, None);
+            false
+        } else {
+            true
+        }
+    }
+
     /// Checks `restrict` after typedef expansion as well as after pointer
     /// derivation. C99: §6.7.3p2, p. 108; PDF p. 120.
     pub(super) fn validate_qualifiers(&mut self, ty: TypeId, source: SourceVectors) {

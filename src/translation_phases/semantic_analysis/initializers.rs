@@ -18,6 +18,7 @@ use super::{
     FxBuildHasher,
     Initializer,
     InitializerType,
+    Integer,
     Linkage,
     Member,
     Scalar,
@@ -35,6 +36,30 @@ fn unparenthesized<'tu>(mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
         e = expression;
     }
     e
+}
+
+/// C99: §6.7.8p11, p. 126; PDF p. 138. Scalar braces preserve the
+/// initializing expression and its assignment conversion.
+fn scalar_initializer_expression<'tu>(
+    mut initializer: &'tu Initializer<'tu>,
+) -> Option<&'tu Expression<'tu>> {
+    loop {
+        if initializer.recovered {
+            return None;
+        }
+        match initializer.kind {
+            | InitializerType::AssignmentExpression(expression) => return Some(expression),
+            | InitializerType::InitializerList(list) => {
+                let [element] = list.elements.as_slice() else {
+                    return None;
+                };
+                if element.designation.is_some() {
+                    return None;
+                }
+                initializer = element.initializer;
+            },
+        }
+    }
 }
 
 /// One selected subobject; parent cursors preserve continuation after a nested
@@ -113,12 +138,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && ty.qualifiers.contains(TypeQualifiers::CONST)
             && !ty.qualifiers.contains(TypeQualifiers::VOLATILE)
             && let Some((bits, signed)) = self.integer_type(ty)
-            && let InitializerType::AssignmentExpression(e) = initializer.kind
+            && let Some(e) = scalar_initializer_expression(initializer)
             && let info = self.expression_info(e)
             && info.constant == ConstantClass::Arithmetic
             && let Some(value) = info.integer
         {
-            self.bindings[index].value = Some(value.cast(bits, signed));
+            // C99 §6.3.1.2p1, p. 43; PDF p. 55: _Bool uses truth
+            // conversion rather than truncating to its one-bit model.
+            self.bindings[index].value = Some(
+                if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
+                    Integer::int(i128::from(value.value != 0)).cast(bits, signed)
+                } else {
+                    value.cast(bits, signed)
+                },
+            );
         }
     }
 
@@ -409,6 +442,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     ty
                 };
+            }
+            // C99 §6.7.8p22, p. 127; PDF p. 139: completion produces an
+            // object type subject to the same size limit as a declared bound.
+            if !self.validate_array_size(element, i128::from(count), initializer.source_vectors) {
+                return self.types.unknown();
             }
             self.types
                 .intern(TypeKind::Array(element, ArrayBound::Constant(count)))

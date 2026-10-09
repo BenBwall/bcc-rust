@@ -212,6 +212,123 @@ fn nested_subscript_type_classification_scales_linearly() {
 }
 
 #[test]
+fn static_const_bool_folding_uses_truth_conversion() {
+    for (initializer, expected) in [("2", 1), ("-2", 1), ("0", 0)] {
+        let source =
+            format!("static const _Bool b = {initializer}; int a[b == {expected} ? 1 : -1];");
+        with_configuration(
+            &source,
+            CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true),
+            |context, unit| {
+                let errors = context.take_pending_errors();
+                assert!(errors.is_empty(), "{source}: {errors:?}");
+                assert_eq!(unit.bindings[0].value.unwrap().value, expected);
+                assert!(matches!(
+                    unit.types.nodes[unit.bindings[1].ty.index],
+                    TypeKind::Array(_, ArrayBound::Constant(1))
+                ));
+            },
+        );
+    }
+}
+
+#[test]
+fn static_const_integer_folding_unwraps_scalar_braces() {
+    for (initializer, scalar, expected) in
+        [("{1}", "int", 1), ("{{1}}", "int", 1), ("{2}", "_Bool", 1)]
+    {
+        let source =
+            format!("static const {scalar} b = {initializer}; int a[b == {expected} ? 1 : -1];");
+        with_configuration(
+            &source,
+            CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true),
+            |context, unit| {
+                let errors = context.take_pending_errors();
+                assert!(errors.is_empty(), "{source}: {errors:?}");
+                assert_eq!(unit.bindings[0].value.unwrap().value, expected);
+                assert!(matches!(
+                    unit.types.nodes[unit.bindings[1].ty.index],
+                    TypeKind::Array(_, ArrayBound::Constant(1))
+                ));
+            },
+        );
+    }
+}
+
+#[test]
+fn unselected_comma_expression_uses_its_right_operand_integer_model() {
+    for comma in ["(1UL,1)", "(1UL,(char)1)"] {
+        let source = format!("enum {{N=(1 ? -1 : {comma}) < 0}}; int a[N ? 1 : -1];");
+        with_configuration(
+            &source,
+            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+            |context, unit| {
+                let errors = context.take_pending_errors();
+                assert!(errors.is_empty(), "{source}: {errors:?}");
+                assert_eq!(unit.bindings[0].value.unwrap().value, 1);
+                assert!(matches!(
+                    unit.types.nodes[unit.bindings[1].ty.index],
+                    TypeKind::Array(_, ArrayBound::Constant(1))
+                ));
+            },
+        );
+    }
+}
+
+#[test]
+fn initializer_completed_arrays_enforce_object_size_limit_and_recover() {
+    for source in [
+        "int a[] = {[0x2000000000000000UL] = 1}; int b[sizeof a]; int after;",
+        "int a[] = {[0x4000000000000000UL] = 1}; int b[sizeof a]; int after;",
+        "char a[] = {[0x7fffffffffffffffUL] = 1}; int b[sizeof a]; int after;",
+    ] {
+        with_source(source, |context, unit| {
+            let errors = context.take_pending_errors();
+            assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+            assert!(matches!(
+                errors[0],
+                TranslationError::Semantic(SemanticError {
+                    kind: SemanticErrorKind::ObjectTooLarge,
+                    ..
+                })
+            ));
+            assert_eq!(
+                unit.types.nodes[unit.bindings[0].ty.index],
+                TypeKind::Unknown
+            );
+            let after = unit
+                .bindings
+                .iter()
+                .find(|binding| context.string_cache.at(binding.name.name) == "after")
+                .unwrap();
+            assert_eq!(
+                unit.types.nodes[after.ty.index],
+                TypeKind::Scalar(Scalar::Int)
+            );
+        });
+    }
+    for (source, size) in [
+        (
+            "char a[] = {[0x7ffffffffffffffeUL] = 1};",
+            0x7FFF_FFFF_FFFF_FFFF,
+        ),
+        (
+            "int a[] = {[0x1ffffffffffffffeUL] = 1};",
+            0x7FFF_FFFF_FFFF_FFFC,
+        ),
+        ("int a[] = {[3] = 1};", 16),
+    ] {
+        with_source(source, |context, unit| {
+            let errors = context.take_pending_errors();
+            assert!(errors.is_empty(), "{source}: {errors:?}");
+            assert_eq!(unit.types.layout(unit.bindings[0].ty).unwrap().size, size);
+        });
+    }
+}
+
+#[test]
 fn offsetof_resolves_anonymous_members_and_unnamed_bit_fields() {
     for (source, expected) in [
         (

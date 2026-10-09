@@ -902,12 +902,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                         self.values.push(self.types.unknown());
                         return;
                     }
-                    if self.types.layout(element).is_some_and(|layout| {
-                        i128::from(layout.size)
-                            .checked_mul(value.value)
-                            .is_none_or(|size| size > i128::from(i64::MAX))
-                    }) {
-                        self.error(SemanticErrorKind::ObjectTooLarge, source, None, None);
+                    if !self.validate_array_size(element, value.value, source) {
                         self.values.push(self.types.unknown());
                         return;
                     }

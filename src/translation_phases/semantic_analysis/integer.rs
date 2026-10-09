@@ -382,7 +382,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ))
     }
 
-    /// C99: §6.3.1.1p2, p. 42; PDF p. 54; §6.3.1.8, p. 45; PDF p. 57.
+    /// C99: §6.3.1.1p2, p. 42; PDF p. 54; §6.3.1.8, p. 45; PDF p. 57;
+    /// §6.5.17p2, p. 94; PDF p. 106 (comma keeps the right operand's type).
     fn integer_model(&mut self, expression: &'tu Expression<'tu>) -> Option<(u32, bool)> {
         let mut pending = super::ArenaVec::new_in(self.scratch);
         let mut values = super::ArenaVec::new_in(self.scratch);
@@ -446,6 +447,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | ExpressionType::Binary { operator, .. } => {
                     let right = values.pop().flatten();
                     let left = values.pop().flatten();
+                    if operator == BinaryOperator::Comma {
+                        _ = self.integer_models.insert(key, right);
+                        values.push(right);
+                        continue;
+                    }
                     left.zip(right).map(|(left, right)| {
                         if matches!(
                             operator,

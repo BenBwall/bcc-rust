@@ -117,9 +117,60 @@ fn arithmetic_conversion_rank_and_complex_precision() {
 
 #[test]
 fn prototype_variadic_and_unprototyped_calls() {
-    accepts(
+    with_source(
         "int f(int, const int *); int v(int,...); int old(); void g(void) { int x=0; \
          f((short)1,&x); v(1,(float)2,(char)3); old((float)2,(char)3); }",
+        |context, unit| {
+            let errors = context.take_pending_errors();
+            assert!(errors.is_empty(), "{errors:?}");
+            assert_eq!(
+                unit.conversions
+                    .iter()
+                    .filter(|conversion| conversion.kind == ConversionKind::DefaultArgument)
+                    .count(),
+                4
+            );
+            for (name, index, expected) in [
+                ("v", 1, Scalar::Double),
+                ("v", 2, Scalar::Int),
+                ("old", 0, Scalar::Double),
+                ("old", 1, Scalar::Int),
+            ] {
+                let arguments = unit
+                    .expressions
+                    .iter()
+                    .find_map(|info| {
+                        if let ExpressionType::Call {
+                            function_expression,
+                            arguments,
+                        } = info.expression.kind
+                            && let ExpressionType::Identifier(identifier) = function_expression.kind
+                            && context.string_cache.at(identifier.name) == name
+                        {
+                            Some(arguments)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap();
+                let argument = arguments.as_slice()[index];
+                let conversion = unit
+                    .conversions
+                    .iter()
+                    .find(|conversion| {
+                        std::ptr::eq(conversion.expression, argument)
+                            && conversion.kind == ConversionKind::DefaultArgument
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("{name} argument {index}: missing default promotion")
+                    });
+                assert_eq!(
+                    unit.types.nodes[conversion.ty.index],
+                    TypeKind::Scalar(expected),
+                    "{name} argument {index}"
+                );
+            }
+        },
     );
     rejects(
         "int f(int); void g(void) {f();}",
