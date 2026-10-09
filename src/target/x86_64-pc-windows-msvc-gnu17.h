@@ -162,6 +162,7 @@
 #define __LONG_LONG_MAX__ 9223372036854775807LL
 #define __LONG_MAX__ 2147483647L
 #define __LONG_WIDTH__ 32
+#define __MMX__ 1
 #define __NO_MATH_INLINES 1
 #define __ORDER_BIG_ENDIAN__ 4321
 #define __ORDER_LITTLE_ENDIAN__ 1234
@@ -200,6 +201,10 @@
 #define __SIZE_MAX__ 18446744073709551615ULL
 #define __SIZE_TYPE__ long long unsigned int
 #define __SIZE_WIDTH__ 64
+#define __SSE2_MATH__ 1
+#define __SSE2__ 1
+#define __SSE_MATH__ 1
+#define __SSE__ 1
 #define __STDC_NO_THREADS__ 1
 #define __UINT16_C(c) c
 #define __UINT16_C_SUFFIX__

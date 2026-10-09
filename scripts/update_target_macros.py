@@ -31,7 +31,7 @@ def exclusion(name):
         return "Floating classification intrinsics are not implemented."
     if name in {"__BITINT_MAXWIDTH__"}:
         return "Extended integer syntax exists but these widths lack semantic types."
-    if name in {"__MMX__", "__SSE__", "__SSE2__", "__SSE_MATH__", "__SSE2_MATH__", "__FXSR__", "__GCC_ASM_FLAG_OUTPUTS__", "__GCC_CONSTRUCTIVE_SIZE", "__GCC_DESTRUCTIVE_SIZE", "__SEG_FS", "__SEG_GS", "__seg_fs", "__seg_gs"}:
+    if name in {"__FXSR__", "__GCC_ASM_FLAG_OUTPUTS__", "__GCC_CONSTRUCTIVE_SIZE", "__GCC_DESTRUCTIVE_SIZE", "__SEG_FS", "__SEG_GS", "__seg_fs", "__seg_gs"}:
         return "Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented."
     if name in {"__PIC__", "__pic__", "__PIE__", "__pie__", "__code_model_small__", "__NO_INLINE__", "__NO_MATH_ERRNO__", "__tune_k8__"}:
         return "Code generation, relocation and optimization policy are not implemented."

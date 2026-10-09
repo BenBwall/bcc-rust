@@ -50,7 +50,6 @@ __MEMORY_SCOPE_SINGLE	Scoped atomic operations and memory scopes are not impleme
 __MEMORY_SCOPE_SYSTEM	Scoped atomic operations and memory scopes are not implemented.
 __MEMORY_SCOPE_WRKGRP	Scoped atomic operations and memory scopes are not implemented.
 __MEMORY_SCOPE_WVFRNT	Scoped atomic operations and memory scopes are not implemented.
-__MMX__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __NO_INLINE__	Code generation, relocation and optimization policy are not implemented.
 __NO_MATH_ERRNO__	Code generation, relocation and optimization policy are not implemented.
 __OBJC_BOOL_IS_BOOL	Objective-C and CoreFoundation string intrinsics are not implemented.
@@ -64,10 +63,6 @@ __PIE__	Code generation, relocation and optimization policy are not implemented.
 __PRAGMA_REDEFINE_EXTNAME	The advertised pragma/attribute semantics are not implemented.
 __SEG_FS	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __SEG_GS	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
-__SSE2_MATH__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
-__SSE2__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
-__SSE_MATH__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
-__SSE__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __STDC_EMBED_EMPTY__	Existing language-mode preprocessor builtin; not a target definition.
 __STDC_EMBED_FOUND__	Existing language-mode preprocessor builtin; not a target definition.
 __STDC_EMBED_NOT_FOUND__	Existing language-mode preprocessor builtin; not a target definition.

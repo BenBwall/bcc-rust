@@ -170,6 +170,7 @@
 #define __LONG_WIDTH__ 32
 #define __MINGW32__ 1
 #define __MINGW64__ 1
+#define __MMX__ 1
 #define __MSVCRT__ 1
 #define __NO_MATH_INLINES 1
 #define __ORDER_BIG_ENDIAN__ 4321
@@ -211,6 +212,10 @@
 #define __SIZE_MAX__ 18446744073709551615ULL
 #define __SIZE_TYPE__ long long unsigned int
 #define __SIZE_WIDTH__ 64
+#define __SSE2_MATH__ 1
+#define __SSE2__ 1
+#define __SSE_MATH__ 1
+#define __SSE__ 1
 #define __UINT16_C(c) c
 #define __UINT16_C_SUFFIX__
 #define __UINT16_FMTX__ "hX"
