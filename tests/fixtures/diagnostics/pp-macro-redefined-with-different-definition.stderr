@@ -1,4 +1,4 @@
-error: macro `F` redefined differently
+warning: macro `F` redefined differently
  --> pp-macro-redefined-with-different-definition.c:2:9
   |
 2 | #define F 2
@@ -7,7 +7,7 @@ error: macro `F` redefined differently
   = note: C99 §6.10.3p2: a redefinition must have the same parameters and an identical replacement list
   = help: add `#undef F` before this definition
 
-error: macro `S` redefined differently
+warning: macro `S` redefined differently
   --> pp-macro-redefined-with-different-definition.c:9:9
    |
  9 | #define S a + b
@@ -16,4 +16,4 @@ error: macro `S` redefined differently
    = note: C99 §6.10.3p2: a redefinition must have the same parameters and an identical replacement list
    = help: add `#undef S` before this definition
 
-2 errors generated.
+2 warnings generated.

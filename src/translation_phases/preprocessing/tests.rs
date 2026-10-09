@@ -647,7 +647,7 @@ fn identical_redefinitions_and_empty_definitions_are_accepted() {
             assert!(matches!(
                 errors,
                 [TranslationError::Preprocessing(PreprocessorError {
-                    error_type: PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(_),
+                    error_type: PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(..),
                     ..
                 })]
             ));

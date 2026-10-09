@@ -862,7 +862,9 @@ fn redefinitions_with_different_tokens_or_separation_are_diagnosed() {
         let name = &source["#define ".len()..][..1];
         assert_eq!(
             errors,
-            [format!("MacroRedefinedWithDifferentDefinition({name:?})")],
+            [format!(
+                "MacroRedefinedWithDifferentDefinition({name:?}, Allow)"
+            )],
             "{source:?}"
         );
     }
@@ -874,15 +876,15 @@ fn whitespace_before_the_parenthesis_changes_the_kind_of_macro() {
     for (source, expected) in [
         (
             "#define F (x) x\n#define F(x) x\n",
-            "RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(\"F\")",
+            "RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(\"F\", Allow)",
         ),
         (
             "#define F(x) x\n#define F (x) x\n",
-            "RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(\"F\")",
+            "RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(\"F\", Allow)",
         ),
         (
             "#define F(x) x\n#define F /**/(x) x\n",
-            "RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(\"F\")",
+            "RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(\"F\", Allow)",
         ),
     ] {
         let errors = preprocessor_errors(source);
