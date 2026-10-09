@@ -853,6 +853,9 @@ struct Lexed {
     reason = "Each flag is one piece of the end-of-input reading state."
 )]
 struct Lexer<'a, 'tu, 'arena, 's> {
+    /// One-byte spellings recur for punctuation and canonical whitespace.
+    /// Cache their IDs lazily to preserve the interner's insertion order.
+    ascii:               [Option<StringCacheId>; 128],
     context:             &'a mut Context<'tu>,
     text:                &'a str,
     bytes:               &'a [u8],
@@ -896,6 +899,7 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
         let bytes = text.as_bytes();
         let lacks_final_newline = !physically_empty && bytes.last() != Some(&b'\n');
         Self {
+            ascii: [None; 128],
             context,
             text,
             bytes,
@@ -964,8 +968,23 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
             .expect("offsets are character boundaries")
     }
 
+    fn intern_spelling(&mut self, spelling: &str) -> StringCacheId {
+        if let [byte @ 0..=127] = spelling.as_bytes() {
+            let index = usize::from(*byte);
+            if let Some(id) = self.ascii[index] {
+                return id;
+            }
+            let id = self.context.string_cache.intern(spelling);
+            self.ascii[index] = Some(id);
+            id
+        } else {
+            self.context.string_cache.intern(spelling)
+        }
+    }
+
     fn intern(&mut self, start: usize, end: usize) -> StringCacheId {
-        self.context.string_cache.intern(&self.text[start..end])
+        let text = self.text;
+        self.intern_spelling(&text[start..end])
     }
 
     /// Finishes a token spelled exactly by `start..end`.
@@ -1014,7 +1033,7 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
         self.pos = end;
         Lexed {
             kind:     Some(kind),
-            contents: self.context.string_cache.intern(spelling),
+            contents: self.intern_spelling(spelling),
         }
     }
 
