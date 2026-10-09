@@ -89,8 +89,8 @@ def invoke(command, timeout, environment):
         exit_code, stdout, stderr, timed_out = None, error.stdout or b"", error.stderr or b"", True
     return {
         "exit": exit_code, "seconds": round(time.perf_counter() - start, 4),
-        "stdout": ANSI.sub("", stdout.decode("utf-8", errors="replace")),
-        "stderr": ANSI.sub("", stderr.decode("utf-8", errors="replace")),
+        "stdout": ANSI.sub("", stdout.decode("utf-8", errors="replace").replace("\r\n", "\n")),
+        "stderr": ANSI.sub("", stderr.decode("utf-8", errors="replace").replace("\r\n", "\n")),
         "timeout": timed_out,
     }
 
