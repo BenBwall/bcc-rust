@@ -64,9 +64,27 @@ MSVC flags affect neither version nor strictness. `__STDC__`,
 predefined in every mode. `__STDC_HOSTED__` is `1` in the default hosted
 execution environment and `0` with `-ffreestanding`; `-fhosted` restores
 hosted and the later flag wins. `CompilerConfiguration::default()` is hosted
-as well. `__GNUC__` and `_MSC_VER` are deliberately not
-defined. `__clang__`, `__linux__`, `_WIN32` and other compiler/OS identity
-macros are also absent.
+as well.
+
+Compiler identity follows Clang's approach. GNU modes (`-std=gnu*`, including
+the default `gnu17`) define `__GNUC__` `4`, `__GNUC_MINOR__` `2` and
+`__GNUC_PATCHLEVEL__` `1`, the GCC version Clang claims, and the
+inline-semantics macro Clang defines: `__GNUC_GNU_INLINE__` before C99 and
+`__GNUC_STDC_INLINE__` from C99 on. Strict modes define none of these, unlike
+Clang, which claims GCC 4.2.1 in every mode. `-fms-extensions` defines
+`_MSC_VER` `1933`, `_MSC_FULL_VER` `193300000`, `_MSC_BUILD` `1` and
+`_MSC_EXTENSIONS` `1`: MSVC 19.33, Clang's default
+`-fms-compatibility-version`. Only the umbrella flag claims MSVC; the
+individual `-fms-NAME` groups do not, and a later `-fno-ms-extensions`
+withdraws it. Both GNU and MSVC identity can therefore be claimed at once,
+whereas Clang drops the GNU identity under `-fms-compatibility`. Every mode
+defines `__bcc__` `1`, `__bcc_major__`, `__bcc_minor__`, `__bcc_patchlevel__`
+and the string `__bcc_version__` from the package version. `__clang__`,
+`__llvm__`, `__VERSION__` and `__GXX_ABI_VERSION` are never defined. Like
+Clang's, these are ordinary macros that `#undef` may remove. `__linux__`,
+`_WIN32` and other OS identity macros belong to target selection and are not
+yet defined. The identity and target definitions are read from the synthetic
+`<built-in>/predefined.h` before user input.
 
 Reserved target-description macros are predefined in **every mode**, including
 strict ISO modes. Like GCC and Clang, these describe the implementation without
@@ -81,8 +99,8 @@ macros, integer-constant functions and suffix helpers, endian constants,
 Clang `-dM -E` subset is `tests/fixtures/freestanding/target-macros.h`; a unit test
 checks every emitted definition against it. They are ordinary implementation
 macros, so `#undef` and compatible redefinition work as in Clang; the required
-ISO predefined macros retain their existing protection. No `__GNUC__` emulation
-is implied by target compatibility.
+ISO predefined macros retain their existing protection. GNU identity follows
+the language mode, not the target description.
 
 ### Embedded freestanding headers
 

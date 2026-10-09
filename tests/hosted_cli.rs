@@ -15,6 +15,7 @@
 )]
 mod tests {
     use std::{
+        fmt::Write as _,
         fs,
         path::{
             Path,
@@ -343,5 +344,129 @@ mod tests {
             "{}",
             stderr(&output)
         );
+    }
+
+    /// The GNU identity and inline-semantics macros Clang predefines.
+    const GNU_IDENTITY: [&str; 5] = [
+        "__GNUC__",
+        "__GNUC_MINOR__",
+        "__GNUC_PATCHLEVEL__",
+        "__GNUC_GNU_INLINE__",
+        "__GNUC_STDC_INLINE__",
+    ];
+
+    /// `(name, value)` for each defined name of `GNU_IDENTITY`, as bcc
+    /// predefines them in `mode`.
+    fn bcc_gnu_identity(mode: &str) -> Vec<(String, String)> {
+        let mut source = String::new();
+        for name in GNU_IDENTITY {
+            writeln!(source, "#ifdef {name}\nfound{name} {name}\n#endif").unwrap();
+        }
+        let output = bcc(&[mode, "--tokens", "--input", &source]);
+        clean(&output);
+        let text = stderr(&output);
+        let mut lines = text.lines();
+        let mut defined = Vec::new();
+        while let Some(line) = lines.next() {
+            if let Some((_, name)) = line.split_once("identifier `found") {
+                let value = lines.next().unwrap();
+                let value = value.split('`').nth(1).unwrap();
+                defined.push((name.trim_end_matches('`').to_owned(), value.to_owned()));
+            }
+        }
+        defined
+    }
+
+    fn clang() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
+            "target/llvm/bin/clang.exe"
+        } else {
+            "target/llvm/bin/clang"
+        })
+    }
+
+    #[test]
+    fn gnu_modes_claim_the_gnu_identity_clang_claims_and_strict_modes_none() {
+        for mode in [
+            "-std=gnu89",
+            "-std=gnu99",
+            "-std=gnu11",
+            "-std=gnu17",
+            "-std=gnu23",
+        ] {
+            let dump = Command::new(clang())
+                .args([
+                    "--target=x86_64-unknown-linux-gnu",
+                    mode,
+                    "-dM",
+                    "-E",
+                    "-x",
+                    "c",
+                    if cfg!(windows) { "NUL" } else { "/dev/null" },
+                ])
+                .output()
+                .unwrap();
+            assert!(dump.status.success());
+            let mut expected: Vec<_> = String::from_utf8_lossy(&dump.stdout)
+                .lines()
+                .filter_map(|line| {
+                    let mut words = line.split_whitespace().skip(1);
+                    let name = words.next()?;
+                    let value = words.next()?;
+                    GNU_IDENTITY
+                        .contains(&name)
+                        .then(|| (name.to_owned(), value.to_owned()))
+                })
+                .collect();
+            let mut actual = bcc_gnu_identity(mode);
+            expected.sort();
+            actual.sort();
+            assert_eq!(actual, expected, "{mode}");
+        }
+        // The user chose GNU identity for GNU modes only, unlike Clang.
+        for mode in ["-std=c89", "-std=c99", "-std=c17", "-std=c23"] {
+            assert!(bcc_gnu_identity(mode).is_empty(), "{mode}");
+        }
+    }
+
+    #[test]
+    fn msvc_identity_needs_the_umbrella_flag_and_clang_is_never_claimed() {
+        let source = "#ifdef _MSC_VER\nms _MSC_VER _MSC_FULL_VER _MSC_BUILD \
+                      _MSC_EXTENSIONS\n#endif\n#ifdef __clang__\nclang\n#endif\n#if __bcc__ == 1 \
+                      && defined __bcc_version__\nbcc __bcc_major__ __bcc_minor__ \
+                      __bcc_patchlevel__\n#endif\n";
+        let constants = |output: &Output| -> Vec<String> {
+            stderr(output)
+                .lines()
+                .filter_map(|line| line.split('`').nth(1))
+                .map(str::to_owned)
+                .collect()
+        };
+        let version = [
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            env!("CARGO_PKG_VERSION_MINOR"),
+            env!("CARGO_PKG_VERSION_PATCH"),
+        ];
+        for mode in ["-std=c99", "-std=gnu17"] {
+            let output = bcc(&[mode, "-fms-extensions", "--tokens", "--input", source]);
+            clean(&output);
+            let mut expected = vec!["ms", "1933", "193300000", "1", "1", "bcc"];
+            expected.extend(version);
+            assert_eq!(constants(&output), expected, "{mode}");
+            for flags in [
+                &["-fms-declspec"][..],
+                &["-fms-extensions", "-fno-ms-extensions"][..],
+                &[][..],
+            ] {
+                let mut args = vec![mode];
+                args.extend_from_slice(flags);
+                args.extend(["--tokens", "--input", source]);
+                let output = bcc(&args);
+                clean(&output);
+                let mut expected = vec!["bcc"];
+                expected.extend(version);
+                assert_eq!(constants(&output), expected, "{mode} {flags:?}");
+            }
+        }
     }
 }

@@ -659,7 +659,7 @@ otherwise unchanged.
 Missing-header fixtures and the corresponding lexing snapshots now list the final `<built-in>` directory. The system
 missing-header fixture consequently reports an actual search list instead of
 its former empty-list/absolute-path note. Other lexing snapshot changes are internal
-file IDs: `<built-in>/target.h` is registered after the main source and before
+file IDs: `<built-in>/predefined.h` (formerly `<built-in>/target.h`) is registered after the main source and before
 any include or `#line` synthetic identity. Display paths and user text remain
 unchanged.
 

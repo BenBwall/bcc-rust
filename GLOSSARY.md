@@ -404,7 +404,8 @@ header can chain to the library's header with `#include_next`. **Header
 chaining** is that hosted behavior: like Clang's resource headers, `<limits.h>`
 and `<stdint.h>` read the C library's header of the same name when
 `__has_include_next` finds one, then supply what remains. Target-description definitions are
-read from the synthetic `<built-in>/target.h` before user preprocessing.
+read, with the compiler-identity macros, from the synthetic
+`<built-in>/predefined.h` before user preprocessing.
 
 The **builtin va-list type** is the reserved `__builtin_va_list` type name,
 available without an include. It represents an array of one opaque complete

@@ -470,10 +470,15 @@ impl Feature {
     }
 }
 
+/// The `msvc` bit recording that the last MSVC umbrella flag enabled the
+/// groups, above the `MsvcFeature` bits.
+const MSVC_COMPATIBILITY: u16 = 1 << 15;
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct CompilerConfiguration {
     standard: CStandard,
     gnu: bool,
+    /// One bit per `MsvcFeature`, plus [`MSVC_COMPATIBILITY`].
     msvc: u16,
     extension_policy: ExtensionPolicy,
     accepted: u128,
@@ -535,13 +540,22 @@ impl CompilerConfiguration {
         self.derive_features()
     }
 
+    /// Enables or disables every MSVC group, as `-fms-extensions` and
+    /// `-fno-ms-extensions` do; the umbrella also decides
+    /// [`Self::msvc_compatibility`].
     pub(crate) const fn with_msvc_extensions(mut self, enabled: bool) -> Self {
         self.msvc = if enabled {
-            (1 << MsvcFeature::ALL.len()) - 1
+            ((1 << MsvcFeature::ALL.len()) - 1) | MSVC_COMPATIBILITY
         } else {
             0
         };
         self.derive_features()
+    }
+
+    /// Whether the last MSVC umbrella flag was `-fms-extensions`, which
+    /// predefines `_MSC_VER` as Clang does; the individual groups do not.
+    pub(crate) const fn msvc_compatibility(self) -> bool {
+        self.msvc & MSVC_COMPATIBILITY != 0
     }
 
     pub(crate) const fn msvc_feature(self, feature: MsvcFeature) -> bool {
