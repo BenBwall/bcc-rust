@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **335 top-level C inputs and 335 stderr snapshots**, plus two supporting headers and one hundred mode/policy `.args` sidecars. Eighty-five of the inputs cover semantic analysis (twenty-one for declarations, twenty-eight for expressions and initializers, thirty-six for statements and functions) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **135 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 116 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **339 top-level C inputs and 339 stderr snapshots**, plus two supporting headers and 104 mode/policy `.args` sidecars. Eighty-nine of the inputs cover semantic analysis (twenty-one for declarations, twenty-eight for expressions and initializers, thirty-six for statements and functions, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **135 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 116 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -618,3 +618,22 @@ statements and a 10,000-case switch. Allocation coverage includes valid and
 erroneous bodies, synthesized definitions and deep statement traversal; rendering
 uses the same complete golden corpus. Optional fallthrough and unused-label
 warnings are not implemented and have no claimed coverage.
+
+### Freestanding resources
+
+Four fixtures cover resource-header intrinsic diagnostics: `freestanding-va-list`
+(invalid va-list operands), `freestanding-va-type` (void, incomplete and array
+result types), `freestanding-va-start` (fixed-argument function) and
+`freestanding-offsetof` (bit-field and invalid member paths). They exercise
+`InvalidVaList`, `InvalidVaArgType`, `VaStartOutsideVariadic` and `InvalidOffsetof`.
+Missing-header fixtures and the corresponding lexing snapshots now list the final `<built-in>` directory. The system
+missing-header fixture consequently reports an actual search list instead of
+its former empty-list/absolute-path note. Other lexing snapshot changes are internal
+file IDs: `<built-in>/target.h` is registered after the main source and before
+any include or `#line` synthetic identity. Display paths and user text remain
+unchanged.
+
+The GNU parser policy fixtures intentionally lose the GNU-origin diagnostics for
+`__builtin_va_arg` and `__builtin_offsetof`, which now support strict-mode
+standard headers. Semantic analysis also identifies their previously opaque
+undeclared `ap` operand. Other extension diagnostics are unchanged.
