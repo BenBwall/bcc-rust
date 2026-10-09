@@ -609,6 +609,55 @@ fn c23_standalone_labels_require_compound_block_positions() {
 }
 
 #[test]
+fn selection_headers_retain_complete_provenance_in_enclosing_nodes() {
+    for (statement_source, expected) in [
+        ("if (1) ;", "if(1);"),
+        ("if (int x = 1; x) ;", "if(intx=1;x);"),
+        ("if (int x = 1) ;", "if(intx=1);"),
+        ("switch (int x = 1; x + 2) ;", "switch(intx=1;x+2);"),
+        ("switch (int x = 1) ;", "switch(intx=1);"),
+    ] {
+        for standard in [CStandard::C99, CStandard::C23, CStandard::C2y] {
+            for policy in [
+                ExtensionPolicy::Allow,
+                ExtensionPolicy::Warn,
+                ExtensionPolicy::Deny,
+            ] {
+                let source = format!("void f(void) {{ {{ {statement_source} }} }}");
+                with_parse_configuration(&source, mode(standard, policy), |p| {
+                    assert_eq!(parser_errors(p).count(), 0, "{source}: {:?}", p.errors);
+                    let definition = function_definition(p, 0);
+                    let BlockItem::Statement(inner_block) = block_items(definition.body)[0] else {
+                        panic!("expected an inner compound statement")
+                    };
+                    let BlockItem::Statement(statement) = block_items(inner_block)[0] else {
+                        panic!("expected a selection statement")
+                    };
+                    for (vectors, expected) in [
+                        (statement.source_vectors, expected.to_owned()),
+                        (inner_block.source_vectors, format!("{{{expected}}}")),
+                        (
+                            definition.body.source_vectors,
+                            format!("{{{{{expected}}}}}"),
+                        ),
+                        (
+                            definition.source_vectors,
+                            format!("voidf(void){{{{{expected}}}}}"),
+                        ),
+                    ] {
+                        assert_eq!(
+                            super::sourced_text(p, vectors),
+                            expected,
+                            "{standard:?}/{policy:?}: {source}"
+                        );
+                    }
+                });
+            }
+        }
+    }
+}
+
+#[test]
 fn c2y_selection_declarations_restore_typedef_scope_and_validate_shape() {
     clean(
         "typedef int T; int f(void){ if(int T=1;T) T=2; else T=3; T after; switch(int T=1){case \

@@ -430,6 +430,10 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     panic!("selection declaration protocol: {returned:?}")
                 };
+                self.source_vectors = Some(parser.context.merge_vectors(
+                    self.source_vectors.unwrap_or_default(),
+                    declaration.source_vectors,
+                ));
                 if is_operator(token, OperatorTokenType::ClosingParenthesis)
                     && !is_operator(parser.cursor.previous, OperatorTokenType::Semicolon)
                 {
@@ -461,6 +465,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::AwaitSelectionExpression(kind, declaration) => {
                 let slot = Self::parsed_slot(returned);
+                self.merge_slot(parser.context, slot);
                 let header = parser.alloc_syntax(SelectionHeader {
                     declaration,
                     expression: Some(slot),
