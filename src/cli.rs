@@ -78,7 +78,8 @@ mod diagnostic_reporter;
 use diagnostic_reporter::DiagnosticReporter;
 
 #[derive(Parser)]
-#[command(author, version, about, long_about, color = ColorChoice::Always)]
+#[command(author, version, about, long_about, color = ColorChoice::Always,
+    after_help = "Preprocessing: -D NAME[=VALUE] or -DNAME[=VALUE], -U NAME or -UNAME, -include FILE.\nDefinitions default to 1. -D/-U run in order before forced includes.")]
 #[expect(
     clippy::disallowed_types,
     reason = "clap's derived parser owns the repeated include directories as `Vec<PathBuf>`."
@@ -99,6 +100,9 @@ struct Cli {
     /// inline,seh,asm,pragma,anonymous-structs,va-args}.
     #[arg(long, hide = true)]
     language_option: Vec<String>,
+    /// GCC startup preprocessing options, normalized with their operation.
+    #[arg(long, hide = true, allow_hyphen_values = true, value_parser = preprocessing_option)]
+    preprocessing_option: Vec<String>,
     #[command(flatten)]
     search: CliHeaderSearch,
     #[command(flatten)]
@@ -140,6 +144,19 @@ struct StandardParser;
 
 #[derive(Clone)]
 struct TargetParser;
+
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "Clap owns startup arguments outside compilation arenas."
+)]
+fn preprocessing_option(value: &str) -> Result<String, &'static str> {
+    if matches!(value.as_bytes().first(), Some(b'D' | b'U' | b'I')) {
+        Ok(value.to_owned())
+    } else {
+        Err("invalid startup preprocessing operation")
+    }
+}
 
 impl TypedValueParser for TargetParser {
     type Value = crate::target::Target;
@@ -202,7 +219,8 @@ fn normalize_language_arguments(
     let mut normalized = Vec::new();
     let mut opaque_value = true; // argv[0]
     let mut positional = false;
-    for argument in arguments {
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
         if opaque_value || positional {
             opaque_value = false;
             normalized.push(argument);
@@ -215,7 +233,24 @@ fn normalize_language_arguments(
         if text == "--" {
             positional = true;
         }
-        if let Some(value) = text.strip_prefix("-std=") {
+        if matches!(text, "-D" | "-U" | "-include") {
+            let operation = match text {
+                | "-D" => "D",
+                | "-U" => "U",
+                | _ => "I",
+            };
+            if let Some(value) = arguments.next() {
+                let mut value_with_operation = std::ffi::OsString::from(operation);
+                value_with_operation.push(value);
+                normalized.push("--preprocessing-option".into());
+                normalized.push(value_with_operation);
+            } else {
+                // Let clap diagnose the missing operand.
+                normalized.push("--preprocessing-option".into());
+            }
+        } else if text.starts_with("-D") || text.starts_with("-U") {
+            normalized.push(format!("--preprocessing-option={}", &text[1..]).into());
+        } else if let Some(value) = text.strip_prefix("-std=") {
             normalized.push(format!("--std={value}").into());
         } else if text == "-std" {
             normalized.push("--std".into());
@@ -250,6 +285,7 @@ fn normalize_language_arguments(
                     | "--sysroot"
                     | "--source-date-epoch"
                     | "--language-option"
+                    | "--preprocessing-option"
             );
             normalized.push(argument);
         }
@@ -312,6 +348,20 @@ impl LanguageFlag {
 }
 
 impl Cli {
+    fn configure_preprocessing(&self, context: &mut Context<'_>) {
+        let tu = context.tu_arena();
+        context.preprocessing_options =
+            tu.alloc_slice_fill_iter(self.preprocessing_option.iter().map(|option| {
+                use crate::configuration::PreprocessingOption;
+                let value = tu.alloc_str(&option[1..]);
+                match option.as_bytes()[0] {
+                    | b'D' => PreprocessingOption::Define(value),
+                    | b'U' => PreprocessingOption::Undefine(value),
+                    | _ => PreprocessingOption::Include(value),
+                }
+            }));
+    }
+
     fn configuration(&self) -> CompilerConfiguration {
         let configuration =
             CompilerConfiguration::new(self.standard.standard, ExtensionPolicy::Allow)
@@ -577,6 +627,7 @@ pub fn run() -> Result<(), MainError> {
     };
     let configuration = args.configuration();
     let mut context = Context::with_configuration(&tu, configuration);
+    args.configure_preprocessing(&mut context);
 
     if args.output.tokens {
         print_preprocessor_output(&mut context, source_filename, input_string, search);
@@ -858,10 +909,10 @@ pub fn compile_file_measured(
     out: &mut dyn Write,
     measure: impl FnMut(CompileStep, &mut dyn FnMut()),
 ) -> io::Result<()> {
-    compile_file_configured_measured(path, CompilerConfiguration::default(), out, measure)
+    compile_file_configured_measured(path, CompilerConfiguration::default(), out, measure, |_| {})
 }
 
-/// Measures compilation with CLI standard, dialect and policy arguments.
+/// Measures compilation with CLI language and startup preprocessing arguments.
 /// Argument parsing runs before either measured interval. Include-path and
 /// output options are not applied by this diagnostic measurement adapter.
 ///
@@ -886,7 +937,9 @@ pub fn compile_file_with_arguments_measured(
             .map(std::ffi::OsString::from),
     ))
     .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    compile_file_configured_measured(path, args.configuration(), out, measure)
+    compile_file_configured_measured(path, args.configuration(), out, measure, |context| {
+        args.configure_preprocessing(context);
+    })
 }
 
 fn compile_file_configured_measured(
@@ -894,10 +947,12 @@ fn compile_file_configured_measured(
     configuration: CompilerConfiguration,
     out: &mut dyn Write,
     mut measure: impl FnMut(CompileStep, &mut dyn FnMut()),
+    configure: impl FnOnce(&mut Context<'_>),
 ) -> io::Result<()> {
     let tu = Bump::new();
     let source = tu.read_to_str_lossy(path)?;
     let mut context = Context::with_configuration(&tu, configuration);
+    configure(&mut context);
     measure(CompileStep::Parse, &mut || {
         let unit = parse_translation_unit(&mut context, path, source, HeaderSearch::default());
         let _semantic = crate::pipeline::analyze_translation_unit(&mut context, &unit);

@@ -555,6 +555,22 @@ impl<'arena> LexingFile<'arena, '_> {
 }
 
 impl<'a> LexedFile<'a> {
+    /// GCC `-D` definitions enter at translation phase 3: backslashes and
+    /// trigraph spellings on argv are already characters, not physical source
+    /// to splice or translate. Keep the ordinary lexer and provenance format.
+    /// C99: command-line extension to §5.1.1.2p3, p. 10; PDF p. 22.
+    pub(super) fn lex_command_line(
+        context: &mut Context<'_>,
+        arena: &'a Bump,
+        source_file_index: u32,
+        source: &str,
+    ) -> Self {
+        let scratch = Bump::new();
+        Lexer::new(context, arena, &scratch, source, &[], source.is_empty())
+            .run()
+            .finish(arena, source_file_index, None)
+    }
+
     /// Runs translation phases 1 through 3 over all of `source`, keeping the
     /// result in `arena`.
     /// C99: §5.1.1.2p1-3, pp. 9-10; PDF pp. 21-22.

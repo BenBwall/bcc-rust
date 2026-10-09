@@ -477,6 +477,17 @@ impl Feature {
 /// groups, above the `MsvcFeature` bits.
 const MSVC_COMPATIBILITY: u16 = 1 << 15;
 
+/// Startup preprocessing operations, borrowed from the caller or an arena.
+/// This is separate from the scalar language configuration so that the latter
+/// remains a lifetime-free, constant value. GCC command-line extension to C99
+/// §6.10.3p9, p. 152; PDF p. 164 and §6.10.3.5, p. 155; PDF p. 167.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreprocessingOption<'a> {
+    Define(&'a str),
+    Undefine(&'a str),
+    Include(&'a str),
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct CompilerConfiguration {
     target: crate::target::Target,

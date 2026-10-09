@@ -90,6 +90,26 @@ fn with_parser<R>(source: &str, inspect: impl FnOnce(&mut LanguageParser<'_, '_,
 }
 
 #[test]
+fn library_startup_options_share_the_cli_directive_path() {
+    use crate::configuration::PreprocessingOption::{
+        Define,
+        Undefine,
+    };
+    let tu = Bump::new();
+    let mut context = Context::new(&tu);
+    context.preprocessing_options = &[Define("VALUE=3"), Undefine("VALUE"), Define("VALUE=7")];
+    let source = "#if VALUE != 7\n#error option order\n#endif\nint value = VALUE;\n";
+    let unit = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        source,
+        HeaderSearch::default(),
+    );
+    assert_eq!(context.pending_error_count(), 0);
+    assert_eq!(unit.external_declarations().len(), 1);
+}
+
+#[test]
 fn diagnostic_is_yielded_before_the_token_produced_alongside_it() {
     with_preprocessed_with(
         "#if (0, 2)\nCOMMA_RESULT_2\n#endif\n",

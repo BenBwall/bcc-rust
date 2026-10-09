@@ -349,6 +349,7 @@ struct SourceText<'tu> {
 pub(crate) struct Context<'tu> {
     tu: &'tu Bump,
     pub(crate) configuration: CompilerConfiguration,
+    pub(crate) preprocessing_options: &'tu [crate::configuration::PreprocessingOption<'tu>],
     pub(crate) source_vectors: SourceVectorStack,
     parser_token_vectors: RegionVec<SourceVector>,
     retained_vectors: RegionVec<SourceVector>,
@@ -421,6 +422,7 @@ impl<'tu> Context<'tu> {
         Self {
             tu,
             configuration,
+            preprocessing_options: &[],
             source_vectors: SourceVectorStack(RegionVec::new()),
             parser_token_vectors: RegionVec::new(),
             retained_vectors: RegionVec::new(),

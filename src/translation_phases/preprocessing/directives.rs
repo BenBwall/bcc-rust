@@ -1272,7 +1272,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         let source_depth = self
             .tokenizer_stack
             .iter()
-            .filter(|frame| matches!(frame.frame_type, TokenizerFrameType::SourceFile { .. }))
+            .filter(|frame| {
+                matches!(frame.frame_type, TokenizerFrameType::SourceFile {
+                physical_source_file_index, ..
+            } if Some(physical_source_file_index) != self.state.command_line_file)
+            })
             .count();
         if source_depth > MAX_INCLUDE_NESTING {
             self.context.preprocessor_error(PreprocessorError {

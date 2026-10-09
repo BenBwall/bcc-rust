@@ -1,0 +1,9 @@
+error: expected a macro name after `#define`, found number `1x`
+ --> <command line>:1:9
+  |
+1 | #define 1x 1
+  |         ^^ expected a macro name
+  |
+  = note: C99 §6.10.3: a macro name is an identifier
+
+1 error generated.

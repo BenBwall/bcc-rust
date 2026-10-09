@@ -410,6 +410,18 @@ impl<'pp> LexedFiles<'pp> {
         file
     }
 
+    /// Opens GCC command-line directives directly at translation phase 3.
+    /// C99: command-line extension to §5.1.1.2p3, p. 10; PDF p. 22.
+    pub(crate) fn open_command_line(
+        &mut self,
+        context: &mut Context<'_>,
+        source_file_index: u32,
+        source: &str,
+    ) -> TokenSource<'pp> {
+        let file = LexedFile::lex_command_line(context, self.arena, source_file_index, source);
+        TokenSource::File(LexedCursor::new(self.register(file)))
+    }
+
     /// `source` in the run's lifetime. A cursor over a file opened here is
     /// re-pointed at that file; any other file, and any replay, is copied
     /// into the arena.
