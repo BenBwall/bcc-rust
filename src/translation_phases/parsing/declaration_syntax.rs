@@ -870,15 +870,15 @@ impl DeclarationSpecifiers<'_> {
 
     /// The storage-class specifiers as written: `none`, one keyword, or a
     /// C23 pairing such as `auto static`.
+    /// Recovered `auto` and `typedef` use their own spelling even if the
+    /// pairing flag is set.
     pub(super) fn storage_spelling(&self) -> &'static str {
         match (self.storage_class, self.auto_with_storage_class) {
             | (None, _) => "none",
-            | (Some(class), false) => class.spelling(),
             | (Some(StorageClass::Register), true) => "auto register",
             | (Some(StorageClass::Static), true) => "auto static",
             | (Some(StorageClass::Extern), true) => "auto extern",
-            | (Some(StorageClass::Auto | StorageClass::Typedef), true) =>
-                unreachable!("`auto` pairs only with register, static, or extern"),
+            | (Some(class), _) => class.spelling(),
         }
     }
 }

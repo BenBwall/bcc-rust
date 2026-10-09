@@ -17,7 +17,12 @@ use crate::{
     translation_phases::{
         TranslationError,
         parsing::{
-            declaration_syntax::TypeSpecifiers,
+            InspectionOptions,
+            Parser,
+            declaration_syntax::{
+                DeclarationSpecifiers,
+                TypeSpecifiers,
+            },
             errors::ParserErrorType,
             modern::ExtendedType,
             syntax::{
@@ -178,6 +183,115 @@ fn c23_auto_accompanies_another_storage_class_and_infers_the_type() {
                 p.errors
             );
         });
+    }
+}
+
+#[test]
+fn c23_auto_storage_recovery_keeps_following_syntax() {
+    for (invalid, storage) in [
+        ("static auto auto x=1;", "auto"),
+        ("auto static auto int x;", "auto"),
+        ("static auto typedef int T;", "typedef"),
+    ] {
+        for standard in [CStandard::C17, CStandard::C23] {
+            for gnu in [false, true] {
+                for block_scope in [false, true] {
+                    let source = if block_scope {
+                        format!(
+                            "void f(void) {{ {invalid} int following_block; }}\nint following;\n"
+                        )
+                    } else {
+                        format!("{invalid}\nint following;\n")
+                    };
+                    let tu = crate::util::bump::Bump::new();
+                    let mut context = crate::translation_phases::Context::with_configuration(
+                        &tu,
+                        mode(standard, gnu, ExtensionPolicy::Deny),
+                    );
+                    let pp = crate::util::bump::Bump::new();
+                    let parse = crate::util::bump::Bump::new();
+                    let preprocessor = crate::translation_phases::preprocessing::Preprocessor::new(
+                        &pp,
+                        &mut context,
+                        std::path::PathBuf::from("<auto-storage-recovery>").into_boxed_path(),
+                        &source,
+                        crate::util::shared::SharedVec::default(),
+                        crate::util::shared::SharedVec::default(),
+                    );
+                    let unit =
+                        Parser::new(preprocessor, &mut context, &parse).parse_translation_unit();
+                    let output = unit.inspect(&tu, &context, InspectionOptions::default());
+                    assert!(
+                        output.contains(&format!("storage={storage} type=")),
+                        "{standard:?}, GNU={gnu}: {source}\n{output}"
+                    );
+                    assert!(
+                        output
+                            .lines()
+                            .any(|line| line.trim() == "declarator following"),
+                        "{source}\n{output}"
+                    );
+                    if block_scope {
+                        assert!(
+                            output.contains("declarator following_block"),
+                            "{source}\n{output}"
+                        );
+                    }
+                    assert_eq!(unit.external_declarations().len(), 2, "{source}");
+                    if !block_scope {
+                        let (ExternalDeclaration::Declaration(declaration)
+                        | ExternalDeclaration::RecoveredDeclaration(declaration)) =
+                            unit.external_declarations()[0]
+                        else {
+                            panic!("expected a declaration: {source}");
+                        };
+                        assert!(
+                            !declaration.declaration_specifiers.auto_with_storage_class,
+                            "{source}"
+                        );
+                    }
+                    assert!(
+                        matches!(
+                            unit.external_declarations()[1],
+                            ExternalDeclaration::Declaration(_)
+                        ),
+                        "{source}"
+                    );
+                    let mut conflicts = 0;
+                    while let Some(error) = context.pop_pending_error() {
+                        if matches!(error, TranslationError::Parsing(error)
+                            if matches!(error.error_type, ParserErrorType::StorageClassRedefinition(..)))
+                        {
+                            conflicts += 1;
+                        }
+                    }
+                    assert_eq!(
+                        conflicts,
+                        if standard == CStandard::C23 { 1 } else { 2 },
+                        "{source}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn c23_auto_storage_recovery_spelling_is_total() {
+    for (storage_class, spelling) in [
+        (None, "none"),
+        (Some(StorageClass::Auto), "auto"),
+        (Some(StorageClass::Typedef), "typedef"),
+        (Some(StorageClass::Static), "auto static"),
+        (Some(StorageClass::Extern), "auto extern"),
+        (Some(StorageClass::Register), "auto register"),
+    ] {
+        let specifiers = DeclarationSpecifiers {
+            storage_class,
+            auto_with_storage_class: true,
+            ..DeclarationSpecifiers::new()
+        };
+        assert_eq!(specifiers.storage_spelling(), spelling);
     }
 }
 

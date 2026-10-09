@@ -534,6 +534,8 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                     Some(token),
                 );
             }
+            // Replacing the storage class also discards its C23 `auto` pairing.
+            self.specifiers.auto_with_storage_class = false;
             self.specifiers.storage_class = Some(storage_class);
             self.storage_seen = true;
             parser.merge_source(&mut self.source_vectors, token);
