@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **366 top-level C inputs and 366 stderr snapshots**, plus six supporting headers and 127 mode/policy `.args` sidecars. One hundred eight of the inputs cover semantic analysis (twenty-seven for declarations, twenty-eight for expressions and initializers, forty for statements and functions, three for 128-bit integers, four for resource intrinsics, six for atomics and generic selection) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **141 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 121 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **370 top-level C inputs and 370 stderr snapshots**, plus six supporting headers and 131 mode/policy `.args` sidecars. One hundred eleven of the inputs cover semantic analysis (twenty-seven for declarations, twenty-eight for expressions and initializers, forty for statements and functions, three for 128-bit integers, four for resource intrinsics, six for atomics and generic selection, three for binary128 and type selections) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **141 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 121 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -727,3 +727,20 @@ identity and constant-evaluated `_Generic` results. The shared atomic probe runs
 with both Clang and bcc for every target in C11, C17 and C23. It deliberately
 disables header deprecation warnings; the separate golden pins that warning.
 All new fixtures participate in the zero-global-allocation reporting harness.
+
+### Binary128 and type-generic diagnostics
+
+- `sema-float128-msvc.c` covers `UnsupportedFloat128` for real and complex
+  types on the MSVC target, with following valid input preserved.
+- `sema-float128-pedantic.c` covers keyword and literal extension warnings
+  and `__extension__` suppression.
+- `pp-float128-literals.c` covers binary128 overflow/underflow through the
+  existing floating range warnings and rejects Clang-unsupported `f128`.
+- `sema-type-generic.c` covers `InvalidChooseCondition`,
+  `InvalidGenericSelection` (duplicate, missing and incomplete associations),
+  invalid real-component operands and classification argument counts.
+
+The shared four-target probe checks real/complex layout, arithmetic rank,
+classification, compatibility, generic and choose selection, and component
+lvalues against Clang. Arena allocation tests exercise exact decimal and
+subnormal parsing, unfolded arithmetic constants and selection diagnostics.
