@@ -6,6 +6,7 @@ error: cannot find header `dir\`
   |
   = note: searched these directories:
             . (the working directory)
+            <built-in>
   = help: add the directory containing it with `--iquote <dir>` or `--isystem <dir>`
 
 1 error generated.

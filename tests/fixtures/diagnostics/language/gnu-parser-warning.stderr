@@ -118,18 +118,6 @@ warning: 'old-style field designator' is a GNU extension
 13 |     struct S {int x;}; struct S s={x:1};
    |                                    ^
 
-warning: '__builtin_va_arg' is a GNU extension
-  --> <input>:14:11
-   |
-14 |     int b=__builtin_va_arg(ap,int)+__builtin_offsetof(struct S,x);
-   |           ^^^^^^^^^^^^^^^^
-
-warning: '__builtin_offsetof' is a GNU extension
-  --> <input>:14:36
-   |
-14 |     int b=__builtin_va_arg(ap,int)+__builtin_offsetof(struct S,x);
-   |                                    ^^^^^^^^^^^^^^^^^^
-
 warning: '__builtin_types_compatible_p' is a GNU extension
   --> <input>:15:8
    |
@@ -166,4 +154,12 @@ warning: 'omitted conditional operand' is a GNU extension
 16 |     return ({ b+__real__ u.i+__imag__ u.i; }) ?: 2;
    |                                                ^
 
-28 warnings generated.
+error: identifier has no visible declaration: `ap`
+  --> <input>:14:28
+   |
+14 |     int b=__builtin_va_arg(ap,int)+__builtin_offsetof(struct S,x);
+   |                            ^^ expression or initializer constraint violated
+   |
+   = note: C99 §6.5.1p2: an identifier expression designates a declared object, function or enumeration constant
+
+1 error and 26 warnings generated.

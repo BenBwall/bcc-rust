@@ -246,6 +246,9 @@ pub(super) fn is_expression_operand_starter(token: TokenType) -> bool {
                     | KeywordTokenType::False
                     | KeywordTokenType::Nullptr
                     | KeywordTokenType::BuiltinVaArg
+                    | KeywordTokenType::BuiltinVaStart
+                    | KeywordTokenType::BuiltinVaEnd
+                    | KeywordTokenType::BuiltinVaCopy
                     | KeywordTokenType::BuiltinOffsetof
                     | KeywordTokenType::BuiltinTypesCompatible
                     | KeywordTokenType::BuiltinChooseExpr

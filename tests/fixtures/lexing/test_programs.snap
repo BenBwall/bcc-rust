@@ -583,6 +583,7 @@ error: cannot find header `stdio.h`
   |
   = note: searched these directories:
             test-programs
+            <built-in>
   = help: add the directory containing it with `--isystem <dir>`
 
 
@@ -595,6 +596,7 @@ error: cannot find header `stdlib.h`
   |
   = note: searched these directories:
             test-programs
+            <built-in>
   = help: add the directory containing it with `--isystem <dir>`
 
 
@@ -633,16 +635,16 @@ warning: no newline at end of file
 === hash-if.c "#if 0\n1\n#elif 1\n2\n#if 0\nint main(void) {}\n#endif\n#endif\n"
 test-programs/hash-if.c:4:1: integer constant `2` = 2 (int) [SourceVector { index: 16, column: 1, line: 4, source_file_index: 0, length: 1 }]
 === include.c "#include \"include.h\"\n\n\"Hello world!\\n\"\n\n#if !defined FOO\n�\n#endif\n"
-test-programs/include.h:2:1: keyword `void` [SourceVector { index: 13, column: 1, line: 2, source_file_index: 1, length: 4 }]
-test-programs/include.h:2:6: identifier `foo` [SourceVector { index: 18, column: 6, line: 2, source_file_index: 1, length: 3 }]
-test-programs/include.h:2:9: punctuator `(` [SourceVector { index: 21, column: 9, line: 2, source_file_index: 1, length: 1 }]
-test-programs/include.h:2:10: keyword `void` [SourceVector { index: 22, column: 10, line: 2, source_file_index: 1, length: 4 }]
-test-programs/include.h:2:14: punctuator `)` [SourceVector { index: 26, column: 14, line: 2, source_file_index: 1, length: 1 }]
-test-programs/include.h:2:15: punctuator `;` [SourceVector { index: 27, column: 15, line: 2, source_file_index: 1, length: 1 }]
+test-programs/include.h:2:1: keyword `void` [SourceVector { index: 13, column: 1, line: 2, source_file_index: 2, length: 4 }]
+test-programs/include.h:2:6: identifier `foo` [SourceVector { index: 18, column: 6, line: 2, source_file_index: 2, length: 3 }]
+test-programs/include.h:2:9: punctuator `(` [SourceVector { index: 21, column: 9, line: 2, source_file_index: 2, length: 1 }]
+test-programs/include.h:2:10: keyword `void` [SourceVector { index: 22, column: 10, line: 2, source_file_index: 2, length: 4 }]
+test-programs/include.h:2:14: punctuator `)` [SourceVector { index: 26, column: 14, line: 2, source_file_index: 2, length: 1 }]
+test-programs/include.h:2:15: punctuator `;` [SourceVector { index: 27, column: 15, line: 2, source_file_index: 2, length: 1 }]
 test-programs/include.c:3:1: string literal "Hello world!\n" [SourceVector { index: 22, column: 1, line: 3, source_file_index: 0, length: 16 }]
 === once.c "#include \"once.h\"\n#include \"once.h\"\n"
-test-programs/once.h:3:1: integer constant `123` = 123 (int) [SourceVector { index: 16, column: 1, line: 3, source_file_index: 1, length: 3 }]
-test-programs/once.h:4:1: string literal "ADSAD" [SourceVector { index: 21, column: 1, line: 4, source_file_index: 1, length: 7 }]
+test-programs/once.h:3:1: integer constant `123` = 123 (int) [SourceVector { index: 16, column: 1, line: 3, source_file_index: 2, length: 3 }]
+test-programs/once.h:4:1: string literal "ADSAD" [SourceVector { index: 21, column: 1, line: 4, source_file_index: 2, length: 7 }]
 === paste.c "#define PASTE(X, Y) X##Y\n\nPASTE(+, +)\nPASTE(1, 2)\nPASTE(=, =)\nPASTE(+, =)\nPASTE(3, )\nPASTE(, 4)\n\nPASTE(A B, C D)\n\n#define X 1##2\n\nX\n"
 test-programs/paste.c:3:7: punctuator `++` [SourceVector { index: 32, column: 7, line: 3, source_file_index: 0, length: 1 }, SourceVector { index: 35, column: 10, line: 3, source_file_index: 0, length: 1 }]
 test-programs/paste.c:4:7: integer constant `12` = 12 (int) [SourceVector { index: 44, column: 7, line: 4, source_file_index: 0, length: 1 }, SourceVector { index: 47, column: 10, line: 4, source_file_index: 0, length: 1 }]

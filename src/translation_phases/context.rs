@@ -1154,6 +1154,16 @@ impl<'tu> Context<'tu> {
             .intern_by(path, || Self::alloc_path(tu, path))
     }
 
+    /// Stable virtual paths do not depend on the host's path separator.
+    /// C99: implementation-defined headers §6.10.2p2-3, pp. 149-150;
+    /// PDF pp. 161-162.
+    pub(crate) fn intern_builtin_header(&mut self, name: &Path) -> u32 {
+        use std::fmt::Write as _;
+        let mut path = ArenaString::new_in(self.tu);
+        write!(path, "{}/{}", crate::headers::DIRECTORY, name.display()).unwrap();
+        self.intern_source_file(Path::new(&*path))
+    }
+
     /// Registers synthetic source text under a fresh identity, even when
     /// `path` names an earlier input, so diagnostics retained from each
     /// input keep quoting their own text.
@@ -1192,6 +1202,7 @@ impl<'tu> Context<'tu> {
             .iter()
             .chain(system_directories)
             .copied()
+            .chain(std::iter::once(Path::new(crate::headers::DIRECTORY)))
             .enumerate()
             .filter(move |(index, _)| !system || *index >= quote_count)
     }
@@ -1215,6 +1226,7 @@ impl<'tu> Context<'tu> {
             .into_iter()
             .flatten()
             .chain(system_directories.iter().copied())
+            .chain(std::iter::once(Path::new(crate::headers::DIRECTORY)))
     }
 
     fn alloc_path(tu: &'tu Bump, path: &Path) -> &'tu Path {
@@ -1243,6 +1255,27 @@ impl<'tu> Context<'tu> {
 
     /// Reads and retains an included file without a temporary heap string.
     pub(crate) fn read_source_file(&mut self, index: u32) -> std::io::Result<&'tu str> {
+        if let Ok(name) = self
+            .get_source_file(index)
+            .strip_prefix(crate::headers::DIRECTORY)
+            && let Some(text) = crate::headers::text(name)
+        {
+            let text = if let Some((before, after)) = text.split_once("@MB_LEN_MAX@") {
+                use std::fmt::Write as _;
+                let mut rendered = ArenaString::new_in(self.tu);
+                write!(
+                    rendered,
+                    "{before}{}{after}",
+                    crate::target::TargetLayout::LP64.mb_len_max
+                )
+                .unwrap();
+                rendered.into_str()
+            } else {
+                text
+            };
+            self.record_arena_source_text(index, text);
+            return Ok(text);
+        }
         let text = self.tu.read_to_str_lossy(self.get_source_file(index))?;
         self.record_arena_source_text(index, text);
         Ok(text)

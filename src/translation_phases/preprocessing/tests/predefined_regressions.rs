@@ -55,6 +55,40 @@ fn observe(source: &str) -> Observation {
     observe_with(source, CompilerConfiguration::default())
 }
 
+#[test]
+fn freestanding_resources_and_suffix_helpers_expand() {
+    let observation = observe(
+        "#include <iso646.h>\n#include <stdbool.h>\n#include <limits.h>\n#include \
+         <stdint.h>\n#include <float.h>\nINT8_C(1) UINT32_C(2) INT64_C(3) UINT64_C(4) INTMAX_C(5) \
+         UINTMAX_C(6)\nCHAR_BIT MB_LEN_MAX FLT_MANT_DIG DBL_MANT_DIG LDBL_MANT_DIG\ntrue false \
+         not and or xor\n",
+    );
+    assert!(observation.errors.is_empty(), "{:?}", observation.errors);
+    assert!(observation.spellings.iter().any(|s| s == "3L"));
+    assert!(observation.spellings.iter().any(|s| s == "4UL"));
+    assert!(observation.spellings.iter().any(|s| s == "!"));
+    assert!(observation.spellings.iter().any(|s| s == "&&"));
+    assert!(
+        observation
+            .sources
+            .iter()
+            .flatten()
+            .any(|s| s.source_file_index != 0)
+    );
+}
+
+#[test]
+fn resource_queries_and_target_macro_override_follow_normal_lookup() {
+    let observation = observe_with(
+        "#if !__has_include(<stddef.h>) || !__has_include(<stdarg.h>)\n#error missing \
+         resource\n#endif\n#if __has_include(<absent-resource.h>)\n#error unexpected \
+         resource\n#endif\n#undef __CHAR_BIT__\n#define __CHAR_BIT__ 16\n__CHAR_BIT__\n",
+        CompilerConfiguration::default().with_gnu_extensions(true),
+    );
+    assert!(observation.errors.is_empty(), "{:?}", observation.errors);
+    assert_eq!(observation.spellings, ["16"]);
+}
+
 fn observe_with(source: &str, configuration: CompilerConfiguration) -> Observation {
     let tu = crate::util::bump::Bump::new();
     let mut context = Context::with_configuration(&tu, configuration);

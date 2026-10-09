@@ -109,7 +109,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             )
     }
 
-    fn expression_result(e: &'tu Expression<'tu>, ty: TypeId) -> ExpressionInfo<'tu> {
+    pub(super) fn expression_result(e: &'tu Expression<'tu>, ty: TypeId) -> ExpressionInfo<'tu> {
         ExpressionInfo {
             expression: e,
             ty,
@@ -713,6 +713,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 arguments,
             } => {
                 info = self.type_call(e, self.expression_info(function_expression), arguments);
+            },
+            | E::Builtin(b) => {
+                info = self.type_builtin(e, b);
             },
             | E::CompoundLiteral {
                 type_name,

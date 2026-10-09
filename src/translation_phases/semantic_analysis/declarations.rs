@@ -81,6 +81,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         match spec {
             | S::TypedefName(name) => {
+                if self.context.string_cache.at(name.name) == "__builtin_va_list" {
+                    let ty = self.builtin_va_list();
+                    self.values.push(ty);
+                    return;
+                }
                 let ty = self
                     .lookup(Namespace::Ordinary, name.name)
                     .and_then(|entry| {

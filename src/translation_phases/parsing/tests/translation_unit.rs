@@ -154,7 +154,8 @@ fn typed_identifier_provenance_survives_macros_and_includes() {
     assert!(
         include_vectors
             .iter()
-            .all(|vector| vector.source_file_index == 1)
+            .all(|vector| context.get_source_file(vector.source_file_index)
+                == include_directory.join("identifier-provenance.h"))
     );
     assert_eq!((include_vectors[0].line, include_vectors[0].column), (1, 5));
 

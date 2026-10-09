@@ -241,6 +241,13 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 .or_insert_with(|| ArenaQueue::new_in(arena))
                 .push_back(occurrence);
         }
+        // Reserved resource-header type is present even without <stdarg.h>.
+        // C99: implementation extension supporting §7.15p3, p. 249; PDF p. 261.
+        let mut scopes = ScopeStack::new_in(arena);
+        scopes.publish(
+            context.string_cache.intern("__builtin_va_list"),
+            super::scope::NameClass::Typedef,
+        );
         Self {
             cursor: TokenCursor::new(upstream),
             arena,
@@ -254,7 +261,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             syntax: super::SyntaxLog::default(),
             syntax_nodes: 0,
             emitted_roots: RegionVec::new(),
-            scopes: ScopeStack::new_in(arena),
+            scopes,
             label_scopes: LabelScopes::new_in(arena),
             func_name: None,
             switch_scopes: ArenaVec::new_in(arena),

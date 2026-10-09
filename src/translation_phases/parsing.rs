@@ -81,6 +81,10 @@ use std::fmt::Debug;
 pub(crate) use declaration_syntax::DirectDeclarator;
 pub(crate) use declaration_syntax::TypeSpecifiers;
 pub(crate) use errors::ParserError;
+pub(crate) use gnu::{
+    Builtin,
+    OffsetMember,
+};
 pub(crate) use inspection::InspectionOptions;
 #[cfg(test)]
 use machine::FrameTraceEvent;

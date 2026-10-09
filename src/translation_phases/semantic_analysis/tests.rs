@@ -12,6 +12,56 @@ fn with_source(source: &str, run: impl FnOnce(&mut Context<'_>, &SemanticTransla
     );
 }
 
+#[test]
+fn all_freestanding_headers_check_their_target_values() {
+    with_source(
+        include_str!("../../../tests/fixtures/freestanding/conformance.c"),
+        |context, _| {
+            assert_eq!(
+                context.pending_error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
+        },
+    );
+}
+
+#[test]
+fn builtin_va_list_is_complete_and_parameters_decay() {
+    with_source(
+        "__builtin_va_list ap; void f(__builtin_va_list parameter) { int \
+         value=__builtin_va_arg(parameter,int); __builtin_va_end(parameter); }",
+        |context, s| {
+            assert_eq!(context.pending_error_count(), 0);
+            let ap = s
+                .bindings
+                .iter()
+                .find(|b| context.string_cache.at(b.name.name) == "ap")
+                .unwrap();
+            assert!(matches!(
+                s.types.nodes[ap.ty.index],
+                TypeKind::Array(_, ArrayBound::Constant(1))
+            ));
+            assert_eq!(
+                s.types.layout(ap.ty),
+                Some(crate::target::TargetLayout::LP64.va_list)
+            );
+            let parameter = s
+                .bindings
+                .iter()
+                .find(|b| context.string_cache.at(b.name.name) == "parameter")
+                .unwrap();
+            assert!(matches!(
+                s.types.nodes[parameter.ty.index],
+                TypeKind::Pointer(_)
+            ));
+            let value = s.expressions.iter().find(|info| matches!(info.expression.kind, ExpressionType::Builtin(b) if b.keyword == super::super::preprocessing::KeywordTokenType::BuiltinVaArg)).unwrap();
+            assert_eq!(s.types.nodes[value.ty.index], TypeKind::Scalar(Scalar::Int));
+        },
+    );
+}
+
 fn with_configuration(
     source: &str,
     configuration: crate::configuration::CompilerConfiguration,

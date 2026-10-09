@@ -23,6 +23,7 @@ mod cli;
 pub(crate) mod configuration;
 pub(crate) mod diagnostics;
 pub(crate) mod float_parsing;
+mod headers;
 mod pipeline;
 mod target;
 #[cfg(test)]

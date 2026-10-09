@@ -1486,6 +1486,9 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             }
             if let TokenType::Keyword(
                 keyword @ (KeywordTokenType::BuiltinVaArg
+                | KeywordTokenType::BuiltinVaStart
+                | KeywordTokenType::BuiltinVaEnd
+                | KeywordTokenType::BuiltinVaCopy
                 | KeywordTokenType::BuiltinOffsetof
                 | KeywordTokenType::BuiltinTypesCompatible
                 | KeywordTokenType::BuiltinChooseExpr),
