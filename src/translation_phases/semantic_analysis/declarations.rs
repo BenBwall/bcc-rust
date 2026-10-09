@@ -623,24 +623,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             || (!typedef
                 && self.types.nodes[ty.index] == TypeKind::Unknown
                 && prior.is_some_and(|p| p.kind == BindingKind::Function));
-        if (file
+        if file
             && matches!(
                 spec.storage_class,
                 Some(StorageClass::Auto | StorageClass::Register)
             )
             && !(spec.storage_class == Some(StorageClass::Auto)
                 && self.context.configuration.standard() >= CStandard::C23
-                && self.types.unanalyzed(ty)))
-            || (function
-                && !typedef
-                && matches!(
-                    spec.storage_class,
-                    Some(StorageClass::Auto | StorageClass::Register)
-                ))
-            || (!file && function && spec.storage_class == Some(StorageClass::Static))
+                && self.types.unanalyzed(ty))
         {
             self.error(
                 SemanticErrorKind::InvalidStorage,
+                name.source_vectors,
+                Some(name.name),
+                None,
+            );
+        } else if !file
+            && function
+            && !typedef
+            && matches!(
+                spec.storage_class,
+                Some(StorageClass::Auto | StorageClass::Register | StorageClass::Static)
+            )
+        {
+            self.error(
+                SemanticErrorKind::InvalidFunctionStorage,
                 name.source_vectors,
                 Some(name.name),
                 None,
@@ -717,16 +724,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.error(
                 SemanticErrorKind::FileScopeVariableType,
                 declarator.source_vectors,
-                Some(name.name),
-                None,
-            );
-        }
-        // Initializers complete their objects; functions.rs completes tentative
-        // definitions at translation-unit end.
-        if initialized && !file && linkage != Linkage::None {
-            self.error(
-                SemanticErrorKind::InvalidStorage,
-                name.source_vectors,
                 Some(name.name),
                 None,
             );

@@ -537,3 +537,20 @@ fn star_bounds_need_a_prototype_that_is_not_a_definition() {
         ]
     );
 }
+
+#[test]
+fn storage_constraints_have_distinct_kinds() {
+    assert_eq!(
+        kinds(
+            "void f(void) { extern int a = 3; static int g(void); auto int h(void); typedef int \
+             T(void); extern int ok(void); } register int r;",
+            gnu17()
+        ),
+        [
+            SemanticErrorKind::LinkedBlockInitializer,
+            SemanticErrorKind::InvalidFunctionStorage,
+            SemanticErrorKind::InvalidFunctionStorage,
+            SemanticErrorKind::InvalidStorage,
+        ]
+    );
+}
