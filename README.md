@@ -266,12 +266,18 @@ to the C library's header with `#include_next` (`<float.h>` too for MinGW-w64
 and the MSVC runtime), and `<stddef.h>` and `<stdarg.h>` answer the partial
 `__need_*` requests that glibc's headers make. Diagnostics and token dumps name
 them `<built-in>/name.h`.
-Target-description macros describe x86-64 System V LP64 in all language modes,
-independently of the host ABI. Compiler identity follows Clang: GNU modes claim
-GCC 4.2.1 (`__GNUC__` `4`), `-fms-extensions` claims MSVC 19.33 (`_MSC_VER`
-`1933`), and every mode defines `__bcc__`; `__clang__` is never defined. See
-[language-standards.md](language-standards.md) for the full list. OS identity
-macros remain absent.
+
+Select the C ABI with `--target`: `x86_64-unknown-linux-gnu` (default),
+`x86_64-unknown-linux-musl`, `x86_64-w64-windows-gnu`, or
+`x86_64-pc-windows-msvc`. MinGW also accepts `x86_64-w64-mingw32` and
+`x86_64-pc-windows-gnu`. The selected ABI controls long widths, long-double
+precision, wide literals, record bit-fields, stdarg types and the
+target-description and OS/ABI macros, in all language modes and independently
+of the compiler host and language-extension flags. Compiler identity is a
+separate contract that follows Clang: GNU modes claim GCC 4.2.1 (`__GNUC__`
+`4`), `-fms-extensions` claims MSVC 19.33 (`_MSC_VER` `1933`), and every mode
+defines `__bcc__`; `__clang__` is never defined. See
+[language-standards.md](language-standards.md) for the full list.
 `offsetof` and the varargs intrinsics have semantic types; this front end does
 not generate the code that performs varargs operations.
 
