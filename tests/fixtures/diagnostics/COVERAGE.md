@@ -682,3 +682,15 @@ header.
 
 The three macro-redefinition snapshots changed from errors to warnings when
 redefinitions took GCC's and Clang's severity.
+
+### GNU 128-bit integer diagnostics
+
+`sema-int128-overflow.c` covers signed addition, subtraction, multiplication,
+negation, minimum / -1, minimum % -1, invalid full-width shift counts and zero
+divisors. `sema-int128-constraints.c` covers 129-bit/zero-width named fields,
+unsigned maximum array bounds, the 64-bit enum ABI ceiling and duplicate
+high-half switch cases. `sema-int128-pedantic.c` pins keyword warnings,
+`__extension__` suppression and builtin typedef spellings without warnings.
+All use structured existing semantic kinds and C99 notes; following valid
+input survives. Arithmetic/layout positives are in the shared target probe
+and direct semantic unit tests, with allocation coverage for both paths.
