@@ -353,8 +353,15 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             }
             buffer.push_str(name);
             let candidate = Path::new(&*buffer);
-            if candidate.is_file() {
-                return Some(self.context.intern_source_file(candidate));
+            if (directory == Path::new(crate::headers::DIRECTORY)
+                && crate::headers::text(path).is_some())
+                || (directory != Path::new(crate::headers::DIRECTORY) && candidate.is_file())
+            {
+                return Some(if directory == Path::new(crate::headers::DIRECTORY) {
+                    self.context.intern_builtin_header(path)
+                } else {
+                    self.context.intern_source_file(candidate)
+                });
             }
         }
         None
@@ -504,6 +511,9 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                         | (
                             "__has_builtin",
                             "__builtin_va_arg"
+                            | "__builtin_va_start"
+                            | "__builtin_va_end"
+                            | "__builtin_va_copy"
                             | "__builtin_offsetof"
                             | "__builtin_types_compatible_p"
                             | "__builtin_choose_expr",

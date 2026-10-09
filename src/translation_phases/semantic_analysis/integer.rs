@@ -548,11 +548,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | super::super::preprocessing::FloatTokenType::ImaginaryLongDouble(_),
                     ),
                 )
-                | ExpressionType::Builtin(_)
                 | ExpressionType::Generic(_)
                 | ExpressionType::Countof(_)
                 | ExpressionType::StatementExpression(_)
                 | ExpressionType::Nullptr => return true,
+                | ExpressionType::Builtin(b) if !super::builtins::modeled(b.keyword) =>
+                    return true,
                 | ExpressionType::Identifier(name) => {
                     if self
                         .lookup(Namespace::Ordinary, name.name)
@@ -764,7 +765,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 ));
                 self.work.push(Work::TypeName(name));
             },
-            | E::SizeofExpr(_) | E::AlignofExpr(_) => {
+            | E::Builtin(_) | E::SizeofExpr(_) | E::AlignofExpr(_) => {
                 let info = self.expression_info(expression);
                 self.integers
                     .push(if info.ice { info.integer } else { None });

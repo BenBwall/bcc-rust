@@ -92,7 +92,10 @@ fn lexers_preserve_other_tokens_before_preprocessing() {
     );
     let mut spellings = Vec::new();
     preprocessor.run(&mut context, |preprocessor| {
-        while let Some(token) = preprocessor.tokenizer.next_item(preprocessor.context) {
+        // This test observes the main file before phase 4, not the target
+        // definitions which are now the initial active source-file frame.
+        let mut tokenizer = preprocessor.tokenizer_stack[0].tokenizer.clone();
+        while let Some(token) = tokenizer.next_item(preprocessor.context) {
             spellings.push(
                 preprocessor
                     .context

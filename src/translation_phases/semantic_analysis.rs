@@ -5,6 +5,7 @@
 //! PDF pp. 54-140; statements/functions §6.8-§6.9.2, pp. 131-143;
 //! PDF pp. 143-155. Backend control-flow and emitted code are not constructed.
 
+mod builtins;
 mod constants;
 mod declarations;
 mod errors;
@@ -370,6 +371,7 @@ struct Analyzer<'a, 'tu, 's> {
     register_bindings:   ArenaMap<'s, usize, bool>,
     ice_operands:        ArenaMap<'s, (usize, bool), bool>,
     functions:           functions::State<'tu, 's>,
+    va_list_type:        Option<TypeId>,
     statements:          statements::State<'s>,
 }
 
@@ -438,6 +440,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             register_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             ice_operands: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             functions: functions::State::new(scratch),
+            va_list_type: None,
             statements: statements::State::new(scratch),
         };
         analyzer.scopes.push(Scope {

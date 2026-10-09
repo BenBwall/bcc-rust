@@ -30,6 +30,14 @@ use crate::{
 /// C99: §6.7p3-4, p. 97; PDF p. 109; subsidiary constraints are cited below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SemanticErrorKind {
+    /// C99: §7.15p3, p. 249; PDF p. 261.
+    InvalidVaList,
+    /// C99: §7.15.1.1p2, pp. 249-250; PDF pp. 261-262.
+    InvalidVaArgType,
+    /// C99: §7.15.1.4p4, p. 251; PDF p. 263; diagnosed UB.
+    VaStartOutsideVariadic,
+    /// C99: §7.17p3, p. 254; PDF p. 266.
+    InvalidOffsetof,
     /// C99: §6.9.1p2, p. 141; PDF p. 153.
     InvalidFunctionDefinition,
     /// C99: §6.9.1p4, p. 141; PDF p. 153.
@@ -477,6 +485,23 @@ impl SemanticErrorKind {
             | Self::UnknownTypedef => (
                 "typedef name has no visible type binding",
                 "C99 §6.7.7: a typedef name denotes its declared type",
+            ),
+            | Self::InvalidVaList => (
+                "varargs builtin requires a modifiable va_list operand",
+                "C99 §7.15p3: ap is an object of type va_list",
+            ),
+            | Self::InvalidVaArgType => (
+                "va_arg requires a complete object type",
+                "C99 §7.15.1.1p2: type permits a pointer to an object of that type",
+            ),
+            | Self::VaStartOutsideVariadic => (
+                "va_start requires a variadic function",
+                "C99 §7.15.1.4p4: parmN is the parameter immediately before the ellipsis",
+            ),
+            | Self::InvalidOffsetof => (
+                "offsetof requires a valid non-bit-field member path",
+                "C99 §7.17p3: offsetof designates a member of the specified structure type; \
+                 bit-fields have undefined behavior",
             ),
             | Self::InvalidStorage => (
                 "storage class is not permitted here",

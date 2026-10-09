@@ -3,6 +3,8 @@
 //! 45-49. The default is x86-64 System V LP64, independent of the compiler host
 //! ABI.
 
+mod predefined;
+
 /// Distinct fundamental types, even when representation is identical.
 /// C99: §6.2.5, pp. 33-37; PDF pp. 45-49.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -86,6 +88,10 @@ pub(crate) struct Layout {
 /// pp. 45-49.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TargetLayout {
+    pub(crate) char_bit:    u32,
+    pub(crate) mb_len_max:  u32,
+    pub(crate) wint_t:      Scalar,
+    pub(crate) va_list:     Layout,
     pub(crate) scalars:     [Option<Layout>; 19],
     pub(crate) pointer:     Layout,
     pub(crate) char_signed: bool,
@@ -96,6 +102,13 @@ pub(crate) struct TargetLayout {
 
 impl TargetLayout {
     pub(crate) const LP64: Self = Self {
+        char_bit:    8,
+        mb_len_max:  1,
+        wint_t:      Scalar::UnsignedInt,
+        va_list:     Layout {
+            size:  24,
+            align: 8,
+        },
         scalars:     [
             None,
             Some(Layout { size: 1, align: 1 }),
@@ -152,6 +165,9 @@ impl TargetLayout {
             | Scalar::UnsignedLongLong => false,
             | _ => true,
         };
-        Some((u32::try_from(self.scalar(scalar)?.size * 8).ok()?, signed))
+        Some((
+            u32::try_from(self.scalar(scalar)?.size * u64::from(self.char_bit)).ok()?,
+            signed,
+        ))
     }
 }

@@ -395,6 +395,15 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             context.record_source_text(source_file_index, source);
         }
         let end = (tokenizer.position(context), source_file_index);
+        let definitions = crate::target::TargetLayout::LP64.predefined_macros(context.tu_arena());
+        let builtin_index =
+            context.add_synthetic_source_file(Path::new("<built-in>/target.h"), definitions);
+        let tokenizer = lexed_files.open(context, builtin_index, definitions);
+        file_frames.push(FileFrame {
+            conditional_base:           0,
+            physical_source_file_index: builtin_index,
+            tokenizer:                  tokenizer.clone(),
+        });
         Self {
             resting: Some(Resting {
                 state: PreprocessorState {

@@ -194,10 +194,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         self.taint(
             e.recovered
-                || matches!(
-                    e.kind,
-                    E::Builtin(_) | E::Generic(_) | E::Countof(_) | E::Nullptr
-                ),
+                || matches!(e.kind, E::Builtin(b) if !super::builtins::modeled(b.keyword))
+                || matches!(e.kind, E::Generic(_) | E::Countof(_) | E::Nullptr),
         );
         self.work.push(Work::ExpressionDone(e));
         match e.kind {
@@ -269,10 +267,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.syntax_operand(g.controlling);
             },
             | E::Countof(operand) => self.syntax_operand(operand),
-            | E::Builtin(b) =>
+            | E::Builtin(b) => {
+                for &member in b.members.iter().rev() {
+                    if let super::super::parsing::OffsetMember::Index(index) = member {
+                        self.work.push(Work::Expression(index));
+                    }
+                }
                 for &operand in b.operands.iter().rev() {
                     self.syntax_operand(operand);
-                },
+                }
+            },
             | _ => {},
         }
     }

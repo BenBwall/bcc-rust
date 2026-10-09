@@ -491,8 +491,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// 1. `"name"` first looks beside the file containing the directive (for
     ///    `--input`, whose name has no directory, that is the working
     ///    directory), then in each `--iquote` directory.
-    /// 2. Both forms then search each `--isystem` directory, `CPATH`, and
-    ///    `C_INCLUDE_PATH`.
+    /// 2. Both forms then search `CPATH`, each `--isystem` directory,
+    ///    `C_INCLUDE_PATH`, and the embedded resource directory.
     ///
     /// The process working directory is never searched implicitly, so the
     /// result depends on the source tree rather than where the compiler runs.
@@ -541,8 +541,15 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 // back before the next one, so a lookup leaves nothing there.
                 let mut buffer = ArenaVec::new_in(self.scratch);
                 let candidate = join_path(&mut buffer, directory, path);
-                if candidate.is_file() {
-                    let index = self.context.intern_source_file(candidate);
+                if (directory == Path::new(crate::headers::DIRECTORY)
+                    && crate::headers::text(path).is_some())
+                    || (directory != Path::new(crate::headers::DIRECTORY) && candidate.is_file())
+                {
+                    let index = if directory == Path::new(crate::headers::DIRECTORY) {
+                        self.context.intern_builtin_header(path)
+                    } else {
+                        self.context.intern_source_file(candidate)
+                    };
                     if let Some(search_index) = search_index {
                         _ = self.state.include_origins.insert(index, search_index);
                     }

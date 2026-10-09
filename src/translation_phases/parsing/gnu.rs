@@ -503,10 +503,10 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                 let GnuKind::Builtin(keyword) = self.kind else {
                     unreachable!("builtin phase");
                 };
-                let count = if keyword == KeywordTokenType::BuiltinChooseExpr {
-                    3
-                } else {
-                    2
+                let count = match keyword {
+                    | KeywordTokenType::BuiltinChooseExpr => 3,
+                    | KeywordTokenType::BuiltinVaEnd => 1,
+                    | _ => 2,
                 };
                 if self.operands.len() < count {
                     self.phase = if keyword == KeywordTokenType::BuiltinOffsetof {

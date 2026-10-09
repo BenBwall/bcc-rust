@@ -28,7 +28,8 @@ error: cannot find header `abc`
 1 | #include <abc
   |          ^^^^ not found in any search directory
   |
-  = note: the path is absolute; no directory was searched
+  = note: searched these directories:
+            <built-in>
   = help: add the directory containing it with `--isystem <dir>`
 
 error: translation unit is empty
