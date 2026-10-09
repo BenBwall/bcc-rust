@@ -5,6 +5,11 @@
    Windows definitions; the target's characteristics then replace its own. */
 #if __STDC_HOSTED__
 #if defined(__MINGW32__) || defined(_MSC_VER)
+/* MinGW-w64's <float.h> would #include_next GCC's own, whose guard is
+   _FLOAT_H___; claim that name so the chain ends here. */
+#ifndef _FLOAT_H___
+#define _FLOAT_H___
+#endif
 #if __has_include_next(<float.h>)
 #include_next <float.h>
 #endif
