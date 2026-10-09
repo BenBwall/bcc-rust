@@ -143,7 +143,6 @@ struct PreprocessorState<'pp> {
     query_depth:           usize,
     conditional_queries:   bool,
     retain_placeholders:   bool,
-    include_origins:       ArenaMap<'pp, u32, usize>,
     arena:                 &'pp Bump,
     once_set:              ArenaSet<'pp, u32>,
     macro_definitions:     ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,
@@ -180,6 +179,7 @@ impl Debug for PreprocessorState<'_> {
 struct FileFrame<'pp> {
     conditional_base:           usize,
     physical_source_file_index: u32,
+    include_search_index:       Option<usize>,
     tokenizer:                  TokenSource<'pp>,
 }
 
@@ -387,6 +387,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         file_frames.push(FileFrame {
             conditional_base:           0,
             physical_source_file_index: source_file_index,
+            include_search_index:       None,
             tokenizer:                  tokenizer.clone(),
         });
         if let Some(source) = arena_source {
@@ -403,7 +404,6 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     query_depth: 0,
                     conditional_queries: false,
                     retain_placeholders: false,
-                    include_origins: ArenaMap::with_hasher_in(FxBuildHasher, pp),
                     arena: pp,
                     once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),
                     macro_definitions,
@@ -597,6 +597,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             frame_type: TokenizerFrameType::SourceFile {
                 conditional_base:           frame.conditional_base,
                 physical_source_file_index: frame.physical_source_file_index,
+                include_search_index:       frame.include_search_index,
             },
             tokenizer:  frame.tokenizer,
         }));
@@ -660,6 +661,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             let TokenizerFrameType::SourceFile {
                 conditional_base,
                 physical_source_file_index,
+                include_search_index,
             } = frame.frame_type
             else {
                 unreachable!("only source-file frames remain between expansions");
@@ -668,6 +670,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             state.file_frames.push(FileFrame {
                 conditional_base,
                 physical_source_file_index,
+                include_search_index,
                 tokenizer,
             });
         }

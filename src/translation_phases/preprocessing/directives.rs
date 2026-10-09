@@ -499,6 +499,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     ///
     /// `including_file` is the file containing the directive, captured before
     /// a macro-expanded operand can switch to its definition's tokenizer.
+    /// `including_search_index` belongs to that opening, not its interned
+    /// identity. GNU `#include_next` continues after it, or starts at the
+    /// first configured entry for local, absolute and main files.
     ///
     /// A header that cannot be found violates the constraint of C99 §6.10.2
     /// paragraph 1, p. 149; PDF p. 161. A file that `#pragma once` marked,
@@ -507,22 +510,20 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     fn find_header_from_path(
         &mut self,
         including_file: u32,
+        including_search_index: Option<usize>,
         operand: SourceVectors,
         path: &Path,
         is_system_header: bool,
         next: bool,
-    ) -> Option<u32> {
-        let source_file_index = if path.is_absolute() {
+    ) -> Option<(u32, Option<usize>)> {
+        let found = if path.is_absolute() {
             path.is_file()
-                .then(|| self.context.intern_source_file(path))
+                .then(|| (self.context.intern_source_file(path), None))
         } else {
             // The including file's directory and the quote directories come
             // first for `"…"` names.
             let start = if next {
-                self.state
-                    .include_origins
-                    .get(&including_file)
-                    .map_or(0, |index| index + 1)
+                including_search_index.map_or(0, |index| index + 1)
             } else {
                 0
             };
@@ -543,10 +544,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 let candidate = join_path(&mut buffer, directory, path);
                 if candidate.is_file() {
                     let index = self.context.intern_source_file(candidate);
-                    if let Some(search_index) = search_index {
-                        _ = self.state.include_origins.insert(index, search_index);
-                    }
-                    found = Some(index);
+                    found = Some((index, search_index));
                     break;
                 }
             }
@@ -567,7 +565,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             }
             found
         };
-        let Some(source_file_index) = source_file_index else {
+        let Some((source_file_index, search_index)) = found else {
             self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::HeaderNotFound {
                     name: self.context.diagnostic_text(&path.to_string_lossy()),
@@ -581,7 +579,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         if self.state.once_set.contains(&source_file_index) {
             None
         } else {
-            Some(source_file_index)
+            Some((source_file_index, search_index))
         }
     }
 
@@ -1073,6 +1071,18 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// header name do not match any of the forms of paragraphs 2-4.
     fn parse_include_directive(&mut self, directive: PreprocessorToken) {
         let including_file = self.physical_source_file_index();
+        let including_search_index = self
+            .tokenizer_stack
+            .iter()
+            .rev()
+            .find_map(|frame| match frame.frame_type {
+                | TokenizerFrameType::SourceFile {
+                    include_search_index,
+                    ..
+                } => Some(include_search_index),
+                | _ => None,
+            })
+            .flatten();
         let header = match self.peek_include_operand() {
             | IncludeOperand::Angle => Some(self.read_written_angle_header(directive)),
             | IncludeOperand::Quoted => Some(self.read_written_quoted_header()),
@@ -1118,6 +1128,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let header_source_index = if look_up {
             self.find_header_from_path(
                 including_file,
+                including_search_index,
                 header.source_vectors,
                 Path::new(header.name),
                 header.is_system_header,
@@ -1152,7 +1163,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         {
             self.skip_and_expand_until_newline();
         }
-        let Some(header_source_index) = header_source_index else {
+        let Some((header_source_index, include_search_index)) = header_source_index else {
             return;
         };
         // The main source contributes one frame. Macro frames and headers
@@ -1192,8 +1203,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 .open(self.context, header_source_index, header_string);
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::SourceFile {
-                conditional_base:           self.state.open_conditionals.len(),
+                conditional_base: self.state.open_conditionals.len(),
                 physical_source_file_index: header_source_index,
+                include_search_index,
             },
             tokenizer,
         });
@@ -1678,8 +1690,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// C99: §6.10.4 paragraphs 1 and 3-5, p. 158; PDF p. 170. The line number
     /// must be a digit sequence from 1 to 2147483647; one outside that range
     /// is diagnosed and ignored. The string literal is decoded like any
-    /// other; a wide one, which paragraph 1 forbids, is diagnosed and its
-    /// name ignored.
+    /// other; a wide or encoded one is diagnosed and its name ignored.
+    /// C11: §6.10.4 paragraph 1, p. 173; PDF p. 191, retains the character
+    /// string literal requirement for the newly available encoded literals.
     fn parse_line_directive(&mut self) {
         let Some(token) = self.expect_token_without_rewind::<true>(
             |_, t| t.kind == PreprocessorTokenType::Number,
@@ -1781,6 +1794,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     | TokenType::String(StringTokenType::WideString(_)) =>
                         self.context.preprocessor_error(PreprocessorError {
                             error_type:     PreprocessorErrorType::WideStringInLineDirective,
+                            source_vectors: token.source_vectors,
+                        }),
+                    | TokenType::String(StringTokenType::EncodedString(_, encoding)) =>
+                        self.context.preprocessor_error(PreprocessorError {
+                            error_type:     PreprocessorErrorType::EncodedStringInLineDirective(
+                                encoding.prefix(),
+                            ),
                             source_vectors: token.source_vectors,
                         }),
                     | _ => {},

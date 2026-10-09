@@ -96,6 +96,7 @@ pp	DivideWithoutRhs	pp-divide-without-rhs.c	folded
 pp	ElifDirectiveWithoutIfDirective	pp-elif-directive-without-if-directive.c	rendered
 pp	ElseDirectiveWithoutIfDirective	pp-else-directive-without-if-directive.c	rendered
 pp	EmptyParenthesesInPreprocessorExpression	pp-empty-parentheses-in-preprocessor-expression.c	rendered
+pp	EncodedStringInLineDirective	pp-encoded-string-in-line-directive.c	rendered
 pp	EqualsWithoutRhs	pp-equals-without-rhs.c	folded
 pp	ErrorDirective	pp-error-directive.c	rendered
 pp	ExclamationMarkInsteadOfBinaryOperatorInPreprocessorExpression	pp-exclamation-mark-instead-of-binary-operator-in-preprocessor-expression.c	rendered

@@ -159,6 +159,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::MissingNumberInLineDirective(..)
             | PreprocessorErrorType::MissingNewlineAfterLineDirective(..)
             | PreprocessorErrorType::WideStringInLineDirective
+            | PreprocessorErrorType::EncodedStringInLineDirective(..)
             | PreprocessorErrorType::MissingOpeningParenthesisInPragmaOperator(..)
             | PreprocessorErrorType::MissingClosingParenthesisInPragmaOperator(..)
             | PreprocessorErrorType::MissingStringLiteralInPragmaOperator(..)
@@ -639,6 +640,11 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     ///
     /// C99: §6.10.4 paragraph 1, p. 158; PDF p. 170.
     WideStringInLineDirective,
+    /// A `u`, `U` or `u8` string literal as the `#line` file name; the name
+    /// is ignored. The field is the encoding prefix.
+    ///
+    /// C11: §6.10.4 paragraph 1, p. 173; PDF p. 191.
+    EncodedStringInLineDirective(&'static str),
     // C99: `_Pragma ( string-literal )`, §6.10.9 paragraph 1, p. 161; PDF
     // p. 173.
     MissingOpeningParenthesisInPragmaOperator(PreprocessorTokenType),
@@ -1343,6 +1349,13 @@ impl PreprocessorErrorType<'_> {
                 .label("not a character string literal")
                 .note("C99 §6.10.4p1: the file name of `#line` shall be a character string literal")
                 .help("remove the `L` prefix"),
+            | Self::EncodedStringInLineDirective(prefix) => new(format_in!(
+                arena,
+                "`#line` file name is a `{prefix}` string literal"
+            ))
+            .label("not a character string literal")
+            .note("C11 §6.10.4p1: the file name of `#line` shall be a character string literal")
+            .help(format_in!(arena, "remove the `{prefix}` prefix")),
             | Self::MissingOpeningParenthesisInPragmaOperator(kind) => new(format_in!(
                 arena,
                 "expected `(` after `_Pragma`, found {}",

@@ -77,6 +77,9 @@ pub(super) enum TokenizerFrameType<'a> {
         conditional_base:           usize,
         /// Physical file identity, unaffected by #line.
         physical_source_file_index: u32,
+        /// Configured search entry for this opening; local, absolute and main
+        /// files have none. GNU `#include_next` continues from this origin.
+        include_search_index:       Option<usize>,
     },
     /// The replacement list of an object-like macro being rescanned.
     ///

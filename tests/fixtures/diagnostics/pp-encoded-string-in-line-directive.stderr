@@ -1,0 +1,10 @@
+error: `#line` file name is a `u8` string literal
+ --> pp-encoded-string-in-line-directive.c:1:10
+  |
+1 | #line 10 u8"logical.c"
+  |          ^^^^^^^^^^^^^ not a character string literal
+  |
+  = note: C11 §6.10.4p1: the file name of `#line` shall be a character string literal
+  = help: remove the `u8` prefix
+
+1 error generated.

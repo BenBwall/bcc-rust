@@ -21,17 +21,28 @@ pub(super) fn observe_paths(
     path: PathBuf,
     directories: &[PathBuf],
 ) -> (Vec<String>, Vec<String>) {
+    observe_include_paths(source, config, path, &[], directories)
+}
+
+fn observe_include_paths(
+    source: &str,
+    config: CompilerConfiguration,
+    path: PathBuf,
+    quote_directories: &[PathBuf],
+    system_directories: &[PathBuf],
+) -> (Vec<String>, Vec<String>) {
     let tu = crate::util::bump::Bump::new();
     let pp = crate::util::bump::Bump::new();
     let mut context = Context::with_configuration(&tu, config);
-    let directories = SharedVec::from(directories.to_vec().into_boxed_slice());
+    let quote_directories = SharedVec::from(quote_directories.to_vec().into_boxed_slice());
+    let system_directories = SharedVec::from(system_directories.to_vec().into_boxed_slice());
     let mut preprocessor = Preprocessor::new(
         &pp,
         &mut context,
         path.into_boxed_path(),
         source,
-        SharedVec::default(),
-        directories,
+        quote_directories,
+        system_directories,
     );
     let tokens = preprocessor.preprocess_all(&mut context);
     let scratch = crate::util::bump::Bump::new();
@@ -51,6 +62,213 @@ pub(super) fn mode(standard: CStandard) -> CompilerConfiguration {
 }
 pub(super) fn spellings(output: &[String]) -> String {
     output.join("\n")
+}
+
+struct IncludeDirectory(PathBuf);
+
+impl IncludeDirectory {
+    fn new(name: &str) -> Self {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("bcc-include-{name}-{}-{nonce}", std::process::id()));
+        std::fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+}
+
+impl Drop for IncludeDirectory {
+    fn drop(&mut self) {
+        drop(std::fs::remove_dir_all(&self.0));
+    }
+}
+
+fn token_descriptions(tokens: &[String]) -> Vec<&str> {
+    tokens
+        .iter()
+        .map(|token| token.rsplit_once(": ").unwrap().1)
+        .collect()
+}
+
+#[test]
+fn include_next_uses_each_opening_search_origin() {
+    let temp = IncludeDirectory::new("per-opening");
+    let a = temp.0.join("a");
+    let b = temp.0.join("b");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    std::fs::write(
+        a.join("wrapper.h"),
+        "#ifdef LOCAL\n#include_next <payload.h>\n#else\ninitial\n#endif\n",
+    )
+    .unwrap();
+    std::fs::write(a.join("neighbor.h"), "#include \"wrapper.h\"\n").unwrap();
+    std::fs::write(a.join("payload.h"), "first\n").unwrap();
+    std::fs::write(b.join("payload.h"), "wrong\n").unwrap();
+    for config in [
+        mode(CStandard::C99),
+        mode(CStandard::C17).with_gnu_extensions(true),
+        mode(CStandard::C23),
+    ] {
+        for (source, expected) in [
+            (
+                "#define LOCAL\n#include <neighbor.h>\nafter\n",
+                vec!["identifier `first`", "identifier `after`"],
+            ),
+            (
+                "#include <wrapper.h>\n#define LOCAL\n#include <neighbor.h>\nafter\n",
+                vec![
+                    "identifier `initial`",
+                    "identifier `first`",
+                    "identifier `after`",
+                ],
+            ),
+        ] {
+            let (tokens, errors) = observe_paths(
+                source,
+                config,
+                temp.0.join("main.c"),
+                &[a.clone(), b.clone()],
+            );
+            assert!(errors.is_empty(), "{source}: {errors:?}");
+            assert_eq!(token_descriptions(&tokens), expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn include_next_continues_across_quote_and_local_origins() {
+    let temp = IncludeDirectory::new("quote-local");
+    let q1 = temp.0.join("q1");
+    let q2 = temp.0.join("q2");
+    let system = temp.0.join("system");
+    for path in [&q1, &q2, &system] {
+        std::fs::create_dir(path).unwrap();
+    }
+    // Exercise the configured origin across many macro expansions and a
+    // presumed filename change before switching from quote to angle form.
+    let wrapper = format!(
+        "first\n#define EMPTY\n{}#line 50 \"presumed.h\"\n#include_next <wrapper.h>\n",
+        "EMPTY\n".repeat(300)
+    );
+    std::fs::write(q1.join("wrapper.h"), wrapper).unwrap();
+    std::fs::write(
+        q2.join("wrapper.h"),
+        "second\n#include_next \"wrapper.h\"\n",
+    )
+    .unwrap();
+    std::fs::write(system.join("wrapper.h"), "third\n").unwrap();
+    std::fs::write(
+        q1.join("local.h"),
+        "#ifdef LOCAL\n#include_next <payload.h>\n#else\ninitial\n#endif\n",
+    )
+    .unwrap();
+    std::fs::write(q1.join("neighbor.h"), "#include \"local.h\"\n").unwrap();
+    std::fs::write(temp.0.join("root-local.h"), "#include_next <payload.h>\n").unwrap();
+    std::fs::write(q1.join("payload.h"), "local_payload\n").unwrap();
+    std::fs::write(q2.join("payload.h"), "wrong_quote\n").unwrap();
+    std::fs::write(system.join("payload.h"), "wrong_system\n").unwrap();
+    for config in [
+        mode(CStandard::C99),
+        mode(CStandard::C17).with_gnu_extensions(true),
+        mode(CStandard::C23),
+    ] {
+        for (source, expected) in [
+            (
+                "#include \"wrapper.h\"\nafter\n",
+                vec![
+                    "identifier `first`",
+                    "identifier `second`",
+                    "identifier `third`",
+                    "identifier `after`",
+                ],
+            ),
+            (
+                "#include \"root-local.h\"\nafter\n",
+                vec!["identifier `local_payload`", "identifier `after`"],
+            ),
+            (
+                "#include \"wrapper.h\"\n#define LOCAL\n#include \"neighbor.h\"\nafter\n",
+                vec![
+                    "identifier `first`",
+                    "identifier `second`",
+                    "identifier `third`",
+                    "identifier `local_payload`",
+                    "identifier `after`",
+                ],
+            ),
+            (
+                "#include \"local.h\"\n#define LOCAL\n#include \"neighbor.h\"\nafter\n",
+                vec![
+                    "identifier `initial`",
+                    "identifier `local_payload`",
+                    "identifier `after`",
+                ],
+            ),
+        ] {
+            let (tokens, errors) = observe_include_paths(
+                source,
+                config,
+                temp.0.join("main.c"),
+                &[q1.clone(), q2.clone()],
+                std::slice::from_ref(&system),
+            );
+            assert!(errors.is_empty(), "{source}: {errors:?}");
+            assert_eq!(token_descriptions(&tokens), expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn line_directive_rejects_encoded_filenames_and_recovers() {
+    for standard in [
+        CStandard::C11,
+        CStandard::C17,
+        CStandard::C23,
+        CStandard::C2y,
+    ] {
+        for gnu in [false, true] {
+            for prefix in ["u", "U", "u8", "L"] {
+                for expanded in [false, true] {
+                    let filename = format!("{prefix}\"new.c\"");
+                    let (definition, operand) = if expanded {
+                        (format!("#define FILENAME {filename}\n"), "FILENAME")
+                    } else {
+                        (String::new(), filename.as_str())
+                    };
+                    let source = format!(
+                        "#line 7 \"original.c\"\n{definition}#line 100 {operand}\n__LINE__ \
+                         after\n__FILE__\n#line 200 \"valid.c\"\n__LINE__ after\n__FILE__\n"
+                    );
+                    let (tokens, errors) =
+                        observe(&source, mode(standard).with_gnu_extensions(gnu));
+                    assert_eq!(
+                        errors.len(),
+                        1,
+                        "{standard:?} GNU={gnu}: {source}: {errors:?}"
+                    );
+                    assert!(errors[0].starts_with("Error:"), "{errors:?}");
+                    assert!(errors[0].contains("`#line` file name"), "{errors:?}");
+                    assert_eq!(
+                        token_descriptions(&tokens),
+                        [
+                            "integer constant `100` = 100 (int)",
+                            "identifier `after`",
+                            "string literal \"original.c\"",
+                            "integer constant `200` = 200 (int)",
+                            "identifier `after`",
+                            "string literal \"valid.c\"",
+                        ],
+                        "{source}"
+                    );
+                    assert_eq!(tokens[1], "original.c:100:10: identifier `after`");
+                    assert_eq!(tokens[4], "valid.c:200:10: identifier `after`");
+                }
+            }
+        }
+    }
 }
 
 #[test]

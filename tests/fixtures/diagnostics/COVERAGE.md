@@ -56,7 +56,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **249 top-level C inputs and 249 stderr snapshots**, plus two supporting headers and fifteen mode/policy `.args` sidecars. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **135 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 116 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **250 top-level C inputs and 250 stderr snapshots**, plus two supporting headers and sixteen mode/policy `.args` sidecars. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **136 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 117 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, and include cases may target the same variant more than once.
 
@@ -218,6 +218,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `LineDirectiveNumberTooLarge` | rendered | [pp-line-directive-number-too-large.c](pp-line-directive-number-too-large.c) |
 | `LineDirectiveNumberZero` | rendered | [pp-line-directive-number-zero.c](pp-line-directive-number-zero.c) |
 | `WideStringInLineDirective` | rendered | [pp-wide-string-in-line-directive.c](pp-wide-string-in-line-directive.c) |
+| `EncodedStringInLineDirective` | rendered | [pp-encoded-string-in-line-directive.c](pp-encoded-string-in-line-directive.c) |
 | `MissingOpeningParenthesisInPragmaOperator` | rendered | [pp-missing-opening-parenthesis-in-pragma-operator.c](pp-missing-opening-parenthesis-in-pragma-operator.c) |
 | `MissingClosingParenthesisInPragmaOperator` | rendered | [pp-missing-closing-parenthesis-in-pragma-operator.c](pp-missing-closing-parenthesis-in-pragma-operator.c) |
 | `MissingStringLiteralInPragmaOperator` | rendered | [pp-missing-string-literal-in-pragma-operator.c](pp-missing-string-literal-in-pragma-operator.c) |
