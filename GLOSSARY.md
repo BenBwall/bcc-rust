@@ -394,11 +394,13 @@ this specific sense.
 
 ## Freestanding resource directory
 
-The **resource directory** is the compiler's embedded final system include
-entry, displayed as `<built-in>`. Its header texts live in `src/headers/` and
-are lexed through the ordinary phase 1-4 machinery. A header identity uses the
+The **resource directory** is the compiler's embedded include entry,
+displayed as `<built-in>`. Its header texts live in `src/headers/` and are
+lexed through the ordinary phase 1-4 machinery. A header identity uses the
 stable `<built-in>/name.h` path, independent of the host filesystem. User and
-environment include entries precede it. Target-description definitions are
+environment include entries precede it; the C library's **system
+directories** (`--sysroot`) and `-idirafter` entries follow it, so a resource
+header can chain to the library's header with `#include_next`. Target-description definitions are
 read from the synthetic `<built-in>/target.h` before user preprocessing.
 
 The **builtin va-list type** is the reserved `__builtin_va_list` type name,

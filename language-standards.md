@@ -86,9 +86,11 @@ is implied by target compatibility.
 
 ### Embedded freestanding headers
 
-All nine headers are discoverable in all language modes, after configured and
-environment system directories; quoted lookup additionally gives local and
-`--iquote` headers priority. `__has_include` uses the same resource directory.
+All nine headers are discoverable in all language modes, after the `-I`,
+`-isystem` and environment directories and before the C library's directories
+(`--sysroot`) and `-idirafter`; quoted lookup additionally gives local and
+`-iquote` headers priority. `-nostdinc` and `-nobuiltininc` remove the resource
+directory. `__has_include` uses the same search.
 This follows Clang resource-header availability; use of newer language syntax
 still follows the configured extension policy.
 

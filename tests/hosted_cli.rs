@@ -10,12 +10,20 @@
 #[expect(
     clippy::disallowed_types,
     clippy::disallowed_methods,
+    clippy::disallowed_macros,
     reason = "Tests own command output and generated sources outside compilation."
 )]
 mod tests {
-    use std::process::{
-        Command,
-        Output,
+    use std::{
+        fs,
+        path::{
+            Path,
+            PathBuf,
+        },
+        process::{
+            Command,
+            Output,
+        },
     };
 
     fn bcc(args: &[&str]) -> Output {
@@ -50,6 +58,36 @@ mod tests {
             .collect()
     }
 
+    /// The directories a missing-header diagnostic lists, in order.
+    fn searched(output: &Output) -> Vec<String> {
+        stderr(output)
+            .lines()
+            .skip_while(|line| !line.contains("searched these directories:"))
+            .skip(1)
+            .take_while(|line| !line.contains("= help"))
+            .map(|line| line.trim().to_owned())
+            .collect()
+    }
+
+    /// A fresh directory under `target/` for one test's header trees.
+    fn scratch(name: &str) -> PathBuf {
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/hosted-cli")
+            .join(name);
+        drop(fs::remove_dir_all(&directory));
+        fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    fn write(path: &Path, text: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+
+    fn arg(path: &Path) -> &str {
+        path.to_str().unwrap()
+    }
+
     #[test]
     fn execution_environment_is_hosted_unless_freestanding_and_the_last_flag_wins() {
         let source =
@@ -82,5 +120,203 @@ mod tests {
             "{hosted:?}"
         );
         clean(&bcc(&["-ffreestanding", "--input", source]));
+    }
+
+    /// One directory per search group. Each holds `chain.h`, which names
+    /// its group and continues with `#include_next`, so a lookup records
+    /// every place it visits in order; the last group ends the chain.
+    struct SearchTree {
+        root:   PathBuf,
+        quote:  PathBuf,
+        user:   PathBuf,
+        cpath:  PathBuf,
+        system: PathBuf,
+        c_path: PathBuf,
+        after:  PathBuf,
+    }
+
+    impl SearchTree {
+        fn new(name: &str) -> Self {
+            let root = scratch(name);
+            let tree = Self {
+                quote: root.join("quote"),
+                user: root.join("user"),
+                cpath: root.join("cpath"),
+                system: root.join("system"),
+                c_path: root.join("c-path"),
+                after: root.join("after"),
+                root,
+            };
+            for (directory, name) in [
+                (tree.quote.clone(), "quote_dir"),
+                (tree.user.clone(), "user_dir"),
+                (tree.cpath.clone(), "cpath_dir"),
+                (tree.system.clone(), "isystem_dir"),
+                (tree.c_path.clone(), "c_include_path_dir"),
+                (
+                    tree.sysroot().join("usr/local/include"),
+                    "usr_local_include",
+                ),
+                (tree.sysroot().join("usr/include"), "usr_include"),
+            ] {
+                write(
+                    &directory.join("chain.h"),
+                    &format!("{name}\n#include_next <chain.h>\n"),
+                );
+            }
+            write(&tree.after.join("chain.h"), "idirafter_dir\n");
+            // Resource header names in a group before the resource directory
+            // and in the C library after it.
+            write(&tree.c_path.join("stddef.h"), "c_include_path_stddef\n");
+            write(
+                &tree.sysroot().join("usr/include/stdbool.h"),
+                "libc_stdbool\n",
+            );
+            tree
+        }
+
+        fn sysroot(&self) -> PathBuf {
+            self.root.join("sysroot")
+        }
+
+        fn run(&self, flags: &[&str], source: &str) -> Output {
+            let sysroot = self.sysroot();
+            let mut args = vec![
+                "-iquote",
+                arg(&self.quote),
+                "-isystem",
+                arg(&self.system),
+                "-I",
+                arg(&self.user),
+                "-idirafter",
+                arg(&self.after),
+                "--sysroot",
+                arg(&sysroot),
+            ];
+            args.extend_from_slice(flags);
+            args.extend(["--tokens", "--input", source]);
+            Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args(&args)
+                .env("NO_COLOR", "1")
+                .env_remove("CLICOLOR_FORCE")
+                .env("CPATH", &self.cpath)
+                .env("C_INCLUDE_PATH", &self.c_path)
+                .output()
+                .unwrap()
+        }
+    }
+
+    #[test]
+    fn header_search_follows_clang_with_the_resource_directory_before_the_library() {
+        let tree = SearchTree::new("order");
+        let output = tree.run(&[], "#include \"chain.h\"\n");
+        clean(&output);
+        assert_eq!(
+            identifiers(&output),
+            [
+                "quote_dir",
+                "user_dir",
+                "cpath_dir",
+                "isystem_dir",
+                "c_include_path_dir",
+                "usr_local_include",
+                "usr_include",
+                "idirafter_dir",
+            ]
+        );
+        // `<…>` skips the `-iquote` directory.
+        let output = tree.run(&[], "#include <chain.h>\n");
+        clean(&output);
+        assert_eq!(identifiers(&output)[0], "user_dir");
+        // Command-line and environment groups precede the resource
+        // directory, which precedes the C library.
+        let output = tree.run(&[], "#include <stddef.h>\n#include <stdbool.h>\nbool\n");
+        clean(&output);
+        let text = stderr(&output);
+        assert_eq!(identifiers(&output), ["c_include_path_stddef"], "{text}");
+        assert!(text.contains("<built-in>/stdbool.h"), "{text}");
+    }
+
+    #[test]
+    fn nostdinc_options_remove_the_resource_and_library_directories() {
+        let tree = SearchTree::new("nostdinc");
+        for (flag, resource, library) in [
+            ("-nostdinc", false, false),
+            ("--nostdinc", false, false),
+            ("-nobuiltininc", false, true),
+            ("-nostdlibinc", true, false),
+        ] {
+            let output = tree.run(&[flag], "#include <chain.h>\n");
+            clean(&output);
+            let visited = identifiers(&output);
+            assert_eq!(
+                visited.iter().any(|name| name.starts_with("usr_")),
+                library,
+                "{flag}: {visited:?}"
+            );
+            // `-idirafter` is the user's and stays.
+            assert_eq!(visited.last().unwrap(), "idirafter_dir", "{flag}");
+            let output = tree.run(&[flag], "#include <stdbool.h>\nbool\n");
+            let text = stderr(&output);
+            assert_eq!(text.contains("<built-in>/stdbool.h"), resource, "{flag}");
+            assert_eq!(
+                identifiers(&output).first().map(String::as_str) == Some("libc_stdbool"),
+                !resource && library,
+                "{flag}: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn search_options_accept_gcc_and_clang_spellings() {
+        let root = scratch("spellings");
+        let probe = root.join("probe");
+        write(&probe.join("probe.h"), "found_probe\n");
+        let joined_i = format!("-I{}", arg(&probe));
+        let joined_isystem = format!("-isystem{}", arg(&probe));
+        let joined_iquote = format!("-iquote{}", arg(&probe));
+        let joined_idirafter = format!("-idirafter{}", arg(&probe));
+        let equals = format!("--isystem={}", arg(&probe));
+        for (args, include) in [
+            (vec![joined_i.as_str()], "<probe.h>"),
+            (vec![joined_isystem.as_str()], "<probe.h>"),
+            (vec![joined_iquote.as_str()], "\"probe.h\""),
+            (vec!["-iquote", arg(&probe)], "\"probe.h\""),
+            (vec![joined_idirafter.as_str()], "<probe.h>"),
+            (vec!["--include-directory", arg(&probe)], "<probe.h>"),
+            (vec!["-idirafter", arg(&probe)], "<probe.h>"),
+            (vec![equals.as_str()], "<probe.h>"),
+        ] {
+            let source = format!("#include {include}\n");
+            let mut full = args.clone();
+            full.extend(["--tokens", "--input", &source]);
+            let output = bcc(&full);
+            clean(&output);
+            assert_eq!(identifiers(&output), ["found_probe"], "{args:?}");
+        }
+        // A missing header lists every place in order, the library last.
+        let sysroot = format!("--sysroot={}", arg(&root));
+        let output = bcc(&[
+            &sysroot,
+            "-I",
+            arg(&probe),
+            "--input",
+            "#include <absent.h>\n",
+        ]);
+        assert_eq!(
+            searched(&output),
+            [
+                probe.display().to_string(),
+                "<built-in>".to_owned(),
+                root.join("usr")
+                    .join("local")
+                    .join("include")
+                    .display()
+                    .to_string(),
+                root.join("usr").join("include").display().to_string(),
+            ],
+            "{}",
+            stderr(&output)
+        );
     }
 }

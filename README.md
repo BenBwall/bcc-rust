@@ -224,9 +224,26 @@ cargo run -- --tokens --input '#define N 3
 N + 1'
 ```
 
-Use `--iquote <directory>` (`-q`) and `--isystem <directory>` (`-s`) to add include search paths. Header lookup follows GCC and Clang: `#include "name"` looks beside the including file (the working directory for `--input`), then each `--iquote` directory; both forms then search `CPATH`, each `--isystem` directory, `C_INCLUDE_PATH`, and finally the embedded
-`<built-in>` resource directory. User headers take precedence over resource
-headers. The working directory is never searched implicitly. The environment variables use the platform path separator, and, as in GCC, an empty element names the working directory. A missing header's diagnostic lists every directory searched. `__DATE__` and `__TIME__` are fixed once per translation unit. For reproducible output, `--source-date-epoch <seconds>` or the `SOURCE_DATE_EPOCH` variable pins them to that UTC time; the flag wins, a malformed variable is ignored, and a malformed flag value is an error. Files under [`test-programs/`](test-programs/) are useful manual inspection inputs, but they are not an automated conformance suite.
+Header lookup follows Clang. `#include "name"` looks beside the including
+file (the working directory for `--input`), then in each `-iquote` directory;
+both forms then search, in order, each `-I` directory, `CPATH`, each
+`-isystem` directory, `C_INCLUDE_PATH`, the embedded `<built-in>` resource
+directory, the C library's directories, and each `-idirafter` directory. User
+headers therefore take precedence over resource headers, and a resource header
+can `#include_next` the C library's header of the same name. `--sysroot <dir>`
+names the C library's directories `<dir>/usr/local/include` and
+`<dir>/usr/include`; without it no library directory is searched, so a C
+library elsewhere (MinGW-w64, the MSVC UCRT, a multiarch
+`/usr/include/x86_64-linux-gnu`) is added with `-idirafter` or `-isystem`.
+Target-driven discovery of these directories is future work. `-nostdinc`
+removes the resource and library directories, `-nostdlibinc` only the library
+directories, and `-nobuiltininc` only the resource directory; `-idirafter`
+directories stay. The GCC single-dash spellings `-iquote`, `-isystem` and
+`-idirafter` take their directory separately or joined, as `-I` does;
+`--iquote`/`-q` and `--isystem`/`-s` remain. The working directory is never
+searched implicitly. The environment variables use the platform path separator,
+and, as in GCC, an empty element names the working directory. A missing
+header's diagnostic lists every directory searched. `__DATE__` and `__TIME__` are fixed once per translation unit. For reproducible output, `--source-date-epoch <seconds>` or the `SOURCE_DATE_EPOCH` variable pins them to that UTC time; the flag wins, a malformed variable is ignored, and a malformed flag value is an error. Files under [`test-programs/`](test-programs/) are useful manual inspection inputs, but they are not an automated conformance suite.
 
 The freestanding model (`__STDC_HOSTED__ == 0`) includes the seven C99 resource
 headers: `<float.h>`, `<iso646.h>`, `<limits.h>`, `<stdarg.h>`, `<stdbool.h>`,
