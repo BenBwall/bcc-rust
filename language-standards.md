@@ -60,8 +60,11 @@ selections use the last value.
 
 Strict modes define `__STRICT_ANSI__` as `1`; GNU modes leave it undefined.
 MSVC flags affect neither version nor strictness. `__STDC__`,
-`__STDC_HOSTED__` (freestanding: `0`), `__DATE__`/`__TIME__`, and
-`__STDC_MB_MIGHT_NEQ_WC__` are predefined in every mode. `__GNUC__` and `_MSC_VER` are deliberately not
+`__STDC_HOSTED__`, `__DATE__`/`__TIME__`, and `__STDC_MB_MIGHT_NEQ_WC__` are
+predefined in every mode. `__STDC_HOSTED__` is `1` in the default hosted
+execution environment and `0` with `-ffreestanding`; `-fhosted` restores
+hosted and the later flag wins. `CompilerConfiguration::default()` is hosted
+as well. `__GNUC__` and `_MSC_VER` are deliberately not
 defined. `__clang__`, `__linux__`, `_WIN32` and other compiler/OS identity
 macros are also absent.
 

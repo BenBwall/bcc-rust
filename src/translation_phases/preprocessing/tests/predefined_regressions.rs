@@ -141,13 +141,13 @@ fn standard_macros_expand_to_required_numeric_types_and_values() {
         [
             IntegerTokenType::Int(1),
             IntegerTokenType::Long(Packed::new(199_901)),
-            IntegerTokenType::Int(0),
+            IntegerTokenType::Int(1),
             IntegerTokenType::Int(1),
         ]
     );
     assert_eq!(
         observation.spellings,
-        ["1", ";", "199901L", ";", "0", ";", "1", ";", "after"]
+        ["1", ";", "199901L", ";", "1", ";", "1", ";", "after"]
     );
     for (index, column, length) in [(0, 1, 8), (2, 11, 16), (4, 29, 15), (6, 46, 24)] {
         let source = &observation.sources[index][0];
@@ -188,16 +188,22 @@ fn required_standard_macros_are_available_to_ifdef() {
 }
 
 #[test]
-fn standard_macro_values_select_c99_freestanding_branch() {
-    let source = "#if __STDC__ == 1 && __STDC_VERSION__ == 199901L && __STDC_HOSTED__ == 0 && \
-                  __STDC_MB_MIGHT_NEQ_WC__ == \
-                  1\nright_values\n#else\nwrong_values\n#endif\nafter\n";
-    let observation = observe(source);
-    assert_eq!(
-        identifier_spellings(&observation),
-        ["right_values", "after"]
-    );
-    assert!(observation.errors.is_empty(), "{observation:#?}");
+fn standard_macro_values_select_the_configured_execution_environment() {
+    for (hosted, expected) in [(true, 1), (false, 0)] {
+        let source = format!(
+            "#if __STDC__ == 1 && __STDC_VERSION__ == 199901L && __STDC_HOSTED__ == {expected} && \
+             __STDC_MB_MIGHT_NEQ_WC__ == 1\nright_values\n#else\nwrong_values\n#endif\nafter\n"
+        );
+        let observation = observe_with(
+            &source,
+            CompilerConfiguration::default().with_hosted(hosted),
+        );
+        assert_eq!(
+            identifier_spellings(&observation),
+            ["right_values", "after"]
+        );
+        assert!(observation.errors.is_empty(), "{observation:#?}");
+    }
 }
 
 #[test]
