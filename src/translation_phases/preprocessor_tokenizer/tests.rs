@@ -763,6 +763,66 @@ fn lexing_commits_the_entries_written_not_a_capacity() {
 }
 
 #[test]
+fn lexical_extension_diagnostics_map_spliced_spellings() {
+    use crate::configuration::{
+        CStandard,
+        CompilerConfiguration,
+        ExtensionPolicy,
+    };
+
+    // Expected ranges are in the physical source, from the first spelling
+    // character through the last, including internal but not adjacent splices.
+    for (source, spelling, index, line, column, length) in [
+        ("int a\\\n<:2];\n", "digraph", 7, 2, 1, 2),
+        ("\\\n<:\n", "digraph", 2, 2, 1, 2),
+        ("<\\\n:\n", "digraph", 0, 1, 1, 4),
+        (":\\\r\n>\n", "digraph", 0, 1, 1, 5),
+        ("<\\\n%\n", "digraph", 0, 1, 1, 4),
+        ("%\\\n>\n", "digraph", 0, 1, 1, 4),
+        ("%\\\n:\n", "digraph", 0, 1, 1, 4),
+        ("%\\\n:%\\\n:\n", "digraph", 0, 1, 1, 8),
+        ("<:\\\n;\n", "digraph", 0, 1, 1, 2),
+        ("/\\\n/ c\n", "//", 0, 1, 1, 4),
+        (" /\\\n/ c\n", "//", 1, 1, 2, 4),
+        ("\\\n// c\n", "//", 2, 2, 1, 2),
+        (" \\\n// c\n", "//", 3, 2, 1, 2),
+        ("/\\\r\n/ c\n", "//", 0, 1, 1, 5),
+        (" /\\\r\n/ c\n", "//", 1, 1, 2, 5),
+        ("//\\\n c\n", "//", 0, 1, 1, 2),
+    ] {
+        let tu = crate::util::bump::Bump::new();
+        let configuration = CompilerConfiguration::new(CStandard::C89, ExtensionPolicy::Warn)
+            .with_gnu_extensions(true);
+        let mut context = Context::with_configuration(&tu, configuration);
+        let file = context.intern_source_file(Path::new("<test>"));
+        context.record_source_text(file, source);
+        let pp = crate::util::bump::Bump::new();
+        let mut tokens = TokenSource::new(&mut context, &pp, file, source);
+        while tokens.next_item(&mut context).is_some() {}
+        let errors = context.take_pending_errors();
+        assert_eq!(errors.len(), 1, "{source:?}: {errors:#?}");
+        let TranslationError::Extension(extension) = &errors[0] else {
+            panic!("{source:?}: expected an extension diagnostic");
+        };
+        assert_eq!(extension.spelling(), spelling, "{source:?}");
+        let vectors = errors[0].source_vectors(&mut context);
+        assert_eq!(
+            context.get_source_vectors(vectors),
+            &[SourceVector::new(
+                SourcePosition {
+                    index,
+                    line,
+                    column,
+                },
+                file,
+                length,
+            )],
+            "{source:?}",
+        );
+    }
+}
+
+#[test]
 fn language_modes_classify_keywords_after_macro_expansion() {
     use crate::configuration::{
         CStandard,

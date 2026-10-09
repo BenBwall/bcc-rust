@@ -998,10 +998,25 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
 
     /// Digraph-only diagnostics stay outside the common token completion path.
     /// C95 amendment 1 introduced the alternative token spellings.
+    /// C99: §6.4.6p3, p. 64; PDF p. 76.
     fn digraph(&mut self, start: usize, end: usize, kind: PreprocessorTokenType) -> Lexed {
-        let position = self.tracker.advance(start);
-        self.record_extension(Feature::Digraphs, "digraph", position, end - start);
+        self.record_spliced_extension(Feature::Digraphs, "digraph", start, end);
         self.spelled(start, end, kind)
+    }
+
+    /// Maps a spelling's endpoints to original source bytes. Adjacent splices
+    /// stay outside the diagnostic, while splices within the spelling are kept.
+    /// C99: phase-2 deletion §5.1.1.2p1, pp. 9-10; PDF pp. 21-22.
+    fn record_spliced_extension(
+        &mut self,
+        feature: Feature,
+        spelling: &'static str,
+        start: usize,
+        end: usize,
+    ) {
+        let position = self.tracker.advance_past_deletions(start);
+        let end = self.tracker.advance(end);
+        self.record_extension(feature, spelling, position, end.index - position.index);
     }
 
     /// Keeps extension diagnostics beside their entry, so skipped groups stay
@@ -1180,7 +1195,7 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
             | b'/' => match self.peek(start + 1) {
                 | Some(b'=') => self.spelled(start, start + 2, T::ForwardSlashEquals),
                 | Some(b'/') if self.context.configuration.accepts(Feature::LineComments) => {
-                    self.record_extension(Feature::LineComments, "//", position, 2);
+                    self.record_spliced_extension(Feature::LineComments, "//", start, start + 2);
                     let end = self.skip_line_comment(start + 2);
                     self.lex_whitespace(end)
                 },
@@ -1452,8 +1467,7 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
             match self.peek(end) {
                 | Some(b'/') => match self.peek(end + 1) {
                     | Some(b'/') if self.context.configuration.accepts(Feature::LineComments) => {
-                        let position = self.tracker.advance_past_deletions(end);
-                        self.record_extension(Feature::LineComments, "//", position, 2);
+                        self.record_spliced_extension(Feature::LineComments, "//", end, end + 2);
                         end = self.skip_line_comment(end + 2);
                     },
                     | Some(b'*') => end = self.skip_block_comment(end + 2),
