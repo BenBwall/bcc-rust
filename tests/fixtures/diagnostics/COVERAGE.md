@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **341 top-level C inputs and 341 stderr snapshots**, plus two supporting headers and 106 mode/policy `.args` sidecars. Ninety of the inputs cover semantic analysis (twenty-two for declarations, twenty-eight for expressions and initializers, thirty-six for statements and functions, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **136 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 117 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **343 top-level C inputs and 343 stderr snapshots**, plus two supporting headers and 108 mode/policy `.args` sidecars. Ninety-two of the inputs cover semantic analysis (twenty-four for declarations, twenty-eight for expressions and initializers, thirty-six for statements and functions, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **136 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 117 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -491,7 +491,9 @@ snapshot at `tests/fixtures/semantic/types.stderr`.
 | `InvalidInline` | [inline](sema-inline.c) | Inline objects, typedef names and main. |
 | `InvalidDerivedType` | [derived](sema-derived.c) | Invalid array elements/function results. |
 | `InvalidArrayBound` | [bound](sema-array-bound.c) | Negative constant and non-integer bounds. Zero bounds use shared extension policy. |
-| `FileScopeVariableType` | [VLA](sema-file-vla.c) | Runtime file bound and linked/static VLA constraints. |
+| `InvalidStarBound` | [star bound](sema-star-bound.c) | `[*]` outside a prototype, including a function definition's parameters. |
+| `ObjectTooLarge` | [object size](sema-object-size.c) | Arrays and records beyond the PTRDIFF_MAX implementation limit. |
+| `FileScopeVariableType` | [VLA](sema-file-vla.c) | Runtime file bound, linked/static VLA constraints and variably modified members. |
 | `IncompatibleDeclaration` | [incompatible](sema-incompatible.c) | Incompatible redeclaration and previous source. |
 | `DuplicateDeclaration` | [duplicate](sema-duplicate.c) | Repeated no-linkage declarations, including local then extern. |
 | `ConflictingLinkage` | [linkage](sema-linkage.c) | Internal/external linkage mix. Positive extern-after-static is in unit tests. |

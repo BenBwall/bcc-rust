@@ -358,8 +358,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 is_pointer,
                 assignment_expression,
             } => {
-                if !parameter && (!type_qualifiers.is_empty() || is_static || is_pointer) {
+                if !parameter && (!type_qualifiers.is_empty() || is_static) {
                     self.error(SemanticErrorKind::InvalidParameter, source, None, None);
+                } else if !parameter && is_pointer {
+                    self.error(SemanticErrorKind::InvalidStarBound, source, None, None);
                 }
                 if matches!(
                     self.types.nodes[base.index],
@@ -397,6 +399,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.work.push(Work::Eval(expression));
                     self.work.push(Work::RuntimeBound(true));
                     self.work.push(Work::Expression(expression));
+                } else if is_pointer && !parameter {
+                    // Already diagnosed; no dependent variably modified error.
+                    self.values.push(self.types.unknown());
                 } else {
                     let bound = if is_pointer {
                         ArrayBound::Star
@@ -515,6 +520,47 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.error(SemanticErrorKind::InvalidParameter, source, None, None);
                 }
                 constrained = next;
+            }
+        }
+    }
+
+    /// A function definition's parameters have block scope, so its own
+    /// parameter declarators cannot use `[*]`; nested prototypes inside them
+    /// still can. The defining parameter list is the function derivation
+    /// that follows the identifier. C99: §6.7.5.2p4, pp. 116-117; PDF pp.
+    /// 128-129; §6.2.1p4, pp. 29-30; PDF pp. 41-42.
+    pub(super) fn definition_star_bounds(&mut self, mut declarator: Declarator<'tu>) {
+        let parameters = loop {
+            match declarator.kind.as_slice() {
+                | [DirectDeclarator::Parenthesized(p), ..] => declarator = p.declarator,
+                | [
+                    DirectDeclarator::Identifier(_),
+                    DirectDeclarator::Function { parameter_list, .. },
+                    ..,
+                ] => break *parameter_list,
+                | _ => return,
+            }
+        };
+        let mut pending = ArenaVec::new_in(self.scratch);
+        for parameter in parameters.iter() {
+            if let Some(d) = parameter.declarator {
+                pending.push(d);
+            }
+        }
+        while let Some(d) = pending.pop() {
+            for direct in d.kind.iter() {
+                match *direct {
+                    | DirectDeclarator::Parenthesized(p) => pending.push(p.declarator),
+                    | DirectDeclarator::Array {
+                        is_pointer: true, ..
+                    } => self.error(
+                        SemanticErrorKind::InvalidStarBound,
+                        d.source_vectors,
+                        d.identifier().map(|n| n.name),
+                        None,
+                    ),
+                    | _ => {},
+                }
             }
         }
     }
@@ -875,6 +921,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut output = ArenaVec::new_in(self.types.tu);
         let (mut bytes, mut alignment, mut bit_end) = (0_u64, 1_u64, 0_u64);
         let named = members.iter().filter(|m| m.initializable()).count();
+        let mut too_large = false;
         for (index, &member) in members.iter().enumerate() {
             let source = member
                 .name
@@ -924,7 +971,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.types.layout(member.ty)
             };
             let Some(layout) = layout else {
-                if !self.types.unanalyzed(member.ty) {
+                if !self.types.unanalyzed(member.ty) && !self.variably_modified(member.ty) {
                     self.error(
                         SemanticErrorKind::InvalidMember,
                         member
@@ -965,15 +1012,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 bytes = bytes.max(bit_end.div_ceil(8));
             } else {
-                let Some(offset) = align_up(bytes, layout.align) else {
+                let placed = align_up(bytes, layout.align).and_then(|offset| {
+                    offset
+                        .checked_add(layout.size)
+                        .filter(|&end| end <= i64::MAX.unsigned_abs())
+                        .map(|end| (offset, end))
+                });
+                let Some((offset, end)) = placed else {
+                    // The record keeps the member but has no layout.
+                    if !too_large {
+                        self.error(
+                            SemanticErrorKind::ObjectTooLarge,
+                            source,
+                            member.name.map(|n| n.name),
+                            None,
+                        );
+                    }
+                    too_large = true;
                     tag.tainted.set(true);
+                    output.push(member);
                     continue;
                 };
                 resolved.offset = offset;
-                let Some(end) = offset.checked_add(layout.size) else {
-                    tag.tainted.set(true);
-                    continue;
-                };
                 bytes = end;
                 bit_end = bytes.saturating_mul(8);
             }

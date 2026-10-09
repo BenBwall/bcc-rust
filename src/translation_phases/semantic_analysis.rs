@@ -691,6 +691,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             },
             | Work::FunctionBase(f) => {
                 let base = self.take_type();
+                self.definition_star_bounds(f.declarator);
                 self.work.push(Work::FunctionBody(f));
                 self.work.push(Work::Declarator(f.declarator, base, false));
             },
@@ -879,6 +880,15 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 let bound = if let Some(value) = value {
                     if value.value < 0 {
                         self.error(SemanticErrorKind::InvalidArrayBound, source, None, None);
+                        self.values.push(self.types.unknown());
+                        return;
+                    }
+                    if self.types.layout(element).is_some_and(|layout| {
+                        i128::from(layout.size)
+                            .checked_mul(value.value)
+                            .is_none_or(|size| size > i128::from(i64::MAX))
+                    }) {
+                        self.error(SemanticErrorKind::ObjectTooLarge, source, None, None);
                         self.values.push(self.types.unknown());
                         return;
                     }
@@ -1119,6 +1129,15 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     None
                 };
                 let name = d.declarator.and_then(Declarator::identifier);
+                if self.variably_modified(ty) {
+                    self.error(
+                        SemanticErrorKind::FileScopeVariableType,
+                        name.map_or(d.source_vectors, |n| n.source_vectors),
+                        name.map(|n| n.name),
+                        None,
+                    );
+                    self.types.tags[tag].tainted.set(true);
+                }
                 if let Some(name) = name
                     && let Some(previous) = self
                         .member_names
