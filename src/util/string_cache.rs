@@ -115,8 +115,9 @@ impl<'tu> StringCache<'tu> {
     }
 
     fn bytes_str(data: &[u8]) -> &str {
-        // SAFETY: `data` is private and only `intern_impl` appends complete
-        // UTF-8 strings, so its bytes are valid UTF-8 at every call site.
+        // SAFETY: `data` is private; `intern_impl` and `intern_concat` append
+        // complete UTF-8 strings and truncate only at string boundaries, so
+        // its bytes are valid UTF-8 at every call site.
         unsafe { std::str::from_utf8_unchecked(data) }
     }
 

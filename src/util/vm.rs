@@ -516,7 +516,8 @@ fn page_size() -> io::Result<usize> {
         SYSTEM_INFO,
     };
     let mut info = std::mem::MaybeUninit::<SYSTEM_INFO>::uninit();
-    // SAFETY: GetSystemInfo initializes the SYSTEM_INFO output buffer.
+    // SAFETY: the pointer addresses aligned, writable storage for one
+    // SYSTEM_INFO, which GetSystemInfo initializes.
     unsafe {
         GetSystemInfo(info.as_mut_ptr());
     }
@@ -674,7 +675,8 @@ fn os_commit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
 
 #[cfg(miri)]
 fn os_decommit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
-    // SAFETY: the caller has ended all allocations in the range. The mock
+    // SAFETY: `checked_range` kept the range inside the writable mock
+    // reservation, and the caller has ended all allocations in it. The mock
     // zeroes it to model decommit/recommit without changing pointer identity.
     unsafe { ptr.write_bytes(0, bytes) };
     Ok(())
@@ -714,21 +716,34 @@ fn os_decommit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
     }
 }
 
+/// Releases a whole reservation.
+///
+/// # Safety
+///
+/// `base` must be a reservation from [`os_reserve`] that is not yet released,
+/// and nothing may access it afterwards.
 #[cfg(all(windows, not(miri)))]
 unsafe fn os_release(base: NonNull<u8>, _: usize) {
     use windows_sys::Win32::System::Memory::{
         MEM_RELEASE,
         VirtualFree,
     };
-    // SAFETY: base is the exact original reservation and size must be zero
-    // for MEM_RELEASE; no caller can use this region after Drop begins.
+    // SAFETY: the caller passes the exact original reservation and no longer
+    // uses it; MEM_RELEASE requires the zero size.
     let released = unsafe { VirtualFree(base.as_ptr().cast(), 0, MEM_RELEASE) };
     debug_assert_ne!(released, 0, "VirtualFree(MEM_RELEASE) failed");
 }
 
+/// Releases a whole reservation.
+///
+/// # Safety
+///
+/// `base` and `bytes` must be a reservation from [`os_reserve`] that is not
+/// yet released, and nothing may access it afterwards.
 #[cfg(all(unix, not(miri)))]
 unsafe fn os_release(base: NonNull<u8>, bytes: usize) {
-    // SAFETY: base and bytes are the original mmap result, unmapped once.
+    // SAFETY: base and bytes are the mapping `os_reserve` kept after trimming
+    // its ends, which the caller no longer uses; it is unmapped once.
     let released = unsafe { libc::munmap(base.as_ptr().cast(), bytes) };
     debug_assert_eq!(released, 0, "munmap failed");
 }
