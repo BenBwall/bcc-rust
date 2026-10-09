@@ -1,0 +1,73 @@
+error: operand does not satisfy the atomic builtin type contract
+ --> sema-atomic-builtin.c:3:23
+  |
+3 |     __c11_atomic_load(plain, 0);
+  |                       ^^^^^ invalid atomic builtin operand
+  |
+  = note: Clang C11 atomic builtins and GCC __atomic/__sync builtins: operations require eligible object pointers and compatible value or buffer operands (https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins)
+
+error: operand does not satisfy the atomic builtin type contract
+ --> sema-atomic-builtin.c:4:24
+  |
+4 |     __c11_atomic_store(constant, 1, 0);
+  |                        ^^^^^^^^ invalid atomic builtin operand
+  |
+  = note: Clang C11 atomic builtins and GCC __atomic/__sync builtins: operations require eligible object pointers and compatible value or buffer operands (https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins)
+
+error: operand does not satisfy the atomic builtin type contract
+ --> sema-atomic-builtin.c:5:50
+  |
+5 |     __c11_atomic_compare_exchange_strong(atomic, floating, 1, 5, 0);
+  |                                                  ^^^^^^^^ invalid atomic builtin operand
+  |
+  = note: Clang C11 atomic builtins and GCC __atomic/__sync builtins: operations require eligible object pointers and compatible value or buffer operands (https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins)
+
+error: operand does not satisfy the atomic builtin type contract
+ --> sema-atomic-builtin.c:6:28
+  |
+6 |     __c11_atomic_fetch_and(floating, 1, 0);
+  |                            ^^^^^^^^ invalid atomic builtin operand
+  |
+  = note: Clang C11 atomic builtins and GCC __atomic/__sync builtins: operations require eligible object pointers and compatible value or buffer operands (https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins)
+
+error: operand does not satisfy the atomic builtin type contract
+ --> sema-atomic-builtin.c:7:21
+  |
+7 |     __atomic_load_n(atomic, 0);
+  |                     ^^^^^^ invalid atomic builtin operand
+  |
+  = note: Clang C11 atomic builtins and GCC __atomic/__sync builtins: operations require eligible object pointers and compatible value or buffer operands (https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins)
+
+error: operand does not satisfy the atomic builtin type contract
+ --> sema-atomic-builtin.c:8:19
+  |
+8 |     __atomic_load(atomic, plain, 0);
+  |                   ^^^^^^ invalid atomic builtin operand
+  |
+  = note: Clang C11 atomic builtins and GCC __atomic/__sync builtins: operations require eligible object pointers and compatible value or buffer operands (https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins)
+
+error: operand does not satisfy the atomic builtin type contract
+  --> sema-atomic-builtin.c:9:26
+   |
+ 9 |     __sync_fetch_and_add(non_atomic_float, 1);
+   |                          ^^^^^^^^^^^^^^^^ invalid atomic builtin operand
+   |
+   = note: Clang C11 atomic builtins and GCC __atomic/__sync builtins: operations require eligible object pointers and compatible value or buffer operands (https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins)
+
+error: function call has the wrong number of arguments
+  --> sema-atomic-builtin.c:10:5
+   |
+10 |     __c11_atomic_load(atomic);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^ wrong number of arguments
+   |
+   = note: C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis permits additional arguments
+
+error: operand does not satisfy the atomic builtin type contract
+  --> sema-atomic-builtin.c:11:29
+   |
+11 |     __atomic_store_n(plain, plain, 0);
+   |                             ^^^^^ invalid atomic builtin operand
+   |
+   = note: Clang C11 atomic builtins and GCC __atomic/__sync builtins: operations require eligible object pointers and compatible value or buffer operands (https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins)
+
+9 errors generated.

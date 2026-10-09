@@ -262,6 +262,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .lookup(Namespace::Ordinary, name.name)
                         .is_some_and(|e| self.bindings[e.binding].kind == BindingKind::Enumerator),
                     | ExpressionType::Constant(Constant::Float(_)) => floating,
+                    | ExpressionType::Cast { target_type, .. } => !self
+                        .resolved_type_names
+                        .get(&target_type.source_vectors)
+                        .is_some_and(|ty| {
+                            matches!(self.types.nodes[ty.index], TypeKind::Atomic(_))
+                        }),
                     | _ => true,
                 };
                 _ = self.ice_operands.insert(key, valid);
@@ -269,6 +275,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 continue;
             }
             if let Some(&valid) = self.ice_operands.get(&key) {
+                values.push(valid);
+                continue;
+            }
+            if matches!(expression.kind, ExpressionType::Generic(_)) {
+                let valid = self.expression_info(expression).ice;
+                _ = self.ice_operands.insert(key, valid);
                 values.push(valid);
                 continue;
             }
@@ -581,6 +593,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | _ => None,
                     }
                 },
+                | ExpressionType::Generic(_) | ExpressionType::Call { .. } =>
+                    self.integer_type(self.expression_info(expression).ty),
                 | _ => None,
             };
             _ = self.integer_models.insert(key, model);
@@ -591,6 +605,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C99: §6.2.5p2-9, pp. 33-34; PDF pp. 45-46.
     pub(super) fn integer_type(&self, ty: TypeId) -> Option<(u32, bool)> {
+        let ty = self.types.non_atomic(ty);
         match self.types.nodes[ty.index] {
             | TypeKind::Scalar(Scalar::Bool) => Some((1, false)),
             | TypeKind::Scalar(s) => self.types.target.integer(s),
@@ -630,7 +645,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | super::super::preprocessing::FloatTokenType::ImaginaryLongDouble(_),
                     ),
                 )
-                | ExpressionType::Generic(_)
                 | ExpressionType::Countof(_)
                 | ExpressionType::StatementExpression(_)
                 | ExpressionType::Nullptr => return true,
@@ -701,7 +715,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn evaluate(&mut self, expression: &'tu Expression<'tu>) {
         use ExpressionType as E;
         let info = self.expression_info(expression);
-        if self.types.unanalyzed(info.ty) {
+        if self.types.unanalyzed(info.ty) || info.atomic_cast() {
             self.integers.push(None);
             return;
         }
@@ -868,7 +882,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 ));
                 self.work.push(Work::TypeName(name));
             },
-            | E::Builtin(_) | E::Call { .. } | E::SizeofExpr(_) | E::AlignofExpr(_) => {
+            | E::Builtin(_)
+            | E::Call { .. }
+            | E::SizeofExpr(_)
+            | E::AlignofExpr(_)
+            | E::Generic(_) => {
                 let info = self.expression_info(expression);
                 self.integers
                     .push(if info.ice { info.integer } else { None });
@@ -888,7 +906,9 @@ fn unanalyzed_extended(specifiers: super::TypeSpecifiers<'_>) -> bool {
         super::TypeSpecifiers::Extended(extended)
             if !matches!(
                 extended,
-                super::ExtendedType::MsInteger { .. } | super::ExtendedType::Int128 { .. }
+                super::ExtendedType::MsInteger { .. }
+                    | super::ExtendedType::Int128 { .. }
+                    | super::ExtendedType::Atomic(_)
             )
     )
 }

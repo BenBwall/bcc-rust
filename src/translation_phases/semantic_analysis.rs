@@ -5,12 +5,15 @@
 //! PDF pp. 54-140; statements/functions §6.8-§6.9.2, pp. 131-143;
 //! PDF pp. 143-155. Backend control-flow and emitted code are not constructed.
 
+mod atomics;
 mod builtins;
+pub(crate) use atomics::modeled as atomic_builtin;
 mod constants;
 mod declarations;
 mod errors;
 mod expressions;
 mod functions;
+mod generic;
 mod initializers;
 mod inspection;
 mod integer;
@@ -344,6 +347,7 @@ enum Work<'tu, 's> {
     CastDone(TypeId, SourceVectors),
     ConvertInteger(u32, bool),
     SizeofDone(bool, SourceVectors),
+    Atomic(SourceVectors),
 }
 
 use crate::util::arena_list::ArenaList;
@@ -814,8 +818,19 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 }
             },
             | Work::Spec(s, q, source, force) => self.resolve_spec(s, q, source, force),
+            | Work::Atomic(source) => {
+                let value = self.take_type();
+                let ty = self.atomic_type(value, source, true);
+                self.values.push(ty);
+            },
             | Work::Qualify(q, source) => {
                 let mut ty = self.take_type();
+                let q = if q.contains(TypeQualifiers::ATOMIC) {
+                    ty = self.atomic_type(ty, source, false);
+                    q - TypeQualifiers::ATOMIC
+                } else {
+                    q
+                };
                 if !(q
                     - (TypeQualifiers::CONST | TypeQualifiers::VOLATILE | TypeQualifiers::RESTRICT))
                     .is_empty()
@@ -870,7 +885,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     if !(level.qualifiers
                         - (TypeQualifiers::CONST
                             | TypeQualifiers::VOLATILE
-                            | TypeQualifiers::RESTRICT))
+                            | TypeQualifiers::RESTRICT
+                            | TypeQualifiers::ATOMIC))
                         .is_empty()
                     {
                         base = self.types.unknown();
@@ -880,10 +896,11 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                         base = self.types.unknown();
                         continue;
                     }
-                    base = self
-                        .types
-                        .intern(TypeKind::Pointer(base))
-                        .qualified(level.qualifiers);
+                    base = self.types.intern(TypeKind::Pointer(base));
+                    if level.qualifiers.contains(TypeQualifiers::ATOMIC) {
+                        base = self.atomic_type(base, d.source_vectors, false);
+                    }
+                    base = base.qualified(level.qualifiers - TypeQualifiers::ATOMIC);
                     self.validate_qualifiers(base, d.source_vectors);
                 }
                 self.values.push(base);
@@ -1146,7 +1163,10 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 let mut invalid = self.semantic_errors != errors_before;
                 let width = if d.bitfield_width.is_some() {
                     let valid = value.and_then(|v| v.to_u64().and_then(|n| u32::try_from(n).ok()));
-                    let bits = self.integer_type(ty).map(|(bits, _)| bits);
+                    let bits = self
+                        .integer_type(ty)
+                        .filter(|_| !matches!(self.types.nodes[ty.index], TypeKind::Atomic(_)))
+                        .map(|(bits, _)| bits);
                     let name = d.declarator.and_then(Declarator::identifier);
                     if valid.is_none()
                         || bits.is_none()

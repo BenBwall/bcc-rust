@@ -225,6 +225,18 @@ pub(crate) enum SemanticErrorKind {
     InvalidParameter,
     /// C99: §6.7p7, p. 98; PDF p. 110.
     IncompleteObject,
+    /// C11: §6.7.2.4p3, p. 121; PDF p. 139; §6.7.3p3.
+    InvalidAtomicType,
+    /// C11: §6.5.1.1p2, p. 78; PDF p. 96.
+    InvalidGenericSelection,
+    /// Clang/GCC type-generic atomic builtin constraints.
+    InvalidAtomicOperand,
+    /// Clang diagnoses invalid constant orders as warnings.
+    InvalidAtomicOrder,
+    /// Compare-exchange failure order cannot release.
+    InvalidAtomicFailureOrder,
+    /// Clang warns when expected/output buffers discard qualifiers.
+    AtomicBufferQualifiers,
 }
 
 impl SemanticErrorKind {
@@ -321,11 +333,37 @@ impl SemanticErrorKind {
             | Self::InvalidVaArgType => "not a complete object type",
             | Self::VaStartOutsideVariadic => "function is not variadic",
             | Self::InvalidOffsetof => "invalid member designator",
+            | Self::InvalidAtomicType => "invalid atomic operand type",
+            | Self::InvalidGenericSelection => "invalid generic association list",
+            | Self::InvalidAtomicOperand => "invalid atomic builtin operand",
+            | Self::InvalidAtomicOrder => "invalid memory order",
+            | Self::InvalidAtomicFailureOrder => "invalid failure memory order",
+            | Self::AtomicBufferQualifiers => "pointer conversion discards qualifiers",
         }
     }
 
     fn explanation(self) -> (&'static str, &'static str) {
         match self {
+            | Self::AtomicBufferQualifiers => (
+                "atomic buffer argument discards pointer target qualifiers",
+                "Clang atomic builtins convert generic value, expected and output buffers to pointers to the unqualified value type",
+            ),
+            | Self::InvalidAtomicOperand => (
+                "operand does not satisfy the atomic builtin type contract",
+                "Clang C11 atomic builtins and GCC __atomic/__sync builtins: operations require eligible object pointers and compatible value or buffer operands (https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins)",
+            ),
+            | Self::InvalidAtomicOrder | Self::InvalidAtomicFailureOrder => (
+                "memory order argument to atomic operation is invalid",
+                "Clang/GCC atomic builtins: loads cannot release, stores cannot acquire, and compare-exchange failure cannot release (https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html)",
+            ),
+            | Self::InvalidGenericSelection => (
+                "generic selection requires unique eligible associations and a matching type or default",
+                "C11 §6.5.1.1p2: associations name complete non-variably-modified object types; compatible types and defaults cannot be repeated",
+            ),
+            | Self::InvalidAtomicType => (
+                "atomic type requires an eligible complete object type",
+                "C11 §6.7.2.4p3 and §6.7.3p3: arrays and functions cannot be atomic; an atomic type specifier also excludes qualified and atomic types",
+            ),
             | Self::InvalidFunctionDefinition => (
                 "definition requires a function declarator",
                 "C99 §6.9.1p2: the function type must be specified by the declarator, not solely \
@@ -795,6 +833,9 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::UnusedStaticFunction
                 | SemanticErrorKind::EmptyCaseRange
                 | SemanticErrorKind::MissingReturnValueWarning
+                | SemanticErrorKind::InvalidAtomicOrder
+                | SemanticErrorKind::InvalidAtomicFailureOrder
+                | SemanticErrorKind::AtomicBufferQualifiers
         ) {
             ErrorSeverity::Warning
         } else {

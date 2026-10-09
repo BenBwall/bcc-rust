@@ -1,0 +1,57 @@
+error: static assertion failed: `atomic size is checked`
+ --> sema-atomic-constant.c:1:16
+  |
+1 | _Static_assert(sizeof(_Atomic(int)) == 5, "atomic size is checked");
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^ assertion is false
+  |
+  = note: C11 §6.7.10p2-3: the assertion requires a nonzero integer constant expression
+
+error: an integer constant expression is required
+ --> sema-atomic-constant.c:2:16
+  |
+2 | _Static_assert((_Atomic(int))1 + 2 == 3, "atomic casts are not ICEs");
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^ not an integer constant expression
+  |
+  = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
+
+error: an integer constant expression is required
+ --> sema-atomic-constant.c:3:16
+  |
+3 | _Static_assert(_Generic(1, int:(_Atomic(int))1, default:0), "selected atomic cast is not an ICE");
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not an integer constant expression
+  |
+  = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
+
+error: an integer constant expression is required
+ --> sema-atomic-constant.c:5:16
+  |
+5 | _Static_assert(__atomic_always_lock_free(runtime, 0), "runtime size is not an ICE");
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not an integer constant expression
+  |
+  = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
+
+error: an integer constant expression is required
+ --> sema-atomic-constant.c:6:16
+  |
+6 | _Static_assert(__c11_atomic_is_lock_free(16), "non-lock-free query is runtime");
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not an integer constant expression
+  |
+  = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
+
+error: bit-field requires an integer type: `field`
+ --> sema-atomic-constant.c:7:26
+  |
+7 | struct Bad { _Atomic int field : 1; };
+  |                          ^^^^^^^^^ not an integer type
+  |
+  = note: C99 §6.7.2.1p4: a bit-field has _Bool, signed int, unsigned int or another implementation-defined integer type
+
+error: operand does not satisfy the atomic builtin type contract
+ --> sema-atomic-constant.c:8:58
+  |
+8 | void f(_Atomic(void *) *object) { __c11_atomic_fetch_add(object, 1, 0); }
+  |                                                          ^^^^^^ invalid atomic builtin operand
+  |
+  = note: Clang C11 atomic builtins and GCC __atomic/__sync builtins: operations require eligible object pointers and compatible value or buffer operands (https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins)
+
+7 errors generated.

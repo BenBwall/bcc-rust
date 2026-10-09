@@ -1,0 +1,25 @@
+error: static assertion failed: `selected false branch`
+ --> sema-atomic-generic.c:1:16
+  |
+1 | _Static_assert(_Generic(1, int:0, default:1), "selected false branch");
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ assertion is false
+  |
+  = note: C11 §6.7.10p2-3: the assertion requires a nonzero integer constant expression
+
+error: generic selection requires unique eligible associations and a matching type or default
+ --> sema-atomic-generic.c:2:16
+  |
+2 | int no_match = _Generic(1, float:1);
+  |                ^^^^^^^^^^^^^^^^^^^^ invalid generic association list
+  |
+  = note: C11 §6.5.1.1p2: associations name complete non-variably-modified object types; compatible types and defaults cannot be repeated
+
+error: generic selection requires unique eligible associations and a matching type or default
+ --> sema-atomic-generic.c:3:17
+  |
+3 | int duplicate = _Generic(1, int:1, signed int:2);
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ invalid generic association list
+  |
+  = note: C11 §6.5.1.1p2: associations name complete non-variably-modified object types; compatible types and defaults cannot be repeated
+
+3 errors generated.

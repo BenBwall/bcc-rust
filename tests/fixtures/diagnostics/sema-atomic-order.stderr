@@ -1,0 +1,81 @@
+warning: memory order argument to atomic operation is invalid
+ --> sema-atomic-order.c:2:31
+  |
+2 |     __c11_atomic_load(atomic, 3);
+  |                               ^ invalid memory order
+  |
+  = note: Clang/GCC atomic builtins: loads cannot release, stores cannot acquire, and compare-exchange failure cannot release (https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html)
+
+warning: memory order argument to atomic operation is invalid
+ --> sema-atomic-order.c:3:31
+  |
+3 |     __c11_atomic_load(atomic, 4);
+  |                               ^ invalid memory order
+  |
+  = note: Clang/GCC atomic builtins: loads cannot release, stores cannot acquire, and compare-exchange failure cannot release (https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html)
+
+warning: memory order argument to atomic operation is invalid
+ --> sema-atomic-order.c:4:35
+  |
+4 |     __c11_atomic_store(atomic, 1, 1);
+  |                                   ^ invalid memory order
+  |
+  = note: Clang/GCC atomic builtins: loads cannot release, stores cannot acquire, and compare-exchange failure cannot release (https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html)
+
+warning: memory order argument to atomic operation is invalid
+ --> sema-atomic-order.c:5:35
+  |
+5 |     __c11_atomic_store(atomic, 1, 2);
+  |                                   ^ invalid memory order
+  |
+  = note: Clang/GCC atomic builtins: loads cannot release, stores cannot acquire, and compare-exchange failure cannot release (https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html)
+
+warning: memory order argument to atomic operation is invalid
+ --> sema-atomic-order.c:6:35
+  |
+6 |     __c11_atomic_store(atomic, 1, 4);
+  |                                   ^ invalid memory order
+  |
+  = note: Clang/GCC atomic builtins: loads cannot release, stores cannot acquire, and compare-exchange failure cannot release (https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html)
+
+warning: memory order argument to atomic operation is invalid
+ --> sema-atomic-order.c:7:66
+  |
+7 |     __c11_atomic_compare_exchange_strong(atomic, expected, 1, 0, 3);
+  |                                                                  ^ invalid failure memory order
+  |
+  = note: Clang/GCC atomic builtins: loads cannot release, stores cannot acquire, and compare-exchange failure cannot release (https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html)
+
+warning: memory order argument to atomic operation is invalid
+ --> sema-atomic-order.c:8:64
+  |
+8 |     __c11_atomic_compare_exchange_weak(atomic, expected, 1, 0, 4);
+  |                                                                ^ invalid failure memory order
+  |
+  = note: Clang/GCC atomic builtins: loads cannot release, stores cannot acquire, and compare-exchange failure cannot release (https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html)
+
+warning: memory order argument to atomic operation is invalid
+  --> sema-atomic-order.c:9:38
+   |
+ 9 |     __c11_atomic_exchange(atomic, 1, 99);
+   |                                      ^^ invalid memory order
+   |
+   = note: Clang/GCC atomic builtins: loads cannot release, stores cannot acquire, and compare-exchange failure cannot release (https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html)
+
+warning: atomic buffer argument discards pointer target qualifiers
+  --> sema-atomic-order.c:13:50
+   |
+13 |     __c11_atomic_compare_exchange_strong(atomic, qualified, 1, 5, 0);
+   |                                                  ^^^^^^^^^ pointer conversion discards qualifiers
+   |
+   = note: Clang atomic builtins convert generic value, expected and output buffers to pointers to the unqualified value type
+
+warning: atomic buffer argument discards pointer target qualifiers
+  --> sema-atomic-order.c:14:30
+   |
+14 |     __atomic_store(expected, qualified, 0);
+   |                              ^^^^^^^^^ pointer conversion discards qualifiers
+   |
+   = note: Clang atomic builtins convert generic value, expected and output buffers to pointers to the unqualified value type
+
+10 warnings generated.

@@ -27,8 +27,8 @@ def exclusion(name):
         return "C++ ABI and type-info semantics are not implemented."
     if name == "__GCC_HAVE_DWARF2_CFI_ASM":
         return "DWARF CFI assembly and unwind code generation are not implemented."
-    if name.startswith(("__ATOMIC_", "__CLANG_ATOMIC_", "__GCC_ATOMIC_", "__GCC_HAVE_SYNC_", "__MEMORY_SCOPE_", "__OPENCL_MEMORY_SCOPE_")):
-        return "Atomic operations, lock-free ABI promises and memory scopes are not implemented."
+    if name.startswith(("__MEMORY_SCOPE_", "__OPENCL_MEMORY_SCOPE_")):
+        return "Scoped atomic operations and memory scopes are not implemented."
     if name.startswith("__FPCLASS_"):
         return "Floating classification intrinsics are not implemented."
     if name in {"__BITINT_MAXWIDTH__"}:
@@ -58,6 +58,10 @@ def main():
     excluded = {}
     outputs = {}
     for triple in TRIPLES:
+        c23 = subprocess.run([str(clang), f"--target={triple}", "-std=c23", "-dM", "-E", "-x", "c", "-"], input="", text=True, capture_output=True, check=True)
+        char8 = "\n".join(line for line in c23.stdout.splitlines() if re.match(r"#define __(?:CLANG|GCC)_ATOMIC_CHAR8_T_LOCK_FREE ", line)) + "\n"
+        char8_path = ROOT / f"src/target/{triple}-atomic-c23.h"
+        outputs[char8_path] = char8
         for mode in ("c11", "gnu17"):
             pinned = [MSVC_COMPATIBILITY_VERSION] if triple == "x86_64-pc-windows-msvc" else []
             result = subprocess.run([str(clang), f"--target={triple}", f"-std={mode}", *pinned, "-dM", "-E", "-x", "c", "-"], input="", text=True, capture_output=True, check=True)

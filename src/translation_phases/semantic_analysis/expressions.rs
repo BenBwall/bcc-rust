@@ -58,6 +58,14 @@ pub(crate) enum ConstantClass {
     Address,
 }
 
+/// Clang does not ICE-evaluate or GNU-fold evaluated atomic value casts.
+/// Initializer constant eligibility is tracked separately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConstantFolding {
+    Permitted,
+    AtomicCast,
+}
+
 /// Retained result keyed by immutable expression identity. The sequence is
 /// deterministic postorder; identities are never printed as host addresses.
 /// C99: §6.5p1, p. 67; PDF p. 79; §6.3.2.1, pp. 46-47; PDF pp. 58-59.
@@ -78,6 +86,13 @@ pub(crate) struct ExpressionInfo<'tu> {
     pub(crate) integer:        Option<Integer>,
     pub(crate) ice:            bool,
     pub(crate) constant:       ConstantClass,
+    pub(crate) folding:        ConstantFolding,
+}
+
+impl ExpressionInfo<'_> {
+    pub(super) fn atomic_cast(self) -> bool {
+        self.folding == ConstantFolding::AtomicCast
+    }
 }
 
 /// An explicit contextual conversion for a particular operand occurrence.
@@ -132,6 +147,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             integer: None,
             ice: false,
             constant: ConstantClass::None,
+            folding: ConstantFolding::Permitted,
         }
     }
 
@@ -203,6 +219,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     pub(super) fn arithmetic(&self, ty: TypeId) -> bool {
+        let ty = self.types.non_atomic(ty);
         self.integer_type(ty).is_some()
             || matches!(self.types.nodes[ty.index], TypeKind::Scalar(s) if s != Scalar::Void)
     }
@@ -216,7 +233,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     pub(super) fn scalar_type(&self, ty: TypeId) -> bool {
-        self.arithmetic(ty) || matches!(self.types.nodes[ty.index], TypeKind::Pointer(_))
+        self.arithmetic(ty) || self.pointer_target(ty).is_some()
     }
 
     /// Pointer arithmetic needs a complete object type (§6.5.6p2); an
@@ -226,6 +243,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     fn pointer_target(&self, ty: TypeId) -> Option<TypeId> {
+        let ty = self.types.non_atomic(ty);
         if let TypeKind::Pointer(target) = self.types.nodes[ty.index] {
             Some(target)
         } else {
@@ -256,7 +274,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.category,
                 ValueCategory::Lvalue | ValueCategory::ModifiableLvalue
             ) =>
-                (info.ty.unqualified(), Some(ConversionKind::Lvalue)),
+                (
+                    self.types.non_atomic(info.ty).unqualified(),
+                    Some(ConversionKind::Lvalue),
+                ),
             | _ => (info.ty.unqualified(), None),
         };
         if let Some(kind) = kind {
@@ -396,6 +417,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     fn scalar_representation(&self, ty: TypeId) -> Option<Scalar> {
+        let ty = self.types.non_atomic(ty);
         match self.types.nodes[ty.index] {
             | TypeKind::Scalar(s) => Some(s),
             | TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Enum =>
@@ -419,6 +441,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         target: TypeId,
         source: ExpressionInfo<'tu>,
     ) -> bool {
+        let target = self.types.non_atomic(target);
         let from = self.converted(source);
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
             return true;
@@ -482,11 +505,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if let ExpressionType::Identifier(name) = e.kind
             && self.lookup(Namespace::Ordinary, name.name).is_none()
-            && self
-                .context
-                .string_cache
-                .at(name.name)
-                .starts_with("__builtin_")
+            && self.builtin_name(name)
         {
             // Unmodeled GNU compiler intrinsics do not have the C89 implicit
             // int signature. Preserve an opaque result rather than rejecting
@@ -540,10 +559,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// 177) that the implementation declares; an undeclared one is an
     /// unmodeled function rather than an implicit `int` declaration.
     pub(super) fn builtin_name(&self, name: Identifier) -> bool {
-        self.context
-            .string_cache
-            .at(name.name)
-            .starts_with("__builtin_")
+        super::atomics::modeled(self.context.string_cache.at(name.name))
+            || self
+                .context
+                .string_cache
+                .at(name.name)
+                .starts_with("__builtin_")
     }
 
     /// GCC's `__builtin_constant_p` folds to whether its operand is an
@@ -960,6 +981,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     ..self.expression_info(expression)
                 };
             },
+            | E::Generic(generic) => info = self.type_generic(e, generic),
             | E::Unary {
                 operator,
                 operand_expression,
@@ -1028,7 +1050,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 function_expression,
                 arguments,
             } => {
-                info = if let Some(info) = self.constant_p(e, function_expression, arguments) {
+                info = if let Some(info) = self.atomic_call(e, function_expression, arguments) {
+                    info
+                } else if let Some(info) = self.constant_p(e, function_expression, arguments) {
                     info
                 } else {
                     self.type_call(e, self.expression_info(function_expression), arguments)
@@ -1073,6 +1097,34 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.floating = None;
             info.ice = false;
             info.constant = ConstantClass::None;
+        }
+        // Size/alignment and generic controlling operands are unevaluated.
+        // Generic selection already copied only its selected expression.
+        let atomic_cast = match e.kind {
+            | E::Unary {
+                operand_expression, ..
+            } => self.expression_info(operand_expression).atomic_cast(),
+            | E::Binary {
+                left_expression,
+                right_expression,
+                ..
+            } =>
+                self.expression_info(left_expression).atomic_cast()
+                    || self.expression_info(right_expression).atomic_cast(),
+            | E::Conditional(c) | E::OmittedConditional(c) =>
+                self.expression_info(c.condition_expression).atomic_cast()
+                    || self.expression_info(c.then_expression).atomic_cast()
+                    || self.expression_info(c.else_expression).atomic_cast(),
+            | E::Cast {
+                operand_expression, ..
+            } =>
+                matches!(self.types.nodes[info.ty.index], TypeKind::Atomic(_))
+                    || self.expression_info(operand_expression).atomic_cast(),
+            | _ => false,
+        };
+        if info.atomic_cast() || atomic_cast {
+            info.folding = ConstantFolding::AtomicCast;
+            info.ice = false;
         }
         self.retain_expression(info);
     }
@@ -1621,10 +1673,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if compound.is_none() {
                 self.convert(
                     right.expression,
-                    left.ty.unqualified(),
+                    self.types.non_atomic(left.ty).unqualified(),
                     ConversionKind::Assignment,
                 );
-                return Self::expression_result(e, left.ty.unqualified());
+                return Self::expression_result(e, self.types.non_atomic(left.ty).unqualified());
             }
         }
         let op = compound.unwrap_or(op);
@@ -1842,8 +1894,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         if compound.is_some() {
-            self.convert(e, left.ty.unqualified(), ConversionKind::Assignment);
-            let mut result = Self::expression_result(e, left.ty.unqualified());
+            let ty = self.types.non_atomic(left.ty).unqualified();
+            self.convert(e, ty, ConversionKind::Assignment);
+            let mut result = Self::expression_result(e, ty);
             result.operation_type = Some(info.ty);
             return result;
         }

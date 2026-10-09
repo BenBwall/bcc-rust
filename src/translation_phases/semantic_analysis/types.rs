@@ -192,6 +192,8 @@ pub(crate) enum TypeKind<'tu> {
         variadic:   bool,
     },
     Tag(usize),
+    /// C11: §6.2.5p20 and §6.7.2.4; distinct from the underlying type.
+    Atomic(TypeId),
 }
 
 /// Durable type graph, retained after semantic working storage is released.
@@ -219,6 +221,7 @@ fn layout(
     mut ty: TypeId,
 ) -> Option<Layout> {
     let mut count = 1_u64;
+    let mut atomic = false;
     let layout = loop {
         match nodes[ty.index] {
             | TypeKind::Scalar(scalar) => break target.scalar(scalar)?,
@@ -228,8 +231,21 @@ fn layout(
                 count = count.checked_mul(n)?;
                 ty = element;
             },
+            | TypeKind::Atomic(value) => {
+                atomic = true;
+                ty = value;
+            },
             | _ => return None,
         }
+    };
+    let layout = if atomic && layout.size <= 16 {
+        let size = layout.size.next_power_of_two();
+        Layout {
+            size,
+            align: layout.align.max(size),
+        }
+    } else {
+        layout
     };
     Some(Layout {
         size: layout.size.checked_mul(count)?,
@@ -326,6 +342,14 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         self.keys[&TypeKind::Unknown]
     }
 
+    /// C11 §6.3.2.1p2: value conversions remove atomicity.
+    pub(crate) fn non_atomic(&self, ty: TypeId) -> TypeId {
+        match self.nodes[ty.index] {
+            | TypeKind::Atomic(value) => value.qualified(ty.qualifiers),
+            | _ => ty,
+        }
+    }
+
     /// A variable or `[*]` array derivation reached through arrays, pointers
     /// or function results; constant time for shared typedef graphs.
     /// C99: §6.7.5p3, p. 114; PDF p. 126; §6.7.5.2p2, p. 116; PDF p. 128.
@@ -403,6 +427,7 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
             Pointer(TypeQualifiers),
             Array(ArrayBound, TypeQualifiers),
             Function(&'a [TypeId], bool, bool, TypeQualifiers),
+            Atomic(TypeQualifiers),
         }
         let mut work = ArenaVec::new_in(self.scratch);
         let mut values = ArenaVec::new_in(self.scratch);
@@ -440,6 +465,10 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
                         },
                         | (TypeKind::Pointer(x), TypeKind::Pointer(y)) => {
                             work.push(Work::Pointer(a.qualifiers));
+                            work.push(Work::Pair(x, y));
+                        },
+                        | (TypeKind::Atomic(x), TypeKind::Atomic(y)) => {
+                            work.push(Work::Atomic(a.qualifiers));
                             work.push(Work::Pair(x, y));
                         },
                         | (TypeKind::Array(x, ab), TypeKind::Array(y, bb)) => {
@@ -512,6 +541,10 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
                 | Work::Pointer(q) => {
                     let x = values.pop()?;
                     values.push(self.intern(TypeKind::Pointer(x)).qualified(q));
+                },
+                | Work::Atomic(q) => {
+                    let x = values.pop()?;
+                    values.push(self.intern(TypeKind::Atomic(x)).qualified(q));
                 },
                 | Work::Array(b, q) => {
                     let x = values.pop()?;

@@ -195,7 +195,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.taint(
             e.recovered
                 || matches!(e.kind, E::Builtin(b) if !super::builtins::modeled(b.keyword))
-                || matches!(e.kind, E::Generic(_) | E::Countof(_) | E::Nullptr),
+                || matches!(e.kind, E::Countof(_) | E::Nullptr),
         );
         self.work.push(Work::ExpressionDone(e));
         match e.kind {

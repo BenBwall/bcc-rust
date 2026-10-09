@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **363 top-level C inputs and 363 stderr snapshots**, plus six supporting headers and 122 mode/policy `.args` sidecars. One hundred four of the inputs cover semantic analysis (twenty-eight for declarations, twenty-eight for expressions and initializers, forty-one for statements and functions, three for 128-bit integers, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **141 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 122 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **369 top-level C inputs and 369 stderr snapshots**, plus five supporting headers and 128 mode/policy `.args` sidecars. One hundred ten of the inputs cover semantic analysis (twenty-eight for declarations, twenty-eight for expressions and initializers, forty-one for statements and functions, three for 128-bit integers, four for resource intrinsics, six for atomics and generic selection) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 122 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -719,3 +719,23 @@ cast followed by integer arithmetic, so strict modes do not need GNU folding.
 
 - `cli-invalid-definition.c` / `.args` / `.stderr` inspect an invalid `-D1x` name at deterministic `<command line>` provenance, using the existing `ExpectedIdentifierInDefineDirective` diagnostic.
 - `../targets/mingw-callconv.c` is a positive Clang/bcc target probe, not a diagnostic input, and does not contribute to the counts above.
+
+### Atomic resources and type-generic operations
+
+Six fixtures cover atomic diagnostics and preserve following valid input:
+
+| Fixture | Coverage |
+| --- | --- |
+| `sema-atomic-type` | `InvalidAtomicType`: arrays, functions, qualified/already-atomic specifier operands, incomplete/void operands and invalid qualifier applications. |
+| `sema-atomic-builtin` | `InvalidAtomicOperand` and shared arity errors: non-atomic C11 pointers, const writes, incompatible expected/value operands, floating bitwise fetches and invalid GNU/sync pointees. |
+| `sema-atomic-order` | `InvalidAtomicOrder`, `InvalidAtomicFailureOrder` and `AtomicBufferQualifiers` warnings; valid runtime orders, stronger failure orders and unrestricted fences remain accepted. |
+| `sema-atomic-generic` | `InvalidGenericSelection`, no matching association, duplicate compatible associations, and a selected false assertion. |
+| `sema-atomic-constant` | Atomic size assertion evaluation, non-ICE atomic casts/runtime lock-free sizes, nonconstant 16-byte queries, atomic bit-fields and incomplete pointer fetches. |
+| `sema-atomic-deprecated` | `DeprecatedMacro` at a C17 `ATOMIC_VAR_INIT` invocation, despite its definition in a system resource header. |
+
+Direct semantic tests additionally check C89/C99/C11/C17/C23 extension policy,
+header deprecation suppression, retained result types, atomic/non-atomic pointer
+identity and constant-evaluated `_Generic` results. The shared atomic probe runs
+with both Clang and bcc for every target in C11, C17 and C23. It deliberately
+disables header deprecation warnings; the separate golden pins that warning.
+All new fixtures participate in the zero-global-allocation reporting harness.

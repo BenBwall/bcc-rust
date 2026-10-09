@@ -101,6 +101,9 @@ pub(super) fn with_identity_macros<'a>(
              1\n#define _MSC_EXTENSIONS 1\n",
         );
     }
+    if configuration.standard() >= CStandard::C23 {
+        out.push_str(configuration.target().atomic_c23_macros());
+    }
     out.into_str()
 }
 
@@ -616,6 +619,11 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                             | "__builtin_types_compatible_p"
                             | "__builtin_choose_expr",
                         ) => 1,
+                        | ("__has_builtin", name)
+                            if crate::translation_phases::semantic_analysis::atomic_builtin(
+                                name,
+                            ) =>
+                            1,
                         | _ => 0,
                     }
                 }

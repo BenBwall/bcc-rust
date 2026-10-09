@@ -1,0 +1,9 @@
+warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
+ --> sema-atomic-deprecated.c:2:25
+  |
+2 | atomic_int deprecated = ATOMIC_VAR_INIT(1);
+  |                         ^^^^^^^^^^^^^^^ deprecated macro
+  |
+  = note: Clang #pragma clang deprecated: the resource header deprecates ATOMIC_VAR_INIT in C17
+
+1 warning generated.

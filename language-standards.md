@@ -154,7 +154,7 @@ must not be advertised merely because Clang advertises them.
 
 ### Embedded freestanding headers
 
-All ten headers are discoverable in all language modes, and each behaves like
+All eleven headers are discoverable in all language modes, and each behaves like
 Clang's resource header of the same name, whose logic, not text, they follow.
 In a hosted translation a header that Clang chains to the C library tests
 `__has_include_next` and reads the library's header with `#include_next`
@@ -177,6 +177,7 @@ still follows the configured extension policy.
 | `stddef.h` | `size_t`, `ptrdiff_t`, `wchar_t`, `NULL`, `offsetof`; C11 adds `max_align_t`, and `__STDC_WANT_LIB_EXT1__` adds `rsize_t`. Like Clang's, it may be included repeatedly: `__need_size_t`, `__need_ptrdiff_t`, `__need_wchar_t`, `__need_NULL`, `__need_wint_t`, `__need_rsize_t`, `__need_max_align_t` and `__need_offsetof` request one part, as glibc's headers do. Each type keeps its conventional guard (`_SIZE_T`, `_PTRDIFF_T`, `_WCHAR_T`, `_WINT_T`, `_RSIZE_T`), so a definition the C library made first is kept; a requested `NULL` is always restored to `((void *)0)`. As in Clang, `_MSC_EXTENSIONS` also defines vcruntime.h's `_WCHAR_T_DEFINED` guard with `wchar_t`, and `max_align_t` is `double` on the MSVC target (`_M_X64` without `__MINGW32__`), otherwise the GCC-style record, independently of MSVC extension flags. |
 | `stdint.h` | All 8/16/32/64 exact, least and fast types, pointer and maximum types, corresponding limits and constant macros; `SIG_ATOMIC`, `SIZE`, `PTRDIFF`, `WCHAR`, `WINT` limits. Hosted, a C library `<stdint.h>` replaces all of these, as with Clang. |
 | `stdalign.h` | Like Clang: `alignas`, `alignof`, and the two indicator macros when `__STDC_VERSION__` exists and precedes C23; empty in C89 and C23/C2y. |
+| `stdatomic.h` | C11 atomic typedefs, `memory_order`, `atomic_flag`, initialization, fences, lock-free queries and all generic operation macros. Hosted, it defers to a following system header except with `_MSC_VER` in C mode, matching the pinned Clang resource header. C17 marks `ATOMIC_VAR_INIT` deprecated through `#pragma clang deprecated`; `_CLANG_DISABLE_CRT_DEPRECATION_WARNINGS` suppresses that marker. C23 removes `ATOMIC_VAR_INIT` and adds `atomic_char8_t` and `ATOMIC_CHAR8_T_LOCK_FREE`. No `__STDC_NO_ATOMICS__` is defined or interpreted, as in Clang. |
 | `stdnoreturn.h` | Like Clang: `noreturn` and `__noreturn_is_defined` in every mode, retained in C23 despite deprecation. |
 | `mm_malloc.h` | Not ISO C; GCC and Clang ship it, and MinGW-w64's `<malloc.h>` includes it. Like Clang's, it includes `<stdlib.h>` and defines `static __inline__` `_mm_malloc` and `_mm_free`: through `__mingw_aligned_malloc` for MinGW-w64, `_aligned_malloc` for the MSVC runtime (from its `<malloc.h>`, unless that defines `_mm_malloc` as a macro), and `posix_memalign`, which it declares, elsewhere. An alignment of 1 uses `malloc`, and a smaller power of two is raised to a pointer's alignment. The x86 intrinsic headers (`x86intrin.h`, `emmintrin.h`, `immintrin.h`, `cpuid.h` and their family) need vector types and target builtins and are not provided. |
 
@@ -303,12 +304,12 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | TrailingEnumComma | - | - | Y | Y | Y | Y | Y | extension | parser |
 | Func | - | - | Y | Y | Y | Y | Y | extension | parser |
 | StaticAssert | - | - | - | Y | Y | Y | Y | extension | parser |
-| Generic | - | - | - | Y | Y | Y | Y | extension | parser |
+| Generic | - | - | - | Y | Y | Y | Y | extension | parser and sema |
 | Alignas | - | - | - | Y | Y | Y | Y | extension | parser |
 | Alignof | - | - | - | Y | Y | Y | Y | extension | parser |
 | Noreturn | - | - | - | Y | Y | Y | Y | extension | parser |
 | ThreadLocal | - | - | - | Y | Y | Y | Y | extension | parser |
-| Atomic | - | - | - | Y | Y | Y | Y | extension | parser |
+| Atomic | - | - | - | Y | Y | Y | Y | extension | parser and sema |
 | AnonymousAggregates | - | - | - | Y | Y | Y | Y | extension | parser |
 | C23Keywords | - | - | - | - | - | Y | Y | native | parser |
 | Attributes | - | - | - | - | - | Y | Y | extension | parser |
@@ -384,7 +385,7 @@ functions.
 | --- | --- | --- |
 | C89/C90/C95 | Native implicit int; C99-origin mixed blocks, for declarations, designated initializers, compound literals, flexible array members, long long, trailing enum comma, `__func__`, and unambiguous qualified/static/`[*]` array syntax follow Allow/Warn/Deny | Variable bounds need constant evaluation to distinguish VLAs from constant arrays; flexible-member position and object layout |
 | C99 | Full C99 grammar; implicit int is retained with a removed-feature policy diagnostic | Type/name/control-flow constraints listed in the C99 checklist |
-| C11/C17 | `_Alignas` expression/type operands, `_Alignof` types (parenthesized expressions as a GNU extension), `_Atomic` type/qualifier, `_Generic` associations, `_Noreturn`, `_Static_assert`, `_Thread_local`, anonymous untagged aggregates; `_Alignas` in a plain type name is a constraint error | Alignment validity, atomic eligibility, generic type compatibility/selection, assertion evaluation, storage-class combinations and aggregate layout |
+| C11/C17 | `_Alignas` expression/type operands, `_Alignof` types (parenthesized expressions as a GNU extension), `_Atomic` type/qualifier, `_Generic` associations, `_Noreturn`, `_Static_assert`, `_Thread_local`, anonymous untagged aggregates; `_Alignas` in a plain type name is a constraint error | Alignment validity, storage-class combinations and aggregate layout; atomic eligibility and generic selection are analyzed |
 | C23 | All `[[...]]` attribute positions with standard/vendor names and balanced arguments; `bool`/`true`/`false`, `nullptr`, `constexpr`, `typeof`/`typeof_unqual`, message-optional `static_assert`, `alignas`/`alignof`/`thread_local` aliases; labels before declarations and at block end; `{}`; `_BitInt` with signedness; fixed enum underlying specifier-qualifier lists; `auto` type inference, alone or beside another storage class except `typedef`; unnamed definition parameters; ellipsis-only prototypes; empty parameter lists as prototypes; rejected identifier-list declarators; decimal type keywords; compound-literal storage classes | Attribute applicability/meaning, inferred types, width values, enum type legality, decimal literal support and literal object lifetime |
 | C2y subset | `_Countof` unary expression or parenthesized type; type-controlling `_Generic`; `if`/`switch` declaration headers with an optional following expression; case ranges; `break`/`continue` label | Array/type/count evaluation, selection conversion, range overlap, and named control-target resolution |
 
@@ -574,7 +575,7 @@ token or directive boundary.
 `noinline`; `__has_builtin` returns 1 for `__builtin_va_arg`,
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
-`__builtin_choose_expr`. Other names return 0. These tables describe the
+`__builtin_choose_expr`, and the modeled `__c11_atomic_*`, `__atomic_*` and `__sync_*` names. Other names return 0. These tables describe the
 syntax-front-end subset, not backend effects or a GCC/Clang version. Both GNU
 queries are available through their reserved spellings in strict modes and
 report GNU policy diagnostics.
@@ -788,23 +789,7 @@ backend work before they can be enabled.
 | `_MSVC_TRADITIONAL` | Traditional Microsoft preprocessing is not implemented; bcc uses its conforming preprocessor. |
 | `_M_FP_CONTRACT` | MS floating code-generation modes are not implemented. |
 | `_M_FP_PRECISE` | MS floating code-generation modes are not implemented. |
-| `__ATOMIC_ACQUIRE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__ATOMIC_ACQ_REL` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__ATOMIC_CONSUME` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__ATOMIC_RELAXED` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__ATOMIC_RELEASE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__ATOMIC_SEQ_CST` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
 | `__BITINT_MAXWIDTH__` | Extended integer syntax exists but these widths lack semantic types. |
-| `__CLANG_ATOMIC_BOOL_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__CLANG_ATOMIC_CHAR16_T_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__CLANG_ATOMIC_CHAR32_T_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__CLANG_ATOMIC_CHAR_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__CLANG_ATOMIC_INT_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__CLANG_ATOMIC_LLONG_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__CLANG_ATOMIC_LONG_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__CLANG_ATOMIC_POINTER_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__CLANG_ATOMIC_SHORT_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__CLANG_ATOMIC_WCHAR_T_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
 | `__CONSTANT_CFSTRINGS__` | Objective-C and CoreFoundation string intrinsics are not implemented. |
 | `__FLOAT128__` | Quadruple-precision floating types and arithmetic are not implemented. |
 | `__FLT16_DECIMAL_DIG__` | Half-precision floating types and arithmetic are not implemented. |
@@ -834,45 +819,30 @@ backend work before they can be enabled.
 | `__FPCLASS_SNAN` | Floating classification intrinsics are not implemented. |
 | `__FXSR__` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__GCC_ASM_FLAG_OUTPUTS__` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
-| `__GCC_ATOMIC_BOOL_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__GCC_ATOMIC_CHAR16_T_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__GCC_ATOMIC_CHAR32_T_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__GCC_ATOMIC_CHAR_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__GCC_ATOMIC_INT_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__GCC_ATOMIC_LLONG_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__GCC_ATOMIC_LONG_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__GCC_ATOMIC_POINTER_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__GCC_ATOMIC_SHORT_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__GCC_ATOMIC_TEST_AND_SET_TRUEVAL` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__GCC_ATOMIC_WCHAR_T_LOCK_FREE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
 | `__GCC_CONSTRUCTIVE_SIZE` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__GCC_DESTRUCTIVE_SIZE` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__GCC_HAVE_DWARF2_CFI_ASM` | DWARF CFI assembly and unwind code generation are not implemented. |
-| `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
 | `__GNUC_MINOR__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__GNUC_PATCHLEVEL__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__GNUC_STDC_INLINE__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__GNUC__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__GXX_ABI_VERSION` | C++ ABI and type-info semantics are not implemented. |
 | `__GXX_TYPEINFO_EQUALITY_INLINE` | C++ ABI and type-info semantics are not implemented. |
-| `__MEMORY_SCOPE_CLUSTR` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__MEMORY_SCOPE_DEVICE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__MEMORY_SCOPE_SINGLE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__MEMORY_SCOPE_SYSTEM` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__MEMORY_SCOPE_WRKGRP` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__MEMORY_SCOPE_WVFRNT` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__MEMORY_SCOPE_CLUSTR` | Scoped atomic operations and memory scopes are not implemented. |
+| `__MEMORY_SCOPE_DEVICE` | Scoped atomic operations and memory scopes are not implemented. |
+| `__MEMORY_SCOPE_SINGLE` | Scoped atomic operations and memory scopes are not implemented. |
+| `__MEMORY_SCOPE_SYSTEM` | Scoped atomic operations and memory scopes are not implemented. |
+| `__MEMORY_SCOPE_WRKGRP` | Scoped atomic operations and memory scopes are not implemented. |
+| `__MEMORY_SCOPE_WVFRNT` | Scoped atomic operations and memory scopes are not implemented. |
 | `__MMX__` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__NO_INLINE__` | Code generation, relocation and optimization policy are not implemented. |
 | `__NO_MATH_ERRNO__` | Code generation, relocation and optimization policy are not implemented. |
 | `__OBJC_BOOL_IS_BOOL` | Objective-C and CoreFoundation string intrinsics are not implemented. |
-| `__OPENCL_MEMORY_SCOPE_ALL_SVM_DEVICES` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__OPENCL_MEMORY_SCOPE_DEVICE` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__OPENCL_MEMORY_SCOPE_SUB_GROUP` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__OPENCL_MEMORY_SCOPE_WORK_GROUP` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
-| `__OPENCL_MEMORY_SCOPE_WORK_ITEM` | Atomic operations, lock-free ABI promises and memory scopes are not implemented. |
+| `__OPENCL_MEMORY_SCOPE_ALL_SVM_DEVICES` | Scoped atomic operations and memory scopes are not implemented. |
+| `__OPENCL_MEMORY_SCOPE_DEVICE` | Scoped atomic operations and memory scopes are not implemented. |
+| `__OPENCL_MEMORY_SCOPE_SUB_GROUP` | Scoped atomic operations and memory scopes are not implemented. |
+| `__OPENCL_MEMORY_SCOPE_WORK_GROUP` | Scoped atomic operations and memory scopes are not implemented. |
+| `__OPENCL_MEMORY_SCOPE_WORK_ITEM` | Scoped atomic operations and memory scopes are not implemented. |
 | `__PIC__` | Code generation, relocation and optimization policy are not implemented. |
 | `__PIE__` | Code generation, relocation and optimization policy are not implemented. |
 | `__PRAGMA_REDEFINE_EXTNAME` | The advertised pragma/attribute semantics are not implemented. |
@@ -907,3 +877,37 @@ backend work before they can be enabled.
 | `__seg_fs` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__seg_gs` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__tune_k8__` | Code generation, relocation and optimization policy are not implemented. |
+
+## Atomic front-end support (2026-10-09)
+
+`_Atomic(T)` and qualifier syntax share a distinct canonical atomic type. C11
+and later are native; earlier revisions use the existing extension policy.
+The type specifier rejects qualified, atomic, array, function and incomplete
+operands. Qualifier syntax rejects arrays, functions and incomplete objects,
+but can qualify an existing qualified or atomic typedef, as Clang does.
+Lvalue conversion removes atomicity; assignments and increments retain their
+ordinary C value result. Atomic casts retain their atomic type and do not
+qualify as integer constant expressions.
+
+The three builtin families are type generic, with eligible object pointers,
+value/buffer conversions and result types checked. Constant invalid operation
+orders are warnings; fences accept any integer-convertible order. Failure
+orders cannot release, but need not be weaker than the success order in the
+pinned Clang. GNU generic buffers and compare-exchange expected buffers warn
+when their conversions discard qualifiers. Only lock-free queries fold:
+1/2/4/8-byte operations and the zero-size query are lock-free on the four
+default targets; 16-byte `is_lock_free` remains runtime. An `always_lock_free`
+query with a constant size can fold false. Pointer type alignment and typed
+null pointers affect GNU lock-free queries, as in Clang.
+
+The macro oracle now includes memory orders, supported lock-free promises and
+legacy compare-and-swap widths. Its C23 additions have separate per-target
+files because MSVC omits GCC spellings. Memory-scope extensions remain excluded.
+`python scripts/update_target_macros.py --check` checks the C11/GNU17 contract
+and C23 atomic additions against the pinned Clang.
+
+`_Generic` now resolves associations and propagates the selected expression's
+type, value category and constant value. This makes the atomic result-type
+probes effective in bcc. Incomplete/void generic associations (a C2y extension
+in Clang) remain outside the supported subset; void builtin results are
+checked directly by semantic unit tests.

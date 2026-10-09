@@ -52,6 +52,7 @@ mod modern;
 pub(crate) use modern::{
     AttributeSpecifier,
     ExtendedType,
+    GenericSelection,
     SpecifierExtension,
     SpecifierExtensionKind,
     StaticAssertion,

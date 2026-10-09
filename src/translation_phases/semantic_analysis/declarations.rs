@@ -204,6 +204,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             | S::Extended(extended) => {
+                if let super::ExtendedType::Atomic(name) = *extended {
+                    self.work.push(Work::Atomic(source));
+                    self.work.push(Work::TypeName(name));
+                    return;
+                }
                 self.values.push(self.types.unknown());
                 match *extended {
                     | super::ExtendedType::Atomic(name) =>

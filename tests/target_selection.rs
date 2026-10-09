@@ -113,6 +113,34 @@ mod tests {
     }
 
     #[test]
+    fn every_target_passes_the_atomic_clang_and_bcc_probe() {
+        for triple in TRIPLES {
+            for standard in ["c11", "c17", "c23"] {
+                for binary in [clang(), env!("CARGO_BIN_EXE_bcc-rust").into()] {
+                    let mut command = Command::new(&binary);
+                    _ = command.args([
+                        &format!("--target={triple}"),
+                        &format!("-std={standard}"),
+                        "-ffreestanding",
+                    ]);
+                    if binary == clang() {
+                        _ = command.arg("-fsyntax-only");
+                    }
+                    let output = command
+                        .arg("tests/fixtures/targets/atomic.c")
+                        .output()
+                        .unwrap();
+                    let diagnostics = String::from_utf8_lossy(&output.stderr);
+                    assert!(
+                        output.status.success() && !diagnostics.contains("error:"),
+                        "{triple} {standard}: {diagnostics}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn aliases_and_equals_form_select_the_windows_abi() {
         for triple in [
             "x86_64-w64-windows-gnu",

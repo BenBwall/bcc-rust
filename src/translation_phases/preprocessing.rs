@@ -158,6 +158,8 @@ struct PreprocessorState<'pp> {
     arena:                 &'pp Bump,
     once_set:              ArenaSet<'pp, u32>,
     macro_definitions:     ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,
+    /// Clang resource-header `#pragma clang deprecated(name)` markers.
+    deprecated_macros:     ArenaSet<'pp, StringCacheId>,
     /// Every source file opened, including the main file and headers.
     lexed_files:           LexedFiles<'pp>,
     /// Source-file frames, outermost first, while no expansion is active.
@@ -457,6 +459,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     arena: pp,
                     once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),
                     macro_definitions,
+                    deprecated_macros: ArenaSet::with_hasher_in(FxBuildHasher, pp),
                     lexed_files,
                     file_frames,
                     command_line_file,

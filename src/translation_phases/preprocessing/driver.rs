@@ -62,6 +62,26 @@ use crate::{
     },
 };
 
+impl Expander<'_, '_, '_, '_> {
+    /// Resource-header deprecation is reported at the macro use, so a
+    /// system-header definition does not hide a user-file use warning.
+    fn warn_deprecated_macro(&mut self, token: PreprocessorToken) {
+        if self
+            .state
+            .deprecated_macros
+            .contains(&token.identifier_id(self.context))
+        {
+            self.context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::DeprecatedMacro(
+                    self.context
+                        .diagnostic_text(self.context.string_cache.at(token.contents)),
+                ),
+                source_vectors: token.source_vectors,
+            });
+        }
+    }
+}
+
 /// What a frame of the tokenizer stack reads.
 #[derive(Debug, PartialEq, Clone)]
 pub(super) enum TokenizerFrameType<'a> {
@@ -683,6 +703,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             {
                 match md {
                     | MacroDefinition::ObjectLike { tokenizer } => {
+                        self.warn_deprecated_macro(token);
                         let frame = TokenizerFrame {
                             frame_type: TokenizerFrameType::ObjectLikeMacroInvocation {
                                 invocation_end: self.expansion_end().unwrap_or_else(|| {
@@ -719,6 +740,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             else {
                                 break 'base Some(token);
                             };
+                            self.warn_deprecated_macro(token);
                             let (tokenizer, arguments) = if is_variadic {
                                 self.prepare_variadic_body(token, tokenizer, arguments)
                             } else {
@@ -762,6 +784,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             }
                         }
                         let mut i = 0;
+                        self.warn_deprecated_macro(token);
                         let enclosing_arguments = self.get_arguments();
                         let disabled_macros = self.disabled_macros();
                         let mut arguments = ArenaVec::with_capacity_in(

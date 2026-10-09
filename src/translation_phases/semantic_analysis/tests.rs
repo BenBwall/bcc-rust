@@ -4,6 +4,7 @@ use std::path::Path;
 
 use super::*;
 
+mod atomics;
 mod int128;
 mod targets;
 

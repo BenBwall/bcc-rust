@@ -271,6 +271,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::ExtraTokensAfterIfdefDirective(_)
             | PreprocessorErrorType::ExtraTokensAfterIfndefDirective(_)
             | PreprocessorErrorType::WarningDirective(..)
+            | PreprocessorErrorType::DeprecatedMacro(..)
             | PreprocessorErrorType::PragmaOnceInNonHeader
             | PreprocessorErrorType::SystemHeaderPragmaInMainFile
             | PreprocessorErrorType::IncludeNextInPrimarySource(..)
@@ -727,6 +728,8 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// C99: §6.10.5 paragraph 1, p. 159; PDF p. 171; translation fails,
     /// §4 paragraph 4, p. 7; PDF p. 19.
     ErrorDirective(&'tu str),
+    /// Clang resource-header `#pragma clang deprecated(name)` warning.
+    DeprecatedMacro(&'tu str),
 }
 
 /// The directives of C99 §6.10, for suggestions.
@@ -1550,6 +1553,15 @@ impl PreprocessorErrorType<'_> {
                 })
                 .label("`#warning` directive")
             },
+            | Self::DeprecatedMacro(name) => new(format_in!(
+                arena,
+                "macro `{name}` has been marked as deprecated"
+            ))
+            .label("deprecated macro")
+            .note(
+                "Clang #pragma clang deprecated: the resource header deprecates ATOMIC_VAR_INIT \
+                 in C17",
+            ),
             | Self::ErrorDirective(message) => {
                 let message = message.trim();
                 new(if message.is_empty() {

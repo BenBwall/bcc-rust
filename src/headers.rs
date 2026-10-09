@@ -19,6 +19,7 @@ pub(crate) fn text(name: &Path) -> Option<&'static str> {
         | "stdint.h" => include_str!("headers/stdint.h"),
         | "stdalign.h" => include_str!("headers/stdalign.h"),
         | "stdnoreturn.h" => include_str!("headers/stdnoreturn.h"),
+        | "stdatomic.h" => include_str!("headers/stdatomic.h"),
         | _ => return None,
     })
 }
