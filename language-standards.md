@@ -93,6 +93,37 @@ selected `--target` triple. The default remains `x86_64-unknown-linux-gnu`;
 `CompilerConfiguration::with_target` selects the same contract for the library
 pipeline. Target selection does not implicitly enable GNU or MSVC syntax groups.
 
+For MinGW only, `__cdecl`, `__fastcall`, `__pascal`, `__stdcall`, `__thiscall`
+and their single-underscore aliases expand to Clang's GNU calling-convention
+attributes; `__declspec(a)` expands to `__attribute__((a))`. Both ISO and GNU
+target tables retain these eleven definitions exactly. Linux does not define
+them, and the MSVC keyword contract is unchanged. Function declarators,
+function pointers, parameters, members and typedefs use the existing balanced
+attribute parser. `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`,
+`restrict`, `deprecated(...)`, `noinline`, `naked`, `allocate(...)`, `uuid(...)`
+and ABI annotations such as `__ms_abi__` are accepted without backend effects.
+`align(...)` and `aligned(...)` continue to mark the affected type/layout as
+unanalyzed rather than assume its natural alignment. Clang itself ignores
+some of these macro-expanded attributes with warnings; bcc's current attribute
+pass preserves their syntax without applicability warnings.
+
+Startup preprocessing uses `PreprocessingOption::{Define,Undefine,Include}`
+in `src/configuration.rs`, borrowed by `Context.preprocessing_options`; the
+scalar `CompilerConfiguration` remains lifetime-free and `Copy`. CLI spellings
+are documented in README. The ordinary directive parser reads an arena-backed
+`<command line>` source after predefined macros and before the main input,
+reusing structured diagnostics, macro validation and builtin protections.
+Definition values split at the first `=` and truncate at the first newline,
+as GCC does. Command-line definitions enter the ordinary lexer at phase 3;
+backslashes cannot splice the next option and trigraph spellings stay literal.
+The measured library CLI adapter applies these options before its intervals,
+so golden diagnostics exercise the same arena-backed path. All `-D`/`-U`
+operations precede all forced includes, even if an
+include appeared earlier on argv, matching GCC/Clang startup ordering. Forced
+includes use working-directory quoted lookup; the synthetic frame does not
+consume the include-nesting limit. `-imacros` is deferred because discarding
+its expanded output requires a separate, explicit preprocessor output scope.
+
 `src/target.rs` is the single target seam: scalar/pointer layout, ABI aliases,
 wide encoding, va-list representation, record rules and, for MSVC, the
 Microsoft ABI's external emission of inline functions. Its `target/` module
@@ -852,7 +883,6 @@ backend work before they can be enabled.
 | `__STDC__` | Existing language-mode preprocessor builtin; not a target definition. |
 | `__STRICT_ANSI__` | Existing language-mode preprocessor builtin; not a target definition. |
 | `__VERSION__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__cdecl` | Vendor attribute/calling-convention semantics are not implemented. |
 | `__clang__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__clang_literal_encoding__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__clang_major__` | Compiler identity/version or hosted-mode contract owned separately. |
@@ -861,19 +891,9 @@ backend work before they can be enabled.
 | `__clang_version__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__clang_wide_literal_encoding__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__code_model_small__` | Code generation, relocation and optimization policy are not implemented. |
-| `__declspec` | Vendor attribute/calling-convention semantics are not implemented. |
-| `__fastcall` | Vendor attribute/calling-convention semantics are not implemented. |
 | `__llvm__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__pascal` | Vendor attribute/calling-convention semantics are not implemented. |
 | `__pic__` | Code generation, relocation and optimization policy are not implemented. |
 | `__pie__` | Code generation, relocation and optimization policy are not implemented. |
 | `__seg_fs` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__seg_gs` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
-| `__stdcall` | Vendor attribute/calling-convention semantics are not implemented. |
-| `__thiscall` | Vendor attribute/calling-convention semantics are not implemented. |
 | `__tune_k8__` | Code generation, relocation and optimization policy are not implemented. |
-| `_cdecl` | Vendor attribute/calling-convention semantics are not implemented. |
-| `_fastcall` | Vendor attribute/calling-convention semantics are not implemented. |
-| `_pascal` | Vendor attribute/calling-convention semantics are not implemented. |
-| `_stdcall` | Vendor attribute/calling-convention semantics are not implemented. |
-| `_thiscall` | Vendor attribute/calling-convention semantics are not implemented. |
