@@ -7,6 +7,7 @@ use super::*;
 mod atomics;
 mod float128;
 mod int128;
+mod mingw_inline;
 mod targets;
 mod vectors;
 

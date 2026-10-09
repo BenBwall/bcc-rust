@@ -783,7 +783,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
         }
         self.bind(name, ty, kind, linkage, duration, None);
-        self.record_declaration(self.bindings.len() - 1, spec, initialized);
+        self.record_declaration(self.bindings.len() - 1, spec, declarator, initialized);
         if spec.storage_class == Some(StorageClass::Register) {
             _ = self.register_bindings.insert(self.bindings.len() - 1, true);
         }
@@ -829,7 +829,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         .flatten()
         {
             let old = self.bindings[index];
-            if old.linkage != linkage && old.linkage != Linkage::None && linkage != Linkage::None {
+            let gnu_redeclaration = kind == BindingKind::Function
+                && old.kind == kind
+                && old.linkage == Linkage::External
+                && linkage == Linkage::Internal
+                && self.gnu_function_redefinable(name.name);
+            if old.linkage != linkage
+                && old.linkage != Linkage::None
+                && linkage != Linkage::None
+                && !gnu_redeclaration
+            {
                 self.error(
                     SemanticErrorKind::ConflictingLinkage,
                     name.source_vectors,

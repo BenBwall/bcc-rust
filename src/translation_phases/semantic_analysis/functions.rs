@@ -80,7 +80,19 @@ pub(super) struct Entity {
     definition:    Option<SourceVectors>,
     tentative:     Option<usize>,
     non_inline:    bool,
-    function_body: Option<SourceVectors>,
+    function_body: Option<FunctionBody>,
+    /// Clang's canRedefineFunction: GNU extern inline declarations permit
+    /// a later static declaration and a replacement function body.
+    can_redefine:  bool,
+    gnu_inline:    bool,
+}
+
+/// GNU extern inline bodies may be replaced; ordinary definitions may not.
+/// Extension: Clang's canRedefineFunction; C99: §6.9p5, p. 140; PDF p. 152.
+#[derive(Clone, Copy)]
+enum FunctionBody {
+    Replaceable(SourceVectors),
+    Unique(SourceVectors),
 }
 
 #[derive(Clone, Copy)]
@@ -752,6 +764,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         index: usize,
         spec: DeclarationSpecifiers<'tu>,
+        declarator: Declarator<'tu>,
         initialized: bool,
     ) {
         if self.tainted {
@@ -797,6 +810,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         entity.latest = index;
         if self.scopes[binding.scope].kind == ScopeKind::File {
             if binding.kind == BindingKind::Function {
+                entity.gnu_inline |= self.has_gnu_inline(spec, declarator);
+                entity.can_redefine = spec.function_specifiers.is_inline
+                    && spec.storage_class == Some(StorageClass::Extern)
+                    && (entity.gnu_inline
+                        || self.context.configuration.standard() == CStandard::C89);
                 entity.non_inline |= !spec.function_specifiers.is_inline
                     || spec.storage_class == Some(StorageClass::Extern);
             } else if binding.kind == BindingKind::Object {
@@ -873,7 +891,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .copied()
             .unwrap_or_default();
         entity.latest = index;
-        if let Some(previous) = entity.function_body {
+        if let Some(FunctionBody::Unique(previous)) = entity.function_body {
             self.error(
                 SemanticErrorKind::DuplicateDefinition,
                 b.name.source_vectors,
@@ -881,13 +899,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Some(previous),
             );
         } else {
-            entity.function_body = Some(b.name.source_vectors);
+            entity.function_body = Some(if entity.can_redefine {
+                FunctionBody::Replaceable(b.name.source_vectors)
+            } else {
+                FunctionBody::Unique(b.name.source_vectors)
+            });
         }
-        if b.linkage == Linkage::Internal
-            || !f.declaration_specifiers.function_specifiers.is_inline
-            || f.declaration_specifiers.storage_class == Some(StorageClass::Extern)
+        if !entity.can_redefine
+            && (b.linkage == Linkage::Internal
+                || !f.declaration_specifiers.function_specifiers.is_inline
+                || f.declaration_specifiers.storage_class == Some(StorageClass::Extern)
+                || entity.gnu_inline
+                || self.context.configuration.standard() == CStandard::C89)
         {
-            entity.definition = entity.function_body;
+            entity.definition = entity.function_body.map(|body| match body {
+                | FunctionBody::Replaceable(source) | FunctionBody::Unique(source) => source,
+            });
             entity.non_inline = true;
         }
         _ = self.functions.entities.insert(b.name.name, entity);
@@ -1069,6 +1096,66 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .functions
                 .entities
                 .get(&self.bindings[binding].name.name)
-                .is_some_and(|e| !e.non_inline)
+                .is_some_and(|e| {
+                    !e.non_inline
+                        && !e.gnu_inline
+                        && self.context.configuration.standard() != CStandard::C89
+                })
+    }
+
+    /// Clang permits replacing a GNU extern inline declaration.
+    pub(super) fn gnu_function_redefinable(&self, name: StringCacheId) -> bool {
+        self.functions
+            .entities
+            .get(&name)
+            .is_some_and(|e| e.can_redefine)
+    }
+
+    /// GNU inline attribute semantics follow Clang's canRedefineFunction.
+    /// <https://clang.llvm.org/docs/AttributeReference.html#gnu-inline>
+    /// Only attribute names count; occurrences inside arguments do not.
+    fn has_gnu_inline(
+        &self,
+        spec: DeclarationSpecifiers<'tu>,
+        declarator: Declarator<'tu>,
+    ) -> bool {
+        let attribute_has = |attribute: &super::AttributeSpecifier<'tu>| {
+            if attribute.recovered
+                || !attribute.tokens.first().is_some_and(|token| {
+                    matches!(
+                        token.kind,
+                        super::super::preprocessing::TokenType::Keyword(
+                            super::super::preprocessing::KeywordTokenType::Attribute
+                        )
+                    )
+                })
+            {
+                return false;
+            }
+            let mut depth = 0usize;
+            attribute.tokens.iter().any(|token| {
+                let spelling = self.context.string_cache.at(token.contents);
+                match spelling {
+                    | "(" => depth += 1,
+                    | ")" => depth = depth.saturating_sub(1),
+                    | "gnu_inline" | "__gnu_inline__" if depth == 2 => return true,
+                    | _ => {},
+                }
+                false
+            })
+        };
+        let mut chain = spec.extensions;
+        while let Some(item) = chain {
+            if let super::SpecifierExtensionKind::Attributes(attribute) = item.kind
+                && attribute_has(attribute)
+            {
+                return true;
+            }
+            chain = item.next;
+        }
+        declarator
+            .kind
+            .iter()
+            .any(|direct| matches!(direct, DirectDeclarator::Attributes(a) if attribute_has(a)))
     }
 }
