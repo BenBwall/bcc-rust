@@ -42,6 +42,10 @@ pub(crate) enum SemanticErrorKind {
     InvalidFunctionDefinition,
     /// C99: §6.9.1p4, p. 141; PDF p. 153.
     FunctionDefinitionStorage,
+    /// GNU extension: nested functions have no linkage and reject
+    /// extern/static. C99: §6.9p1, p. 140; PDF p. 152 limits definitions to
+    /// external declarations.
+    NestedFunctionStorage,
     /// C99: §6.9.1p3, p. 141; PDF p. 153.
     IncompleteFunctionReturn,
     /// C99: §6.9.1p5-6, p. 141; PDF p. 153.
@@ -281,6 +285,7 @@ impl SemanticErrorKind {
             | Self::IncompleteObject => "incomplete type",
             | Self::InvalidFunctionDefinition => "not a function declarator",
             | Self::FunctionDefinitionStorage => "storage class is not allowed on a definition",
+            | Self::NestedFunctionStorage => "storage class is not allowed on a nested definition",
             | Self::IncompleteFunctionReturn => "incomplete return type",
             | Self::InvalidDefinitionParameterList => "invalid parameter list for a definition",
             | Self::UnnamedDefinitionParameter => "parameter has no name",
@@ -327,6 +332,11 @@ impl SemanticErrorKind {
                 "invalid storage class in function definition",
                 "C99 §6.9.1p4: a function definition permits only extern or static storage-class \
                  specifiers",
+            ),
+            | Self::NestedFunctionStorage => (
+                "invalid storage class in nested function definition",
+                "GNU extension: nested functions have no linkage; extern and static are not \
+                 permitted",
             ),
             | Self::IncompleteFunctionReturn => (
                 "function definition requires a complete return object type",

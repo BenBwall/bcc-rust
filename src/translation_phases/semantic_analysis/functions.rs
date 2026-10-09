@@ -183,6 +183,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C99: §6.9.1p2-7, pp. 141-142; PDF pp. 153-154.
+    /// GNU extension: nested definitions have no linkage and reject
+    /// extern/static.
     pub(super) fn function_body(&mut self, f: &'tu FunctionDefinition<'tu>) {
         let declared_type = self.take_type();
         let nested = self.scopes[self.scope].kind != ScopeKind::File;
@@ -190,6 +192,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if nested {
             // GNU nested functions denote lexical entities, not translation-
             // unit externals. Their parser owner reports the extension.
+            if matches!(
+                f.declaration_specifiers.storage_class,
+                Some(StorageClass::Static | StorageClass::Extern)
+            ) {
+                self.error(
+                    SemanticErrorKind::NestedFunctionStorage,
+                    f.declaration_specifiers.source_vectors,
+                    name.map(|n| n.name),
+                    None,
+                );
+            }
             if let Some(name) = name {
                 self.bind(
                     name,
@@ -322,6 +335,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if void {
                     continue;
                 }
+                let syntax = match derivation {
+                    | Some(DirectDeclarator::Function { parameter_list, .. }) =>
+                        parameter_list.as_slice().get(parameter_index),
+                    | _ => None,
+                };
+                // C99 §6.7.5.3p4: completeness after adjustment applies even
+                // when C23 permits omitting the parameter's name. Void
+                // parameters were already rejected during prototype
+                // construction.
+                let valid = !matches!(
+                    self.types.nodes[parameter.ty.index],
+                    TypeKind::Scalar(Scalar::Void)
+                ) && self.validate_definition_parameter(
+                    parameter.ty,
+                    parameter.name.map_or_else(
+                        || syntax.map_or(f.declarator.source_vectors, |p| p.source_vectors),
+                        |name| name.source_vectors,
+                    ),
+                    parameter.name.map(|name| name.name),
+                );
                 if let Some(name) = parameter.name {
                     // Prototype construction already diagnosed duplicate
                     // parameter/enumerator names. Replay each binding once.
@@ -331,17 +364,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     {
                         continue;
                     }
-                    // Void parameters were already rejected while the
-                    // prototype was constructed. Failed parameter types must
-                    // not generate dependent errors in the body.
-                    let valid = !matches!(
-                        self.types.nodes[parameter.ty.index],
-                        TypeKind::Scalar(Scalar::Void)
-                    ) && self.validate_definition_parameter(
-                        parameter.ty,
-                        name.source_vectors,
-                        Some(name.name),
-                    );
+                    // Failed parameter types must not generate dependent
+                    // errors in the body.
                     let parameter_type = if valid {
                         parameter.ty
                     } else {
@@ -365,11 +389,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         _ = self.register_bindings.insert(self.bindings.len() - 1, true);
                     }
                 } else if self.context.configuration.standard() < CStandard::C23 {
-                    let syntax = match derivation {
-                        | Some(DirectDeclarator::Function { parameter_list, .. }) =>
-                            parameter_list.as_slice().get(parameter_index),
-                        | _ => None,
-                    };
                     let parser_exempt = syntax.is_some_and(|p| {
                         parameters.len() == 1
                             && p.declarator.is_none()
@@ -607,7 +626,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         };
         let binding = self.bindings[index];
-        let TypeKind::Function { result, .. } = self.types.nodes[binding.ty.index] else {
+        let TypeKind::Function {
+            result,
+            parameters: prior_parameters,
+            prototype,
+            ..
+        } = self.types.nodes[binding.ty.index]
+        else {
             return;
         };
         let parameters = self.types.tu.alloc_slice_copy(&parameters);
@@ -617,7 +642,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             prototype: false,
             variadic: false,
         });
-        if let Some(composite) = self.types.composite(binding.ty, defined) {
+        // C99 §6.7.5.3p15: a definition's identifier list, including an empty
+        // one, must match a preceding prototype's parameter count.
+        if (!prototype || prior_parameters.len() == parameters.len())
+            && let Some(composite) = self.types.composite(binding.ty, defined)
+        {
             self.bindings[index].ty = composite;
             self.check_main(function, composite);
         } else {

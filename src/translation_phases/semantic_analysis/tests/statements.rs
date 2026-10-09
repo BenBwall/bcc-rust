@@ -458,14 +458,50 @@ fn statement_analysis_has_no_native_stack_limit() {
 
 #[test]
 fn malformed_statements_suppress_dependent_constraints() {
-    for source in [
-        "void f(void) {if() return;}",
-        "void f(void) {switch() {case :break;}}",
-        "void f(void) {goto ;}",
-        "int f(int a,) {return +;}",
-    ] {
-        with_source(source, |context, _| {
-            assert!(context.pending_error_count() > 0);
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "void f(void) {if() return 1;}",
+            &["ExpectedStatementExpression"],
+        ),
+        (
+            "void f(void) {switch() {case :break;}}",
+            &["ExpectedStatementExpression", "ExpectedStatementExpression"],
+        ),
+        ("void f(void) {goto ;}", &["ExpectedGotoLabel"]),
+        (
+            "int f(int a,) {return +;}",
+            &[
+                "ExpectedParameterDeclarationAfterCommaInFunctionDeclarator",
+                "ExpectedStatementExpression",
+            ],
+        ),
+    ];
+    for &(source, expected_parser_kinds) in cases {
+        let source = format!("{source} void following(void) {{return 1;}}");
+        with_source(&source, |context, _| {
+            let errors = context.take_pending_errors();
+            let (last, parser_errors) = errors.split_last().unwrap();
+            assert!(
+                matches!(last, TranslationError::Semantic(e)
+                    if e.kind == SemanticErrorKind::VoidReturnValue),
+                "{source}: {errors:?}"
+            );
+            let parser_kinds: Vec<_> = parser_errors
+                .iter()
+                .map(|error| match error {
+                    | TranslationError::Parsing(e) => {
+                        // The parser's kind enum is private. Check its variant
+                        // name, excluding the grammar-specific payload.
+                        let mut kind = format!("{:?}", e.error_type);
+                        if let Some(payload) = kind.find('(') {
+                            kind.truncate(payload);
+                        }
+                        kind
+                    },
+                    | _ => panic!("{source}: unexpected dependent diagnostic: {error:?}"),
+                })
+                .collect();
+            assert_eq!(parser_kinds, expected_parser_kinds, "{source}: {errors:?}");
         });
     }
 }

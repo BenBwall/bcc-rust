@@ -650,5 +650,6 @@ fn gnu_void_and_function_size_constants_remain_accepted() {
 
 mod declarations;
 mod expressions;
+mod function_regressions;
 mod operand_regressions;
 mod statements;
