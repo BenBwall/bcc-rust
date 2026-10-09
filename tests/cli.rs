@@ -774,6 +774,43 @@ mod tests {
         );
     }
 
+    fn check_encoded_string_inspection(flag: &str, label_separator: &str) {
+        for standard in [None, Some("-std=c11")] {
+            for (source, kind, expected) in [
+                (r#"u"\x100""#, "char16_t", "u\"\u{100}\""),
+                (r#"u"\777""#, "char16_t", "u\"\u{1ff}\""),
+                (r#"U"\x12345""#, "char32_t", "U\"\u{12345}\""),
+                (r#"u"\xd800""#, "char16_t", r#"u"\xd800""#),
+                (r#"U"\x110000""#, "char32_t", r#"U"\x110000""#),
+                (r#"u8"\xc4\x80""#, "char8_t", "u8\"\u{100}\""),
+                (r#"u8"\xff""#, "char8_t", r#"u8"\377""#),
+            ] {
+                let declaration = format!("void f(void) {{ (void){source}; }}\n");
+                let mut arguments = vec![flag, "--input", &declaration];
+                arguments.extend(standard);
+                let output = run(&arguments);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                assert!(output.status.success(), "{arguments:?}: {stderr}");
+                assert!(
+                    !stderr.contains("error:") && !stderr.contains("warning:"),
+                    "{stderr}"
+                );
+                let label = format!("{kind}{label_separator} {expected}");
+                assert!(stderr.contains(&label), "{arguments:?}: {stderr}");
+            }
+        }
+    }
+
+    #[test]
+    fn token_dump_renders_encoded_string_code_units() {
+        check_encoded_string_inspection("--tokens", " string literal");
+    }
+
+    #[test]
+    fn syntax_tree_renders_encoded_string_code_units() {
+        check_encoded_string_inspection("--syntax-tree", "-string");
+    }
+
     #[test]
     fn missing_input_files_name_the_path() {
         let output = run(&["does-not-exist.c"]);

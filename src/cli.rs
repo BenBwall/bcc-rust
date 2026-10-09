@@ -564,11 +564,12 @@ pub(crate) fn describe_token<'a>(
         .at(token.contents)
         .trim_end_matches('\0');
     let literal = match token.kind {
-        | TokenType::String(
-            StringTokenType::String(contents) | StringTokenType::EncodedString(contents, _),
-        ) => context.literal_spelling_in(scratch, scratch, contents, false),
+        | TokenType::String(StringTokenType::EncodedString(contents, encoding)) =>
+            context.literal_spelling_in(scratch, scratch, contents, encoding.prefix()),
+        | TokenType::String(StringTokenType::String(contents)) =>
+            context.literal_spelling_in(scratch, scratch, contents, ""),
         | TokenType::String(StringTokenType::WideString(contents)) =>
-            context.literal_spelling_in(scratch, scratch, contents, true),
+            context.literal_spelling_in(scratch, scratch, contents, "L"),
         | _ => "",
     };
     let mut line = ArenaString::new_in(scratch);
@@ -585,12 +586,8 @@ pub(crate) fn describe_token<'a>(
         | TokenType::Identifier => write!(line, "identifier `{spelling}`"),
         | TokenType::Keyword(_) => write!(line, "keyword `{spelling}`"),
         | TokenType::Operator(operator) => write!(line, "punctuator `{}`", operator.spelling()),
-        | TokenType::String(StringTokenType::EncodedString(_, encoding)) => write!(
-            line,
-            "{} string literal {}{literal}",
-            encoding.type_name(),
-            encoding.prefix()
-        ),
+        | TokenType::String(StringTokenType::EncodedString(_, encoding)) =>
+            write!(line, "{} string literal {literal}", encoding.type_name()),
         | TokenType::String(StringTokenType::String(_)) => write!(line, "string literal {literal}"),
         | TokenType::String(StringTokenType::WideString(_)) =>
             write!(line, "wide string literal {literal}"),

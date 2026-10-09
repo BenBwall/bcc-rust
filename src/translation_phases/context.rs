@@ -533,19 +533,26 @@ impl<'tu> Context<'tu> {
     /// its characters are text, and as numeric escapes otherwise. The text is
     /// decoded in `scratch` and taken back, unless something else is
     /// allocated there meanwhile.
+    /// `prefix` selects byte decoding for ordinary/UTF-8 strings and full
+    /// code-unit decoding for `L`, `u`, and `U` strings.
+    ///
+    /// C11: numeric escapes use the corresponding character type,
+    /// §6.4.4.4 paragraph 9, p. 69; PDF p. 87; string element types are
+    /// specified by §6.4.5 paragraph 6, p. 71; PDF p. 89.
     pub(crate) fn literal_spelling_in<'a>(
         &self,
         arena: &'a Bump,
         scratch: &Bump,
         id: LiteralId,
-        wide: bool,
+        prefix: &str,
     ) -> &'a str {
+        let wide = matches!(prefix, "L" | "u" | "U");
         let mut spelling = ArenaString::new_in(arena);
         let text = self.decode_literal_text(scratch, id, wide);
         let text = text
             .as_deref()
             .and_then(|text| std::str::from_utf8(text).ok());
-        self.write_literal_spelling(&mut spelling, text, id, wide)
+        self.write_literal_spelling(&mut spelling, text, id, prefix)
             .expect("arena formatting cannot fail");
         spelling.into_str()
     }
@@ -557,12 +564,14 @@ impl<'tu> Context<'tu> {
         out: &mut impl std::fmt::Write,
         text: Option<&str>,
         id: LiteralId,
-        wide: bool,
+        prefix: &str,
     ) -> std::fmt::Result {
+        let wide = matches!(prefix, "L" | "u" | "U");
         if let Some(text) = text {
-            return crate::diagnostics::write_c_quoted(out, if wide { "L" } else { "" }, '"', text);
+            return crate::diagnostics::write_c_quoted(out, prefix, '"', text);
         }
-        out.write_str(if wide { "L\"" } else { "\"" })?;
+        out.write_str(prefix)?;
+        out.write_char('"')?;
         for unit in self.literal_units(id) {
             match *unit {
                 | LiteralUnit::Character(c) if wide => write!(out, "\\x{:x}", u32::from(c))?,

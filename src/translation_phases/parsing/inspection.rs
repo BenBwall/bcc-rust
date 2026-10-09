@@ -1384,20 +1384,24 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                     return match string {
                         | StringTokenType::EncodedString(contents, encoding) => write!(
                             f,
-                            "{}-string {}{}",
+                            "{}-string {}",
                             encoding.type_name(),
-                            encoding.prefix(),
-                            context.literal_spelling_in(scratch, scratch, *contents, false)
+                            context.literal_spelling_in(
+                                scratch,
+                                scratch,
+                                *contents,
+                                encoding.prefix()
+                            )
                         ),
                         | StringTokenType::String(contents) => write!(
                             f,
                             "string {}",
-                            context.literal_spelling_in(scratch, scratch, *contents, false)
+                            context.literal_spelling_in(scratch, scratch, *contents, "")
                         ),
                         | StringTokenType::WideString(contents) => write!(
                             f,
                             "wide-string {}",
-                            context.literal_spelling_in(scratch, scratch, *contents, true)
+                            context.literal_spelling_in(scratch, scratch, *contents, "L")
                         ),
                     };
                 },

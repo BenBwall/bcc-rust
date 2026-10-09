@@ -893,10 +893,10 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             match token.kind {
                 | TokenType::String(StringTokenType::String(contents)) => self
                     .context
-                    .literal_spelling_in(self.context.tu_arena(), self.arena, contents, false),
+                    .literal_spelling_in(self.context.tu_arena(), self.arena, contents, ""),
                 | TokenType::String(StringTokenType::WideString(contents)) => self
                     .context
-                    .literal_spelling_in(self.context.tu_arena(), self.arena, contents, true),
+                    .literal_spelling_in(self.context.tu_arena(), self.arena, contents, "L"),
                 | _ => self.context.diagnostic_text(
                     self.context
                         .string_cache
