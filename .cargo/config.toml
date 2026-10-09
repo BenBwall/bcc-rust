@@ -2,6 +2,15 @@
 # Keep target LTO flags away from host build scripts and proc macros.
 target = "host-tuple"
 
+# Linker-plugin LTO creates calls to some compiler_builtins functions only
+# while generating code, after LTO has discarded `rust_eh_personality`. The
+# linker then fetches their objects, whose unwind tables still reference it,
+# and the link fails. Forcing those objects in before LTO keeps the
+# personality alive. The list is every function defined by a pinned
+# compiler_builtins object that references `rust_eh_personality`: signed
+# 128-bit division, 128-bit float arithmetic and `lgamma`. Recheck it when the
+# toolchain changes: run `llvm-nm -u` over the rlib's members.
+# tests/late_builtins.rs fails to link if the list stops covering division.
 [target.'cfg(all(target_os = "windows", target_env = "gnu"))']
 rustflags = [
     "-C", "target-cpu=native",
@@ -12,6 +21,16 @@ rustflags = [
     "-C", "embed-bitcode=yes",
     "-C", "target-feature=+crt-static",
     "-C", "link-self-contained=yes",
+    "-C", "link-arg=--undefined=__divti3",
+    "-C", "link-arg=--undefined=__modti3",
+    "-C", "link-arg=--undefined=__divmodti4",
+    "-C", "link-arg=--undefined=__addtf3",
+    "-C", "link-arg=--undefined=__subtf3",
+    "-C", "link-arg=--undefined=__multf3",
+    "-C", "link-arg=--undefined=__divtf3",
+    "-C", "link-arg=--undefined=fmodf128",
+    "-C", "link-arg=--undefined=lgamma_r",
+    "-C", "link-arg=--undefined=lgammaf_r",
 ]
 
 [target.'cfg(all(target_os = "windows", target_env = "msvc"))']
@@ -35,4 +54,9 @@ rustflags = [
     "-C", "target-feature=+crt-static",
     "-C", "link-arg=-fuse-ld=lld",
     "-C", "link-arg=-flto=full",
+    # The same late compiler_builtins calls as on Windows GNU.
+    "-C", "link-arg=-Wl,--undefined=__divti3,--undefined=__modti3,--undefined=__divmodti4",
+    "-C", "link-arg=-Wl,--undefined=__addtf3,--undefined=__subtf3,--undefined=__multf3",
+    "-C", "link-arg=-Wl,--undefined=__divtf3,--undefined=fmodf128",
+    "-C", "link-arg=-Wl,--undefined=lgamma_r,--undefined=lgammaf_r",
 ]

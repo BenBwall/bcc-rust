@@ -167,6 +167,15 @@ host's backend is enabled. Rust uses
 the Rust/C boundary. The [Rust LTO documentation](https://doc.rust-lang.org/rustc/linker-plugin-lto.html)
 describes this combination and why matching LLVM versions matters.
 
+Under this combination, code generation can introduce calls to
+`compiler_builtins` functions after LTO has already discarded
+`rust_eh_personality`, which their unwind tables reference. Signed 128-bit
+division and `f128` arithmetic are examples. The linker would then fail with
+`undefined symbol: rust_eh_personality`. The Windows GNU and Linux flags in
+[`.cargo/config.toml`](.cargo/config.toml) therefore force those objects in
+before LTO, and [`tests/late_builtins.rs`](tests/late_builtins.rs) fails to link
+if the list stops covering them.
+
 Cargo selects the source-built linker directly from `target/llvm/bin/`.
 The C compiler, archiver, libclang, and linker all come from that pinned
 build; no setup script or linker wrapper is needed. The shared LLVM cache is
