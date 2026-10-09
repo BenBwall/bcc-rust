@@ -148,6 +148,49 @@ mod tests {
         clean(&output);
     }
 
+    #[test]
+    fn float_h_chains_only_for_windows_runtimes_and_keeps_the_targets_values() {
+        // MinGW-w64's <float.h> adds Windows definitions and would chain to
+        // GCC's own unless that header's guard, `_FLOAT_H___`, is defined.
+        let library = scratch("mingw-float").join("include");
+        write(
+            &library.join("float.h"),
+            "#ifndef _FLOAT_H___\n#include_next <float.h>\n#endif\n#define FLT_DIG 99\n#define \
+             _MCW_EM 0x0008001F\n",
+        );
+        let check = "#include <float.h>\n_Static_assert(FLT_DIG == 6, \"\");\n#ifdef \
+                     _MCW_EM\nwindows_additions\n#endif\n";
+        for (prefix, expected) in [
+            ("#define __MINGW32__ 1\n", &["windows_additions"][..]),
+            ("", &[][..]),
+        ] {
+            let source = format!("{prefix}{check}");
+            for flags in [&["-fhosted"][..], &["-ffreestanding"][..]] {
+                let mut args = flags.to_vec();
+                args.extend(["-idirafter", arg(&library), "--tokens", "--input", &source]);
+                let output = bcc(&args);
+                clean(&output);
+                let hosted = flags == ["-fhosted"];
+                assert_eq!(
+                    identifiers(&output),
+                    if hosted { expected } else { &[] },
+                    "{prefix:?} {flags:?}"
+                );
+            }
+        }
+        // `-fms-extensions` claims MSVC, whose runtime chains the same way.
+        let output = bcc(&[
+            "-fms-extensions",
+            "-idirafter",
+            arg(&library),
+            "--tokens",
+            "--input",
+            check,
+        ]);
+        clean(&output);
+        assert_eq!(identifiers(&output), ["windows_additions"]);
+    }
+
     /// One directory per search group. Each holds `chain.h`, which names
     /// its group and continues with `#include_next`, so a lookup records
     /// every place it visits in order; the last group ends the chain.
