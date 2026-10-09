@@ -1,0 +1,13 @@
+error: va_start requires a variadic function
+ --> <built-in>/stdarg.h:5:28
+  |
+5 | #define va_start(ap, last) __builtin_va_start(ap, last)
+  |                            ^^^^^^^^^^^^^^^^^^^  ^     ^ declaration constraint violated
+ ::: freestanding-va-start.c:2:42
+  |
+2 | void fixed(int n) { va_list ap; va_start(ap, n); va_end(ap); }
+  |                                          ^^  ^
+  |
+  = note: C99 §7.15.1.4p4: parmN is the parameter immediately before the ellipsis
+
+1 error generated.
