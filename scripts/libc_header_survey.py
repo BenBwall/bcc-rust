@@ -66,7 +66,7 @@ GROUP_PRELUDES = {"win32": ["windows.h"]}
 MINGW_POSIX_HEADERS = ["dirent.h", "getopt.h", "pthread.h", "strings.h", "sys/time.h", "unistd.h"]
 COMBINED = "<c-standard>"
 SENTINEL = "typedef int libc_header_survey_unit;\n"
-DEFAULT_BCC_ARGS = '--target={triple} {flags} --std={std} "--isystem {dir}"'
+DEFAULT_BCC_ARGS = '--target={triple} {flags} --std={std} "-idirafter {dir}"'
 PLACEHOLDERS = {"triple", "sysroot", "std", "config", "dir", "input", "flags"}
 CLANG_DIAGNOSTIC = re.compile(r"^(.*?):(\d+):\d+: (fatal error|error|warning): (.*)$", re.MULTILINE)
 BCC_FIRST_ERROR_LOCATION = re.compile(r"^[Ee]rror: .*\n\s*--> (.+):(\d+):\d+\s*$", re.MULTILINE)
@@ -158,7 +158,7 @@ def check_template(template):
 def expand_template(template, values, include_dirs, source):
     """Expand a bcc argument template into arguments.
 
-    {flags} expands to the configuration's equivalent bcc extension flags.
+    {flags} expands to the configuration's equivalent bcc flags.
     Scalar placeholders fill in place; a word whose placeholder is empty (the
     MSVC configuration has no sysroot) is dropped. A word containing {dir}
     repeats once per include directory and is itself split into words first,
@@ -195,7 +195,7 @@ def linux_configuration(name, triple, sysroots, multiarch):
         "triple": triple, "sysroot": str(sysroot), "include_dirs": include_dirs,
         "header_roots": include_dirs, "extra_groups": {"posix": POSIX_HEADERS},
         "clang_flags": [f"--target={triple}", f"--sysroot={sysroot}"],
-        "bcc_flags": [],
+        "bcc_flags": [f"--sysroot={sysroot}"],
         "source": json.loads(manifest.read_text(encoding="utf-8")),
     }, None
 

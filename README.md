@@ -477,18 +477,19 @@ timeout makes the survey exit nonzero. `--config`, `--match` (a header glob),
 `--jobs`, and `--timeout` narrow or tune a run.
 
 bcc's arguments come from a template. The default,
-`--target={triple} {flags} --std={std} "--isystem {dir}"`, selects each
-configuration's target and passes the library's include directories as system
-directories, ahead of bcc's built-in freestanding headers. The separate word
-`{flags}` expands to the configuration's equivalent bcc extension flags:
-`-fms-extensions` for MSVC, and no extra flags for the other configurations.
+`--target={triple} {flags} --std={std} "-idirafter {dir}"`, selects each
+configuration's target and passes the library's include directories after
+bcc's built-in resource headers, the order Clang uses, so the resource
+headers can wrap the library's (`#include_next`). The separate word
+`{flags}` expands to the configuration's equivalent bcc flags: `--sysroot`
+for glibc and musl (as their Clang command passes), `-fms-extensions` for
+MSVC, and no extra flags for MinGW-w64.
 The other placeholders are `{triple}`, `{sysroot}`, `{std}`, `{config}`, `{dir}`,
 and `{input}`. A word containing `{dir}` repeats once for each include directory, and a word
 whose placeholder is empty is dropped (the MSVC configuration has no sysroot;
 MinGW-w64's is the GCC installation root). The translation unit is appended
-unless `{input}` appears. bcc defaults to hosted mode and also supports sysroot
-header lookup. Override the template to use that lookup, for every
-configuration or for one:
+unless `{input}` appears. Override the template for every configuration or
+for one, for example to rely on `--sysroot` lookup alone:
 
 ```sh
 python scripts/libc_header_survey.py --output target/libc-survey/hosted \

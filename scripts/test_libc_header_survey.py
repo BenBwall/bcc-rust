@@ -84,8 +84,10 @@ class SurveyCommandTests(unittest.TestCase):
                     for name, factory in configurations(args, root / "resource", environment).items()
                 }
             expected = {
-                "glibc-x86_64-linux": ("x86_64-unknown-linux-gnu", []),
-                "musl-x86_64-linux": ("x86_64-unknown-linux-musl", []),
+                "glibc-x86_64-linux": ("x86_64-unknown-linux-gnu",
+                                       [f"--sysroot={root / 'sysroots' / 'glibc-x86_64-linux'}"]),
+                "musl-x86_64-linux": ("x86_64-unknown-linux-musl",
+                                      [f"--sysroot={root / 'sysroots' / 'musl-x86_64-linux'}"]),
                 "mingw-w64": ("x86_64-w64-windows-gnu", []),
                 "msvc-ucrt": ("x86_64-pc-windows-msvc", ["-fms-extensions"]),
             }
@@ -107,7 +109,7 @@ class SurveyCommandTests(unittest.TestCase):
                         self.assertEqual(bcc_command, [
                             args.bcc, f"--target={triple}", *flags, f"--std={std}",
                             *[argument for directory in configuration["include_dirs"]
-                              for argument in ("--isystem", str(directory))], str(source),
+                              for argument in ("-idirafter", str(directory))], str(source),
                         ])
                         self.assertEqual(surveyed["bcc"]["status"], "accepted")
 
