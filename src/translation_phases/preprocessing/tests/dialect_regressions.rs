@@ -153,6 +153,91 @@ fn stringified_va_opt_is_not_rescanned() {
     assert_eq!(texts(&tokens), "\"G (1)\"");
 }
 
+/// C23 §6.10.5.2p3: stringizing removes boundary whitespace and placemarkers
+/// while collapsing whitespace between significant tokens.
+#[test]
+fn stringified_va_opt_trims_whitespace_and_placemarkers() {
+    for (source, expected) in [
+        ("#define F(...) #__VA_OPT__(   abc   )\nF(x)\n", "\"abc\""),
+        (
+            "#define F(...) #__VA_OPT__(   abc   def   )\nF(x)\n",
+            "\"abc def\"",
+        ),
+        (
+            "#define F(X, ...) #__VA_OPT__( X ## X   abc   X ## X )\nF(, x)\n",
+            "\"abc\"",
+        ),
+        ("#define F(...) #__VA_OPT__(   )\nF(x)\n", "\"\""),
+        ("#define F(...) #__VA_OPT__(   abc   )\nF()\n", "\"\""),
+    ] {
+        for config in [
+            mode(CStandard::C23),
+            mode(CStandard::C23).with_gnu_extensions(true),
+            mode(CStandard::C17).with_gnu_extensions(true),
+        ] {
+            let (tokens, errors) = observe(source, config);
+            assert!(errors.is_empty(), "{source}: {errors:?}");
+            assert_eq!(texts(&tokens), expected, "{source}");
+        }
+    }
+}
+
+/// GNU comma-paste is prepared before ordinary pasting in a selected
+/// optional replacement, just as in the outer replacement list.
+#[test]
+fn va_opt_applies_gnu_comma_paste_before_substitution() {
+    for (source, expected) in [
+        (
+            "#define F(...) f(0 __VA_OPT__(, ## __VA_ARGS__))\nF(1,2)\n",
+            "f ( 0 , 1 , 2 )",
+        ),
+        (
+            "#define ONE 1\n#define F(...) f(0 __VA_OPT__(, ## __VA_ARGS__))\nF(ONE,2)\n",
+            "f ( 0 , 1 , 2 )",
+        ),
+        (
+            "#define F(...) #__VA_OPT__(, ## __VA_ARGS__)\nF(1,2)\n",
+            "\",1,2\"",
+        ),
+        (
+            "#define F(...) f(0 __VA_OPT__(, ## __VA_ARGS__))\nF()\n",
+            "f ( 0 )",
+        ),
+        (
+            "#define EMPTY\n#define F(...) f(0 __VA_OPT__(, ## __VA_ARGS__))\nF(EMPTY)\n",
+            "f ( 0 )",
+        ),
+    ] {
+        for config in [
+            mode(CStandard::C23),
+            mode(CStandard::C23).with_gnu_extensions(true),
+            mode(CStandard::C17).with_gnu_extensions(true),
+        ] {
+            let (tokens, errors) = observe(source, config);
+            assert!(errors.is_empty(), "{source}: {errors:?}");
+            assert_eq!(texts(&tokens), expected, "{source}");
+        }
+    }
+
+    for gnu in [false, true] {
+        for (policy, severity) in [
+            (ExtensionPolicy::Warn, "Warning"),
+            (ExtensionPolicy::Deny, "Error"),
+        ] {
+            let config =
+                CompilerConfiguration::new(CStandard::C23, policy).with_gnu_extensions(gnu);
+            let source = "#define F(...) f(0 __VA_OPT__(, ## __VA_ARGS__))\nF(1,2)\n";
+            let (tokens, errors) = observe(source, config);
+            assert_eq!(texts(&tokens), "f ( 0 , 1 , 2 )", "{errors:?}");
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert_eq!(
+                errors[0],
+                format!("{severity}: ', ## __VA_ARGS__' is a GNU extension")
+            );
+        }
+    }
+}
+
 /// C23 §6.10.5p5: `__VA_OPT__` outside a variadic macro is reported once, at
 /// its definition, under the extension policy.
 #[test]

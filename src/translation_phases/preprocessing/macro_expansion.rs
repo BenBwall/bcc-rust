@@ -368,8 +368,26 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         &mut self,
         invocation: PreprocessorToken,
         arguments: MacroArguments<'x>,
+        argument: &'x FunctionLikeMacroArgument<'x>,
         selected: &[PreprocessorToken],
+        empty: &mut Option<bool>,
     ) -> ArenaVec<'x, PreprocessorToken> {
+        let mut prepared = ArenaVec::new_in(self.scratch);
+        let mut index = 0;
+        while index < selected.len() {
+            if let Some(consumed) = self.prepare_variadic_comma(
+                invocation,
+                &selected[index..],
+                argument,
+                empty,
+                &mut prepared,
+            ) {
+                index += consumed;
+            } else {
+                prepared.push(selected[index]);
+                index += 1;
+            }
+        }
         let saved_hashes = replace(&mut self.hash_hash_stack, ArenaVec::new_in(self.scratch));
         let newlines = (self.last_was_newline, self.current_is_newline);
         let placeholder_mode = self.generate_placeholders;
@@ -388,7 +406,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let tokenizer = TokenSource::replay(
             self.context,
             self.scratch,
-            &[selected, &[newline]],
+            &[&prepared, &[newline]],
             location.clone(),
         );
         self.push_tokenizer_frame(TokenizerFrame {
@@ -417,6 +435,64 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         self.state.retain_placeholders = retain_placeholders;
         (self.last_was_newline, self.current_is_newline) = newlines;
         result
+    }
+
+    /// Prepares GNU comma-paste and traditional MSVC comma elision before
+    /// ordinary substitution, including within a selected optional body.
+    /// These are extensions to C99 §6.10.3.3 paragraph 2, p. 154; PDF p. 166.
+    /// Returns the number of consumed tokens when a comma form was handled.
+    fn prepare_variadic_comma(
+        &mut self,
+        invocation: PreprocessorToken,
+        tokens: &[PreprocessorToken],
+        argument: &'x FunctionLikeMacroArgument<'x>,
+        empty: &mut Option<bool>,
+        output: &mut ArenaVec<'x, PreprocessorToken>,
+    ) -> Option<usize> {
+        use PreprocessorTokenType as T;
+        let token = *tokens.first()?;
+        if token.kind != T::Comma {
+            return None;
+        }
+        let mut next = 1;
+        while tokens.get(next).is_some_and(|t| t.kind == T::Whitespace) {
+            next += 1;
+        }
+        let paste = tokens.get(next).is_some_and(|t| t.kind == T::HashHash);
+        if paste {
+            next += 1;
+            while tokens.get(next).is_some_and(|t| t.kind == T::Whitespace) {
+                next += 1;
+            }
+        }
+        if !tokens.get(next).is_some_and(|t| {
+            t.kind.is_identifier() && t.identifier_id(self.context) == argument.name
+        }) {
+            return None;
+        }
+        if paste {
+            self.context.report_extension(
+                Feature::GnuVaArgs,
+                ", ## __VA_ARGS__",
+                token.source_vectors,
+            );
+            if !argument.omitted {
+                output.push(token);
+                output.push(tokens[next]);
+            }
+            return Some(next + 1);
+        }
+        if self.context.configuration.accepts(Feature::MsVaArgs)
+            && self.variadic_argument_is_empty(empty, invocation, argument)
+        {
+            self.context.report_extension(
+                Feature::MsVaArgs,
+                "empty __VA_ARGS__ comma elision",
+                token.source_vectors,
+            );
+            return Some(next + 1);
+        }
+        None
     }
 
     fn va_opt_error(
@@ -546,7 +622,6 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let Some(argument) = arguments.iter().find(|argument| argument.variadic) else {
             return (original, arguments);
         };
-        let va_name = argument.name;
         // Whether `__VA_ARGS__` would be replaced by no tokens. It is decided
         // only where a construct needs it, since deciding prescans the
         // argument, which may then be used only as a `#` operand.
@@ -594,7 +669,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 {
                     ArenaVec::new_in(self.scratch)
                 } else {
-                    self.expand_optional_replacement(invocation, arguments, &tokens[start..index])
+                    self.expand_optional_replacement(
+                        invocation,
+                        arguments,
+                        argument,
+                        &tokens[start..index],
+                        &mut empty,
+                    )
                 };
                 let hash = output
                     .iter()
@@ -602,7 +683,21 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     .filter(|&i| output[i].kind == T::Hash);
                 if let Some(hash) = hash {
                     output.truncate(hash);
-                    let contents = Self::stringify(self.context, self.scratch, &selected);
+                    // C23 §6.10.5.2p3: discard placemarkers and boundary
+                    // whitespace before stringizing the optional argument.
+                    let boundary = |token: &PreprocessorToken| {
+                        matches!(token.kind, T::Whitespace | T::Newline | T::Placeholder)
+                    };
+                    let end = selected
+                        .iter()
+                        .rposition(|token| !boundary(token))
+                        .map_or(0, |i| i + 1);
+                    let start = selected[..end]
+                        .iter()
+                        .position(|token| !boundary(token))
+                        .unwrap_or(end);
+                    let contents =
+                        Self::stringify(self.context, self.scratch, &selected[start..end]);
                     output.push(PreprocessorToken {
                         kind: T::String,
                         contents,
@@ -645,46 +740,15 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 index += usize::from(index < tokens.len());
                 continue;
             }
-            if token.kind == T::Comma {
-                let mut next = index + 1;
-                while tokens.get(next).is_some_and(|t| t.kind == T::Whitespace) {
-                    next += 1;
-                }
-                let paste = tokens.get(next).is_some_and(|t| t.kind == T::HashHash);
-                if paste {
-                    next += 1;
-                    while tokens.get(next).is_some_and(|t| t.kind == T::Whitespace) {
-                        next += 1;
-                    }
-                }
-                if tokens.get(next).is_some_and(|t| {
-                    t.kind.is_identifier() && t.identifier_id(self.context) == va_name
-                }) {
-                    if paste {
-                        self.context.report_extension(
-                            Feature::GnuVaArgs,
-                            ", ## __VA_ARGS__",
-                            token.source_vectors,
-                        );
-                        if !argument.omitted {
-                            output.push(token);
-                            output.push(tokens[next]);
-                        }
-                        index = next + 1;
-                        continue;
-                    }
-                    if self.context.configuration.accepts(Feature::MsVaArgs)
-                        && self.variadic_argument_is_empty(&mut empty, invocation, argument)
-                    {
-                        self.context.report_extension(
-                            Feature::MsVaArgs,
-                            "empty __VA_ARGS__ comma elision",
-                            token.source_vectors,
-                        );
-                        index = next + 1;
-                        continue;
-                    }
-                }
+            if let Some(consumed) = self.prepare_variadic_comma(
+                invocation,
+                &tokens[index..],
+                argument,
+                &mut empty,
+                &mut output,
+            ) {
+                index += consumed;
+                continue;
             }
             output.push(token);
             index += 1;
