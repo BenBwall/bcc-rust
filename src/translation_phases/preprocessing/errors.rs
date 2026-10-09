@@ -216,6 +216,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::UnexpectedTokenInPreprocessorExpression(..)
             | PreprocessorErrorType::UnexpectedTokenAtPhase7(..)
             | PreprocessorErrorType::LanguageConstraint(..)
+            | PreprocessorErrorType::WideCharacterOutOfRange
             | PreprocessorErrorType::EmbeddedResourceNotFound(..)
             | PreprocessorErrorType::EmbeddedResourceUnreadable { .. }
             | PreprocessorErrorType::EmbeddedResourceTooLarge(..)
@@ -277,6 +278,9 @@ impl GetSeverity for PreprocessorError<'_> {
 
 #[derive(Debug)]
 pub(crate) enum PreprocessorErrorType<'tu> {
+    /// C99: implementation-defined wide encoding §6.4.4.4p11, p. 61;
+    /// PDF p. 73. A UTF-16 wide character must occupy one `wchar_t`.
+    WideCharacterOutOfRange,
     /// A violated lexical or directive constraint of a later standard, with
     /// its message.
     ///
@@ -1452,6 +1456,10 @@ impl PreprocessorErrorType<'_> {
                  this header came from none",
             ),
             | Self::LanguageConstraint(message) => new(format_in!(arena, "{message}")),
+            | Self::WideCharacterOutOfRange =>
+                new("wide character constant does not fit in wchar_t")
+                    .label("requires more than one UTF-16 code unit")
+                    .note("C99 §6.4.4.4p11: wide character encoding is implementation-defined"),
             | Self::EmbeddedResourceNotFound(name) =>
                 new(format_in!(arena, "cannot find embedded resource `{name}`"))
                     .label("not found in any search directory")

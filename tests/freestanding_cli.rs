@@ -150,10 +150,16 @@ mod tests {
             );
         }
         source.push_str(
-            "#if defined(__clang__) || defined(__linux__) || defined(_WIN32) || \
-             defined(_MSC_VER)\n#error identity macros must be absent\n#endif\n#if \
-             defined(__GNUC__) != !defined(__STRICT_ANSI__)\n#error __GNUC__ follows GNU \
-             modes\n#endif\n",
+            "#if defined(__clang__) || defined(_MSC_VER)
+#error compiler identity macros must              be absent
+#endif
+#if defined(__GNUC__) != !defined(__STRICT_ANSI__)
+#error              __GNUC__ follows GNU modes
+#endif
+#if !defined(__linux__) ||              defined(_WIN32)
+#error default target must identify Linux
+#endif
+",
         );
         for mode in [
             "c89",

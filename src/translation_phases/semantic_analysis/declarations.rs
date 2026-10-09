@@ -874,13 +874,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// System V records use natural alignment, low-to-high bits and
-    /// non-straddling units. C99: implementation-defined bit-field
+    /// System V packs non-straddling fields at the bit cursor. Microsoft
+    /// reserves entire units, sharing only consecutive fields of equal size;
+    /// a zero-width field affects layout only after a nonzero bit-field.
+    /// C99: implementation-defined bit-field
     /// allocation §6.7.2.1p10-16, pp. 102-103; PDF pp. 114-115.
     pub(super) fn complete_record(&mut self, id: usize, members: &'tu [Member]) {
         let tag = self.types.tags[id];
         let mut output = ArenaVec::new_in(self.types.tu);
         let (mut bytes, mut alignment, mut bit_end) = (0_u64, 1_u64, 0_u64);
+        let ms = self.types.target.ms_bitfields;
+        let mut ms_unit: Option<(u64, u64, u64)> = None; // size, byte start, used bits
         let named = members.iter().filter(|m| m.initializable()).count();
         let mut too_large = false;
         for (index, &member) in members.iter().enumerate() {
@@ -949,18 +953,43 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // The System V ABI ignores unnamed bit-fields when aligning a
             // structure or union; in a union one still occupies its bytes.
             let unnamed_bit_field = member.name.is_none() && member.width.is_some();
-            if !unnamed_bit_field {
+            if !(unnamed_bit_field || ms && tag.kind == TagKind::Union && member.width.is_some()) {
                 alignment = alignment.max(layout.align);
             }
             let mut resolved = member;
             if tag.kind == TagKind::Union {
                 bytes = bytes.max(match member.width {
+                    | Some(0) if ms => 0,
+                    | Some(_) if ms => layout.size,
                     | Some(width) if unnamed_bit_field => u64::from(width).div_ceil(8),
                     | _ => layout.size,
                 });
             } else if let Some(width) = member.width {
                 let bits = layout.size * 8;
-                if width == 0 {
+                if ms {
+                    if width == 0 {
+                        if ms_unit.take().is_some() {
+                            alignment = alignment.max(layout.align);
+                            bytes = align_up(bytes, layout.align).unwrap_or(bytes);
+                        }
+                        resolved.offset = bytes;
+                    } else {
+                        alignment = alignment.max(layout.align);
+                        let unit = match ms_unit {
+                            | Some((size, start, used))
+                                if size == layout.size && used + u64::from(width) <= bits =>
+                                (size, start, used),
+                            | _ => {
+                                let start = align_up(bytes, layout.align).unwrap_or(bytes);
+                                bytes = start.saturating_add(layout.size);
+                                (layout.size, start, 0)
+                            },
+                        };
+                        resolved.offset = unit.1 + unit.2 / 8;
+                        resolved.bit_offset = u32::try_from(unit.2 % 8).unwrap_or(0);
+                        ms_unit = Some((unit.0, unit.1, unit.2 + u64::from(width)));
+                    }
+                } else if width == 0 {
                     bit_end = align_up(bit_end, bits).unwrap_or(bit_end);
                     resolved.offset = bit_end / 8;
                 } else {
@@ -974,6 +1003,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 bytes = bytes.max(bit_end.div_ceil(8));
             } else {
+                ms_unit = None;
                 let placed = align_up(bytes, layout.align).and_then(|offset| {
                     offset
                         .checked_add(layout.size)

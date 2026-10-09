@@ -46,6 +46,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let Some(ty) = self.va_list_type {
             return ty;
         }
+        if self.types.target.va_list_is_pointer {
+            let char_type = self.types.scalar(Scalar::Char);
+            let ty = self.types.intern(TypeKind::Pointer(char_type));
+            self.va_list_type = Some(ty);
+            return ty;
+        }
         let name = self.context.string_cache.intern("__builtin_va_list");
         let id = {
             let id = self.types.tags.len();
@@ -85,10 +91,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return Self::expression_result(e, self.types.unknown());
         }
         let list = self.builtin_va_list();
-        let TypeKind::Array(record, _) = self.types.nodes[list.index] else {
-            unreachable!()
+        let pointer = match self.types.nodes[list.index] {
+            | TypeKind::Array(record, _) => self.types.intern(TypeKind::Pointer(record)),
+            | TypeKind::Pointer(_) => list,
+            | _ => unreachable!("target va_list is an array or pointer"),
         };
-        let pointer = self.types.intern(TypeKind::Pointer(record));
         for (index, &operand) in b.operands.iter().enumerate() {
             if index != 0 && b.keyword != K::BuiltinVaCopy {
                 continue;
@@ -96,7 +103,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if let SyntaxOperand::Expression(operand) = operand {
                 let info = self.expression_info(operand);
                 let ty = self.converted(info);
-                if !self.types.unanalyzed(ty) && ty != pointer {
+                let requires_lvalue = self.types.target.va_list_is_pointer;
+                if !self.types.unanalyzed(ty)
+                    && (ty != pointer
+                        || (requires_lvalue
+                            && info.category
+                                != super::expressions::ValueCategory::ModifiableLvalue))
+                {
                     self.error(
                         SemanticErrorKind::InvalidVaList,
                         operand.source_vectors,
@@ -184,7 +197,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let Some(member) = self
                         .member_indices
                         .get(&(id, name.name))
-                        .and_then(|&index| self.types.tags[id].members.get().get(index))
+                        // Indices address the named field table; unnamed
+                        // bit-fields are present only in the member list.
+                        .and_then(|&index| self.types.tags[id].fields.get().get(index))
                     else {
                         valid = false;
                         break;

@@ -84,6 +84,9 @@ use diagnostic_reporter::DiagnosticReporter;
     reason = "clap's derived parser owns the repeated include directories as `Vec<PathBuf>`."
 )]
 struct Cli {
+    /// Select the C target ABI (independent of the compiler host).
+    #[arg(long, default_value = "x86_64-unknown-linux-gnu", value_parser = TargetParser)]
+    target: crate::target::Target,
     #[command(flatten)]
     input: CliInput,
     /// Select ISO C or a GNU dialect (also accepts GCC -std=VALUE).
@@ -134,6 +137,32 @@ const STANDARD_NOTES: &str =
 
 #[derive(Clone)]
 struct StandardParser;
+
+#[derive(Clone)]
+struct TargetParser;
+
+impl TypedValueParser for TargetParser {
+    type Value = crate::target::Target;
+
+    fn parse_ref(
+        &self,
+        _cmd: &Command,
+        _arg: Option<&Arg>,
+        value: &OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        value
+            .to_str()
+            .and_then(crate::target::Target::parse)
+            .ok_or_else(|| {
+                clap::Error::raw(
+                    clap::error::ErrorKind::InvalidValue,
+                    "unsupported target triple; supported targets: x86_64-unknown-linux-gnu, \
+                     x86_64-unknown-linux-musl, x86_64-w64-windows-gnu (aliases: \
+                     x86_64-w64-mingw32, x86_64-pc-windows-gnu), x86_64-pc-windows-msvc",
+                )
+            })
+    }
+}
 impl TypedValueParser for StandardParser {
     type Value = LanguageMode;
 
@@ -208,6 +237,7 @@ fn normalize_language_arguments(
             opaque_value = matches!(
                 text,
                 "--std"
+                    | "--target"
                     | "--input"
                     | "-i"
                     | "--iquote"
@@ -286,6 +316,7 @@ impl Cli {
         let configuration =
             CompilerConfiguration::new(self.standard.standard, ExtensionPolicy::Allow)
                 .with_gnu_extensions(self.standard.gnu);
+        let configuration = configuration.with_target(self.target);
         self.language_option
             .iter()
             .filter_map(|option| LanguageFlag::parse(option))

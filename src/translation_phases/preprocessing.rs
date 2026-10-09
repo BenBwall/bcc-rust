@@ -398,7 +398,10 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         let end = (tokenizer.position(context), source_file_index);
         let definitions = language_features::with_identity_macros(
             context.tu_arena(),
-            crate::target::TargetLayout::LP64.predefined_macros(context.tu_arena()),
+            context
+                .configuration
+                .target()
+                .predefined_macros(context.tu_arena(), context.configuration.gnu_extensions()),
             context.configuration,
         );
         let builtin_index =

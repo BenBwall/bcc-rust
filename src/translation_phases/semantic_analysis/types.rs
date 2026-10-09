@@ -213,13 +213,13 @@ pub(crate) struct TypeInterner<'tu, 's> {
 }
 
 impl<'tu, 's> TypeInterner<'tu, 's> {
-    pub(crate) fn new(tu: &'tu Bump, scratch: &'s Bump) -> Self {
+    pub(crate) fn new(tu: &'tu Bump, scratch: &'s Bump, target: &TargetLayout) -> Self {
         let mut result = Self {
             nodes: ArenaVec::new_in(tu),
             tags: ArenaVec::new_in(tu),
             keys: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             variably_modified: ArenaVec::new_in(scratch),
-            target: TargetLayout::LP64,
+            target: *target,
             tu,
             scratch,
         };

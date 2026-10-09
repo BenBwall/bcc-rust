@@ -55,7 +55,8 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         let target = self.types.target;
         let _ = writeln!(
             out,
-            "target x86_64-sysv-lp64 size_t={} ptrdiff_t={} wchar_t={} char={}",
+            "target {} size_t={} ptrdiff_t={} wchar_t={} char={}",
+            context.configuration.target().inspection_name(),
             value(arena, target.size_t.spelling()),
             value(arena, target.ptrdiff_t.spelling()),
             value(arena, target.wchar_t.spelling()),

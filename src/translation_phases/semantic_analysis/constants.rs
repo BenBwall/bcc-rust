@@ -63,7 +63,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let precision = match scalar {
             | Scalar::Float | Scalar::ComplexFloat => 1,
             | Scalar::Double | Scalar::ComplexDouble => 2,
-            | Scalar::LongDouble | Scalar::ComplexLongDouble => 3,
+            | Scalar::LongDouble | Scalar::ComplexLongDouble =>
+                if self.types.target.long_double_is_double() {
+                    2
+                } else {
+                    3
+                },
             | _ => return None,
         };
         let complex = matches!(
@@ -83,15 +88,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// IEC 60559 arithmetic: a zero divisor gives an infinity or NaN
     /// (Annex F.3). C99: §6.5.5-§6.5.6, pp. 82-84; PDF pp. 94-96.
     pub(super) fn floating_binary(
+        &self,
         op: BinaryOperator,
         left: Floating,
         right: Floating,
     ) -> Option<Floating> {
         use BinaryOperator as B;
-        let add = |a: LongDouble, b| a.arithmetic(b, 0, 3);
-        let sub = |a: LongDouble, b| a.arithmetic(b, 1, 3);
-        let mul = |a: LongDouble, b| a.arithmetic(b, 2, 3);
-        let div = |a: LongDouble, b| a.arithmetic(b, 3, 3);
+        let precision = if self.types.target.long_double_is_double() {
+            2
+        } else {
+            3
+        };
+        let add = |a: LongDouble, b| a.arithmetic(b, 0, precision);
+        let sub = |a: LongDouble, b| a.arithmetic(b, 1, precision);
+        let mul = |a: LongDouble, b| a.arithmetic(b, 2, precision);
+        let div = |a: LongDouble, b| a.arithmetic(b, 3, precision);
         Some(match op {
             | B::Addition => Floating {
                 real: add(left.real, right.real),

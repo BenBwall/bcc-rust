@@ -5,8 +5,8 @@
 //! item 7, p. 10; PDF p. 22, and the `token` categories of §6.4 paragraphs
 //! 1 and 3, p. 49; PDF p. 61 (also §A.1.1, p. 403; PDF p. 415).
 //!
-//! Types and values assume an LP64 target: `int` has 32 bits, `long` and
-//! `long long` have 64, and `char` has 8. Those widths are
+//! Literal carriers hold up to 64 bits; conversion selects types and bounds
+//! values using the configured target. Those widths are
 //! implementation-defined (§5.2.4.2.1 paragraph 1, pp. 21-22; PDF
 //! pp. 33-34).
 
@@ -440,7 +440,26 @@ pub(crate) enum CharacterTokenType {
     MultiChar(i32),
 }
 
-/// The value `#if` gives a character constant. A one-byte narrow constant is
+impl CharacterTokenType {
+    /// Interpret a wide code unit in the target's `wchar_t` representation.
+    /// Narrow preprocessing values retain the existing implementation choice.
+    /// C99: §6.4.4.4p11, p. 61; PDF p. 73; §6.10.1p4, p. 148; PDF p. 160.
+    pub(crate) fn target_value(self, target: &crate::target::TargetLayout) -> i64 {
+        let Self::WideChar(unit) = self else {
+            return self.into();
+        };
+        let (bits, signed) = target.integer(target.wchar_t).unwrap();
+        let value = i64::from(unit & (u32::MAX >> (32 - bits)));
+        if signed && value >= 1_i64 << (bits - 1) {
+            value - (1_i64 << bits)
+        } else {
+            value
+        }
+    }
+}
+
+/// The stored value before target-wide signedness is applied. A one-byte
+/// narrow constant is
 /// never negative here, which C99 leaves implementation-defined (§6.10.1
 /// paragraph 4, p. 148; PDF p. 160). Whether plain `char` is signed in
 /// phase 7 (§6.2.5 paragraph 15, p. 35; PDF p. 47) is left to semantic
