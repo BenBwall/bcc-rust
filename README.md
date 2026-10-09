@@ -258,7 +258,10 @@ The resource directory holds the seven headers a freestanding implementation
 provides: `<float.h>`, `<iso646.h>`, `<limits.h>`, `<stdarg.h>`, `<stdbool.h>`,
 `<stddef.h>` and `<stdint.h>` (C99 §4p6, printed p. 7; PDF p. 19). `<stdalign.h>`
 and `<stdnoreturn.h>` are also available, with the Clang language-mode macro
-gates documented in [language-standards.md](language-standards.md). These are
+gates documented in [language-standards.md](language-standards.md).
+`<mm_malloc.h>`, which GCC and Clang ship and MinGW-w64's `<malloc.h>`
+includes, defines `_mm_malloc` and `_mm_free` over the C library's aligned
+allocators. These are
 embedded compiler resources; with `-ffreestanding`, or when no C library is
 configured, no on-disk include directory is required. Hosted, each behaves like
 Clang's resource header of the same name: `<limits.h>` and `<stdint.h>` chain

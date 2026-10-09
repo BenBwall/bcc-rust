@@ -118,7 +118,7 @@ must not be advertised merely because Clang advertises them.
 
 ### Embedded freestanding headers
 
-All nine headers are discoverable in all language modes, and each behaves like
+All ten headers are discoverable in all language modes, and each behaves like
 Clang's resource header of the same name, whose logic, not text, they follow.
 In a hosted translation a header that Clang chains to the C library tests
 `__has_include_next` and reads the library's header with `#include_next`
@@ -142,6 +142,7 @@ still follows the configured extension policy.
 | `stdint.h` | All 8/16/32/64 exact, least and fast types, pointer and maximum types, corresponding limits and constant macros; `SIG_ATOMIC`, `SIZE`, `PTRDIFF`, `WCHAR`, `WINT` limits. Hosted, a C library `<stdint.h>` replaces all of these, as with Clang. |
 | `stdalign.h` | Like Clang: `alignas`, `alignof`, and the two indicator macros when `__STDC_VERSION__` exists and precedes C23; empty in C89 and C23/C2y. |
 | `stdnoreturn.h` | Like Clang: `noreturn` and `__noreturn_is_defined` in every mode, retained in C23 despite deprecation. |
+| `mm_malloc.h` | Not ISO C; GCC and Clang ship it, and MinGW-w64's `<malloc.h>` includes it. Like Clang's, it includes `<stdlib.h>` and defines `static __inline__` `_mm_malloc` and `_mm_free`: through `__mingw_aligned_malloc` for MinGW-w64, `_aligned_malloc` for the MSVC runtime (from its `<malloc.h>`, unless that defines `_mm_malloc` as a macro), and `posix_memalign`, which it declares, elsewhere. An alignment of 1 uses `malloc`, and a smaller power of two is raised to a pointer's alignment. The x86 intrinsic headers (`x86intrin.h`, `emmintrin.h`, `immintrin.h`, `cpuid.h` and their family) need vector types and target builtins and are not provided. |
 
 Reserved `__builtin_va_arg`, `__builtin_va_start`, `__builtin_va_end`,
 `__builtin_va_copy`, `__builtin_va_list` and `__builtin_offsetof` support the
@@ -695,7 +696,8 @@ diagnostics are not counted.
 - Hosted translation: [`tests/hosted_cli.rs`](tests/hosted_cli.rs) covers the
   execution environment, the header search order and its options, resource
   headers chained to the fake glibc-like library under
-  `tests/fixtures/hosted/`, compiler identity per mode against Clang, and the
+  `tests/fixtures/hosted/`, `mm_malloc.h` against POSIX-, MinGW-w64- and
+  MSVC-like runtimes, compiler identity per mode against Clang, and the
   system-header classification of every search group.
 - Allocation: [`tests/allocation_count.rs`](tests/allocation_count.rs) checks
   that ISO, GNU, MSVC and pedantic-suppression parsing, and diagnostic
