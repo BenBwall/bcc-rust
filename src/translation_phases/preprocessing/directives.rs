@@ -1408,6 +1408,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                         PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(
                             self.context
                                 .diagnostic_text(self.context.string_cache.at(name.contents)),
+                            self.context.configuration.extension_policy(),
                         ),
                     source_vectors: name.source_vectors,
                 });
@@ -1524,6 +1525,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                         PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(
                             self.context
                                 .diagnostic_text(self.context.string_cache.at(name.contents)),
+                            self.context.configuration.extension_policy(),
                         ),
                     source_vectors: name.source_vectors,
                 });
@@ -1557,11 +1559,19 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     && variadic_alias == *old_alias,
             | _ => true,
         };
-        if old_tokenizer.is_some() && !(parameters_match && lists_match) {
+        // A change of form was already reported above; as a warning it is
+        // not folded into this one, so it is not repeated.
+        let form_changed = match &old_definition {
+            | Some(MacroDefinition::ObjectLike { .. }) => is_function_like,
+            | Some(MacroDefinition::FunctionLike { .. }) => !is_function_like,
+            | _ => false,
+        };
+        if old_tokenizer.is_some() && !form_changed && !(parameters_match && lists_match) {
             self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(
                     self.context
                         .diagnostic_text(self.context.string_cache.at(name.contents)),
+                    self.context.configuration.extension_policy(),
                 ),
                 source_vectors: name.source_vectors,
             });

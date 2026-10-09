@@ -142,13 +142,10 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence
             | PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall
             | PreprocessorErrorType::MultiCharacterLiteralsUnsupported
-            | PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(..)
-            | PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(..)
             | PreprocessorErrorType::ExpectedIdentifierInMacroDefinition(..)
             | PreprocessorErrorType::VariadicMacroMustBeLastParameter(..)
             | PreprocessorErrorType::DuplicateMacroParameter(..)
             | PreprocessorErrorType::ExpectedCommaOrClosingParenthesisInMacroDefinition(..)
-            | PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(..)
             | PreprocessorErrorType::ExpectedIdentifierInUndefDirective(..)
             | PreprocessorErrorType::ExpectedNewlineAfterUndefDirective(..)
             | PreprocessorErrorType::HashOperatorMustBeFollowedByAMacroArgument(..)
@@ -240,7 +237,11 @@ impl GetSeverity for PreprocessorError<'_> {
                     | ExtensionPolicy::Deny => ErrorSeverity::Error,
                 },
             | PreprocessorErrorType::VaArgsOutsideVariadicMacro(policy)
-            | PreprocessorErrorType::VaOptOutsideVariadicMacro(policy) => match policy {
+            | PreprocessorErrorType::VaOptOutsideVariadicMacro(policy)
+            | PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(_, policy)
+            | PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(_, policy)
+            | PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(_, policy) =>
+                match policy {
                 | ExtensionPolicy::Allow | ExtensionPolicy::Warn => ErrorSeverity::Warning,
                 | ExtensionPolicy::Deny => ErrorSeverity::Error,
             },
@@ -601,16 +602,22 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     ///
     /// C99: §6.4.4.4 paragraphs 1 and 11, pp. 59-61; PDF pp. 71-73.
     MultiCharacterLiteralsUnsupported,
-    // C99: §6.10.3 paragraph 2, p. 151; PDF p. 163.
-    RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(&'tu str),
-    RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(&'tu str),
+    /// A macro redefined with the other form. C99 §6.10.3 paragraph 2, p.
+    /// 151; PDF p. 163 requires only a diagnostic; like GCC and Clang it is
+    /// a warning, an error under `-pedantic-errors`, and the new definition
+    /// replaces the old.
+    RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(&'tu str, ExtensionPolicy),
+    RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(&'tu str, ExtensionPolicy),
     // C99: the `# define` forms with `identifier-list` and `...`, §6.10
     // paragraph 1, p. 146; PDF p. 158.
     ExpectedIdentifierInMacroDefinition(PreprocessorTokenType),
     VariadicMacroMustBeLastParameter(&'tu str),
     ExpectedCommaOrClosingParenthesisInMacroDefinition(PreprocessorTokenType),
+    /// A macro redefined with different parameters or replacement list; a
+    /// warning, an error under `-pedantic-errors`, as for the variants above.
+    ///
     /// C99: §6.10.3 paragraphs 1-2, p. 151; PDF p. 163.
-    MacroRedefinedWithDifferentDefinition(&'tu str),
+    MacroRedefinedWithDifferentDefinition(&'tu str, ExtensionPolicy),
     // C99: `# undef identifier new-line`, §6.10 paragraph 1, p. 146; PDF
     // p. 158.
     ExpectedIdentifierInUndefDirective(PreprocessorTokenType),
@@ -1241,7 +1248,7 @@ impl PreprocessorErrorType<'_> {
                         )
                 }
             },
-            | Self::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(name) => new(format_in!(
+            | Self::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(name, _) => new(format_in!(
                 arena,
                 "function-like macro `{name}` redefined as an object-like macro"
             ))
@@ -1251,7 +1258,7 @@ impl PreprocessorErrorType<'_> {
                 arena,
                 "add `#undef {name}` before this definition"
             )),
-            | Self::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(name) => new(format_in!(
+            | Self::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(name, _) => new(format_in!(
                 arena,
                 "object-like macro `{name}` redefined as a function-like macro"
             ))
@@ -1279,7 +1286,7 @@ impl PreprocessorErrorType<'_> {
                 kind.found(spelling)
             ))
             .label("expected `,` or `)`"),
-            | Self::MacroRedefinedWithDifferentDefinition(name) =>
+            | Self::MacroRedefinedWithDifferentDefinition(name, _) =>
                 new(format_in!(arena, "macro `{name}` redefined differently"))
                     .label("this definition differs from the previous one")
                     .note(
