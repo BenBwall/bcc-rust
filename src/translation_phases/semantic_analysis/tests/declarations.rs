@@ -606,3 +606,27 @@ fn pointers_to_unanalyzed_types_suppress_arithmetic_constraints() {
         []
     );
 }
+
+#[test]
+fn compound_literals_may_have_pointers_to_variable_arrays() {
+    assert_eq!(
+        kinds(
+            "void f(void) { unsigned n = 10; typedef double T[n]; (double (*)[n])((unsigned char \
+             (*)[sizeof (T)]){ 0 }); }",
+            gnu17()
+        ),
+        []
+    );
+    assert_eq!(
+        kinds(
+            "struct S { int c, e[]; }; int foo(struct S *m, int r, int c) { int (*a)[][m->c] = \
+             (int (*)[][m->c])&m->e; return (*a)[r][c]; }",
+            gnu17()
+        ),
+        []
+    );
+    assert_eq!(
+        kinds("void g(int n) { (void)(int [3][n]){ 0 }; }", gnu17()),
+        [SemanticErrorKind::InvalidCompoundLiteral]
+    );
+}

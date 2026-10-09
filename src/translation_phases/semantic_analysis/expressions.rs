@@ -881,8 +881,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .get(&type_name.source_vectors)
                     .copied()
                     .unwrap_or_else(|| self.types.unknown());
+                // §6.5.2.5p1 excludes variable length array types; a pointer
+                // to one is a valid compound literal type.
                 if !self.types.unanalyzed(ty)
-                    && (self.variably_modified(ty)
+                    && ((matches!(self.types.nodes[ty.index], TypeKind::Array(..))
+                        && self.variably_modified(ty))
                         || (!self.complete_object(ty)
                             && !matches!(
                                 self.types.nodes[ty.index],
