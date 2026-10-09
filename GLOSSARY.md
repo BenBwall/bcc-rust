@@ -391,3 +391,18 @@ declarations all specify inline without extern. It provides an inline-only body,
 not an external definition. Later declarations can change that classification;
 static inline functions have internal linkage and are not inline definitions in
 this specific sense.
+
+## Freestanding resource directory
+
+The **resource directory** is the compiler's embedded final system include
+entry, displayed as `<built-in>`. Its header texts live in `src/headers/` and
+are lexed through the ordinary phase 1-4 machinery. A header identity uses the
+stable `<built-in>/name.h` path, independent of the host filesystem. User and
+environment include entries precede it. Target-description definitions are
+read from the synthetic `<built-in>/target.h` before user preprocessing.
+
+The **builtin va-list type** is the reserved `__builtin_va_list` type name,
+available without an include. It represents an array of one opaque complete
+x86-64 System V record, size 24 and alignment 8. Ordinary array decay and
+parameter adjustment apply. `<stdarg.h>` exposes it as `va_list`; the `va_*`
+intrinsics use the GNU builtin syntax node with expression/type operands.

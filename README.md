@@ -3,7 +3,8 @@
 `bcc-rust` is an experimental Rust implementation of a C compiler front end
 supporting C89/C90, C95, C99, C11, C17/C18, C23 and a documented C2y draft
 subset, plus GNU and opt-in MSVC extensions. Its non-recursive language parser
-builds syntax trees; semantic analysis and code generation are not implemented.
+builds syntax trees; semantic analysis covers declarations, expressions,
+initializers, statements and functions. Code generation is not implemented.
 
 See [language-standards.md](language-standards.md) for language modes, extension
 flags, shared configuration, implementation details and remaining semantic
@@ -61,8 +62,7 @@ literals, GNU macros/keywords/imaginary constants, and MSVC macro pragmas and
 empty variadic calls through the CLI. Declaration semantic analysis now follows parsing in the default CLI mode;
 `--semantic-types` inspects resolved declaration types, linkage and duration.
 See [semantic-analysis.md](semantic-analysis.md) for implemented boundaries and
-validation gaps. Full expression/statement typing, initializer current-object
-rules and code generation remain unimplemented.
+validation gaps. Code generation remains unimplemented.
 This is not yet a production-ready or conforming C99 compiler.
 
 ## Prerequisites
@@ -222,7 +222,21 @@ cargo run -- --tokens --input '#define N 3
 N + 1'
 ```
 
-Use `--iquote <directory>` (`-q`) and `--isystem <directory>` (`-s`) to add include search paths. Header lookup follows GCC and Clang: `#include "name"` looks beside the including file (the working directory for `--input`), then each `--iquote` directory; both forms then search `CPATH`, each `--isystem` directory, and `C_INCLUDE_PATH`. The working directory is never searched implicitly. The environment variables use the platform path separator, and, as in GCC, an empty element names the working directory. A missing header's diagnostic lists every directory searched. `__DATE__` and `__TIME__` are fixed once per translation unit. For reproducible output, `--source-date-epoch <seconds>` or the `SOURCE_DATE_EPOCH` variable pins them to that UTC time; the flag wins, a malformed variable is ignored, and a malformed flag value is an error. Files under [`test-programs/`](test-programs/) are useful manual inspection inputs, but they are not an automated conformance suite.
+Use `--iquote <directory>` (`-q`) and `--isystem <directory>` (`-s`) to add include search paths. Header lookup follows GCC and Clang: `#include "name"` looks beside the including file (the working directory for `--input`), then each `--iquote` directory; both forms then search `CPATH`, each `--isystem` directory, `C_INCLUDE_PATH`, and finally the embedded
+`<built-in>` resource directory. User headers take precedence over resource
+headers. The working directory is never searched implicitly. The environment variables use the platform path separator, and, as in GCC, an empty element names the working directory. A missing header's diagnostic lists every directory searched. `__DATE__` and `__TIME__` are fixed once per translation unit. For reproducible output, `--source-date-epoch <seconds>` or the `SOURCE_DATE_EPOCH` variable pins them to that UTC time; the flag wins, a malformed variable is ignored, and a malformed flag value is an error. Files under [`test-programs/`](test-programs/) are useful manual inspection inputs, but they are not an automated conformance suite.
+
+The freestanding model (`__STDC_HOSTED__ == 0`) includes the seven C99 resource
+headers: `<float.h>`, `<iso646.h>`, `<limits.h>`, `<stdarg.h>`, `<stdbool.h>`,
+`<stddef.h>` and `<stdint.h>` (C99 §4p6, printed p. 7; PDF p. 19). `<stdalign.h>`
+and `<stdnoreturn.h>` are also available, with the Clang language-mode macro
+gates documented in [language-standards.md](language-standards.md). These are
+embedded compiler resources; no host C library or on-disk include directory is
+required. Diagnostics and token dumps name them `<built-in>/name.h`.
+Target-description macros describe x86-64 System V LP64 in all language modes,
+independently of the host ABI. Compiler and OS identity macros remain absent.
+`offsetof` and the varargs intrinsics have semantic types; this front end does
+not generate the code that performs varargs operations.
 
 The preprocessor permits 200 simultaneously nested included headers, excluding
 the main source file. An include beyond that limit produces a diagnostic and

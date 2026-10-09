@@ -62,7 +62,53 @@ Strict modes define `__STRICT_ANSI__` as `1`; GNU modes leave it undefined.
 MSVC flags affect neither version nor strictness. `__STDC__`,
 `__STDC_HOSTED__` (freestanding: `0`), `__DATE__`/`__TIME__`, and
 `__STDC_MB_MIGHT_NEQ_WC__` are predefined in every mode. `__GNUC__` and `_MSC_VER` are deliberately not
-defined.
+defined. `__clang__`, `__linux__`, `_WIN32` and other compiler/OS identity
+macros are also absent.
+
+Reserved target-description macros are predefined in **every mode**, including
+strict ISO modes. Like GCC and Clang, these describe the implementation without
+changing the language grammar (C99 §7.1.3p1, printed p. 166; PDF p. 178). The
+single target model in `src/target.rs` and its `target/` module owns the values:
+8-bit signed char, x86-64 System V LP64, little endian, binary32/binary64 and
+x87 extended precision in 16-byte storage. Definitions include scalar/pointer
+`__SIZEOF_*__`, integer maxima, exact/least/fast-width and ABI typedef `__*_TYPE__`
+macros, integer-constant functions and suffix helpers, endian constants,
+`__LP64__`/`_LP64`/`__x86_64__`/`__x86_64`, and the exact Clang `__FLT_*__`,
+`__DBL_*__`, `__LDBL_*__` and `__DECIMAL_DIG__` spellings. The frozen Linux-target
+Clang `-dM -E` subset is `tests/fixtures/freestanding/target-macros.h`; a unit test
+checks every emitted definition against it. They are ordinary implementation
+macros, so `#undef` and compatible redefinition work as in Clang; the required
+ISO predefined macros retain their existing protection. No `__GNUC__` emulation
+is implied by target compatibility.
+
+### Embedded freestanding headers
+
+All nine headers are discoverable in all language modes, after configured and
+environment system directories; quoted lookup additionally gives local and
+`--iquote` headers priority. `__has_include` uses the same resource directory.
+This follows Clang resource-header availability; use of newer language syntax
+still follows the configured extension policy.
+
+| Header | Contents and mode policy |
+| --- | --- |
+| `float.h` | C99 floating limits; C11 adds true minima, subnormal and decimal-digit macros. `FLT_ROUNDS` is the default round-to-nearest value `1`; `FLT_EVAL_METHOD` is `0`. Runtime changes to the rounding environment require backend support. |
+| `iso646.h` | The eleven C alternative operator macros. |
+| `limits.h` | LP64 signed/unsigned limits and `MB_LEN_MAX == 1`, matching Clang's freestanding resource header. Long-long limits appear from C99 onward. |
+| `stdarg.h` | `va_list` and the four `va_*` macros in every mode. The reserved intrinsic type is an array of one opaque 24-byte, 8-aligned SysV record. |
+| `stdbool.h` | `__bool_true_false_are_defined`; `bool`, `true`, `false` macros before C23. C23 uses language keywords. |
+| `stddef.h` | `size_t`, `ptrdiff_t`, `wchar_t`, `NULL`, `offsetof`; C11 adds `max_align_t`. |
+| `stdint.h` | All 8/16/32/64 exact, least and fast types, pointer and maximum types, corresponding limits and constant macros; `SIG_ATOMIC`, `SIZE`, `PTRDIFF`, `WCHAR`, `WINT` limits. |
+| `stdalign.h` | Like Clang: `alignas`, `alignof`, and the two indicator macros when `__STDC_VERSION__` exists and precedes C23; empty in C89 and C23/C2y. |
+| `stdnoreturn.h` | Like Clang: `noreturn` and `__noreturn_is_defined` in every mode, retained in C23 despite deprecation. |
+
+Reserved `__builtin_va_arg`, `__builtin_va_start`, `__builtin_va_end`,
+`__builtin_va_copy`, `__builtin_va_list` and `__builtin_offsetof` support the
+standard headers even with `-pedantic-errors`. The parser uses `GnuFrame` for
+intrinsic expression operands; semantic analysis checks va-list operands,
+va-arg result types and variadic-function context. Runtime pairing, argument
+availability and promoted argument/type agreement remain backend/runtime work.
+An `offsetof` member/index path yields a `size_t` integer constant; bit-fields
+and invalid paths diagnose.
 
 `-pedantic` and `-Wpedantic` select Warn; `-pedantic-errors` selects Deny;
 the default is Allow. Later policy flags win. Deny emits an error but keeps
@@ -204,8 +250,8 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | StatementExpressions | - | - | - | - | - | - | - | extension (GNU native) | parser |
-| BuiltinVaArg | - | - | - | - | - | - | - | extension (GNU native) | parser |
-| BuiltinOffsetof | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| BuiltinVaArg | - | - | - | - | - | - | - | reserved intrinsic in all modes | parser/sema |
+| BuiltinOffsetof | - | - | - | - | - | - | - | reserved intrinsic in all modes | parser/sema |
 | BuiltinTypesCompatible | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | BuiltinChooseExpr | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | LabelsAsValues | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -422,6 +468,7 @@ boundary.
 `__has_attribute` returns 1 for `unused`, `deprecated`, `aligned`, `packed`,
 `noreturn`, `weak`, `section`, `visibility`, `format`, `always_inline`, and
 `noinline`; `__has_builtin` returns 1 for `__builtin_va_arg`,
+`__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`. Other names return 0. These tables describe the
 syntax-front-end subset, not backend effects or a GCC/Clang version. Both GNU
