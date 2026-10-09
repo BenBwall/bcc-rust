@@ -16,6 +16,7 @@
 //! The rest of phase 7, syntactic and semantic analysis, belongs to the
 //! parser and later work.
 
+mod command_line;
 mod conditional;
 mod directives;
 mod driver;
@@ -154,6 +155,7 @@ struct PreprocessorState<'pp> {
     /// During an expansion segment they live on the expander's stack and
     /// this vector stays empty, keeping its capacity.
     file_frames:           ArenaVec<'pp, FileFrame<'pp>>,
+    command_line_file:     Option<u32>,
     /// Provenance of open conditionals is owned because token iteration
     /// compacts temporary preprocessor provenance while groups remain open.
     open_conditionals:     ArenaVec<'pp, ConditionalGroup<'pp>>,
@@ -396,6 +398,22 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             context.record_source_text(source_file_index, source);
         }
         let end = (tokenizer.position(context), source_file_index);
+        // The stack is read from the top: builtins, command line, main file.
+        let command_line = command_line::source(context);
+        let command_line_file = (!command_line.is_empty()).then(|| {
+            let index =
+                context.add_synthetic_source_file(Path::new("<command line>"), command_line);
+            file_frames.push(FileFrame {
+                conditional_base:           0,
+                physical_source_file_index: index,
+                tokenizer:                  lexed_files.open_command_line(
+                    context,
+                    index,
+                    command_line,
+                ),
+            });
+            index
+        });
         let definitions = language_features::with_identity_macros(
             context.tu_arena(),
             context
@@ -426,6 +444,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     macro_definitions,
                     lexed_files,
                     file_frames,
+                    command_line_file,
                     open_conditionals: ArenaVec::new_in(pp),
                     translation_timestamp: None,
                     literal_scratch: LiteralScratch::new(pp),
