@@ -141,6 +141,67 @@ mod tests {
     }
 
     #[test]
+    fn float128_and_type_generic_probe_matches_clang_on_each_target() {
+        let probe = "tests/fixtures/targets/float128.c";
+        for triple in TRIPLES {
+            for standard in ["c11", "c17", "gnu17", "c23"] {
+                for binary in [clang(), env!("CARGO_BIN_EXE_bcc-rust").into()] {
+                    let mut command = Command::new(&binary);
+                    _ = command.args([&format!("--target={triple}"), &format!("-std={standard}")]);
+                    if binary == clang() {
+                        _ = command.arg("-fsyntax-only");
+                    }
+                    let output = command.arg(probe).output().unwrap();
+                    let diagnostics = String::from_utf8_lossy(&output.stderr);
+                    assert!(
+                        output.status.success() && !diagnostics.contains("error:"),
+                        "{triple} {standard}: {diagnostics}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn glibc_float128_math_and_stdlib_paths_match_clang() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let sysroot = root.join("target/sysroots/glibc-x86_64-linux");
+        if !sysroot.join("usr/include/tgmath.h").exists() {
+            return;
+        }
+        let multiarch = sysroot.join("usr/include/x86_64-linux-gnu");
+        for standard in ["c17", "gnu17"] {
+            for binary in [clang(), env!("CARGO_BIN_EXE_bcc-rust").into()] {
+                let mut command = Command::new(&binary);
+                _ = command.args([
+                    "--target=x86_64-unknown-linux-gnu",
+                    &format!("-std={standard}"),
+                    &format!("--sysroot={}", sysroot.display()),
+                ]);
+                if binary == clang() {
+                    _ = command
+                        .args(["-fsyntax-only", "-isystem"])
+                        .arg(sysroot.join("usr/include"))
+                        .arg("-isystem");
+                } else {
+                    _ = command.arg("--idirafter");
+                }
+                let output = command
+                    .arg(&multiarch)
+                    .arg("tests/fixtures/targets/glibc-tgmath.c")
+                    .output()
+                    .unwrap();
+                let diagnostics = String::from_utf8_lossy(&output.stderr);
+                assert!(
+                    output.status.success() && !diagnostics.contains("error:"),
+                    "{standard} {}: {diagnostics}",
+                    binary.display()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn aliases_and_equals_form_select_the_windows_abi() {
         for triple in [
             "x86_64-w64-windows-gnu",

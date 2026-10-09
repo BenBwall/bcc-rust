@@ -745,7 +745,8 @@ per-file logs, delta lists and independent GNU-mode triage, is retained under
 The pinned Clang 23.1.1 accepts the shared C11 target probe for all four
 canonical triples. bcc accepts the same probe, with direct Rust checks for
 canonical typedef/literal types, bit offsets, UTF-16 surrogate values and
-long-double precision supplementing syntax-only `_Generic` handling. Exact
+long-double precision. `_Generic` gained semantic selection in the
+binary128/type-generic work documented below. Exact
 macro comparisons pass for all four triples in both ISO C11 and GNU C17,
 minus the 139 individually documented exclusions in language-standards.md.
 Aliases and invalid/missing CLI values are covered. No existing snapshot was
@@ -967,3 +968,76 @@ header units also become accepted. MSVC's two `stdatomic.h` rows remain accepted
 The remaining first errors are glibc's unsupported `<tgmath.h>` type
 combination, MinGW's missing `<tgmath.h>` and 13 MinGW headers needing
 `<x86intrin.h>`. Those sibling features are outside this change.
+
+## Binary128 and type-generic math (2026-10-09)
+
+The scalar graph includes real and complex IEEE binary128 with arithmetic
+rank above long double. Explicit `__float128` declarations are accepted on
+Linux GNU, Linux musl and MinGW (16-byte size/alignment; complex 32/16), and
+rejected on MSVC. Clang nevertheless accepts `q` literals and a `typeof`
+type derived from them on MSVC; bcc preserves that distinction. The target
+macros mirror the pinned Clang exactly: `__SIZEOF_FLOAT128__` on the GNU
+triples, `__FLOAT128__` on Linux, no `__FLT128_*__` inventory and no MSVC
+capability advertisement. GCC 4.2.1 identity remains unchanged.
+
+Native `_Float128` and `f128`/`F128` literals are deliberately not added:
+Clang 23.1.1 rejects them in every tested mode (C11/C17/GNU17/C23/GNU23).
+The reachable glibc path supplies `_Float32`, `_Float64`, `_Float32x` and
+`_Float64x` as typedefs of the existing standard types. A private embedded
+`bits/floatn.h` uses `include_next` and adjusts glibc's old-GCC binary128
+capability decision, providing its `_Float128` and complex typedefs, suffix
+macro and old-compiler builtin aliases. System headers stay read-only.
+GNU-source math and stdlib probes cover quad sqrt/pow/fabs, complex sin,
+`strtof128`, binary128 infinity/NaN initializers, fabs/copy-sign builtins,
+and the standard float/double/long-double selections. Clang accepts the
+`f128` builtin names and rejects the old GCC `q` builtin names; the bridge
+keeps the native names for fabs and copy-sign. Their binary128 results
+retain constant eligibility without numerical or NaN-payload folding. The bridge
+requires ordinary resource-before-libc search order; explicit earlier
+`-isystem` directories can bypass it.
+
+`binary128.rs` converts literals without any host float: retain all digits
+in arena-backed base-2^32 integers, represent decimal input as a rational
+scaled by powers of two/five, and divide/round once at 113 significand bits
+(or the fixed subnormal quantum 2^-16494). Ties round to even. Zero, the
+minimum subnormal, half-ULP boundaries, maximum finite value, overflow and
+underflow have bit-exact unit coverage. An independent batch of 250 decimal
+and 100 hexadecimal literals matches Clang IR constant bits exactly. Token storage remains packed at the
+existing alignment and all compiler allocation stays in arenas.
+
+This implements the brief's explicitly permitted limited constant-evaluation
+fallback: literal bits are exact, but binary128 arithmetic, comparisons and
+casts are **not numerically folded**. Expression information marks arithmetic
+constants as `unfolded_binary128`, clears approximate integer/x87 values, and
+keeps them out of integer constant expressions. Static arithmetic initializers
+remain valid; assertions, enum values and array bounds requiring a binary128
+numerical result are unavailable. The x87 helper and Rust's unstable native
+`f128` are not used. Implementing full IEEE software operations remains a
+separate gap; no numerical equality or conversion result is fabricated.
+
+GNU `typeof` preserves operand type without array/function decay; unqualified
+forms remove top qualifiers. `__builtin_types_compatible_p` ignores top-level
+qualifiers, `__builtin_choose_expr` requires an ICE and transfers the selected
+expression's type/lvalue/constant eligibility, and `_Generic` checks distinct
+complete non-variably-modified association types and selects the matching or
+default expression. `__builtin_classify_type` accepts one expression (also
+through a parenthesized name) and folds Clang's integer/bool/pointer/real/
+complex/record classes without evaluating it. Real/imaginary components
+preserve complex lvalues and qualifiers; a real operand's imaginary part is
+zero. The ordinary explicit work stack visits all syntax operands.
+
+The reachable old-GCC glibc `tgmath.h` path needs these primitives rather than
+`__builtin_tgmath`, which the pinned Clang rejects. No MinGW resource
+`tgmath.h` is supplied: Clang's header requires `overloadable` function
+resolution, which remains unmodeled, and its binary128 calls are ambiguous.
+The implementation also repairs the glibc macro pattern `cast function ##
+f128`: a multi-token paste operand is pasted at its final token before its
+prefix is rescanned, protected by a reduced preprocessor regression.
+
+Diagnostics cover unsupported target spellings, extension policy and
+suppression, literal ranges, unsupported suffixes, invalid generic selections
+and non-ICE choose conditions. The shared Clang/bcc target fixture uses actual
+`_Static_assert` and `_Generic` evaluation on all four triples; GNU-source
+glibc integration is checked in both C17 and GNU17 when the sysroot is present.
+Allocation coverage includes exact conversion, unfolded arithmetic and error
+paths.

@@ -154,7 +154,7 @@ must not be advertised merely because Clang advertises them.
 
 ### Embedded freestanding headers
 
-All eleven headers are discoverable in all language modes, and each behaves like
+All eleven public headers are discoverable in all language modes, and each behaves like
 Clang's resource header of the same name, whose logic, not text, they follow.
 In a hosted translation a header that Clang chains to the C library tests
 `__has_include_next` and reads the library's header with `#include_next`
@@ -328,21 +328,22 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | CaseRanges | - | - | - | - | - | - | Y | extension | parser |
 | GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser |
-| GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | StatementExpressions | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | BuiltinVaArg | - | - | - | - | - | - | - | reserved intrinsic in all modes | parser/sema |
 | BuiltinOffsetof | - | - | - | - | - | - | - | reserved intrinsic in all modes | parser/sema |
-| BuiltinTypesCompatible | - | - | - | - | - | - | - | extension (GNU native) | parser |
-| BuiltinChooseExpr | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| BuiltinTypesCompatible | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
+| BuiltinChooseExpr | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | LabelsAsValues | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | LocalLabels | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | OmittedConditionalOperand | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | ZeroLengthArrays | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| Float128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | Int128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | AutoType | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | GnuAlternateKeywords | - | - | - | - | - | - | - | extension (GNU native) | parser |
-| RealImag | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| RealImag | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | GnuDesignators | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | UnionCasts | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | EmptyStructs | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -575,7 +576,7 @@ token or directive boundary.
 `noinline`; `__has_builtin` returns 1 for `__builtin_va_arg`,
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
-`__builtin_choose_expr`, and the modeled `__c11_atomic_*`, `__atomic_*` and `__sync_*` names. Other names return 0. These tables describe the
+`__builtin_choose_expr`, `__builtin_classify_type`, and the modeled `__c11_atomic_*`, `__atomic_*` and `__sync_*` names. Other names return 0. These tables describe the
 syntax-front-end subset, not backend effects or a GCC/Clang version. Both GNU
 queries are available through their reserved spellings in strict modes and
 report GNU policy diagnostics.
@@ -791,7 +792,6 @@ backend work before they can be enabled.
 | `_M_FP_PRECISE` | MS floating code-generation modes are not implemented. |
 | `__BITINT_MAXWIDTH__` | Extended integer syntax exists but these widths lack semantic types. |
 | `__CONSTANT_CFSTRINGS__` | Objective-C and CoreFoundation string intrinsics are not implemented. |
-| `__FLOAT128__` | Quadruple-precision floating types and arithmetic are not implemented. |
 | `__FLT16_DECIMAL_DIG__` | Half-precision floating types and arithmetic are not implemented. |
 | `__FLT16_DENORM_MIN__` | Half-precision floating types and arithmetic are not implemented. |
 | `__FLT16_DIG__` | Half-precision floating types and arithmetic are not implemented. |
@@ -848,7 +848,6 @@ backend work before they can be enabled.
 | `__PRAGMA_REDEFINE_EXTNAME` | The advertised pragma/attribute semantics are not implemented. |
 | `__SEG_FS` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__SEG_GS` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
-| `__SIZEOF_FLOAT128__` | Quadruple-precision floating types and arithmetic are not implemented. |
 | `__SSE2_MATH__` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__SSE2__` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__SSE_MATH__` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
@@ -911,3 +910,43 @@ type, value category and constant value. This makes the atomic result-type
 probes effective in bcc. Incomplete/void generic associations (a C2y extension
 in Clang) remain outside the supported subset; void builtin results are
 checked directly by semantic unit tests.
+
+## Binary128 and type-generic math (2026-10-09)
+
+`__float128`, `_Complex __float128` and `q`/`Q` floating suffixes are GNU
+extensions in every ISO mode, governed by `Float128` and suppressed by
+`__extension__` or system-header provenance. Linux GNU, Linux musl and MinGW
+use IEEE binary128 (16 bytes, alignment 16), distinct from x87 long double,
+with greater arithmetic rank. Complex binary128 occupies 32 bytes with
+alignment 16. MSVC rejects the explicit type spelling, matching the pinned Clang 23.1.1,
+but still accepts binary128 literals and their internal types through `typeof`.
+Clang's target definitions now retain `__SIZEOF_FLOAT128__` on the three GNU
+triples and `__FLOAT128__` on Linux. Clang defines no `__FLT128_*__` macros;
+none are invented. The macro oracle has 94 documented exclusions.
+
+The pinned Clang rejects native `_Float128`, `_Float32`, `_Float64`,
+`_Float32x`, `_Float64x`, and `f128`/`F128` suffixes in C11, C17, GNU17,
+C23 and GNU23. bcc follows that contract: glibc supplies its `_FloatN`
+typedefs. The private resource `bits/floatn.h` chains to glibc and bridges
+its GCC-4.2 version decision to the actual binary128 capability, enabling
+`__HAVE_FLOAT128` and the distinct type without changing compiler identity
+or editing the sysroot. Its complex typedef avoids the unmodeled GNU `mode`
+attribute. Explicit `-isystem` directories still precede resources and can
+bypass this bridge; normal `--sysroot` and `-idirafter` ordering uses it.
+
+`__typeof__`, compatible-type tests, choose-expression selection, generic
+selection, type classification, and real/imaginary components now have
+semantic types and constant eligibility. The reachable old-GCC glibc
+`tgmath.h` path uses these primitives, not `__builtin_tgmath`; the pinned
+Clang rejects that builtin. No resource `tgmath.h` is supplied for MinGW.
+Clang's resource implementation requires `overloadable` function resolution,
+which remains unimplemented, and is ambiguous for binary128 calls.
+
+Binary128 literals are parsed exactly with arena-backed integer rational
+conversion and one IEEE round-to-nearest-even step. Binary128 arithmetic,
+comparisons and casts are retained as non-ICE arithmetic constants without
+numerical folding. Static arithmetic initializers are accepted, but an
+integer constant expression requiring binary128 evaluation is unavailable.
+The x87 helper is never used to approximate binary128. See
+[semantic-analysis.md](semantic-analysis.md#binary128-and-type-generic-math-2026-10-09)
+for verification and limits.
