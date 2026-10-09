@@ -52,6 +52,28 @@ fn calling_convention(keyword: super::super::preprocessing::KeywordTokenType) ->
     )
 }
 
+/// The standard integer type an MSVC sized-integer keyword names, as in Clang
+/// and MSVC: `__int8` is plain `char`, and `__int16`, `__int32` and `__int64`
+/// are `short`, `int` and `long long`, so `__int32` is never `long`. An
+/// explicit sign selects the signed or unsigned type.
+///
+/// MSVC extension; the integer types are C99: §6.7.2p2, pp. 99-100;
+/// PDF pp. 111-112.
+fn ms_integer(width: u8, signedness: Option<bool>) -> Scalar {
+    match (width, signedness) {
+        | (8, None) => Scalar::Char,
+        | (8, Some(true)) => Scalar::SignedChar,
+        | (8, Some(false)) => Scalar::UnsignedChar,
+        | (16, Some(false)) => Scalar::UnsignedShort,
+        | (16, _) => Scalar::Short,
+        | (32, Some(false)) => Scalar::UnsignedInt,
+        | (32, _) => Scalar::Int,
+        | (64, Some(false)) => Scalar::UnsignedLongLong,
+        | (64, _) => Scalar::LongLong,
+        | _ => unreachable!("MSVC sized integers are 8, 16, 32 or 64 bits wide"),
+    }
+}
+
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Resolves the parser's validated specifier multiset into a canonical
     /// type. C99: §6.7.2p2-5, pp. 99-100; PDF pp. 111-112.
@@ -90,6 +112,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | S::ComplexFloat => Some(Scalar::ComplexFloat),
             | S::ComplexDouble => Some(Scalar::ComplexDouble),
             | S::ComplexLongDouble => Some(Scalar::ComplexLongDouble),
+            | S::Extended(super::ExtendedType::MsInteger { width, signedness }) =>
+                Some(ms_integer(*width, *signedness)),
             | _ => None,
         };
         self.work.push(Work::Qualify(q, source));

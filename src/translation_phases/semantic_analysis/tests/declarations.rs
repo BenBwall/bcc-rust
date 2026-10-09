@@ -436,6 +436,51 @@ fn msvc_tagged_anonymous_members_join_the_namespace() {
 }
 
 #[test]
+fn msvc_sized_integers_are_the_standard_integer_types() {
+    // As in Clang, `__int8` is plain `char` and the wider spellings are
+    // `short`, `int` and `long long`, so a typedef that one header spells
+    // with `__int64` may be repeated with the standard spelling.
+    let msvc = gnu17().with_msvc_extensions(true);
+    assert_eq!(
+        kinds(
+            "typedef __int8 a; typedef char a; typedef signed __int8 b; typedef signed char b; \
+             typedef unsigned __int8 c; typedef unsigned char c; typedef __int16 d; typedef short \
+             d; typedef unsigned __int16 e; typedef unsigned short e; typedef __int32 f; typedef \
+             int f; typedef __int32 unsigned g; typedef unsigned g; typedef __int64 h; typedef \
+             long long h; typedef unsigned __int64 i; typedef unsigned long long i;",
+            msvc
+        ),
+        []
+    );
+    // `long` is never one of them, even where it has the same width, and
+    // their sizes are evaluated.
+    assert_eq!(
+        kinds(
+            "typedef __int32 l; typedef long l; typedef __int8 s; typedef signed char s; int \
+             z[sizeof(unsigned __int16) == 2 ? -1 : 1];",
+            msvc.with_target(crate::target::Target::WindowsMsvc)
+        ),
+        [
+            SemanticErrorKind::DuplicateDeclaration,
+            SemanticErrorKind::DuplicateDeclaration,
+            SemanticErrorKind::InvalidArrayBound,
+        ]
+    );
+    // vcruntime.h's definitions agree with the resource stddef.h's.
+    assert_eq!(
+        kinds(
+            "typedef unsigned __int64 size_t; typedef __int64 ptrdiff_t; typedef __SIZE_TYPE__ \
+             size_t; typedef __PTRDIFF_TYPE__ ptrdiff_t; unsigned __int64 x = (unsigned __int64)1 \
+             << 40; int y[sizeof(__int64) == 8 && (__int8)-1 < 0 ? 1 : -1];",
+            CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+                .with_msvc_extensions(true)
+                .with_target(crate::target::Target::WindowsMsvc)
+        ),
+        []
+    );
+}
+
+#[test]
 fn gnu_flexible_array_forms_are_policy_extensions() {
     let source = "union U { int a; int b[]; }; struct F { int n; int d[]; }; struct G { struct F \
                   f; int after; }; struct F arr[2]; struct E { int only[]; };";
