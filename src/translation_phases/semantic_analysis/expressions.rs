@@ -223,6 +223,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.arithmetic(ty) || matches!(self.types.nodes[ty.index], TypeKind::Pointer(_))
     }
 
+    /// Pointer arithmetic needs a complete object type (§6.5.6p2); an
+    /// unanalyzed target, such as a GNU vector, is not checked.
+    fn pointer_arithmetic_target(&self, target: TypeId) -> bool {
+        self.complete_object(target) || self.types.unanalyzed(target)
+    }
+
     fn pointer_target(&self, ty: TypeId) -> Option<TypeId> {
         if let TypeKind::Pointer(target) = self.types.nodes[ty.index] {
             Some(target)
@@ -1068,7 +1074,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if !(self.real(ty)
                 || self
                     .pointer_target(ty)
-                    .is_some_and(|t| self.complete_object(t)))
+                    .is_some_and(|t| self.pointer_arithmetic_target(t)))
             {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidUnaryOperand);
             }
@@ -1436,7 +1442,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let Some((target, pointer)) = pair else {
                     return self.invalid_expression(e, SemanticErrorKind::InvalidSubscript);
                 };
-                if !self.complete_object(target) {
+                if !self.pointer_arithmetic_target(target) {
                     return self.invalid_expression(e, SemanticErrorKind::InvalidSubscript);
                 }
                 info.ty = target;
@@ -1463,7 +1469,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if self.arithmetic(lt) && self.arithmetic(rt) {
                     info.ty = self.common_arithmetic(left, right, lt, rt);
                 } else if let Some(target) = self.pointer_target(lt) {
-                    if !self.complete_object(target) {
+                    if !self.pointer_arithmetic_target(target) {
                         return self
                             .invalid_expression(e, SemanticErrorKind::InvalidAdditiveOperands);
                     }
@@ -1474,7 +1480,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         }
                     } else if op == B::Subtraction
                         && self.pointer_target(rt).is_some_and(|t| {
-                            self.complete_object(t) && self.pointer_compatible(target, t, false)
+                            self.pointer_arithmetic_target(t)
+                                && self.pointer_compatible(target, t, false)
                         })
                     {
                         info.ty = self.types.scalar(self.types.target.ptrdiff_t);
@@ -1486,7 +1493,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && self.integer_type(lt).is_some()
                     && self
                         .pointer_target(rt)
-                        .is_some_and(|t| self.complete_object(t))
+                        .is_some_and(|t| self.pointer_arithmetic_target(t))
                 {
                     info.ty = rt;
                     if self.address_value(right) && left.ice && left.integer.is_some() {

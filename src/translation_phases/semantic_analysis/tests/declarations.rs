@@ -594,3 +594,15 @@ fn floating_constants_follow_iec_60559() {
         []
     );
 }
+
+#[test]
+fn pointers_to_unanalyzed_types_suppress_arithmetic_constraints() {
+    assert_eq!(
+        kinds(
+            "typedef float V __attribute__((vector_size(16))); V f(const V *p, V *q, int i) { V a \
+             = *p++; q[i] = p[0]; q[2] = (q[0] & (1 << q[1])) != 0; i = q - p; return *(p + 1); }",
+            gnu17()
+        ),
+        []
+    );
+}
