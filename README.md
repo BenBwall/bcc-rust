@@ -400,7 +400,9 @@ it.
 Each selected header becomes a translation unit holding only its `#include`
 and one declaration. The selection is the C17 standard headers, the C23
 headers the library ships, the common POSIX headers for glibc and musl, and
-`windows.h` with other common Win32 and CRT headers for MinGW-w64 and MSVC.
+`windows.h` with other common Win32 and CRT headers for MinGW-w64 and MSVC
+(Win32 headers such as `shellapi.h`, which need `windows.h`'s types, include
+it first).
 `--all-headers` adds every `.h` under the library's include roots. One more
 unit includes all the standard headers together. Clang runs first with the
 configuration's target and include flags and `-fsyntax-only`, in `-std=gnu17`

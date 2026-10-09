@@ -55,12 +55,14 @@ POSIX_HEADERS = [
     "utmpx.h", "wordexp.h",
 ]
 WINDOWS_HEADERS = [
-    "windows.h", "winsock2.h", "ws2tcpip.h", "winbase.h", "winnt.h", "winuser.h",
-    "wincrypt.h", "winreg.h", "shellapi.h", "shlobj.h", "objbase.h", "commctrl.h",
-    "tlhelp32.h", "psapi.h", "intrin.h", "conio.h", "direct.h", "fcntl.h", "io.h",
-    "malloc.h", "process.h", "share.h", "sys/stat.h", "sys/types.h", "sys/timeb.h",
-    "sys/utime.h",
+    "windows.h", "winsock2.h", "ws2tcpip.h", "objbase.h", "shlobj.h", "intrin.h", "conio.h",
+    "direct.h", "fcntl.h", "io.h", "malloc.h", "process.h", "share.h", "sys/stat.h",
+    "sys/types.h", "sys/timeb.h", "sys/utime.h",
 ]
+# These Win32 headers need windows.h's types, so their units include it first.
+WIN32_HEADERS = ["commctrl.h", "dbghelp.h", "psapi.h", "shellapi.h", "shlwapi.h", "tlhelp32.h",
+                 "wincrypt.h"]
+GROUP_PRELUDES = {"win32": ["windows.h"]}
 MINGW_POSIX_HEADERS = ["dirent.h", "getopt.h", "pthread.h", "strings.h", "sys/time.h", "unistd.h"]
 COMBINED = "<c-standard>"
 SENTINEL = "typedef int libc_header_survey_unit;\n"
@@ -214,7 +216,8 @@ def mingw_configuration(gcc, resource_include, environment):
     return {
         "triple": "x86_64-w64-windows-gnu", "sysroot": str(root), "include_dirs": include_dirs,
         "header_roots": roots,
-        "extra_groups": {"windows": WINDOWS_HEADERS, "mingw-posix": MINGW_POSIX_HEADERS},
+        "extra_groups": {"windows": WINDOWS_HEADERS, "win32": WIN32_HEADERS,
+                         "mingw-posix": MINGW_POSIX_HEADERS},
         "clang_flags": ["--target=x86_64-w64-windows-gnu", "-nostdinc",
                         "-isystem", resource_include,
                         *[item for path in include_dirs for item in ("-isystem", path)]],
@@ -273,7 +276,8 @@ def msvc_configuration(resource_include, environment):
              if path.name.lower() == "ucrt" or (path / "vcruntime.h").exists()]
     return {
         "triple": "x86_64-pc-windows-msvc", "sysroot": "", "include_dirs": include_dirs,
-        "header_roots": roots or include_dirs, "extra_groups": {"windows": WINDOWS_HEADERS},
+        "header_roots": roots or include_dirs,
+        "extra_groups": {"windows": WINDOWS_HEADERS, "win32": WIN32_HEADERS},
         "clang_flags": ["--target=x86_64-pc-windows-msvc", "-fms-extensions", "-fms-compatibility",
                         "-nostdinc", "-isystem", resource_include,
                         *[item for path in include_dirs for item in ("-isystem", path)]],
@@ -330,7 +334,8 @@ def header_rows(name, configuration, args):
             continue
         modes = ["gnu17", "c17"] if group in {"c-standard", "c23"} else ["gnu17"]
         rows.extend({"config": name, "header": header, "std": std, "group": group,
-                     "libc_path": locate(header, configuration["include_dirs"])} for std in modes)
+                     "libc_path": locate(header, configuration["include_dirs"]),
+                     "includes": GROUP_PRELUDES.get(group, []) + [header]} for std in modes)
     return rows
 
 
@@ -347,7 +352,7 @@ def survey_row(row, configuration, args, environment):
     stem = "_c_standard" if header == COMBINED else header
     source = args.output / "tu" / name / std / (stem + ".c")
     source.parent.mkdir(parents=True, exist_ok=True)
-    includes = row.get("includes", [header])
+    includes = row["includes"]
     source.write_text(translation_unit(includes), encoding="utf-8")
     logs = args.output / "logs" / name / std
     clang = invoke([args.clang, *configuration["clang_flags"], f"-std={std}", "-fsyntax-only",
