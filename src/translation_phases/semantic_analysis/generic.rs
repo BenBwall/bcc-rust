@@ -13,6 +13,8 @@ use super::{
 use crate::translation_phases::parsing::GenericSelection;
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Checks generic associations and preserves the selected expression.
+    /// C11: §6.5.1.1 paragraphs 2-4, p. 79; PDF p. 97.
     pub(super) fn type_generic(
         &mut self,
         e: &'tu Expression<'tu>,

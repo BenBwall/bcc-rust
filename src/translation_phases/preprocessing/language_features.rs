@@ -47,6 +47,16 @@ use crate::{
     },
 };
 
+/// Predefined dialect macros and later-standard conditional query operators.
+/// GNU extension: GCC preprocessor manual, "Common Predefined Macros".
+/// <https://gcc.gnu.org/onlinedocs/cpp/Common-Predefined-Macros.html>
+/// Clang extension: Clang Language Extensions, "Feature Checking Macros".
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#feature-checking-macros>
+/// MSVC extension: Microsoft Learn, "Pragma directives and the __pragma
+/// keyword".
+/// <https://learn.microsoft.com/en-us/cpp/preprocessor/pragma-directives-and-the-pragma-keyword>
+/// C23: §6.10.2 paragraph 1, p. 166; PDF p. 179.
+/// C23: §6.10.4.1 paragraph 7, p. 171; PDF p. 184.
 pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
     ("__COUNTER__", Feature::Counter),
     ("__has_include", Feature::HasInclude),
@@ -109,6 +119,9 @@ pub(super) fn with_identity_macros<'a>(
 
 /// GNU builtins can be overridden with a warning, like GCC and Clang. ISO
 /// predefined macros and standard query operators retain their protection.
+/// GNU extension: GCC preprocessor manual, "Common Predefined Macros".
+/// <https://gcc.gnu.org/onlinedocs/cpp/Common-Predefined-Macros.html>
+/// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173.
 pub(super) fn overridable_gnu_builtin(name: &str) -> bool {
     LANGUAGE_BUILTINS.iter().any(|(spelling, feature)| {
         *spelling == name && matches!(feature.origin(), FeatureOrigin::Gnu)
@@ -116,7 +129,8 @@ pub(super) fn overridable_gnu_builtin(name: &str) -> bool {
 }
 
 impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
-    /// C99 §6.10.3p4 permits empty arguments, unlike C89 §3.8.3.
+    /// Reports the C99 allowance for empty macro arguments in older modes.
+    /// C99: §6.10.3 paragraph 4, p. 151; PDF p. 163.
     pub(super) fn report_empty_macro_argument(&mut self, source: SourceVectors) {
         self.context
             .report_extension(Feature::EmptyMacroArguments, "empty macro argument", source);
@@ -438,7 +452,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
     }
 
     /// Evaluates query operators and consumes the MSVC token-form pragma
-    /// operator. C23: §6.10.2p6-11, pp. 165-167; PDF pp. 178-180.
+    /// operator. C23: §6.10.2p6-11, pp. 166-167; PDF pp. 179-180.
     pub(super) fn language_builtin(
         &mut self,
         token: PreprocessorToken,
@@ -466,6 +480,19 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         }
     }
 
+    /// Expands conditional queries, resource status macros and vendor
+    /// preprocessing operators.
+    /// GNU extension: GCC preprocessor manual, "Common Predefined Macros".
+    /// <https://gcc.gnu.org/onlinedocs/cpp/Common-Predefined-Macros.html>
+    /// Clang extension: Clang Language Extensions, "Feature Checking Macros".
+    /// <https://clang.llvm.org/docs/LanguageExtensions.html#feature-checking-macros>
+    /// MSVC extension: Microsoft Learn, "Pragma directives and the __pragma
+    /// keyword".
+    /// <https://learn.microsoft.com/en-us/cpp/preprocessor/pragma-directives-and-the-pragma-keyword>
+    /// GNU extension: GCC preprocessor manual, "Wrapper Headers".
+    /// <https://gcc.gnu.org/onlinedocs/cpp/Wrapper-Headers.html>
+    /// C23: §6.10.2 paragraphs 6-11, pp. 166-167; PDF pp. 179-180.
+    /// C23: §6.10.4.1 paragraph 7, p. 171; PDF p. 184.
     fn language_builtin_inner(&mut self, token: PreprocessorToken) -> Option<PreprocessorToken> {
         let name = self.context.string_cache.at(token.contents);
         // C23 §6.10.4.2p3: only the limit's evaluation uses conditional
@@ -854,6 +881,9 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         });
     }
 
+    /// Diagnoses a resource whose contents cannot be read for resource
+    /// inclusion.
+    /// C23: §6.10.4.1 paragraph 3, p. 171; PDF p. 184.
     #[cold]
     fn embed_unreadable(
         &mut self,
@@ -969,6 +999,11 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
     }
 }
 
+/// Resource inclusion parameter values and replacement token sequences.
+/// C23: §6.10.4.2 paragraphs 1-4, p. 174; PDF p. 187.
+/// C23: §6.10.4.3 paragraphs 1-2, p. 176; PDF p. 189.
+/// C23: §6.10.4.4 paragraphs 1-2, p. 176; PDF p. 189.
+/// C23: §6.10.4.5 paragraphs 1-2, p. 177; PDF p. 190.
 struct EmbedParameters<'x> {
     supported: bool,
     limit:     Option<u64>,

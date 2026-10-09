@@ -5,6 +5,9 @@
 /// allowed-value mask).
 pub(super) type Immediate = (usize, i128, i128, u16);
 
+/// Clang x86 intrinsic signatures and constant immediate operand requirements.
+/// GNU extension: GCC manual, "x86 Built-in Functions".
+/// <https://gcc.gnu.org/onlinedocs/gcc/x86-Built-in-Functions.html>
 #[rustfmt::skip]
 pub(super) const BUILTINS: &[(&str, &str, &[Immediate])] = &[
     ("__builtin_ia32_addcarryx_u32", "A,A,I,I,PI", &[]),

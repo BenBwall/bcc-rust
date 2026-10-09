@@ -36,6 +36,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Clang math primitives used by glibc's older-compiler binary128 aliases.
     /// Binary128 operations retain constant eligibility without numerical
     /// folding; infinity/NaN constructors in the aliases have type double.
+    /// GNU extension: GCC manual, "Floating Types".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Floating-Types.html>
+    /// GNU extension: GCC manual, "Other Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     pub(super) fn math128_builtin(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -125,6 +129,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// These selections have their own unevaluated-operand ICE rules.
+    /// GNU extension: GCC manual, "Other Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    /// GNU extension: GCC manual, "Complex".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Complex.html>
+    /// C11: §6.5.1.1 paragraphs 3-4, p. 79; PDF p. 97.
     pub(super) fn type_generic_constant(&self, e: &'tu Expression<'tu>) -> bool {
         use super::ExpressionType as E;
         matches!(e.kind, E::Generic(_))
@@ -157,6 +166,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// GNU real/imag preserves a complex component's lvalue and qualifiers;
     /// on a real operand the imaginary part is a zero rvalue.
+    /// GNU extension: GCC manual, "Complex".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Complex.html>
     pub(super) fn real_imag(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -235,6 +246,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// GCC Other Builtins: top-level qualifications are ignored by the type
     /// compatibility builtin; `choose_expr` performs no usual conversions.
+    /// GNU extension: GCC manual, "Other Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     pub(super) fn type_generic_builtin(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -292,6 +305,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// GCC Other Builtins: expression arguments undergo default argument
     /// conversions for classification, without evaluating their value.
+    /// GNU extension: GCC manual, "Other Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     pub(super) fn classify_type(
         &mut self,
         e: &'tu Expression<'tu>,

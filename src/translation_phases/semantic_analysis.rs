@@ -1,5 +1,5 @@
 //! Semantic analysis, the second half of translation phase 7.
-//! C99: §5.1.1.2p1, p. 10; PDF p. 22; scopes/linkage §6.2.1-§6.2.4,
+//! C99: §5.1.1.2p1, pp. 9-10; PDF pp. 21-22; scopes/linkage §6.2.1-§6.2.4,
 //! pp. 29-32; PDF pp. 41-44; declarations §6.7, pp. 97-124;
 //! PDF pp. 109-136; expressions/initializers §6.3, §6.5-§6.7.8, pp. 42-128;
 //! PDF pp. 54-140; statements/functions §6.8-§6.9.2, pp. 131-143;
@@ -169,6 +169,8 @@ pub(crate) enum ScopeKind {
     Block,
     Prototype,
 }
+/// A lexical scope and its enclosing scope.
+/// C99: §6.2.1 paragraphs 1-4, pp. 29-30; PDF pp. 41-42.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Scope {
     pub(crate) parent: Option<usize>,
@@ -196,6 +198,11 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) tag_declarations: &'tu [(usize, usize)],
 }
 
+/// Separate identifier namespaces for ordinary names, tags and GNU local
+/// labels.
+/// GNU extension: GCC manual, "Local Labels".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
+/// C99: §6.2.3 paragraph 1, p. 31; PDF p. 43.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Namespace {
     Ordinary,
@@ -407,10 +414,12 @@ struct Analyzer<'a, 'tu, 's> {
     enum_ranges:         ArenaMap<'s, usize, (i128, i128)>,
 }
 
-/// GCC and Clang choose an x86-64 System V enumeration's compatible type
-/// from its value range: unsigned int when no value is negative, otherwise
-/// int, widening to the 64-bit type of the same signedness. C99 leaves this
-/// choice implementation-defined (§6.7.2.2p4, p. 105; PDF p. 117).
+/// GCC and Clang choose an enumeration's compatible integer type from
+/// its range; the target may instead select a fixed type. Nonnegative
+/// ranges use unsigned int and widen to the target unsigned maximum type;
+/// negative ranges use int and widen to the signed maximum type.
+/// This choice is implementation-defined.
+/// C99: §6.7.2.2 paragraph 4, p. 105; PDF p. 117.
 fn compatible_enum_type((low, high): (i128, i128), target: &crate::target::TargetLayout) -> Scalar {
     if let Some(scalar) = target.fixed_enum_type {
         return scalar;
@@ -429,7 +438,7 @@ fn compatible_enum_type((low, high): (i128, i128), target: &crate::target::Targe
 }
 
 /// Runs declaration analysis only after the complete immutable syntax tree
-/// exists. C99: §5.1.1.2p1, p. 10; PDF p. 22.
+/// exists. C99: §5.1.1.2p1, pp. 9-10; PDF pp. 21-22.
 pub(crate) fn analyze<'tu>(
     context: &mut Context<'tu>,
     unit: &ParsedTranslationUnit<'tu>,
@@ -547,7 +556,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         }
     }
 
-    /// C99: §6.2.1p4, p. 29; PDF p. 41.
+    /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42.
     fn enter(&mut self, kind: ScopeKind) {
         let next = self.scopes.len();
         self.scopes.push(Scope {
@@ -560,7 +569,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         self.scope = next;
     }
 
-    /// C99: §6.2.1p4, p. 29; PDF p. 41.
+    /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42.
     fn leave(&mut self) {
         let mut next = self.scope_entries[self.scope].head.get();
         while let Some(link) = next {
@@ -578,7 +587,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         self.scope = self.scopes[self.scope].parent.unwrap_or(0);
     }
 
-    /// C99: §6.2.1p2-4, p. 29; PDF p. 41; §6.2.3p1, p. 31; PDF p. 43.
+    /// C99: §6.2.1p2-4, pp. 29-30; PDF pp. 41-42; §6.2.3p1, p. 31; PDF p. 43.
     fn lookup(&self, namespace: Namespace, name: StringCacheId) -> Option<Entry> {
         self.visible
             .get(&(namespace, name))
@@ -616,10 +625,11 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         );
     }
 
-    /// Overflow and other exceptional evaluation violate the constant
-    /// expression constraint (§6.6p4, p. 95; PDF p. 107) where an integer
-    /// constant expression is required. An array bound instead becomes
-    /// variable length.
+    /// Exceptional evaluation violates the representability constraint where
+    /// an integer constant expression is required; an array bound instead
+    /// becomes variable length.
+    /// C99: §6.6 paragraph 4, p. 95; PDF p. 107.
+    /// C99: §6.7.5.2 paragraph 4, pp. 116-117; PDF pp. 128-129.
     fn exceptional_constant(&mut self, source: SourceVectors) {
         if !self.runtime_bound {
             self.error(SemanticErrorKind::ConstantOverflow, source, None, None);

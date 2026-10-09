@@ -23,6 +23,8 @@ use super::{
 /// GNU attributes extend C99 declaration specifiers. Only names at
 /// attribute-list depth count; identifiers in parenthesized arguments do not.
 /// C99: §6.7, p. 97; PDF p. 109 (GNU attribute extension).
+/// GNU extension: GCC manual, "Attribute Syntax".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
 fn attribute_names<'a>(
     a: &'a AttributeSpecifier<'_>,
     context: &'a super::Context<'_>,
@@ -59,6 +61,10 @@ fn attribute_names<'a>(
 
 /// GNU construction and alignment suffixes apply to the declared type.
 /// C99: §6.7, p. 97; PDF p. 109 (GNU attribute extension).
+/// GNU extension: GCC manual, "Vector Extensions".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
+/// GNU extension: GCC manual, "Attribute Syntax".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
 pub(super) fn declared_type_attribute(
     a: &AttributeSpecifier<'_>,
     context: &super::Context<'_>,
@@ -73,6 +79,10 @@ pub(super) fn constructs_vector(a: &AttributeSpecifier<'_>, context: &super::Con
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Group vector construction before alignment-only attributes,
     /// independently of which syntax attribute list carries them.
+    /// GNU extension: GCC manual, "Vector Extensions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
+    /// GNU extension: GCC manual, "Attribute Syntax".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
     pub(super) fn vector_attribute_chain(
         &mut self,
         mut ty: TypeId,
@@ -111,6 +121,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// GNU `vector_size` operates on the element even on a pointer, array or
     /// function declarator. Explicit stacks rebuild the derivations.
+    /// GNU extension: GCC manual, "Vector Extensions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
     pub(super) fn vector_attribute(
         &mut self,
         mut ty: TypeId,
@@ -260,6 +272,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ty
     }
 
+    /// Evaluates integer attribute arguments using the supported
+    /// constant-expression operators.
+    /// GNU extension: GCC manual, "Attribute Syntax".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+    /// C99: §6.6 paragraph 6, p. 95; PDF p. 107.
     fn vector_attribute_integer(
         &self,
         tokens: &[super::super::preprocessing::Token],
@@ -356,12 +373,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Implementation choice: accepts vector assignment between equal byte
+    /// widths.
+    /// GNU extension: GCC manual, "Vector Extensions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
     pub(super) fn vector_assignment(&self, to: TypeId, from: TypeId) -> bool {
         self.vector(to).is_some()
             && self.vector(from).is_some()
             && self.vector_width(to) == self.vector_width(from)
     }
 
+    /// Checks whether a scalar can be broadcast to vector lanes without
+    /// truncation.
+    /// GNU extension: GCC manual, "Vector Extensions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
     fn vector_splat(&self, element: TypeId, scalar: ExpressionInfo<'tu>) -> bool {
         if let Some((bits, signed)) = self.integer_type(element) {
             if let Some(value) = scalar.integer.filter(|_| scalar.ice) {
@@ -425,6 +450,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         source_precision <= precision
     }
 
+    /// Checks and types element-wise vector operators and comparisons.
+    /// GNU extension: GCC manual, "Vector Extensions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
     pub(super) fn vector_binary(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -605,6 +633,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Checks equal lane counts and converts each lane to the requested vector
+    /// element type.
+    /// Clang extension: Clang Language Extensions, "`__builtin_convertvector`".
+    /// <https://clang.llvm.org/docs/LanguageExtensions.html#builtin-convertvector>
     pub(super) fn convert_vector_builtin(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -640,6 +672,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Self::expression_result(e, self.types.unknown())
     }
 
+    /// Checks vector inputs and constant lane indices for a shuffle.
+    /// Clang extension: Clang Language Extensions, "`__builtin_shufflevector`".
+    /// <https://clang.llvm.org/docs/LanguageExtensions.html#builtin-shufflevector>
     pub(super) fn shuffle_vector_builtin(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -700,6 +735,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Checks equal source/destination sizes for a builtin bit cast.
+    /// Clang extension: Clang `SemaCast.cpp`, "`BuildBuiltinBitCastExpr`".
+    /// <https://clang.llvm.org/doxygen/SemaCast_8cpp_source.html>
     pub(super) fn bit_cast_builtin(
         &mut self,
         e: &'tu Expression<'tu>,

@@ -87,6 +87,8 @@ pub(crate) enum ExtendedType<'tu> {
     },
     AutoType,
     /// MSVC fixed-width integer spelling; target layout belongs to analysis.
+    /// MSVC extension: Microsoft Learn, "__int8, __int16, __int32, __int64".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/int8-int16-int32-int64>
     MsInteger {
         width:      u8,
         signedness: Option<bool>,
@@ -106,6 +108,15 @@ pub(crate) struct SpecifierExtension<'tu> {
     pub(crate) next:           Option<&'tu Self>,
     pub(crate) source_vectors: SourceVectors,
 }
+/// Declaration specifier additions from later ISO revisions and vendor
+/// dialects.
+/// GNU extension: GCC manual, "Attribute Syntax".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+/// MSVC extension: Microsoft Learn, "declspec".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/declspec>
+/// C11: §6.7.5 paragraph 1, p. 127; PDF p. 145.
+/// C11: §6.7.1 paragraph 1, p. 109; PDF p. 127.
+/// C23: §6.7.2 paragraph 1, pp. 98-99; PDF pp. 111-112.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum SpecifierExtensionKind<'tu> {
     Alignment(SyntaxOperand<'tu>),
@@ -114,6 +125,8 @@ pub(crate) enum SpecifierExtensionKind<'tu> {
     Constexpr,
     ExtensionMarker,
     /// MSVC declaration modifier, retaining exact spelling and provenance.
+    /// MSVC extension: Microsoft Learn, "Microsoft-Specific Modifiers".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/microsoft-specific-modifiers>
     MsModifier(KeywordTokenType),
 }
 
@@ -128,6 +141,12 @@ pub(crate) struct AttributeSpecifier<'tu> {
     pub(crate) source_vectors: SourceVectors,
     pub(crate) recovered:      bool,
 }
+/// ISO, GNU and Microsoft attribute introducer grammars.
+/// GNU extension: GCC manual, "Attribute Syntax".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+/// MSVC extension: Microsoft Learn, "declspec".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/declspec>
+/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum AttributeSyntax {
     Standard,
@@ -143,6 +162,8 @@ pub(crate) struct GenericSelection<'tu> {
     pub(crate) controlling:    SyntaxOperand<'tu>,
     pub(crate) associations:   ArenaList<'tu, GenericAssociation<'tu>>,
 }
+/// A type-named or default generic association and its result expression.
+/// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct GenericAssociation<'tu> {
     pub(crate) type_name:  Option<&'tu TypeName<'tu>>,
@@ -164,6 +185,11 @@ pub(super) enum ModernValue<'tu> {
     Assertion(&'tu StaticAssertion<'tu>),
     Attributes(&'tu AttributeSpecifier<'tu>),
 }
+/// Selects the operand, generic, assertion or attribute grammar owned by a
+/// frame.
+/// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
+/// C11: §6.7.10 paragraph 1, p. 145; PDF p. 163.
+/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ModernKind {
     Operand { type_only: bool, constant: bool },
@@ -171,6 +197,8 @@ pub(super) enum ModernKind {
     Assertion,
     Attributes,
 }
+/// Resumable positions in the standard attribute token grammar.
+/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
 #[derive(Debug, Clone, Copy)]
 enum AttributePosition {
     Opening,
@@ -182,6 +210,12 @@ enum AttributePosition {
     AfterArguments,
     Closing,
 }
+/// Resumable grammar positions for ISO additions and GNU attributes.
+/// GNU extension: GCC manual, "Attribute Syntax".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+/// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
+/// C11: §6.7.10 paragraph 1, p. 145; PDF p. 163.
+/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
 #[derive(Debug, Clone, Copy)]
 enum Phase {
     Start,
@@ -255,6 +289,11 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         }
     }
 
+    /// Starts parsing the parenthesized operand of an extended type or
+    /// alignment specifier.
+    /// C11: §6.7.2.4 paragraph 1, p. 121; PDF p. 139.
+    /// C11: §6.7.5 paragraph 1, p. 127; PDF p. 145.
+    /// C23: §6.7.3.6 paragraph 1, p. 117; PDF p. 130.
     pub(super) fn operand_after_keyword(
         arena: &'p Bump,
         errors: usize,
@@ -402,6 +441,13 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         }
     }
 
+    /// Parses later-standard operands, generic associations, assertions and
+    /// attributes.
+    /// GNU extension: GCC manual, "Attribute Syntax".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+    /// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
+    /// C11: §6.7.10 paragraph 1, p. 145; PDF p. 163.
+    /// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
     pub(super) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,

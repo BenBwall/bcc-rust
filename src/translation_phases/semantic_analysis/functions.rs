@@ -48,12 +48,17 @@ pub(crate) enum DefinitionKind {
     FunctionName(StringCacheId),
 }
 
+/// A completed object or function definition and its declaration binding.
+/// C99: §6.9 paragraph 5, p. 140; PDF p. 152.
+/// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Definition {
     pub(crate) binding: usize,
     pub(crate) kind:    DefinitionKind,
 }
 
+/// The active function definition, result type and adjusted parameters.
+/// C99: §6.9.1 paragraphs 2-7, pp. 141-142; PDF pp. 153-154.
 #[derive(Clone, Copy)]
 pub(super) struct FunctionContext<'tu> {
     pub(super) id:         usize,
@@ -74,6 +79,11 @@ pub(super) enum FunctionWork<'tu> {
     RestoreSizeof(Option<usize>),
 }
 
+/// Definition and tentative-definition state for an identifier with linkage.
+/// GNU extension: GCC manual, "Inline".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Inline.html>
+/// C99: §6.9 paragraphs 3-5, p. 140; PDF p. 152.
+/// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Entity {
     latest:        usize,
@@ -109,6 +119,8 @@ struct SizeofContext<'tu> {
     parent:     Option<usize>,
 }
 
+/// A static object whose declaration is checked against inline restrictions.
+/// C99: §6.7.4 paragraph 3, p. 112; PDF p. 124.
 #[derive(Clone, Copy)]
 struct InlineObject {
     function: usize,
@@ -146,7 +158,7 @@ impl<'s> State<'_, 's> {
 /// Finds the first derivation outward from the identifier, including grouping.
 /// A function typedef supplies no such derivation. Identity is the immutable
 /// suffix node, not the source span of its containing declarator.
-/// C99: §6.7.5p4-6, pp. 114-115; PDF pp. 126-127; §6.9.1p2, p. 141;
+/// C99: §6.7.5p4-6, p. 115; PDF p. 127; §6.9.1p2, p. 141;
 /// PDF p. 153.
 pub(super) fn function_derivation<'tu>(
     declarator: Declarator<'tu>,
@@ -197,6 +209,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.9.1p2-7, pp. 141-142; PDF pp. 153-154.
     /// GNU extension: nested definitions have no linkage and reject
     /// extern/static.
+    /// GNU extension: GCC manual, "Nested Functions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Nested-Functions.html>
     pub(super) fn function_body(&mut self, f: &'tu FunctionDefinition<'tu>) {
         let declared_type = self.take_type();
         let nested = self.scopes[self.scope].kind != ScopeKind::File;
@@ -478,7 +492,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// `[*]` belongs to prototype scope, not a definition's parameter scope.
-    /// C99: §6.7.5.2p4, p. 117; PDF p. 129; §6.9.1p7, p. 142; PDF p. 154.
+    /// C99: §6.7.5.2p4, pp. 116-117; PDF pp. 128-129; §6.9.1p7, p. 142; PDF p.
+    /// 154.
     fn validate_definition_stars(&mut self, derivation: Option<&'tu DirectDeclarator<'tu>>) {
         let Some(DirectDeclarator::Function { parameter_list, .. }) = derivation else {
             return;
@@ -508,6 +523,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Rejects empty declarations in an old-style definition parameter list.
+    /// C99: §6.9.1 paragraph 6, p. 141; PDF p. 153.
     pub(super) fn validate_declaration_list_item(&mut self, d: &'tu Declaration<'tu>) {
         if self.old_parameter_mode && d.init_declarators.is_empty() && d.assertion.is_none() {
             self.error(
@@ -864,6 +881,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Rejects multiple definitions of an identifier with linkage.
+    /// C99: §6.9 paragraph 3, p. 140; PDF p. 152.
+    /// C99: §6.9 paragraph 5, p. 140; PDF p. 152.
     fn define_entity(&mut self, index: usize, entity: &mut Entity) {
         let b = self.bindings[index];
         if let Some(previous) = entity.definition {
@@ -935,6 +955,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         });
     }
 
+    /// Retains uses needed for internal-definition and inline-reference
+    /// constraints.
+    /// C99: §6.9 paragraph 3, p. 140; PDF p. 152.
+    /// C99: §6.7.4 paragraph 3, p. 112; PDF p. 124.
     pub(super) fn record_binding_use(&mut self, binding: usize, name: Identifier) {
         if self.tainted {
             return;
@@ -1115,6 +1139,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Clang permits replacing a GNU extern inline declaration.
+    /// GNU extension: GCC manual, "Inline".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Inline.html>
     pub(super) fn gnu_function_redefinable(&self, name: StringCacheId) -> bool {
         self.functions
             .entities
@@ -1125,6 +1151,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GNU inline attribute semantics follow Clang's canRedefineFunction.
     /// <https://clang.llvm.org/docs/AttributeReference.html#gnu-inline>
     /// Only attribute names count; occurrences inside arguments do not.
+    /// GNU extension: GCC manual, "Inline".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Inline.html>
     fn has_gnu_inline(
         &self,
         spec: DeclarationSpecifiers<'tu>,

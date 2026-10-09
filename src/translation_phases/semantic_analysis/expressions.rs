@@ -39,7 +39,7 @@ use super::{
 use crate::float_parsing::LongDouble;
 
 /// The category before contextual lvalue conversion or decay.
-/// C99: §6.3.2.1p1-4, pp. 46-47; PDF pp. 58-59.
+/// C99: §6.3.2.1p1-4, p. 46; PDF p. 58.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ValueCategory {
     Lvalue,
@@ -126,6 +126,10 @@ pub(crate) enum ConversionKind {
     Assignment,
     DefaultArgument,
 }
+/// One contextual conversion and its resulting type.
+/// C99: §6.3.2.1 paragraphs 2-4, p. 46; PDF p. 58.
+/// C99: §6.5.2.2 paragraphs 6-7, pp. 71-72; PDF pp. 83-84.
+/// C99: §6.5.16.1 paragraph 2, p. 92; PDF p. 104.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Conversion<'tu> {
     pub(crate) expression: &'tu Expression<'tu>,
@@ -188,6 +192,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Checks recursive const membership when classifying modifiable lvalues.
+    /// C99: §6.3.2.1 paragraph 1, p. 46; PDF p. 58.
     fn contains_const(&mut self, ty: TypeId) -> bool {
         let mut pending = ArenaVec::new_in(self.scratch);
         pending.push((ty, false));
@@ -241,12 +247,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.types.complete_object(ty)
     }
 
+    /// Classifies integer and floating types as arithmetic types.
+    /// C99: §6.2.5 paragraph 18, p. 35; PDF p. 47.
     pub(super) fn arithmetic(&self, ty: TypeId) -> bool {
         let ty = self.types.non_atomic(ty);
         self.integer_type(ty).is_some()
             || matches!(self.types.nodes[ty.index], TypeKind::Scalar(s) if s != Scalar::Void)
     }
 
+    /// Classifies integer and real floating types for relational operators.
+    /// C99: §6.2.5 paragraph 17, p. 35; PDF p. 47.
     fn real(&self, ty: TypeId) -> bool {
         self.integer_type(ty).is_some()
             || matches!(
@@ -257,12 +267,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             )
     }
 
+    /// Classifies arithmetic and pointer types as scalar types.
+    /// C99: §6.2.5 paragraph 21, p. 36; PDF p. 48.
     pub(super) fn scalar_type(&self, ty: TypeId) -> bool {
         self.arithmetic(ty) || self.pointer_target(ty).is_some()
     }
 
     /// Pointer arithmetic needs a complete object type (§6.5.6p2); an
     /// unanalyzed target, such as a GNU vector, is not checked.
+    /// C99: §6.5.6 paragraphs 2-3, pp. 82-83; PDF pp. 94-95.
     fn pointer_arithmetic_target(&self, target: TypeId) -> bool {
         self.complete_object(target) || self.types.unanalyzed(target)
     }
@@ -284,7 +297,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         });
     }
 
-    /// C99: §6.3.2.1p2-4, pp. 46-47; PDF pp. 58-59.
+    /// C99: §6.3.2.1p2-4, p. 46; PDF p. 58.
     pub(super) fn converted(&mut self, info: ExpressionInfo<'tu>) -> TypeId {
         let (ty, kind) = match self.types.nodes[info.ty.index] {
             | TypeKind::Array(element, _) => (
@@ -311,7 +324,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ty
     }
 
-    /// C99: §6.3.1.1p2, p. 42; PDF p. 54. Bit-field width can promote an
+    /// C99: §6.3.1.1p2, pp. 42-43; PDF pp. 54-55. Bit-field width can promote
+    /// an
     /// unsigned int field to int when all its values fit.
     pub(super) fn promote(&mut self, info: ExpressionInfo<'tu>, ty: TypeId) -> TypeId {
         // An enumeration's compatible type has at least the rank of int, so
@@ -460,7 +474,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// C99: §6.3.2.3p3, p. 48; PDF p. 60.
+    /// C99: §6.3.2.3p3, p. 47; PDF p. 59.
     pub(super) fn null_pointer_constant(&self, info: ExpressionInfo<'tu>) -> bool {
         (info.ice && info.integer.is_some_and(|v| v.value == 0))
             || (matches!(self.types.nodes[info.ty.index], TypeKind::Pointer(target) if matches!(self.types.nodes[target.index], TypeKind::Scalar(Scalar::Void)))
@@ -512,6 +526,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .is_some()
     }
 
+    /// Checks compatible pointer targets, allowing object/void pairs where
+    /// required.
+    /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
+    /// C99: §6.5.9 paragraph 2, p. 86; PDF p. 98.
     fn pointer_compatible(&mut self, left: TypeId, right: TypeId, void: bool) -> bool {
         if self.types.unanalyzed(left) || self.types.unanalyzed(right) {
             return true;
@@ -530,9 +548,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .is_some()
     }
 
-    /// C89 §3.3.2.2 implicit function declarations; GNU modes retain the
-    /// removed feature. Strict C99 and later require a declaration (§6.5.1p2,
-    /// p. 69; PDF p. 81).
+    /// C89 implicit function declarations are retained in GNU modes.
+    /// Strict C99 and later require a declaration.
+    /// C89: §3.3.2.2, p. 41; PDF p. 55.
+    /// C99: §6.5.1 paragraph 2, p. 69; PDF p. 81.
     pub(super) fn implicit_function(&mut self, mut e: &'tu Expression<'tu>) {
         if self.tainted {
             return;
@@ -596,9 +615,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// GCC builtins are reserved identifiers (C99 §7.1.3p1, p. 165; PDF p.
-    /// 177) that the implementation declares; an undeclared one is an
-    /// unmodeled function rather than an implicit `int` declaration.
+    /// GCC builtins use reserved identifiers declared by the implementation;
+    /// an undeclared builtin retains an unmodeled result rather than implicit
+    /// int.
+    /// C99: §7.1.3 paragraph 1, p. 166; PDF p. 178.
     pub(super) fn builtin_name(&self, name: Identifier) -> bool {
         super::atomics::modeled(self.context.string_cache.at(name.name))
             || self
@@ -611,6 +631,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GCC's `__builtin_constant_p` folds to whether its operand is an
     /// arithmetic constant; it returns `int` and is valid where a constant
     /// is required. GNU extension; C99: §6.6p10, p. 96; PDF p. 108.
+    /// GNU extension: GCC manual, "Other Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     fn constant_p(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -651,9 +673,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(info)
     }
 
-    /// The integer that the address of an lvalue reached from an
-    /// integer-valued pointer constant folds to, as in the classic `offsetof`
-    /// macro.
+    /// Implementation-defined pointer-to-integer folding for the address of
+    /// an lvalue reached from an integer-valued pointer constant, as in the
+    /// classic `offsetof` macro.
+    /// C99: §6.3.2.3 paragraph 6, p. 47; PDF p. 59.
     fn integer_address(&self, e: &'tu Expression<'tu>) -> Option<i128> {
         match self.address_parts(e, true)? {
             | (AddressBase::Absolute, offset) => Some(offset),
@@ -661,12 +684,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Splits a pointer value (or, with `lvalue`, an lvalue's address) into
-    /// the object it is based on and a byte offset, following member,
-    /// subscript, cast and integer-offset steps. GCC folds differences of
-    /// such addresses, which §6.6p10 lets an implementation accept as
-    /// constant expressions. Each step has one address operand, so this is a
-    /// loop rather than recursion over syntax.
+    /// Splits an address into its base object and byte offset, following
+    /// member, subscript, cast and integer-offset steps without recursion.
+    /// Implementation choice: GCC-style address differences are accepted as
+    /// additional constant expressions.
+    /// C99: §6.6 paragraphs 9-10, p. 96; PDF p. 108.
     pub(super) fn address_parts(
         &self,
         mut e: &'tu Expression<'tu>,
@@ -810,8 +832,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Whether two address bases designate the same object; identical string
-    /// literals are merged, as GCC does.
+    /// Whether two address bases designate the same object; the implementation
+    /// chooses to merge identical string literals, as GCC does.
+    /// C99: §6.4.5 paragraph 6, p. 63; PDF p. 75.
     fn same_address_base(&self, left: AddressBase<'tu>, right: AddressBase<'tu>) -> bool {
         match (left, right) {
             | (AddressBase::Absolute, AddressBase::Absolute) => true,
@@ -860,6 +883,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .map(|v| v.value)
     }
 
+    /// Checks integer switch expressions and scalar selection/iteration
+    /// conditions.
+    /// C99: §6.8.4.1 paragraph 1, p. 133; PDF p. 145.
+    /// C99: §6.8.4.2 paragraph 1, p. 134; PDF p. 146.
+    /// C99: §6.8.5 paragraph 2, p. 135; PDF p. 147.
     pub(super) fn check_condition(&mut self, mut slot: ExpressionSlot<'tu>, integer: bool) {
         while let ExpressionSlot::Selection(header) = slot {
             let Some(e) = header.expression else {
@@ -1282,7 +1310,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.expressions.push(info);
     }
 
-    /// C99: §6.4.5p5-6, p. 63; PDF p. 75. The count includes the final
+    /// C99: §6.4.5p5-6, pp. 62-63; PDF pp. 74-75. The count includes the final
     /// zero; narrow source characters contribute their UTF-8 code units.
     pub(super) fn string_type(&mut self, value: StringTokenType) -> Option<(TypeId, u64)> {
         let (id, wide) = match value {
@@ -1328,7 +1356,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Self::expression_result(e, self.types.unknown())
     }
 
-    /// C99: §6.5.3.4p1-5, pp. 80-81; PDF pp. 92-93.
+    /// C99: §6.5.3.4p1-5, p. 80; PDF p. 92.
     /// Alignment: C11 §6.5.3.4p3, p. 90; PDF p. 108 (extension in C99).
     fn type_sizeof(
         &mut self,
@@ -1502,6 +1530,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         info
     }
 
+    /// Determines whether an expression forms an address constant without
+    /// reading an object.
+    /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
     pub(super) fn address_value(&self, info: ExpressionInfo<'tu>) -> bool {
         info.constant == ConstantClass::Address
             || (info.static_address

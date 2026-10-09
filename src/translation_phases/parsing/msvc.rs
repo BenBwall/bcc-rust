@@ -50,6 +50,8 @@ use crate::{
 /// An opaque, balanced MSVC assembly token sequence, including its introducer.
 /// C99: extension to §6.8, p. 131; PDF p. 143. Assembly interpretation is
 /// deferred.
+/// MSVC extension: Microsoft Learn, "__asm".
+/// <https://learn.microsoft.com/en-us/cpp/assembler/inline/asm>
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct MsAsm<'tu> {
     pub(crate) tokens:         ArenaList<'tu, Token>,
@@ -61,6 +63,10 @@ pub(crate) struct MsAsm<'tu> {
 /// Guarded SEH compound, optional exception filter, and handler compound.
 /// C99: extension to §6.8, p. 131; PDF p. 143. An absent filter denotes
 /// finally; missing required syntax is represented by recovered children.
+/// MSVC extension: Microsoft Learn, "try-except statement".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/try-except-statement>
+/// MSVC extension: Microsoft Learn, "try-finally statement".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/try-finally-statement>
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Seh<'tu> {
     pub(crate) body:            &'tu Statement<'tu>,
@@ -90,7 +96,7 @@ pub(super) const CONSTANT_DIAGNOSTICS: [&str; 11] = [
 /// as MASM's `0FFh` is a pp-number that is not a C constant, so the MSVC
 /// assembly owning it withdraws these errors.
 /// C99: pp-numbers §6.4.8, p. 65; PDF p. 77 become constants in phase 7
-/// (§5.1.1.2 paragraph 1, p. 10; PDF p. 22), under §6.4.4.1-§6.4.4.2,
+/// (§5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22), under §6.4.4.1-§6.4.4.2,
 /// pp. 54-58; PDF pp. 66-70. MSVC assembly is an extension.
 pub(super) fn constant_diagnostic(error: &PreprocessorErrorType<'_>) -> Option<&'static str> {
     let index = match error {
@@ -109,6 +115,9 @@ pub(super) fn constant_diagnostic(error: &PreprocessorErrorType<'_>) -> Option<&
     };
     Some(CONSTANT_DIAGNOSTICS[index])
 }
+/// Recognizes Microsoft calling-convention declaration modifiers.
+/// MSVC extension: Microsoft Learn, "Argument Passing and Naming Conventions".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/argument-passing-and-naming-conventions>
 pub(super) fn calling_convention(keyword: KeywordTokenType) -> bool {
     matches!(
         keyword,
@@ -119,6 +128,9 @@ pub(super) fn calling_convention(keyword: KeywordTokenType) -> bool {
             | KeywordTokenType::Thiscall
     )
 }
+/// Recognizes Microsoft pointer and integer type modifiers.
+/// MSVC extension: Microsoft Learn, "Microsoft-Specific Modifiers".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/microsoft-specific-modifiers>
 pub(super) fn type_modifier(keyword: KeywordTokenType) -> bool {
     matches!(
         keyword,
@@ -131,6 +143,13 @@ pub(super) fn type_modifier(keyword: KeywordTokenType) -> bool {
     )
 }
 
+/// Resumable positions in Microsoft assembly and SEH statement grammar.
+/// MSVC extension: Microsoft Learn, "__asm".
+/// <https://learn.microsoft.com/en-us/cpp/assembler/inline/asm>
+/// MSVC extension: Microsoft Learn, "try-except statement".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/try-except-statement>
+/// MSVC extension: Microsoft Learn, "try-finally statement".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/try-finally-statement>
 #[derive(Debug, Clone, Copy)]
 enum Phase {
     Start,
@@ -151,6 +170,12 @@ enum Phase {
 
 /// Delimiter owner for MSVC statements; compound/expression children run on
 /// the shared parser stack. C99: extension to §6.8, p. 131; PDF p. 143.
+/// MSVC extension: Microsoft Learn, "__asm".
+/// <https://learn.microsoft.com/en-us/cpp/assembler/inline/asm>
+/// MSVC extension: Microsoft Learn, "try-except statement".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/try-except-statement>
+/// MSVC extension: Microsoft Learn, "try-finally statement".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/try-finally-statement>
 #[derive(Debug)]
 pub(super) struct MsvcFrame<'tu, 'p> {
     keyword:           KeywordTokenType,
@@ -224,7 +249,7 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
     /// arguments span lines stays on the line where it starts. Phase-2
     /// splices join lines, while a comment's new-line ends one, as in the
     /// text of the line.
-    /// C99: phases 2-3 are §5.1.1.2 paragraph 1, p. 10; PDF p. 22.
+    /// C99: phases 2-3 are §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
     fn new_line(parser: &Parser<'_, 'tu, 'p>, previous: Token, next: Token) -> bool {
         let Some(a) = parser.context.user_source_end(previous.source_vectors) else {
             return false;
@@ -281,6 +306,13 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
         false
     }
 
+    /// Parses Microsoft assembly, SEH handlers and __leave statements.
+    /// MSVC extension: Microsoft Learn, "__asm".
+    /// <https://learn.microsoft.com/en-us/cpp/assembler/inline/asm>
+    /// MSVC extension: Microsoft Learn, "try-except statement".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/try-except-statement>
+    /// MSVC extension: Microsoft Learn, "try-finally statement".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/try-finally-statement>
     pub(super) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,

@@ -33,6 +33,8 @@ impl Floating {
         }
     }
 
+    /// Tests whether a complex value differs from zero.
+    /// C99: §6.3.1.2 paragraph 1, p. 43; PDF p. 55.
     pub(super) fn truth(self) -> bool {
         !self.real.is_zero() || !self.imag.is_zero()
     }
@@ -49,6 +51,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(Floating::real(string_to_long_double(text).ok()?))
     }
 
+    /// Tests scalar constant truth for logical and conditional evaluation.
+    /// C99: §6.5.3.3 paragraph 5, p. 79; PDF p. 91.
+    /// C99: §6.5.15 paragraph 4, p. 90; PDF p. 102.
     pub(super) fn constant_truth(info: ExpressionInfo<'tu>) -> Option<bool> {
         info.integer
             .map(|v| v.value != 0)
@@ -137,6 +142,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Negation keeps the sign of zero (Annex F.3).
+    /// C99: §F.3 paragraph 1, pp. 445-447; PDF pp. 457-459.
+    /// C99: §6.5.3.3 paragraph 3, p. 79; PDF p. 91.
     pub(super) fn floating_negate(value: Floating) -> Floating {
         Floating {
             real: value.real.negate(),
@@ -144,6 +151,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Folds floating equality and ordering, including unordered NaNs.
+    /// C99: §F.3 paragraph 1, pp. 445-447; PDF pp. 457-459.
+    /// C99: §6.5.8 paragraph 6, p. 86; PDF p. 98.
+    /// C99: §6.5.9 paragraph 3, p. 86; PDF p. 98.
     pub(super) fn floating_comparison(
         op: BinaryOperator,
         left: Floating,
