@@ -227,7 +227,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                             TypeKind::Array(..) | TypeKind::Function { .. }
                                         ));
                                 let valid = if matches!(
-                                    self.types.nodes[target.index],
+                                    // C99 §6.3.1.2p1 and §6.6p7: address constants
+                                    // initialize bool, including C11 atomic bool.
+                                    self.types.nodes[self.types.non_atomic(target).index],
                                     TypeKind::Scalar(Scalar::Bool)
                                 ) && address
                                 {

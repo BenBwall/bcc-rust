@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **379 top-level C inputs and 379 stderr snapshots**, plus six supporting headers and 137 mode/policy `.args` sidecars. One hundred seventeen of the inputs cover semantic analysis (twenty-eight for declarations, twenty-eight for expressions and initializers, forty-one for statements and functions, three for 128-bit integers, four for resource intrinsics, six for atomics and generic selection, three for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 122 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **380 top-level C inputs and 380 stderr snapshots**, plus six supporting headers and 138 mode/policy `.args` sidecars. One hundred eighteen of the inputs cover semantic analysis (twenty-eight for declarations, twenty-eight for expressions and initializers, forty-one for statements and functions, three for 128-bit integers, four for resource intrinsics, six for atomics and generic selection, four for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 122 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -751,6 +751,10 @@ All new fixtures participate in the zero-global-allocation reporting harness.
 - `sema-type-generic.c` covers `InvalidChooseCondition`,
   `InvalidGenericSelection` (duplicate, missing and incomplete associations),
   invalid real-component operands and classification argument counts.
+- `sema-type-generic-recovery.c` covers a failed choose operand without a
+  dependent condition error, atomic variably modified jumps and associations,
+  selected vector lane addresses, and nonconstant imaginary components.
+  Static component addresses and atomic bool address initializers remain valid.
 
 The shared four-target probe checks real/complex layout, arithmetic rank,
 classification, compatibility, generic and choose selection, and component

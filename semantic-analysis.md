@@ -1015,16 +1015,22 @@ numerical result are unavailable. The x87 helper and Rust's unstable native
 `f128` are not used. Implementing full IEEE software operations remains a
 separate gap; no numerical equality or conversion result is fabricated.
 
-GNU `typeof` preserves operand type without array/function decay; unqualified
-forms remove top qualifiers. `__builtin_types_compatible_p` ignores top-level
-qualifiers, `__builtin_choose_expr` requires an ICE and transfers the selected
+GNU `typeof` preserves operand type without array/function decay;
+`typeof_unqual` removes top qualifiers, qualifiers carried by array elements and
+a top-level atomic wrapper (C23 §6.7.3.6p5). `__builtin_types_compatible_p`
+ignores the same top-level and array-element qualifiers, `__builtin_choose_expr` requires an ICE and transfers the selected
 expression's type/lvalue/constant eligibility, and `_Generic` checks distinct
 complete non-variably-modified association types and selects the matching or
 default expression. `__builtin_classify_type` accepts one expression (also
 through a parenthesized name) and folds Clang's integer/bool/pointer/real/
 complex/record classes without evaluating it. Real/imaginary components
-preserve complex lvalues and qualifiers; a real operand's imaginary part is
-zero. The ordinary explicit work stack visits all syntax operands.
+preserve complex lvalues, qualifiers and static-address eligibility; a real
+operand's imaginary part is zero but keeps the operand's constant-expression
+restrictions. Selections record the selected operand, so address constants,
+GNU-folded address differences and vector-lane address restrictions survive
+`_Generic` and `__builtin_choose_expr`. A failed choose condition suppresses the
+dependent ICE diagnostic, and math builtin dispatch yields to a shadowing
+declaration. The ordinary explicit work stack visits all syntax operands.
 
 The reachable old-GCC glibc `tgmath.h` path needs these primitives rather than
 `__builtin_tgmath`, which the pinned Clang rejects. No MinGW resource

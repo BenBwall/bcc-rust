@@ -722,12 +722,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.integers.push(None);
             return;
         }
-        if self.type_generic_constant(expression) {
+        if self.type_generic_constant(expression) && !info.folded_address() {
             self.integers
                 .push(if info.ice { info.integer } else { None });
             return;
         }
-        if self.context.configuration.gnu_extensions()
+        if (self.context.configuration.gnu_extensions() || info.folded_address())
             && info.constant == super::ConstantClass::Arithmetic
             && info.integer.is_some()
         {

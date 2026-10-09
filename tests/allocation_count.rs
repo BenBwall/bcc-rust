@@ -575,6 +575,20 @@ mod measurements {
     }
 
     #[test]
+    fn type_generic_selections_allocate_only_from_arenas() {
+        let source = "int a[2]; _Atomic(_Bool) b=&a; _Complex double z; double *r=&__real__ z; \
+                      _Static_assert(__builtin_types_compatible_p(const int[2][3],int[2][3]), \
+                      \"array\"); _Static_assert(_Generic(1,int:&a[1])-&a[0]==1,\"selection\"); \
+                      _Static_assert(!__atomic_always_lock_free(-1,0),\"size\");\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("array qualification and selections", summary, &allocations);
+        let source = include_str!("fixtures/diagnostics/sema-type-generic-recovery.c");
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(allocations.calls, 0, "type-generic dependent diagnostics");
+        assert_eq!(summary.diagnostics, 8);
+    }
+
+    #[test]
     fn vectors_and_x86_resources_allocate_only_from_arenas() {
         let (summary, allocations) =
             count_compile(|| bcc_rust::sema_source(include_str!("fixtures/targets/vector.c")));

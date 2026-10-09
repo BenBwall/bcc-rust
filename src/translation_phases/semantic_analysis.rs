@@ -827,8 +827,14 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             },
             | Work::TypeofDone(operand, unqualified) => {
                 let ty = self.operand_type(operand);
-                self.values
-                    .push(if unqualified { ty.unqualified() } else { ty });
+                // C23 §6.7.3.6p5: typeof preserves qualifiers; typeof_unqual
+                // yields the non-atomic, unqualified type.
+                let ty = if unqualified {
+                    self.types.unqualified_array(self.types.non_atomic(ty))
+                } else {
+                    ty
+                };
+                self.values.push(ty);
             },
             | Work::VectorAttributes(chain) => {
                 let base = self.take_type();

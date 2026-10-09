@@ -167,7 +167,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let size = self
                 .expression_info(args[0])
                 .integer
-                .and_then(Integer::to_u64);
+                .zip(self.integer_type(size_type))
+                // C99 §6.3.1.3p2: fold the converted unsigned size_t value.
+                .and_then(|(value, (bits, signed))| value.cast(bits, signed).to_u64());
             let mut aligned = true;
             if let Some(&pointer) = args.get(1) {
                 let info = self.expression_info(pointer);

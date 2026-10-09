@@ -329,7 +329,8 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         };
         let variably_modified = match kind {
             | TypeKind::Array(_, ArrayBound::Variable | ArrayBound::Star) => true,
-            | TypeKind::Array(next, _) | TypeKind::Pointer(next) =>
+            // C11 §6.7.6p3: derived types retain variably modified state.
+            | TypeKind::Array(next, _) | TypeKind::Pointer(next) | TypeKind::Atomic(next) =>
                 self.variably_modified[next.index],
             | TypeKind::Function { result, .. } => self.variably_modified[result.index],
             | _ => false,
@@ -373,9 +374,27 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         }
     }
 
+    /// Remove top-level qualification, including qualification carried by
+    /// array elements, without changing pointed-to types or atomic identity.
+    /// C99: §6.7.3p8, p. 109; PDF p. 121.
+    /// C23: §6.7.3.6p5, p. 118; PDF p. 131 (`typeof_unqual` caller).
+    pub(crate) fn unqualified_array(&mut self, mut ty: TypeId) -> TypeId {
+        let mut bounds = ArenaVec::new_in(self.scratch);
+        while let TypeKind::Array(element, bound) = self.nodes[ty.index] {
+            bounds.push(bound);
+            ty = element;
+        }
+        ty = ty.unqualified();
+        while let Some(bound) = bounds.pop() {
+            ty = self.intern(TypeKind::Array(ty, bound));
+        }
+        ty
+    }
+
     /// A variable or `[*]` array derivation reached through arrays, pointers
-    /// or function results; constant time for shared typedef graphs.
-    /// C99: §6.7.5p3, p. 114; PDF p. 126; §6.7.5.2p2, p. 116; PDF p. 128.
+    /// atomic wrappers or function results; constant time for shared typedef
+    /// graphs. C99: §6.7.5p3, p. 114; PDF p. 126; §6.7.5.2p2, p. 116; PDF
+    /// p. 128. C11: §6.7.6p3, p. 129; PDF p. 147.
     pub(crate) fn variably_modified(&self, ty: TypeId) -> bool {
         self.variably_modified[ty.index]
     }

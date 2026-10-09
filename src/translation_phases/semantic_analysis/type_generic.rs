@@ -49,6 +49,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let E::Identifier(name) = function.kind else {
             return None;
         };
+        // C99 §6.5.2.2p1: a shadowing declaration uses ordinary call typing.
+        if self.expression_info(function).binding.is_some_and(|id| {
+            !matches!(self.types.nodes[self.bindings[id].ty.index], TypeKind::Function { result, .. } if result == self.types.unknown())
+        }) {
+            return None;
+        }
         let (scalar, count, nan, operation) = match self.context.string_cache.at(name.name) {
             | "__builtin_huge_val" | "__builtin_inf" => (Scalar::Double, 0, false, false),
             | "__builtin_nan" | "__builtin_nans" => (Scalar::Double, 1, true, false),
@@ -183,11 +189,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             operand.ty
         };
         let mut result = Self::expression_result(e, ty);
+        result.folding = operand.folding;
         if complex || op == UnaryOperator::Real {
             result.category = operand.category;
             result.register = operand.register;
             result.bit_field = operand.bit_field;
             result.binding = operand.binding;
+            // GNU component designations preserve C99 §6.6p9 address
+            // eligibility.
+            result.static_address = operand.static_address;
+            result.vector_element = operand.vector_element;
         }
         if scalar.integer() {
             result.integer = if op == UnaryOperator::Imag {
@@ -195,10 +206,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 operand.integer
             };
-            result.ice = op == UnaryOperator::Imag || operand.ice;
-            if result.ice {
-                result.constant = ConstantClass::Arithmetic;
-            }
+            // A known zero still has its operand's constant restrictions.
+            // C99 §6.6p6,8: ICE/arithmetic operands cannot include calls.
+            result.ice = operand.ice;
+            result.constant = operand.constant;
         } else {
             result.unfolded_binary128 = operand.unfolded_binary128;
             result.floating = operand.floating.map(|value| {
@@ -210,7 +221,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             });
             if !complex && op == UnaryOperator::Imag {
                 result.category = ValueCategory::Rvalue;
-                result.constant = ConstantClass::Arithmetic;
+                result.constant = operand.constant;
                 result.unfolded_binary128 = component == Scalar::Float128;
                 if !result.unfolded_binary128 {
                     result.floating = Some(Floating::real(LongDouble::ZERO));
@@ -242,6 +253,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return Self::expression_result(e, self.types.unknown());
             };
             let condition = self.expression_info(condition);
+            // C99 §5.1.1.3p1: suppress a dependent constraint after operand
+            // failure.
+            if self.types.unanalyzed(condition.ty) {
+                return Self::expression_result(e, self.types.unknown());
+            }
             if !condition.ice || condition.integer.is_none() {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidChooseCondition);
             }
@@ -252,14 +268,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             return ExpressionInfo {
                 expression: e,
+                selected_expression: Some(selected),
                 ..self.expression_info(selected)
             };
         }
         let [left, right] = &*builtin.operands else {
             return Self::expression_result(e, self.types.unknown());
         };
-        let left = self.operand_type(*left).unqualified();
-        let right = self.operand_type(*right).unqualified();
+        let left = self.operand_type(*left);
+        let right = self.operand_type(*right);
+        let left = self.types.unqualified_array(left);
+        let right = self.types.unqualified_array(right);
         let mut result = Self::expression_result(e, self.types.scalar(Scalar::Int));
         if !self.types.unanalyzed(left) && !self.types.unanalyzed(right) {
             result.integer = Some(Integer::int(i128::from(

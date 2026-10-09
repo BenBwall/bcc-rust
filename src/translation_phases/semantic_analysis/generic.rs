@@ -73,6 +73,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             || Self::expression_result(e, self.types.unknown()),
             |selected| ExpressionInfo {
                 expression: e,
+                // C11 §6.5.1.1p4: preserve the selected value/designation,
+                // including its address base and offset (C99 §6.6p9).
+                selected_expression: Some(selected),
                 ..self.expression_info(selected)
             },
         )

@@ -58,11 +58,14 @@ pub(crate) enum ConstantClass {
     Address,
 }
 
-/// Clang does not ICE-evaluate or GNU-fold evaluated atomic value casts.
-/// Initializer constant eligibility is tracked separately.
+/// Folding restrictions and GNU address-difference eligibility are separate
+/// from initializer constant classes. Atomic value casts remain non-ICEs.
+/// C99: §6.6p10, p. 96; PDF p. 108 (additional constant forms).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConstantFolding {
     Permitted,
+    /// An address difference folded under C99 §6.6p10 and GNU policy.
+    AddressDifference,
     AtomicCast,
 }
 
@@ -76,30 +79,39 @@ pub(crate) enum ConstantFolding {
               evaluation; none is a state transition."
 )]
 pub(crate) struct ExpressionInfo<'tu> {
-    pub(crate) expression:         &'tu Expression<'tu>,
-    pub(crate) ty:                 TypeId,
+    pub(crate) expression:          &'tu Expression<'tu>,
+    /// Selected operand identity for address decomposition.
+    /// C11: §6.5.1.1p4, p. 79; PDF p. 97; GNU `choose_expr` follows it.
+    pub(crate) selected_expression: Option<&'tu Expression<'tu>>,
+    pub(crate) ty:                  TypeId,
     /// Arithmetic type before the final compound-assignment conversion.
-    pub(crate) operation_type:     Option<TypeId>,
-    pub(crate) category:           ValueCategory,
-    pub(crate) binding:            Option<usize>,
-    pub(crate) bit_field:          Option<u32>,
-    pub(crate) register:           bool,
+    pub(crate) operation_type:      Option<TypeId>,
+    pub(crate) category:            ValueCategory,
+    pub(crate) binding:             Option<usize>,
+    pub(crate) bit_field:           Option<u32>,
+    pub(crate) register:            bool,
+    /// GNU vector extension: a lane remains assignable but has no address.
+    pub(crate) vector_element:      bool,
     /// Whether designation can form an address constant without reading an
     /// object.
-    pub(crate) static_address:     bool,
+    pub(crate) static_address:      bool,
     /// An arithmetic constant containing binary128, retained without
     /// approximate folding.
-    pub(crate) unfolded_binary128: bool,
-    pub(crate) floating:           Option<Floating>,
-    pub(crate) integer:            Option<Integer>,
-    pub(crate) ice:                bool,
-    pub(crate) constant:           ConstantClass,
-    pub(crate) folding:            ConstantFolding,
+    pub(crate) unfolded_binary128:  bool,
+    pub(crate) floating:            Option<Floating>,
+    pub(crate) integer:             Option<Integer>,
+    pub(crate) ice:                 bool,
+    pub(crate) constant:            ConstantClass,
+    pub(crate) folding:             ConstantFolding,
 }
 
 impl ExpressionInfo<'_> {
     pub(super) fn atomic_cast(self) -> bool {
         self.folding == ConstantFolding::AtomicCast
+    }
+
+    pub(super) fn folded_address(self) -> bool {
+        self.folding == ConstantFolding::AddressDifference
     }
 }
 
@@ -144,12 +156,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn expression_result(e: &'tu Expression<'tu>, ty: TypeId) -> ExpressionInfo<'tu> {
         ExpressionInfo {
             expression: e,
+            selected_expression: None,
             ty,
             operation_type: None,
             category: ValueCategory::Rvalue,
             binding: None,
             bit_field: None,
             register: false,
+            vector_element: false,
             static_address: false,
             unfolded_binary128: false,
             floating: None,
@@ -665,6 +679,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 continue;
             }
             let info = self.expression_info(e);
+            if let Some(selected) = info.selected_expression {
+                e = selected;
+                continue;
+            }
             if !lvalue {
                 if matches!(
                     self.types.nodes[info.ty.index],
@@ -1181,6 +1199,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.ice = false;
             info.constant = ConstantClass::None;
         }
+        // GNU vector lane designation survives parentheses and selections.
+        // The address-of constraint below extends C99 §6.5.3.2p1.
+        if let E::Binary {
+            operator: BinaryOperator::Subscript,
+            left_expression,
+            ..
+        } = e.kind
+        {
+            info.vector_element = self
+                .vector(self.expression_info(left_expression).ty)
+                .is_some();
+        }
         // Size/alignment and generic controlling operands are unevaluated.
         // Generic selection already copied only its selected expression.
         let atomic_cast = match e.kind {
@@ -1208,6 +1238,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if info.atomic_cast() || atomic_cast {
             info.folding = ConstantFolding::AtomicCast;
             info.ice = false;
+        } else {
+            // C99 §6.6p10 permits additional constant forms. Preserve the
+            // GNU-folded address difference through enclosing arithmetic;
+            // evaluate reports it through the existing extension policy.
+            let folded_address = match e.kind {
+                | E::Unary {
+                    operand_expression, ..
+                } => self.expression_info(operand_expression).folded_address(),
+                | E::Binary {
+                    left_expression,
+                    right_expression,
+                    ..
+                } =>
+                    self.expression_info(left_expression).folded_address()
+                        || self.expression_info(right_expression).folded_address(),
+                | E::Conditional(c) | E::OmittedConditional(c) =>
+                    self.expression_info(c.condition_expression)
+                        .folded_address()
+                        || self.expression_info(c.then_expression).folded_address()
+                        || self.expression_info(c.else_expression).folded_address(),
+                | _ => false,
+            };
+            if folded_address {
+                info.folding = ConstantFolding::AddressDifference;
+            }
         }
         self.retain_expression(info);
     }
@@ -1325,19 +1380,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
         }
         if op == U::AddressOf {
-            let mut immediate = operand.expression;
-            while let ExpressionType::Parenthesized { expression } = immediate.kind {
-                immediate = expression;
-            }
-            if let ExpressionType::Binary {
-                operator: BinaryOperator::Subscript,
-                left_expression,
-                ..
-            } = immediate.kind
-                && self
-                    .vector(self.expression_info(left_expression).ty)
-                    .is_some()
-            {
+            if operand.vector_element {
                 return self.vector_error(e);
             }
             let indirect = matches!(
@@ -1878,6 +1921,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         info.integer = self.address_difference(left, right, target);
                         if info.integer.is_some() {
                             info.constant = ConstantClass::Arithmetic;
+                            info.folding = ConstantFolding::AddressDifference;
                         }
                     } else {
                         return self
