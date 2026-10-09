@@ -82,6 +82,7 @@ long_double_t long_double_arithmetic(long_double_t left, long_double_t right,
   case 1: result = a - b; break;
   case 2: result = a * b; break;
   case 3: result = a / b; break;
+  case 5: result = -a; break;
   default: result = a; break;
   }
   if (precision == 1) { volatile float rounded = (float)result; result = rounded; }
@@ -92,6 +93,10 @@ long_double_t long_double_arithmetic(long_double_t left, long_double_t right,
 int long_double_compare(long_double_t left, long_double_t right)
 {
   long double a = load_long_double(left), b = load_long_double(right);
+  if (isnan(a) || isnan(b))
+  {
+    return 2;
+  }
   return a < b ? -1 : a > b ? 1 : 0;
 }
 

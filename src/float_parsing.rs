@@ -69,19 +69,24 @@ impl LongDouble {
     }
 
     /// C99: §6.6p4, p. 95; PDF p. 107; §6.3.1.8, pp. 44-45;
-    /// PDF pp. 56-57. Native arithmetic shares the literal carrier.
-    pub(crate) fn arithmetic(self, right: Self, operation: i32, precision: i32) -> Option<Self> {
-        // SAFETY: Both carriers are initialized finite native representations;
-        // the C function returns a fully initialized carrier by value.
+    /// PDF pp. 56-57. Native arithmetic shares the literal carrier, and
+    /// infinite or NaN results are the IEC 60559 values of Annex F.
+    pub(crate) fn arithmetic(self, right: Self, operation: i32, precision: i32) -> Self {
+        // SAFETY: Both carriers are initialized native representations; the C
+        // function returns a fully initialized carrier by value.
         let result = unsafe {
             ffi::long_double_arithmetic(self.to_ffi(), right.to_ffi(), operation, precision)
         };
         // SAFETY: C initializes all bytes, including padding.
-        let result = Self {
+        Self {
             // SAFETY: The C function initializes all carrier bytes.
             value: unsafe { result.bytes },
-        };
-        matches!(result.classify(), FloatClass::Zero | FloatClass::Nonzero).then_some(result)
+        }
+    }
+
+    /// The additive inverse, keeping the sign of zero (Annex F.3).
+    pub(crate) fn negate(self) -> Self {
+        self.arithmetic(Self::ZERO, 5, 3)
     }
 
     pub(crate) fn from_double(value: f64) -> Self {
@@ -95,6 +100,7 @@ impl LongDouble {
         }
     }
 
+    /// -1, 0 or 1 for ordered operands, and 2 when either is a NaN.
     pub(crate) fn compare(self, right: Self) -> i32 {
         // SAFETY: Both carriers contain valid native values and are passed by
         // copy.

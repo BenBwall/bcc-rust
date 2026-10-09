@@ -71,16 +71,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             Scalar::ComplexFloat | Scalar::ComplexDouble | Scalar::ComplexLongDouble
         );
         Some(Floating {
-            real: value.real.arithmetic(LongDouble::ZERO, 4, precision)?,
+            real: value.real.arithmetic(LongDouble::ZERO, 4, precision),
             imag: if complex {
-                value.imag.arithmetic(LongDouble::ZERO, 4, precision)?
+                value.imag.arithmetic(LongDouble::ZERO, 4, precision)
             } else {
                 LongDouble::ZERO
             },
         })
     }
 
-    /// C99: §6.5.5-§6.5.6, pp. 82-84; PDF pp. 94-96.
+    /// IEC 60559 arithmetic: a zero divisor gives an infinity or NaN
+    /// (Annex F.3). C99: §6.5.5-§6.5.6, pp. 82-84; PDF pp. 94-96.
     pub(super) fn floating_binary(
         op: BinaryOperator,
         left: Floating,
@@ -90,42 +91,44 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let add = |a: LongDouble, b| a.arithmetic(b, 0, 3);
         let sub = |a: LongDouble, b| a.arithmetic(b, 1, 3);
         let mul = |a: LongDouble, b| a.arithmetic(b, 2, 3);
-        let div = |a: LongDouble, b: LongDouble| {
-            if b.is_zero() {
-                None
-            } else {
-                a.arithmetic(b, 3, 3)
-            }
-        };
-        match op {
-            | B::Addition => Some(Floating {
-                real: add(left.real, right.real)?,
-                imag: add(left.imag, right.imag)?,
-            }),
-            | B::Subtraction => Some(Floating {
-                real: sub(left.real, right.real)?,
-                imag: sub(left.imag, right.imag)?,
-            }),
-            | B::Multiplication => Some(Floating {
-                real: sub(mul(left.real, right.real)?, mul(left.imag, right.imag)?)?,
-                imag: add(mul(left.real, right.imag)?, mul(left.imag, right.real)?)?,
-            }),
-            | B::Division if left.imag.is_zero() && right.imag.is_zero() =>
-                Some(Floating::real(div(left.real, right.real)?)),
-            | B::Division => {
-                let denominator = add(mul(right.real, right.real)?, mul(right.imag, right.imag)?)?;
-                Some(Floating {
-                    real: div(
-                        add(mul(left.real, right.real)?, mul(left.imag, right.imag)?)?,
-                        denominator,
-                    )?,
-                    imag: div(
-                        sub(mul(left.imag, right.real)?, mul(left.real, right.imag)?)?,
-                        denominator,
-                    )?,
-                })
+        let div = |a: LongDouble, b| a.arithmetic(b, 3, 3);
+        Some(match op {
+            | B::Addition => Floating {
+                real: add(left.real, right.real),
+                imag: add(left.imag, right.imag),
             },
-            | _ => None,
+            | B::Subtraction => Floating {
+                real: sub(left.real, right.real),
+                imag: sub(left.imag, right.imag),
+            },
+            | B::Multiplication => Floating {
+                real: sub(mul(left.real, right.real), mul(left.imag, right.imag)),
+                imag: add(mul(left.real, right.imag), mul(left.imag, right.real)),
+            },
+            | B::Division if left.imag.is_zero() && right.imag.is_zero() =>
+                Floating::real(div(left.real, right.real)),
+            | B::Division => {
+                let denominator = add(mul(right.real, right.real), mul(right.imag, right.imag));
+                Floating {
+                    real: div(
+                        add(mul(left.real, right.real), mul(left.imag, right.imag)),
+                        denominator,
+                    ),
+                    imag: div(
+                        sub(mul(left.imag, right.real), mul(left.real, right.imag)),
+                        denominator,
+                    ),
+                }
+            },
+            | _ => return None,
+        })
+    }
+
+    /// Negation keeps the sign of zero (Annex F.3).
+    pub(super) fn floating_negate(value: Floating) -> Floating {
+        Floating {
+            real: value.real.negate(),
+            imag: value.imag.negate(),
         }
     }
 
@@ -135,11 +138,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         right: Floating,
     ) -> Option<Integer> {
         use BinaryOperator as B;
+        // A NaN operand is unordered: only inequality holds (Annex F.3).
         let comparison = left.real.compare(right.real);
-        let equal = comparison == 0 && left.imag.compare(right.imag) == 0;
+        let imaginary = left.imag.compare(right.imag);
+        let unordered = comparison == 2 || imaginary == 2;
+        let equal = comparison == 0 && imaginary == 0;
         let result = match op {
             | B::Equal => equal,
             | B::NotEqual => !equal,
+            | _ if unordered => false,
             | B::LessThan => comparison < 0,
             | B::LessThanOrEqual => comparison <= 0,
             | B::GreaterThan => comparison > 0,
