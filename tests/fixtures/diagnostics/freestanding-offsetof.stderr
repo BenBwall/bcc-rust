@@ -1,7 +1,7 @@
 error: offsetof requires a valid non-bit-field member path
-  --> <built-in>/stddef.h:75:32
+  --> <built-in>/stddef.h:84:32
    |
-75 | #define offsetof(type, member) __builtin_offsetof(type, member)
+84 | #define offsetof(type, member) __builtin_offsetof(type, member)
    |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
   ::: freestanding-offsetof.c:3:18
    |
@@ -11,9 +11,9 @@ error: offsetof requires a valid non-bit-field member path
    = note: C99 §7.17p3: offsetof designates a member of the specified structure type; bit-fields have undefined behavior
 
 error: offsetof requires a valid non-bit-field member path
-  --> <built-in>/stddef.h:75:32
+  --> <built-in>/stddef.h:84:32
    |
-75 | #define offsetof(type, member) __builtin_offsetof(type, member)
+84 | #define offsetof(type, member) __builtin_offsetof(type, member)
    |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
   ::: freestanding-offsetof.c:4:18
    |
@@ -23,9 +23,9 @@ error: offsetof requires a valid non-bit-field member path
    = note: C99 §7.17p3: offsetof designates a member of the specified structure type; bit-fields have undefined behavior
 
 error: offsetof requires a valid non-bit-field member path
-  --> <built-in>/stddef.h:75:32
+  --> <built-in>/stddef.h:84:32
    |
-75 | #define offsetof(type, member) __builtin_offsetof(type, member)
+84 | #define offsetof(type, member) __builtin_offsetof(type, member)
    |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
   ::: freestanding-offsetof.c:5:18
    |
@@ -35,9 +35,9 @@ error: offsetof requires a valid non-bit-field member path
    = note: C99 §7.17p3: offsetof designates a member of the specified structure type; bit-fields have undefined behavior
 
 error: offsetof requires a valid non-bit-field member path
-  --> <built-in>/stddef.h:75:32
+  --> <built-in>/stddef.h:84:32
    |
-75 | #define offsetof(type, member) __builtin_offsetof(type, member)
+84 | #define offsetof(type, member) __builtin_offsetof(type, member)
    |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
   ::: freestanding-offsetof.c:6:18
    |

@@ -240,6 +240,49 @@ mod tests {
     }
 
     #[test]
+    fn stddef_h_follows_clang_for_msvc() {
+        // Like Clang's, the header defines vcruntime.h's `_WCHAR_T_DEFINED`
+        // guard under `_MSC_EXTENSIONS` and makes `max_align_t` a `double`
+        // under `_MSC_VER`.
+        let source = "#include <stddef.h>\n#ifndef _WCHAR_T_DEFINED\n#error no \
+                      guard\n#endif\n_Static_assert(sizeof(max_align_t) == 8 && \
+                      _Alignof(max_align_t) == 8, \"max_align_t\");\nwchar_t w = L'x';\n";
+        clean(&bcc(&[
+            "--target=x86_64-pc-windows-msvc",
+            "-fms-extensions",
+            "-std=c11",
+            "-pedantic",
+            "--input",
+            source,
+        ]));
+        let probe = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/msvc-stddef-probe.c");
+        fs::write(&probe, source).unwrap();
+        let output = Command::new(clang())
+            .args([
+                "--target=x86_64-pc-windows-msvc",
+                "-fms-extensions",
+                "-std=c11",
+                "-ffreestanding",
+                "-fsyntax-only",
+            ])
+            .arg(&probe)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // Other targets keep the GCC-compatible record.
+        clean(&bcc(&[
+            "-std=c11",
+            "--input",
+            "#include <stddef.h>\n_Static_assert(sizeof(max_align_t) == 32, \"\");\n#ifdef \
+             _WCHAR_T_DEFINED\n#error guard\n#endif\n",
+        ]));
+    }
+
+    #[test]
     fn modern_header_macros_follow_clang_mode_gates() {
         for (mode, modern_bool, alignment) in [
             ("c89", false, false),
