@@ -680,3 +680,111 @@ fn definition_on_an_unterminated_last_line_reports_the_missing_newline_once() {
         });
     }
 }
+
+/// The error types `source` draws, which must all come from the
+/// preprocessor.
+fn preprocessor_errors(source: &str) -> Vec<String> {
+    expansion_of(source, |_, errors| {
+        errors
+            .iter()
+            .map(|error| match error {
+                | TranslationError::Preprocessing(PreprocessorError { error_type, .. }) =>
+                    format!("{error_type:?}"),
+                | _ => panic!("{source:?}: {errors:#?}"),
+            })
+            .collect()
+    })
+}
+
+#[test]
+fn redefinitions_differing_only_in_whitespace_amount_or_comments_are_identical() {
+    // C99 §6.10.3p1-2: all whitespace separations are identical, §6.10.3p7:
+    // leading and trailing whitespace is not part of the replacement list,
+    // and §5.1.1.2 phase 3: each comment is one space character.
+    let failures = [
+        // glibc's <bits/in.h> and Linux's <linux/in.h>.
+        "#define A 49 /* c1 */\n#define A\t\t49\n",
+        "#define A\t\t49\n#define A 49\t/* bool */\n",
+        "#define B 49\n#define B 49 // trailing\n",
+        "#define B 49 // trailing\n#define B 49\n",
+        "#define B 49    \n#define B 49\n",
+        "#define C a + b\n#define C a/**/+/* two */b\n",
+        "#define C a + b\n#define C /* lead */ a \t + \t b /* trail */ // line\n",
+        "#define C a + b\n#define C a /* one\n two */ + b\n",
+        "#define D 1 + 2\n#define D 1 \\\n+ 2\n",
+        "#define D 1 + 2\n#define D 1 + \\\n  2\n",
+        "#define D 1 + 2\n#define D 1\\\n + 2\n",
+        "#define D 1 \\\n+ 2\n#define D 1 + 2\n",
+        "#define D 12 + 2\n#define D 1\\\n2 + 2\n",
+        "#define E\n#define E   \n#define E /* empty */\n#define E // empty\n",
+        "#define F(x, y) x + y\n#define F( x ,y )  x\t+ y  /* sum */\n",
+        "#define F(x, y) x + y\n#define F(x,y)x + y\n",
+        "#define F(x, y) x + y\n#define F(x, y)/**/x + y\n",
+        "#define G() 1\n#define G( ) 1 // one\n",
+        "#define V(a, ...) a __VA_ARGS__\n#define V(a,...) a  __VA_ARGS__ \n",
+        "#define N(args...) f(args)\n#define N(args...)  f(args) \n",
+    ]
+    .into_iter()
+    .filter_map(|source| {
+        let errors = preprocessor_errors(source);
+        (!errors.is_empty()).then(|| format!("{source:?}: {errors:?}"))
+    })
+    .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn redefinitions_with_different_tokens_or_separation_are_diagnosed() {
+    // C99 §6.10.3p1-2: the presence of whitespace between two tokens, the
+    // tokens and their spellings, and a function-like macro's parameters
+    // must all match.
+    for source in [
+        "#define C a+b\n#define C a + b\n",
+        "#define C a + b\n#define C a+b\n",
+        "#define C a+b\n#define C a/**/+b\n",
+        "#define C a+b\n#define C a\\\n +b\n",
+        "#define C a b\n#define C a\\\nb\n",
+        "#define C a + b\n#define C a - b\n",
+        "#define C 49\n#define C 0x31\n",
+        "#define C 1\n#define C\n",
+        "#define C\n#define C 1\n",
+        "#define C 1\n#define C 1 2\n",
+        "#define C 1 2\n#define C 1\n",
+        "#define F(x) x\n#define F(y) y\n",
+        "#define F(x) (x)\n#define F(x) ( x )\n",
+        "#define F(x, y) x+y\n#define F(x, y) x + y\n",
+        "#define F(x) x\n#define F(x, y) x\n",
+        "#define F(x, ...) x\n#define F(x) x\n",
+        "#define F(x) x\n#define F(x) x x\n",
+    ] {
+        let errors = preprocessor_errors(source);
+        let name = &source["#define ".len()..][..1];
+        assert_eq!(
+            errors,
+            [format!("MacroRedefinedWithDifferentDefinition({name:?})")],
+            "{source:?}"
+        );
+    }
+}
+
+#[test]
+fn whitespace_before_the_parenthesis_changes_the_kind_of_macro() {
+    // C99 §6.10.3p2 and the `lparen` of §6.10p1: `F (x)` is object-like.
+    for (source, expected) in [
+        (
+            "#define F (x) x\n#define F(x) x\n",
+            "RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(\"F\")",
+        ),
+        (
+            "#define F(x) x\n#define F (x) x\n",
+            "RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(\"F\")",
+        ),
+        (
+            "#define F(x) x\n#define F /**/(x) x\n",
+            "RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(\"F\")",
+        ),
+    ] {
+        let errors = preprocessor_errors(source);
+        assert_eq!(errors, [expected], "{source:?}");
+    }
+}
