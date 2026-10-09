@@ -1129,7 +1129,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 function_expression,
                 arguments,
             } => {
-                info = if let ExpressionType::Identifier(name) = function_expression.kind
+                // C99 §6.5.1p5: parentheses preserve the callee designation.
+                // GNU vector builtins retain constraints through parentheses.
+                let mut vector_callee = function_expression;
+                while let ExpressionType::Parenthesized { expression } = vector_callee.kind {
+                    vector_callee = expression;
+                }
+                info = if let ExpressionType::Identifier(name) = vector_callee.kind
                     && self.context.string_cache.at(name.name) == "__builtin_shufflevector"
                 {
                     self.context.report_extension(
@@ -1138,7 +1144,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         name.source_vectors,
                     );
                     self.shuffle_vector_builtin(e, arguments)
-                } else if let Some(info) = self.vector_overload(e, function_expression, arguments) {
+                } else if let Some(info) = self.vector_overload(e, vector_callee, arguments) {
                     info
                 } else if let Some(info) = self.atomic_call(e, function_expression, arguments) {
                     info
@@ -1521,6 +1527,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return Self::expression_result(e, self.types.unknown());
         }
         if self.vector(target).is_some() || self.vector(from).is_some() {
+            // C99 §6.5.4p2: a void target also permits discarding a GNU vector.
+            if matches!(
+                self.types.nodes[target.index],
+                TypeKind::Scalar(Scalar::Void)
+            ) {
+                self.convert(operand.expression, target, ConversionKind::Assignment);
+                return Self::expression_result(e, target.unqualified());
+            }
             let permitted = |ty| self.vector(ty).is_some() || self.integer_type(ty).is_some();
             if permitted(target)
                 && permitted(from)
@@ -2100,6 +2114,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let ty = if self.arithmetic(lt) && self.arithmetic(rt) {
             self.common_arithmetic(left, right, lt, rt)
+        } else if self.vector(lt).is_some() && self.vector(rt).is_some() {
+            // GNU vectors extend the compatible alternatives of C99 §6.5.15p3.
+            let Some(ty) = self.types.composite(lt.unqualified(), rt.unqualified()) else {
+                return self.invalid_expression(e, SemanticErrorKind::InvalidConditionalOperands);
+            };
+            ty
         } else if (matches!(self.types.nodes[lt.index], TypeKind::Scalar(Scalar::Void))
             && matches!(self.types.nodes[rt.index], TypeKind::Scalar(Scalar::Void)))
             || (self.pointer_target(lt).is_some() && self.null_pointer_constant(right))

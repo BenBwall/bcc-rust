@@ -1,0 +1,2 @@
+// errors: 0
+typedef int V __attribute__((vector_size(16))); typedef int A __attribute__((vector_size(16),aligned(1))); V f(V v){_Static_assert(__builtin_types_compatible_p(__typeof__(__builtin_shufflevector(v,v)),V),"shuffle type");return __builtin_shufflevector(v,v);} A g(A v){_Static_assert(__alignof__(__builtin_shufflevector(v,v))==1,"shuffle alignment");return __builtin_shufflevector(v,v);} int following;

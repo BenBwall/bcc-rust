@@ -952,7 +952,12 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     self.validate_qualifiers(base, d.source_vectors);
                 }
                 self.values.push(base);
-                let vector = d.kind.iter().any(|direct| matches!(direct, DirectDeclarator::Attributes(a) if vectors::constructs_vector(a,self.context)));
+                // GNU attributes extend C99 §6.7: an alignment suffix applies
+                // to the declared array, not to its element type.
+                let vector = d.kind.iter().any(|direct| {
+                    matches!(direct, DirectDeclarator::Attributes(a)
+                        if vectors::declared_type_attribute(a, self.context))
+                });
                 if vector {
                     self.work.push(Work::VectorDeclaratorAttributes(d.kind));
                 }

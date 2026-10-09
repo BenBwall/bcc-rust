@@ -257,6 +257,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             }
                         },
                         | InitializerType::InitializerList(list) => {
+                            // GNU vector extension of C99 §6.7.8p13: a single
+                            // compatible vector initializes the whole object.
+                            if self.vector(target).is_some()
+                                && let [element] = list.elements.as_slice()
+                                && element.designation.is_none()
+                                && let InitializerType::AssignmentExpression(e) =
+                                    element.initializer.kind
+                                && self.vector_assignment(
+                                    target,
+                                    self.types.non_atomic(self.expression_info(e).ty),
+                                )
+                            {
+                                work.push(InitWork::Value(target, element.initializer));
+                                continue;
+                            }
                             // A character array may have its string enclosed in
                             // braces.
                             if let [element] = list.elements.as_slice()

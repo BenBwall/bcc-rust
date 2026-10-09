@@ -104,16 +104,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Ok(i) = BUILTINS.binary_search_by(|entry| entry.0.cmp(name)) else {
             return;
         };
+        // C99 §6.5.2.2p7, p. 72; PDF p. 84: prototype arguments convert
+        // to parameter types before GNU intrinsic immediate constraints apply.
+        let TypeKind::Function { parameters, .. } = self.types.nodes[function.ty.index] else {
+            return;
+        };
         for &(index, low, high, mask) in BUILTINS[i].2 {
             if let Some(&arg) = args.get(index) {
                 let info = self.expression_info(arg);
                 if self.types.unanalyzed(info.ty) {
                     continue;
                 }
-                let value = info
-                    .integer
-                    .filter(|_| info.ice)
-                    .and_then(super::Integer::to_i128);
+                let value = info.integer.filter(|_| info.ice).and_then(|value| {
+                    let parameter = parameters.get(index)?;
+                    let (bits, signed) = self.integer_type(*parameter)?;
+                    value.cast(bits, signed).to_i128()
+                });
                 if !value.is_some_and(|v| {
                     v >= low && v <= high && (mask == 0 || (v < 16 && (mask & (1 << v)) != 0))
                 }) {
@@ -162,11 +168,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let load = name == "__builtin_nontemporal_load";
         let store = name == "__builtin_nontemporal_store";
         let absolute = name == "__builtin_elementwise_abs";
+        let min_max = matches!(
+            name,
+            "__builtin_elementwise_min" | "__builtin_elementwise_max"
+        );
         self.context.report_extension(
             crate::configuration::Feature::VectorBuiltins,
             "vector builtin",
             id.source_vectors,
         );
+        // GNU overload constraints cannot add errors for already failed
+        // operands.
+        if args
+            .iter()
+            .any(|&arg| self.types.unanalyzed(self.expression_info(arg).ty))
+        {
+            return Some(Self::expression_result(e, self.types.unknown()));
+        }
         let input = args.first().map(|&arg| self.expression_info(arg));
         if args.len() == arity
             && let Some(input) = input
@@ -196,6 +214,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.types.nodes[element.index],
                         TypeKind::Scalar(Scalar::Float | Scalar::Double | Scalar::LongDouble)
                     ))
+                    // Clang's GNU min/max overloads exclude C99 §6.2.5p2 _Bool.
+                    && (!min_max || !matches!(self.types.nodes[element.index], TypeKind::Scalar(Scalar::Bool)))
                     && (!absolute || self.integer_type(element).is_none_or(|(_, signed)| signed))
                     && (!integer || self.integer_type(element).is_some())
                     && (!floating

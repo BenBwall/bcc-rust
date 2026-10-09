@@ -1070,6 +1070,18 @@ does not make three-lane and four-lane vectors convertible. Scalar operands spla
 when Clang's precision/truncation rules allow them. Vector element addresses,
 logical operators, increments and vector conditions are rejected in C.
 
+Vector operands may be discarded with a void cast, selected by a scalar
+conditional with compatible vector alternatives, and copied by a single braced
+initializer. Binary128 scalars splat at 113-bit precision without passing
+constants through long double; complex elements are rejected. Integer-only
+operators check both operands, and shifts require equal lane counts. Value
+operations remove atomic wrappers while assignment checks preserve operand
+categories. Attribute scanning skips argument identifiers. Builtins propagate
+unknown operands without cascades and retain constraints through parenthesized
+callees; two-operand shuffles preserve the first vector type, x86 immediates
+convert to parameter types before constraint checks, and elementwise min/max
+reject Boolean operands.
+
 `__builtin_shufflevector`, `__builtin_convertvector`, `__builtin_bit_cast` and
 the overloaded elementwise/nontemporal builtins used by the resources have
 operand-dependent typing. `x86_builtin_table.rs` declares 384 x86 builtins and two population-count builtins from
@@ -1099,8 +1111,10 @@ The prefetch builtin checks its pointer and optional constant operands.
 Known boundaries: AVX-512, AMX, newer x86 instruction families, _Float16/bfloat
 vector typedefs and ext_vector_type are not shipped. Attribute arguments have
 an iterative integer-literal/enum/arithmetic reducer rather than general C ICE
-syntax (sizeof and casts in attribute arguments are not implemented). A
-non-vector aligned attribute remains unanalyzed.
+syntax (sizeof and casts in attribute arguments are not implemented).
+Alignment-only attributes on non-vector declared types, including vector-derived
+pointers and arrays, remain unanalyzed; they do not change the pointee or element
+vector.
 sizeof/alignof vectors and constant scalar lane initializers evaluate normally;
 vector arithmetic/shuffles/casts do not retain lane constants, so their results
 are not folded in static initializers or subsequent subscripting. This is a

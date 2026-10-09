@@ -777,6 +777,16 @@ Positive rules and known result types are checked through the translation-unit
 seam and four-target Clang/bcc probes; the allocation harness compiles vector
 operators and the complete supported intrinsic umbrella without heap allocation.
 
+The `tests/fixtures/semantic/vectors/` regressions exercise vector casts,
+conditional selection, whole-vector brace initialization, binary128 splats,
+atomic value conversion, attribute argument identifiers, and declared-type
+alignment boundaries. Invalid cases pin missing-operand cascade suppression,
+complex element rejection, integer-only operators, shift lane counts,
+parenthesized shuffle constraints, and Boolean min/max restrictions beside
+valid controls. Two-operand shuffles and converted x86 immediates are also
+covered. These are semantic unit-test fixtures; the four diagnostic vector
+fixtures and `coverage.tsv` counts are unchanged.
+
 ### Type-only member declarations
 
 `parser-member-declares-nothing.c` pins Clang-compatible warnings for tagged

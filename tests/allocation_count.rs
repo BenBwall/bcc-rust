@@ -602,6 +602,73 @@ mod measurements {
     }
 
     #[test]
+    fn vector_fixture_paths_allocate_only_from_arenas() {
+        for (source, diagnostics) in [
+            (include_str!("fixtures/semantic/vectors/control.c"), 0),
+            (
+                include_str!("fixtures/semantic/vectors/scalar_condition_vector_alternatives.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/vector_builtin_unknown_operands.c"),
+                5,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/attribute_argument_identifiers.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/alignment_belongs_to_declared_pointer.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/braced_whole_vector_initializer.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/binary128_vector_splats.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/complex_binary128_is_not_vector_element.c"),
+                1,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/integer_vector_operands_and_shift_lanes.c"),
+                10,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/atomic_vector_controls.c"),
+                3,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/atomic_vector_value_conversion.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/shuffle_without_indices.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/parenthesized_vector_builtin_callees.c"),
+                1,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/x86_immediate_parameter_conversion.c"),
+                0,
+            ),
+            (
+                include_str!("fixtures/semantic/vectors/elementwise_min_max_exclude_bool.c"),
+                2,
+            ),
+        ] {
+            let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+            assert_eq!(allocations.calls, 0, "vector fixture regressions: {source}");
+            assert_eq!(summary.diagnostics, diagnostics, "{source}");
+        }
+    }
+
+    #[test]
     fn mingw_member_and_inline_paths_allocate_only_from_arenas() {
         for (source, diagnostics) in [
             (

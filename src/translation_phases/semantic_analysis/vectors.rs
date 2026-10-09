@@ -20,10 +20,54 @@ use super::{
     },
 };
 
+/// GNU attributes extend C99 declaration specifiers. Only names at
+/// attribute-list depth count; identifiers in parenthesized arguments do not.
+/// C99: §6.7, p. 97; PDF p. 109 (GNU attribute extension).
+fn attribute_names<'a>(
+    a: &'a AttributeSpecifier<'_>,
+    context: &'a super::Context<'_>,
+) -> impl Iterator<Item = (usize, &'a str)> {
+    let level = match a
+        .tokens
+        .first()
+        .map(|t| context.string_cache.at(t.contents).trim_matches('_'))
+    {
+        | Some("attribute") => 2,
+        | Some("declspec") => 1,
+        | _ => 0,
+    };
+    let mut depth = 0usize;
+    a.tokens.iter().enumerate().filter_map(move |(i, token)| {
+        let spelling = context
+            .string_cache
+            .at(token.contents)
+            .trim_end_matches('\0');
+        match spelling {
+            | "(" => {
+                depth += 1;
+                None
+            },
+            | ")" => {
+                depth = depth.saturating_sub(1);
+                None
+            },
+            | _ if depth == level => Some((i, spelling.trim_matches('_'))),
+            | _ => None,
+        }
+    })
+}
+
+/// GNU construction and alignment suffixes apply to the declared type.
+/// C99: §6.7, p. 97; PDF p. 109 (GNU attribute extension).
+pub(super) fn declared_type_attribute(
+    a: &AttributeSpecifier<'_>,
+    context: &super::Context<'_>,
+) -> bool {
+    attribute_names(a, context).any(|(_, name)| matches!(name, "vector_size" | "aligned"))
+}
+
 pub(super) fn constructs_vector(a: &AttributeSpecifier<'_>, context: &super::Context<'_>) -> bool {
-    a.tokens
-        .iter()
-        .any(|t| context.string_cache.at(t.contents).trim_matches('_') == "vector_size")
+    attribute_names(a, context).any(|(_, name)| name == "vector_size")
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
@@ -75,12 +119,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let tokens = a.tokens.as_slice();
         let mut bytes = None;
         let mut alignment = None;
-        for (i, token) in tokens.iter().enumerate() {
-            let name = self
-                .context
-                .string_cache
-                .at(token.contents)
-                .trim_matches('_');
+        for (i, name) in attribute_names(a, self.context) {
             if name == "vector_size" || name == "aligned" {
                 let value = if tokens.get(i + 1).is_some_and(|t| {
                     self.context
@@ -108,8 +147,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if bytes.is_none() && alignment.is_none() {
             return ty;
         }
+        // GNU vector_size extends C99 §6.2.5p20 derived types. Alignment
+        // alone applies only to this type; non-vector layout stays unanalyzed.
         let mut derived = ArenaVec::new_in(self.scratch);
-        loop {
+        while bytes.is_some() {
             match self.types.nodes[ty.index] {
                 | TypeKind::Pointer(next) | TypeKind::Array(next, _) => {
                     derived.push((self.types.nodes[ty.index], ty.qualifiers));
@@ -124,7 +165,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let mut vector = self.vector(ty);
         if let Some(size) = bytes {
-            let valid_element = matches!(self.types.nodes[ty.index], TypeKind::Scalar(s) if !matches!(s, Scalar::Void | Scalar::Bool | Scalar::ComplexFloat | Scalar::ComplexDouble | Scalar::ComplexLongDouble));
+            // GNU vector elements extend the real/integer types of C99 §6.2.5.
+            let valid_element = matches!(
+                self.types.nodes[ty.index],
+                TypeKind::Scalar(
+                    Scalar::Char
+                        | Scalar::SignedChar
+                        | Scalar::UnsignedChar
+                        | Scalar::Short
+                        | Scalar::UnsignedShort
+                        | Scalar::Int
+                        | Scalar::UnsignedInt
+                        | Scalar::Long
+                        | Scalar::UnsignedLong
+                        | Scalar::LongLong
+                        | Scalar::UnsignedLongLong
+                        | Scalar::Int128
+                        | Scalar::UnsignedInt128
+                        | Scalar::Float
+                        | Scalar::Double
+                        | Scalar::LongDouble
+                        | Scalar::Float128
+                )
+            );
             let layout = self.types.layout(ty);
             if !valid_element
                 || size.is_none()
@@ -321,6 +384,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let precision = match self.types.nodes[element.index] {
             | TypeKind::Scalar(Scalar::Float) => 24,
             | TypeKind::Scalar(Scalar::Double) => 53,
+            // GNU binary128 has 113 significand bits; its constants stay exact
+            // and never pass through the native long-double folding bridge.
+            | TypeKind::Scalar(Scalar::Float128) => 113,
             | TypeKind::Scalar(Scalar::LongDouble) =>
                 if self.types.target.long_double_is_double() {
                     53
@@ -329,7 +395,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 },
             | _ => return false,
         };
-        if scalar.constant == super::ConstantClass::Arithmetic
+        // GNU binary128 widening uses type precision, not the long-double
+        // rounding bridge, which cannot represent a binary128 destination.
+        if precision != 113
+            && scalar.constant == super::ConstantClass::Arithmetic
             && let Some(value) = self.floating_value(scalar)
         {
             return self.round_floating(value, element).is_some_and(|rounded| {
@@ -342,6 +411,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let source_precision = match self.types.nodes[scalar.ty.index] {
             | TypeKind::Scalar(Scalar::Float) => 24,
             | TypeKind::Scalar(Scalar::Double) => 53,
+            // GNU binary128 has 113 significand bits; its constants stay exact
+            // and never pass through the native long-double folding bridge.
+            | TypeKind::Scalar(Scalar::Float128) => 113,
             | TypeKind::Scalar(Scalar::LongDouble) =>
                 if self.types.target.long_double_is_double() {
                     53
@@ -361,21 +433,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         right: ExpressionInfo<'tu>,
     ) -> Option<ExpressionInfo<'tu>> {
         use BinaryOperator as B;
-        let lv = self.vector(left.ty);
-        let rv = self.vector(right.ty);
+        // C11 §6.3.2.1p2, p. 54; PDF p. 72: value conversion removes
+        // atomicity. Keep the original left category for assignment checks.
+        let lt = self.types.non_atomic(left.ty);
+        let rt = self.types.non_atomic(right.ty);
+        let lv = self.vector(lt);
+        let rv = self.vector(rt);
         if lv.is_none() && rv.is_none() {
             return None;
         }
         if op == B::Comma {
-            return Some(Self::expression_result(e, right.ty.unqualified()));
+            return Some(Self::expression_result(e, rt.unqualified()));
         }
         if op == B::Subscript {
             if let Some((element, _, _)) = lv
-                && self.integer_type(right.ty).is_some()
+                && self.integer_type(rt).is_some()
             {
                 let element = element.qualified(left.ty.qualifiers);
                 let mut result = Self::expression_result(e, element);
-                result.category = if left.category == ValueCategory::Rvalue {
+                result.category = if left.category == ValueCategory::Rvalue
+                    || matches!(self.types.nodes[left.ty.index], TypeKind::Atomic(_))
+                {
                     ValueCategory::Rvalue
                 } else if element.qualifiers.contains(TypeQualifiers::CONST) {
                     ValueCategory::Lvalue
@@ -406,20 +484,35 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return Some(self.vector_error(e));
         }
         if op == B::Assignment {
-            return Some(if self.vector_assignment(left.ty, right.ty) {
-                Self::expression_result(e, left.ty.unqualified())
+            return Some(if self.vector_assignment(lt, rt) {
+                Self::expression_result(e, lt.unqualified())
             } else {
                 self.vector_error(e)
             });
         }
         let (element, count, align) = lv.or(rv)?;
         let valid = match (lv, rv) {
-            | (Some(_), Some(_)) => self.vector_assignment(left.ty, right.ty),
-            | (Some(_), None) => self.vector_splat(element, right),
-            | (None, Some(_)) => !assignment && self.vector_splat(element, left),
+            | (Some(_), Some(_)) => self.vector_assignment(lt, rt),
+            // Clang's GNU scalar splat form requires an ordinary vector;
+            // atomic vector values still work with another vector operand.
+            | (Some(_), None) =>
+                !matches!(self.types.nodes[left.ty.index], TypeKind::Atomic(_))
+                    && self.vector_splat(element, ExpressionInfo { ty: rt, ..right }),
+            | (None, Some(_)) =>
+                !assignment
+                    && !matches!(self.types.nodes[right.ty.index], TypeKind::Atomic(_))
+                    && self.vector_splat(element, ExpressionInfo { ty: lt, ..left }),
             | _ => false,
         };
-        let integer = self.integer_type(element).is_some();
+        // GNU lane-wise extension of C99 §6.5.5p2, §6.5.7p2 and §6.5.10p2:
+        // both vector operands must have integer elements; shifts pair lanes.
+        let integer = self.integer_type(element).is_some()
+            && lv.is_none_or(|v| self.integer_type(v.0).is_some())
+            && rv.is_none_or(|v| self.integer_type(v.0).is_some());
+        let lanes_match = !matches!(
+            op,
+            B::LeftShift | B::RightShift | B::LeftShiftAssignment | B::RightShiftAssignment
+        ) || lv.zip(rv).is_none_or(|(a, b)| a.1 == b.1);
         let allowed = match op {
             | B::Addition
             | B::Subtraction
@@ -449,7 +542,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | B::BitwiseXorAssignment => integer,
             | _ => false,
         };
-        if !valid || !allowed {
+        if !valid || !allowed || !lanes_match {
             return Some(self.vector_error(e));
         }
         let comparison = matches!(
@@ -496,11 +589,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.convert(right.expression, operand_ty, ConversionKind::Arithmetic);
         Some(Self::expression_result(
             e,
-            if assignment {
-                left.ty.unqualified()
-            } else {
-                ty
-            },
+            if assignment { lt.unqualified() } else { ty },
         ))
     }
 
@@ -557,8 +646,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         arguments: super::ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> ExpressionInfo<'tu> {
         let args = arguments.as_slice();
+        // GNU builtin constraints depend on every operand having a known type.
+        if args
+            .iter()
+            .any(|&arg| self.types.unanalyzed(self.expression_info(arg).ty))
+        {
+            return Self::expression_result(e, self.types.unknown());
+        }
         let mut result = None;
-        if args.len() >= 3 {
+        if args.len() >= 2 {
             let a = self.expression_info(args[0]);
             let b = self.expression_info(args[1]);
             if let (Some((element, n, _)), Some((other, m, _))) =
@@ -566,6 +662,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && element == other
                 && n == m
             {
+                // Clang's GNU two-operand form keeps the first vector type.
+                if args.len() == 2 {
+                    return Self::expression_result(e, a.ty.unqualified());
+                }
                 let valid = args[2..].iter().all(|arg| {
                     let info = self.expression_info(arg);
                     info.ice
