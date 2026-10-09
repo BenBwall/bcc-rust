@@ -97,17 +97,50 @@ Anonymous-member paths share retained index chains: each enclosing record
 prepends one node, so deep nesting does not copy every descendant path.
 Labels are reserved to the function statement stage and are not yet resolved.
 
-`src/target.rs` is the target seam. `TargetLayout::LP64` describes x86-64 System V:
-8-bit bytes, signed plain char, 1-byte bool/char, 2-byte short, 4-byte int/float,
-8-byte long/long-long/double/pointer, 16-byte/16-aligned long double; complex sizes
-are twice the real size with real alignment. `size_t` is unsigned long,
-`ptrdiff_t` is long, and `wchar_t` is int. Integer token candidate selection now
-consults this layout; phase-4 intmax/uintmax evaluation retains its established
-64-bit model. The parser-facing packed literal variants are still the LP64 carriers.
-This is a target description, not an assertion about Windows host `long`.
-No LLP64 behavior or target-selection CLI is added.
+`src/target.rs` is the target seam, selected through
+`CompilerConfiguration::with_target` and the CLI's `--target`. The target flows
+through the shared context to the preprocessor and type interner; no global
+state or host `long` representation selects C types. The default GNU Linux
+inspection label remains `x86_64-sysv-lp64` for snapshot compatibility.
 
-Aggregate layout uses natural member alignment, tail padding, union maximum size,
+| Triple | Model / long | long double size / align / precision | wchar / wint | size / ptrdiff / intmax | va_list |
+| --- | --- | --- | --- | --- | --- |
+| x86_64-unknown-linux-gnu | LP64 / 8 | 16 / 16 / x87 64-bit significand | int / unsigned int | unsigned long / long / long | one 24-byte, 8-aligned SysV record array |
+| x86_64-unknown-linux-musl | LP64 / 8 | 16 / 16 / x87 64-bit significand | int / unsigned int | unsigned long / long / long | same SysV array |
+| x86_64-w64-windows-gnu | LLP64 / 4 | 16 / 16 / x87 64-bit significand | unsigned short / unsigned short | unsigned long long / long long / long long | char pointer |
+| x86_64-pc-windows-msvc | LLP64 / 4 | 8 / 8 / binary64 | unsigned short / unsigned short | unsigned long long / long long / long long | char pointer |
+
+All four have 8-bit signed plain char, 1-byte bool/char, 2-byte short, 4-byte
+int/float, 8-byte long-long/double/pointer, and natural scalar alignment.
+Complex sizes are twice the real size, with real alignment. `int64_t` is long
+on Linux and long long on Windows; the frozen macros also select exact/least/
+fast unsigned aliases, intptr, uintmax and sig_atomic types. The embedded
+`stdint.h` follows Clang's **freestanding** typedef choices; a hosted library
+may choose different fast aliases in its own header (for example glibc).
+
+Integer candidate selection and both semantic integer-evaluation paths use
+target widths while keeping fundamental ranks distinct. Packed literal storage
+can hold 64-bit values even for a 32-bit target long. Phase-4 intmax arithmetic
+is 64-bit on every supported target. L-prefixed strings have int elements and
+UTF-32 execution units on Linux, unsigned-short elements and UTF-16 execution
+units on Windows. Source literal units remain intact for inspection;
+`Context::wide_literal_units` supplies execution units, including surrogate
+pairs, and semantic string bounds count those units. Linux numeric wide
+character escapes are sign-extended from wchar_t before intmax preprocessing
+arithmetic and semantic evaluation. The legacy nonnegative narrow-byte `#if`
+choice is retained (C99 6.10.1p4 makes this implementation-defined). Non-BMP wide character
+constants are rejected on Windows with a structured C99 §6.4.4.4p11 diagnostic.
+MSVC long-double literals use binary64 conversion and constant operations round
+to binary64; the existing native x87 bridge still carries values internally. Extended
+operations temporarily select 64-bit x87 precision and restore the caller
+control word, so Windows worker threads do not silently compute at 53 bits.
+MSVC enum types and enumerators use 32-bit int, including truncation of wider
+values. MinGW widens enum compatible types to long long; Linux retains the
+existing long choices.
+Windows stdarg operands are modifiable pointer lvalues (including va-copy's
+source, matching Clang); SysV array decay retains existing behavior.
+
+System V aggregate layout uses natural member alignment, tail padding, union maximum size,
 and final flexible-array alignment with no elements included in the size. Bit-fields
 allocate low-order bits first, may share bytes across differing integer base types,
 and do not cross the allocation boundary of their declared base type. Unnamed
@@ -120,6 +153,21 @@ structure's only member, a flexible structure nested in a structure, and arrays
 of flexible structures) keep their layout and are reported through the
 `FlexibleArrayExtensions` policy. Packed/aligned/vendor attribute meaning is not
 modeled; affected record layouts become unavailable instead of fabricated.
+Windows records use Microsoft's bit-field layout on both MinGW and MSVC,
+matching Clang's MinGW default `-mms-bitfields`. Consecutive nonzero fields share
+an entire reserved storage unit only when their base-type sizes match and they
+fit. A zero-width field affects alignment only immediately after a nonzero
+bit-field. Union bit-fields occupy a full unit without increasing alignment;
+zero-width union fields occupy no bytes. The C11 probe in
+`tests/fixtures/targets/conformance.c` covers every scalar, ABI aliases, offsets,
+mixed-type fields, exhausted units, zero-width fields, compact byte-field
+records, and unions against all four Clang targets. Rust tests additionally
+verify bit offsets, typedef identities, literal types and UTF-16 surrogate
+values directly. `_Generic` remains syntax-only in sema: the C probe includes
+Clang-checked `_Generic` assertions, and **direct Rust type assertions** supply
+bcc's type evidence rather than claiming unmodeled generic assertions passed.
+No packed/aligned attribute or pragma-pack semantics are added.
+
 `tests/fixtures/semantic/layout-probe.c` uses Clang's Linux target static assertions
 for scalar sizes, mixed-base bit-fields, zero-width and unnamed bit-fields, nested records, unions,
 member offsets and flexible arrays. Clang accepted that probe.
@@ -334,7 +382,9 @@ conversion. Automatic aggregate copies may use compatible record expressions.
 
 Finite floating arithmetic uses the existing padding-free native `LongDouble`
 carrier, with a small C bridge for arithmetic, comparison and rounding. The
-configured GNU x86-64 host's x87 precision matches the selected target model.
+configured GNU x86-64 host's x87 representation carries extended values;
+MSVC target values convert and round in binary64. Precision control is explicit
+inside the native bridge, including on Windows worker threads.
 Operands round to the common component type before arithmetic/comparison, and
 results round to the expression type. Integer arithmetic never uses 128-bit
 division/remainder or checked/overflowing 128-bit multiplication.
@@ -641,7 +691,8 @@ available through the ordinary preprocessing pipeline. The implementation and
 mode decisions are in [language-standards.md](language-standards.md). Varargs
 operations retain typed GNU builtin syntax; semantic analysis resolves
 `__builtin_va_list` as an array of one opaque complete SysV record (24 bytes,
-alignment 8). Ordinary parameter adjustment and array decay apply. Intrinsics
+alignment 8) on Linux, and as `char *` on Windows. Ordinary parameter adjustment
+and array decay apply; Windows operands must be modifiable lvalues. Intrinsics
 check va-list operands, complete object result types for `va_arg`, and variadic
 function context for `va_start`; `va_start`, `va_end` and `va_copy` return void.
 `offsetof` resolves field/index paths iteratively and retains a `size_t` ICE.
@@ -677,3 +728,59 @@ architecture macros. The semantic-review work owns broader declaration rules;
 this change does not alter global-register semantics. Full evidence, including
 per-file logs, delta lists and independent GNU-mode triage, is retained under
 `target/survey-freestanding/`.
+
+
+## Target-selection verification (2026-10-09)
+
+The pinned Clang 23.1.1 accepts the shared C11 target probe for all four
+canonical triples. bcc accepts the same probe, with direct Rust checks for
+canonical typedef/literal types, bit offsets, UTF-16 surrogate values and
+long-double precision supplementing syntax-only `_Generic` handling. Exact
+macro comparisons pass for all four triples in both ISO C11 and GNU C17,
+minus the 139 individually documented exclusions in language-standards.md.
+Aliases and invalid/missing CLI values are covered. No existing snapshot was
+changed, and every definition in the original 163-macro fixture is preserved.
+The scalar/layout/macro oracle is Clang's freestanding resource contract;
+this does not claim integration with installed glibc, musl, MinGW or UCRT.
+
+Canonical checks passed unmodified with `CARGO_BUILD_JOBS=8`: all-target tests
+(977 tests across their binaries), allocation counting (16 tests), nightly
+format checking, both all-target clippy commands with `-D warnings`, and
+`git diff --check`. The plain CLI build was restored after the feature test;
+the benchmarking feature's executable is intentionally a benchmark loop.
+Complete output is retained in `target/target-*.log` and
+`target/TARGET_VALIDATION.md`.
+
+The requested default-target survey ran over all 3,878 sources using the
+unmodified command/harness and baseline `target/survey-r2/run/results.json`.
+Its exact no-change requirement is **not met**, because it conflicts with the
+new target-macro contract:
+
+- Raw acceptance changes from 3,598 to 3,581; diagnostics change from 280 to
+  297. The 17 affected `execute/builtins/*-chk-lib.c` sources (including
+  `builtins/lib/chk.c`) now enter `#ifdef __unix__` and include `sys/types.h`,
+  which this freestanding resource set does not provide.
+- `execute/memchr-1.c` stays accepted but loses two undefined-macro warnings
+  because `__WCHAR_WIDTH__` is now defined. Raw inputs with warnings change
+  from 91 to 90.
+- All 2,596 header-free preprocessed results, including diagnostic/warning
+  counts, are identical: 2,588 accepted, eight diagnosed. GCC C99 acceptance
+  remains 2,874 with zero timeouts. All other raw results are identical.
+- A source wrapper that undefines only `__unix__` for the 17 includes, or only
+  `__WCHAR_WIDTH__` for memchr, reproduces each baseline status, error count,
+  warning count and first error. This isolates every delta to new macros.
+
+The complete per-file comparison and control evidence are in
+`target/survey-target/comparison.json` and `target/survey-target/source-controls/`.
+The survey baseline and harness were left unchanged. Hiding required macros,
+inventing a partial libc `sys/types.h`, or weakening the survey would not
+resolve this conflict within the target layer. Hosted include integration is
+owned by the separate branch and remains to be validated after merging.
+
+Review decisions: target selection does not imply syntax-extension flags;
+MSVC enums use Clang's 32-bit int/truncation rule; Microsoft bit-field rules
+apply to both Windows targets; the native x87 bridge saves/restores precision
+control on Windows worker threads. Packed/aligned attributes, pragma-pack,
+`_Generic` semantic selection, encoded u/U literal semantic types, target instruction lowering and a portable
+software implementation of extended floating arithmetic remain existing gaps.
+No resource header, hosted-mode or compiler-identity implementation was changed.
