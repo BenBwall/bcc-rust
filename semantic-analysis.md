@@ -119,7 +119,9 @@ previous visible binding; each scope owns an undo list. File, function, block,
 prototype and implicit selection/iteration scopes are independent of parser scopes.
 Bindings retain source occurrences rather than replacing earlier declarations.
 Linked redeclarations form composite types, with a separate translation-unit
-linkage map covering extern declarations across disjoint lexical scopes.
+linkage map covering extern declarations across disjoint lexical scopes. A
+redeclaration whose type is unanalyzed, such as GNU `__typeof__(f) f`, takes
+the visible function's kind and keeps its type instead of conflicting with it.
 
 Extern inherits a visible internal/external linkage (§6.2.2p4); a visible automatic
 object does not confer linkage. File static is internal; other file objects and

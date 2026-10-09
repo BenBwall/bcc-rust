@@ -548,8 +548,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         let file = self.scopes[self.scope].kind == ScopeKind::File;
-        let function = matches!(self.types.nodes[ty.index], TypeKind::Function { .. });
         let typedef = spec.storage_class == Some(StorageClass::Typedef);
+        let prior = self
+            .lookup(Namespace::Ordinary, name.name)
+            .map(|e| self.bindings[e.binding]);
+        // An unanalyzed type, such as GNU `__typeof__` of a function, cannot
+        // show whether it declares an object or a function, so it redeclares
+        // the visible function rather than conflicting with its kind.
+        let function = matches!(self.types.nodes[ty.index], TypeKind::Function { .. })
+            || (!typedef
+                && self.types.nodes[ty.index] == TypeKind::Unknown
+                && prior.is_some_and(|p| p.kind == BindingKind::Function));
         if (file
             && matches!(
                 spec.storage_class,
@@ -592,9 +601,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             BindingKind::Object
         };
-        let prior = self
-            .lookup(Namespace::Ordinary, name.name)
-            .map(|e| self.bindings[e.binding]);
         let linkage = if typedef {
             Linkage::None
         } else if file && spec.storage_class == Some(StorageClass::Static) {

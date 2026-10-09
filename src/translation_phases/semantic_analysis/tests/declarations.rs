@@ -175,3 +175,23 @@ fn only_layout_attributes_make_declarator_types_unanalyzed() {
         None
     );
 }
+
+#[test]
+fn unanalyzed_redeclarations_inherit_the_previous_kind() {
+    assert_eq!(
+        kinds(
+            "int f(void); extern __typeof__(f) f; __typeof__(f) f; int g(void) { return 0; } \
+             extern __typeof__(g) g __asm__(\"g_alias\"); void h(void) { f(); g(); }",
+            gnu17()
+        ),
+        []
+    );
+    // GNU typeof stays an extension under the pedantic policy.
+    assert_eq!(
+        extensions(
+            "int f(void); extern __typeof__(f) f;",
+            pedantic(CStandard::C99, false)
+        ),
+        ["'__typeof__' is a GNU extension"]
+    );
+}
