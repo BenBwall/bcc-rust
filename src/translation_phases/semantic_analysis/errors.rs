@@ -154,8 +154,12 @@ pub(crate) enum SemanticErrorKind {
     InvalidDesignator,
     /// C99: §6.7.8p4, p. 125; PDF p. 137.
     NonConstantInitializer,
-    /// C99: §6.7.1, p. 98; PDF p. 110.
+    /// C99: §6.9p2, p. 140; PDF p. 152.
     InvalidStorage,
+    /// C99: §6.7.1p5, p. 98; PDF p. 110.
+    InvalidFunctionStorage,
+    /// C99: §6.7.8p5, p. 125; PDF p. 137.
+    LinkedBlockInitializer,
     /// C99: §6.7.3p2, p. 108; PDF p. 120.
     InvalidRestrict,
     /// C99: §6.7.3p8, p. 109; PDF p. 121. Qualifying a function type is
@@ -512,8 +516,18 @@ impl SemanticErrorKind {
                  bit-fields have undefined behavior",
             ),
             | Self::InvalidStorage => (
-                "storage class is not permitted here",
-                "C99 §6.7.1 and §6.9p2: auto and register require block scope",
+                "auto and register are not permitted at file scope",
+                "C99 §6.9p2: an external declaration has no auto or register storage class",
+            ),
+            | Self::InvalidFunctionStorage => (
+                "block-scope function declaration has a storage class other than extern",
+                "C99 §6.7.1p5: a function declared in a block has no explicit storage class other \
+                 than extern",
+            ),
+            | Self::LinkedBlockInitializer => (
+                "block-scope declaration with linkage cannot have an initializer",
+                "C99 §6.7.8p5: a block-scope declaration of an identifier with external or \
+                 internal linkage has no initializer",
             ),
             | Self::InvalidRestrict => (
                 "restrict requires a pointer to an object or incomplete type",

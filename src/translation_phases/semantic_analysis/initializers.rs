@@ -16,8 +16,10 @@ use super::{
     ExpressionType,
     Initializer,
     InitializerType,
+    Linkage,
     Member,
     Scalar,
+    ScopeKind,
     SemanticErrorKind,
     TagKind,
     TypeId,
@@ -57,6 +59,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let binding = self.bindings[index];
         if initializer.recovered {
             self.bindings[index].ty = self.types.unknown();
+            return;
+        }
+        // C99 §6.7.8p5, p. 125; PDF p. 137.
+        if binding.kind == BindingKind::Object
+            && binding.linkage != Linkage::None
+            && self.scopes[binding.scope].kind != ScopeKind::File
+        {
+            self.error(
+                SemanticErrorKind::LinkedBlockInitializer,
+                initializer.source_vectors,
+                Some(binding.name.name),
+                None,
+            );
             return;
         }
         if binding.kind != BindingKind::Object {
