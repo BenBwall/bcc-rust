@@ -175,9 +175,16 @@ comparison with visible prototypes, and their completed signatures survive later
 unprototyped declarations. Conditional ICE arms use their common integer type
 without evaluating an unselected arm. Immediate floating-to-integer casts support
 float, double and native long double, including parenthesized immediate constants.
-Signed overflow and exceptional evaluation produce one primary diagnostic before
-dependent array/enumerator checks. Signed right shift is arithmetic; narrowing
-integer casts use two's-complement truncation, following the selected target.
+Where an integer constant expression is required (enumerators, bit-field widths,
+case labels, static assertions), signed overflow and exceptional evaluation
+produce one primary diagnostic before dependent checks. An array bound with such
+an operation is not an integer constant expression, so it declares a variable
+length array (§6.7.5.2p4); file-scope, linked and static arrays then report the
+variably modified type. As in GCC, a left shift of a nonnegative signed value
+into (not past) the sign bit folds to its two's-complement result and is reported
+through the `SignBitShifts` extension policy. Signed right shift is arithmetic;
+narrowing integer casts use two's-complement truncation, following the selected
+target.
 
 Stage-1 boundaries, with their current disposition:
 
