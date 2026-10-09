@@ -853,15 +853,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 output.push(member);
                 continue;
             };
-            if member.width != Some(0) {
+            // The System V ABI ignores unnamed bit-fields when aligning a
+            // structure or union; in a union one still occupies its bytes.
+            let unnamed_bit_field = member.name.is_none() && member.width.is_some();
+            if !unnamed_bit_field {
                 alignment = alignment.max(layout.align);
             }
             let mut resolved = member;
             if tag.kind == TagKind::Union {
-                bytes = bytes.max(if member.width == Some(0) {
-                    0
-                } else {
-                    layout.size
+                bytes = bytes.max(match member.width {
+                    | Some(width) if unnamed_bit_field => u64::from(width).div_ceil(8),
+                    | _ => layout.size,
                 });
             } else if let Some(width) = member.width {
                 let bits = layout.size * 8;

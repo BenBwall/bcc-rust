@@ -95,9 +95,10 @@ No LLP64 behavior or target-selection CLI is added.
 Aggregate layout uses natural member alignment, tail padding, union maximum size,
 and final flexible-array alignment with no elements included in the size. Bit-fields
 allocate low-order bits first, may share bytes across differing integer base types,
-and do not cross the allocation boundary of their declared base type. An unnamed
-zero-width field advances to its base-type boundary without increasing aggregate
-alignment. Plain-int bit-fields are signed; integer bit-field types beyond the
+and do not cross the allocation boundary of their declared base type. Unnamed
+bit-fields never increase aggregate alignment: an unnamed zero-width field
+advances to its base-type boundary, and in a union an unnamed bit-field occupies
+only the bytes its width needs. Plain-int bit-fields are signed; integer bit-field types beyond the
 C99-required int/unsigned-int/bool set are accepted as an implementation-defined
 choice following the target ABI. Packed/aligned/vendor attribute meaning is not
 modeled; affected record layouts become unavailable instead of fabricated.
