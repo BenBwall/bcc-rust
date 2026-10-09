@@ -1,5 +1,7 @@
 //! Declaration, tag and layout regressions from the Stage-1 review.
 
+use std::fmt::Write as _;
+
 use super::*;
 use crate::configuration::{
     CStandard,
@@ -35,7 +37,7 @@ fn extensions(source: &str, configuration: CompilerConfiguration) -> Vec<String>
     with_configuration(source, configuration, |context, _| {
         for error in context.take_pending_errors() {
             match error {
-                | TranslationError::Extension(e) => messages.push(e.to_string()),
+                | TranslationError::Extension(e) => messages.push(format!("{e}")),
                 | other => panic!("{source}: unexpected {other:?}"),
             }
         }
@@ -312,7 +314,7 @@ fn shared_deep_typedefs_answer_variably_modified_queries_once() {
     let count = 60_000;
     let mut source = format!("typedef int {}P; P a0", "*".repeat(count));
     for index in 1..count {
-        source.push_str(&format!(", a{index}"));
+        write!(source, ", a{index}").unwrap();
     }
     source.push(';');
     let start = std::time::Instant::now();
@@ -670,7 +672,7 @@ fn gnu_modes_fold_static_const_integer_objects() {
                   static const double l = 1 + a; }";
     assert_eq!(kinds(source, gnu17()), []);
     // Strict C99 reads of objects are not constant expressions (§6.6p7-8).
-    assert!(!kinds(source, CompilerConfiguration::default()).is_empty());
+    assert_ne!(kinds(source, CompilerConfiguration::default()), []);
     assert_eq!(
         kinds(
             "volatile const int v = 1; int w = v; void g(void) { const int n = 2; static int s = \

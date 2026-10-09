@@ -542,13 +542,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         };
         let mut pending = ArenaVec::new_in(self.scratch);
-        for parameter in parameters.iter() {
+        for parameter in parameters {
             if let Some(d) = parameter.declarator {
                 pending.push(d);
             }
         }
         while let Some(d) = pending.pop() {
-            for direct in d.kind.iter() {
+            for direct in d.kind {
                 match *direct {
                     | DirectDeclarator::Parenthesized(p) => pending.push(p.declarator),
                     | DirectDeclarator::Array {
