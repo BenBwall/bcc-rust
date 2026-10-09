@@ -286,3 +286,50 @@ fn msvc_long_double_literals_and_operations_have_binary64_precision() {
         );
     }
 }
+
+#[test]
+fn msvc_inline_functions_are_discardable_external_definitions() {
+    // As in Clang, the Microsoft ABI emits every C inline function as a
+    // discardable external definition rather than a C99 inline definition, so
+    // the UCRT's `__inline` functions may keep modifiable static locals.
+    let source = "static int y; __inline int *f(void) { static int x; return &x; } inline int \
+                  g(void) { return y; }";
+    for target in TARGETS {
+        with_configuration(
+            source,
+            CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true)
+                .with_target(target),
+            |context, unit| {
+                let errors: Vec<_> = context
+                    .take_pending_errors()
+                    .into_iter()
+                    .map(|error| match error {
+                        | TranslationError::Semantic(error) => error.kind,
+                        | other => panic!("unexpected {other:?}"),
+                    })
+                    .collect();
+                let msvc = target == Target::WindowsMsvc;
+                assert_eq!(
+                    errors,
+                    if msvc {
+                        vec![]
+                    } else {
+                        vec![
+                            SemanticErrorKind::InlineInternalReference,
+                            SemanticErrorKind::InlineStaticObject,
+                        ]
+                    },
+                    "{}",
+                    target.triple()
+                );
+                let inline = unit
+                    .definitions
+                    .iter()
+                    .filter(|d| d.kind == functions::DefinitionKind::Inline)
+                    .count();
+                assert_eq!(inline, if msvc { 0 } else { 2 }, "{}", target.triple());
+            },
+        );
+    }
+}

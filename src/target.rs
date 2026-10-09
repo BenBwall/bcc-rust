@@ -46,6 +46,19 @@ impl Target {
         }
     }
 
+    /// Whether an external function whose file-scope declarations all say
+    /// `inline`, without `extern`, is a C99 inline definition. The Microsoft
+    /// ABI instead emits every inline function as a discardable external
+    /// definition, as MSVC and Clang do for C, so the restrictions on inline
+    /// definitions do not apply there.
+    ///
+    /// C99: inline definitions §6.7.4 paragraphs 3 and 6, pp. 112-113;
+    /// PDF pp. 124-125. The Microsoft ABI rule is an extension under §4
+    /// paragraph 6, p. 7; PDF p. 19.
+    pub(crate) const fn c99_inline_definitions(self) -> bool {
+        !matches!(self, Self::WindowsMsvc)
+    }
+
     /// Scalar layout and ABI choices, including the Microsoft record rules.
     /// C99: §6.2.5, pp. 33-37; PDF pp. 45-49; §6.7.2.1p10-11, p. 102;
     /// PDF p. 114; enumeration choice §6.7.2.2p4, p. 105; PDF p. 117.

@@ -94,7 +94,8 @@ selected `--target` triple. The default remains `x86_64-unknown-linux-gnu`;
 pipeline. Target selection does not implicitly enable GNU or MSVC syntax groups.
 
 `src/target.rs` is the single target seam: scalar/pointer layout, ABI aliases,
-wide encoding, va-list representation and record rules. Its `target/` module
+wide encoding, va-list representation, record rules and, for MSVC, the
+Microsoft ABI's external emission of inline functions. Its `target/` module
 contains frozen, ordinary macro definitions. GNU modes receive Clang's unreserved
 OS spellings (`linux`, `unix`, `WIN32`, etc.) where Clang emits them; ISO modes
 receive only the corresponding reserved forms. GNU Linux and musl share the
