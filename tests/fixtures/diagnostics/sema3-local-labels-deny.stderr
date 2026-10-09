@@ -1,0 +1,31 @@
+error: '__label__' is a GNU extension
+ --> sema3-local-labels-deny.c:1:24
+  |
+1 | void duplicate(void) { __label__ L, L; L:; }
+  |                        ^^^^^^^^^
+
+error: '__label__' is a GNU extension
+ --> sema3-local-labels-deny.c:2:24
+  |
+2 | void undefined(void) { __label__ L; }
+  |                        ^^^^^^^^^
+
+error: local label is declared more than once in the same scope: `L`
+ --> sema3-local-labels-deny.c:1:37
+  |
+1 | void duplicate(void) { __label__ L, L; L:; }
+  |                                  -  ^ local label declared again here
+  |                                  |
+  |                                  previous declaration is here
+  |
+  = note: GNU local labels require distinct declarations in a scope; C99 §6.2.1p3 gives ordinary labels function scope
+
+error: declared local label is not defined: `L`
+ --> sema3-local-labels-deny.c:2:34
+  |
+2 | void undefined(void) { __label__ L; }
+  |                                  ^ local label is never defined
+  |
+  = note: GNU local-label declarations require a definition even without a goto; C99 §6.2.1p3 declares ordinary labels by their definitions
+
+4 errors generated.

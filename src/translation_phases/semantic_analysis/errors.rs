@@ -84,6 +84,12 @@ pub(crate) enum SemanticErrorKind {
     DuplicateLabel,
     /// C99: §6.8.6.1p1, p. 137; PDF p. 149.
     UndefinedLabel,
+    /// GNU extension: local labels have lexical scope, unlike the function
+    /// scope in C99 §6.2.1p3, p. 29; PDF p. 41.
+    DuplicateLocalLabel,
+    /// GNU extension: a local-label declaration requires a definition.
+    /// C99 labels are implicit definitions: §6.2.1p3, p. 29; PDF p. 41.
+    UndefinedLocalLabel,
     /// C99: §6.8.6.1p1, p. 137; PDF p. 149.
     JumpIntoVariableScope,
     /// C99: §6.8.4.2p2, p. 134; PDF p. 146.
@@ -294,6 +300,8 @@ impl SemanticErrorKind {
             | Self::InvalidForDeclaration => "not an automatic object",
             | Self::DuplicateLabel => "label defined again here",
             | Self::UndefinedLabel => "label is never defined",
+            | Self::DuplicateLocalLabel => "local label declared again here",
+            | Self::UndefinedLocalLabel => "local label is never defined",
             | Self::JumpIntoVariableScope | Self::SwitchIntoVariableScope =>
                 "jumps into a variably modified scope",
             | Self::CaseOutsideSwitch => "not in a switch statement",
@@ -424,6 +432,16 @@ impl SemanticErrorKind {
                 "goto target label is not defined",
                 "C99 §6.8.6.1p1: a goto identifier names a label somewhere in the enclosing \
                  function",
+            ),
+            | Self::DuplicateLocalLabel => (
+                "local label is declared more than once in the same scope",
+                "GNU local labels require distinct declarations in a scope; C99 §6.2.1p3 gives \
+                 ordinary labels function scope",
+            ),
+            | Self::UndefinedLocalLabel => (
+                "declared local label is not defined",
+                "GNU local-label declarations require a definition even without a goto; C99 \
+                 §6.2.1p3 declares ordinary labels by their definitions",
             ),
             | Self::JumpIntoVariableScope => (
                 "goto enters the scope of a variably modified identifier",

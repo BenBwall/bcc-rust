@@ -568,6 +568,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             );
             self.record_vm(self.bindings.len() - 1);
+            // K&R parameters take their storage from the declaration list.
+            // C99 §6.5.3.2p1, p. 78; PDF p. 90.
+            if spec.storage_class == Some(StorageClass::Register) {
+                _ = self.register_bindings.insert(self.bindings.len() - 1, true);
+            }
             return;
         }
         let file = self.scopes[self.scope].kind == ScopeKind::File;

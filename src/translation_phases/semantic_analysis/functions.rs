@@ -356,6 +356,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         None,
                     );
                     self.record_vm(self.bindings.len() - 1);
+                    // The body binding is distinct from its prototype binding.
+                    // C99 §6.5.3.2p1, p. 78; PDF p. 90.
+                    if matches!(derivation, Some(DirectDeclarator::Function { parameter_list, .. })
+                        if parameter_list.as_slice().get(parameter_index).is_some_and(|p|
+                            p.declaration_specifiers.storage_class == Some(StorageClass::Register)))
+                    {
+                        _ = self.register_bindings.insert(self.bindings.len() - 1, true);
+                    }
                 } else if self.context.configuration.standard() < CStandard::C23 {
                     let syntax = match derivation {
                         | Some(DirectDeclarator::Function { parameter_list, .. }) =>

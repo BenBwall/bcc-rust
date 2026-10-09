@@ -1,0 +1,13 @@
+error: 'non-variable declaration in 'for' loop' is a C23 extension
+ --> sema3-for-init-c99.c:2:10
+  |
+2 |     for (enum { A = 1 }; ; ) break;
+  |          ^^^^^^^^^^^^^^^
+
+error: 'non-variable declaration in 'for' loop' is a C23 extension
+ --> sema3-for-init-c99.c:3:10
+  |
+3 |     for (struct S { int x; }; ; ) break;
+  |          ^^^^^^^^^^^^^^^^^^^^
+
+2 errors generated.

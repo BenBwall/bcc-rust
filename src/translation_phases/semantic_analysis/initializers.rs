@@ -6,6 +6,7 @@
 use super::{
     super::parsing::declaration_syntax::BracedInitializerList,
     Analyzer,
+    ArenaMap,
     ArenaVec,
     ArrayBound,
     BindingKind,
@@ -14,6 +15,7 @@ use super::{
     Duration,
     Expression,
     ExpressionType,
+    FxBuildHasher,
     Initializer,
     InitializerType,
     Linkage,
@@ -27,6 +29,13 @@ use super::{
     TypeQualifiers,
     expressions::ConversionKind,
 };
+
+fn unparenthesized<'tu>(mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
+    while let ExpressionType::Parenthesized { expression } = e.kind {
+        e = expression;
+    }
+    e
+}
 
 /// One selected subobject; parent cursors preserve continuation after a nested
 /// designator or an elided brace. C99: §6.7.8p17-20, pp. 126-127;
@@ -142,6 +151,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return ty;
         }
         let mut work = ArenaVec::new_in(self.scratch);
+        let mut leaves = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut count = 0;
         let before = self.semantic_errors;
         let mut unmodeled = false;
@@ -149,7 +159,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         while let Some(task) = work.pop() {
             match task {
                 | InitWork::Value(target, init) => {
-                    if init.recovered || self.types.unanalyzed(target) {
+                    if init.recovered || self.initializer_unanalyzed(target, &mut leaves) {
                         continue;
                     }
                     match init.kind {
@@ -412,8 +422,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             || matches!(self.types.nodes[ty.index], TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum)
     }
 
+    /// Cache immutable array-tail identities, not mutable tag taint. Each
+    /// classification still checks the terminal tag's current taint state.
+    /// C99: §6.7.8p3, p. 125; PDF p. 137.
+    fn initializer_unanalyzed(
+        &self,
+        mut ty: TypeId,
+        leaves: &mut ArenaMap<'_, usize, TypeId>,
+    ) -> bool {
+        let mut path = ArenaVec::new_in(self.scratch);
+        loop {
+            #[cfg(test)]
+            self.review_step(2);
+            if let Some(&leaf) = leaves.get(&ty.index) {
+                ty = leaf;
+                break;
+            }
+            if let TypeKind::Array(element, _) = self.types.nodes[ty.index] {
+                path.push(ty.index);
+                ty = element;
+            } else {
+                break;
+            }
+        }
+        for index in path {
+            _ = leaves.insert(index, ty);
+        }
+        self.types.unanalyzed(ty)
+    }
+
     fn whole_object_expression(&mut self, target: TypeId, e: &'tu Expression<'tu>) -> bool {
-        if let ExpressionType::StringLiteral(_) = e.kind {
+        if let ExpressionType::StringLiteral(_) = unparenthesized(e).kind {
             return matches!(self.types.nodes[target.index], TypeKind::Array(element, _) if matches!(self.types.nodes[element.index], TypeKind::Scalar(Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar | Scalar::Int)));
         }
         matches!(self.types.nodes[target.index], TypeKind::Tag(_))
@@ -426,9 +465,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .is_some()
     }
 
-    /// C99: §6.7.8p14-15, p. 126; PDF p. 138.
+    /// C99: §6.7.8p14-15, p. 126; PDF p. 138; §6.5.1p5,
+    /// p. 69; PDF p. 81. Parentheses retain the literal's type and value.
     fn initialize_string(&mut self, target: TypeId, e: &'tu Expression<'tu>) -> Option<u64> {
-        let ExpressionType::StringLiteral(value) = e.kind else {
+        let ExpressionType::StringLiteral(value) = unparenthesized(e).kind else {
             return None;
         };
         let TypeKind::Array(element, bound) = self.types.nodes[target.index] else {

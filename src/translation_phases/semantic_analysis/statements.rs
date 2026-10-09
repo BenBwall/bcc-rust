@@ -59,6 +59,7 @@ struct VmScope {
 
 #[derive(Clone, Copy)]
 struct Label {
+    local:      bool,
     function:   usize,
     name:       Identifier,
     definition: Option<Identifier>,
@@ -100,6 +101,7 @@ pub(super) struct State<'s> {
     jumps:               ArenaVec<'s, Jump>,
     switches:            ArenaVec<'s, Switch<'s>>,
     case_count:          usize,
+    vm_queries:          ArenaMap<'s, (Option<usize>, Option<usize>), Option<usize>>,
 }
 
 impl<'s> State<'s> {
@@ -117,6 +119,7 @@ impl<'s> State<'s> {
             jumps: ArenaVec::new_in(scratch),
             switches: ArenaVec::new_in(scratch),
             case_count: 0,
+            vm_queries: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 }
@@ -164,6 +167,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.statements.switch = previous;
             },
             | StatementWork::ForDeclarationDone(d) => {
+                // C99 §6.8.5p3, p. 135; PDF p. 147. C23 relaxes the
+                // restriction to object declarations in the for initializer.
+                if d.init_declarators.is_empty() {
+                    self.context.report_extension_since(
+                        "non-variable declaration in 'for' loop",
+                        crate::configuration::FeatureOrigin::Standard(CStandard::C23),
+                        d.source_vectors,
+                    );
+                }
                 if d.declaration_specifiers
                     .storage_class
                     .is_some_and(|s| !matches!(s, StorageClass::Auto | StorageClass::Register))
@@ -304,8 +316,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         for &name in names {
+            if let Some(entry) = self.lookup(Namespace::Label, name.name)
+                && entry.scope == self.scope
+            {
+                self.error(
+                    SemanticErrorKind::DuplicateLocalLabel,
+                    name.source_vectors,
+                    Some(name.name),
+                    Some(entry.name.source_vectors),
+                );
+                continue;
+            }
             let index = self.statements.labels.len();
             self.statements.labels.push(Label {
+                local: true,
                 function: self.functions.current.map_or(usize::MAX, |f| f.id),
                 name,
                 definition: None,
@@ -326,6 +350,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let index = self.statements.labels.len();
         self.statements.labels.push(Label {
+            local: false,
             function,
             name,
             definition: None,
@@ -370,14 +395,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.statements.vm = Some(index);
     }
 
-    fn entered_vm(&self, source: Option<usize>, mut target: Option<usize>) -> Option<usize> {
+    /// Cache immutable path pairs, including successful scope exits.
+    /// C99: §6.8.6.1p1, p. 137; PDF p. 149.
+    fn entered_vm(&mut self, source: Option<usize>, target: Option<usize>) -> Option<usize> {
+        if target.is_none() || source == target {
+            return None;
+        }
+        if let Some(&result) = self.statements.vm_queries.get(&(source, target)) {
+            return result;
+        }
+        let result = self.find_entered_vm(source, target);
+        _ = self.statements.vm_queries.insert((source, target), result);
+        result
+    }
+
+    fn find_entered_vm(&self, source: Option<usize>, mut target: Option<usize>) -> Option<usize> {
         let mut source = source;
         let depth = |path: Option<usize>| path.map_or(0, |p| self.statements.vm_scopes[p].depth);
         while depth(source) > depth(target) {
+            #[cfg(test)]
+            self.review_step(0);
             source = source.and_then(|p| self.statements.vm_scopes[p].parent);
         }
         let mut entered = None;
         while source != target {
+            #[cfg(test)]
+            self.review_step(0);
             if depth(target) >= depth(source) {
                 let p = target?;
                 entered = Some(self.statements.vm_scopes[p].binding);
@@ -393,10 +436,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         for i in 0..self.statements.labels.len() {
             let label = self.statements.labels[i];
             if label.definition.is_none()
-                && let Some(usage) = label.used
+                && let Some(usage) = label.used.or_else(|| label.local.then_some(label.name))
             {
                 self.error(
-                    SemanticErrorKind::UndefinedLabel,
+                    if label.local {
+                        SemanticErrorKind::UndefinedLocalLabel
+                    } else {
+                        SemanticErrorKind::UndefinedLabel
+                    },
                     usage.source_vectors,
                     Some(label.name.name),
                     None,
