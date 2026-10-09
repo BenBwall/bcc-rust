@@ -266,8 +266,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.3.1.1p2, p. 42; PDF p. 54. Bit-field width can promote an
     /// unsigned int field to int when all its values fit.
     pub(super) fn promote(&mut self, info: ExpressionInfo<'tu>, ty: TypeId) -> TypeId {
+        // An enumeration's compatible type has at least the rank of int, so
+        // the enumeration promotes to that type unless it is a narrow
+        // bit-field (§6.3.1.1p1-2).
+        if let TypeKind::Tag(id) = self.types.nodes[ty.index]
+            && self.types.tags[id].kind == TagKind::Enum
+        {
+            let promoted = if info.bit_field.is_some_and(|width| width < 32) {
+                Scalar::Int
+            } else {
+                self.types.tags[id].compatible.get()
+            };
+            return self.types.scalar(promoted);
+        }
         if self.integer_type(ty).is_some_and(|(bits, _)| bits < 32)
-            || matches!(self.types.nodes[ty.index], TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Enum)
             || (info.bit_field.is_some_and(|width| width < 32)
                 && matches!(
                     self.types.nodes[ty.index],
@@ -359,7 +371,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn scalar_representation(&self, ty: TypeId) -> Option<Scalar> {
         match self.types.nodes[ty.index] {
             | TypeKind::Scalar(s) => Some(s),
-            | TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Enum => Some(Scalar::Int),
+            | TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Enum =>
+                Some(self.types.tags[id].compatible.get()),
             | _ => None,
         }
     }

@@ -304,6 +304,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             complete: Cell::new(false),
             tainted: Cell::new(false),
             contains_flexible: Cell::new(false),
+            compatible: Cell::new(Scalar::Int),
         });
         self.types.tags.push(tag);
         index

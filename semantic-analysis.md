@@ -109,8 +109,17 @@ Compatibility handles qualifiers, pointer targets, constant vs incomplete array
 extents and prototype parameter types/ellipsis, and constructs composite derived
 types iteratively. Unprototyped declarations impose default-promotion stability
 when compared to prototypes; old-style definition parameter types are promoted
-and checked against visible prototypes. This implementation selects int as the compatible
-integer type for C99 enums, preserving the nominal enum identity when forming an enum/int composite. Nominal identities distinguish independent enum tags.
+and checked against visible prototypes. An enumeration's compatible integer type
+is implementation-defined (§6.7.2.2p4); this implementation follows GCC and Clang
+on x86-64 System V: unsigned int when no member is negative, otherwise int, each
+widening to the 64-bit type of the same signedness when a member needs it. The
+tag records that type, which fixes its layout, promotion and integer conversions;
+an enum/integer composite with exactly that type keeps the nominal enum identity.
+Nominal identities distinguish independent enum tags. Enumeration constants
+representable as int have type int; wider values are accepted as the C23
+extension that GCC and Clang provide, take the type of their value, and are
+reported through the extension policy. A set of members that no 64-bit type
+holds is diagnosed.
 
 ## Binding, scope, linkage and recovery
 
@@ -157,7 +166,8 @@ The integer evaluator implements integer/character constants and enumerators,
 unary integer operators, integer binary operators, short-circuit logical and
 conditional evaluation, integer casts and sizeof/alignof of modeled type names.
 It carries widths/signedness, promotes small integers, diagnoses exceptional/overflow
-operations and constrains C99 enumerators to int. Positive constant array bounds
+operations and reports enumerators outside int through the extension policy.
+Positive constant array bounds
 use the same evaluator; runtime bounds at file scope/with linkage are rejected.
 
 Old-style definition parameter declarations are adjusted and promoted before
@@ -487,7 +497,7 @@ with `-std=c99 -pedantic-errors` also rejects every fixture. Sample triage:
 | Input | Classification and independent check |
 | --- | --- |
 | `sema-duplicate.c` | Genuine: repeated automatic declaration and automatic followed by same-scope extern; Clang rejects both. |
-| `sema-enum-range.c` | Genuine C99 int representability constraint; Clang identifies the incremented value as requiring a C23 extension. |
+| `sema-enum-range.c` | Genuine under `-pedantic-errors`: values outside int are the C23 extension Clang also reports, and Clang also rejects a negative member beside one that needs unsigned long. |
 | `sema-member.c` | Genuine: void member and nesting a flexible-array structure; Clang rejects both. |
 | `sema-overflow.c` | Genuine C99 ICE constraint; Clang accepts folding only as a GNU extension and rejects it in strict mode. |
 | GNU literal zero array in existing policy fixture | Initial sema rejection was a false positive; fixed to use shared parser/extension policy without duplicate diagnostics. Computed zero uses the same policy. |

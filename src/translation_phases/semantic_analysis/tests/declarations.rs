@@ -195,3 +195,61 @@ fn unanalyzed_redeclarations_inherit_the_previous_kind() {
         ["'__typeof__' is a GNU extension"]
     );
 }
+
+#[test]
+fn enums_use_the_gcc_x86_64_compatible_integer_type() {
+    for configuration in [CompilerConfiguration::default(), gnu17()] {
+        assert_eq!(
+            kinds(
+                "enum E {A, B}; unsigned int f(void); enum E f(void); int x[(enum E)-1 > 0 ? 1 : \
+                 -1]; enum N {M = -1}; int g(void); enum N g(void); int y[(enum N)-1 < 0 ? 1 : \
+                 -1]; int z[A - 1 < 0 ? 1 : -1]; void h(enum E e) { int w[e - 1 > 0 ? 1 : 1]; }",
+                configuration
+            ),
+            []
+        );
+        assert_eq!(
+            kinds(
+                "enum E {A}; int f(void); enum E f(void); enum N {M = -1}; unsigned g(void); enum \
+                 N g(void);",
+                configuration
+            ),
+            [
+                SemanticErrorKind::IncompatibleDeclaration,
+                SemanticErrorKind::IncompatibleDeclaration,
+            ]
+        );
+    }
+    assert_eq!(
+        tag_layout("enum L {P = 0x100000000L};", gnu17(), "L"),
+        Some(Layout { size: 8, align: 8 })
+    );
+    assert_eq!(
+        tag_layout("enum L {P = -1, Q = 0x7fffffff};", gnu17(), "L"),
+        Some(Layout { size: 4, align: 4 })
+    );
+}
+
+#[test]
+fn enumerators_beyond_int_are_a_policy_extension() {
+    let source = "enum { HI = 0x80000000, ALL = 0xFFFFFFFF, NEXT }; int t[HI > 0 ? 1 : -1]; int \
+                  u[NEXT == 0x100000000L ? 1 : -1];";
+    assert_eq!(kinds(source, gnu17()), []);
+    assert_eq!(kinds(source, CompilerConfiguration::default()), []);
+    assert_eq!(
+        extensions(source, pedantic(CStandard::C99, false)),
+        [
+            "'enumerator value outside the range of int' is a C23 extension",
+            "'enumerator value outside the range of int' is a C23 extension",
+            "'enumerator value outside the range of int' is a C23 extension",
+        ]
+    );
+    assert_eq!(
+        extensions(source, pedantic(CStandard::C23, false)),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        kinds("enum { N = -1, U = 0xFFFFFFFFFFFFFFFF };", gnu17()),
+        [SemanticErrorKind::EnumeratorRange]
+    );
+}

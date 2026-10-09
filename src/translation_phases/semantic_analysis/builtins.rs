@@ -57,6 +57,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 complete:          Cell::new(true),
                 tainted:           Cell::new(false),
                 contains_flexible: Cell::new(false),
+                compatible:        Cell::new(Scalar::Int),
             }));
             id
         };

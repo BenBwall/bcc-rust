@@ -101,6 +101,9 @@ pub(crate) struct Tag<'tu> {
     pub(crate) complete:          Cell<bool>,
     pub(crate) tainted:           Cell<bool>,
     pub(crate) contains_flexible: Cell<bool>,
+    /// The integer type an enumeration is compatible with, fixed when its
+    /// list completes (§6.7.2.2p4, p. 105; PDF p. 117).
+    pub(crate) compatible:        Cell<Scalar>,
 }
 
 /// Hash-consing key. Child identities keep hashing bounded by immediate arity.
@@ -275,9 +278,10 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
                         return None;
                     }
                     match (ak, bk) {
-                        | (TypeKind::Tag(id), TypeKind::Scalar(Scalar::Int))
-                        | (TypeKind::Scalar(Scalar::Int), TypeKind::Tag(id))
-                            if self.tags[id].kind == TagKind::Enum =>
+                        | (TypeKind::Tag(id), TypeKind::Scalar(scalar))
+                        | (TypeKind::Scalar(scalar), TypeKind::Tag(id))
+                            if self.tags[id].kind == TagKind::Enum
+                                && self.tags[id].compatible.get() == scalar =>
                         {
                             values.push(if matches!(ak, TypeKind::Tag(_)) { a } else { b });
                         },

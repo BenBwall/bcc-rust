@@ -377,6 +377,26 @@ struct Analyzer<'a, 'tu, 's> {
     statements:          statements::State<'s>,
     /// Tags whose member or enumerator list is open.
     defining:            ArenaMap<'s, usize, ()>,
+    /// Least and greatest enumerator values of an open enumeration.
+    enum_ranges:         ArenaMap<'s, usize, (i128, i128)>,
+}
+
+/// GCC and Clang choose an x86-64 System V enumeration's compatible type
+/// from its value range: unsigned int when no value is negative, otherwise
+/// int, widening to the 64-bit type of the same signedness. C99 leaves this
+/// choice implementation-defined (§6.7.2.2p4, p. 105; PDF p. 117).
+fn compatible_enum_type((low, high): (i128, i128)) -> Scalar {
+    if low >= 0 {
+        if high <= i128::from(u32::MAX) {
+            Scalar::UnsignedInt
+        } else {
+            Scalar::UnsignedLong
+        }
+    } else if low >= i128::from(i32::MIN) && high <= i128::from(i32::MAX) {
+        Scalar::Int
+    } else {
+        Scalar::Long
+    }
 }
 
 /// Runs declaration analysis only after the complete immutable syntax tree
@@ -449,6 +469,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             va_list_type: None,
             statements: statements::State::new(scratch),
             defining: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            enum_ranges: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         };
         analyzer.scopes.push(Scope {
             parent: None,
@@ -1117,11 +1138,13 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     }
                 } else {
                     _ = self.defining.remove(&tag);
-                    self.types.tags[tag].complete.set(true);
-                    if !self.types.tags[tag].tainted.get() {
-                        self.types.tags[tag]
-                            .layout
-                            .set(self.types.target.scalar(Scalar::Int));
+                    let range = self.enum_ranges.remove(&tag).unwrap_or((0, 0));
+                    let tag = self.types.tags[tag];
+                    tag.complete.set(true);
+                    if !tag.tainted.get() {
+                        let compatible = compatible_enum_type(range);
+                        tag.compatible.set(compatible);
+                        tag.layout.set(self.types.target.scalar(compatible));
                     }
                 }
             },
@@ -1135,36 +1158,68 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                         .expression
                         .is_some_and(|e| self.unanalyzed_constant(e.expression()))
                 {
+                    // An implicit value past the previous one that no
+                    // 64-bit type holds has no integer type at all.
                     self.error(
-                        SemanticErrorKind::InvalidConstant,
+                        if item.expression.is_none() {
+                            SemanticErrorKind::EnumeratorRange
+                        } else {
+                            SemanticErrorKind::InvalidConstant
+                        },
                         item.source_vectors,
                         Some(item.name.name),
                         None,
                     );
                 }
+                // C99 §6.7.2.2p2 requires int values; GCC and Clang accept
+                // wider ones, which C23 adopts.
+                let wide = value.is_some_and(|v| i32::try_from(v.value).is_err());
+                if wide && !self.tainted && !self.types.tags[tag].tainted.get() {
+                    self.context.report_extension(
+                        crate::configuration::Feature::WideEnumerators,
+                        "enumerator value outside the range of int",
+                        item.source_vectors,
+                    );
+                }
                 if let Some(v) = value
-                    && i32::try_from(v.value).is_err()
+                    && !self.types.tags[tag].tainted.get()
                 {
-                    if self.context.configuration.standard() < CStandard::C23
-                        && !self.types.tags[tag].tainted.get()
-                    {
+                    let (low, high) = self
+                        .enum_ranges
+                        .get(&tag)
+                        .copied()
+                        .unwrap_or((v.value, v.value));
+                    let (low, high) = (low.min(v.value), high.max(v.value));
+                    if low < 0 && high > i128::from(i64::MAX) {
                         self.error(
                             SemanticErrorKind::EnumeratorRange,
-                            item.source_vectors,
+                            item.name.source_vectors,
                             Some(item.name.name),
                             None,
                         );
+                        self.types.tags[tag].tainted.set(true);
+                    } else {
+                        _ = self.enum_ranges.insert(tag, (low, high));
                     }
-                    self.types.tags[tag].tainted.set(true);
                 }
                 if value.is_none() {
                     self.types.tags[tag].tainted.set(true);
                 }
                 let opaque = self.types.tags[tag].tainted.get();
-                let ty = if opaque {
-                    self.types.unknown()
-                } else {
-                    self.types.scalar(Scalar::Int)
+                let (ty, retained) = match value {
+                    | _ if opaque => (self.types.unknown(), None),
+                    | Some(v) if wide => (
+                        self.types.scalar(match (v.bits, v.signed) {
+                            | (64, true) => Scalar::Long,
+                            | (64, false) => Scalar::UnsignedLong,
+                            | _ => Scalar::UnsignedInt,
+                        }),
+                        Some(v),
+                    ),
+                    | _ => (
+                        self.types.scalar(Scalar::Int),
+                        value.map(|v| Integer::int(v.value)),
+                    ),
                 };
                 self.bind(
                     item.name,
@@ -1172,11 +1227,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     BindingKind::Enumerator,
                     Linkage::None,
                     Duration::None,
-                    if opaque {
-                        None
-                    } else {
-                        value.map(|v| Integer::int(v.value))
-                    },
+                    retained,
                 );
                 self.work
                     .push(Work::EnumMembers(tag, list, index + 1, value));

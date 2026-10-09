@@ -195,6 +195,7 @@ pub(crate) enum Feature {
     AutoTypeInference,
     Constexpr,
     Nullptr,
+    WideEnumerators,
     Countof,
     IfSwitchDeclarations,
     NamedLoops,
@@ -296,6 +297,7 @@ impl Feature {
         Self::AutoTypeInference,
         Self::Constexpr,
         Self::Nullptr,
+        Self::WideEnumerators,
         Self::Countof,
         Self::IfSwitchDeclarations,
         Self::NamedLoops,
@@ -392,7 +394,8 @@ impl Feature {
             | Self::EnumUnderlyingType
             | Self::AutoTypeInference
             | Self::Constexpr
-            | Self::Nullptr => FeatureOrigin::Standard(CStandard::C23),
+            | Self::Nullptr
+            | Self::WideEnumerators => FeatureOrigin::Standard(CStandard::C23),
 
             | Self::OctalPrefix
             | Self::DelimitedEscapes

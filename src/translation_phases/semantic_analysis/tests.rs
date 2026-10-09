@@ -175,7 +175,7 @@ fn linkage_shadowing_and_composites() {
 #[test]
 fn constraints_are_structured_and_source_backed() {
     with_source(
-        "int x; double x; void f(void) {int y; int y;} enum E {A=2147483647,B};",
+        "int x; double x; void f(void) {int y; int y;} enum E {A=-1,B=18446744073709551615ULL};",
         |context, _| {
             let kinds = context
                 .take_pending_errors()
@@ -309,12 +309,15 @@ fn integer_division_truncates_toward_zero_across_the_64_bit_range() {
 #[test]
 fn casts_conditional_conversions_and_array_qualification() {
     with_source(
-        "enum E {A=(int)1.75, B=(int)2.5L, C=1?-1:0U}; typedef int A[2]; const A a;",
+        "enum E {A=(int)1.75, B=(int)2.5L, C=1?-1:0U}; typedef int T[2]; const T a;",
         |context, s| {
+            // The unsigned common type makes C a wide enumerator, which the
+            // default Allow policy accepts as an extension.
             let errors = context.take_pending_errors();
-            assert_eq!(errors.iter().filter(|e|matches!(e,TranslationError::Semantic(e) if e.kind==SemanticErrorKind::EnumeratorRange)).count(),1);
+            assert!(errors.is_empty(), "{errors:?}");
             assert_eq!(s.bindings[0].value.unwrap().value, 1);
             assert_eq!(s.bindings[1].value.unwrap().value, 2);
+            assert_eq!(s.bindings[2].value.unwrap().value, i128::from(u32::MAX));
             let ty = s.bindings.last().unwrap().ty;
             let TypeKind::Array(element, _) = s.types.nodes[ty.index] else {
                 panic!("qualified array typedef");
@@ -590,7 +593,7 @@ fn opaque_type_operands_preserve_nested_declaration_names() {
 #[test]
 fn enum_composites_retain_nominal_identity() {
     with_source(
-        "enum E {A}; enum F {B}; extern enum E e; extern int e; extern enum F e;",
+        "enum E {A}; enum F {B}; extern enum E e; extern unsigned int e; extern enum F e;",
         |context, _| {
             let errors = context.take_pending_errors();
             assert_eq!(

@@ -77,9 +77,11 @@ impl Integer {
         .cast_value(self.value)
     }
 
+    /// The next implicit enumerator value, which never wraps.
     /// C99: §6.7.2.2p3, p. 105; PDF p. 117.
     pub(crate) fn increment(self) -> Option<Self> {
-        self.checked(self.value.checked_add(1)?)
+        let value = self.value.checked_add(1)?;
+        (value <= self.maximum()).then_some(Self { value, ..self })
     }
 
     /// C99: §6.3.1.1p2, p. 42; PDF p. 54.
@@ -517,7 +519,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | TypeKind::Tag(id)
                 if self.types.tags[id].kind == TagKind::Enum
                     && !self.types.tags[id].tainted.get() =>
-                Some((32, true)),
+                self.types
+                    .target
+                    .integer(self.types.tags[id].compatible.get()),
             | _ => None,
         }
     }

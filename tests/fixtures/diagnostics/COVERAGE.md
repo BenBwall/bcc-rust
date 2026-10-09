@@ -498,7 +498,7 @@ snapshot at `tests/fixtures/semantic/types.stderr`.
 | `IncompleteEnum` | [enum declaration](sema-enum-incomplete.c) | Strict C99 enum tag without a prior completion. |
 | `InvalidConstant` | [constant](sema-constant.c) | Runtime enumerator operand, including unselected conditional/logical arms. |
 | `ConstantOverflow` | [overflow](sema-overflow.c) | Exceptional ICE evaluation; no dependent enumerator cascade. |
-| `EnumeratorRange` | [enum range](sema-enum-range.c) | Enumerator not representable in int. |
+| `EnumeratorRange` | [enum range](sema-enum-range.c) | Members that no 64-bit integer type holds; under `-pedantic-errors` the C23 extension diagnostic for values outside int precedes it. |
 | `InvalidMember` | [member](sema-member.c) | Incomplete/function member and flexible-array nesting. |
 | `DuplicateMember` | [member name](sema-duplicate-member.c) | Duplicate names in a record member namespace. |
 | `InvalidBitField` | [bit-field](sema-bit-field.c) | Width/type/zero-width-name constraints. |
