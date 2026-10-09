@@ -536,9 +536,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// GCC's `__builtin_constant_p` folds to whether its operand is an
-    /// arithmetic constant; it is valid where a constant is required.
+    /// arithmetic constant; it returns `int` and is valid where a constant
+    /// is required. GNU extension; C99: §6.6p10, p. 96; PDF p. 108.
     fn constant_p(
-        &self,
+        &mut self,
         e: &'tu Expression<'tu>,
         function: &'tu Expression<'tu>,
         arguments: ArenaList<'tu, &'tu Expression<'tu>>,
@@ -570,7 +571,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let operand = self.expression_info(argument);
         let constant = operand.constant == ConstantClass::Arithmetic
             && (operand.integer.is_some() || operand.floating.is_some());
-        let mut info = Self::expression_result(e, self.types.unknown());
+        let mut info = Self::expression_result(e, self.types.scalar(Scalar::Int));
         info.integer = Some(Integer::int(i128::from(constant)));
         info.ice = true;
         info.constant = ConstantClass::Arithmetic;

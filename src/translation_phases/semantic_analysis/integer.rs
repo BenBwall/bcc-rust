@@ -203,6 +203,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Cache by syntax identity and immediate-floating-cast context so deep
     /// conditionals do not repeatedly validate their descendants.
     /// C99: §6.6p6, p. 95; PDF p. 107.
+    /// Modeled constant builtin calls are an extension under §6.6p10,
+    /// p. 96; PDF p. 108.
     fn valid_ice_operands(&mut self, expression: &'tu Expression<'tu>) -> bool {
         let mut work = super::ArenaVec::new_in(self.scratch);
         let mut values = super::ArenaVec::new_in(self.scratch);
@@ -227,6 +229,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             if let Some(&valid) = self.ice_operands.get(&key) {
                 values.push(valid);
+                continue;
+            }
+            if matches!(expression.kind, ExpressionType::Call { .. })
+                && self.expression_info(expression).ice
+            {
+                values.push(true);
                 continue;
             }
             let children = match expression.kind {
@@ -425,6 +433,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | ExpressionType::Identifier(name) => self
                     .lookup(Namespace::Ordinary, name.name)
                     .and_then(|e| self.integer_type(self.bindings[e.binding].ty)),
+                | ExpressionType::Call { .. } if self.expression_info(expression).ice =>
+                    self.integer_type(self.expression_info(expression).ty),
                 | ExpressionType::Parenthesized { .. } => values.pop().flatten(),
                 | ExpressionType::Unary { operator, .. } => values.pop().flatten().map(|model| {
                     if operator == UnaryOperator::LogicalNot || model.0 < 32 {
@@ -630,6 +640,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Evaluation schedules continuations instead of recursing into
     /// operands/types. C99: §6.6p3-6, p. 95; PDF p. 107.
+    /// Modeled constant builtin calls are an extension under §6.6p10,
+    /// p. 96; PDF p. 108.
     pub(super) fn evaluate(&mut self, expression: &'tu Expression<'tu>) {
         use ExpressionType as E;
         let info = self.expression_info(expression);
@@ -784,7 +796,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 ));
                 self.work.push(Work::TypeName(name));
             },
-            | E::Builtin(_) | E::SizeofExpr(_) | E::AlignofExpr(_) => {
+            | E::Builtin(_) | E::Call { .. } | E::SizeofExpr(_) | E::AlignofExpr(_) => {
                 let info = self.expression_info(expression);
                 self.integers
                     .push(if info.ice { info.integer } else { None });

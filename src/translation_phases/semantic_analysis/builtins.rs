@@ -72,6 +72,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C99: §7.15.1.1p2, pp. 249-250; PDF pp. 261-262; §7.15.1.4p4,
     /// p. 251; PDF p. 263. Runtime argument availability remains lowering work.
+    /// Failed va-list operands leave an unknown result for error recovery.
     pub(super) fn type_builtin(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -89,6 +90,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             unreachable!()
         };
         let pointer = self.types.intern(TypeKind::Pointer(record));
+        let mut failed_operand = false;
         for (index, &operand) in b.operands.iter().enumerate() {
             if index != 0 && b.keyword != K::BuiltinVaCopy {
                 continue;
@@ -96,7 +98,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if let SyntaxOperand::Expression(operand) = operand {
                 let info = self.expression_info(operand);
                 let ty = self.converted(info);
-                if !self.types.unanalyzed(ty) && ty != pointer {
+                if self.types.unanalyzed(ty) {
+                    failed_operand = true;
+                } else if ty != pointer {
+                    failed_operand = true;
                     self.error(
                         SemanticErrorKind::InvalidVaList,
                         operand.source_vectors,
@@ -148,6 +153,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 result = self.types.unknown();
             }
         }
+        if failed_operand {
+            result = self.types.unknown();
+        }
         Self::expression_result(e, result)
     }
 
@@ -184,7 +192,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let Some(member) = self
                         .member_indices
                         .get(&(id, name.name))
-                        .and_then(|&index| self.types.tags[id].members.get().get(index))
+                        .and_then(|&index| self.types.tags[id].fields.get().get(index))
                     else {
                         valid = false;
                         break;
