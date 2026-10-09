@@ -344,6 +344,10 @@ enum Work<'tu, 's> {
 use crate::util::arena_list::ArenaList;
 
 struct Analyzer<'a, 'tu, 's> {
+    // Deterministic scaling-test counts: VM ancestors, offset members,
+    // initializer type nodes. They are absent from production compilation.
+    #[cfg(test)]
+    review_steps:        Cell<[usize; 3]>,
     context:             &'a mut Context<'tu>,
     scratch:             &'s Bump,
     types:               TypeInterner<'tu, 's>,
@@ -436,9 +440,18 @@ pub(crate) fn analyze<'tu>(
 }
 
 impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
+    #[cfg(test)]
+    fn review_step(&self, kind: usize) {
+        let mut steps = self.review_steps.get();
+        steps[kind] += 1;
+        self.review_steps.set(steps);
+    }
+
     fn new(context: &'c mut Context<'tu>, scratch: &'s Bump) -> Self {
         let tu = context.tu_arena();
         let mut analyzer = Self {
+            #[cfg(test)]
+            review_steps: Cell::new([0; 3]),
             context,
             scratch,
             types: TypeInterner::new(tu, scratch),

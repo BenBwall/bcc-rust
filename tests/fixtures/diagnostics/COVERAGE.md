@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **344 top-level C inputs and 344 stderr snapshots**, plus two supporting headers and 109 mode/policy `.args` sidecars. Ninety-four of the inputs cover semantic analysis (twenty-six for declarations, twenty-eight for expressions and initializers, thirty-six for statements and functions, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **135 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 116 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **348 top-level C inputs and 348 stderr snapshots**, plus two supporting headers and 113 mode/policy `.args` sidecars. Ninety-eight of the inputs cover semantic analysis (twenty-six for declarations, twenty-eight for expressions and initializers, forty for statements and functions, four for resource intrinsics) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **135 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 116 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -626,6 +626,21 @@ statements and a 10,000-case switch. Allocation coverage includes valid and
 erroneous bodies, synthesized definitions and deep statement traversal; rendering
 uses the same complete golden corpus. Optional fallthrough and unused-label
 warnings are not implemented and have no claimed coverage.
+
+Four more `sema3-*` fixtures extend statement coverage:
+
+| Fixture | Coverage |
+| --- | --- |
+| [for-init C99](sema3-for-init-c99.c) | Type-only enum/struct for initializers report the C23 extension under Deny. |
+| [for-init warning](sema3-for-init-warn.c) | GNU17 with Warn reports the same later-standard extension as warnings. |
+| [local labels](sema3-local-labels.c) | `DuplicateLocalLabel` labels the previous declaration; `UndefinedLocalLabel` diagnoses an unused declaration in GNU17. |
+| [local labels Deny](sema3-local-labels-deny.c) | Strict C99 reports GNU syntax policy and both local-label constraints. |
+
+`semantic_analysis/tests/operand_regressions.rs` also checks C99/C17/C23 policy behavior,
+register parameters, null-pointer alternatives, parenthesized strings, pointer
+Boolean constants, directional compound assignment and runtime `offsetof`.
+Operation counts at 128 and 512 elements protect VLA jump queries, indexed
+member lookup and nested array initializer classification without timing limits.
 
 ### Freestanding resources
 

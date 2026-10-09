@@ -1349,6 +1349,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.arithmetic(target) && operand.constant == ConstantClass::Arithmetic {
             info.constant = ConstantClass::Arithmetic;
         }
+        // Known pointer truth is an accepted arithmetic constant form, but
+        // not an integer constant expression. C99 §6.3.1.2p1, p. 43;
+        // PDF p. 55; implementation latitude §6.6p10, p. 96; PDF p. 108.
+        if matches!(
+            self.types.nodes[target.index],
+            TypeKind::Scalar(Scalar::Bool)
+        ) && self.pointer_target(from).is_some()
+            && self.address_value(operand)
+        {
+            let truth = Self::constant_truth(operand).unwrap_or(true);
+            info.integer = Some(Integer::int(i128::from(truth)).cast(1, false));
+            info.constant = ConstantClass::Arithmetic;
+            info.ice = false;
+        }
         if self.pointer_target(target).is_some()
             && (self.address_value(operand) || (operand.ice && operand.integer.is_some()))
         {
@@ -1545,11 +1559,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             if let Some(operation) = compound {
                 // This is one bounded delegation, never a traversal of syntax.
-                if matches!(operation, B::Addition | B::Subtraction)
-                    && self.pointer_target(left.ty).is_some()
-                    && self.integer_type(right.ty).is_none()
-                {
-                    return self.invalid_expression(e, SemanticErrorKind::InvalidAdditiveOperands);
+                if matches!(operation, B::Addition | B::Subtraction) {
+                    // Compound addition is directional, unlike ordinary +.
+                    // C99 §6.5.16.2p1, p. 93; PDF p. 105.
+                    let valid = if self.pointer_target(left.ty).is_some() {
+                        self.integer_type(right.ty).is_some()
+                    } else {
+                        self.arithmetic(left.ty) && self.arithmetic(right.ty)
+                    };
+                    if !valid {
+                        return self
+                            .invalid_expression(e, SemanticErrorKind::InvalidAdditiveOperands);
+                    }
                 }
             } else if !self.assignment_compatible(left.ty, right) {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidAssignment);
@@ -1595,7 +1616,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     } else {
                         left.ice && left.integer.is_some()
                     };
-                info.register = pointer.register;
+                // Array decay retains the designated register object;
+                // reading a register pointer does not transfer its storage.
+                // C99 §6.5.3.2p1, p. 78; PDF p. 90.
+                info.register = pointer.register
+                    && matches!(self.types.nodes[pointer.ty.index], TypeKind::Array(..));
             },
             | B::Multiplication | B::Division | B::Modulo => {
                 if !(self.arithmetic(lt) && self.arithmetic(rt))
@@ -1683,18 +1708,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if arithmetic {
                     arithmetic_operands = Some(self.common_arithmetic(left, right, lt, rt));
                 } else {
-                    let valid = if let (Some(lp), Some(rp)) =
+                    let null_pair = equality
+                        && ((self.pointer_target(lt).is_some()
+                            && self.null_pointer_constant(right))
+                            || (self.pointer_target(rt).is_some()
+                                && self.null_pointer_constant(left)));
+                    // C99 §6.5.9p2, p. 86; PDF p. 98: null alternatives
+                    // apply even when the null constant itself is void *.
+                    let valid = if null_pair {
+                        true
+                    } else if let (Some(lp), Some(rp)) =
                         (self.pointer_target(lt), self.pointer_target(rt))
                     {
                         self.pointer_compatible(lp, rp, equality)
                             && (equality
                                 || !matches!(self.types.nodes[lp.index], TypeKind::Function { .. }))
                     } else {
-                        equality
-                            && ((self.pointer_target(lt).is_some()
-                                && self.null_pointer_constant(right))
-                                || (self.pointer_target(rt).is_some()
-                                    && self.null_pointer_constant(left)))
+                        false
                     };
                     if !valid {
                         return self
@@ -1793,10 +1823,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let ty = if self.arithmetic(lt) && self.arithmetic(rt) {
             self.common_arithmetic(left, right, lt, rt)
-        } else if matches!(self.types.nodes[lt.index], TypeKind::Scalar(Scalar::Void))
-            && matches!(self.types.nodes[rt.index], TypeKind::Scalar(Scalar::Void))
+        } else if (matches!(self.types.nodes[lt.index], TypeKind::Scalar(Scalar::Void))
+            && matches!(self.types.nodes[rt.index], TypeKind::Scalar(Scalar::Void)))
+            || (self.pointer_target(lt).is_some() && self.null_pointer_constant(right))
         {
             lt
+        } else if self.pointer_target(rt).is_some() && self.null_pointer_constant(left) {
+            rt
         } else if let (Some(lp), Some(rp)) = (self.pointer_target(lt), self.pointer_target(rt)) {
             if !self.pointer_compatible(lp, rp, true) {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidConditionalOperands);
@@ -1813,10 +1846,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.types.intern(TypeKind::Pointer(
                 target.qualified(lp.qualifiers | rp.qualifiers),
             ))
-        } else if self.pointer_target(lt).is_some() && self.null_pointer_constant(right) {
-            lt
-        } else if self.pointer_target(rt).is_some() && self.null_pointer_constant(left) {
-            rt
         } else if matches!(self.types.nodes[lt.index], TypeKind::Tag(_))
             && self
                 .types

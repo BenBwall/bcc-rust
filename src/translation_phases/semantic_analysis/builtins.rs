@@ -151,7 +151,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Self::expression_result(e, result)
     }
 
-    /// Resolves a member/index path iteratively and yields a `size_t` ICE.
+    /// Resolves a member/index path iteratively; constant paths yield a
+    /// `size_t` ICE. GNU runtime indices yield an ordinary `size_t` value.
     /// C99: §7.17p3, p. 254; PDF p. 266.
     fn type_offsetof(
         &mut self,
@@ -170,39 +171,60 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return Self::expression_result(e, ty);
         }
         let mut offset = Some(0_u64);
+        let mut valid = true;
         for &member in b.members {
             match member {
                 | OffsetMember::Field(name) => {
                     let TypeKind::Tag(id) = self.types.nodes[ty.index] else {
-                        offset = None;
+                        valid = false;
                         break;
                     };
-                    let Some(member) =
-                        self.types.tags[id].members.get().iter().find(|member| {
-                            member.name.is_some_and(|field| field.name == name.name)
-                        })
+                    #[cfg(test)]
+                    self.review_step(1);
+                    let Some(member) = self
+                        .member_indices
+                        .get(&(id, name.name))
+                        .and_then(|&index| self.types.tags[id].members.get().get(index))
                     else {
-                        offset = None;
+                        valid = false;
                         break;
                     };
                     if member.width.is_some() {
-                        offset = None;
+                        valid = false;
                         break;
                     }
-                    offset = offset.and_then(|n| n.checked_add(member.offset));
+                    let computed = offset.and_then(|n| n.checked_add(member.offset));
+                    valid &= offset.is_none() || computed.is_some();
+                    offset = computed;
                     ty = member.ty;
                 },
                 | OffsetMember::Index(index) => {
                     let TypeKind::Array(element, _) = self.types.nodes[ty.index] else {
-                        offset = None;
+                        valid = false;
                         break;
                     };
                     let info = self.expression_info(index);
+                    let index_ty = self.converted(info);
+                    if self.types.unanalyzed(index_ty) {
+                        return Self::expression_result(e, self.types.unknown());
+                    }
+                    if self.integer_type(index_ty).is_none() {
+                        valid = false;
+                        break;
+                    }
+                    // The GNU intrinsic accepts runtime integer paths; the
+                    // standard macro's address-constant contract remains
+                    // C99 §7.17p3, p. 254; PDF p. 266.
+                    if !info.ice {
+                        offset = None;
+                        ty = element;
+                        continue;
+                    }
                     let value = info
                         .integer
                         .filter(|_| info.ice)
                         .and_then(|n| u64::try_from(n.value).ok());
-                    offset = offset.and_then(|n| {
+                    let computed = offset.and_then(|n| {
                         value.and_then(|value| {
                             self.types
                                 .layout(element)?
@@ -211,11 +233,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 .checked_add(n)
                         })
                     });
+                    valid &= offset.is_none() || computed.is_some();
+                    offset = computed;
                     ty = element;
                 },
             }
         }
-        let Some(offset) = offset else {
+        if !valid {
             self.error(
                 SemanticErrorKind::InvalidOffsetof,
                 e.source_vectors,
@@ -223,9 +247,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             );
             return Self::expression_result(e, self.types.unknown());
-        };
+        }
         let ty = self.types.scalar(self.types.target.size_t);
         let mut info = Self::expression_result(e, ty);
+        let Some(offset) = offset else {
+            return info;
+        };
         let (bits, signed) = self.types.target.integer(self.types.target.size_t).unwrap();
         info.integer = Some(Integer {
             value: i128::from(offset),
