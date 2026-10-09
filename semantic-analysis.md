@@ -386,8 +386,9 @@ configured GNU x86-64 host's x87 representation carries extended values;
 MSVC target values convert and round in binary64. Precision control is explicit
 inside the native bridge, including on Windows worker threads.
 Operands round to the common component type before arithmetic/comparison, and
-results round to the expression type. Integer arithmetic never uses 128-bit
-division/remainder or checked/overflowing 128-bit multiplication.
+results round to the expression type. Integer arithmetic uses checked signed
+128-bit operations and modular unsigned 128-bit operations; the linker retains
+the late compiler-builtin division objects before LTO.
 Exceptional constant evaluation produces one primary diagnostic.
 
 #### Initializer current objects
@@ -586,7 +587,8 @@ The `Semantic analysis` Criterion group runs phases 1-7 plus semantic
 analysis over the same inputs as `Parser` and `Parser only`; the difference
 from `Parser` is the cost of analysis.
 
-Integer constant evaluation holds values in `i128`. Its division relies on
+Integer constant evaluation stores 128-bit patterns plus width and signedness.
+Unsigned high-half patterns use `u128` arithmetic and formatting. Its division relies on
 the linker flags in `.cargo/config.toml` that keep `compiler_builtins`'
 `__divti3`/`__modti3` across linker-plugin LTO (see the README's LTO section).
 
@@ -784,3 +786,125 @@ control on Windows worker threads. Packed/aligned attributes, pragma-pack,
 `_Generic` semantic selection, encoded u/U literal semantic types, target instruction lowering and a portable
 software implementation of extended floating arithmetic remain existing gaps.
 No resource header, hosted-mode or compiler-identity implementation was changed.
+
+## GNU 128-bit integers (2026-10-09)
+
+The target scalar graph now includes signed and unsigned `__int128`, each
+16 bytes with alignment 16 on Linux GNU, Linux musl, MinGW and MSVC x86-64.
+Rank is above `long long`; integer promotions, usual arithmetic conversions,
+assignment/cast/Boolean/pointer conversions, and implementation-defined
+integer bit-fields use the shared scalar rules (C99 §6.3.1.1-3, pp. 42-43;
+PDF pp. 54-55; §6.3.1.8, pp. 44-45; PDF pp. 56-57;
+§6.7.2.1p4, p. 101; PDF p. 113). Clang probes confirm that signed/unsigned
+128-bit fields of width below 32 promote to int; at width 32 the result is
+int/unsigned int respectively; wider fields retain the 128-bit base type.
+
+The parser seeds `__int128_t`/`__uint128_t` as reserved builtin typedef names,
+using the same header-independent seam as `__builtin_va_list`; semantic
+resolution maps them to canonical scalars. They do not enter the macro dump.
+`__SIZEOF_INT128__` 16 is enabled in all eight target macro snapshots and
+removed from the exclusion generator, table, and documentation. The macro
+oracle compares these snapshots with the pinned Clang for each triple/mode.
+There is no 128-bit integer literal suffix or new literal candidate, and
+`intmax_t`/`uintmax_t` and `#if` remain 64-bit.
+
+Decision: constant representation is a 128-bit two's-complement pattern plus
+width/signedness, without enlarging the retained record or allocating a wider
+number. The `i128` field is interpreted as signed only for signed values;
+unsigned operations explicitly reinterpret it as `u128`. Masks use a right
+shift of `u128::MAX`, never a shift by 128. Checked mathematical accessors
+protect array bounds, designators, offsets and enum ranges. Display uses
+unsigned decimal for the full unsigned range, including conversion to floating
+constants. Signed arithmetic checks overflow; unsigned arithmetic wraps.
+Shifts validate the mathematical count before shifting, signed right shifts
+are arithmetic, and GNU sign-bit left shifts keep the existing extension
+policy. Both signed minimum / -1 and signed minimum % -1 are exceptional,
+as are division by zero and signed minimum negation. Floating-to-integer
+conversion accepts the unsigned high half and signed minimum, while rejecting
+out-of-range values. Integer-to-pointer constants truncate to pointer width.
+Switch interval ordering uses a sign-biased key for unsigned patterns, so
+ranges crossing bit 127 are ordered and overlapping cases diagnosed correctly.
+
+Decision: retain the existing enumeration ABI ceiling of 64 bits, even when
+an ICE computes a 128-bit value. Wider enum values get `EnumeratorRange` with
+no dependent cascade. This is an implementation boundary, not a claim that
+all GCC/Clang wide-enum extensions are modeled; pinned Clang itself warns and
+truncates an unsigned 128-bit maximum enumerator to unsigned long long.
+
+Known gap: GNU `mode`/`__mode__` attributes (QI/HI/SI/DI/TI/word/pointer) remain
+opaque balanced tokens and make affected types unavailable, just like other
+unmodeled representation attributes. Modeling them cleanly requires an
+attribute semantic layer that distinguishes names, arguments, placement and
+conflicts; this change does not add an ad hoc token scan. The MinGW fallback
+`typedef int __int128 __attribute__((__mode__(TI)));` is still invalid when
+`__SIZEOF_INT128__` is manually undefined: `__int128` is already a keyword,
+and pinned Clang rejects that exact fallback too. Normal MinGW inclusion
+avoids the branch with the now-correct predefined size macro. No packed/aligned,
+pragma-pack, vector, atomic, backend or code-generation support is claimed.
+
+`tests/fixtures/targets/int128.c` is shared by semantic unit tests, CLI tests,
+allocation coverage, and pinned Clang `--target=<triple> -fsyntax-only` checks.
+It asserts scalar/struct/union sizes, alignments and offsets, target-specific
+bit-field storage, full-width arithmetic, Boolean conversion and floating casts.
+Rust tests additionally inspect canonical types, ranks, bit-field promotion,
+all shift counts 64-127, signed/unsigned limits, narrowing and switch ranges.
+The three `sema-int128-*` goldens cover overflow/exceptional arithmetic,
+bit-field/bound/enum constraints, duplicate high-half cases and pedantic policy,
+with following declarations retained. Survey and canonical validation evidence
+is recorded below.
+
+### Int128 validation and survey evidence
+
+All six canonical commands passed unmodified with `CARGO_BUILD_JOBS=8`:
+`cargo test --all-targets` (998 tests),
+`cargo test --features benchmarking-internals --test allocation_count`
+(18 tests, including valid/invalid int128 paths with zero global allocations),
+`cargo +nightly fmt --check`, both all-target clippy commands with
+`-D warnings`, and `git diff --check`. The plain executable was restored with
+`cargo build --bin bcc-rust` before both surveys. Verbatim results/full logs
+are in `target/INT128_CHECKS.md` and `target/int128-check-*.log`.
+Clang accepts `tests/fixtures/targets/int128.c` using each canonical triple
+and `-std=c11 -fsyntax-only`; the target macro regeneration/equality checks
+match all four triples in both modes with 138 documented exclusions.
+
+The requested libc survey command completed 440 individual translation units
+plus eight combined probes; all 448 rows match the supplied `targeted` baseline
+by identity. There are zero newly accepted or newly rejected headers. MinGW
+GNU17 remains 7/58 Clang-accepted headers, and C17 remains 6/28. The 34 GNU17
+headers formerly stopped by the `int __int128` fallback now get past it and
+stop at `_mingw.h:580`, `void __cdecl __debugbreak(void);`. This is an existing
+calling-convention keyword gate, independent of integer support: a standalone
+probe reproduces the error, and `-fms-extensions` makes that probe pass, as does
+pinned Clang. The requested MinGW survey arguments intentionally lack that
+flag; the command was not changed to inflate acceptance. The other libc
+configurations retain their previous accepted counts and first errors.
+
+Current MinGW GNU17 top first errors:
+
+| Count | First error |
+| ---: | --- |
+| 34 | Expected declarator punctuation before `__debugbreak` (`__cdecl` gate). |
+| 13 | Expected `)` to close `defined(`, found `##`. |
+| 2 | Cannot find `mm_malloc.h`. |
+| 1 | Cannot find `stdatomic.h`. |
+| 1 | Cannot find `tgmath.h`. |
+
+MinGW C17 still has 20 VARARGS-not-implemented first errors, plus the two missing
+standard headers. Evidence and exact deltas are in
+`target/libc-survey/int128/results.json`, `target/int128-libc-survey.log` and
+`target/int128-mingw-cdecl-triage.json`. These results expose the next blocker;
+they do not claim an increase in accepted libc headers.
+
+The GCC 15.2 torture survey compares 3,878 files with `target/survey-target`:
+raw acceptance is 3,581 -> 3,584 (+3), and the 2,596 header-free GCC-C99-valid
+preprocessed inputs improve from 2,588 -> 2,592 (+4). The three bit-field files
+`compile/bitfield-1.c`, `compile/bitfield-endian-1.c` and
+`compile/bitfield-endian-2.c` improve in both forms; `execute/pr98474.c` additionally
+improves after preprocessing. All four formerly had unknown `__uint128_t`.
+There are zero newly rejected inputs (including GCC-valid inputs), crashes,
+process failures or timeouts. GCC reference classifications are unchanged.
+The cached corpus was copied into this worktree before running the survey;
+all generated sources, logs and evidence stayed under this worktree's target/.
+Exact comparison: `target/int128-gcc-comparison.json`; full survey:
+`target/survey-int128/results.json`. Ordered exact-file commit partitions are
+in `target/INT128_COMMITS.md`; no commits or pushes were made.
