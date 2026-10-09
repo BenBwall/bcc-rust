@@ -19,6 +19,7 @@ use coz as _;
 
 #[cfg(feature = "benchmarking-internals")]
 mod benchmarking;
+mod binary128;
 mod cli;
 pub(crate) mod configuration;
 pub(crate) mod diagnostics;

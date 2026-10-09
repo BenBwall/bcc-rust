@@ -5,6 +5,7 @@ use std::path::Path;
 use super::*;
 
 mod atomics;
+mod float128;
 mod int128;
 mod targets;
 

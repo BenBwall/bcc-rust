@@ -147,6 +147,32 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         }
     }
 
+    /// GCC Additional Floating Types: binary128 accepts _Complex in either
+    /// order.
+    fn step_float128(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Token,
+    ) -> Option<ParseAction<'tu, 'p>> {
+        if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Float128)) {
+            let complex = self.specifiers.type_specifiers == TypeSpecifiers::Complex;
+            if !matches!(
+                self.specifiers.type_specifiers,
+                TypeSpecifiers::Empty | TypeSpecifiers::Complex
+            ) {
+                self.specifiers
+                    .type_specifiers
+                    .report_conflict(parser, token.contents, token);
+            }
+            self.specifiers.type_specifiers =
+                TypeSpecifiers::Extended(parser.alloc_syntax(ExtendedType::Float128 { complex }));
+            self.consumed = true;
+            parser.merge_source(&mut self.source_vectors, token);
+            return Some(ParseAction::Consume);
+        }
+        None
+    }
+
     pub(super) fn parameter() -> Self {
         Self {
             implicit_name_allowed: false,
@@ -342,6 +368,9 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             self.consumed = true;
             parser.merge_source(&mut self.source_vectors, token);
             return ParseAction::Consume;
+        }
+        if let Some(action) = self.step_float128(parser, token) {
+            return action;
         }
         if let Some(action) = self.step_msvc(parser, token) {
             return action;
@@ -886,6 +915,20 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                         width,
                         signedness: Some(new_sign),
                     }));
+            }
+            return;
+        }
+        if let TypeSpecifiers::Extended(ExtendedType::Float128 { complex }) =
+            self.specifiers.type_specifiers
+        {
+            if matches!(specifier, PrimitiveTypeSpecifier::Complex) && !complex {
+                self.specifiers.type_specifiers = TypeSpecifiers::Extended(
+                    parser.alloc_syntax(ExtendedType::Float128 { complex: true }),
+                );
+            } else {
+                self.specifiers
+                    .type_specifiers
+                    .report_conflict(parser, token.contents, token);
             }
             return;
         }

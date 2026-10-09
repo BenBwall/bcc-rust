@@ -103,6 +103,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     Scalar::Int128
                 }),
+            | S::Extended(super::ExtendedType::Float128 { complex }) => {
+                if self.context.configuration.target() == crate::target::Target::WindowsMsvc {
+                    self.error(SemanticErrorKind::UnsupportedFloat128, source, None, None);
+                    None
+                } else {
+                    Some(if *complex {
+                        Scalar::ComplexFloat128
+                    } else {
+                        Scalar::Float128
+                    })
+                }
+            },
             | S::Float => Some(Scalar::Float),
             | S::Double => Some(Scalar::Double),
             | S::LongDouble => Some(Scalar::LongDouble),
@@ -114,6 +126,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => None,
         };
         self.work.push(Work::Qualify(q, source));
+        if let S::Extended(super::ExtendedType::Typeof {
+            operand,
+            unqualified,
+        }) = spec
+        {
+            self.work.push(Work::TypeofDone(*operand, *unqualified));
+            self.syntax_operand(*operand);
+            return;
+        }
         if let Some(s) = scalar {
             let ty = self.types.scalar(s);
             self.values.push(ty);

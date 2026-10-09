@@ -560,7 +560,8 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                             | "__builtin_va_copy"
                             | "__builtin_offsetof"
                             | "__builtin_types_compatible_p"
-                            | "__builtin_choose_expr",
+                            | "__builtin_choose_expr"
+                            | "__builtin_classify_type",
                         ) => 1,
                         | ("__has_builtin", name)
                             if crate::translation_phases::semantic_analysis::atomic_builtin(

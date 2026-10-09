@@ -557,6 +557,24 @@ mod measurements {
     }
 
     #[test]
+    fn binary128_and_type_generic_paths_allocate_only_from_arenas() {
+        let source = include_str!("fixtures/targets/float128.c");
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("binary128 and type selections", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+        let source = "__float128 a=0.1q, b=0x1p-16494q, c=1.0q+2.0q, d=__builtin_fabsf128(-1.0q), \
+                      e=(__float128)__builtin_huge_val(); int n; int f(void) { return \
+                      __builtin_choose_expr(n,1,2); } int g(void) { return _Generic(1, double: \
+                      0); }\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(
+            allocations.calls, 0,
+            "binary128 parsing and selection diagnostics"
+        );
+        assert_eq!(summary.diagnostics, 2);
+    }
+
+    #[test]
     fn expressions_and_initializers_allocate_only_from_arenas() {
         let source = "struct S {int a[2]; int b;}; struct S s={1,2,3}; int a[][2]={[2][1]=3,4,5}; \
                       char c[]=\"abc\"; int *p=&s.a[1]; double d=1.5*2.0; int fun(const int \

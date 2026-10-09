@@ -71,23 +71,31 @@ pub(crate) enum ConstantFolding {
 /// deterministic postorder; identities are never printed as host addresses.
 /// C99: §6.5p1, p. 67; PDF p. 79; §6.3.2.1, pp. 46-47; PDF pp. 58-59.
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent retained facts describe category, address eligibility and constant \
+              evaluation; none is a state transition."
+)]
 pub(crate) struct ExpressionInfo<'tu> {
-    pub(crate) expression:     &'tu Expression<'tu>,
-    pub(crate) ty:             TypeId,
+    pub(crate) expression:         &'tu Expression<'tu>,
+    pub(crate) ty:                 TypeId,
     /// Arithmetic type before the final compound-assignment conversion.
-    pub(crate) operation_type: Option<TypeId>,
-    pub(crate) category:       ValueCategory,
-    pub(crate) binding:        Option<usize>,
-    pub(crate) bit_field:      Option<u32>,
-    pub(crate) register:       bool,
+    pub(crate) operation_type:     Option<TypeId>,
+    pub(crate) category:           ValueCategory,
+    pub(crate) binding:            Option<usize>,
+    pub(crate) bit_field:          Option<u32>,
+    pub(crate) register:           bool,
     /// Whether designation can form an address constant without reading an
     /// object.
-    pub(crate) static_address: bool,
-    pub(crate) floating:       Option<Floating>,
-    pub(crate) integer:        Option<Integer>,
-    pub(crate) ice:            bool,
-    pub(crate) constant:       ConstantClass,
-    pub(crate) folding:        ConstantFolding,
+    pub(crate) static_address:     bool,
+    /// An arithmetic constant containing binary128, retained without
+    /// approximate folding.
+    pub(crate) unfolded_binary128: bool,
+    pub(crate) floating:           Option<Floating>,
+    pub(crate) integer:            Option<Integer>,
+    pub(crate) ice:                bool,
+    pub(crate) constant:           ConstantClass,
+    pub(crate) folding:            ConstantFolding,
 }
 
 impl ExpressionInfo<'_> {
@@ -144,6 +152,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             bit_field: None,
             register: false,
             static_address: false,
+            unfolded_binary128: false,
             floating: None,
             integer: None,
             ice: false,
@@ -242,7 +251,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.integer_type(ty).is_some()
             || matches!(
                 self.types.nodes[ty.index],
-                TypeKind::Scalar(Scalar::Float | Scalar::Double | Scalar::LongDouble)
+                TypeKind::Scalar(
+                    Scalar::Float | Scalar::Double | Scalar::LongDouble | Scalar::Float128
+                )
             )
     }
 
@@ -369,23 +380,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | Scalar::Float | Scalar::ComplexFloat => 1,
             | Scalar::Double | Scalar::ComplexDouble => 2,
             | Scalar::LongDouble | Scalar::ComplexLongDouble => 3,
+            | Scalar::Float128 | Scalar::ComplexFloat128 => 4,
             | _ => 0,
         };
         let rank = float_rank(ls).max(float_rank(rs));
         let complex = matches!(
             ls,
-            Scalar::ComplexFloat | Scalar::ComplexDouble | Scalar::ComplexLongDouble
+            Scalar::ComplexFloat
+                | Scalar::ComplexDouble
+                | Scalar::ComplexLongDouble
+                | Scalar::ComplexFloat128
         ) || matches!(
             rs,
-            Scalar::ComplexFloat | Scalar::ComplexDouble | Scalar::ComplexLongDouble
+            Scalar::ComplexFloat
+                | Scalar::ComplexDouble
+                | Scalar::ComplexLongDouble
+                | Scalar::ComplexFloat128
         );
         let scalar = if rank != 0 {
             match (rank, complex) {
                 | (1, false) => Scalar::Float,
                 | (2, false) => Scalar::Double,
+                | (4, false) => Scalar::Float128,
                 | (_, false) => Scalar::LongDouble,
                 | (1, true) => Scalar::ComplexFloat,
                 | (2, true) => Scalar::ComplexDouble,
+                | (4, true) => Scalar::ComplexFloat128,
                 | (_, true) => Scalar::ComplexLongDouble,
             }
         } else {
@@ -962,11 +982,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.ice = true;
                 info.constant = ConstantClass::Arithmetic;
             },
+            | E::Constant(Constant::Float(
+                FloatTokenType::Float128(_) | FloatTokenType::ImaginaryFloat128(_),
+            )) => {
+                info.ty = self.types.scalar(
+                    if matches!(
+                        e.kind,
+                        E::Constant(Constant::Float(FloatTokenType::ImaginaryFloat128(_)))
+                    ) {
+                        Scalar::ComplexFloat128
+                    } else {
+                        Scalar::Float128
+                    },
+                );
+                info.unfolded_binary128 = true;
+                info.constant = ConstantClass::Arithmetic;
+            },
             | E::Constant(Constant::Float(value)) => {
                 info.ty = self.types.scalar(match value {
                     | FloatTokenType::Float(_) => Scalar::Float,
                     | FloatTokenType::Double(_) => Scalar::Double,
                     | FloatTokenType::LongDouble(_) => Scalar::LongDouble,
+                    | FloatTokenType::ImaginaryFloat(_) => Scalar::ComplexFloat,
+                    | FloatTokenType::ImaginaryDouble(_) => Scalar::ComplexDouble,
+                    | FloatTokenType::ImaginaryLongDouble(_) => Scalar::ComplexLongDouble,
                     | _ => {
                         self.retain_expression(info);
                         return;
@@ -978,6 +1017,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | FloatTokenType::LongDouble(value) => value,
                     | _ => LongDouble::ZERO,
                 }));
+                info.floating = match value {
+                    | FloatTokenType::ImaginaryFloat(value) => Some(Floating {
+                        real: LongDouble::ZERO,
+                        imag: LongDouble::from_double(f64::from(value)),
+                    }),
+                    | FloatTokenType::ImaginaryDouble(value) => Some(Floating {
+                        real: LongDouble::ZERO,
+                        imag: LongDouble::from_double(value.get()),
+                    }),
+                    | FloatTokenType::ImaginaryLongDouble(value) => Some(Floating {
+                        real: LongDouble::ZERO,
+                        imag: value,
+                    }),
+                    | _ => info.floating,
+                };
                 info.constant = ConstantClass::Arithmetic;
             },
             | E::StringLiteral(value) =>
@@ -1065,6 +1119,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 info = if let Some(info) = self.atomic_call(e, function_expression, arguments) {
                     info
+                } else if self.classify_type_callee(function_expression) {
+                    self.classify_type(e, &arguments)
+                } else if let Some(info) = self.math128_builtin(e, function_expression, &arguments)
+                {
+                    info
                 } else if let Some(info) = self.constant_p(e, function_expression, arguments) {
                     info
                 } else {
@@ -1104,7 +1163,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // Unmodeled extensions retain unknown results and suppress constraints.
             | _ => {},
         }
+        if info.unfolded_binary128 {
+            info.integer = None;
+            info.floating = None;
+            info.ice = false;
+        }
         if e.recovered {
+            info.unfolded_binary128 = false;
             info.ty = self.types.unknown();
             info.integer = None;
             info.floating = None;
@@ -1181,7 +1246,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ))
     }
 
-    fn invalid_expression(
+    pub(super) fn invalid_expression(
         &mut self,
         e: &'tu Expression<'tu>,
         kind: SemanticErrorKind,
@@ -1324,7 +1389,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return self.invalid_expression(e, SemanticErrorKind::InvalidUnaryOperand);
         }
         if matches!(op, U::Real | U::Imag) {
-            return Self::expression_result(e, self.types.unknown());
+            return self.real_imag(e, op, operand);
         }
         let ty = if op == U::LogicalNot {
             self.types.scalar(Scalar::Int)
@@ -1333,6 +1398,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         self.convert(operand.expression, ty, ConversionKind::Arithmetic);
         let mut info = Self::expression_result(e, ty);
+        info.unfolded_binary128 = operand.unfolded_binary128;
         info.integer = operand.integer.and_then(|v| v.unary(op));
         if op == U::LogicalNot {
             info.integer =
@@ -1399,6 +1465,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         self.convert(operand.expression, target, ConversionKind::Assignment);
         let mut info = Self::expression_result(e, target.unqualified());
+        info.unfolded_binary128 = operand.unfolded_binary128
+            || (self.binary128_type(target) && operand.constant == ConstantClass::Arithmetic);
         let mut immediate = operand.expression;
         while let ExpressionType::Parenthesized { expression } = immediate.kind {
             immediate = expression;
@@ -1441,6 +1509,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if self.arithmetic(target) && operand.constant == ConstantClass::Arithmetic {
             info.constant = ConstantClass::Arithmetic;
+        }
+        if info.unfolded_binary128 {
+            info.integer = None;
+            info.floating = None;
+            info.ice = false;
         }
         // Known pointer truth is an accepted arithmetic constant form, but
         // not an integer constant expression. C99 §6.3.1.2p1, p. 43;
@@ -1833,6 +1906,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => {},
         }
         if self.arithmetic(info.ty) {
+            info.unfolded_binary128 = left.unfolded_binary128
+                || right.unfolded_binary128
+                || (self.binary128_type(info.ty)
+                    && left.constant == ConstantClass::Arithmetic
+                    && right.constant == ConstantClass::Arithmetic);
             let floating = left.floating.is_some() || right.floating.is_some();
             if floating
                 && let Some((left, right)) = self
@@ -1958,8 +2036,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.convert(left.expression, ty, ConversionKind::Arithmetic);
         self.convert(right.expression, ty, ConversionKind::Arithmetic);
         let mut info = Self::expression_result(e, ty);
+        if self.arithmetic(ty)
+            && condition.constant == ConstantClass::Arithmetic
+            && left.constant == ConstantClass::Arithmetic
+            && right.constant == ConstantClass::Arithmetic
+            && (condition.unfolded_binary128
+                || left.unfolded_binary128
+                || right.unfolded_binary128
+                || self.binary128_type(ty))
+        {
+            info.unfolded_binary128 = true;
+            info.constant = ConstantClass::Arithmetic;
+        }
         if let Some(truth) = Self::constant_truth(condition) {
             let selected = if truth { left } else { right };
+            info.unfolded_binary128 = selected.unfolded_binary128
+                || (self.binary128_type(ty) && selected.constant == ConstantClass::Arithmetic);
             info.integer = selected.integer;
             if self.arithmetic(ty) && self.integer_type(ty).is_none() {
                 info.floating = self

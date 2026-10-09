@@ -1,0 +1,13 @@
+warning: '__float128' is a GNU extension
+ --> sema-float128-pedantic.c:1:1
+  |
+1 | __float128 value = 1.0Q;
+  | ^^^^^^^^^^
+
+warning: 'binary128 floating constant' is a GNU extension
+ --> sema-float128-pedantic.c:1:20
+  |
+1 | __float128 value = 1.0Q;
+  |                    ^^^^
+
+2 warnings generated.

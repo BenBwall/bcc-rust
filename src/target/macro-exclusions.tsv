@@ -8,7 +8,6 @@ _M_FP_CONTRACT	MS floating code-generation modes are not implemented.
 _M_FP_PRECISE	MS floating code-generation modes are not implemented.
 __BITINT_MAXWIDTH__	Extended integer syntax exists but these widths lack semantic types.
 __CONSTANT_CFSTRINGS__	Objective-C and CoreFoundation string intrinsics are not implemented.
-__FLOAT128__	Quadruple-precision floating types and arithmetic are not implemented.
 __FLT16_DECIMAL_DIG__	Half-precision floating types and arithmetic are not implemented.
 __FLT16_DENORM_MIN__	Half-precision floating types and arithmetic are not implemented.
 __FLT16_DIG__	Half-precision floating types and arithmetic are not implemented.
@@ -65,7 +64,6 @@ __PIE__	Code generation, relocation and optimization policy are not implemented.
 __PRAGMA_REDEFINE_EXTNAME	The advertised pragma/attribute semantics are not implemented.
 __SEG_FS	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __SEG_GS	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
-__SIZEOF_FLOAT128__	Quadruple-precision floating types and arithmetic are not implemented.
 __SSE2_MATH__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __SSE2__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __SSE_MATH__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.

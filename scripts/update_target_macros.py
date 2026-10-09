@@ -17,8 +17,6 @@ def exclusion(name):
         return "Encoded literal syntax exists, but its semantic types and storage are not implemented."
     if name.startswith(("__FLT16_", "__BF16_")):
         return "Half-precision floating types and arithmetic are not implemented."
-    if name.startswith("__FLT128_") or name in {"__FLOAT128__", "__SIZEOF_FLOAT128__"}:
-        return "Quadruple-precision floating types and arithmetic are not implemented."
     if name in {"__GXX_ABI_VERSION", "__GXX_TYPEINFO_EQUALITY_INLINE"}:
         return "C++ ABI and type-info semantics are not implemented."
     if name == "__GCC_HAVE_DWARF2_CFI_ASM":

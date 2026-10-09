@@ -1224,6 +1224,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Decimal128
                 | KeywordTokenType::Constexpr
                 | KeywordTokenType::Int128
+                | KeywordTokenType::Float128
                 | KeywordTokenType::Int8
                 | KeywordTokenType::Int16
                 | KeywordTokenType::Int32
@@ -1291,6 +1292,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 | KeywordTokenType::Decimal64
                 | KeywordTokenType::Decimal128
                 | KeywordTokenType::Int128
+                | KeywordTokenType::Float128
                 | KeywordTokenType::Int8
                 | KeywordTokenType::Int16
                 | KeywordTokenType::Int32

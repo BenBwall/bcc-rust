@@ -231,12 +231,17 @@ pub(crate) enum SemanticErrorKind {
     InvalidAtomicFailureOrder,
     /// Clang warns when expected/output buffers discard qualifiers.
     AtomicBufferQualifiers,
+    /// GCC Additional Floating Types, target availability.
+    UnsupportedFloat128,
+    /// GCC Other Builtins: `choose_expr` requires an integer constant.
+    InvalidChooseCondition,
 }
 
 impl SemanticErrorKind {
     /// The primary label names what is wrong at the labeled source.
     const fn label(self) -> &'static str {
         match self {
+            | Self::UnsupportedFloat128 => "unsupported floating type",
             | Self::UnknownTypedef => "not a typedef name in this scope",
             | Self::UndeclaredIdentifier => "not declared",
             | Self::InvalidAddressOperand => "cannot take this address",
@@ -281,7 +286,8 @@ impl SemanticErrorKind {
             | Self::TagKindMismatch => "different tag kind",
             | Self::TagRedefinition | Self::DuplicateDefinition => "defined again here",
             | Self::IncompleteEnum => "enum is not yet complete",
-            | Self::InvalidConstant => "not an integer constant expression",
+            | Self::InvalidConstant | Self::InvalidChooseCondition =>
+                "not an integer constant expression",
             | Self::ConstantOverflow => "overflow or invalid operation",
             | Self::EnumeratorRange => "no supported enum type holds this value with the others",
             | Self::InvalidMember => "incomplete member type",
@@ -355,6 +361,16 @@ impl SemanticErrorKind {
             | Self::InvalidAtomicType => (
                 "atomic type requires an eligible complete object type",
                 "C11 §6.7.2.4p3 and §6.7.3p3: arrays and functions cannot be atomic; an atomic type specifier also excludes qualified and atomic types",
+            ),
+            | Self::InvalidChooseCondition => (
+                "__builtin_choose_expr requires an integer constant expression",
+                "GCC Other Builtins: __builtin_choose_expr selects its second or third operand \
+                 using an integer constant expression, preserving the selected type",
+            ),
+            | Self::UnsupportedFloat128 => (
+                "__float128 is not supported on this target",
+                "GCC Additional Floating Types: __float128 requires target binary128 support; \
+                 Clang rejects it on x86_64-pc-windows-msvc",
             ),
             | Self::InvalidFunctionDefinition => (
                 "definition requires a function declarator",

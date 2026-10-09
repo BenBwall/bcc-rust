@@ -91,6 +91,9 @@ pub(crate) enum ExtendedType<'tu> {
         width:      u8,
         signedness: Option<bool>,
     },
+    Float128 {
+        complex: bool,
+    },
 }
 
 /// Specifier additions collected in reverse source order; immutable links avoid
