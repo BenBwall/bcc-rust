@@ -12,6 +12,7 @@ mod expression_regressions;
 mod expressions;
 mod gnu;
 mod limits;
+mod mingw;
 mod msvc;
 mod node_sizes;
 mod parameter_regressions;

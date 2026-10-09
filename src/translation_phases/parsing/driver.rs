@@ -939,6 +939,15 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             | Some(token) => token.source_vectors,
             | None => self.missing_syntax_source(),
         };
+        // Clang's missing-declarations warning remains suppressible in system
+        // headers even when -pedantic-errors promotes it to an error.
+        if matches!(error_type, ParserErrorType::MemberDeclaresNothing)
+            && self
+                .context
+                .withholds(ErrorSeverity::Warning, false, source_vectors)
+        {
+            return;
+        }
         let insertion_point = if error_type.expects_terminating_semicolon() {
             self.semicolon_insertion_point(token)
         } else {
@@ -946,7 +955,14 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         };
         self.context.parser_error(ParserError {
             code: error_type.code(),
-            severity: error_type.severity(),
+            severity: if matches!(error_type, ParserErrorType::MemberDeclaresNothing)
+                && self.context.configuration.extension_policy()
+                    == crate::configuration::ExtensionPolicy::Deny
+            {
+                ErrorSeverity::Error
+            } else {
+                error_type.severity()
+            },
             warning_group,
             frame: self.active_frame,
             expected: error_type.expected_syntax(),

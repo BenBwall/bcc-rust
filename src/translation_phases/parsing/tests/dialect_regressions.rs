@@ -666,7 +666,7 @@ fn ms_anonymous_structs_accept_typedef_name_members() {
     );
     with_parse_configuration(source, configuration, |p| {
         assert!(
-            parser_errors(p).any(|error| *error == ParserErrorType::EmptyStructDeclarator),
+            p.errors.iter().any(|error| matches!(error, TranslationError::Parsing(error) if error.error_type == ParserErrorType::MemberDeclaresNothing)),
             "{:?}",
             p.errors
         );

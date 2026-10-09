@@ -420,7 +420,13 @@ mod tests {
                 args.extend(["--input", source]);
                 let disabled = run(&args);
                 assert!(
-                    String::from_utf8_lossy(&disabled.stderr).contains("error:"),
+                    String::from_utf8_lossy(&disabled.stderr).contains(
+                        if name == "anonymous-structs" {
+                            "warning: declaration does not declare anything"
+                        } else {
+                            "error:"
+                        }
+                    ),
                     "{name}: {disabled:?}"
                 );
             }

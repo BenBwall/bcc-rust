@@ -436,7 +436,11 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                             token,
                         );
                     } else {
-                        parser.report(ParserErrorType::EmptyStructDeclarator, Some(token));
+                        // C99: §6.7.2.1p1, p. 101; PDF p. 113. Clang accepts
+                        // type-only member declarations with
+                        // -Wmissing-declarations;
+                        // tagged records do not become C11 anonymous members.
+                        parser.report(ParserErrorType::MemberDeclaresNothing, Some(token));
                     }
                     parser.merge_source(&mut self.member_source, token);
                     self.finish_member(parser);

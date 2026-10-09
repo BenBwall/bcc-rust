@@ -1,0 +1,19 @@
+warning: declaration does not declare anything
+ --> parser-member-declares-nothing.c:2:28
+  |
+2 |     struct Inner { int x; };
+  |                            ^ this declaration declares a type but no member
+
+warning: declaration does not declare anything
+ --> parser-member-declares-nothing.c:3:19
+  |
+3 |     struct Forward;
+  |                   ^ this declaration declares a type but no member
+
+warning: declaration does not declare anything
+ --> parser-member-declares-nothing.c:4:17
+  |
+4 |     enum E { A };
+  |                 ^ this declaration declares a type but no member
+
+3 warnings generated.

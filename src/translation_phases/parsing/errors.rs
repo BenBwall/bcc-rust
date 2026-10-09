@@ -703,7 +703,10 @@ pub(crate) enum ParserErrorType<'tu> {
     /// Struct member declaration contained no declarator or bit-field.
     /// C99: struct-declarator-list is nonempty under §6.7.2.1,
     /// p. 101; PDF p. 113.
-    EmptyStructDeclarator,
+    /// C11: §6.7.2.1p2, p. 113; PDF p. 131. Clang's
+    /// -Wmissing-declarations accepts type-only declarations with a warning;
+    /// they declare no member unless anonymous-member syntax applies.
+    MemberDeclaresNothing,
 }
 
 impl GetSeverity for ParserErrorType<'_> {
@@ -793,7 +796,8 @@ impl ParserErrorType<'_> {
             | Self::VolatileSpecifiedTwice
             | Self::RestrictSpecifiedTwice
             | Self::InlineSpecifiedTwice
-            | Self::TypedefDeclaresNoName => ParserDiagnosticCode::Quality,
+            | Self::TypedefDeclaresNoName
+            | Self::MemberDeclaresNothing => ParserDiagnosticCode::Quality,
             | Self::StorageClassRedefinition(..)
             | Self::StaticSpecifiedTwice
             | Self::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator
@@ -863,7 +867,6 @@ impl ParserErrorType<'_> {
                 ..,
             )
             | Self::UnexpectedEndOfVariadicFunctionDeclaratorParameterList
-            | Self::EmptyStructDeclarator
             | Self::ExpectedClosingSquareBracketAfterPointerInArrayDirectDeclarator(..)
             | Self::UnsupportedImaginaryTypeSpecifier
             | Self::DeclarationSpecifierNotAllowedHere(..) => ParserDiagnosticCode::Syntax,
@@ -992,8 +995,8 @@ impl ParserErrorType<'_> {
             | Self::TypeQualifiersWithoutDeclarator
             | Self::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
             | Self::KAndRFunctionDeclaratorMixedWithModernDeclarator
-            | Self::EmptyStructDeclarator
             | Self::TypedefDeclaresNoName
+            | Self::MemberDeclaresNothing
             | Self::DuplicateDefaultLabel => ExpectedSyntax::None,
         }
     }
@@ -1419,12 +1422,8 @@ impl ParserErrorType<'_> {
                 .note("C99 §6.7.5: `...` must be the last parameter"),
             | Self::UnexpectedEndOfVariadicFunctionDeclaratorParameterList =>
                 expected_with_label("`)` after `...`", "expected `)`", None),
-            | Self::EmptyStructDeclarator => new("expected a member name")
-                .label("this member declaration declares nothing")
-                .note(
-                    "C99 §6.7.2.1: each member declarator names a member or gives a bit-field \
-                     width",
-                ),
+            | Self::MemberDeclaresNothing => new("declaration does not declare anything")
+                .label("this declaration declares a type but no member"),
         }
     }
 }

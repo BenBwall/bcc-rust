@@ -9,7 +9,7 @@ parser	DeclarationSpecifierNotAllowedHere	parser-declaration-specifier-not-allow
 parser	DirectDeclaratorMustStartWithIdentifierOrOpeningParenthesis	parser-direct-declarator-must-start-with-identifier-or-opening-parenthesis.c	rendered
 parser	DuplicateDefaultLabel	parser-duplicate-default-label.c	rendered
 parser	EmptyDeclarationSpecifiers	parser-empty-declaration-specifiers.c	rendered
-parser	EmptyStructDeclarator	parser-empty-struct-declarator.c	rendered
+parser	MemberDeclaresNothing	parser-empty-struct-declarator.c	rendered
 parser	EmptyTranslationUnit	parser-empty-translation-unit.c	rendered
 parser	EnumSpecifierWithoutNameAndBody	parser-enum-specifier-without-name-and-body.c	rendered
 parser	ExpectedAssignmentExpressionAfterStaticInArrayDirectDeclarator	parser-expected-assignment-expression-after-static-in-array-direct-declarator.c	rendered
