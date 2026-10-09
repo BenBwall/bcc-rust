@@ -1,0 +1,25 @@
+warning: floating constant is too large for `__float128`
+ --> pp-float128-literals.c:1:19
+  |
+1 | __float128 huge = 0x1p16384q;
+  |                   ^^^^^^^^^^ this value becomes infinity
+  |
+  = note: C99 §6.4.4p2: the value of a constant must be representable in its type
+
+warning: floating constant is too small for `__float128`
+ --> pp-float128-literals.c:2:19
+  |
+2 | __float128 tiny = 0x1p-16495q;
+  |                   ^^^^^^^^^^^ this nonzero value becomes zero
+  |
+  = note: C99 §6.4.4p2: the value of a constant must be representable in its type
+
+error: invalid floating constant `1.0f128`
+ --> pp-float128-literals.c:3:22
+  |
+3 | double unsupported = 1.0f128;
+  |                      ^^^^^^^ not a valid floating constant
+  |
+  = note: C99 §6.4.4.2: a floating constant is digits with a `.` or an exponent and an optional `f`, `F`, `l`, or `L` suffix, as in `1.5`, `2e10`, or `.5f`
+
+1 error and 2 warnings generated.

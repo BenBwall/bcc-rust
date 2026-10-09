@@ -120,6 +120,9 @@ pub(crate) enum Scalar {
     ComplexFloat,
     ComplexDouble,
     ComplexLongDouble,
+    /// GCC Additional Floating Types: IEEE binary128.
+    Float128,
+    ComplexFloat128,
 }
 
 impl Scalar {
@@ -146,6 +149,8 @@ impl Scalar {
             | Self::ComplexFloat => "float _Complex",
             | Self::ComplexDouble => "double _Complex",
             | Self::ComplexLongDouble => "long double _Complex",
+            | Self::Float128 => "__float128",
+            | Self::ComplexFloat128 => "__float128 _Complex",
         }
     }
 
@@ -193,7 +198,7 @@ pub(crate) struct TargetLayout {
     pub(crate) mb_len_max:         u32,
     pub(crate) wint_t:             Scalar,
     pub(crate) va_list:            Layout,
-    pub(crate) scalars:            [Option<Layout>; 21],
+    pub(crate) scalars:            [Option<Layout>; 23],
     pub(crate) pointer:            Layout,
     pub(crate) char_signed:        bool,
     pub(crate) size_t:             Scalar,
@@ -247,6 +252,14 @@ impl TargetLayout {
             Some(Layout {
                 size:  16,
                 align: 8,
+            }),
+            Some(Layout {
+                size:  32,
+                align: 16,
+            }),
+            Some(Layout {
+                size:  16,
+                align: 16,
             }),
             Some(Layout {
                 size:  32,

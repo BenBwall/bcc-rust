@@ -26,6 +26,7 @@ mod statements;
 )]
 mod tests;
 mod traversal;
+mod type_generic;
 mod types;
 
 use std::cell::Cell;
@@ -348,6 +349,7 @@ enum Work<'tu, 's> {
     ConvertInteger(u32, bool),
     SizeofDone(bool, SourceVectors),
     Atomic(SourceVectors),
+    TypeofDone(SyntaxOperand<'tu>, bool),
 }
 
 use crate::util::arena_list::ArenaList;
@@ -816,6 +818,11 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                         }
                     },
                 }
+            },
+            | Work::TypeofDone(operand, unqualified) => {
+                let ty = self.operand_type(operand);
+                self.values
+                    .push(if unqualified { ty.unqualified() } else { ty });
             },
             | Work::Spec(s, q, source, force) => self.resolve_spec(s, q, source, force),
             | Work::Atomic(source) => {

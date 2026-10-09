@@ -155,6 +155,9 @@ impl<'tu> SemanticTranslationUnit<'tu> {
             if let Some(width) = info.bit_field {
                 let _ = write!(out, " bit-field={width}");
             }
+            if info.unfolded_binary128 {
+                out.push_str(" unfolded=binary128");
+            }
             if let Some(value) = info.floating {
                 let _ = write!(out, " real={} imag={}", value.real, value.imag);
             }

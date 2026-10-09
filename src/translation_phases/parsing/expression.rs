@@ -1665,7 +1665,20 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 | TokenType::Identifier =>
                     ExpressionType::Identifier(Identifier::from_token(token)),
                 | TokenType::Integer(value) => ExpressionType::Constant(Constant::Integer(value)),
-                | TokenType::Float(value) => ExpressionType::Constant(Constant::Float(value)),
+                | TokenType::Float(value) => {
+                    if matches!(
+                        value,
+                        super::super::preprocessing::FloatTokenType::Float128(_)
+                            | super::super::preprocessing::FloatTokenType::ImaginaryFloat128(_)
+                    ) {
+                        parser.extension(
+                            crate::configuration::Feature::Float128,
+                            "binary128 floating constant",
+                            token,
+                        );
+                    }
+                    ExpressionType::Constant(Constant::Float(value))
+                },
                 | TokenType::Character(value) => ExpressionType::Constant(Constant::Char(value)),
                 | TokenType::String(value) => ExpressionType::StringLiteral(value),
                 | _ => {

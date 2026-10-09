@@ -185,6 +185,8 @@ pub(crate) enum FloatTokenType {
     ImaginaryFloat(f32),
     ImaginaryDouble(Packed<f64>),
     ImaginaryLongDouble(LongDouble),
+    Float128(crate::binary128::Binary128),
+    ImaginaryFloat128(crate::binary128::Binary128),
 }
 
 impl FloatTokenType {
@@ -194,6 +196,8 @@ impl FloatTokenType {
             | Self::Float(_) => "float",
             | Self::Double(_) => "double",
             | Self::LongDouble(_) => "long double",
+            | Self::Float128(_) => "__float128",
+            | Self::ImaginaryFloat128(_) => "__float128 _Complex",
             | Self::ImaginaryFloat(_) => "float _Complex",
             | Self::ImaginaryDouble(_) => "double _Complex",
             | Self::ImaginaryLongDouble(_) => "long double _Complex",
@@ -210,6 +214,8 @@ impl Display for FloatTokenType {
             | Self::ImaginaryDouble(v) => write!(f, "{v}i"),
             | Self::LongDouble(v) => write!(f, "{v}"),
             | Self::ImaginaryLongDouble(v) => write!(f, "{v}i"),
+            | Self::Float128(v) => write!(f, "{v}"),
+            | Self::ImaginaryFloat128(v) => write!(f, "{v}i"),
         }
     }
 }
@@ -314,6 +320,7 @@ pub(crate) enum KeywordTokenType {
     Leave,
     MsAsm,
     Pragma,
+    Float128,
 }
 
 /// A `punctuator`. Digraphs map to the punctuators they behave as (§6.4.6
@@ -699,6 +706,7 @@ impl KeywordTokenType {
         Self::Leave,
         Self::MsAsm,
         Self::Pragma,
+        Self::Float128,
     ];
 
     /// Classifies an identifier after preprocessing has finished. It is an
@@ -816,6 +824,10 @@ impl KeywordTokenType {
                 | Self::LocalLabel => (
                     configuration.accepts(Feature::LocalLabels),
                     Some(Feature::LocalLabels.origin()),
+                ),
+                | Self::Float128 => (
+                    configuration.accepts(Feature::Float128),
+                    Some(Feature::Float128.origin()),
                 ),
                 | Self::Int128 => (
                     configuration.accepts(Feature::Int128),
@@ -977,6 +989,7 @@ impl KeywordTokenType {
             | Self::BuiltinChooseExpr => "__builtin_choose_expr",
             | Self::LocalLabel => "__label__",
             | Self::Int128 => "__int128",
+            | Self::Float128 => "__float128",
             | Self::AutoType => "__auto_type",
             | Self::Real => "__real__",
             | Self::Imag => "__imag__",

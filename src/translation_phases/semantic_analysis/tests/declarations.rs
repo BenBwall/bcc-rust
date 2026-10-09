@@ -252,7 +252,10 @@ fn members_through_pointers_to_unanalyzed_types_are_opaque() {
              v->missing; } struct T *w; int g(void) { return w->missing; }",
             gnu17()
         ),
-        [SemanticErrorKind::InvalidMemberAccess]
+        [
+            SemanticErrorKind::InvalidMemberAccess,
+            SemanticErrorKind::InvalidMemberAccess
+        ]
     );
     assert_eq!(
         kinds(

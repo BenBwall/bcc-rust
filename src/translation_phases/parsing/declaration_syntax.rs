@@ -314,6 +314,8 @@ impl Display for TypeSpecifiers<'_> {
                     signedness: Some(false),
                 } => "unsigned __int128",
                 | super::modern::ExtendedType::Int128 { .. } => "__int128",
+                | super::modern::ExtendedType::Float128 { complex: false } => "__float128",
+                | super::modern::ExtendedType::Float128 { complex: true } => "__float128 _Complex",
             }),
             | TypeSpecifiers::Empty => write!(f, "<no type specifier>"),
             | TypeSpecifiers::Char => write!(f, "char"),

@@ -278,8 +278,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 values.push(valid);
                 continue;
             }
-            if matches!(expression.kind, ExpressionType::Generic(_)) {
-                let valid = self.expression_info(expression).ice;
+            if matches!(expression.kind, ExpressionType::Generic(_))
+                || self.type_generic_constant(expression)
+            {
+                let info = self.expression_info(expression);
+                let valid = info.ice && info.integer.is_some();
                 _ = self.ice_operands.insert(key, valid);
                 values.push(valid);
                 continue;
@@ -719,6 +722,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.integers.push(None);
             return;
         }
+        if self.type_generic_constant(expression) {
+            self.integers
+                .push(if info.ice { info.integer } else { None });
+            return;
+        }
         if self.context.configuration.gnu_extensions()
             && info.constant == super::ConstantClass::Arithmetic
             && info.integer.is_some()
@@ -909,6 +917,8 @@ fn unanalyzed_extended(specifiers: super::TypeSpecifiers<'_>) -> bool {
                 super::ExtendedType::MsInteger { .. }
                     | super::ExtendedType::Int128 { .. }
                     | super::ExtendedType::Atomic(_)
+                    | super::ExtendedType::Float128 { .. }
+                    | super::ExtendedType::Typeof { .. }
             )
     )
 }

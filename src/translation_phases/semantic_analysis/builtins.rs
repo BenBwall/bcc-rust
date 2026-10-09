@@ -34,11 +34,25 @@ pub(super) fn modeled(keyword: KeywordTokenType) -> bool {
             | KeywordTokenType::BuiltinVaStart
             | KeywordTokenType::BuiltinVaEnd
             | KeywordTokenType::BuiltinVaCopy
+            | KeywordTokenType::BuiltinTypesCompatible
+            | KeywordTokenType::BuiltinChooseExpr
             | KeywordTokenType::BuiltinOffsetof
     )
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// GNU typeof preserves the operand's declared type, without decay.
+    pub(super) fn operand_type(&self, operand: SyntaxOperand<'tu>) -> TypeId {
+        match operand {
+            | SyntaxOperand::Expression(e) => self.expression_info(e).ty,
+            | SyntaxOperand::Type(name) => self
+                .resolved_type_names
+                .get(&name.source_vectors)
+                .copied()
+                .unwrap_or_else(|| self.types.unknown()),
+        }
+    }
+
     /// Opaque `SysV` record, wrapped in an array of one so parameter adjustment
     /// and expression decay use the ordinary array rules. C99: extension
     /// supporting §7.15p3, p. 249; PDF p. 261.
@@ -85,6 +99,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         b: &'tu Builtin<'tu>,
     ) -> ExpressionInfo<'tu> {
         use KeywordTokenType as K;
+        if matches!(b.keyword, K::BuiltinTypesCompatible | K::BuiltinChooseExpr) {
+            return self.type_generic_builtin(e, b);
+        }
         if b.keyword == K::BuiltinOffsetof {
             return self.type_offsetof(e, b);
         }

@@ -717,7 +717,10 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         } else {
             &normalized
         };
-        let res = match contents.char_at(contents.len() - 2) {
+        let suffix = contents.char_at(contents.len() - 2);
+        let res = match suffix {
+            | Some('q' | 'Q') =>
+                crate::binary128::parse(contents, self.scratch).map(FloatTokenType::Float128),
             | Some('f' | 'F') => string_to_float(contents).map(FloatTokenType::Float),
             | Some('l' | 'L')
                 if self
@@ -1040,6 +1043,8 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
                     TokenType::Float(FloatTokenType::ImaginaryFloat(v)),
                 | TokenType::Float(FloatTokenType::Double(v)) =>
                     TokenType::Float(FloatTokenType::ImaginaryDouble(v)),
+                | TokenType::Float(FloatTokenType::Float128(v)) =>
+                    TokenType::Float(FloatTokenType::ImaginaryFloat128(v)),
                 | TokenType::Float(FloatTokenType::LongDouble(v)) =>
                     TokenType::Float(FloatTokenType::ImaginaryLongDouble(v)),
                 | TokenType::Integer(v) => {

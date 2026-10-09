@@ -1,0 +1,17 @@
+error: __float128 is not supported on this target
+ --> sema-float128-msvc.c:1:1
+  |
+1 | __float128 value;
+  | ^^^^^^^^^^ unsupported floating type
+  |
+  = note: GCC Additional Floating Types: __float128 requires target binary128 support; Clang rejects it on x86_64-pc-windows-msvc
+
+error: __float128 is not supported on this target
+ --> sema-float128-msvc.c:2:1
+  |
+2 | _Complex __float128 complex_value;
+  | ^^^^^^^^^^^^^^^^^^^ unsupported floating type
+  |
+  = note: GCC Additional Floating Types: __float128 requires target binary128 support; Clang rejects it on x86_64-pc-windows-msvc
+
+2 errors generated.

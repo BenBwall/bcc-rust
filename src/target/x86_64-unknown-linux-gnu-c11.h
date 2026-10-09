@@ -39,6 +39,7 @@
 #define __DECIMAL_DIG__ __LDBL_DECIMAL_DIG__
 #define __ELF__ 1
 #define __FINITE_MATH_ONLY__ 0
+#define __FLOAT128__ 1
 #define __FLT_DECIMAL_DIG__ 9
 #define __FLT_DENORM_MIN__ 1.40129846e-45F
 #define __FLT_DIG__ 6
@@ -188,6 +189,7 @@
 #define __SIG_ATOMIC_TYPE__ int
 #define __SIG_ATOMIC_WIDTH__ 32
 #define __SIZEOF_DOUBLE__ 8
+#define __SIZEOF_FLOAT128__ 16
 #define __SIZEOF_FLOAT__ 4
 #define __SIZEOF_INT128__ 16
 #define __SIZEOF_INT__ 4
