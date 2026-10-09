@@ -398,6 +398,9 @@ impl PreprocessorExpressionOperand {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 struct EvaluatedPreprocessorExpressionOperand {
     value:                    PreprocessorExpressionOperand,
+    /// Recovery supplies a value for reduction, not a real arithmetic operand.
+    /// C99: §6.10.1 paragraph 1, pp. 147-148; PDF pp. 159-160.
+    is_recovered:             bool,
     contains_evaluated_comma: bool,
     arithmetic_faults:        Option<NonZeroU32>,
 }
@@ -406,6 +409,7 @@ impl From<PreprocessorExpressionOperand> for EvaluatedPreprocessorExpressionOper
     fn from(value: PreprocessorExpressionOperand) -> Self {
         Self {
             value,
+            is_recovered: false,
             contains_evaluated_comma: false,
             arithmetic_faults: None,
         }
@@ -413,12 +417,21 @@ impl From<PreprocessorExpressionOperand> for EvaluatedPreprocessorExpressionOper
 }
 
 impl EvaluatedPreprocessorExpressionOperand {
+    fn recovered_zero() -> Self {
+        Self {
+            is_recovered: true,
+            ..PreprocessorExpressionOperand::Signed(0).into()
+        }
+    }
+
     fn with_comma_liveness(
         value: PreprocessorExpressionOperand,
         contains_evaluated_comma: bool,
+        is_recovered: bool,
     ) -> Self {
         Self {
             value,
+            is_recovered,
             contains_evaluated_comma,
             arithmetic_faults: None,
         }
@@ -703,7 +716,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     .operand_stack
                     .retain_faults(rhs.arithmetic_faults);
                 self.expression_parser.operand_stack.push(
-                    EvaluatedPreprocessorExpressionOperand::with_comma_liveness(rhs.value, true),
+                    EvaluatedPreprocessorExpressionOperand::with_comma_liveness(
+                        rhs.value,
+                        true,
+                        rhs.is_recovered,
+                    ),
                 );
             },
             | Op::QuestionMark => {
@@ -717,7 +734,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 _ = self.expression_parser.operand_stack.pop();
                 self.expression_parser
                     .operand_stack
-                    .push(PreprocessorExpressionOperand::Signed(0));
+                    .push(EvaluatedPreprocessorExpressionOperand::recovered_zero());
             },
             | Op::Conditional => self.apply_conditional_operator(),
             | Op::OpeningParenthesis => {
@@ -756,10 +773,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             self.report_missing_operand(operator.kind);
             return;
         };
-        let result = match operator.kind {
+        let mut result = match operator.kind {
             | Op::UnaryMinus => {
                 let (new, did_overflow) = operand.as_signed().overflowing_neg();
-                if operand.is_signed() && did_overflow {
+                if operand.is_signed() && did_overflow && !operand.is_recovered {
                     self.expression_parser.operand_stack.record_fault(
                         ArithmeticFaultKind::UnaryMinusOverflow,
                         operator.source_vectors,
@@ -772,6 +789,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 PreprocessorExpressionOperand::Signed(i64::from(operand.as_signed() == 0)).into(),
             | other => unreachable!("{other:?} is not a unary operator"),
         };
+        result.is_recovered = operand.is_recovered;
         self.expression_parser.operand_stack.push(result);
     }
 
@@ -795,7 +813,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 stack.pop()
             }
         };
-        let rhs = pop().unwrap_or_else(|| PreprocessorExpressionOperand::Signed(0).into());
+        let rhs = pop().unwrap_or_else(EvaluatedPreprocessorExpressionOperand::recovered_zero);
         let Some(lhs) = pop() else {
             self.report_missing_operand(operator);
             self.expression_parser.operand_stack.push(rhs);
@@ -816,6 +834,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             return;
         };
         let is_unsigned = lhs.is_unsigned() || rhs.is_unsigned();
+        let is_recovered = lhs.is_recovered || rhs.is_recovered;
         let truth = |value: bool| (Operand::Signed(i64::from(value)), None);
         // Unsigned results never overflow (C99 §6.2.5p9).
         let arithmetic = |(new, did_overflow): (i64, bool), fault: Fault| {
@@ -915,12 +934,19 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             ),
             | other => unreachable!("{other:?} is not a binary arithmetic operator"),
         };
-        if let Some(fault) = fault {
+        if let Some(fault) = fault
+            && !is_recovered
+        {
             self.expression_parser
                 .operand_stack
                 .record_fault(fault, operator.source_vectors);
         }
-        self.expression_parser.operand_stack.push(result);
+        self.expression_parser
+            .operand_stack
+            .push(EvaluatedPreprocessorExpressionOperand {
+                is_recovered,
+                ..result.into()
+            });
     }
 
     /// Applies `&&` or `||`.
@@ -953,6 +979,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             EvaluatedPreprocessorExpressionOperand::with_comma_liveness(
                 PreprocessorExpressionOperand::Signed(i64::from(value)),
                 lhs.contains_evaluated_comma || (rhs_is_evaluated && rhs.contains_evaluated_comma),
+                lhs.is_recovered || (rhs_is_evaluated && rhs.is_recovered),
             ),
         );
     }
@@ -972,7 +999,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             });
             self.expression_parser
                 .operand_stack
-                .push(PreprocessorExpressionOperand::Signed(0));
+                .push(EvaluatedPreprocessorExpressionOperand::recovered_zero());
         }
         operand
     }
@@ -1018,6 +1045,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     selected_operand.value
                 },
                 condition.contains_evaluated_comma || selected_operand.contains_evaluated_comma,
+                condition.is_recovered || selected_operand.is_recovered,
             ),
         );
     }
@@ -1118,7 +1146,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         let stack = &mut self.expression_parser.operand_stack;
         if stack.len() != 1 {
             while stack.pop().is_some() {}
-            stack.push(PreprocessorExpressionOperand::Signed(0));
+            stack.push(EvaluatedPreprocessorExpressionOperand::recovered_zero());
         }
         stack.floor = self.expression_parser.open_parentheses.pop().unwrap_or(0);
     }
@@ -1278,7 +1306,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             });
                             // An invalid group still contributes one recovered
                             // operand, so following operators cannot underflow.
-                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+                            self.expression_parser.operand_stack.push(EvaluatedPreprocessorExpressionOperand::recovered_zero());
                         }
                         self.expression_parser.state = BINARY;
                         while let Some(op) = self.expression_parser.operator_stack.pop() {
@@ -1314,9 +1342,12 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     ),
                     (PreprocessorTokenType::Colon, state) => {
                         // C99 §6.5.15p1: an operand belongs here. The
-                        // operator before the `:` lacks it, so a recovered
-                        // operand takes its place before reduction; with no
-                        // operator, only the unmatched `:` is reported.
+                        // operator before the `:` lacks it. Only a matching
+                        // `?` within this group needs a recovered operand
+                        // before reduction; otherwise abandon this expression.
+                        let matched_question_mark = self.expression_parser.operator_stack.iter().rev()
+                            .take_while(|operator| operator.kind != PreprocessorExpressionOperator::OpeningParenthesis)
+                            .any(|operator| operator.kind == PreprocessorExpressionOperator::QuestionMark);
                         if state == UNARY
                             && let Some(operator) = self.expression_parser.operator_stack.last().map(|operator| operator.kind)
                             && operator != PreprocessorExpressionOperator::OpeningParenthesis
@@ -1330,9 +1361,21 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                 error_type,
                                 source_vectors: token.source_vectors,
                             });
-                            self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Signed(0));
+                            if matched_question_mark {
+                                self.expression_parser.operand_stack.push(EvaluatedPreprocessorExpressionOperand::recovered_zero());
+                            }
                         }
-                        let mut matched_question_mark = false;
+                        if !matched_question_mark {
+                            self.context.preprocessor_error(PreprocessorError {
+                                error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
+                                source_vectors: token.source_vectors,
+                            });
+                            // Abandon evaluation too: deferred faults may belong
+                            // to a branch that would never be selected. Recovery
+                            // supplies a defined false condition for this line.
+                            self.skip_and_expand_until_newline();
+                            return Some(PreprocessorExpressionOperand::Signed(0));
+                        }
                         while let Some(last) = self.expression_parser.operator_stack.last() {
                             match last.kind {
                                 | PreprocessorExpressionOperator::QuestionMark => {
@@ -1340,7 +1383,6 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                         kind: PreprocessorExpressionOperator::Conditional,
                                         source_vectors: token.source_vectors,
                                     };
-                                    matched_question_mark = true;
                                     break;
                                 },
                                 | PreprocessorExpressionOperator::OpeningParenthesis => break,
@@ -1350,14 +1392,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                 },
                             }
                         }
-                        if matched_question_mark {
-                            self.expression_parser.state = UNARY;
-                        } else {
-                            self.context.preprocessor_error(PreprocessorError {
-                                error_type: PreprocessorErrorType::ColonWithoutMatchingQuestionMark,
-                                source_vectors: token.source_vectors,
-                            });
-                        }
+                        self.expression_parser.state = UNARY;
                     },
                     (
                         | PreprocessorTokenType::ForwardSlash | PreprocessorTokenType::Percent | PreprocessorTokenType::LessThanLessThan |
@@ -1479,7 +1514,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             });
             self.expression_parser
                 .operand_stack
-                .push(PreprocessorExpressionOperand::Signed(0));
+                .push(EvaluatedPreprocessorExpressionOperand::recovered_zero());
         }
         while let Some(op) = self.expression_parser.operator_stack.pop() {
             self.handle_expression_operator(op);

@@ -332,6 +332,43 @@ mod tests {
     }
 
     #[test]
+    fn recovered_preprocessor_operands_preserve_following_declarations() {
+        for mode in ["c99", "gnu17", "c23"] {
+            for (expression, diagnostic) in [
+                ("1 ? 1 / : 2", "expected an expression after `/`"),
+                ("1 ? 1 % : 2", "expected an expression after `%`"),
+                ("(1 / )", "expected an expression after `/`"),
+                ("(1 % )", "expected an expression after `%`"),
+                ("! : 1", "expected an expression after `!`"),
+                ("1 + : 2", "expected an expression after `+`"),
+                ("0 ? 1 / 0 : 1 + : 2", "expected an expression after `+`"),
+                ("1 / 0", "division by zero in `#if` expression"),
+                ("1 2", "expected an operator, found number `2`"),
+            ] {
+                let source =
+                    format!("#if {expression}\n#endif\nint after;\n#if 1\nint later;\n#endif\n");
+                let output = run(&["-std", mode], &source);
+                let tree = String::from_utf8_lossy(&output.stderr);
+                assert!(output.status.success(), "{mode}: {expression}: {tree}");
+                assert!(tree.contains(diagnostic), "{mode}: {expression}: {tree}");
+                assert_eq!(
+                    tree.matches("error:").count(),
+                    1,
+                    "{mode}: {expression}: {tree}"
+                );
+                assert!(
+                    tree.contains("declarator after"),
+                    "{mode}: {expression}: {tree}"
+                );
+                assert!(
+                    tree.contains("declarator later"),
+                    "{mode}: {expression}: {tree}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn opaque_syntax_tokens_do_not_print_numeric_sentinels() {
         for (flags, source, expected) in [
             (

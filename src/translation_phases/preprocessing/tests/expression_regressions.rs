@@ -442,7 +442,13 @@ fn colon_in_operand_position_reports_the_operator_before_it() {
             &[
                 "ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(BinaryPlus)@1:9",
                 "ColonWithoutMatchingQuestionMark@1:9",
-                "ExpectedBinaryOperatorInPreprocessorExpression@2:1",
+            ],
+        ),
+        (
+            "! : 1",
+            &[
+                "LogicalNotWithoutOperand@1:7",
+                "ColonWithoutMatchingQuestionMark@1:7",
             ],
         ),
         (
@@ -460,8 +466,66 @@ fn colon_in_operand_position_reports_the_operator_before_it() {
             ],
         ),
         ("1 ? - : 2", &["UnaryMinusWithoutOperand@1:11"]),
+        (
+            "1 ? 1 / : 2",
+            &["ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(Divide)@1:13"],
+        ),
+        (
+            "1 ? 1 % : 2",
+            &["ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(Modulo)@1:13"],
+        ),
         (": 2", &["ColonWithoutMatchingQuestionMark@1:5"]),
+        (
+            "(1 + : 2)",
+            &[
+                "ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(BinaryPlus)@1:10",
+                "ColonWithoutMatchingQuestionMark@1:10",
+            ],
+        ),
+        (
+            "0 ? 1 / 0 : 1 + : 2",
+            &[
+                "ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(BinaryPlus)@1:21",
+                "ColonWithoutMatchingQuestionMark@1:21",
+            ],
+        ),
     ] {
         assert_eq!(expression_diagnostics(expression), expected, "{expression}");
+    }
+}
+
+#[test]
+fn missing_operands_at_group_end_do_not_create_arithmetic_faults() {
+    for (expression, expected) in [
+        (
+            "(1 / )",
+            "ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(Divide)@1:10",
+        ),
+        (
+            "(1 % )",
+            "ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(Modulo)@1:10",
+        ),
+        (
+            "1 / -(1 / )",
+            "ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(Divide)@1:15",
+        ),
+        (
+            "1 / (1 ? (1 / ) : 2)",
+            "ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(Divide)@1:19",
+        ),
+        (
+            "1 / (1 && (1 / ))",
+            "ExpectedRightHandSideOfBinaryOperatorInPreprocessorExpression(Divide)@1:20",
+        ),
+    ] {
+        assert_eq!(
+            expression_diagnostics(expression),
+            [expected],
+            "{expression}"
+        );
+        let source = format!("#if {expression}\ninside\n#endif\nafter\n");
+        preprocess(&source, |identifiers, errors| {
+            assert_eq!(identifiers, ["after"], "{expression}: {errors:#?}");
+        });
     }
 }

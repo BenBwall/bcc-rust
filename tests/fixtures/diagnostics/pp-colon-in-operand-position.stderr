@@ -4,14 +4,6 @@ error: expected an expression after `+`
 1 | #if 1 + : 2
   |         ^ `+` needs an operand here
 
-error: expected an operator between the operands of `#if`
- --> pp-colon-in-operand-position.c:2:1
-  |
-2 | #endif
-  | ^ the expression ends with an operand still unjoined
-  |
-  = note: C99 §6.10.1p1: the condition must be an integer constant expression
-
 error: expected an expression after `:`
  --> pp-colon-in-operand-position.c:3:13
   |
@@ -30,4 +22,4 @@ error: expected an expression after `-`
 7 | #if 1 ? - : 2
   |           ^ `-` needs an operand here
 
-5 errors generated.
+4 errors generated.
