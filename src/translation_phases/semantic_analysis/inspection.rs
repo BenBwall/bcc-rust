@@ -159,7 +159,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                 let _ = write!(out, " real={} imag={}", value.real, value.imag);
             }
             if let Some(value) = info.integer {
-                let _ = write!(out, " value={}", value.value);
+                let _ = write!(out, " value={value}");
             }
             if info.ice {
                 out.push_str(" ice");
@@ -302,7 +302,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
             out.push_str(" prototype");
         }
         if let Some(value) = binding.value {
-            let _ = write!(out, " value={}", value.value);
+            let _ = write!(out, " value={value}");
         }
         if let Some(minimum) = minimums.get(&binding.name.source_vectors) {
             let _ = write!(out, " static-minimum={minimum}");

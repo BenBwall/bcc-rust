@@ -308,7 +308,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                     {
                                         None
                                     } else {
-                                        info.integer.and_then(|v| u64::try_from(v.value).ok())
+                                        info.integer.and_then(Integer::to_u64)
                                     }
                                 },
                                 | DesignatorType::Field(name) | DesignatorType::GnuField(name) =>

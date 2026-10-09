@@ -281,6 +281,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             return self.types.scalar(promoted);
         }
+        // Clang's implementation-defined extended bit-field promotions.
+        // C99: §6.3.1.1p2, p. 42; PDF p. 54; §6.7.2.1p4, p. 101; PDF p. 113.
+        if let Some(width) = info.bit_field
+            && width <= 32
+            && matches!(
+                self.types.nodes[ty.index],
+                TypeKind::Scalar(Scalar::Int128 | Scalar::UnsignedInt128)
+            )
+        {
+            let unsigned = width == 32
+                && matches!(
+                    self.types.nodes[ty.index],
+                    TypeKind::Scalar(Scalar::UnsignedInt128)
+                );
+            return self.types.scalar(if unsigned {
+                Scalar::UnsignedInt
+            } else {
+                Scalar::Int
+            });
+        }
         if self.integer_type(ty).is_some_and(|(bits, _)| bits < 32)
             || (info.bit_field.is_some_and(|width| width < 32)
                 && matches!(
@@ -337,12 +357,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let rank = |s| match s {
                 | Scalar::Long | Scalar::UnsignedLong => 2,
                 | Scalar::LongLong | Scalar::UnsignedLongLong => 3,
+                | Scalar::Int128 | Scalar::UnsignedInt128 => 4,
                 | _ => 1,
             };
             let unsigned = |s| {
                 matches!(
                     s,
-                    Scalar::UnsignedInt | Scalar::UnsignedLong | Scalar::UnsignedLongLong
+                    Scalar::UnsignedInt
+                        | Scalar::UnsignedLong
+                        | Scalar::UnsignedLongLong
+                        | Scalar::UnsignedInt128
                 )
             };
             let (high, low) = if rank(ls) >= rank(rs) {
@@ -360,6 +384,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 match high {
                     | Scalar::Long => Scalar::UnsignedLong,
                     | Scalar::LongLong => Scalar::UnsignedLongLong,
+                    | Scalar::Int128 => Scalar::UnsignedInt128,
                     | _ => Scalar::UnsignedInt,
                 }
             }
@@ -609,7 +634,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         if operand.ice
                             && let Some(value) = operand.integer
                         {
-                            return Some((AddressBase::Absolute, offset.checked_add(value.value)?));
+                            return Some((
+                                AddressBase::Absolute,
+                                offset.checked_add(if self.pointer_target(info.ty).is_some() {
+                                    info.integer?.to_i128()?
+                                } else {
+                                    value.to_i128()?
+                                })?,
+                            ));
                         }
                         e = operand_expression;
                     },
@@ -633,7 +665,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         } else {
                             (right, left)
                         };
-                        let index = index.integer.filter(|_| index.ice)?.value;
+                        let index = index.integer.filter(|_| index.ice)?.to_i128()?;
                         let target = self.pointer_target(info.ty)?;
                         let size = i128::from(self.types.layout(target)?.size);
                         let step = index.checked_mul(size)?;
@@ -694,7 +726,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     } else {
                         (right, left)
                     };
-                    let index = index.integer.filter(|_| index.ice)?.value;
+                    let index = index.integer.filter(|_| index.ice)?.to_i128()?;
                     let size = i128::from(self.types.layout(info.ty)?.size);
                     offset = offset.checked_add(index.checked_mul(size)?)?;
                     lvalue = false;
@@ -1365,7 +1397,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && (self.address_value(operand) || (operand.ice && operand.integer.is_some()))
         {
             info.constant = ConstantClass::Address;
-            info.integer = operand.integer;
+            info.integer = operand.integer.map(|v| v.cast(64, false));
         }
         // GNU modes fold an integer-valued address constant converted to an
         // integer type, which C99 does not count as arithmetic (§6.6p8).

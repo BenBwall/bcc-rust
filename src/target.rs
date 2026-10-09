@@ -97,6 +97,10 @@ pub(crate) enum Scalar {
     UnsignedLong,
     LongLong,
     UnsignedLongLong,
+    /// GNU integer extension; rank exceeds long long.
+    /// C99: §6.3.1.1p1, p. 42; PDF p. 54.
+    Int128,
+    UnsignedInt128,
     Float,
     Double,
     LongDouble,
@@ -121,6 +125,8 @@ impl Scalar {
             | Self::UnsignedLong => "unsigned long",
             | Self::LongLong => "long long",
             | Self::UnsignedLongLong => "unsigned long long",
+            | Self::Int128 => "__int128",
+            | Self::UnsignedInt128 => "unsigned __int128",
             | Self::Float => "float",
             | Self::Double => "double",
             | Self::LongDouble => "long double",
@@ -146,6 +152,8 @@ impl Scalar {
                 | Self::UnsignedLong
                 | Self::LongLong
                 | Self::UnsignedLongLong
+                | Self::Int128
+                | Self::UnsignedInt128
         )
     }
 }
@@ -172,7 +180,7 @@ pub(crate) struct TargetLayout {
     pub(crate) mb_len_max:         u32,
     pub(crate) wint_t:             Scalar,
     pub(crate) va_list:            Layout,
-    pub(crate) scalars:            [Option<Layout>; 19],
+    pub(crate) scalars:            [Option<Layout>; 21],
     pub(crate) pointer:            Layout,
     pub(crate) char_signed:        bool,
     pub(crate) size_t:             Scalar,
@@ -208,6 +216,14 @@ impl TargetLayout {
             Some(Layout { size: 8, align: 8 }),
             Some(Layout { size: 8, align: 8 }),
             Some(Layout { size: 8, align: 8 }),
+            Some(Layout {
+                size:  16,
+                align: 16,
+            }),
+            Some(Layout {
+                size:  16,
+                align: 16,
+            }),
             Some(Layout { size: 4, align: 4 }),
             Some(Layout { size: 8, align: 8 }),
             Some(Layout {
@@ -259,7 +275,8 @@ impl TargetLayout {
             | Scalar::UnsignedShort
             | Scalar::UnsignedInt
             | Scalar::UnsignedLong
-            | Scalar::UnsignedLongLong => false,
+            | Scalar::UnsignedLongLong
+            | Scalar::UnsignedInt128 => false,
             | _ => true,
         };
         Some((

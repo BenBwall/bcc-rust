@@ -239,10 +239,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         ty = element;
                         continue;
                     }
-                    let value = info
-                        .integer
-                        .filter(|_| info.ice)
-                        .and_then(|n| u64::try_from(n.value).ok());
+                    let value = info.integer.filter(|_| info.ice).and_then(Integer::to_u64);
                     let computed = offset.and_then(|n| {
                         value.and_then(|value| {
                             self.types

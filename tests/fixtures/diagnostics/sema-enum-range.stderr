@@ -10,12 +10,12 @@ error: 'enumerator value outside the range of int' is a C23 extension
 2 | enum F {N=-1, U=18446744073709551615ULL};
   |               ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: enumeration values have no common integer type: `U`
+error: enumeration values have no common supported integer type: `U`
  --> sema-enum-range.c:2:15
   |
 2 | enum F {N=-1, U=18446744073709551615ULL};
-  |               ^ no integer type holds this value with the others
+  |               ^ no supported enum type holds this value with the others
   |
-  = note: C99 §6.7.2.2p4: an enumerated type is compatible with an integer type that represents every member; no 64-bit type holds a negative member and this one
+  = note: C99 §6.7.2.2p4: an enumerated type is compatible with an integer type that represents every member; this implementation requires a common type of at most 64 bits
 
 3 errors generated.

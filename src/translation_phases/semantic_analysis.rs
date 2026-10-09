@@ -908,12 +908,17 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                     return;
                 }
                 let bound = if let Some(value) = value {
-                    if value.value < 0 {
+                    if value.signed && value.value < 0 {
                         self.error(SemanticErrorKind::InvalidArrayBound, source, None, None);
                         self.values.push(self.types.unknown());
                         return;
                     }
-                    if !self.validate_array_size(element, value.value, source) {
+                    // A bound beyond i128 is far beyond any object size.
+                    if !self.validate_array_size(
+                        element,
+                        value.to_i128().unwrap_or(i128::MAX),
+                        source,
+                    ) {
                         self.values.push(self.types.unknown());
                         return;
                     }
@@ -932,8 +937,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                             );
                         }
                     }
-                    u64::try_from(value.value)
-                        .ok()
+                    value
+                        .to_u64()
                         .map_or(ArrayBound::Variable, ArrayBound::Constant)
                 } else {
                     ArrayBound::Variable
@@ -1140,7 +1145,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 // without repeating their constraints during completion.
                 let mut invalid = self.semantic_errors != errors_before;
                 let width = if d.bitfield_width.is_some() {
-                    let valid = value.and_then(|v| u32::try_from(v.value).ok());
+                    let valid = value.and_then(|v| v.to_u64().and_then(|n| u32::try_from(n).ok()));
                     let bits = self.integer_type(ty).map(|(bits, _)| bits);
                     let name = d.declarator.and_then(Declarator::identifier);
                     if valid.is_none()
@@ -1245,8 +1250,38 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 }
             },
             | Work::EnumeratorDone(tag, list, index, errors_before, invalid_implicit) => {
-                let value = self.integers.pop().flatten();
+                let mut value = self.integers.pop().flatten();
                 let item = list.as_slice()[index];
+                // The enum ABI still selects a standard integer type, at most
+                // 64 bits. Do not truncate a full-width unsigned value here.
+                // C99: implementation-defined §6.7.2.2p4, p. 105; PDF p. 117.
+                if self.types.target.fixed_enum_type.is_none()
+                    && value.is_some_and(|v| {
+                        v.to_i128()
+                            .is_none_or(|n| n < i128::from(i64::MIN) || n > i128::from(u64::MAX))
+                    })
+                {
+                    self.error(
+                        SemanticErrorKind::EnumeratorRange,
+                        item.source_vectors,
+                        Some(item.name.name),
+                        None,
+                    );
+                    self.types.tags[tag].tainted.set(true);
+                    value = None;
+                }
+                if let Some(v) = value
+                    && v.bits == 128
+                    && v.to_i128().is_some_and(|n| i32::try_from(n).is_err())
+                {
+                    value = Some(
+                        v.cast(
+                            64,
+                            v.to_i128()
+                                .is_some_and(|n| n < 0 || (v.signed && n <= i128::from(i64::MAX))),
+                        ),
+                    );
+                }
                 if value.is_none()
                     && self.semantic_errors == errors_before
                     && !invalid_implicit
@@ -1269,7 +1304,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 }
                 // C99 §6.7.2.2p2 requires int values; GCC and Clang accept
                 // wider ones, which C23 adopts.
-                let wide = value.is_some_and(|v| i32::try_from(v.value).is_err());
+                let wide =
+                    value.is_some_and(|v| v.to_i128().is_none_or(|n| i32::try_from(n).is_err()));
                 if wide && !self.tainted && !self.types.tags[tag].tainted.get() {
                     self.context.report_extension(
                         crate::configuration::Feature::WideEnumerators,

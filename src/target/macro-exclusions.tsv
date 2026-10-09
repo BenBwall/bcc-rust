@@ -97,7 +97,6 @@ __PRAGMA_REDEFINE_EXTNAME	The advertised pragma/attribute semantics are not impl
 __SEG_FS	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __SEG_GS	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __SIZEOF_FLOAT128__	Quadruple-precision floating types and arithmetic are not implemented.
-__SIZEOF_INT128__	Extended integer syntax exists but these widths lack semantic types.
 __SSE2_MATH__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __SSE2__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __SSE_MATH__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.

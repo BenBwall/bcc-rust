@@ -78,6 +78,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | S::LongLong | S::SignedLongLong | S::LongLongInt | S::SignedLongLongInt =>
                 Some(Scalar::LongLong),
             | S::UnsignedLongLong | S::UnsignedLongLongInt => Some(Scalar::UnsignedLongLong),
+            | S::Extended(super::ExtendedType::Int128 { signedness }) =>
+                Some(if signedness == &Some(false) {
+                    Scalar::UnsignedInt128
+                } else {
+                    Scalar::Int128
+                }),
             | S::Float => Some(Scalar::Float),
             | S::Double => Some(Scalar::Double),
             | S::LongDouble => Some(Scalar::LongDouble),
@@ -96,6 +102,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | S::TypedefName(name) => {
                 if self.context.string_cache.at(name.name) == "__builtin_va_list" {
                     let ty = self.builtin_va_list();
+                    self.values.push(ty);
+                    return;
+                }
+                let builtin = match self.context.string_cache.at(name.name) {
+                    | "__int128_t" => Some(Scalar::Int128),
+                    | "__uint128_t" => Some(Scalar::UnsignedInt128),
+                    | _ => None,
+                };
+                if let Some(scalar) = builtin {
+                    let ty = self.types.scalar(scalar);
                     self.values.push(ty);
                     return;
                 }

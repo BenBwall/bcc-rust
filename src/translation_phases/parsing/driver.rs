@@ -248,6 +248,13 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
             context.string_cache.intern("__builtin_va_list"),
             super::scope::NameClass::Typedef,
         );
+        // GNU reserved builtin typedefs (C99 §4p6 extension).
+        for name in ["__int128_t", "__uint128_t"] {
+            scopes.publish(
+                context.string_cache.intern(name),
+                super::scope::NameClass::Typedef,
+            );
+        }
         Self {
             cursor: TokenCursor::new(upstream),
             arena,

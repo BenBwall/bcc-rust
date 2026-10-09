@@ -278,7 +278,7 @@ impl SemanticErrorKind {
             | Self::IncompleteEnum => "enum is not yet complete",
             | Self::InvalidConstant => "not an integer constant expression",
             | Self::ConstantOverflow => "overflow or invalid operation",
-            | Self::EnumeratorRange => "no integer type holds this value with the others",
+            | Self::EnumeratorRange => "no supported enum type holds this value with the others",
             | Self::InvalidMember => "incomplete member type",
             | Self::DuplicateMember => "member declared again here",
             | Self::InvalidBitFieldType => "not an integer type",
@@ -731,9 +731,10 @@ impl SemanticErrorKind {
                  exceptional evaluation",
             ),
             | Self::EnumeratorRange => (
-                "enumeration values have no common integer type",
+                "enumeration values have no common supported integer type",
                 "C99 §6.7.2.2p4: an enumerated type is compatible with an integer type that \
-                 represents every member; no 64-bit type holds a negative member and this one",
+                 represents every member; this implementation requires a common type of at most \
+                 64 bits",
             ),
             | Self::InvalidMember => (
                 "member requires a complete object type",

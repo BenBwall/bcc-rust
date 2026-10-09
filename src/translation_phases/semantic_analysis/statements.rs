@@ -534,7 +534,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.ice
                 .then_some(info.integer)
                 .flatten()
-                .map(|v| v.cast(bits, signed).value)
+                .map(|v| v.cast(bits, signed).order_key())
         };
         let Some(lower) = lower.and_then(value) else {
             return;
