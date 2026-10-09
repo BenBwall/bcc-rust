@@ -28,6 +28,9 @@ mod tests;
 mod traversal;
 mod type_generic;
 mod types;
+mod vectors;
+mod x86_builtin_table;
+pub(crate) mod x86_builtins;
 
 use std::cell::Cell;
 
@@ -280,6 +283,8 @@ enum Work<'tu, 's> {
     RuntimeBound(bool),
     OldSignature(&'tu FunctionDefinition<'tu>),
     DiscardType,
+    VectorAttributes(Option<&'tu SpecifierExtension<'tu>>),
+    VectorDeclaratorAttributes(ArenaList<'tu, DirectDeclarator<'tu>>),
     UnknownType,
     Spec(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
     Qualify(TypeQualifiers, SourceVectors),
@@ -634,6 +639,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             self.taint(true);
             self.work.push(Work::UnknownType);
         }
+        self.work.push(Work::VectorAttributes(spec.extensions));
         self.work.push(Work::Spec(
             spec.type_specifiers,
             spec.type_qualifiers,
@@ -824,6 +830,28 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 self.values
                     .push(if unqualified { ty.unqualified() } else { ty });
             },
+            | Work::VectorAttributes(chain) => {
+                let base = self.take_type();
+                let ty = self.vector_attribute_chain(base, chain);
+                self.values.push(ty);
+            },
+            | Work::VectorDeclaratorAttributes(list) => {
+                let mut ty = self.take_type();
+                for construction in [true, false] {
+                    for direct in list {
+                        if let DirectDeclarator::Attributes(a) = direct
+                            && vectors::constructs_vector(a, self.context) == construction
+                        {
+                            ty = if self.layout_attribute(a) {
+                                self.types.unknown()
+                            } else {
+                                self.vector_attribute(ty, a)
+                            };
+                        }
+                    }
+                }
+                self.values.push(ty);
+            },
             | Work::Spec(s, q, source, force) => self.resolve_spec(s, q, source, force),
             | Work::Atomic(source) => {
                 let value = self.take_type();
@@ -908,10 +936,24 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                         base = self.atomic_type(base, d.source_vectors, false);
                     }
                     base = base.qualified(level.qualifiers - TypeQualifiers::ATOMIC);
+                    let mut chain = level.attributes;
+                    while let Some(item) = chain {
+                        if let SpecifierExtensionKind::Attributes(attribute) = item.kind {
+                            base = self.vector_attribute(base, attribute);
+                        }
+                        chain = item.next;
+                    }
                     self.validate_qualifiers(base, d.source_vectors);
                 }
                 self.values.push(base);
+                let vector = d.kind.iter().any(|direct| matches!(direct, DirectDeclarator::Attributes(a) if vectors::constructs_vector(a,self.context)));
+                if vector {
+                    self.work.push(Work::VectorDeclaratorAttributes(d.kind));
+                }
                 for direct in d.kind {
+                    if vector && matches!(direct, DirectDeclarator::Attributes(_)) {
+                        continue;
+                    }
                     self.work
                         .push(Work::Direct(direct, d.source_vectors, parameter));
                 }
@@ -1114,6 +1156,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                         return;
                     }
                     self.work.push(Work::RecordMemberBase(tag, member, members));
+                    self.work.push(Work::VectorAttributes(member.extensions));
                     self.work.push(Work::Spec(
                         member.type_specifiers,
                         member.type_qualifiers,
@@ -1146,6 +1189,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             | Work::MemberBase(tag, d, base, members) => {
                 self.work
                     .push(Work::MemberDone(tag, d, members, self.semantic_errors));
+                self.work.push(Work::VectorAttributes(d.attributes));
                 if let Some(decl) = d.declarator {
                     self.work.push(Work::Declarator(decl, base, false));
                 } else {

@@ -466,6 +466,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
             return true;
         }
+        if self.vector_assignment(target, from) {
+            return true;
+        }
         if self.arithmetic(target) && self.arithmetic(from) {
             return true;
         }
@@ -530,13 +533,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // Unmodeled GNU compiler intrinsics do not have the C89 implicit
             // int signature. Preserve an opaque result rather than rejecting
             // valid pointer/aggregate returns based on an invented int type.
-            let result = self.types.unknown();
-            let ty = self.types.intern(TypeKind::Function {
-                result,
-                parameters: &[],
-                prototype: false,
-                variadic: false,
-            });
+            let ty = if let Some(ty) = self.x86_builtin_type(name) {
+                ty
+            } else {
+                let result = self.types.unknown();
+                self.types.intern(TypeKind::Function {
+                    result,
+                    parameters: &[],
+                    prototype: false,
+                    variadic: false,
+                })
+            };
             self.bind(
                 name,
                 ty,
@@ -1104,7 +1111,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 function_expression,
                 arguments,
             } => {
-                info = if let Some(info) = self.atomic_call(e, function_expression, arguments) {
+                info = if let ExpressionType::Identifier(name) = function_expression.kind
+                    && self.context.string_cache.at(name.name) == "__builtin_shufflevector"
+                {
+                    self.context.report_extension(
+                        crate::configuration::Feature::VectorBuiltins,
+                        "__builtin_shufflevector",
+                        name.source_vectors,
+                    );
+                    self.shuffle_vector_builtin(e, arguments)
+                } else if let Some(info) = self.vector_overload(e, function_expression, arguments) {
+                    info
+                } else if let Some(info) = self.atomic_call(e, function_expression, arguments) {
                     info
                 } else if self.classify_type_callee(function_expression) {
                     self.classify_type(e, &arguments)
@@ -1307,6 +1325,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
         }
         if op == U::AddressOf {
+            let mut immediate = operand.expression;
+            while let ExpressionType::Parenthesized { expression } = immediate.kind {
+                immediate = expression;
+            }
+            if let ExpressionType::Binary {
+                operator: BinaryOperator::Subscript,
+                left_expression,
+                ..
+            } = immediate.kind
+                && self
+                    .vector(self.expression_info(left_expression).ty)
+                    .is_some()
+            {
+                return self.vector_error(e);
+            }
             let indirect = matches!(
                 operand.expression.kind,
                 ExpressionType::Unary {
@@ -1340,6 +1373,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return info;
         }
         let ty = self.converted(operand);
+        if let Some((element, _, _)) = self.vector(ty) {
+            if matches!(op, U::Plus | U::Minus)
+                || (op == U::BitwiseNot && self.integer_type(element).is_some())
+            {
+                return Self::expression_result(e, ty);
+            }
+            return self.vector_error(e);
+        }
         if op == U::Indirection {
             let Some(target) = self.pointer_target(ty) else {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidUnaryOperand);
@@ -1435,6 +1476,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
             return Self::expression_result(e, self.types.unknown());
+        }
+        if self.vector(target).is_some() || self.vector(from).is_some() {
+            let permitted = |ty| self.vector(ty).is_some() || self.integer_type(ty).is_some();
+            if permitted(target)
+                && permitted(from)
+                && self.vector_width(target) == self.vector_width(from)
+            {
+                return Self::expression_result(e, target.unqualified());
+            }
+            return self.vector_error(e);
         }
         let void = matches!(
             self.types.nodes[target.index],
@@ -1609,6 +1660,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         function: ExpressionInfo<'tu>,
         arguments: ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> ExpressionInfo<'tu> {
+        self.x86_immediates(function, arguments);
         let ty = self.converted(function);
         if self.types.unanalyzed(ty) {
             return Self::expression_result(e, self.types.unknown());
@@ -1707,6 +1759,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         use BinaryOperator as B;
         if self.types.unanalyzed(left.ty) || self.types.unanalyzed(right.ty) {
             return Self::expression_result(e, self.types.unknown());
+        }
+        if let Some(result) = self.vector_binary(e, op, left, right) {
+            return result;
         }
         let compound = match op {
             | B::MultiplicationAssignment => Some(B::Multiplication),

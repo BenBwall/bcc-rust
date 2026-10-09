@@ -241,6 +241,14 @@ pub(crate) enum SemanticErrorKind {
     UnsupportedFloat128,
     /// GCC Other Builtins: `choose_expr` requires an integer constant.
     InvalidChooseCondition,
+    /// GCC Vector Extensions and Clang Vectors and Extended Vectors.
+    InvalidVectorAttribute,
+    /// GCC Vector Extensions: compatible lanes and safe scalar splats.
+    InvalidVectorOperand,
+    /// Clang Language Extensions: shuffle and conversion builtin contracts.
+    InvalidVectorBuiltin,
+    /// Clang x86 intrinsic immediate argument constraint.
+    InvalidImmediate,
 }
 
 impl SemanticErrorKind {
@@ -248,6 +256,10 @@ impl SemanticErrorKind {
     const fn label(self) -> &'static str {
         match self {
             | Self::UnsupportedFloat128 => "unsupported floating type",
+            | Self::InvalidVectorAttribute => "invalid vector size or element type",
+            | Self::InvalidVectorOperand => "invalid vector operands",
+            | Self::InvalidVectorBuiltin => "invalid vector builtin operands",
+            | Self::InvalidImmediate => "expected an integer constant expression in range",
             | Self::UnknownTypedef => "not a typedef name in this scope",
             | Self::UndeclaredIdentifier => "not declared",
             | Self::InvalidAddressOperand => "cannot take this address",
@@ -379,6 +391,26 @@ impl SemanticErrorKind {
                 "__float128 is not supported on this target",
                 "GCC Additional Floating Types: __float128 requires target binary128 support; \
                  Clang rejects it on x86_64-pc-windows-msvc",
+            ),
+            | Self::InvalidVectorAttribute => (
+                "invalid vector attribute",
+                "GCC Vector Extensions: vector_size requires an integer or real floating element \
+                 and a positive multiple of its size",
+            ),
+            | Self::InvalidVectorOperand => (
+                "invalid vector operation",
+                "Clang Language Extensions: vector operators require valid element types and \
+                 matching widths; scalar operands must convert without truncation",
+            ),
+            | Self::InvalidVectorBuiltin => (
+                "invalid vector builtin",
+                "Clang Language Extensions: shufflevector requires matching vectors and constant \
+                 indices; convertvector requires equal lane counts",
+            ),
+            | Self::InvalidImmediate => (
+                "invalid intrinsic immediate operand",
+                "Clang x86 intrinsics: the immediate operand must be an integer constant \
+                 expression in the builtin's permitted range",
             ),
             | Self::InvalidFunctionDefinition => (
                 "definition requires a function declarator",

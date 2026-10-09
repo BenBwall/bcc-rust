@@ -321,6 +321,8 @@ pub(crate) enum KeywordTokenType {
     MsAsm,
     Pragma,
     Float128,
+    BuiltinConvertVector,
+    BuiltinBitCast,
 }
 
 /// A `punctuator`. Digraphs map to the punctuators they behave as (§6.4.6
@@ -707,6 +709,8 @@ impl KeywordTokenType {
         Self::MsAsm,
         Self::Pragma,
         Self::Float128,
+        Self::BuiltinConvertVector,
+        Self::BuiltinBitCast,
     ];
 
     /// Classifies an identifier after preprocessing has finished. It is an
@@ -816,6 +820,10 @@ impl KeywordTokenType {
                 | Self::BuiltinTypesCompatible => (
                     configuration.accepts(Feature::BuiltinTypesCompatible),
                     Some(Feature::BuiltinTypesCompatible.origin()),
+                ),
+                | Self::BuiltinConvertVector | Self::BuiltinBitCast => (
+                    configuration.accepts(Feature::VectorBuiltins),
+                    Some(Feature::VectorBuiltins.origin()),
                 ),
                 | Self::BuiltinChooseExpr => (
                     configuration.accepts(Feature::BuiltinChooseExpr),
@@ -987,6 +995,8 @@ impl KeywordTokenType {
             | Self::BuiltinOffsetof => "__builtin_offsetof",
             | Self::BuiltinTypesCompatible => "__builtin_types_compatible_p",
             | Self::BuiltinChooseExpr => "__builtin_choose_expr",
+            | Self::BuiltinConvertVector => "__builtin_convertvector",
+            | Self::BuiltinBitCast => "__builtin_bit_cast",
             | Self::LocalLabel => "__label__",
             | Self::Int128 => "__int128",
             | Self::Float128 => "__float128",

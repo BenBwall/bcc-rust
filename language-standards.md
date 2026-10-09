@@ -326,7 +326,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | NamedLoops | - | - | - | - | - | - | Y | extension | parser |
 | GenericTypeOperand | - | - | - | - | - | - | Y | extension | parser |
 | CaseRanges | - | - | - | - | - | - | Y | extension | parser |
-| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; vector_size/aligned sema |
 | GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -334,6 +334,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | BuiltinVaArg | - | - | - | - | - | - | - | reserved intrinsic in all modes | parser/sema |
 | BuiltinOffsetof | - | - | - | - | - | - | - | reserved intrinsic in all modes | parser/sema |
 | BuiltinTypesCompatible | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
+| VectorBuiltins | - | - | - | - | - | - | - | extension (GNU native) | shuffle/convert/bitcast and x86 signatures |
 | BuiltinChooseExpr | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | LabelsAsValues | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | LocalLabels | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -950,3 +951,7 @@ integer constant expression requiring binary128 evaluation is unavailable.
 The x87 helper is never used to approximate binary128. See
 [semantic-analysis.md](semantic-analysis.md#binary128-and-type-generic-math-2026-10-09)
 for verification and limits.
+
+## GNU vectors and x86 SIMD resources (2026-10-09)
+
+GNU vector semantics and x86 resource coverage follow [GCC Vector Extensions](https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html) and [Clang Language Extensions](https://clang.llvm.org/docs/LanguageExtensions.html); see semantic-analysis.md for the supported instruction families and constant-evaluation boundaries.

@@ -458,8 +458,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     fn aggregate(&self, ty: TypeId) -> bool {
-        matches!(self.types.nodes[ty.index], TypeKind::Array(..))
-            || matches!(self.types.nodes[ty.index], TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum)
+        matches!(
+            self.types.nodes[ty.index],
+            TypeKind::Array(..) | TypeKind::Vector { .. }
+        ) || matches!(self.types.nodes[ty.index], TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum)
     }
 
     /// Cache immutable array-tail identities, not mutable tag taint. Each
@@ -494,6 +496,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn whole_object_expression(&mut self, target: TypeId, e: &'tu Expression<'tu>) -> bool {
         if let ExpressionType::StringLiteral(_) = unparenthesized(e).kind {
             return matches!(self.types.nodes[target.index], TypeKind::Array(element, _) if matches!(self.types.nodes[element.index], TypeKind::Scalar(Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar | Scalar::Int)));
+        }
+        if self.vector_assignment(target, self.expression_info(e).ty) {
+            return true;
         }
         matches!(self.types.nodes[target.index], TypeKind::Tag(_))
             && self
@@ -570,6 +575,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     fn subobject(&self, ty: TypeId, index: u64) -> Option<TypeId> {
         match self.types.nodes[ty.index] {
+            | TypeKind::Vector { element, count, .. } => (index < count).then_some(element),
             | TypeKind::Array(element, bound) =>
                 if matches!(bound, ArrayBound::Constant(n) if index >= n)
                     || matches!(bound, ArrayBound::Variable | ArrayBound::Star)

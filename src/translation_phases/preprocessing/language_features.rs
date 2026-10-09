@@ -597,6 +597,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                         return Some(self.integer_pp_token(0, token.source_vectors));
                     }
                     match (name, &*operand) {
+                        | ("__has_builtin", builtin) if crate::translation_phases::semantic_analysis::x86_builtins::known(builtin) => 1,
                         // C23 §6.7.13.2p2, p. 143; PDF p. 156: the standard
                         // attributes, `_Noreturn` included (§6.7.13.7p1).
                         | (
@@ -618,7 +619,10 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                             | "__builtin_offsetof"
                             | "__builtin_types_compatible_p"
                             | "__builtin_choose_expr"
-                            | "__builtin_classify_type",
+                            | "__builtin_classify_type"
+                            | "__builtin_convertvector"
+                            | "__builtin_shufflevector"
+                            | "__builtin_bit_cast",
                         ) => 1,
                         | ("__has_builtin", name)
                             if crate::translation_phases::semantic_analysis::atomic_builtin(

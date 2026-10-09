@@ -36,6 +36,8 @@ pub(super) fn modeled(keyword: KeywordTokenType) -> bool {
             | KeywordTokenType::BuiltinVaCopy
             | KeywordTokenType::BuiltinTypesCompatible
             | KeywordTokenType::BuiltinChooseExpr
+            | KeywordTokenType::BuiltinBitCast
+            | KeywordTokenType::BuiltinConvertVector
             | KeywordTokenType::BuiltinOffsetof
     )
 }
@@ -101,6 +103,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         use KeywordTokenType as K;
         if matches!(b.keyword, K::BuiltinTypesCompatible | K::BuiltinChooseExpr) {
             return self.type_generic_builtin(e, b);
+        }
+        if matches!(b.keyword, K::BuiltinBitCast | K::BuiltinConvertVector) {
+            self.context.report_extension(
+                crate::configuration::Feature::VectorBuiltins,
+                "vector builtin",
+                b.source_vectors,
+            );
+        }
+        if b.keyword == K::BuiltinBitCast {
+            return self.bit_cast_builtin(e, b);
+        }
+        if b.keyword == K::BuiltinConvertVector {
+            return self.convert_vector_builtin(e, b);
         }
         if b.keyword == K::BuiltinOffsetof {
             return self.type_offsetof(e, b);

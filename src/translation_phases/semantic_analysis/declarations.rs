@@ -279,10 +279,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .strip_prefix("__")
                     .and_then(|n| n.strip_suffix("__"))
                     .unwrap_or(name);
-                matches!(
-                    name,
-                    "aligned" | "align" | "packed" | "mode" | "vector_size" | "ext_vector_type"
-                )
+                matches!(name, "align" | "packed" | "mode" | "ext_vector_type")
             })
     }
 
@@ -549,12 +546,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .parameters
                     .insert(std::ptr::from_ref(direct).addr(), (list.leak(), 0));
             },
-            | DirectDeclarator::Attributes(attribute) =>
-                self.values.push(if self.layout_attribute(attribute) {
+            | DirectDeclarator::Attributes(attribute) => {
+                let ty = if self.layout_attribute(attribute) {
                     self.types.unknown()
                 } else {
-                    base
-                }),
+                    self.vector_attribute(base, attribute)
+                };
+                self.values.push(ty);
+            },
             | DirectDeclarator::MsModifier(keyword, _) =>
                 self.values.push(if calling_convention(keyword) {
                     base

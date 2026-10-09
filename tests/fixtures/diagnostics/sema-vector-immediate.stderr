@@ -1,0 +1,25 @@
+error: invalid intrinsic immediate operand
+    --> <built-in>/emmintrin.h:4320:57
+     |
+4320 |   ((__m128i)__builtin_ia32_pshufd((__v4si)(__m128i)(a), (int)(imm)))
+     |                                                         ^^^^^^   ^ expected an integer constant expression in range
+    ::: sema-vector-immediate.c:2:49
+     |
+   2 | void f(__m128i v,int i) { v=_mm_shuffle_epi32(v,i); v=_mm_shuffle_epi32(v,256); }
+     |                                                 ^
+     |
+     = note: Clang x86 intrinsics: the immediate operand must be an integer constant expression in the builtin's permitted range
+
+error: invalid intrinsic immediate operand
+    --> <built-in>/emmintrin.h:4320:57
+     |
+4320 |   ((__m128i)__builtin_ia32_pshufd((__v4si)(__m128i)(a), (int)(imm)))
+     |                                                         ^^^^^^   ^ expected an integer constant expression in range
+    ::: sema-vector-immediate.c:2:75
+     |
+   2 | void f(__m128i v,int i) { v=_mm_shuffle_epi32(v,i); v=_mm_shuffle_epi32(v,256); }
+     |                                                                           ^^^
+     |
+     = note: Clang x86 intrinsics: the immediate operand must be an integer constant expression in the builtin's permitted range
+
+2 errors generated.

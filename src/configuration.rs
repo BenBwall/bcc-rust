@@ -246,6 +246,7 @@ pub(crate) enum Feature {
     MsAnonymousStructs,
     MsVaArgs,
     Float128,
+    VectorBuiltins,
 }
 
 impl Feature {
@@ -353,6 +354,7 @@ impl Feature {
         Self::MsAnonymousStructs,
         Self::MsVaArgs,
         Self::Float128,
+        Self::VectorBuiltins,
     ];
 
     pub(crate) const fn origin(self) -> FeatureOrigin {
@@ -456,7 +458,8 @@ impl Feature {
             | Self::SignBitShifts
             | Self::FlexibleArrayExtensions
             | Self::ConstantFolding
-            | Self::Float128 => FeatureOrigin::Gnu,
+            | Self::Float128
+            | Self::VectorBuiltins => FeatureOrigin::Gnu,
 
             | Self::MsDeclspec => FeatureOrigin::Msvc(MsvcFeature::Declspec),
             | Self::MsIntTypes => FeatureOrigin::Msvc(MsvcFeature::IntTypes),
@@ -841,7 +844,7 @@ mod tests {
         }
         assert_eq!(
             Feature::ALL.last().map(|feature| *feature as usize),
-            Some(Feature::Float128 as usize)
+            Some(Feature::VectorBuiltins as usize)
         );
         for (index, feature) in MsvcFeature::ALL.iter().enumerate() {
             assert_eq!(*feature as usize, index, "{feature:?}");

@@ -151,7 +151,7 @@ fn only_layout_attributes_make_declarator_types_unanalyzed() {
         ),
         [SemanticErrorKind::IncompatibleDeclaration]
     );
-    // Alignment, packing, modes and vectors are not modeled.
+    // Non-vector alignment, packing and modes are not modeled.
     assert_eq!(
         kinds(
             "int x __attribute__((aligned(16))); extern long x; int \
@@ -719,7 +719,7 @@ fn pointers_to_unanalyzed_types_suppress_arithmetic_constraints() {
              = *p++; q[i] = p[0]; q[2] = (q[0] & (1 << q[1])) != 0; i = q - p; return *(p + 1); }",
             gnu17()
         ),
-        []
+        [SemanticErrorKind::InvalidVectorOperand]
     );
 }
 

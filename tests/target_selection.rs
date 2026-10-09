@@ -202,6 +202,30 @@ mod tests {
     }
 
     #[test]
+    fn vectors_and_intrinsic_resources_match_clang_on_every_target() {
+        for probe in [
+            "tests/fixtures/targets/vector.c",
+            "tests/fixtures/targets/x86-intrinsics.c",
+        ] {
+            for triple in TRIPLES {
+                for binary in [clang(), env!("CARGO_BIN_EXE_bcc-rust").into()] {
+                    let mut command = Command::new(&binary);
+                    _ = command.args([&format!("--target={triple}"), "-std=c11", "-ffreestanding"]);
+                    if binary == clang() {
+                        _ = command.arg("-fsyntax-only");
+                    }
+                    let output = command.arg(probe).output().unwrap();
+                    let diagnostics = String::from_utf8_lossy(&output.stderr);
+                    assert!(
+                        output.status.success() && !diagnostics.contains("error:"),
+                        "{triple}, {probe}: {diagnostics}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn aliases_and_equals_form_select_the_windows_abi() {
         for triple in [
             "x86_64-w64-windows-gnu",

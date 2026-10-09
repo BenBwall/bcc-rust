@@ -1,0 +1,33 @@
+error: invalid vector operation
+ --> sema-vector-operation.c:3:30
+  |
+3 | void f(V v, F a, long l) { v=v+l; a=a%a; v=!v; int *p=&v[0]; }
+  |                              ^^^ invalid vector operands
+  |
+  = note: Clang Language Extensions: vector operators require valid element types and matching widths; scalar operands must convert without truncation
+
+error: invalid vector operation
+ --> sema-vector-operation.c:3:37
+  |
+3 | void f(V v, F a, long l) { v=v+l; a=a%a; v=!v; int *p=&v[0]; }
+  |                                     ^^^ invalid vector operands
+  |
+  = note: Clang Language Extensions: vector operators require valid element types and matching widths; scalar operands must convert without truncation
+
+error: invalid vector operation
+ --> sema-vector-operation.c:3:44
+  |
+3 | void f(V v, F a, long l) { v=v+l; a=a%a; v=!v; int *p=&v[0]; }
+  |                                            ^^ invalid vector operands
+  |
+  = note: Clang Language Extensions: vector operators require valid element types and matching widths; scalar operands must convert without truncation
+
+error: invalid vector operation
+ --> sema-vector-operation.c:3:55
+  |
+3 | void f(V v, F a, long l) { v=v+l; a=a%a; v=!v; int *p=&v[0]; }
+  |                                                       ^^^^^ invalid vector operands
+  |
+  = note: Clang Language Extensions: vector operators require valid element types and matching widths; scalar operands must convert without truncation
+
+4 errors generated.

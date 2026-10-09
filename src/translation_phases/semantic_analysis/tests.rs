@@ -8,6 +8,7 @@ mod atomics;
 mod float128;
 mod int128;
 mod targets;
+mod vectors;
 
 fn with_source(source: &str, run: impl FnOnce(&mut Context<'_>, &SemanticTranslationUnit<'_>)) {
     with_configuration(

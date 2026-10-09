@@ -271,8 +271,8 @@ Stage-1 boundaries, with their current disposition:
   `short`, `int` and `long long`, and `signed` or `unsigned` selects that
   variant. Only alignment
   specifiers, thread/constexpr storage, MSVC pointer-size modifiers and
-  attributes naming `aligned`, `align`, `packed`, `mode`, `vector_size` or
-  `ext_vector_type` make that one declaration's type unavailable; other
+  attributes naming `align`, `packed`, `mode` or `ext_vector_type`
+  (and non-vector `aligned`) make that one declaration's type unavailable; other
   attributes and the calling conventions that x86-64 ignores leave it intact. A
   tag's layout becomes unavailable only when its own definition or one of its
   members carries such an extension, never from a use site. C23-specific redeclaration/value rules beyond repeated typedefs
@@ -1041,3 +1041,69 @@ and non-ICE choose conditions. The shared Clang/bcc target fixture uses actual
 glibc integration is checked in both C17 and GNU17 when the sysroot is present.
 Allocation coverage includes exact conversion, unfolded arithmetic and error
 paths.
+
+## GNU vectors and x86 SIMD resources (2026-10-09)
+
+The canonical type graph now retains a vector's arithmetic element, lane count
+and alignment. `vector_size` accepts integer/real scalar elements and positive
+multiples of their size. Clang also accepts non-power-of-two lane counts: their
+object size and natural alignment round to a power of two, while their lane
+count remains unchanged. Explicit `aligned(N)` and bare `__aligned__` on vector
+types override alignment; `may_alias`, `target` and `min_vector_width` parse and
+leave type identity intact. These contracts extend C99; the primary references
+are [GCC Vector Extensions](https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html)
+and [Clang Vectors and Extended Vectors](https://clang.llvm.org/docs/LanguageExtensions.html#vectors-and-extended-vectors).
+
+Vectors support function parameters/results, arrays/records, brace
+initialization, lvalue subscripting, casts between equal-bit-width vectors, unary arithmetic and
+integer complement, element-wise arithmetic/bitwise/shifts/comparisons, and
+compound assignments. Comparison masks contain signed integers of each lane's
+width and natural alignment. Clang's default lax vector conversions are used: vectors with equal bit widths can
+convert implicitly, including mixed element types. Padded object size alone
+does not make three-lane and four-lane vectors convertible. Scalar operands splat only
+when Clang's precision/truncation rules allow them. Vector element addresses,
+logical operators, increments and vector conditions are rejected in C.
+
+`__builtin_shufflevector`, `__builtin_convertvector`, `__builtin_bit_cast` and
+the overloaded elementwise/nontemporal builtins used by the resources have
+operand-dependent typing. `x86_builtin_table.rs` declares 384 x86 builtins and two population-count builtins from
+canonical Clang call signatures, with constant-operand positions and immediate
+ranges (including gather scale choices). `scripts/generate_x86_builtins.py`
+derives the catalog from names called by the shipped headers, queries Clang's
+AST with discovery calls, independently probes constant arguments and ranges,
+and compiles a valid signature assertion/call for every entry on all four
+supported targets. This avoids handwritten per-instruction semantic branches
+and does not need the missing Clang builtin definition sources.
+
+The embedded resources adapt Clang 23.1.1's MMX/3DNow, SSE through SSE4.2,
+AES/PCLMUL, AVX/AVX2, population-count, CRC, CPUID and MSVC intrin/intrin0/ADC
+headers, retaining their Apache-2.0 WITH LLVM-exception notices. The adaptations remove
+half/bfloat typedefs, omit Clang module-building conditions, spell GNU asm
+unambiguously when MS extensions are enabled, and give MSVC inline forward
+declarations the linkage of their definitions. bcc's umbrella
+headers include this supported subset. Baseline predefined features remain
+x86-64/SSE2; target-attributed bodies and AVX/AVX2 calls are checked without
+backend feature gating, matching Clang's syntax-only acceptance. No instruction
+selection or execution is promised. MSVC intrinsic resources forward to the
+libc on non-MSVC targets through include_next. Twenty-eight MSVC compiler-provided
+interlocked and ISO volatile interfaces are declared with separately Clang-verified
+signatures so replacing intrin0.h preserves the native C17 stdatomic.h path.
+The prefetch builtin checks its pointer and optional constant operands.
+
+Known boundaries: AVX-512, AMX, newer x86 instruction families, _Float16/bfloat
+vector typedefs and ext_vector_type are not shipped. Attribute arguments have
+an iterative integer-literal/enum/arithmetic reducer rather than general C ICE
+syntax (sizeof and casts in attribute arguments are not implemented). A
+non-vector aligned attribute remains unanalyzed.
+sizeof/alignof vectors and constant scalar lane initializers evaluate normally;
+vector arithmetic/shuffles/casts do not retain lane constants, so their results
+are not folded in static initializers or subsequent subscripting. This is a
+constant-evaluation gap, not an opaque type-checking fallback.
+
+The final libc survey in `target/libc-survey/vector/results.json` compares 448
+rows with the `gnuc` baseline: zero newly accepted and zero newly rejected
+headers. All thirteen MinGW missing `x86intrin.h` first errors clear, exposing
+later failures: twelve reach the anonymous-union member parser at
+`objidl.h:9984`, and `intrin.h` reaches the unmodeled GNU atomic pointer return
+at `psdk_inc/intrin-impl.h:1737`. The MSVC C17 `stdatomic.h` and combined-header
+paths remain accepted.

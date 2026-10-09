@@ -1491,7 +1491,9 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 | KeywordTokenType::BuiltinVaCopy
                 | KeywordTokenType::BuiltinOffsetof
                 | KeywordTokenType::BuiltinTypesCompatible
-                | KeywordTokenType::BuiltinChooseExpr),
+                | KeywordTokenType::BuiltinChooseExpr
+                | KeywordTokenType::BuiltinConvertVector
+                | KeywordTokenType::BuiltinBitCast),
             ) = token.kind
             {
                 self.phase = ExpressionPhase::AwaitGnu;

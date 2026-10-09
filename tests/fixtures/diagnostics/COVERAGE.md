@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **373 top-level C inputs and 373 stderr snapshots**, plus five supporting headers and 132 mode/policy `.args` sidecars. One hundred thirteen of the inputs cover semantic analysis (twenty-eight for declarations, twenty-eight for expressions and initializers, forty-one for statements and functions, three for 128-bit integers, four for resource intrinsics, six for atomics and generic selection, three for binary128 and type selections) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 122 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **377 top-level C inputs and 377 stderr snapshots**, plus five supporting headers and 136 mode/policy `.args` sidecars. One hundred seventeen of the inputs cover semantic analysis (twenty-eight for declarations, twenty-eight for expressions and initializers, forty-one for statements and functions, three for 128-bit integers, four for resource intrinsics, six for atomics and generic selection, three for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 122 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -756,3 +756,15 @@ The shared four-target probe checks real/complex layout, arithmetic rank,
 classification, compatibility, generic and choose selection, and component
 lvalues against Clang. Arena allocation tests exercise exact decimal and
 subnormal parsing, unfolded arithmetic constants and selection diagnostics.
+
+
+### GNU vector constraints
+
+The four `sema-vector-*` fixtures cover `InvalidVectorAttribute` (invalid byte
+count and void element), `InvalidVectorOperand` (unsafe scalar splat, floating
+remainder, logical negation and vector element addresses), `InvalidVectorBuiltin` (runtime shuffle index
+and a non-vector conversion type), and `InvalidImmediate` (runtime and
+out-of-range SSE2 shuffle control). Each keeps a following ordinary declaration.
+Positive rules and known result types are checked through the translation-unit
+seam and four-target Clang/bcc probes; the allocation harness compiles vector
+operators and the complete supported intrinsic umbrella without heap allocation.
