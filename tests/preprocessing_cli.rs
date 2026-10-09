@@ -77,6 +77,56 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_macros,
+        reason = "Test arguments contain literal line endings."
+    )]
+    fn definitions_truncate_at_line_endings() {
+        for standard in ["c17", "gnu17", "c23"] {
+            for ending in ["\r", "\n", "\r\n"] {
+                for tail in ["", "#error injected"] {
+                    let definition = format!("-DVALUE=7{ending}{tail}");
+                    clean(&bcc(&[
+                        "--std",
+                        standard,
+                        &definition,
+                        "-DFOLLOWING=11",
+                        "--input",
+                        "#if VALUE != 7 || FOLLOWING != 11\n#error wrong definition\n#endif\nint \
+                         n = VALUE;\n",
+                    ]));
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::disallowed_macros,
+        reason = "Test arguments contain literal line endings."
+    )]
+    fn undefinitions_truncate_at_line_endings() {
+        for standard in ["c17", "gnu17", "c23"] {
+            for ending in ["\r", "\n", "\r\n"] {
+                for tail in ["", "#error injected"] {
+                    let undefinition = format!("VALUE{ending}{tail}");
+                    clean(&bcc(&[
+                        "--std",
+                        standard,
+                        "-DVALUE=7",
+                        "-U",
+                        &undefinition,
+                        "-DFOLLOWING=11",
+                        "--input",
+                        "#ifdef VALUE\n#error still defined\n#endif\n#if FOLLOWING != 11\n#error \
+                         lost following option\n#endif\nint n = FOLLOWING;\n",
+                    ]));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn invalid_definitions_and_builtin_protections_are_diagnosed() {
         for option in ["-D1x", "-D", "-U"] {
             let result = if option == "-D" || option == "-U" {

@@ -85,7 +85,7 @@ typedef __UINTMAX_TYPE__ uintmax_t;
 #define SIG_ATOMIC_MAX __SIG_ATOMIC_MAX__
 #define SIG_ATOMIC_MIN (-SIG_ATOMIC_MAX - 1)
 #define WCHAR_MAX __WCHAR_MAX__
-#define WCHAR_MIN (-WCHAR_MAX - 1)
+#define WCHAR_MIN __WCHAR_MIN__
 #define WINT_MAX __WINT_MAX__
 #define WINT_MIN __WINT_MIN__
 #define SIZE_MAX __SIZE_MAX__

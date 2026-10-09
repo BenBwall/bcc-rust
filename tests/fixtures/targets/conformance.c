@@ -8,6 +8,15 @@
 #define CHECK(e) _Static_assert(e, #e)
 #define LAYOUT(t,s,a) CHECK(sizeof(t)==s); CHECK(_Alignof(t)==a)
 #define TYPE(e,t) CHECK(_Generic((e),t:1,default:0))
+/* C11 §7.19p2: max_align_t covers the target's fundamental alignments. */
+CHECK(_Alignof(max_align_t) >= _Alignof(long double));
+CHECK(_Alignof(max_align_t) >= _Alignof(long long));
+#if defined(_M_X64) && !defined(__MINGW32__)
+LAYOUT(max_align_t,8,8);
+TYPE((max_align_t*)0,double*);
+#else
+LAYOUT(max_align_t,32,16);
+#endif
 LAYOUT(_Bool,1,1);
 LAYOUT(char,1,1);
 LAYOUT(signed char,1,1);
@@ -45,6 +54,11 @@ TYPE((int_least16_t)0,short);
 TYPE((int_least32_t)0,int);
 TYPE((__SIG_ATOMIC_TYPE__)0,int);
 CHECK(__SIG_ATOMIC_MAX__ == 2147483647);
+/* C99 §7.18.3p4-5: wide-character limits follow their signedness. */
+CHECK(WINT_MIN == 0);
+#if WINT_MIN != 0
+#error wrong wint minimum in preprocessing
+#endif
 CHECK(sizeof(L"A") == 2*sizeof(wchar_t));
 TYPE(0.0L,long double);
 enum WidePositive { positive = 4294967296 };
@@ -110,6 +124,10 @@ TYPE(0x100000000,long long);
 CHECK(sizeof(L"\U0001f600")==6);
 CHECK(__WCHAR_UNSIGNED__==1);
 CHECK(__WCHAR_MAX__==65535);
+CHECK(WCHAR_MIN == 0);
+#if WCHAR_MIN != 0
+#error wrong unsigned wchar minimum in preprocessing
+#endif
 CHECK(_WIN32==1 && _WIN64==1);
 LAYOUT(struct A,12,4);
 CHECK(offsetof(struct A,tail)==9);
@@ -154,6 +172,10 @@ LAYOUT(unsigned long,8,8);
 LAYOUT(long double,16,16);
 LAYOUT(long double _Complex,32,16);
 LAYOUT(wchar_t,4,4);
+CHECK(WCHAR_MIN == (-2147483647 - 1));
+#if WCHAR_MIN != (-2147483647 - 1)
+#error wrong signed wchar minimum in preprocessing
+#endif
 LAYOUT(__WINT_TYPE__,4,4);
 LAYOUT(va_list,24,8);
 TYPE((wchar_t)0,int);

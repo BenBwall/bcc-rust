@@ -13,7 +13,7 @@ use crate::{
 
 /// Produce a deterministic synthetic source without reimplementing macro
 /// lexing, parameter lists, redefinition diagnostics or reserved-name checks.
-/// GCC truncates definitions at the first newline. Forced includes are read
+/// GCC truncates definitions at the first CR or LF. Forced includes are read
 /// in their command-line order, after every `-D`/`-U`, starting in the working
 /// directory rather than beside the main source (C99 §6.10.2p3).
 pub(super) fn source<'tu>(context: &Context<'tu>) -> &'tu str {
@@ -21,12 +21,16 @@ pub(super) fn source<'tu>(context: &Context<'tu>) -> &'tu str {
     for option in context.preprocessing_options {
         match *option {
             | PreprocessingOption::Define(definition) => {
-                let definition = definition.split('\n').next().unwrap_or("");
+                let definition = definition.split(['\r', '\n']).next().unwrap_or("");
                 let (name, value) = definition.split_once('=').unwrap_or((definition, "1"));
                 _ = writeln!(source, "#define {name} {value}");
             },
             | PreprocessingOption::Undefine(name) => {
-                _ = writeln!(source, "#undef {}", name.split('\n').next().unwrap_or(""));
+                _ = writeln!(
+                    source,
+                    "#undef {}",
+                    name.split(['\r', '\n']).next().unwrap_or("")
+                );
             },
             | PreprocessingOption::Include(_) => {},
         }
