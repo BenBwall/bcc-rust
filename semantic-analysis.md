@@ -529,12 +529,9 @@ The `Semantic analysis` Criterion group runs phases 1-7 plus semantic
 analysis over the same inputs as `Parser` and `Parser only`; the difference
 from `Parser` is the cost of analysis.
 
-Integer constant evaluation holds values in `i128` but never divides two
-`i128`s. Under the configured linker-plugin fat LTO, `i128` division lowers to
-`__divti3`/`__modti3`, which `ld.lld` fetches from `compiler_builtins` only
-after LTO has discarded the `rust_eh_personality` that their unwind tables
-reference, and the link fails. Operands are at most 64 bits wide, so division
-uses `u64` magnitudes.
+Integer constant evaluation holds values in `i128`. Its division relies on
+the linker flags in `.cargo/config.toml` that keep `compiler_builtins`'
+`__divti3`/`__modti3` across linker-plugin LTO (see the README's LTO section).
 
 ### Diagnostic survey and triage
 
