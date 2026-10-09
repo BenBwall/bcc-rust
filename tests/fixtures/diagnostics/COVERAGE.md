@@ -653,6 +653,9 @@ Four fixtures cover resource-header intrinsic diagnostics: `freestanding-va-list
 result types), `freestanding-va-start` (fixed-argument function) and
 `freestanding-offsetof` (bit-field and invalid member paths). They exercise
 `InvalidVaList`, `InvalidVaArgType`, `VaStartOutsideVariadic` and `InvalidOffsetof`.
+Their `<built-in>/stddef.h` and `<built-in>/stdarg.h` lines moved when those
+headers gained the `__need_*` partial-inclusion protocol; the diagnostics are
+otherwise unchanged.
 Missing-header fixtures and the corresponding lexing snapshots now list the final `<built-in>` directory. The system
 missing-header fixture consequently reports an actual search list instead of
 its former empty-list/absolute-path note. Other lexing snapshot changes are internal

@@ -9,7 +9,12 @@
 #include <stdnoreturn.h>
 #define CHECK(n, e) _Static_assert((e), #n)
 CHECK(char_bit, CHAR_BIT == 8);
+/* Clang's freestanding fallback is 1; bcc's is 4, enough for UTF-8. */
+#ifdef __clang__
 CHECK(mb_len, MB_LEN_MAX == 1);
+#else
+CHECK(mb_len, MB_LEN_MAX == 4);
+#endif
 CHECK(char_min, CHAR_MIN == -128);
 CHECK(char_max, CHAR_MAX == 127);
 CHECK(size_t, sizeof(size_t) == 8);

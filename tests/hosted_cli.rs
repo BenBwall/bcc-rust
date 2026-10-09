@@ -122,6 +122,31 @@ mod tests {
         clean(&bcc(&["-ffreestanding", "--input", source]));
     }
 
+    #[test]
+    fn resource_headers_chain_to_a_glibc_like_library_only_when_hosted() {
+        let sysroot = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hosted/sysroot");
+        let probe = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hosted/probe.c");
+        for mode in [
+            "-std=gnu99",
+            "-std=gnu17",
+            "-std=c99",
+            "-std=c11",
+            "-std=c23",
+        ] {
+            for environment in ["-fhosted", "-ffreestanding"] {
+                let output = bcc(&[mode, environment, "--sysroot", sysroot, probe]);
+                clean(&output);
+            }
+        }
+        // Without the library the hosted resource headers stand alone.
+        let output = bcc(&[
+            "--input",
+            "#include <limits.h>\n#include <stdint.h>\n_Static_assert(MB_LEN_MAX == 4, \
+             \"\");\n_Static_assert(sizeof(int64_t) == 8, \"\");\n",
+        ]);
+        clean(&output);
+    }
+
     /// One directory per search group. Each holds `chain.h`, which names
     /// its group and continues with `#include_next`, so a lookup records
     /// every place it visits in order; the last group ends the chain.

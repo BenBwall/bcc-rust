@@ -1,6 +1,55 @@
 /* C99: §5.2.4.2.2, pp. 23-27; PDF pp. 35-39. Target definitions come from src/target.rs. */
 #ifndef __BCC_FLOAT_H
 #define __BCC_FLOAT_H
+/* Hosted on MinGW-w64 or the MSVC runtime, the C library's <float.h> adds
+   Windows definitions; the target's characteristics then replace its own. */
+#if __STDC_HOSTED__
+#if defined(__MINGW32__) || defined(_MSC_VER)
+#if __has_include_next(<float.h>)
+#include_next <float.h>
+#endif
+#undef FLT_RADIX
+#undef FLT_ROUNDS
+#undef FLT_EVAL_METHOD
+#undef DECIMAL_DIG
+#undef FLT_MANT_DIG
+#undef FLT_DIG
+#undef FLT_MIN_EXP
+#undef FLT_MIN_10_EXP
+#undef FLT_MAX_EXP
+#undef FLT_MAX_10_EXP
+#undef FLT_MAX
+#undef FLT_EPSILON
+#undef FLT_MIN
+#undef FLT_DECIMAL_DIG
+#undef FLT_TRUE_MIN
+#undef FLT_HAS_SUBNORM
+#undef DBL_MANT_DIG
+#undef DBL_DIG
+#undef DBL_MIN_EXP
+#undef DBL_MIN_10_EXP
+#undef DBL_MAX_EXP
+#undef DBL_MAX_10_EXP
+#undef DBL_MAX
+#undef DBL_EPSILON
+#undef DBL_MIN
+#undef DBL_DECIMAL_DIG
+#undef DBL_TRUE_MIN
+#undef DBL_HAS_SUBNORM
+#undef LDBL_MANT_DIG
+#undef LDBL_DIG
+#undef LDBL_MIN_EXP
+#undef LDBL_MIN_10_EXP
+#undef LDBL_MAX_EXP
+#undef LDBL_MAX_10_EXP
+#undef LDBL_MAX
+#undef LDBL_EPSILON
+#undef LDBL_MIN
+#undef LDBL_DECIMAL_DIG
+#undef LDBL_TRUE_MIN
+#undef LDBL_HAS_SUBNORM
+#endif
+#endif
 #define FLT_RADIX __FLT_RADIX__
 #define FLT_ROUNDS 1
 #define FLT_EVAL_METHOD 0

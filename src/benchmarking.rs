@@ -345,7 +345,12 @@ pub struct ParseBenchmarkSummary {
 #[must_use]
 pub fn parse(input: BenchmarkInput) -> ParseBenchmarkSummary {
     let tu = Bump::new();
-    summarize_parse(&tu, Path::new("<input>"), input.source())
+    summarize_parse(
+        &tu,
+        Path::new("<input>"),
+        input.source(),
+        crate::headers::HeaderSearch::default(),
+    )
 }
 
 /// Runs the full pipeline including declaration semantic analysis.
@@ -388,7 +393,12 @@ fn summarize_semantic<'tu>(tu: &'tu Bump, source: &'tu str) -> ParseBenchmarkSum
 pub fn parse_source(source: &str) -> ParseBenchmarkSummary {
     let tu = Bump::new();
     let source = tu.alloc_str(source);
-    summarize_parse(&tu, Path::new("<input>"), source)
+    summarize_parse(
+        &tu,
+        Path::new("<input>"),
+        source,
+        crate::headers::HeaderSearch::default(),
+    )
 }
 
 /// Runs phases 1 through 7 with all MSVC groups enabled, for allocation tests.
@@ -421,17 +431,47 @@ pub fn parse_msvc_source(source: &str) -> ParseBenchmarkSummary {
 pub fn parse_file(path: &Path) -> std::io::Result<ParseBenchmarkSummary> {
     let tu = Bump::new();
     let source = tu.read_to_str_lossy(path)?;
-    Ok(summarize_parse(&tu, path, source))
-}
-
-fn summarize_parse<'tu>(tu: &'tu Bump, path: &Path, source: &'tu str) -> ParseBenchmarkSummary {
-    let mut context = benchmark_context(tu);
-    let unit = crate::pipeline::parse_translation_unit(
-        &mut context,
+    Ok(summarize_parse(
+        &tu,
         path,
         source,
         crate::headers::HeaderSearch::default(),
-    );
+    ))
+}
+
+/// Like [`parse_file`], with `library` as the C library's include directory
+/// after the resource directory, so the resource headers chain to it.
+///
+/// # Errors
+///
+/// When `path` cannot be read.
+#[doc(hidden)]
+pub fn parse_file_with_library(
+    path: &Path,
+    library: &Path,
+) -> std::io::Result<ParseBenchmarkSummary> {
+    let tu = Bump::new();
+    let source = tu.read_to_str_lossy(path)?;
+    let system = [library];
+    Ok(summarize_parse(
+        &tu,
+        path,
+        source,
+        crate::headers::HeaderSearch {
+            system: &system,
+            ..crate::headers::HeaderSearch::default()
+        },
+    ))
+}
+
+fn summarize_parse<'tu>(
+    tu: &'tu Bump,
+    path: &Path,
+    source: &'tu str,
+    search: crate::headers::HeaderSearch<'_>,
+) -> ParseBenchmarkSummary {
+    let mut context = benchmark_context(tu);
+    let unit = crate::pipeline::parse_translation_unit(&mut context, path, source, search);
     ParseBenchmarkSummary {
         external_declarations: unit.external_declarations().len(),
         diagnostics:           context.pending_error_count(),

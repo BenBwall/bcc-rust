@@ -1,6 +1,15 @@
 /* C99: §7.18, pp. 255-261; PDF pp. 267-273. Target definitions come from src/target.rs. */
 #ifndef __BCC_STDINT_H
 #define __BCC_STDINT_H
+/* Hosted, the C library's <stdint.h> provides every definition, with any
+   additions of its own. */
+#if __STDC_HOSTED__
+#if __has_include_next(<stdint.h>)
+#include_next <stdint.h>
+#define __BCC_STDINT_FROM_LIBRARY
+#endif
+#endif
+#ifndef __BCC_STDINT_FROM_LIBRARY
 typedef __INT8_TYPE__ int8_t;
 #define INT8_MAX __INT8_MAX__
 #define INT8_MIN (-INT8_MAX - 1)
@@ -90,4 +99,5 @@ typedef __UINTMAX_TYPE__ uintmax_t;
 #define UINT64_C(c) __UINT64_C(c)
 #define INTMAX_C(c) __INTMAX_C(c)
 #define UINTMAX_C(c) __UINTMAX_C(c)
+#endif
 #endif

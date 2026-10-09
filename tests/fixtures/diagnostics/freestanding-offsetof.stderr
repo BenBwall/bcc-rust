@@ -1,49 +1,49 @@
 error: offsetof requires a valid non-bit-field member path
- --> <built-in>/stddef.h:8:32
-  |
-8 | #define offsetof(type, member) __builtin_offsetof(type, member)
-  |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
- ::: freestanding-offsetof.c:3:18
-  |
-3 | int a = offsetof(struct S, bit);
-  |                  ^^^^^^^^  ^^^
-  |
-  = note: C99 §7.17p3: offsetof designates a member of the specified structure type; bit-fields have undefined behavior
+  --> <built-in>/stddef.h:75:32
+   |
+75 | #define offsetof(type, member) __builtin_offsetof(type, member)
+   |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
+  ::: freestanding-offsetof.c:3:18
+   |
+ 3 | int a = offsetof(struct S, bit);
+   |                  ^^^^^^^^  ^^^
+   |
+   = note: C99 §7.17p3: offsetof designates a member of the specified structure type; bit-fields have undefined behavior
 
 error: offsetof requires a valid non-bit-field member path
- --> <built-in>/stddef.h:8:32
-  |
-8 | #define offsetof(type, member) __builtin_offsetof(type, member)
-  |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
- ::: freestanding-offsetof.c:4:18
-  |
-4 | int b = offsetof(struct S, absent);
-  |                  ^^^^^^^^  ^^^^^^
-  |
-  = note: C99 §7.17p3: offsetof designates a member of the specified structure type; bit-fields have undefined behavior
+  --> <built-in>/stddef.h:75:32
+   |
+75 | #define offsetof(type, member) __builtin_offsetof(type, member)
+   |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
+  ::: freestanding-offsetof.c:4:18
+   |
+ 4 | int b = offsetof(struct S, absent);
+   |                  ^^^^^^^^  ^^^^^^
+   |
+   = note: C99 §7.17p3: offsetof designates a member of the specified structure type; bit-fields have undefined behavior
 
 error: offsetof requires a valid non-bit-field member path
- --> <built-in>/stddef.h:8:32
-  |
-8 | #define offsetof(type, member) __builtin_offsetof(type, member)
-  |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
- ::: freestanding-offsetof.c:5:18
-  |
-5 | int c = offsetof(int, field);
-  |                  ^^^  ^^^^^
-  |
-  = note: C99 §7.17p3: offsetof designates a member of the specified structure type; bit-fields have undefined behavior
+  --> <built-in>/stddef.h:75:32
+   |
+75 | #define offsetof(type, member) __builtin_offsetof(type, member)
+   |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
+  ::: freestanding-offsetof.c:5:18
+   |
+ 5 | int c = offsetof(int, field);
+   |                  ^^^  ^^^^^
+   |
+   = note: C99 §7.17p3: offsetof designates a member of the specified structure type; bit-fields have undefined behavior
 
 error: offsetof requires a valid non-bit-field member path
- --> <built-in>/stddef.h:8:32
-  |
-8 | #define offsetof(type, member) __builtin_offsetof(type, member)
-  |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
- ::: freestanding-offsetof.c:6:18
-  |
-6 | int d = offsetof(struct S, array.field);
-  |                  ^^^^^^^^  ^^^^^^^^^^^
-  |
-  = note: C99 §7.17p3: offsetof designates a member of the specified structure type; bit-fields have undefined behavior
+  --> <built-in>/stddef.h:75:32
+   |
+75 | #define offsetof(type, member) __builtin_offsetof(type, member)
+   |                                ^^^^^^^^^^^^^^^^^^^    ^       ^ invalid member designator
+  ::: freestanding-offsetof.c:6:18
+   |
+ 6 | int d = offsetof(struct S, array.field);
+   |                  ^^^^^^^^  ^^^^^^^^^^^
+   |
+   = note: C99 §7.17p3: offsetof designates a member of the specified structure type; bit-fields have undefined behavior
 
 4 errors generated.

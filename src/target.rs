@@ -103,7 +103,7 @@ pub(crate) struct TargetLayout {
 impl TargetLayout {
     pub(crate) const LP64: Self = Self {
         char_bit:    8,
-        mb_len_max:  1,
+        mb_len_max:  4,
         wint_t:      Scalar::UnsignedInt,
         va_list:     Layout {
             size:  24,
