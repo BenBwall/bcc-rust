@@ -78,7 +78,8 @@ type (§6.7.3p8). Function typedef qualifiers warn about the C99 undefined behav
 function definition installs its parameter bindings and parameter-list tags and
 enumerators in the outer body scope. `ScopeKind::Function` names that semantic
 owner: ordinary names there have C99 block scope, while the distinct label
-namespace has function scope and awaits Stage 3. Each aggregate has a separate member namespace.
+namespace has function scope; GNU local labels additionally have lexical scope.
+Each aggregate has a separate member namespace.
 Labels are reserved to the function statement stage and are not yet resolved.
 
 `src/target.rs` is the target seam. `TargetLayout::LP64` describes x86-64 System V:
@@ -175,9 +176,9 @@ Stage-1 boundaries, with their current disposition:
 - Stage 2 implements initializer conversions, inferred array extents, and object
   completeness after an initializer. Parameter completeness in a
   function definition, named-parameter requirements and identifier-list definition
-  constraints belong to the function-definition checks of Stage 3.
-- Label bindings/constraints, for-init storage constraints, inline body restrictions
-  and translation-unit completion of tentative definitions await Stage 3.
+  constraints are now checked by Stage 3.
+- Stage 3 implements label constraints, for-init declaration constraints, inline
+  body restrictions and translation-unit completion of tentative definitions.
 
 Unanalyzed types suppress dependent compatibility/layout diagnostics. Unsupported
 constant-expression forms similarly suppress dependent enum/VLA diagnostics rather
@@ -288,13 +289,14 @@ a fabricated extent or a dependent incomplete-object error.
 Statement expression sites, return operands and loop iteration/initialization
 expressions are typed. Selection/iteration conditions require scalar type and
 switch operands require integer type (§6.8.4-§6.8.5, pp. 133-137, PDF pp. 145-149).
-Return assignment conversion remains Stage 3.
+Stage 3 reuses assignment compatibility and retains assignment conversions for
+return expressions.
 
 #### Boundaries carried forward
 
-- The remaining statement/function rules are Stage 3: return conversions,
-  labels/gotos, duplicate cases/defaults, function-definition parameter rules,
-  inline-body restrictions and tentative-definition completion.
+- Stage 3 implements return conversions, labels/gotos, case dispatch,
+  function-definition parameter rules, inline-body restrictions and
+  tentative-definition completion.
 - GNU builtins, statement-expression results, union casts, range initializers,
   generic selections, count queries, attribute-derived types and newer-standard
   special values remain conservative unknowns. Core operator checks do not
@@ -309,10 +311,133 @@ Return assignment conversion remains Stage 3.
 
 ### Stage 3: Statements and functions
 
-Implement statement constraints (§6.8), return checking, function label namespace,
-goto targets, switch/case/default bookkeeping, external definitions and tentative
-definitions (§6.9). Complete old-style definition constraints and inline-body restrictions with the
-full expression/binding model.
+#### Function derivation and body bindings
+
+`functions.rs` identifies the first derivation outward from the identifier,
+walking grouping and pointer/suffix constructors iteratively. A definition must
+specify its own function derivation rather than obtain a function type solely
+from a typedef (§6.9.1p2, printed p. 141, PDF p. 153). Parameter lookup uses the
+immutable defining suffix's syntax identity. It does not use the enclosing
+declarator's provenance, which may describe several different function suffixes.
+Thus `int (*fp(int a))(int b)` binds `a` in its body, and a grouped
+`int (g(int a))` retains the same binding and redeclaration rules as `g`.
+K&R signature comparison uses that identical suffix and labels the previous
+declaration on a mismatch.
+
+Prototype definitions require named, complete adjusted parameters, with the sole
+unnamed `void` exception (§6.9.1p5 and §6.7.5.3p4, printed pp. 141 and 118,
+PDF pp. 153 and 130). C23 permits unnamed parameters. Earlier-mode pedantic
+diagnostics already emitted by the parser are not duplicated by sema; sema
+enforces the missing-name constraint when that parser policy is silent, including
+typedef spellings that the parser cannot resolve. `[*]` is excluded from definition
+parameters while nested function prototypes retain prototype scope. Definitions
+check storage classes, complete return object types and declaration-list
+consistency. Missing K&R declarations bind `int` before the body: native in C89/C95,
+a constraint diagnostic in strict C99 and later, and shared implicit-int extension
+policy in GNU modes. This prevents accidental lookup of a same-named global.
+
+`__func__` is a function-entry binding for a static const character array,
+including before its first use (§6.4.2.2p1, printed p. 52, PDF p. 64). Its
+retained synthesized definition records the function-name string. Inner blocks
+may shadow it; the function's outer block may not redefine it. Hosted `main`
+signatures outside the portable `int (void)` and `int (int, char **)` forms,
+including internal linkage, receive an implementation warning. GNU nested
+definitions have lexical bindings and no translation-unit linkage; their
+statement/return state is independent of the enclosing function.
+
+#### Statements and jump scope
+
+`statements.rs` composes continuations with the existing work stack. It checks
+scalar conditions, integer switch conditions and promotions, expression
+statements, loop/switch placement of `break` and `continue`, and for-init object
+and storage constraints (§6.8, printed pp. 131-139, PDF pp. 143-151). Returns
+use Stage 2 assignment compatibility and retain conversion to the unqualified
+result type (§6.8.6.4p3, printed p. 139, PDF p. 151). Missing values in non-void
+functions are errors in strict C99 and later, warnings in C89/C95 and GNU modes.
+Returning a void expression from a void function uses GNU extension policy;
+other expressions in void returns violate the constraint.
+
+Each associated selection/iteration substatement has its own block scope,
+whether it is a compound or a single expression (§6.8.4p3 and §6.8.5p5, printed
+pp. 133 and 135, PDF pp. 145 and 147). Enum/tag declarations in a then-body
+therefore cannot leak into an else-body or a do-while condition. These scope
+continuations use the same explicit work stack as expression typing.
+
+Each function has a separate label map. GNU `__label__` declarations install
+lexically scoped label identities, also available to nested functions. Label
+addresses count as references; computed-goto destinations remain opaque.
+Duplicate labels are diagnosed immediately, and unresolved references after
+the translation unit has been walked. The parser retains ownership of the
+duplicate-default diagnostic, so it is emitted once. Case/default placement
+and case ICE requirements are checked semantically. Case values are converted
+to the promoted control type; GNU inclusive ranges use the same conversion.
+Cases are collected, then sorted once per switch. Duplicate values and overlaps
+are checked in O(n log n), and empty converted ranges produce a warning.
+
+A **variable scope path** is a persistent chain of declarations of variably
+modified identifiers, including typedefs and pointers to VLAs. Scope exit
+restores the previous chain. Labels, gotos and switch entry retain snapshots
+without borrowing a live scope stack. Iterative path comparison diagnoses jumps
+that enter a target declaration's scope (§6.8.6.1p1 and §6.8.4.2p2, printed
+pp. 137 and 134, PDF pp. 149 and 146). Forward labels are checked after their
+definitions are known. GNU nonlocal jumps through an enclosing local label are
+kept conservative rather than applying ordinary same-function VLA rules.
+
+#### Translation-unit definitions
+
+Declaration occurrences remain distinct from entity definition state. Linked
+entities accumulate definitions, tentative declarations, their latest composite
+type and file-scope inline/extern status (§6.9-§6.9.2, printed pp. 140-143,
+PDF pp. 152-155). Repeated definitions are rejected. At translation-unit end,
+tentative definitions without explicit definitions become zero-initialized
+definitions. Incomplete external arrays become one-element arrays with a warning;
+incomplete internal tentative types are rejected at their declaration. Other
+uncompleted tentative object types are rejected at translation-unit end.
+
+`SemanticTranslationUnit.definitions` retains deterministic binding-index order
+for explicit objects/functions, inline-only bodies, completed tentative objects
+and implicit function-name arrays. The existing inspection schema is retained;
+implicit `__func__` bindings appear through its ordinary binding output. No
+statement inspection format was added. Earlier source occurrences and expression
+types retain their point-of-use types; synthesized tentative definitions identify
+the final composite binding needed by lowering.
+
+Internal-linkage expression uses require a definition, except operands of
+constant `sizeof` results (§6.9p3, printed p. 140, PDF p. 152). Persistent
+sizeof contexts are resolved after typing, so runtime VLA-size uses still count.
+Used undefined static functions are errors; unused undefined declarations warn.
+Inline restrictions are deferred until all file-scope declarations are known:
+a later non-inline or `extern` declaration can make the body an external
+definition (§6.7.4p3,p6, printed p. 112, PDF p. 124). Inline-only external bodies
+cannot define modifiable static objects or reference internal identifiers,
+including in sizeof operands. Static inline and ordinary external definitions
+are exempt. Const qualification is checked on the object (or array element);
+a const aggregate member does not protect the aggregate's other members.
+Unmodeled `__builtin_*` calls receive opaque function results rather
+than invented implicit-int return types; explicit visible prototypes still govern
+known calls. Opaque results suppress dependent return-conversion errors.
+
+#### Remaining backend and quality work
+
+- Optional fallthrough/missing-return warnings and unused-label warnings are
+  intentionally deferred. There is no CFG or claim of reachability analysis;
+  infinite loops, noreturn attributes, exhaustive switches and goto cycles
+  therefore receive no speculative fallthrough warnings.
+- A backend still needs labels and branch targets, switch dispatch lowering,
+  runtime VLA allocation/extent evaluation, automatic lifetime cleanup, return
+  value lowering and a calling convention. The syntax and conversion graph remain
+  available, but statement constraints do not provide an executable control-flow
+  graph or computed-goto target set.
+- GNU statement-expression result types, intrinsic signatures, local-label
+  nonlocal-jump mechanics, GNU89 inline semantics, attributes and calling-convention
+  effects remain conservative. The five requested GNU statement forms retain
+  parser-owned extension policy; accepted opaque constructs are not certified.
+- The existing parameter-inspection metadata still uses source provenance;
+  definition binding and K&R comparisons use suffix identity. A backend requiring
+  arbitrary parameter-site lookup should index the immutable suffixes itself.
+- Initializer materialization, implicit object bytes, relocations and backend
+  emitted-symbol selection remain lowering work. Definition records distinguish
+  inline-only bodies from externally provided definitions.
 
 ## Validation
 
@@ -343,7 +468,7 @@ uses `u64` magnitudes.
 
 All 14 `.c` files in `test-programs/` completed without crashes or timeouts.
 Comparing default compilation with syntax-only inspection found zero new semantic
-errors; the 24 existing preprocessing/syntax errors were unchanged. This small,
+errors; the 23 existing preprocessing/syntax errors were unchanged. This small,
 mostly preprocessor-oriented set is not sufficient evidence of C99 conformance.
 
 The 21 new semantic diagnostic fixtures produce 30 semantic errors and one
@@ -360,8 +485,8 @@ with `-std=c99 -pedantic-errors` also rejects every fixture. Sample triage:
 | `sema-function-qualifier.c` | Genuine undefined behavior under C99; emitted as a warning, while strict Clang promotes its ignored-qualifier extension warning to an error. |
 | Old-style prototype and body parameter types | Positive promoted short-to-int and float-to-double examples accepted by Clang and retained as regressions. |
 
-The GCC torture corpus survey (`scripts/run_gcc_torture.py`) has not yet been
-run with semantic analysis enabled; the 12 retained torture regressions pass.
+The 12 retained syntax torture regressions pass. The Stage 3 survey below also
+exercises the complete semantic CLI.
 
 The defensive `UnknownTypedef` kind cannot be reached by deliberately well-formed
 source through the parser's typedef classification. Its constructed resolver unit
@@ -371,8 +496,59 @@ Stage 2 adds 28 diagnostic fixtures, covering every new semantic kind and the
 shared implicit-function extension policy; the existing overflow diagnostic now
 also covers arithmetic initializer evaluation. Linux-target Clang rejects every
 negative fixture under its matching standard with `-pedantic-errors`.
-The ordinary survey still has 14 files, 24 preprocessing/syntax errors and zero
+The ordinary survey still has 14 files, 23 preprocessing/syntax errors and zero
 additional semantic errors. The positive shared `expression-sizeof-probe.c`
 checks inferred arrays, compound literals, strings, promotions, complex sizes and
 pointers through both sema and Clang static assertions. This corpus and the unit
 tests establish regression protection, not general conformance.
+
+Stage 3 adds 36 diagnostic fixtures for 30 new semantic kinds and the shared
+extension policy: 39 rendered errors and five warnings. Positive and negative
+unit tests cover each rule; explicit work-stack tests use 10,000 nested
+if/while/block statements and 10,000 chained cases. Allocation tests cover the
+new paths, synthesized definitions, invalid statements and deep nesting. All
+canonical checks pass with `CARGO_BUILD_JOBS=8` and the configured fat LTO.
+The ordinary 14-file survey matches an archived Stage 2 CLI exactly: 23 existing
+preprocessing/syntax errors and no additional diagnostics or crashes. Linux-target
+Clang was run for every file and each new golden. Clang accepts the incomplete
+tentative-array fixture with the same one-element warning; it warns rather than
+errors on the modifiable-static inline fixture, and needs an optional warning
+flag for the unused static declaration. Sema's severities follow the Stage 3
+contract: inline restrictions are errors and unused undefined static functions
+warn by default.
+
+The GCC 15.2.0 torture corpus comparison uses `scripts/run_gcc_torture.py`, six
+workers and the cached corpus without modifying it. The baseline CLI is built
+from a `git archive` export of Stage 2 commit
+`d06ebdf33c1e54f9781e1a7c193f6e5ec903da77`, with a separate target directory and
+a copied LLVM toolchain. Both builds use plain `cargo build --bin bcc-rust` and
+the same configured linker-plugin fat LTO. Rebuild the plain CLI after the
+feature-enabled allocation checks: `benchmarking-internals` replaces its entry
+point with a benchmark loop. GCC 13.2.0 targets Windows x86-64;
+independent Clang checks target `x86_64-unknown-linux-gnu`.
+
+| Survey measure | Stage 2 baseline | Stage 3 |
+| --- | ---: | ---: |
+| Raw inputs surveyed | 3,878 | 3,878 |
+| Raw accepted / diagnosed | 3,069 / 809 | 3,119 / 759 |
+| GCC C99 pedantic accepted | 2,874 | 2,874 |
+| GCC-accepted raw inputs accepted / diagnosed by bcc | 2,327 / 547 | 2,352 / 522 |
+| Header-free GCC C99 preprocessed inputs | 2,596 | 2,596 |
+| Preprocessed accepted / diagnosed | 2,514 / 82 | 2,560 / 36 |
+| Newly rejected GCC-accepted raw / preprocessed inputs | — | 0 / 0 |
+| Crashes, timeouts and process failures | 0 | 0 |
+
+The first comparison exposed five dependent return-conversion false positives:
+`compile/pr37669.c`, `compile/pr38343-2.c`, `compile/pr46360.c`,
+`compile/pr65873.c` and `execute/20030323-1.c`. Their pointer-returning GNU
+intrinsics (`__builtin_strdup`, `__builtin_stpcpy`, `__builtin_strncpy`,
+`__builtin___memcpy_chk`, `__builtin_return_address`) had been assigned invented
+implicit-int results. Opaque intrinsic signatures fix those return diagnostics;
+reduced positive regressions retain the behavior, and a genuine integer-to-pointer
+return still diagnoses. Clang confirms the pointer returns; the unreduced GCC
+sources also include a GCC-only va-arg-pack intrinsic and an old-style `main`
+spelling that this Clang rejects independently. The final complete survey has no
+new GCC-accepted rejections. The 36 remaining preprocessed rejections already
+occurred in Stage 2 and are outside this stage's new statement/function rules.
+Evidence is retained in `target/survey-stage2`, `target/survey-stage3` (initial
+triage), `target/survey-stage3-cli`, and `target/sema3-final-triage.json`.

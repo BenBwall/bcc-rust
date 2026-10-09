@@ -360,3 +360,34 @@ An arena cursor identifying the subobject to receive the next initializer under
 its containing brace pair. Designators reset the path; brace elision descends it;
 sequential initialization advances and unwinds it. It validates syntax and infers
 array bounds without materializing backend stores.
+
+**Defining function derivation**:
+The first type derivation outward from a function definition's identifier,
+including through grouping parentheses. Its immutable suffix identity selects
+the body parameters and K&R signature. A function suffix in the return type,
+or a function type obtained solely from a typedef, is not that derivation.
+
+**Definition record** (`Definition`):
+A finalized definition associated with a semantic binding occurrence, separate
+from declarations of the same entity. It distinguishes explicit object/function
+definitions, inline-only bodies, completed tentative objects and synthesized
+function-name arrays. Tentative records use the final composite object type.
+
+**Variable scope path**:
+A persistent chain of declarations of variably modified identifiers currently
+in scope. It includes VLA objects, pointers to VLAs and variably modified typedefs.
+A label or jump retains a path snapshot after lexical scope exit; path comparison
+detects entry into a declaration's scope without recursive tree traversal.
+
+**Function label identity**:
+A label's identity in its separate function-wide namespace. GNU local-label
+declarations introduce lexical identities that can shadow an ordinary label or
+be referenced by a nested function. Label identities are independent of ordinary
+object/function bindings and of label spellings in other functions.
+
+**Inline definition**:
+In the C99 model, a function body with external linkage whose file-scope
+declarations all specify inline without extern. It provides an inline-only body,
+not an external definition. Later declarations can change that classification;
+static inline functions have internal linkage and are not inline definitions in
+this specific sense.

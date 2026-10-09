@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **300 top-level C inputs and 300 stderr snapshots**, plus two supporting headers and sixty-five mode/policy `.args` sidecars. Forty-nine of the inputs cover semantic analysis (twenty-one for declarations, twenty-eight for expressions and initializers) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **136 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 117 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **336 top-level C inputs and 336 stderr snapshots**, plus two supporting headers and one hundred one mode/policy `.args` sidecars. Eighty-five of the inputs cover semantic analysis (twenty-one for declarations, twenty-eight for expressions and initializers, thirty-six for statements and functions) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **136 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 117 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -567,3 +567,55 @@ inspection is pinned by `tests/fixtures/semantic/expressions.stderr`; the shared
 Deep tests exercise 100,000 parentheses, unary operators and additions.
 The allocation harness measures valid expression/initializer paths, erroneous
 operands, and rendering of every golden here without global allocations.
+
+## Statement and function semantic diagnostics
+
+The 36 `sema3-*` fixtures cover all 30 new symbolic kinds below, plus GNU case
+range overlaps, the K&R previous-declaration label, missing K&R declarations,
+predefined-function-name redefinition, shared GNU statement-extension policy and
+GNU void-expression returns. The parser continues to own duplicate-default
+diagnostics; its existing golden remains authoritative. Modes and severity are
+pinned by the `.args` sidecars.
+
+| Symbolic kind | Golden |
+| --- | --- |
+| `InvalidFunctionDefinition` | [function-declarator](sema3-function-declarator.c) |
+| `FunctionDefinitionStorage` | [function-storage](sema3-function-storage.c) |
+| `IncompleteFunctionReturn` | [function-return](sema3-function-return.c) |
+| `InvalidDefinitionParameterList` | [parameter-list](sema3-parameter-list.c) |
+| `UnnamedDefinitionParameter` | [parameter-name](sema3-parameter-name.c) |
+| `IncompleteDefinitionParameter` | [parameter-complete](sema3-parameter-complete.c) |
+| `DefinitionStarArray` | [parameter-star](sema3-parameter-star.c) |
+| `MainSignature` | [main](sema3-main.c) |
+| `IncompleteInternalTentative` | [internal-tentative](sema3-internal-tentative.c) |
+| `DuplicateDefinition` | [definition](sema3-definition.c) |
+| `TentativeArrayAssumedOne` | [array-completion](sema3-array-completion.c) |
+| `IncompleteTentativeDefinition` | [incomplete-tentative](sema3-incomplete-tentative.c) |
+| `UndefinedInternal` | [internal-undefined](sema3-internal-undefined.c) |
+| `UnusedStaticFunction` | [static-unused](sema3-static-unused.c) |
+| `InlineInternalReference` | [inline-reference](sema3-inline-reference.c) |
+| `InlineStaticObject` | [inline-object](sema3-inline-object.c) |
+| `VoidReturnValue` | [void-return](sema3-void-return.c) |
+| `MissingReturnValue` | [missing-value](sema3-missing-value.c) |
+| `MissingReturnValueWarning` | [missing-value-warning](sema3-missing-value-warning.c) |
+| `InvalidReturnConversion` | [return-conversion](sema3-return-conversion.c) |
+| `InvalidForDeclaration` | [for-declaration](sema3-for-declaration.c) |
+| `DuplicateLabel` | [label-duplicate](sema3-label-duplicate.c) |
+| `UndefinedLabel` | [label-undefined](sema3-label-undefined.c) |
+| `JumpIntoVariableScope` | [goto-vla](sema3-goto-vla.c) |
+| `SwitchIntoVariableScope` | [switch-vla](sema3-switch-vla.c) |
+| `CaseOutsideSwitch` | [case-outside](sema3-case-outside.c) |
+| `EmptyCaseRange` | [case-empty](sema3-case-empty.c) |
+| `BreakOutsideLoopOrSwitch` | [break](sema3-break.c) |
+| `ContinueOutsideLoop` | [continue](sema3-continue.c) |
+| `DuplicateCase` | [case-duplicate](sema3-case-duplicate.c) |
+
+Positive and negative rules are exercised in `semantic_analysis/tests/statements.rs`,
+including nested declarator identity, C89 K&R implicit int, C23 unnamed parameters,
+forward and backward jumps, pointer/typedef VLA scopes, converted unsigned cases,
+local labels and nested functions, return conversions, late extern declarations
+and translation-unit completion. Deep tests use 10,000 nested if/while/block
+statements and a 10,000-case switch. Allocation coverage includes valid and
+erroneous bodies, synthesized definitions and deep statement traversal; rendering
+uses the same complete golden corpus. Optional fallthrough and unused-label
+warnings are not implemented and have no claimed coverage.
