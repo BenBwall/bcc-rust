@@ -509,6 +509,135 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// GCC builtins are reserved identifiers (C99 §7.1.3p1, p. 165; PDF p.
+    /// 177) that the implementation declares; an undeclared one is an
+    /// unmodeled function rather than an implicit `int` declaration.
+    pub(super) fn builtin_name(&self, name: Identifier) -> bool {
+        self.context
+            .string_cache
+            .at(name.name)
+            .starts_with("__builtin_")
+    }
+
+    /// GCC's `__builtin_constant_p` folds to whether its operand is an
+    /// arithmetic constant; it is valid where a constant is required.
+    fn constant_p(
+        &self,
+        e: &'tu Expression<'tu>,
+        function: &'tu Expression<'tu>,
+        arguments: ArenaList<'tu, &'tu Expression<'tu>>,
+    ) -> Option<ExpressionInfo<'tu>> {
+        let mut callee = function;
+        while let ExpressionType::Parenthesized { expression } = callee.kind {
+            callee = expression;
+        }
+        let ExpressionType::Identifier(name) = callee.kind else {
+            return None;
+        };
+        let &[argument] = arguments.as_slice() else {
+            return None;
+        };
+        // Undeclared builtins are bound as opaque functions; a user
+        // declaration with a known result type is an ordinary function.
+        if self.context.string_cache.at(name.name) != "__builtin_constant_p"
+            || self
+                .lookup(Namespace::Ordinary, name.name)
+                .is_some_and(|entry| {
+                    !matches!(
+                        self.types.nodes[self.bindings[entry.binding].ty.index],
+                        TypeKind::Function { result, .. } if result == self.types.unknown()
+                    )
+                })
+        {
+            return None;
+        }
+        let operand = self.expression_info(argument);
+        let constant = operand.constant == ConstantClass::Arithmetic
+            && (operand.integer.is_some() || operand.floating.is_some());
+        let mut info = Self::expression_result(e, self.types.unknown());
+        info.integer = Some(Integer::int(i128::from(constant)));
+        info.ice = true;
+        info.constant = ConstantClass::Arithmetic;
+        Some(info)
+    }
+
+    /// GCC folds the address of a member or element reached from a null or
+    /// other integer-valued pointer constant, as in the classic `offsetof`
+    /// macro, to that integer plus the byte offset.
+    fn integer_address(&self, mut e: &'tu Expression<'tu>) -> Option<i128> {
+        let mut offset = 0_i128;
+        loop {
+            match e.kind {
+                | ExpressionType::Parenthesized { expression } => e = expression,
+                | ExpressionType::DirectMember {
+                    base_expression,
+                    member,
+                }
+                | ExpressionType::IndirectMember {
+                    base_expression,
+                    member,
+                } => {
+                    let base = self.expression_info(base_expression);
+                    let indirect = matches!(e.kind, ExpressionType::IndirectMember { .. });
+                    let record = if indirect {
+                        self.pointer_target(base.ty)?
+                    } else {
+                        base.ty
+                    };
+                    let TypeKind::Tag(id) = self.types.nodes[record.index] else {
+                        return None;
+                    };
+                    let index = *self.member_indices.get(&(id, member.name))?;
+                    let field = self.types.tags[id].fields.get().get(index)?;
+                    offset = offset.checked_add(i128::from(field.offset))?;
+                    if indirect {
+                        return Self::pointer_value(base).and_then(|v| v.checked_add(offset));
+                    }
+                    e = base_expression;
+                },
+                | ExpressionType::Binary {
+                    operator: BinaryOperator::Subscript,
+                    left_expression,
+                    right_expression,
+                } => {
+                    let left = self.expression_info(left_expression);
+                    let right = self.expression_info(right_expression);
+                    let (array, index) = if right.ice {
+                        (left, right)
+                    } else {
+                        (right, left)
+                    };
+                    let index = index.integer.filter(|_| index.ice)?.value;
+                    let (TypeKind::Array(element, _) | TypeKind::Pointer(element)) =
+                        self.types.nodes[array.ty.index]
+                    else {
+                        return None;
+                    };
+                    let size = i128::from(self.types.layout(element)?.size);
+                    offset = offset.checked_add(index.checked_mul(size)?)?;
+                    if matches!(self.types.nodes[array.ty.index], TypeKind::Pointer(_)) {
+                        return Self::pointer_value(array).and_then(|v| v.checked_add(offset));
+                    }
+                    e = array.expression;
+                },
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::Indirection,
+                    operand_expression,
+                } =>
+                    return Self::pointer_value(self.expression_info(operand_expression))
+                        .and_then(|v| v.checked_add(offset)),
+                | _ => return None,
+            }
+        }
+    }
+
+    fn pointer_value(info: ExpressionInfo<'tu>) -> Option<i128> {
+        (info.constant == ConstantClass::Address)
+            .then_some(info.integer)
+            .flatten()
+            .map(|v| v.value)
+    }
+
     pub(super) fn check_condition(&mut self, mut slot: ExpressionSlot<'tu>, integer: bool) {
         while let ExpressionSlot::Selection(header) = slot {
             let Some(e) = header.expression else {
@@ -569,7 +698,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     if info.ice {
                         info.constant = ConstantClass::Arithmetic;
                     }
-                } else if !e.recovered {
+                } else if !e.recovered && !self.builtin_name(name) {
                     self.error(
                         SemanticErrorKind::UndeclaredIdentifier,
                         name.source_vectors,
@@ -728,7 +857,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 function_expression,
                 arguments,
             } => {
-                info = self.type_call(e, self.expression_info(function_expression), arguments);
+                info = if let Some(info) = self.constant_p(e, function_expression, arguments) {
+                    info
+                } else {
+                    self.type_call(e, self.expression_info(function_expression), arguments)
+                };
             },
             | E::Builtin(b) => {
                 info = self.type_builtin(e, b);
@@ -905,6 +1038,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let mut info = Self::expression_result(e, ty);
             if operand.static_address {
                 info.constant = ConstantClass::Address;
+                info.integer = self
+                    .integer_address(operand.expression)
+                    .map(|value| Integer::int(value).cast(64, false));
             }
             return info;
         }
@@ -1074,6 +1210,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             info.constant = ConstantClass::Address;
             info.integer = operand.integer;
+        }
+        // GNU modes fold an integer-valued address constant converted to an
+        // integer type, which C99 does not count as arithmetic (§6.6p8).
+        if self.context.configuration.gnu_extensions()
+            && self.integer_type(target).is_some()
+            && Self::pointer_value(operand).is_some()
+        {
+            info.constant = ConstantClass::Arithmetic;
         }
         info
     }
