@@ -1120,6 +1120,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let depth = self.tokenizer_stack.len();
         (self.operand_fence != 0 && depth == self.operand_fence)
             || (self.verbatim_fence != 0 && depth >= self.verbatim_fence)
+            || matches!(
+                self.tokenizer_stack.last().map(|frame| &frame.frame_type),
+                Some(TokenizerFrameType::DeferredQuery)
+            )
     }
 
     /// Returns the frame that reads `token`'s argument as a `##` operand.
@@ -1882,7 +1886,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                             }
                         },
                         | TokenizerFrame {
-                            frame_type: TokenizerFrameType::Rescan,
+                            frame_type:
+                                TokenizerFrameType::Rescan | TokenizerFrameType::DeferredQuery,
                             ..
                         } => {
                             // A recovered directive boundary must return its

@@ -400,21 +400,23 @@ extensions. `#warning` always emits its message, plus a policy diagnostic when
 its spelling is an extension. `#embed` reads real files as 8-bit resource
 elements through the include search paths, and implements `limit`, `prefix`,
 `suffix`, `if_empty`, and their double-underscore aliases. Limits use the
-integer preprocessor evaluator in their own expansion frame and reject negative values and `defined`. Written quoted/angle names are read before
-macro replacement, including digraph-looking punctuation and dollar signs as
-header characters; macro-produced names and builtin strings such as `__FILE__`
+integer preprocessor evaluator in their own expansion frame, allow conditional
+queries, and reject negative values and `defined`. Written quoted/angle names
+are read before macro replacement, including digraph-looking punctuation and
+dollar signs as header characters; macro-produced names and builtin strings such as `__FILE__`
 expand normally. Missing operands and missing closing quotes are diagnosed.
 Resource queries return 0 for missing resources, 1 for found resources, and
 `__has_embed` returns 2 for an empty effective resource, including `limit(0)`.
 The three `__STDC_EMBED_*__` constants are predefined when resource inclusion is
 enabled. An unsupported qualified embed parameter returns 0 in `__has_embed`; a
-direct `#embed` diagnoses it. Malformed parameters are diagnosed in both forms.
+direct `#embed` diagnoses it. Malformed parameters, including mismatched
+parentheses, brackets and braces, are diagnosed in both forms.
 Query nesting is bounded at 64, so adversarial recursive operands produce a
 diagnostic instead of exhausting the native stack. Resource and C attribute
-queries are restricted to preprocessing conditional expressions (C23
-§6.10.2p11); their names remain defined for `defined`, `#ifdef` and related
-tests. Invalid operator openings preserve the following token or directive
-boundary.
+queries are restricted to preprocessing conditional expressions and embed
+limits (C23 §6.10.2p11, §6.10.4.2p3); their names remain defined for `defined`,
+`#ifdef` and related tests. Invalid operator openings preserve the following
+token or directive boundary.
 
 `__has_c_attribute` returns 202311 for the seven standard C23 attributes and
 `_Noreturn`, including double-underscore forms, and 0 for other names. GNU

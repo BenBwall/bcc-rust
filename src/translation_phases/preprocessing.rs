@@ -135,6 +135,14 @@ enum OutputPurpose {
     Parsing,
 }
 
+/// Whether conditional queries are evaluated or retained for a later embed
+/// parameter evaluation. C23: §6.10.4.2p3, p. 174; PDF p. 187.
+#[derive(Clone, Copy, PartialEq)]
+enum QueryExpansion {
+    Evaluate,
+    Defer,
+}
+
 /// State kept from the start of preprocessing to its end.
 struct PreprocessorState<'pp> {
     counter:               u64,
@@ -247,6 +255,8 @@ struct Expander<'c, 'tu, 'pp: 'x, 'x> {
     output_purpose:        OutputPurpose,
     last_was_newline:      bool,
     generate_placeholders: bool,
+    /// C23 §6.10.4.2p3: queries in embed operands wait for limit evaluation.
+    query_expansion:       QueryExpansion,
     /// The tokenizer-stack depth of the `#` or `##` operand being replaced,
     /// at which reading stops when that operand ends, or 0 outside such
     /// replacement.
@@ -615,6 +625,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             output_purpose,
             last_was_newline,
             generate_placeholders: false,
+            query_expansion: QueryExpansion::Evaluate,
             operand_fence: 0,
             expansion_fence: 0,
             verbatim_fence: 0,

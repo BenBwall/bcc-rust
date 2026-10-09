@@ -69,6 +69,10 @@ pub(super) enum TokenizerFrameType<'a> {
     /// boundary-crossing macro call, rejected lookahead, or the output of a
     /// builtin query or `#embed`.
     Rescan,
+    /// Already collected query arguments, replayed without macro replacement
+    /// until their enclosing embed parameter is evaluated.
+    /// C23: §6.10.4.2p3, p. 174; PDF p. 187.
+    DeferredQuery,
     /// A source file, the main file or one named by `#include`.
     ///
     /// C99: §6.10.2 paragraphs 2-3, pp. 149-150; PDF pp. 161-162.
@@ -215,7 +219,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     return Some(invocation_end.clone()),
                 | TokenizerFrameType::FunctionLikeMacroArgument { .. }
                 | TokenizerFrameType::SourceFile { .. } => return None,
-                | TokenizerFrameType::Rescan => (),
+                | TokenizerFrameType::Rescan | TokenizerFrameType::DeferredQuery => (),
             }
         }
         None
@@ -229,7 +233,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     return invocation.clone(),
                 | TokenizerFrameType::FunctionLikeMacroArgument { .. }
                 | TokenizerFrameType::SourceFile { .. } => break,
-                | TokenizerFrameType::Rescan => (),
+                | TokenizerFrameType::Rescan | TokenizerFrameType::DeferredQuery => (),
             }
         }
         self.context

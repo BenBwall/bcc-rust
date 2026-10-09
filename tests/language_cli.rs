@@ -204,17 +204,32 @@ mod tests {
                 vec![flag.as_str(), "-pedantic-errors"]
             };
             let tree = clean_tree(&run(&flags, &source));
-            for value in [
-                "constant 9",
-                "constant 0",
-                "constant 65",
-                "constant 255",
-                "constant 8",
-                "constant 7",
-                "following",
-            ] {
-                assert!(tree.contains(value), "{mode}, {value}: {tree}");
-            }
+            let initializers: Vec<_> = tree
+                .split("initializer: initializer-list")
+                .skip(1)
+                .map(|list| {
+                    list.lines()
+                        .skip(1)
+                        .take_while(|line| line.starts_with("      "))
+                        .map(|line| line.trim().split(" @").next().unwrap())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .collect();
+            let expected = [&[9, 0, 65, 255, 8][..], &[7][..]].map(|values| {
+                values
+                    .iter()
+                    .map(|value| {
+                        format!(
+                            "element\nvalue: assignment-expression\nassignment-expression: \
+                             constant {value} (int)"
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+            assert_eq!(initializers, expected, "{mode}: {tree}");
+            assert!(tree.contains("declarator following"), "{mode}: {tree}");
         }
         let output = run(&["-std=c17"], &source);
         assert!(

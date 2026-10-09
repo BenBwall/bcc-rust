@@ -1428,13 +1428,14 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     ) -> bool {
         let conditional_queries = replace(&mut self.state.conditional_queries, true);
         let result = self
-            .eval_preprocessor_value(on_no_expression_error)
+            .eval_preprocessor_value(on_no_expression_error, true)
             .is_none_or(|value| value.as_signed() != 0);
         self.state.conditional_queries = conditional_queries;
         result
     }
 
-    /// C23: #embed limit uses an integer constant expression (§6.10.4.2p1).
+    /// C23: #embed limit uses conditional inclusion without `defined`.
+    /// §6.10.4.2 paragraphs 1, 3, p. 174; PDF p. 187.
     pub(super) fn eval_resource_limit(&mut self) -> Option<u64> {
         let saved_parser = replace(
             &mut self.expression_parser,
@@ -1442,9 +1443,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         );
         let newlines = (self.last_was_newline, self.current_is_newline);
         let before = self.context.pending_error_count();
-        let result = self.eval_preprocessor_value(PreprocessorErrorType::LanguageConstraint(
-            "expected embed limit expression",
-        ));
+        let result = self.eval_preprocessor_value(
+            PreprocessorErrorType::LanguageConstraint("expected embed limit expression"),
+            false,
+        );
         self.expression_parser = saved_parser;
         (self.last_was_newline, self.current_is_newline) = newlines;
         let mut diagnostics = ArenaVec::new_in(self.scratch);
@@ -1470,6 +1472,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     fn eval_preprocessor_value(
         &mut self,
         on_no_expression_error: PreprocessorErrorType<'tu>,
+        allow_defined: bool,
     ) -> Option<PreprocessorExpressionOperand> {
         const UNARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Unary;
         const BINARY: PreprocessorExpressionParserState = PreprocessorExpressionParserState::Binary;
@@ -1579,6 +1582,12 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             self.handle_expression_operator(op);
                         }
                     }
+                    (PreprocessorTokenType::Defined, _) if !allow_defined => {
+                        // C23 §6.10.4.2p3 excludes defined macro expressions,
+                        // not the same characters in a query's header name.
+                        self.language_error("defined is not permitted in an embed limit", token.source_vectors);
+                        return None;
+                    },
                     (PreprocessorTokenType::Defined, UNARY) =>
                         self.parse_defined_operator(),
                     (PreprocessorTokenType::Defined, BINARY) => self.context.preprocessor_error(PreprocessorError {

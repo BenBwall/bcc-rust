@@ -13,6 +13,7 @@ use std::{
 
 use super::{
     Expander,
+    QueryExpansion,
     driver::{
         TokenizerFrame,
         TokenizerFrameType,
@@ -106,12 +107,13 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         });
     }
 
-    /// Collects an operator argument with an explicit delimiter counter.
+    /// Collects an operator argument with an explicit delimiter counter,
+    /// retaining its delimiters and their provenance for deferred replay.
     /// GNU/MSVC extension: ordinary-text invocations treat new-lines as
     /// whitespace, following C99 §6.10.3p10-11, p. 152; PDF p. 164.
     /// Directives and replacement lists retain their new-line boundary:
     /// C99: §6.10p2, pp. 146-147; PDF pp. 158-159.
-    fn query_arguments(
+    fn query_arguments<const KEEP_DELIMITERS: bool>(
         &mut self,
         operator: PreprocessorToken,
     ) -> Option<ArenaVec<'x, PreprocessorToken>> {
@@ -147,6 +149,9 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             return None;
         }
         let mut tokens = ArenaVec::new_in(self.scratch);
+        if KEEP_DELIMITERS {
+            tokens.push(open);
+        }
         let resource_query = matches!(
             self.context.string_cache.at(operator.contents),
             "__has_include" | "__has_embed"
@@ -155,7 +160,10 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             self.language_error("unterminated resource query", operator.source_vectors);
             return None;
         }
-        let mut resource_started = tokens.iter().any(|t| t.kind != T::Whitespace);
+        let mut resource_started = tokens
+            .iter()
+            .skip(usize::from(KEEP_DELIMITERS))
+            .any(|t| t.kind != T::Whitespace);
         let mut in_header = false;
         let mut depth = 1usize;
         while let Some(mut token) = self.next_preprocessor_token::<false>() {
@@ -181,6 +189,9 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                 | T::ClosingParenthesis => {
                     depth -= 1;
                     if depth == 0 {
+                        if KEEP_DELIMITERS {
+                            tokens.push(token);
+                        }
                         return Some(tokens);
                     }
                 },
@@ -408,6 +419,25 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
 
     fn language_builtin_inner(&mut self, token: PreprocessorToken) -> Option<PreprocessorToken> {
         let name = self.context.string_cache.at(token.contents);
+        // C23 §6.10.4.2p3: only the limit's evaluation uses conditional
+        // inclusion rules. Keep query calls intact during the directive's
+        // initial replacement, including their written header names.
+        if self.query_expansion == QueryExpansion::Defer
+            && matches!(name, "__has_include" | "__has_embed" | "__has_c_attribute")
+        {
+            let arguments = self.query_arguments::<true>(token)?.leak();
+            let tokenizer = TokenSource::replay(
+                self.context,
+                self.scratch,
+                &[arguments],
+                SourceVector::default(),
+            );
+            self.push_tokenizer_frame(TokenizerFrame {
+                frame_type: TokenizerFrameType::DeferredQuery,
+                tokenizer,
+            });
+            return Some(token);
+        }
         let &(name, feature) = LANGUAGE_BUILTINS
             .iter()
             .find(|(spelling, _)| *spelling == name)
@@ -424,7 +454,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                 "resource and C attribute queries require a preprocessing conditional expression",
                 token.source_vectors,
             );
-            drop(self.query_arguments(token));
+            drop(self.query_arguments::<false>(token));
             return Some(self.integer_pp_token(0, token.source_vectors));
         }
         let value = match name {
@@ -437,7 +467,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             | "__STDC_EMBED_FOUND__" => 1,
             | "__STDC_EMBED_EMPTY__" => 2,
             | _ => {
-                let tokens = self.query_arguments(token)?.leak();
+                let tokens = self.query_arguments::<false>(token)?.leak();
                 let name = self.context.string_cache.at(token.contents);
                 if name == "__pragma" {
                     let newline = PreprocessorToken {
@@ -533,6 +563,9 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         Some(self.integer_pp_token(value, token.source_vectors))
     }
 
+    /// Scans parameter clauses using the balanced-token grammar shared by
+    /// resource inclusion and its conditional query.
+    /// C23: §6.10.1p1, pp. 163-164; PDF pp. 176-177.
     fn embed_parameters(
         &mut self,
         tokens: &'x [PreprocessorToken],
@@ -619,13 +652,43 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             }
             index += 1;
             let start = index;
-            let mut depth = 1usize;
+            let mut delimiters = ArenaVec::new_in(self.scratch);
+            delimiters.push(T::ClosingParenthesis);
             while index < tokens.len() {
+                // A query's header-name is opaque, even if its characters
+                // include delimiters (C99 §6.4.7p1, C23 §6.10.2p7).
+                if tokens[index].kind.is_identifier()
+                    && matches!(
+                        self.context.string_cache.at(tokens[index].contents),
+                        "__has_include" | "__has_embed"
+                    )
+                {
+                    let open = significant(index + 1);
+                    if tokens
+                        .get(open)
+                        .is_some_and(|t| t.kind == T::OpeningParenthesis)
+                    {
+                        let header = significant(open + 1);
+                        let (_, _, end) =
+                            self.resource_operand(&tokens[header..], tokens[index].source_vectors)?;
+                        delimiters.push(T::ClosingParenthesis);
+                        index = header + end;
+                        continue;
+                    }
+                }
                 match tokens[index].kind {
-                    | T::OpeningParenthesis => depth += 1,
-                    | T::ClosingParenthesis => {
-                        depth -= 1;
-                        if depth == 0 {
+                    | T::OpeningParenthesis => delimiters.push(T::ClosingParenthesis),
+                    | T::OpeningSquareBracket => delimiters.push(T::ClosingSquareBracket),
+                    | T::OpeningCurlyBrace => delimiters.push(T::ClosingCurlyBrace),
+                    | T::ClosingParenthesis | T::ClosingSquareBracket | T::ClosingCurlyBrace => {
+                        if delimiters.pop() != Some(tokens[index].kind) {
+                            self.language_error(
+                                "mismatched delimiter in embed parameter",
+                                tokens[index].source_vectors,
+                            );
+                            return None;
+                        }
+                        if delimiters.is_empty() {
                             break;
                         }
                     },
@@ -633,7 +696,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                 }
                 index += 1;
             }
-            if depth != 0 {
+            if !delimiters.is_empty() {
                 self.language_error("unterminated embed parameter", source);
                 return None;
             }
@@ -641,10 +704,6 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             index += 1;
             match bit {
                 | 1 => {
-                    if body.iter().any(|t| t.kind == T::Defined) {
-                        self.language_error("defined is not permitted in an embed limit", source);
-                        return None;
-                    }
                     let value = self.eval_fenced_resource_limit(body, source);
                     result.limit = value;
                     _ = value?;
@@ -662,7 +721,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
     /// sentinel new-line, like an argument prescan. The operand may come from
     /// a replacement list that is still being read: its frames and cursors
     /// stay below the fence, so the sentinel cannot end them.
-    /// C23: §6.10.4.2 paragraph 1, p. 174; PDF p. 187.
+    /// C23: §6.10.4.2 paragraphs 1, 3, p. 174; PDF p. 187.
     fn eval_fenced_resource_limit(
         &mut self,
         body: &[PreprocessorToken],
@@ -691,7 +750,12 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         let operand_fence = std::mem::replace(&mut self.operand_fence, 0);
         let expansion_fence = std::mem::replace(&mut self.expansion_fence, depth);
         let verbatim_fence = std::mem::replace(&mut self.verbatim_fence, 0);
+        let query_expansion =
+            std::mem::replace(&mut self.query_expansion, QueryExpansion::Evaluate);
+        let conditional_queries = std::mem::replace(&mut self.state.conditional_queries, true);
         let value = self.eval_resource_limit();
+        self.state.conditional_queries = conditional_queries;
+        self.query_expansion = query_expansion;
         // An expression that stopped early leaves its remaining operand
         // frames above the fence.
         while self.tokenizer_stack.len() >= depth {
@@ -740,6 +804,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             .report_extension(Feature::Embed, "#embed", directive.source_vectors);
         let mut tokens = ArenaVec::new_in(self.scratch);
         _ = self.collect_written_resource(&mut tokens);
+        let query_expansion = std::mem::replace(&mut self.query_expansion, QueryExpansion::Defer);
         // The rest of the line, through its new-line, belongs to the
         // directive whether or not the resource is valid. C99: §6.10p2,
         // pp. 146-147; PDF pp. 158-159.
@@ -749,6 +814,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             }
             tokens.push(token);
         }
+        self.query_expansion = query_expansion;
         self.resume_at_line_start();
         let tokens = tokens.leak();
         let Some((name, system, end)) = self.resource_operand(tokens, directive.source_vectors)

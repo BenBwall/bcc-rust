@@ -271,6 +271,22 @@ fn line_directive_rejects_encoded_filenames_and_recovers() {
     }
 }
 
+/// The spellings of the output tokens, separated by spaces.
+pub(super) fn texts(output: &[String]) -> String {
+    output
+        .iter()
+        .map(|line| {
+            if let Some((_, rest)) = line.split_once('`') {
+                rest.split_once('`').map_or(rest, |(spelling, _)| spelling)
+            } else {
+                line.split_once("string literal ")
+                    .map_or(&**line, |(_, rest)| rest)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[test]
 fn comments_digraphs_and_trigraphs_obey_mode_boundaries() {
     for standard in [
@@ -989,9 +1005,10 @@ fn resource_queries_embed_parameters_and_include_next_use_real_search_paths() {
         "#define literal wrong\n#include <wrapper.h>\n#if __has_include(<wrapper.h>) && \
          !__has_include(<missing.h>)\nfound\n#endif\n#if __has_embed(<data.bin>) == \
          __STDC_EMBED_FOUND__ && __has_embed(<empty.bin>) == \
-         __STDC_EMBED_EMPTY__\nresources\n#endif\n#embed <data.bin> limit(1+1) prefix(start,) \
-         suffix(,end)\n#embed <empty.bin> if_empty(empty)\n#embed <data.bin> limit(0) \
-         if_empty(zero)\n#if (5 + __has_embed(<data.bin> limit(1+1))) == 6\nnested\n#endif\n#if \
+         __STDC_EMBED_EMPTY__\nresources\n#endif\nunsigned char bytes[]={\n#embed <data.bin> \
+         limit(1+2) prefix(9,) suffix(,8)\n};\nunsigned char empty[]={\n#embed <empty.bin> \
+         if_empty(7)\n};\n#embed <data.bin> limit(0) if_empty(zero)\n#if (5 + \
+         __has_embed(<data.bin> limit(1+1))) == 6\nnested\n#endif\n#if \
          __has_include(<literal-name.h>)\nliteral_header\n#endif\n#if __has_embed(<data.bin> \
          vendor::unsupported(1)) == __STDC_EMBED_NOT_FOUND__\nunsupported\n#endif\n#if \
          __has_embed(<%data%>) == __STDC_EMBED_FOUND__ && \
@@ -1006,30 +1023,12 @@ fn resource_queries_embed_parameters_and_include_next_use_real_search_paths() {
         &[a.clone(), b],
     );
     assert!(errors.is_empty(), "{errors:?}");
-    let tokens = spellings(&tokens);
-    for word in [
-        "first",
-        "second",
-        "found",
-        "resources",
-        "start",
-        "end",
-        "empty",
-        "zero",
-        "after",
-        "nested",
-        "literal_header",
-        "unsupported",
-        "special_header",
-        "macro_header",
-        "paren_header",
-        "current_file",
-    ] {
-        assert!(tokens.contains(&format!("identifier `{word}`")), "{tokens}");
-    }
-    assert!(tokens.contains("= 255"));
-    assert!(tokens.contains("= 77"));
-    assert!(!tokens.contains("= 65"));
+    assert_eq!(
+        texts(&tokens),
+        "first second found resources unsigned char bytes [ ] = { 9 , 0 , 255 , 65 , 8 } ; \
+         unsigned char empty [ ] = { 7 } ; zero nested literal_header unsupported special_header \
+         77 macro_header paren_header current_file after"
+    );
     let (_, errors) = observe_paths(
         "#if __has_include(<$header.h>)\n#endif\n",
         CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Warn),

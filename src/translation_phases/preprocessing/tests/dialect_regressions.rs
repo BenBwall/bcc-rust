@@ -11,6 +11,7 @@ use super::{
         observe,
         observe_paths,
         spellings,
+        texts,
     },
     *,
 };
@@ -42,6 +43,114 @@ fn language_fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/language")
 }
 
+/// C23 §6.10.4.2p3: limits use conditional-inclusion rules, except `defined`.
+#[test]
+fn embed_limits_allow_conditional_queries() {
+    for limit in [
+        "__has_include(<embed.bin>)",
+        "__has_embed(<embed.bin> limit(1))",
+        "(__has_c_attribute(maybe_unused) != 0)",
+        "QUERY",
+        "IDENTITY(QUERY)",
+    ] {
+        let source = format!(
+            "#define IDENTITY(x) x\n#define QUERY __has_include(<embed.bin>)\n#embed <embed.bin> \
+             limit({limit})\n#define AFTER 7\nAFTER\n"
+        );
+        let (tokens, errors) =
+            observe_terminating(&source, mode(CStandard::C23), vec![language_fixtures()]);
+        assert!(errors.is_empty(), "{limit}: {errors:?}");
+        assert_eq!(texts(&tokens), "0 7", "{limit}");
+    }
+    for limit in ["defined(QUERY)", "DEFINED"] {
+        let source = format!(
+            "#define QUERY 1\n#define DEFINED defined(QUERY)\n#embed <embed.bin> \
+             limit({limit})\nint after;\n"
+        );
+        let (tokens, errors) =
+            observe_terminating(&source, mode(CStandard::C23), vec![language_fixtures()]);
+        assert_eq!(
+            errors,
+            ["Error: defined is not permitted in an embed limit"]
+        );
+        assert_eq!(texts(&tokens), "int after ;");
+    }
+    let (tokens, errors) = observe_terminating(
+        "#embed <embed.bin> limit(__has_include(<embed.bin>))\n__has_include(<embed.bin>)\nint \
+         after;\n",
+        mode(CStandard::C23),
+        vec![language_fixtures()],
+    );
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("require a preprocessing conditional expression"));
+    assert_eq!(texts(&tokens), "0 0 int after ;");
+    let (_, errors) = observe_terminating(
+        "#embed <embed.bin> prefix(__has_include(<embed.bin>),) limit(1)\nint after;\n",
+        mode(CStandard::C23),
+        vec![language_fixtures()],
+    );
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("require a preprocessing conditional expression"));
+}
+
+/// Query header-name characters are not limit expression operators.
+#[test]
+fn embed_limit_queries_preserve_header_name_tokens() {
+    for query in [
+        "__has_include(<defined>)",
+        "__has_include(<open(>)",
+        "__has_embed(<missing[resource{>)",
+    ] {
+        let source = format!("#embed <embed.bin> limit({query})\n#define AFTER 7\nAFTER\n");
+        let (tokens, errors) =
+            observe_terminating(&source, mode(CStandard::C23), vec![language_fixtures()]);
+        assert!(errors.is_empty(), "{query}: {errors:?}");
+        assert_eq!(texts(&tokens), "7", "{query}");
+    }
+}
+
+/// C23 §6.10.1p1: parameter clauses balance parentheses, brackets and braces.
+#[test]
+fn embed_parameter_clauses_reject_mismatched_delimiters() {
+    for body in ["]", "}", "[)", "{)", "([)]", "[", "{", "{[}]"] {
+        for parameter in ["prefix", "suffix", "if_empty"] {
+            for query in [false, true] {
+                let clause = format!("{parameter}({body})");
+                let source = if query {
+                    format!(
+                        "#if __has_embed(<embed.bin> \
+                         {clause})\nwrong\n#else\nrecovered\n#endif\n#define AFTER 7\nAFTER\n"
+                    )
+                } else {
+                    format!("#embed <embed.bin> {clause}\n#define AFTER 7\nAFTER\n")
+                };
+                let (tokens, errors) =
+                    observe_terminating(&source, mode(CStandard::C23), vec![language_fixtures()]);
+                assert!(!errors.is_empty(), "{source}: {tokens:?}");
+                assert_eq!(
+                    texts(&tokens),
+                    if query { "recovered 7" } else { "7" },
+                    "{source}: {errors:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn embed_parameter_clauses_accept_nested_mixed_delimiters() {
+    let source = "#if __has_embed(<embed.bin> prefix([{(9)}]))\nyes\n#endif\n#embed <embed.bin> \
+                  limit(1) prefix([{(9)}],) suffix(,[{(8)}])\n#embed <embed.bin> limit(0) \
+                  if_empty([{(7)}])\nafter\n";
+    let (tokens, errors) =
+        observe_terminating(source, mode(CStandard::C23), vec![language_fixtures()]);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(
+        texts(&tokens),
+        "yes [ { ( 9 ) } ] , 0 , [ { ( 8 ) } ] [ { ( 7 ) } ] after"
+    );
+}
+
 /// C23 §6.10.4.2p1: a limit is evaluated as a constant expression where it
 /// appears, even when the query comes from a macro's replacement list.
 #[test]
@@ -67,20 +176,21 @@ fn macro_sourced_embed_limit_evaluates_in_its_own_frame() {
     }
 }
 
-/// The spellings of the output tokens, separated by spaces.
-fn texts(output: &[String]) -> String {
-    output
-        .iter()
-        .map(|line| {
-            if let Some((_, rest)) = line.split_once('`') {
-                rest.split_once('`').map_or(rest, |(spelling, _)| spelling)
-            } else {
-                line.split_once("string literal ")
-                    .map_or(&**line, |(_, rest)| rest)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+/// C23 §6.10.4.1p7 and §6.10.4.3-5: resource elements and surrounding
+/// parameters retain their exact order and multiplicity after expansion.
+#[test]
+fn embed_initializers_preserve_order_and_multiplicity() {
+    let source = "#define PREFIX 9,\n#define SUFFIX ,8\n#define EMPTY 7\nunsigned char \
+                  bytes[]={\n#embed <embed.bin> limit(3) prefix(PREFIX) \
+                  suffix(SUFFIX)\n};\nunsigned char empty[]={\n#embed <embed.bin> limit(0) \
+                  prefix(PREFIX) suffix(SUFFIX) if_empty(EMPTY)\n};\n";
+    let (tokens, errors) =
+        observe_terminating(source, mode(CStandard::C23), vec![language_fixtures()]);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(
+        texts(&tokens),
+        "unsigned char bytes [ ] = { 9 , 0 , 65 , 255 , 8 } ; unsigned char empty [ ] = { 7 } ;"
+    );
 }
 
 /// GNU/MSVC operators in ordinary text follow the whitespace rule for
