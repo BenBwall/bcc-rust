@@ -423,8 +423,8 @@ directory for each run. `--limit 30` runs a smoke sample; `--match` selects
 corpus-relative globs. Sources and detailed results stay in ignored `target/`.
 The runner reports crashes/timeouts with a nonzero exit status and does not
 execute C programs. It is a corpus survey rather than a conformance gate.
-See the [compiler corpus research](compiler-test-corpus-research.md) and
-[recorded parser results](gcc-torture-parser-results.md) for comparison profiles,
+See the [compiler corpus research](docs/research/compiler-test-corpus-research.md) and
+[recorded parser results](docs/research/gcc-torture-parser-results.md) for comparison profiles,
 known discrepancies, and interpretation limits.
 
 ### libc header survey

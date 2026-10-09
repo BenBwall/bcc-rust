@@ -85,12 +85,12 @@ Validation completed:
 
 Final evidence:
 
-- [Complete final results, timings, binary checksum, and manifest](./target/compiler-corpus/fixed-release-complete/results.json)
-- [Final incremental records](./target/compiler-corpus/fixed-release-complete/results.jsonl)
-- [CLI reductions](./tests/torture_regressions.rs)
-- [Parser storage and resource regressions](./src/translation_phases/parsing.rs)
-- [Canonical test output](./target/torture-tests.log)
-- [Optimized regression output](./target/torture-release-tests.log)
+- [Complete final results, timings, binary checksum, and manifest](../../target/compiler-corpus/fixed-release-complete/results.json)
+- [Final incremental records](../../target/compiler-corpus/fixed-release-complete/results.jsonl)
+- [CLI reductions](../../tests/torture_regressions.rs)
+- [Parser storage and resource regressions](../../src/translation_phases/parsing.rs)
+- [Canonical test output](../../target/torture-tests.log)
+- [Optimized regression output](../../target/torture-release-tests.log)
 
 ## Corpus and compiler practices
 
@@ -266,12 +266,12 @@ replacement for the repository's tests.
 
 Evidence from this run:
 
-- [Full per-file results and manifest](./target/compiler-corpus/results/results.json)
-- [Incremental full-run results](./target/compiler-corpus/results/results.jsonl)
-- [Optimized retry results](./target/compiler-corpus/release-retry/results.json)
-- [Reduced probe sources and observations](./target/compiler-corpus/probes/results.json)
-- [Negative-exponent syntax tree](./target/compiler-corpus/probes/negative-exponent.tree.log)
-- [Runner](./scripts/run_gcc_torture.py)
+- [Full per-file results and manifest](../../target/compiler-corpus/results/results.json)
+- [Incremental full-run results](../../target/compiler-corpus/results/results.jsonl)
+- [Optimized retry results](../../target/compiler-corpus/release-retry/results.json)
+- [Reduced probe sources and observations](../../target/compiler-corpus/probes/results.json)
+- [Negative-exponent syntax tree](../../target/compiler-corpus/probes/negative-exponent.tree.log)
+- [Runner](../../scripts/run_gcc_torture.py)
 
 For the initial investigation, `cargo build --bin bcc-rust`,
 `cargo build --release --bin bcc-rust`, and `cargo test --test cli` passed
