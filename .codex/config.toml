@@ -6,8 +6,8 @@ command = "python"
 args = ["-c", "import pathlib, runpy, subprocess; root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip(); runpy.run_path(str(pathlib.Path(root) / 'scripts/agentbus/run.py'), run_name='__main__')", "serve"]
 env = { AGENTBUS_AGENT = "codex" }
 
-# CodeGraph starts only with this checkout's own root index and the `codegraph`
-# CLI on PATH; run `codegraph init` in each worktree (see README.md#codegraph-index).
+# CodeGraph's resolver must report this checkout's own root as initialized.
+# Requires the CLI on PATH; run `codegraph init` here (see README.md#codegraph-index).
 [mcp_servers.codegraph]
 command = "python"
-args = ["-c", "import pathlib, shutil, subprocess, sys; root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip(); (pathlib.Path(root) / '.codegraph').is_dir() or sys.exit('This checkout has no CodeGraph index; run codegraph init'); exe = shutil.which('codegraph'); exe or sys.exit('CodeGraph CLI not found on PATH; install codegraph'); sys.exit(subprocess.call([exe, 'serve', '--mcp', '--path', root]))"]
+args = ["-c", "import pathlib, runpy, subprocess; root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip(); runpy.run_path(str(pathlib.Path(root) / 'scripts/codegraph_mcp.py'), run_name='__main__')"]

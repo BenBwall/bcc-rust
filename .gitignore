@@ -1,5 +1,5 @@
 /target
-/.codegraph/
+/.codegraph*/
 /scripts/agentbus/target/
 /scripts/standards-html/target/
 *.log
