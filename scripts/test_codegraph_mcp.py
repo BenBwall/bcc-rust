@@ -1,4 +1,4 @@
-"""Exercise both MCP client entries without running the real CodeGraph CLI."""
+"""Exercise the MCP client entries and the Claude prompt hook without the real CLI."""
 
 import json
 import os
@@ -20,7 +20,14 @@ class CodeGraphLauncherTests(unittest.TestCase):
         with (ROOT / ".codex/config.toml").open("rb") as source:
             codex = tomllib.load(source)["mcp_servers"]["codegraph"]
         claude = json.loads((ROOT / ".mcp.json").read_text())["mcpServers"]["codegraph"]
-        self.configurations = {"codex": codex, "claude": claude}
+        vscode = json.loads((ROOT / ".vscode/mcp.json").read_text())["servers"]["codegraph"]
+        self.configurations = {"codex": codex, "claude": claude, "vscode": vscode}
+        settings = json.loads((ROOT / ".claude/settings.json").read_text())
+        self.hook = next(
+            hook["command"]
+            for entry in settings["hooks"]["UserPromptSubmit"] for hook in entry["hooks"]
+            if "codegraph" in hook["command"]
+        )
 
         temporary = tempfile.TemporaryDirectory(prefix="codegraph checkout ")
         self.addCleanup(temporary.cleanup)
@@ -75,7 +82,7 @@ class CodeGraphLauncherTests(unittest.TestCase):
             self.git_path = str(self.bin)
         self.record = self.parent / "serve.json"
 
-    def check_clients(self, output, error=None, status_exit=0, missing=False):
+    def environment(self, output, status_exit=0, missing=False):
         if missing:
             (self.bin / "codegraph").unlink()
             (self.bin / "codegraph.cmd").unlink()
@@ -90,6 +97,10 @@ class CodeGraphLauncherTests(unittest.TestCase):
         }
         if missing:
             self.assertIsNone(shutil.which("codegraph", path=environment["PATH"]))
+        return environment
+
+    def check_clients(self, output, error=None, status_exit=0, missing=False):
+        environment = self.environment(output, status_exit, missing)
         client_input = "MCP client input must not reach status\n"
         for name, configuration in self.configurations.items():
             with self.subTest(client=name):
@@ -110,13 +121,40 @@ class CodeGraphLauncherTests(unittest.TestCase):
                     self.assertEqual(observed["argv"], ["serve", "--mcp", "--path", "."])
                     self.assertEqual(Path(observed["cwd"]), self.checkout)
                     self.assertEqual(observed["stdin"], client_input)
-                if missing:
-                    self.assertFalse(self.record.with_suffix(".status").exists())
-                if not missing:
-                    observed = json.loads(self.record.with_suffix(".status").read_text())
-                    self.assertEqual(observed["argv"], ["status", "--json", "."])
-                    self.assertEqual(Path(observed["cwd"]), self.checkout)
-                    self.assertEqual(observed["stdin"], "")
+                self.check_status(missing)
+        self.check_hook(environment, served=not error, missing=missing)
+
+    def check_status(self, missing):
+        if missing:
+            self.assertFalse(self.record.with_suffix(".status").exists())
+        else:
+            observed = json.loads(self.record.with_suffix(".status").read_text())
+            self.assertEqual(observed["argv"], ["status", "--json", "."])
+            self.assertEqual(Path(observed["cwd"]), self.checkout)
+            self.assertEqual(observed["stdin"], "")
+
+    def check_hook(self, environment, served, missing):
+        self.record.unlink(missing_ok=True)
+        self.record.with_suffix(".status").unlink(missing_ok=True)
+        hook_input = '{"prompt": "where is main"}\n'
+        result = subprocess.run(
+            [sys.executable, *shlex.split(self.hook)[1:]], cwd=self.nested,
+            env=environment, text=True, capture_output=True, input=hook_input,
+        )
+        self.assertEqual(result.stderr, "")
+        if served:
+            self.assertEqual(result.returncode, 37)
+            self.assertEqual(result.stdout, "MCP stream\n")
+            observed = json.loads(self.record.read_text())
+            self.assertEqual(observed["argv"], ["prompt-hook"])
+            self.assertEqual(Path(observed["cwd"]), self.checkout)
+            self.assertEqual(observed["stdin"], hook_input)
+        else:
+            # Without its own index, the hook adds nothing and never blocks a prompt.
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
+            self.assertFalse(self.record.exists())
+        self.check_status(missing)
 
     def assert_refused(self, result, message):
         self.assertNotEqual(result.returncode, 0)
@@ -127,12 +165,20 @@ class CodeGraphLauncherTests(unittest.TestCase):
         self.assertNotIn("Traceback", result.stderr)
 
     def test_client_entries_are_identical(self):
-        codex, claude = self.configurations.values()
+        codex, claude, vscode = self.configurations.values()
         self.assertEqual(codex["command"], "python")
-        self.assertEqual(claude["command"], codex["command"])
-        self.assertEqual(claude["args"], codex["args"])
-        self.assertEqual(claude["type"], "stdio")
+        for client in (claude, vscode):
+            self.assertEqual(client["command"], codex["command"])
+            self.assertEqual(client["args"], codex["args"])
+            self.assertEqual(client["type"], "stdio")
         self.assertIs(claude["alwaysLoad"], True)
+        self.assertEqual(vscode["cwd"], "${workspaceFolder}")
+
+    def test_prompt_hook_runs_the_launcher_in_hook_mode(self):
+        python, flag, script, mode = shlex.split(self.hook)
+        self.assertEqual([python, flag, script], [self.configurations["codex"]["command"],
+                                                  *self.configurations["codex"]["args"]])
+        self.assertEqual(mode, "prompt-hook")
 
     def test_uninitialized_checkout_is_refused(self):
         output = json.dumps({"initialized": False, "projectPath": str(self.checkout)})

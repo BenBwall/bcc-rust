@@ -543,11 +543,13 @@ before a real cleanup; only local branches are deleted. Run its tests with
 
 [CodeGraph](https://github.com/colbymchenry/codegraph) gives coding agents a
 local symbol and call graph of the repository sources. The project configuration in
-`.mcp.json` (Claude Code) and `.codex/config.toml` (Codex) starts its MCP
-server only when CodeGraph resolves the checkout or worktree's own root as an
-initialized project, so an empty index directory (without CodeGraph's database)
-or an enclosing checkout's index is not used. Agents can then query the graph
-instead of searching file by file.
+`.mcp.json` (Claude Code), `.codex/config.toml` (Codex), and `.vscode/mcp.json`
+(VS Code) starts its MCP server only when CodeGraph resolves the checkout or
+worktree's own root as an initialized project, so an empty index directory
+(without CodeGraph's database) or an enclosing checkout's index is not used.
+Claude Code's `UserPromptSubmit` hook in `.claude/settings.json` adds the
+graph's context to code questions under the same condition, and adds nothing
+otherwise. Agents can then query the graph instead of searching file by file.
 It is optional: install the `codegraph` CLI, then run `codegraph init` in each
 checkout or worktree:
 
@@ -565,6 +567,8 @@ than code. Without an index at the checkout's own root, or without the CLI,
 agents report the server as failed to start and search as before. The guard in
 [`scripts/codegraph_mcp.py`](scripts/codegraph_mcp.py) makes that check; its
 tests run with `python -m unittest discover -s scripts -p "test_codegraph_mcp.py"`.
+CodeGraph's agent installer rewrites these entries to run `codegraph` directly,
+which bypasses the guard; restore them with `git restore` if it does.
 
 ## Pipeline and code map
 
