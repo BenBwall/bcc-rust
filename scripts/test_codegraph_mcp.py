@@ -25,7 +25,7 @@ class CodeGraphLauncherTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="codegraph checkout ")
         self.addCleanup(temporary.cleanup)
         self.parent = Path(temporary.name).resolve()
-        self.checkout = self.parent / "worktree é"
+        self.checkout = self.parent / "worktree é & (x)"
         self.checkout.mkdir()
         subprocess.run(["git", "init", "--quiet", str(self.checkout)], check=True)
         self.nested = self.checkout / "nested working directory"
@@ -107,18 +107,15 @@ class CodeGraphLauncherTests(unittest.TestCase):
                     self.assertEqual(result.stdout, "MCP stream\n")
                     self.assertEqual(result.stderr, "")
                     observed = json.loads(self.record.read_text())
-                    self.assertEqual(observed["argv"][:3], ["serve", "--mcp", "--path"])
-                    self.assertEqual(len(observed["argv"]), 4)
-                    self.assertEqual(Path(observed["argv"][3]), self.checkout)
-                    self.assertEqual(Path(observed["cwd"]), self.nested)
+                    self.assertEqual(observed["argv"], ["serve", "--mcp", "--path", "."])
+                    self.assertEqual(Path(observed["cwd"]), self.checkout)
                     self.assertEqual(observed["stdin"], client_input)
                 if missing:
                     self.assertFalse(self.record.with_suffix(".status").exists())
                 if not missing:
                     observed = json.loads(self.record.with_suffix(".status").read_text())
-                    self.assertEqual(observed["argv"][:2], ["status", "--json"])
-                    self.assertEqual(Path(observed["argv"][2]), self.checkout)
-                    self.assertEqual(Path(observed["cwd"]), self.nested)
+                    self.assertEqual(observed["argv"], ["status", "--json", "."])
+                    self.assertEqual(Path(observed["cwd"]), self.checkout)
                     self.assertEqual(observed["stdin"], "")
 
     def assert_refused(self, result, message):

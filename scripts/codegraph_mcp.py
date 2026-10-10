@@ -26,9 +26,10 @@ def main():
     if exe is None:
         return fail("CodeGraph CLI not found on PATH; install codegraph")
 
+    # Pass "." from the checkout root so batch shims never parse path metacharacters.
     try:
         result = subprocess.run(
-            [exe, "status", "--json", root], stdin=subprocess.DEVNULL,
+            [exe, "status", "--json", "."], cwd=root, stdin=subprocess.DEVNULL,
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
     except OSError:
@@ -54,7 +55,7 @@ def main():
         )
 
     try:
-        return subprocess.run([exe, "serve", "--mcp", "--path", root]).returncode
+        return subprocess.run([exe, "serve", "--mcp", "--path", "."], cwd=root).returncode
     except OSError:
         return fail("CodeGraph serve failed to start")
 
