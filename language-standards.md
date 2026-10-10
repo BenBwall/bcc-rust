@@ -277,6 +277,25 @@ and optional origin. C99 keyword IDs are stable. New grammar consumes these
 kinds rather than adding a second spelling classifier, and parser consumers keep
 the original tokens for spelling and provenance.
 
+The typed adapter, `Context::report_extension_diagnostic`, retains the phase's
+specific message, labels, notes and help. It shares native-feature suppression
+and system-header handling with the generic emitter; non-accepted features
+remain hard errors. `DiagnosticPolicy` and `policy_severity` also govern constraint
+and quality diagnostics: variadic marker misuse, macro redefinition and empty
+member declarations warn by default and become errors under Deny. Object-like
+macro-generated defined remains a warning under Deny, matching Clang's
+-Wexpansion-to-defined; function-like expansion uses the normal extension policy.
+Strict C99+ implicit old-style parameters retain their hard-error baseline.
+Unnamed definition parameters are native in C23; the earlier semantic fallback
+now warns by default and is promoted under Deny, matching Clang and avoiding
+duplicate reports from the parser.
+
+`KeywordClassification` also records whether the written assembly introducer is
+the ambiguous reserved __asm alias. Grammar owners use that metadata to choose
+GNU parentheses or MSVC instructions/blocks. __has_builtin takes keyword identity
+from classify and implementation support from `semantic_analysis::implemented_builtin`;
+ordinary-call builtins use their implementation owners' named predicates.
+
 ## Feature matrix
 
 ISO columns give revision availability: `Y` means native and `-` means not
@@ -312,6 +331,10 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | HexFloats | - | - | Y | Y | Y | Y | Y | extension | lexer/preprocessor |
 | VariadicMacros | - | - | Y | Y | Y | Y | Y | extension | lexer/preprocessor |
 | OmittedVariadicArguments | - | - | - | - | - | Y | Y | extension (MS exception) | preprocessor |
+| PreprocessorComma | - | - | - | - | - | - | - | extension | preprocessor |
+| MacroExpandedDefined | - | - | - | - | - | - | - | extension (object-like warning baseline) | preprocessor |
+| QuotedHeaderBackslash | - | - | - | - | - | - | - | extension | preprocessor |
+| UnnamedDefinitionParameters | - | - | - | - | - | Y | Y | extension (warning fallback) | parser/semantic analysis |
 | EmptyMacroArguments | - | - | Y | Y | Y | Y | Y | extension | lexer/preprocessor |
 | Inline | - | - | Y | Y | Y | Y | Y | GNU earlier | parser |
 | Restrict | - | - | Y | Y | Y | Y | Y | native | parser |

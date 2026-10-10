@@ -1140,12 +1140,12 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         // it as a path character is an extension (§4p6).
         if let Some(source_vectors) = header.backslash {
             let policy = self.context.configuration.extension_policy();
-            if policy != ExtensionPolicy::Allow {
-                self.context.preprocessor_error(PreprocessorError {
-                    error_type: PreprocessorErrorType::BackslashInQuotedHeaderName(policy),
-                    source_vectors,
-                });
-            }
+            self.context.preprocessor_extension(
+                Feature::QuotedHeaderBackslash,
+                crate::translation_phases::DiagnosticPolicy::Extension,
+                source_vectors,
+                PreprocessorErrorType::BackslashInQuotedHeaderName,
+            );
             look_up = policy != ExtensionPolicy::Deny
                 || self
                     .context

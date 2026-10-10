@@ -32,6 +32,12 @@ use crate::{
     },
 };
 
+/// GNU `__builtin_classify_type` implementation identity.
+/// GCC: Other Builtins, <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+pub(super) fn named_builtin(name: &str) -> bool {
+    name == "__builtin_classify_type"
+}
+
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Clang math primitives used by glibc's older-compiler binary128 aliases.
     /// Binary128 operations retain constant eligibility without numerical
@@ -153,7 +159,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         while let E::Parenthesized { expression } = function.kind {
             function = expression;
         }
-        matches!(function.kind, E::Identifier(name) if self.context.string_cache.at(name.name) == "__builtin_classify_type")
+        matches!(function.kind, E::Identifier(name) if named_builtin(self.context.string_cache.at(name.name)))
             && self.expression_info(function).binding.is_none_or(|id| matches!(self.types.nodes[self.bindings[id].ty.index], TypeKind::Function { result, .. } if result == self.types.unknown()))
     }
 

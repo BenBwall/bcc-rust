@@ -276,7 +276,8 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                         .configuration
                         .accepts(crate::configuration::Feature::OldStyleFunctionDeclarators)
                     {
-                        parser.report(
+                        parser.extension_diagnostic(
+                            crate::configuration::Feature::OldStyleFunctionDeclarators,
                             ParserErrorType::ExpectedIsoSyntax(
                                 "a prototype parameter list in C23",
                                 token.map(|x| x.kind),

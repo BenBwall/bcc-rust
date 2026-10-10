@@ -37,6 +37,37 @@ use crate::{
     util::bump::Bump,
 };
 
+/// Baseline for a diagnostic controlled by the extension policy.
+/// C99: §5.1.1.3p1, p. 11; PDF p. 23 leaves severity to the implementation.
+#[derive(Clone, Copy)]
+pub(crate) enum DiagnosticPolicy {
+    Extension,
+    Warning,
+    /// Clang's object-like -Wexpansion-to-defined is not pedantic-promoted.
+    WarningOnly,
+    Error,
+}
+
+/// Shared severity for extensions and policy-governed constraints or quality.
+/// C99: §4p6, p. 7; PDF p. 19; §5.1.1.3p1, p. 11; PDF p. 23.
+pub(crate) fn policy_severity(
+    policy: ExtensionPolicy,
+    baseline: DiagnosticPolicy,
+) -> Option<ErrorSeverity> {
+    if matches!(baseline, DiagnosticPolicy::Error) {
+        return Some(ErrorSeverity::Error);
+    }
+    if matches!(baseline, DiagnosticPolicy::WarningOnly) {
+        return Some(ErrorSeverity::Warning);
+    }
+    match policy {
+        | ExtensionPolicy::Allow =>
+            matches!(baseline, DiagnosticPolicy::Warning).then_some(ErrorSeverity::Warning),
+        | ExtensionPolicy::Warn => Some(ErrorSeverity::Warning),
+        | ExtensionPolicy::Deny => Some(ErrorSeverity::Error),
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct ExtensionDiagnostic<'tu> {
     /// Arena-stable suppression marker; FIFO diagnostics keep their order.
@@ -94,7 +125,7 @@ impl ToDiagnostic for ExtensionDiagnostic<'_> {
         Explanation::new(arena, format_in!(arena, "{self}")).at(self.severity, source)
     }
 }
-impl Context<'_> {
+impl<'tu> Context<'tu> {
     /// Reports syntax from `origin` under the extension policy. GNU/MSVC
     /// extensions remain non-ISO even when enabled; standard features cease
     /// being extensions in a revision that has them.
@@ -104,21 +135,11 @@ impl Context<'_> {
         origin: FeatureOrigin,
         source_vectors: SourceVectors,
     ) {
-        if matches!(
-            origin,
-            FeatureOrigin::Standard(_) | FeatureOrigin::Removed { .. }
-        ) && self.configuration.origin_is_native(origin)
-        {
+        let Some(severity) =
+            self.extension_severity(origin, DiagnosticPolicy::Extension, source_vectors)
+        else {
             return;
-        }
-        let severity = match self.configuration.extension_policy() {
-            | ExtensionPolicy::Allow => return,
-            | ExtensionPolicy::Warn => ErrorSeverity::Warning,
-            | ExtensionPolicy::Deny => ErrorSeverity::Error,
         };
-        if self.withholds(severity, true, source_vectors) {
-            return;
-        }
         let spelling = self.diagnostic_text(spelling);
         self.pending_errors
             .push_back(TranslationError::Extension(ExtensionDiagnostic {
@@ -140,6 +161,65 @@ impl Context<'_> {
         source: SourceVectors,
     ) {
         self.report_extension_since(spelling, feature.origin(), source);
+    }
+
+    /// Retains a phase's typed explanation while sharing suppression and
+    /// severity. Non-accepted features always diagnose as errors.
+    /// C99: §4p6, p. 7; PDF p. 19; §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(crate) fn report_extension_diagnostic(
+        &mut self,
+        feature: Feature,
+        baseline: DiagnosticPolicy,
+        source: SourceVectors,
+        diagnostic: impl FnOnce(ErrorSeverity) -> TranslationError<'tu>,
+    ) {
+        let baseline = if self.configuration.accepts(feature) {
+            baseline
+        } else {
+            DiagnosticPolicy::Error
+        };
+        if let Some(severity) = self.extension_severity(feature.origin(), baseline, source) {
+            self.pending_errors.push_back(diagnostic(severity));
+        }
+    }
+
+    fn extension_severity(
+        &self,
+        origin: FeatureOrigin,
+        baseline: DiagnosticPolicy,
+        source: SourceVectors,
+    ) -> Option<ErrorSeverity> {
+        if matches!(
+            origin,
+            FeatureOrigin::Standard(_) | FeatureOrigin::Removed { .. }
+        ) && self.configuration.origin_is_native(origin)
+        {
+            return None;
+        }
+        let severity = policy_severity(self.configuration.extension_policy(), baseline)?;
+        (!self.withholds(
+            severity,
+            !matches!(baseline, DiagnosticPolicy::Error),
+            source,
+        ))
+        .then_some(severity)
+    }
+
+    /// Typed preprocessor adapter; payloads keep their labels, notes and help.
+    /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(crate) fn preprocessor_extension(
+        &mut self,
+        feature: Feature,
+        baseline: DiagnosticPolicy,
+        source: SourceVectors,
+        payload: impl FnOnce(ErrorSeverity) -> super::preprocessing::PreprocessorErrorType<'tu>,
+    ) {
+        self.report_extension_diagnostic(feature, baseline, source, |severity| {
+            TranslationError::Preprocessing(super::preprocessing::PreprocessorError {
+                error_type:     payload(severity),
+                source_vectors: source,
+            })
+        });
     }
 
     /// Withdraws the pending preprocessing diagnostic at `index`. An already
@@ -174,6 +254,40 @@ mod tests {
         CompilerConfiguration,
         MsvcFeature,
     };
+    #[test]
+    fn shared_policy_covers_extension_warning_and_hard_error_baselines() {
+        for (policy, extension, warning) in [
+            (ExtensionPolicy::Allow, None, ErrorSeverity::Warning),
+            (
+                ExtensionPolicy::Warn,
+                Some(ErrorSeverity::Warning),
+                ErrorSeverity::Warning,
+            ),
+            (
+                ExtensionPolicy::Deny,
+                Some(ErrorSeverity::Error),
+                ErrorSeverity::Error,
+            ),
+        ] {
+            assert_eq!(
+                policy_severity(policy, DiagnosticPolicy::Extension),
+                extension
+            );
+            assert_eq!(
+                policy_severity(policy, DiagnosticPolicy::Warning),
+                Some(warning)
+            );
+            assert_eq!(
+                policy_severity(policy, DiagnosticPolicy::WarningOnly),
+                Some(ErrorSeverity::Warning)
+            );
+            assert_eq!(
+                policy_severity(policy, DiagnosticPolicy::Error),
+                Some(ErrorSeverity::Error)
+            );
+        }
+    }
+
     #[test]
     fn shared_emitter_applies_policy_and_suppresses_native_standard_features() {
         for standard in [CStandard::C89, CStandard::C11] {

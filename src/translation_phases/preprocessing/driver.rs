@@ -39,7 +39,6 @@ use super::{
     },
 };
 use crate::{
-    configuration::ExtensionPolicy,
     translation_phases::{
         Context,
         GetSourceFileIndex,
@@ -990,22 +989,17 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             // C99 §6.10.3p4 requires an argument for `...`;
                             // omitting it is a common extension (§4p6), which
                             // the extension policy governs.
-                            let extension_policy = self.context.configuration.extension_policy();
-                            if extension_policy != ExtensionPolicy::Allow
-                                && !self.context.configuration.is_native(
-                                    crate::configuration::Feature::OmittedVariadicArguments,
-                                )
-                                && !self
-                                    .context
-                                    .configuration
-                                    .accepts(crate::configuration::Feature::MsVaArgs)
+                            if !self
+                                .context
+                                .configuration
+                                .accepts(crate::configuration::Feature::MsVaArgs)
                             {
-                                self.context.preprocessor_error(PreprocessorError {
-                                    error_type:     PreprocessorErrorType::MissingVariadicArgument(
-                                        extension_policy,
-                                    ),
-                                    source_vectors: token.source_vectors,
-                                });
+                                self.context.preprocessor_extension(
+                                    crate::configuration::Feature::OmittedVariadicArguments,
+                                    crate::translation_phases::DiagnosticPolicy::Extension,
+                                    token.source_vectors,
+                                    PreprocessorErrorType::MissingVariadicArgument,
+                                );
                             }
                         }
                         if is_variadic {

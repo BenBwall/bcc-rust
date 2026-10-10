@@ -649,3 +649,96 @@ fn inline_static_objects_use_object_const_qualification() {
     );
     clean("inline void f(void) {static const int a[1]={0}; sizeof a;}");
 }
+
+#[test]
+fn unnamed_definition_parameter_fallback_matches_clang_severity_without_duplicates() {
+    use crate::{
+        configuration::{
+            CompilerConfiguration,
+            ExtensionPolicy,
+        },
+        translation_phases::{
+            ErrorSeverity,
+            GetSeverity,
+        },
+    };
+    for standard in [CStandard::C17, CStandard::C23] {
+        for policy in [
+            ExtensionPolicy::Allow,
+            ExtensionPolicy::Warn,
+            ExtensionPolicy::Deny,
+        ] {
+            for source in [
+                "int f(int) {return 0;}",
+                "typedef int I; int f(I) {return 0;}",
+            ] {
+                with_configuration(
+                    source,
+                    CompilerConfiguration::new(standard, policy),
+                    |context, _| {
+                        let errors = context.take_pending_errors();
+                        assert_eq!(
+                            errors.len(),
+                            usize::from(standard < CStandard::C23),
+                            "{errors:?}"
+                        );
+                        if let Some(error) = errors.first() {
+                            assert_eq!(
+                                error.severity(),
+                                if policy == ExtensionPolicy::Deny {
+                                    ErrorSeverity::Error
+                                } else {
+                                    ErrorSeverity::Warning
+                                }
+                            );
+                        }
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn implicit_old_style_parameters_keep_strict_error_and_gnu_extension_policy() {
+    use crate::{
+        configuration::{
+            CompilerConfiguration,
+            ExtensionPolicy,
+        },
+        translation_phases::{
+            ErrorSeverity,
+            GetSeverity,
+        },
+    };
+    for standard in [CStandard::C89, CStandard::C17] {
+        for gnu in [false, true] {
+            for policy in [
+                ExtensionPolicy::Allow,
+                ExtensionPolicy::Warn,
+                ExtensionPolicy::Deny,
+            ] {
+                with_configuration(
+                    "int f(x) {return x;}",
+                    CompilerConfiguration::new(standard, policy).with_gnu_extensions(gnu),
+                    |context, _| {
+                        let errors = context.take_pending_errors();
+                        let expected = if standard == CStandard::C89
+                            || (gnu && policy == ExtensionPolicy::Allow)
+                        {
+                            None
+                        } else if gnu && policy == ExtensionPolicy::Warn {
+                            Some(ErrorSeverity::Warning)
+                        } else {
+                            Some(ErrorSeverity::Error)
+                        };
+                        assert_eq!(errors.len(), usize::from(expected.is_some()), "{errors:?}");
+                        if let Some(expected) = expected {
+                            assert_eq!(errors[0].severity(), expected);
+                        }
+                    },
+                );
+            }
+        }
+    }
+}

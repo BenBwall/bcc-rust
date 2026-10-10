@@ -417,7 +417,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else if !self
                     .context
                     .configuration
-                    .is_native(crate::configuration::Feature::C23Keywords)
+                    .is_native(crate::configuration::Feature::UnnamedDefinitionParameters)
                 {
                     let parser_exempt = syntax.is_some_and(|p| {
                         parameters.len() == 1
@@ -433,10 +433,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         || self.context.configuration.extension_policy()
                             == crate::configuration::ExtensionPolicy::Allow
                     {
-                        self.error(
+                        self.extension_error(
+                            crate::configuration::Feature::UnnamedDefinitionParameters,
+                            crate::translation_phases::DiagnosticPolicy::Warning,
                             SemanticErrorKind::UnnamedDefinitionParameter,
                             syntax.map_or(f.declarator.source_vectors, |p| p.source_vectors),
-                            None,
                             None,
                         );
                     }
@@ -629,11 +630,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .is_native(crate::configuration::Feature::ImplicitInt)
                     && !self.context.configuration.gnu_extensions()
                 {
-                    self.error(
+                    self.extension_error(
+                        crate::configuration::Feature::ImplicitInt,
+                        crate::translation_phases::DiagnosticPolicy::Error,
                         SemanticErrorKind::InvalidDefinitionParameterList,
                         name.source_vectors,
                         Some(name.name),
-                        None,
                     );
                 } else {
                     self.context.report_extension(

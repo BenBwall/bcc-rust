@@ -120,7 +120,7 @@ fn diagnostic_is_yielded_before_the_token_produced_alongside_it() {
                 &error,
                 TranslationError::Preprocessing(PreprocessorError {
                     error_type: PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
-                        ExtensionPolicy::Deny
+                        crate::translation_phases::ErrorSeverity::Error
                     ),
                     ..
                 })

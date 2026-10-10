@@ -177,7 +177,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                                         .is_none()
                                 {
                                     parser.extension_source(
-                                        crate::configuration::Feature::C23Keywords,
+                                        crate::configuration::Feature::UnnamedDefinitionParameters,
                                         "unnamed parameter in function definition",
                                         parameter.source_vectors,
                                     );

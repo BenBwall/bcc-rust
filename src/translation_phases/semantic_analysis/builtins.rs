@@ -27,7 +27,9 @@ use crate::translation_phases::{
 };
 
 /// Intrinsics supporting standard headers are available even in strict modes.
-pub(super) fn modeled(keyword: KeywordTokenType) -> bool {
+/// GCC/Clang implementation keywords extending C99 §7.15, pp. 249-252;
+/// PDF pp. 261-264 and §7.17p3, p. 254; PDF p. 266.
+pub(crate) fn modeled(keyword: KeywordTokenType) -> bool {
     matches!(
         keyword,
         KeywordTokenType::BuiltinVaArg

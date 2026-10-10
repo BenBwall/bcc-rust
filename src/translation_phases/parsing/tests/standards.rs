@@ -1216,3 +1216,33 @@ fn identifier_list_declarators_keep_the_c23_hard_error_and_legacy_shape() {
         }
     }
 }
+
+#[test]
+fn member_declares_nothing_quality_diagnostic_follows_shared_policy() {
+    for policy in [
+        ExtensionPolicy::Allow,
+        ExtensionPolicy::Warn,
+        ExtensionPolicy::Deny,
+    ] {
+        with_parse_configuration(
+            "struct S { int; int field; }; int following;",
+            mode(CStandard::C17, policy),
+            |p| {
+                assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
+                assert_eq!(
+                    p.errors[0].to_string(),
+                    "declaration does not declare anything"
+                );
+                assert_eq!(
+                    p.errors[0].severity(),
+                    if policy == ExtensionPolicy::Deny {
+                        ErrorSeverity::Error
+                    } else {
+                        ErrorSeverity::Warning
+                    }
+                );
+                assert_eq!(p.items.len(), 2);
+            },
+        );
+    }
+}

@@ -21,6 +21,10 @@ use std::{
 };
 
 pub(crate) use context::Context;
+pub(crate) use extension::{
+    DiagnosticPolicy,
+    policy_severity,
+};
 pub(crate) use provenance::{
     SourcePosition,
     SourceVector,

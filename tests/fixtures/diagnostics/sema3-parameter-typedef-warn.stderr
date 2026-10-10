@@ -1,8 +1,8 @@
 warning: function definition parameter requires a name
- --> sema3-parameter-name.c:1:7
+ --> sema3-parameter-typedef-warn.c:2:7
   |
-1 | int f(int) { return 0; }
-  |       ^^^ parameter has no name
+2 | int f(I) { return 0; }
+  |       ^ parameter has no name
   |
   = note: C99 §6.9.1p5: each prototype-definition parameter includes an identifier, except the sole void parameter
 

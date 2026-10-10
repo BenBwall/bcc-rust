@@ -35,17 +35,16 @@ use super::{
     },
     token::{
         IntegerTokenType,
+        KeywordTokenType,
         TokenType,
     },
     token_conversion::IntegerRepresentation,
 };
 use crate::{
-    configuration::{
-        CStandard,
-        ExtensionPolicy,
-    },
+    configuration::Feature,
     translation_phases::{
         Context,
+        DiagnosticPolicy,
         SourceVectors,
         preprocessor_tokenizer::{
             PreprocessorToken,
@@ -1197,22 +1196,25 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         let Some(function_like) = function_like else {
             return;
         };
-        let policy = self.context.configuration.extension_policy();
-        let error_type = if !function_like {
-            PreprocessorErrorType::DefinedFromObjectLikeMacroExpansion
-        } else if policy == ExtensionPolicy::Allow {
-            return;
-        } else {
-            PreprocessorErrorType::DefinedFromFunctionLikeMacroExpansion(policy)
-        };
         let source_vectors = match invocation {
             | Some(invocation) => self.context.push_source_vectors(&[invocation]),
             | None => defined.source_vectors,
         };
-        self.context.preprocessor_error(PreprocessorError {
-            error_type,
+        // Clang keeps the object-like warning even under -pedantic-errors.
+        self.context.preprocessor_extension(
+            Feature::MacroExpandedDefined,
+            if function_like {
+                DiagnosticPolicy::Extension
+            } else {
+                DiagnosticPolicy::WarningOnly
+            },
             source_vectors,
-        });
+            if function_like {
+                PreprocessorErrorType::DefinedFromFunctionLikeMacroExpansion
+            } else {
+                PreprocessorErrorType::DefinedFromObjectLikeMacroExpansion
+            },
+        );
     }
 
     /// Consumes the next token of a directive after it was diagnosed, unless
@@ -1552,10 +1554,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                         // C23: §6.10.2p13, p. 167; PDF p. 180 replaces
                         // remaining `true` with 1 after macro expansion.
                         // C99 §6.10.1p4 replaces all identifiers with 0.
-                        let spelling = self.context.string_cache.at(token.contents);
-                        let boolean = self.context.configuration.standard() >= CStandard::C23
-                            && matches!(spelling, "true" | "false");
-                        let value = i64::from(boolean && spelling == "true");
+                        let keyword = KeywordTokenType::classify(token.identifier_id(self.context), self.context.configuration)
+                            .map(|classification| classification.kind);
+                        let boolean = matches!(keyword, Some(KeywordTokenType::True | KeywordTokenType::False));
+                        let value = i64::from(keyword == Some(KeywordTokenType::True));
                         if !boolean {
                             self.context.preprocessor_error(PreprocessorError {
                                     error_type: PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(self.context.diagnostic_text(self.context.string_cache.at(token.contents))),
@@ -1613,15 +1615,14 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 self.expression_parser
                     .operand_stack
                     .emit_faults(self.context, operand.arithmetic_faults);
-                let extension_policy = self.context.configuration.extension_policy();
-                if operand.contains_evaluated_comma && extension_policy != ExtensionPolicy::Allow {
+                if operand.contains_evaluated_comma {
                     let source_vectors = self.current_location();
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type: PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
-                            extension_policy,
-                        ),
+                    self.context.preprocessor_extension(
+                        Feature::PreprocessorComma,
+                        DiagnosticPolicy::Extension,
                         source_vectors,
-                    });
+                        PreprocessorErrorType::CommaOperatorInPreprocessorExpression,
+                    );
                 }
                 Some(operand.value)
             },

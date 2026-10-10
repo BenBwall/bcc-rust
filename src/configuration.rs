@@ -275,6 +275,14 @@ pub(crate) enum Feature {
     MsVaArgs,
     Float128,
     VectorBuiltins,
+    /// Evaluated comma in #if, extending C99 §6.6p3, p. 95; PDF p. 107.
+    PreprocessorComma,
+    /// Macro-generated defined, extending C99 §6.10.1p4, p. 148; PDF p. 160.
+    MacroExpandedDefined,
+    /// Path backslashes, extending C99 §6.4.7p3, pp. 64-65; PDF pp. 76-77.
+    QuotedHeaderBackslash,
+    /// C23 §6.9.2p5, p. 160; PDF p. 173 permits unnamed definition parameters.
+    UnnamedDefinitionParameters,
 }
 
 impl Feature {
@@ -390,6 +398,10 @@ impl Feature {
         Self::MsVaArgs,
         Self::Float128,
         Self::VectorBuiltins,
+        Self::PreprocessorComma,
+        Self::MacroExpandedDefined,
+        Self::QuotedHeaderBackslash,
+        Self::UnnamedDefinitionParameters,
     ];
 
     pub(crate) const fn origin(self) -> FeatureOrigin {
@@ -446,6 +458,7 @@ impl Feature {
             | Self::AutoTypeInference
             | Self::Constexpr
             | Self::Nullptr
+            | Self::UnnamedDefinitionParameters
             | Self::WideEnumerators => FeatureOrigin::Standard(CStandard::C23),
 
             | Self::OctalPrefix
@@ -504,7 +517,10 @@ impl Feature {
             | Self::FlexibleArrayExtensions
             | Self::ConstantFolding
             | Self::Float128
-            | Self::VectorBuiltins => FeatureOrigin::Gnu,
+            | Self::VectorBuiltins
+            | Self::PreprocessorComma
+            | Self::MacroExpandedDefined
+            | Self::QuotedHeaderBackslash => FeatureOrigin::Gnu,
 
             | Self::MsDeclspec => FeatureOrigin::Msvc(MsvcFeature::Declspec),
             | Self::MsIntTypes => FeatureOrigin::Msvc(MsvcFeature::IntTypes),
@@ -912,7 +928,7 @@ mod tests {
         }
         assert_eq!(
             Feature::ALL.last().map(|feature| *feature as usize),
-            Some(Feature::VectorBuiltins as usize)
+            Some(Feature::UnnamedDefinitionParameters as usize)
         );
         for (index, feature) in MsvcFeature::ALL.iter().enumerate() {
             assert_eq!(*feature as usize, index, "{feature:?}");

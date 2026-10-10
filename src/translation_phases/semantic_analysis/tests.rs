@@ -468,10 +468,11 @@ fn semantic_diagnostic_positions_reject_empty_primary_ranges() {
     let tu = Bump::new();
     let context = Context::new(&tu);
     let error = SemanticError {
-        kind:           SemanticErrorKind::UnknownTypedef,
-        source_vectors: SourceVectors::empty(),
-        name:           None,
-        previous:       None,
+        extension_severity: None,
+        kind:               SemanticErrorKind::UnknownTypedef,
+        source_vectors:     SourceVectors::empty(),
+        name:               None,
+        previous:           None,
     };
     _ = crate::translation_phases::GetPosition::position(&error, &context);
 }

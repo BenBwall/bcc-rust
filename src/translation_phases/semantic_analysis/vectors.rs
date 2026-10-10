@@ -76,6 +76,12 @@ pub(super) fn constructs_vector(a: &AttributeSpecifier<'_>, context: &super::Con
     attribute_names(a, context).any(|(_, name)| name == "vector_size")
 }
 
+/// Clang `__builtin_shufflevector` implementation identity.
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#builtin-shufflevector>
+pub(super) fn named_builtin(name: &str) -> bool {
+    name == "__builtin_shufflevector"
+}
+
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Group vector construction before alignment-only attributes,
     /// independently of which syntax attribute list carries them.

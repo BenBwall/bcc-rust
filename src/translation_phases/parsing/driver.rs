@@ -908,6 +908,26 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// diagnostic under §5.1.1.3, p. 11; PDF p. 23: implementations must
     /// “produce at least one diagnostic message”.
     pub(super) fn report(&mut self, error_type: ParserErrorType<'tu>, token: Option<Token>) {
+        self.report_with_feature(error_type, token, None);
+    }
+
+    /// Typed extension diagnostic, including non-accepted syntax.
+    /// C99: §4p6, p. 7; PDF p. 19; §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(super) fn extension_diagnostic(
+        &mut self,
+        feature: crate::configuration::Feature,
+        error_type: ParserErrorType<'tu>,
+        token: Option<Token>,
+    ) {
+        self.report_with_feature(error_type, token, Some(feature));
+    }
+
+    fn report_with_feature(
+        &mut self,
+        error_type: ParserErrorType<'tu>,
+        token: Option<Token>,
+        feature: Option<crate::configuration::Feature>,
+    ) {
         let warning_group = error_type.warning_group();
         if warning_group == Some(ParserWarningGroup::RepeatedSpecifiers)
             && !self.context.configuration.repeated_specifier_warnings()
@@ -951,13 +971,14 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         } else {
             None
         };
-        self.context.parser_error(ParserError {
+        let error = ParserError {
             code: error_type.code(),
-            severity: if matches!(error_type, ParserErrorType::MemberDeclaresNothing)
-                && self.context.configuration.extension_policy()
-                    == crate::configuration::ExtensionPolicy::Deny
-            {
-                ErrorSeverity::Error
+            severity: if matches!(error_type, ParserErrorType::MemberDeclaresNothing) {
+                crate::translation_phases::policy_severity(
+                    self.context.configuration.extension_policy(),
+                    crate::translation_phases::DiagnosticPolicy::Warning,
+                )
+                .unwrap_or(ErrorSeverity::Warning)
             } else {
                 error_type.severity()
             },
@@ -977,7 +998,17 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 .context
                 .user_source_end(source_vectors)
                 .map(|location| (location.source_file_index, location.index)),
-        });
+        };
+        if let Some(feature) = feature {
+            self.context.report_extension_diagnostic(
+                feature,
+                crate::translation_phases::DiagnosticPolicy::Extension,
+                source_vectors,
+                |severity| TranslationError::Parsing(ParserError { severity, ..error }),
+            );
+        } else {
+            self.context.parser_error(error);
+        }
     }
 
     /// Attaches a "missing `;`" suggestion after `source` to the diagnostic

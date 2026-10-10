@@ -8,6 +8,7 @@
 mod atomics;
 mod builtins;
 pub(crate) use atomics::modeled as atomic_builtin;
+pub(crate) use builtins::modeled as implemented_builtin;
 mod constants;
 mod declarations;
 mod errors;
@@ -118,6 +119,15 @@ use crate::{
         string_cache::StringCacheId,
     },
 };
+
+/// Builtins parsed as ordinary calls, queried by the preprocessor.
+/// GCC/Clang extensions to C99 §6.5.2.2, pp. 71-72; PDF pp. 83-84.
+pub(crate) fn named_builtin(name: &str) -> bool {
+    type_generic::named_builtin(name)
+        || vectors::named_builtin(name)
+        || atomic_builtin(name)
+        || x86_builtins::known(name)
+}
 
 /// The three C linkage states, distinct from lexical scope.
 /// C99: §6.2.2, pp. 30-31; PDF pp. 42-43.
@@ -540,6 +550,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         if !self.tainted {
             self.semantic_errors += 1;
             let error = SemanticError {
+                extension_severity: None,
                 kind,
                 source_vectors,
                 name,
@@ -553,6 +564,36 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
                 self.context
                     .append_pending_errors([TranslationError::Semantic(error)]);
             }
+        }
+    }
+
+    /// Reports a typed semantic extension without duplicating policy decisions.
+    /// C99: §4p6, p. 7; PDF p. 19; §5.1.1.3p1, p. 11; PDF p. 23.
+    fn extension_error(
+        &mut self,
+        feature: crate::configuration::Feature,
+        baseline: super::DiagnosticPolicy,
+        kind: SemanticErrorKind,
+        source_vectors: SourceVectors,
+        name: Option<StringCacheId>,
+    ) {
+        if !self.tainted {
+            let semantic_errors = &mut self.semantic_errors;
+            self.context.report_extension_diagnostic(
+                feature,
+                baseline,
+                source_vectors,
+                |severity| {
+                    *semantic_errors += usize::from(severity == super::ErrorSeverity::Error);
+                    TranslationError::Semantic(SemanticError {
+                        extension_severity: Some(severity),
+                        kind,
+                        source_vectors,
+                        name,
+                        previous: None,
+                    })
+                },
+            );
         }
     }
 

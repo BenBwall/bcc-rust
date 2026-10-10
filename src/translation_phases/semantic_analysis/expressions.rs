@@ -950,7 +950,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     vector_callee = expression;
                 }
                 info = if let ExpressionType::Identifier(name) = vector_callee.kind
-                    && self.context.string_cache.at(name.name) == "__builtin_shufflevector"
+                    && super::vectors::named_builtin(self.context.string_cache.at(name.name))
                 {
                     self.context.report_extension(
                         crate::configuration::Feature::VectorBuiltins,

@@ -415,7 +415,7 @@ fn strict_c99_diagnoses_an_evaluated_comma_after_reducing_to_rhs() {
                             TranslationError::Preprocessing(PreprocessorError {
                                 error_type:
                                     PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
-                                        ExtensionPolicy::Deny
+                                        ErrorSeverity::Error
                                     ),
                                 ..
                             })
@@ -443,7 +443,7 @@ fn warning_policy_reports_an_evaluated_comma_as_a_warning() {
                             TranslationError::Preprocessing(PreprocessorError {
                                 error_type:
                                     PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
-                                        ExtensionPolicy::Warn
+                                        ErrorSeverity::Warning
                                     ),
                                 ..
                             })
@@ -945,7 +945,7 @@ fn variadic_macros_may_omit_the_variable_arguments() {
                     [error @ TranslationError::Preprocessing(PreprocessorError {
                         error_type: PreprocessorErrorType::MissingVariadicArgument(found),
                         ..
-                    })] if *found == policy && error.severity() == severity
+                    })] if *found == severity && error.severity() == severity
                 ),
                 "{errors:#?}"
             );

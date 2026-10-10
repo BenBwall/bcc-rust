@@ -487,7 +487,7 @@ fn text_after_an_escaped_closing_quote_is_extra_tokens() {
             if source.starts_with("#include \"a\\\" b\"") {
                 assert!(errors.iter().any(|error| matches!(
                     error,
-                    PreprocessorErrorType::BackslashInQuotedHeaderName(ExtensionPolicy::Deny)
+                    PreprocessorErrorType::BackslashInQuotedHeaderName(ErrorSeverity::Error)
                 )));
             } else {
                 assert!(outcome.errors.iter().any(|error| {
@@ -530,7 +530,7 @@ fn quoted_backslashes_follow_the_extension_policy() {
             outcome.errors.as_slice(),
             [TranslationError::Preprocessing(PreprocessorError {
                 error_type: PreprocessorErrorType::BackslashInQuotedHeaderName(
-                    ExtensionPolicy::Warn
+                    ErrorSeverity::Warning
                 ),
                 ..
             })]
@@ -549,7 +549,7 @@ fn quoted_backslashes_follow_the_extension_policy() {
             outcome.errors.as_slice(),
             [TranslationError::Preprocessing(PreprocessorError {
                 error_type: PreprocessorErrorType::BackslashInQuotedHeaderName(
-                    ExtensionPolicy::Deny
+                    ErrorSeverity::Error
                 ),
                 ..
             })]

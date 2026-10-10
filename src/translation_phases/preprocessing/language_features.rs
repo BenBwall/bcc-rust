@@ -22,6 +22,7 @@ use super::{
         PreprocessorError,
         PreprocessorErrorType,
     },
+    token::KeywordTokenType,
 };
 use crate::{
     configuration::{
@@ -31,6 +32,7 @@ use crate::{
         FeatureOrigin,
     },
     translation_phases::{
+        Context,
         SourceVector,
         SourceVectors,
         TranslationPhase,
@@ -126,6 +128,17 @@ pub(super) fn overridable_gnu_builtin(name: &str) -> bool {
     LANGUAGE_BUILTINS.iter().any(|(spelling, feature)| {
         *spelling == name && matches!(feature.origin(), FeatureOrigin::Gnu)
     })
+}
+
+/// Uses keyword identity and the implementation owners' predicates.
+/// Clang Language Extensions, Feature Checking Macros:
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#has-builtin>
+/// Extension to C99 §6.10.1p4, p. 148; PDF p. 160.
+fn has_builtin(context: &mut Context<'_>, spelling: &str) -> bool {
+    let id = context.string_cache.intern(spelling);
+    KeywordTokenType::classify(id, context.configuration).is_some_and(|keyword| {
+        crate::translation_phases::semantic_analysis::implemented_builtin(keyword.kind)
+    }) || crate::translation_phases::semantic_analysis::named_builtin(spelling)
 }
 
 impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
@@ -624,7 +637,8 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                         return Some(self.integer_pp_token(0, token.source_vectors));
                     }
                     match (name, &*operand) {
-                        | ("__has_builtin", builtin) if crate::translation_phases::semantic_analysis::x86_builtins::known(builtin) => 1,
+                        | ("__has_builtin", builtin) =>
+                            u64::from(has_builtin(self.context, builtin)),
                         // C23 §6.7.13.2p2, p. 143; PDF p. 156: the standard
                         // attributes, `_Noreturn` included (§6.7.13.7p1).
                         | (
@@ -636,26 +650,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
                             "__has_attribute",
                             "unused" | "deprecated" | "aligned" | "packed" | "noreturn" | "weak"
                             | "section" | "visibility" | "format" | "always_inline" | "noinline",
-                        )
-                        | (
-                            "__has_builtin",
-                            "__builtin_va_arg"
-                            | "__builtin_va_start"
-                            | "__builtin_va_end"
-                            | "__builtin_va_copy"
-                            | "__builtin_offsetof"
-                            | "__builtin_types_compatible_p"
-                            | "__builtin_choose_expr"
-                            | "__builtin_classify_type"
-                            | "__builtin_convertvector"
-                            | "__builtin_shufflevector"
-                            | "__builtin_bit_cast",
                         ) => 1,
-                        | ("__has_builtin", name)
-                            if crate::translation_phases::semantic_analysis::atomic_builtin(
-                                name,
-                            ) =>
-                            1,
                         | _ => 0,
                     }
                 }
