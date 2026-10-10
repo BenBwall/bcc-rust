@@ -7,8 +7,8 @@
     },
     "codegraph": {
       "type": "stdio",
-      "command": "codegraph",
-      "args": ["serve", "--mcp"],
+      "command": "python",
+      "args": ["-c", "import pathlib, shutil, subprocess, sys; root = subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip(); (pathlib.Path(root) / '.codegraph').is_dir() or sys.exit('This checkout has no CodeGraph index; run codegraph init'); exe = shutil.which('codegraph'); exe or sys.exit('CodeGraph CLI not found on PATH; install codegraph'); sys.exit(subprocess.call([exe, 'serve', '--mcp', '--path', root]))"],
       "alwaysLoad": true
     }
   }

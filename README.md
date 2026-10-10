@@ -541,9 +541,10 @@ before a real cleanup; only local branches are deleted. Run its tests with
 [CodeGraph](https://github.com/colbymchenry/codegraph) gives coding agents a
 local symbol and call graph of the repository sources. The project configuration in
 `.mcp.json` (Claude Code) and `.codex/config.toml` (Codex) starts its MCP
-server, so agents can query the graph instead of searching file by file. It is
-optional: install the `codegraph` CLI, then index each checkout or worktree
-once:
+server only when the checkout or worktree's own root has an index, so agents
+can query the graph instead of searching file by file. It is optional: install
+the `codegraph` CLI, then run `codegraph init` in each checkout or worktree;
+an index from an enclosing checkout is not used:
 
 ```sh
 npm install -g @colbymchenry/codegraph
@@ -554,8 +555,8 @@ The index lives in the ignored `.codegraph/` directory and follows file changes
 automatically; `codegraph sync` catches up after edits made while no server ran.
 [`codegraph.json`](codegraph.json) leaves the C inputs under `tests/fixtures/`
 and `test-programs/` out of the graph, since they are compiler test data rather
-than code. Without the CLI, agents report the server as failed to start and
-work as before.
+than code. Without an index at the checkout's own root, or without the CLI,
+agents report the server as failed to start and search as before.
 
 ## Pipeline and code map
 
