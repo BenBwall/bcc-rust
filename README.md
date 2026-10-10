@@ -536,6 +536,33 @@ the merged PR's head commit recognizes squash merges. Commit or stash changes
 before a real cleanup; only local branches are deleted. Run its tests with
 `cargo +nightly -Zscript test --manifest-path scripts/branch-cleanup.rs`.
 
+### CodeGraph index
+
+[CodeGraph](https://github.com/colbymchenry/codegraph) gives coding agents a
+local symbol and call graph of the repository sources. The project configuration in
+`.mcp.json` (Claude Code) and `.codex/config.toml` (Codex) starts its MCP
+server only when CodeGraph resolves the checkout or worktree's own root as an
+initialized project, so an empty index directory (without CodeGraph's database)
+or an enclosing checkout's index is not used. Agents can then query the graph
+instead of searching file by file.
+It is optional: install the `codegraph` CLI, then run `codegraph init` in each
+checkout or worktree:
+
+```sh
+npm install -g @colbymchenry/codegraph
+codegraph init --yes
+```
+
+CodeGraph chooses the index directory, including `.codegraph-wsl/` on Windows
+drives under WSL and `CODEGRAPH_DIR` overrides. The index follows file changes
+automatically; `codegraph sync` catches up after edits made while no server ran.
+[`codegraph.json`](codegraph.json) leaves the C inputs under `tests/fixtures/`
+and `test-programs/` out of the graph, since they are compiler test data rather
+than code. Without an index at the checkout's own root, or without the CLI,
+agents report the server as failed to start and search as before. The guard in
+[`scripts/codegraph_mcp.py`](scripts/codegraph_mcp.py) makes that check; its
+tests run with `python -m unittest discover -s scripts -p "test_codegraph_mcp.py"`.
+
 ## Pipeline and code map
 
 | Area | Role |
