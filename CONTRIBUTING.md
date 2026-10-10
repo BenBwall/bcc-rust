@@ -1,14 +1,45 @@
 # Contributing
 
+## Source layout
+
+Code reads top-down: a reader meets a module's main algorithm first and the
+details it relies on afterwards. Rust resolves items regardless of their order,
+so nothing needs to be declared before it is used.
+
+- **A module's entry file is short.** The entry file (`parsing.rs` for
+  `parsing/`) holds only these, in order:
+  1. A `//!` map of the module: a paragraph on how it works, a short worked
+     example when the algorithm has steps worth tracing, a reading order that
+     names the items to read first, a list of its files grouped by role, and
+     then the standard citations described below.
+  2. The `mod` declarations, grouped by role, with a `//` heading comment over
+     each group. rustfmt sorts modules only within a group, so the grouping
+     stays put.
+  3. The re-exports that form the module's interface.
+  4. The module's main loop or entry point, followed by the state type that
+     loop runs on. Constructors, helpers, error types, token types, and debug
+     views live in submodules. A module with no loop, such as a collection of
+     utilities, gives this place to its entry point or its central type.
+- **Every file puts its most important item first.** Order items as a reader
+  should meet them: the entry point or core algorithm, then the types and
+  helpers it uses in the order it uses them, then constructors and accessors,
+  then trait impls such as `Debug`, `Display`, and `Default`. `#[cfg(test)]`
+  modules come last.
+- **Directories group files by role** when three or more siblings share one,
+  such as grammar frames, extension frames, or builtin tables. The entry file
+  re-exports what other modules use, so moving a file does not change
+  crate-visible paths.
+
 ## Citing the C standard
 
 Compiler code says which part of the C standard it implements. The reference is
 the repository's [`standards/c99-n1256.pdf`](standards/c99-n1256.pdf),
 WG14/N1256 (ISO/IEC 9899:TC3: C99 with Technical Corrigenda 1-3).
 
-- Every module under `src/translation_phases/` opens with a `//!` comment that
-  names the translation phases and clauses it implements, and where its
+- Every module under `src/translation_phases/` has a `//!` comment that names
+  the translation phases and clauses it implements, and where its
   responsibility stops (for example, a constraint left to semantic analysis).
+  In an entry file these citations follow the module map.
 - A type, frame, function, or diagnostic that implements a specific grammar
   production, constraint, semantic rule, translation limit, or
   implementation-defined choice carries a `C99:` line in its doc comment. Mark
