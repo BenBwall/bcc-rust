@@ -2,7 +2,8 @@
 //!
 //! A region owns one fixed address range. Reserving it consumes address space
 //! but does not make it writable. Callers commit page-aligned subranges before
-//! writing and must not retain references across decommit or release.
+//! writing. Decommit invalidates pointers into that range; release invalidates
+//! every allocation and raw pointer obtained from the region.
 //!
 //! On Linux a region of at least one huge page starts on a
 //! transparent-huge-page boundary, is advised as huge pages
@@ -22,7 +23,9 @@ use std::{
     ptr::NonNull,
 };
 
-/// One OS reservation, released when dropped.
+/// One OS reservation, released when dropped. Release invalidates every
+/// allocation and raw pointer into it; raw pointers carry no borrow, and
+/// using them after release is the caller's bug.
 pub(crate) struct Region {
     base:     NonNull<u8>,
     reserved: usize,
@@ -55,6 +58,11 @@ impl Region {
         })
     }
 
+    /// The reservation's base. Commit before accessing a range, and end all
+    /// references and allocations in it before decommit. Decommit invalidates
+    /// pointers into that range, and dropping the region invalidates every
+    /// allocation and raw pointer obtained from it. Raw pointers carry no
+    /// borrow; using one after invalidation is the caller's bug.
     pub(crate) fn as_ptr(&self) -> NonNull<u8> {
         self.base
     }
@@ -116,10 +124,13 @@ impl Region {
     }
 
     /// Return physical storage and revoke access to a committed page range.
+    /// A successful decommit discards its contents; recommit provides zeros.
     ///
     /// # Safety
     ///
     /// No Rust reference, slice, or live allocation may overlap this range.
+    /// All raw pointers into it are invalidated on success and must not be
+    /// used again, even after recommit; derive new pointers from the region.
     #[cfg_attr(
         not(test),
         expect(
@@ -140,7 +151,10 @@ impl Drop for Region {
             usage.reserved -= self.reserved;
         });
         // SAFETY: this is the original reservation base and size, released
-        // exactly once. Users of the region cannot outlive its owner.
+        // exactly once. Owners end all references and allocations before
+        // release. Every raw pointer obtained from it is now invalidated;
+        // callers must not use those pointers again, regardless of whether
+        // they still exist (raw pointers carry no borrow).
         unsafe {
             #[cfg(not(miri))]
             os_release(self.base, self.reserved);
@@ -198,6 +212,8 @@ impl GrowingRegion {
     /// The region's base. Memory is reachable through it only up to the
     /// committed prefix at the time of the call, so derive pointers into newly
     /// committed memory after [`Self::ensure_committed`] succeeds.
+    /// Dropping this region invalidates all allocations and raw pointers;
+    /// using any of them afterwards is the caller's bug.
     pub(crate) fn as_ptr(&self) -> NonNull<u8> {
         #[cfg(miri)]
         return self.view;
@@ -269,13 +285,15 @@ fn committed_view(base: NonNull<u8>, committed: usize) -> NonNull<u8> {
     let cells = std::ptr::slice_from_raw_parts(
         base.as_ptr()
             .cast_const()
-            .cast::<std::cell::UnsafeCell<u8>>(),
+            .cast::<std::cell::UnsafeCell<std::mem::MaybeUninit<u8>>>(),
         committed,
     );
     // SAFETY: the mock reservation is one live allocation of at least
-    // `committed` bytes. A shared reference to `UnsafeCell` bytes neither
-    // reads them nor invalidates other pointers, and the raw pointer taken
-    // from it may read and write exactly that range.
+    // `committed` bytes, aligned for these one-byte cells. MaybeUninit permits
+    // unwritten bytes; UnsafeCell permits mutation through existing allocation
+    // pointers while this shared view is formed. The reference only bounds
+    // Miri's read-write permission to the committed prefix; it does not read
+    // or assert initialization of the bytes. Every view derives from `base`.
     NonNull::from(unsafe { &*cells }).cast()
 }
 
@@ -561,6 +579,9 @@ fn os_reserve(bytes: usize) -> io::Result<NonNull<u8>> {
     // SAFETY: null requests a new reservation; size is nonzero and rounded
     // to a page. PAGE_NOACCESS leaves every page inaccessible.
     let ptr = unsafe { VirtualAlloc(std::ptr::null(), bytes, MEM_RESERVE, PAGE_NOACCESS) };
+    // VirtualAlloc documents NULL as failure, so the checked conversion is
+    // also the OS error check:
+    // https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc
     NonNull::new(ptr.cast()).ok_or_else(io::Error::last_os_error)
 }
 
@@ -609,8 +630,13 @@ fn os_reserve(bytes: usize) -> io::Result<NonNull<u8>> {
             return Err(error);
         }
     }
-    // SAFETY: the base lies inside a successful mapping, so it is not null.
-    Ok(unsafe { NonNull::new_unchecked(base) })
+    // The offset is inside a non-null mapping and cannot wrap its address
+    // range. Still check the trimmed OS address before constructing NonNull.
+    mapping_base(base, || {
+        // SAFETY: after trimming, this is exactly the remaining mapping;
+        // nothing has obtained an allocation or reference into it yet.
+        _ = unsafe { libc::munmap(base.cast(), bytes) };
+    })
 }
 
 /// A new reservation: an anonymous private mapping with no access.
@@ -635,8 +661,32 @@ fn os_map(bytes: usize) -> io::Result<NonNull<u8>> {
     if ptr == libc::MAP_FAILED {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: successful mmap returns a non-null mapped address.
-    Ok(unsafe { NonNull::new_unchecked(ptr.cast()) })
+    // POSIX excludes zero for non-fixed mappings. Still check OS results:
+    // Linux's mmap_min_addr is configurable, and the macOS/BSD manuals do
+    // not explicitly guarantee nonzero anonymous mappings for a null hint.
+    // https://pubs.opengroup.org/onlinepubs/9799919799/functions/mmap.html
+    // https://man7.org/linux/man-pages/man2/mmap.2.html
+    // https://docs.kernel.org/admin-guide/sysctl/vm.html#mmap-min-addr
+    // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/mmap.2.html
+    // https://man.freebsd.org/cgi/man.cgi?query=mmap&sektion=2
+    // https://man.netbsd.org/mmap.2 and https://man.openbsd.org/mmap.2
+    mapping_base(ptr.cast(), || {
+        // SAFETY: mmap succeeded (not MAP_FAILED); even a mapping at zero
+        // must be released before rejecting it. No Rust reference exists.
+        _ = unsafe { libc::munmap(ptr, bytes) };
+    })
+}
+
+/// Checks a successful mapping's base, releasing it if it cannot be `NonNull`.
+#[cfg(any(all(unix, not(miri)), test))]
+fn mapping_base(ptr: *mut u8, release: impl FnOnce()) -> io::Result<NonNull<u8>> {
+    match NonNull::new(ptr) {
+        | Some(base) => Ok(base),
+        | None => {
+            release();
+            Err(io::Error::other("mapping at address zero"))
+        },
+    }
 }
 
 #[cfg(miri)]
@@ -698,10 +748,13 @@ fn os_decommit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
     }
 }
 
-#[cfg(all(unix, not(miri)))]
+#[cfg(all(target_os = "linux", not(miri)))]
 fn os_decommit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
+    // Linux guarantees zero-fill-on-demand after MADV_DONTNEED for private
+    // anonymous mappings (our reservations), preserving huge-page advice:
+    // https://man7.org/linux/man-pages/man2/madvise.2.html
     // SAFETY: ptr and bytes cover page-aligned mapped memory with no live
-    // Rust references; MADV_DONTNEED discards the physical pages.
+    // references or allocations; MADV_DONTNEED discards the physical pages.
     let advised = unsafe { libc::madvise(ptr.cast(), bytes, libc::MADV_DONTNEED) };
     if advised != 0 {
         return Err(io::Error::last_os_error());
@@ -716,12 +769,44 @@ fn os_decommit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
     }
 }
 
+#[cfg(all(unix, not(target_os = "linux"), not(miri)))]
+fn os_decommit(ptr: *mut u8, bytes: usize) -> io::Result<()> {
+    // MADV_DONTNEED is only advice on macOS and BSDs, so replace the range
+    // with fresh, zero-filled anonymous pages, inaccessible until recommit:
+    // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/madvise.2.html
+    // https://man.freebsd.org/cgi/man.cgi?query=madvise&sektion=2
+    // https://man.netbsd.org/madvise.2 and https://man.openbsd.org/madvise.2
+    // MAP_FIXED replaces our pages at the same address; MAP_ANON zero-fills:
+    // https://man.freebsd.org/cgi/man.cgi?query=mmap&sektion=2
+    // https://man.netbsd.org/mmap.2
+    // SAFETY: the checked page-aligned range is wholly owned by this region
+    // and has no live references or allocations. MAP_FIXED replaces only
+    // those pages, without releasing the address range for other threads.
+    let result = unsafe {
+        libc::mmap(
+            ptr.cast(),
+            bytes,
+            libc::PROT_NONE,
+            libc::MAP_FIXED | libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+    };
+    if result == libc::MAP_FAILED {
+        Err(io::Error::last_os_error())
+    } else {
+        debug_assert_eq!(result.cast::<u8>(), ptr, "decommitted range moved");
+        Ok(())
+    }
+}
+
 /// Releases a whole reservation.
 ///
 /// # Safety
 ///
 /// `base` must be a reservation from [`os_reserve`] that is not yet released,
-/// and nothing may access it afterwards.
+/// and no reference or allocation may remain in it. Release invalidates all
+/// raw pointers obtained from it; none may be used afterwards.
 #[cfg(all(windows, not(miri)))]
 unsafe fn os_release(base: NonNull<u8>, _: usize) {
     use windows_sys::Win32::System::Memory::{
@@ -739,7 +824,8 @@ unsafe fn os_release(base: NonNull<u8>, _: usize) {
 /// # Safety
 ///
 /// `base` and `bytes` must be a reservation from [`os_reserve`] that is not
-/// yet released, and nothing may access it afterwards.
+/// yet released, and no reference or allocation may remain in it. Release
+/// invalidates all raw pointers obtained from it; none may be used afterwards.
 #[cfg(all(unix, not(miri)))]
 unsafe fn os_release(base: NonNull<u8>, bytes: usize) {
     // SAFETY: base and bytes are the mapping `os_reserve` kept after trimming
@@ -751,6 +837,46 @@ unsafe fn os_release(base: NonNull<u8>, bytes: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zero_address_mappings_are_released_and_rejected() {
+        let mut released = false;
+        let error = mapping_base(std::ptr::null_mut(), || released = true).unwrap_err();
+        assert!(released);
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        let mut byte = 0;
+        let ptr = std::ptr::from_mut(&mut byte);
+        assert_eq!(
+            mapping_base(ptr, || released = false).unwrap().as_ptr(),
+            ptr
+        );
+        assert!(released, "a non-null mapping must remain reserved");
+    }
+
+    #[cfg(miri)]
+    #[test]
+    fn committed_views_allow_uninitialized_storage_and_live_allocations() {
+        let mut region = GrowingRegion::reserve(4 * FIRST_COMMIT_STEP).unwrap();
+        region.ensure_committed(1).unwrap();
+        let first = region.as_ptr().cast::<u64>();
+        // SAFETY: the first committed slot is aligned and writable.
+        unsafe {
+            first.as_ptr().write(42);
+        }
+        // SAFETY: the slot is initialized and exclusively accessed here.
+        let live = unsafe { &mut *first.as_ptr() };
+        // A larger view covers this live allocation and still-unwritten bytes.
+        region.ensure_committed(FIRST_COMMIT_STEP + 1).unwrap();
+        *live += 1;
+        assert_eq!(*live, 43);
+        let next = region.as_ptr().as_ptr().wrapping_add(FIRST_COMMIT_STEP);
+        // SAFETY: the new view reaches this newly committed, unwritten slot.
+        unsafe {
+            next.write(7);
+        }
+        // SAFETY: that slot is now initialized.
+        assert_eq!(unsafe { next.read() }, 7);
+    }
 
     #[test]
     fn rounding_rejects_overflow_and_preserves_aligned_sizes() {
@@ -1057,7 +1183,7 @@ mod tests {
     }
 
     #[test]
-    fn pages_can_be_committed_decommitted_and_recommitted_at_fixed_addresses() {
+    fn decommit_recommit_zeroes_the_whole_range_and_preserves_neighbors() {
         let page = page_size().unwrap();
         let region = Region::reserve(4 * page).unwrap();
         assert_eq!(region.reserved(), 4 * page);
@@ -1069,27 +1195,36 @@ mod tests {
             region.commit(0, 5 * page).unwrap_err().kind(),
             io::ErrorKind::InvalidInput
         );
-        region.commit(0, page).unwrap();
+        region.commit(0, 4 * page).unwrap();
         let first = region.as_ptr().as_ptr();
-        // SAFETY: the first page is committed, and only this test accesses it.
+        // SAFETY: all four pages are committed and exclusively accessed here.
         unsafe {
-            first.write_volatile(42);
+            first.write_bytes(42, 4 * page);
         }
-        region.commit(page, page).unwrap();
-        let second = first.wrapping_add(page);
-        // SAFETY: the second page was committed and is still owned here.
-        unsafe {
-            second.write_volatile(99);
+        for _ in 0..2 {
+            // SAFETY: no reference or allocation remains in the middle pages;
+            // their old pointers are not used after decommit.
+            unsafe {
+                region.decommit(page, 2 * page).unwrap();
+            }
+            region.commit(page, 2 * page).unwrap();
+            let middle = region.as_ptr().as_ptr().wrapping_add(page);
+            // SAFETY: derive a fresh pointer after recommit, which guarantees
+            // zero-filled pages on every backend, not just Linux.
+            let bytes = unsafe { std::slice::from_raw_parts(middle, 2 * page) };
+            assert!(bytes.iter().all(|&byte| byte == 0));
+            // SAFETY: these pages remain committed and the slice is no longer
+            // used. Dirty the whole range before the next decommit.
+            unsafe {
+                middle.write_bytes(99, 2 * page);
+            }
         }
-        // SAFETY: no reference or allocation remains in the second page.
-        unsafe {
-            region.decommit(page, page).unwrap();
+        for offset in [0, 3 * page] {
+            let neighbor = region.as_ptr().as_ptr().wrapping_add(offset);
+            // SAFETY: the untouched neighboring page remains initialized.
+            let bytes = unsafe { std::slice::from_raw_parts(neighbor, page) };
+            assert!(bytes.iter().all(|&byte| byte == 42));
         }
-        region.commit(page, page).unwrap();
-        // SAFETY: recommit made the second page readable and zero initialized.
-        assert_eq!(unsafe { second.read_volatile() }, 0);
-        // SAFETY: the first page was not decommitted and remains readable.
-        assert_eq!(unsafe { first.read_volatile() }, 42);
     }
 
     #[cfg(all(not(miri), target_pointer_width = "64"))]
