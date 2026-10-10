@@ -168,10 +168,6 @@ The original target probe also includes **direct Rust type assertions** supplyin
 bcc's type evidence rather than claiming unmodeled generic assertions passed.
 No packed/aligned attribute or pragma-pack semantics are added.
 
-`tests/fixtures/semantic/layout-probe.c` uses Clang's Linux target static assertions
-for scalar sizes, mixed-base bit-fields, zero-width and unnamed bit-fields, nested records, unions,
-member offsets and flexible arrays. Clang accepted that probe.
-
 Compatibility handles qualifiers, pointer targets, constant vs incomplete array
 extents and prototype parameter types/ellipsis, and constructs composite derived
 types iteratively. Unprototyped declarations impose default-promotion stability
