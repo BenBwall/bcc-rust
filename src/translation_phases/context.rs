@@ -16,6 +16,7 @@ use rustc_hash::FxBuildHasher;
 
 use super::{
     ErrorSeverity,
+    GetPosition,
     GetSeverity,
     TranslationError,
     provenance::{
@@ -759,6 +760,13 @@ impl<'tu> Context<'tu> {
         SourceArena::Retained.encode(start, end)
     }
 
+    /// Retains a zero-width diagnostic anchor immediately after `vector`.
+    /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
+    pub(crate) fn retain_source_end(&mut self, vector: &SourceVector) -> SourceVectors {
+        let anchor = vector.end_anchor();
+        self.create_retained_source_vectors(anchor.position(self), anchor.source_file_index, 0)
+    }
+
     /// Discards the preprocessor provenance arena once nothing but pending
     /// diagnostics can still refer to it. Those ranges move to the retained
     /// arena first, so diagnostics read the same vectors afterwards.
@@ -1066,6 +1074,45 @@ impl<'tu> Context<'tu> {
         &self.arena(arena)[start..start + source_vectors.length() as usize]
     }
 
+    /// Copies the first vector, or the default vector when no source is
+    /// available. This fallback is for internal preprocessing state, not
+    /// diagnostic positions.
+    /// C99: provenance across §5.1.1.2, pp. 9-10; PDF pp. 21-22.
+    pub(crate) fn first_source_vector_or_default(&self, source: SourceVectors) -> SourceVector {
+        self.get_source_vectors(source)
+            .first()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Copies the ordered source vectors into the caller's arena so they
+    /// survive changes to the context's provenance stores. Empty ranges
+    /// remain empty.
+    /// C99: provenance across §5.1.1.2, pp. 9-10; PDF pp. 21-22.
+    pub(crate) fn copy_source_vectors_in<'a>(
+        &self,
+        source: SourceVectors,
+        arena: &'a Bump,
+    ) -> &'a [SourceVector] {
+        arena.alloc_slice_fill_iter(self.get_source_vectors(source).iter().cloned())
+    }
+
+    /// Returns the primary diagnostic position from a non-empty source range.
+    /// A zero-width vector is a valid location; a range with no vectors is not.
+    /// Empty ranges assert in debug builds, so tests catch them; a release
+    /// build falls back to the default position instead of panicking.
+    /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
+    #[inline(always)]
+    pub(crate) fn diagnostic_position(&self, source: SourceVectors) -> SourcePosition {
+        debug_assert!(
+            source.length() != 0,
+            "diagnostic primary source range must be non-empty"
+        );
+        self.get_source_vectors(source)
+            .first()
+            .map_or_else(SourcePosition::default, |vector| vector.position(self))
+    }
+
     pub(super) fn first_source_vector(&self, source_vectors: SourceVectors) -> &SourceVector {
         let (arena, start) = SourceArena::decode(source_vectors);
         &self.arena(arena)[start as usize]
@@ -1196,12 +1243,16 @@ impl<'tu> Context<'tu> {
     /// header. The location's first source vector is its spelling: for a
     /// token from a macro expansion, the macro's replacement list. Errors
     /// are never withheld.
+    /// The primary range must be non-empty even if the diagnostic is withheld.
+    /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
     pub(crate) fn withholds(
         &self,
         severity: ErrorSeverity,
         extension: bool,
         source_vectors: SourceVectors,
     ) -> bool {
+        #[cfg(debug_assertions)]
+        let _ = self.diagnostic_position(source_vectors);
         (extension || severity == ErrorSeverity::Warning)
             && !self.system_headers.is_empty()
             && source_vectors.length() != 0
@@ -1389,6 +1440,92 @@ mod tests {
         SourceArena,
         SourceVector,
     };
+
+    #[test]
+    fn source_helpers_preserve_order_and_copies_survive_compaction() {
+        let tu = crate::util::bump::Bump::new();
+        let phase = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let position = super::SourcePosition {
+            index:  7,
+            line:   2,
+            column: 3,
+        };
+        let source = context.create_source_vectors(position, 4, 2);
+        let other = context.create_source_vectors(
+            super::SourcePosition {
+                index:  12,
+                line:   3,
+                column: 1,
+            },
+            5,
+            1,
+        );
+        let source = context.merge_vectors(source, other);
+        let expected = context.get_source_vectors(source).to_vec();
+        let parser = context.retain_token_source(source);
+        let retained = context.create_retained_source_vectors(position, 4, 2);
+        for range in [source, parser, retained] {
+            assert_eq!(context.first_source_vector_or_default(range), expected[0]);
+            assert_eq!(context.diagnostic_position(range), position);
+        }
+        let copy = context.copy_source_vectors_in(source, &phase);
+        let empty = super::SourceVectors::empty();
+        assert_eq!(
+            context.first_source_vector_or_default(empty),
+            SourceVector::default()
+        );
+        assert_eq!(context.copy_source_vectors_in(empty, &phase), []);
+        context.compact_preprocessor_vectors();
+        assert_eq!(copy, expected);
+        assert_eq!(context.get_source_vectors(parser), expected);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "diagnostic primary source range must be non-empty")]
+    fn diagnostic_positions_reject_empty_ranges_even_with_vectors_in_the_store() {
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        _ = context.create_source_vectors(super::SourcePosition::default(), 0, 1);
+        _ = context.diagnostic_position(super::SourceVectors::empty());
+    }
+
+    #[test]
+    fn retained_end_anchors_keep_the_file_line_and_end_column() {
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        for length in [0, 4] {
+            let vector = SourceVector {
+                index: 10,
+                column: 6,
+                line: 3,
+                source_file_index: 2,
+                length,
+            };
+            let source = context.retain_source_end(&vector);
+            assert_eq!(source.length(), 1);
+            assert_eq!(
+                context.get_source_vectors(source),
+                &[SourceVector {
+                    index: 10 + length,
+                    column: 6 + length,
+                    length: 0,
+                    ..vector
+                }]
+            );
+            assert_eq!(
+                context.diagnostic_position(source),
+                super::SourcePosition {
+                    index:  (10 + length) as usize,
+                    line:   3,
+                    column: 6 + length,
+                }
+            );
+            context.compact_preprocessor_vectors();
+            assert_eq!(context.get_source_vectors(source)[0].length, 0);
+        }
+    }
 
     #[test]
     fn source_arena_accepts_the_last_representable_vector() {

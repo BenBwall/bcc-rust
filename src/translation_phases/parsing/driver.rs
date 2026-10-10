@@ -78,7 +78,6 @@ use crate::{
         GetPosition,
         GetSeverity,
         GetSourceFileIndex,
-        SourcePosition,
         SourceVector,
         SourceVectors,
         TranslationError,
@@ -234,10 +233,9 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 },
                 | _ => continue,
             };
-            let vectors =
-                arena.alloc_slice_fill_iter(context.get_source_vectors(source).iter().cloned());
+            let vectors = context.copy_source_vectors_in(source, arena);
             token_diagnostics
-                .entry((spelling, &*vectors, context.user_source_end(source)))
+                .entry((spelling, vectors, context.user_source_end(source)))
                 .or_insert_with(|| ArenaQueue::new_in(arena))
                 .push_back(occurrence);
         }
@@ -988,16 +986,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         let Some(last) = self.context.user_source_end(source) else {
             return;
         };
-        let column = last.column + last.length;
-        let insertion_point = self.context.create_retained_source_vectors(
-            SourcePosition {
-                index: last.end(),
-                line: last.line,
-                column,
-            },
-            last.source_file_index,
-            0,
-        );
+        let insertion_point = self.context.retain_source_end(&last);
         let related = self.context.diagnostic_slice(&[RelatedParserDiagnostic {
             message:        "not a function, so later declarations were read as its parameters",
             source_vectors: source,
@@ -1008,7 +997,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         }
     }
 
-    /// Returns an empty range just after the previous token when `found`
+    /// Returns a zero-width anchor just after the previous token when `found`
     /// starts a later line of the same file: the likely place of a missing
     /// `;`.
     fn semicolon_insertion_point(&mut self, found: Option<Token>) -> Option<SourceVectors> {
@@ -1022,16 +1011,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         if previous.source_file_index != next.source_file_index || previous.line >= next.line {
             return None;
         }
-        let column = previous.column + previous.length;
-        Some(self.context.create_retained_source_vectors(
-            SourcePosition {
-                index: previous.end(),
-                line: previous.line,
-                column,
-            },
-            previous.source_file_index,
-            0,
-        ))
+        Some(self.context.retain_source_end(&previous))
     }
 
     /// Adds a token's provenance to an optional accumulated source range.

@@ -78,6 +78,17 @@ impl SourceVector {
         self.index as usize + self.length as usize
     }
 
+    /// A zero-width anchor at the end, keeping this vector's file and line.
+    /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
+    pub(crate) fn end_anchor(&self) -> Self {
+        Self {
+            index: self.index + self.length,
+            column: self.column + self.length,
+            length: 0,
+            ..self.clone()
+        }
+    }
+
     /// The source bytes this segment covers.
     pub(crate) fn range(&self) -> Range<usize> {
         self.index as usize..self.end()
@@ -121,12 +132,7 @@ pub(crate) type SourceVectors = VectorSlice<SourceVector>;
 impl GetPosition for SourceVectors {
     #[inline(always)]
     fn position(&self, context: &Context<'_>) -> SourcePosition {
-        let start = context.first_source_vector(*self);
-        SourcePosition {
-            index:  start.index as usize,
-            line:   start.line,
-            column: start.column,
-        }
+        context.diagnostic_position(*self)
     }
 }
 

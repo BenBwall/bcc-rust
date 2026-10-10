@@ -833,12 +833,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
             contents:       self.context.string_cache.intern("\n"),
             source_vectors: source,
         };
-        let location = self
-            .context
-            .get_source_vectors(source)
-            .first()
-            .cloned()
-            .unwrap_or_default();
+        let location = self.context.first_source_vector_or_default(source);
         let tokenizer = TokenSource::replay(self.context, self.scratch, &[body, &[end]], location);
         let hash_hash_stack =
             std::mem::replace(&mut self.hash_hash_stack, ArenaVec::new_in(self.scratch));

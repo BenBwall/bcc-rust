@@ -81,10 +81,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         };
         let location = self
             .context
-            .get_source_vectors(invocation.source_vectors)
-            .first()
-            .cloned()
-            .unwrap_or_default();
+            .first_source_vector_or_default(invocation.source_vectors);
         let tokenizer = TokenSource::replay(
             self.context,
             self.scratch,
@@ -313,10 +310,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let mut results = ArenaVec::new_in(self.scratch);
         let location = self
             .context
-            .get_source_vectors(invocation.source_vectors)
-            .first()
-            .cloned()
-            .unwrap_or_default();
+            .first_source_vector_or_default(invocation.source_vectors);
         let mut index = 0;
         while index < tokens.len() {
             let token = tokens[index];

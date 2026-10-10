@@ -462,20 +462,44 @@ fn outermost_parameter_arrays_and_flexible_member_constraints() {
 }
 
 #[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "diagnostic primary source range must be non-empty")]
+fn semantic_diagnostic_positions_reject_empty_primary_ranges() {
+    let tu = Bump::new();
+    let context = Context::new(&tu);
+    let error = SemanticError {
+        kind:           SemanticErrorKind::UnknownTypedef,
+        source_vectors: SourceVectors::empty(),
+        name:           None,
+        previous:       None,
+    };
+    _ = crate::translation_phases::GetPosition::position(&error, &context);
+}
+
+#[test]
 fn missing_typedef_binding_is_defensive_and_structured() {
+    use crate::translation_phases::{
+        GetPosition,
+        SourcePosition,
+    };
+
     let tu = Bump::new();
     let scratch = Bump::new();
     let mut context = Context::new(&tu);
-    let name = Identifier::new(
-        context.string_cache.intern("missing"),
-        SourceVectors::empty(),
-    );
+    let file = context.add_synthetic_source_file(Path::new("<typedef>"), "\n  missing\n");
+    let position = SourcePosition {
+        index:  3,
+        line:   2,
+        column: 3,
+    };
+    let source = context.create_source_vectors(position, file, "missing".len());
+    let name = Identifier::new(context.string_cache.intern("missing"), source);
     {
         let mut analyzer = Analyzer::new(&mut context, &scratch);
         analyzer.resolve_spec(
             TypeSpecifiers::TypedefName(name),
             TypeQualifiers::empty(),
-            SourceVectors::empty(),
+            source,
             false,
         );
         while let Some(work) = analyzer.work.pop() {
@@ -491,6 +515,11 @@ fn missing_typedef_binding_is_defensive_and_structured() {
             ..
         })
     ));
+    let TranslationError::Semantic(error) = &errors[0] else {
+        unreachable!()
+    };
+    assert_eq!(error.source_vectors, source);
+    assert_eq!(error.position(&context), position);
 }
 
 #[test]

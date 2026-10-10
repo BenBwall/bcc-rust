@@ -478,10 +478,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let disabled_macros = self.disabled_macros_in(cursor.active_frames());
         let location = self
             .context
-            .get_source_vectors(closing.source_vectors)
-            .first()
-            .cloned()
-            .unwrap_or_default();
+            .first_source_vector_or_default(closing.source_vectors);
         let parameters = names.len() + usize::from(variadic);
         let mut arguments = ArenaVec::with_capacity_in(parameters, self.scratch);
         for (i, name) in names.iter().copied().chain(variadic_name).enumerate() {
@@ -670,10 +667,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let tokens = self.read_argument(argument, true);
         let location = self
             .context
-            .get_source_vectors(token.source_vectors)
-            .first()
-            .cloned()
-            .unwrap_or_default();
+            .first_source_vector_or_default(token.source_vectors);
         let tokenizer = TokenSource::replay(self.context, self.scratch, &[&tokens], location);
         drop(argument.expanded.set(tokenizer.clone()));
         tokenizer
@@ -729,10 +723,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             let tokens = self.replace_operand_argument(argument);
             let empty_location = self
                 .context
-                .get_source_vectors(token.source_vectors)
-                .first()
-                .cloned()
-                .unwrap_or_default();
+                .first_source_vector_or_default(token.source_vectors);
             let tokenizer =
                 TokenSource::replay(self.context, self.scratch, &[&tokens], empty_location);
             // This frame reads its own replaced copy; the invocation keeps
@@ -1704,10 +1695,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     fn replay_pasted_tokens(&mut self, result: &[PreprocessorToken]) {
         let Some(location) = result.first().map(|token| {
             self.context
-                .get_source_vectors(token.source_vectors)
-                .first()
-                .cloned()
-                .unwrap_or_default()
+                .first_source_vector_or_default(token.source_vectors)
         }) else {
             // Every operand was a placemarker.
             return;

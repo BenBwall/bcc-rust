@@ -102,6 +102,8 @@ impl ToDiagnostic for TranslationError<'_> {
         source: SourceVectors,
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
+        // C99 §5.1.1.3 and footnote 8: every primary label has a location.
+        _ = context.diagnostic_position(source);
         match self {
             | Self::InitialProcessing(error) => error.diagnostic_in(context, source, arena),
             | Self::PreprocessorTokenizining(error) => error.diagnostic_in(context, source, arena),

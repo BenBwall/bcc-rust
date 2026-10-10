@@ -187,7 +187,15 @@ mod tests {
                     .with_gnu_extensions(true)
                     .with_msvc_extensions(true);
                 let mut context = Context::with_configuration(&tu, configuration);
-                let source = context.push_source_vectors(&[]);
+                let file = context.add_synthetic_source_file(
+                    std::path::Path::new("<extension>"),
+                    "_Static_assert",
+                );
+                let source = context.create_source_vectors(
+                    SourcePosition::default(),
+                    file,
+                    "_Static_assert".len(),
+                );
                 context.report_extension(Feature::StaticAssert, "_Static_assert", source);
                 context.report_extension(Feature::ImplicitInt, "implicit int", source);
                 context.report_extension(Feature::GnuAttribute, "__attribute__", source);

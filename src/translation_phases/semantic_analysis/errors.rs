@@ -930,10 +930,7 @@ impl GetSeverity for SemanticError {
 }
 impl GetPosition for SemanticError {
     fn position(&self, context: &Context<'_>) -> SourcePosition {
-        context
-            .get_source_vectors(self.source_vectors)
-            .first()
-            .map_or_else(SourcePosition::default, |v| v.position(context))
+        self.source_vectors.position(context)
     }
 }
 impl GetSourceVectors for SemanticError {

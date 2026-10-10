@@ -103,13 +103,7 @@ impl<'a> ReplayCursor<'a> {
             .iter()
             .rev()
             .find_map(|token| token.source_vectors.as_slice().last())
-            .map_or(empty_location, |last| SourceVector {
-                index:             last.index + last.length,
-                column:            last.column + last.length,
-                line:              last.line,
-                source_file_index: last.source_file_index,
-                length:            0,
-            });
+            .map_or(empty_location, SourceVector::end_anchor);
         Self {
             tokens,
             end: SourceVector { length: 0, ..end },

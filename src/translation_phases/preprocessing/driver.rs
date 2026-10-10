@@ -330,10 +330,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     /// separately from its invocation through nested rescanning.
     fn spelling_location(&self, token: PreprocessorToken) -> SourceVector {
         self.context
-            .get_source_vectors(token.source_vectors)
-            .first()
-            .cloned()
-            .unwrap_or_default()
+            .first_source_vector_or_default(token.source_vectors)
     }
 
     pub(super) fn physical_source_file_index(&self) -> u32 {
