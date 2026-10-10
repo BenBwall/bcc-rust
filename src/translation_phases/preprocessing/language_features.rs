@@ -111,7 +111,7 @@ pub(super) fn with_identity_macros<'a>(
              1\n#define _MSC_EXTENSIONS 1\n",
         );
     }
-    if configuration.standard() >= CStandard::C23 {
+    if configuration.accepts(Feature::C23Keywords) {
         out.push_str(configuration.target().atomic_c23_macros());
     }
     out.into_str()

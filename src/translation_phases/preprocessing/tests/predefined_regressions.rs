@@ -400,3 +400,47 @@ fn msvc_identity_follows_the_umbrella_flag_and_identity_macros_can_be_undefined(
         assert!(result.spellings.is_empty(), "{:?}", result.spellings);
     }
 }
+
+#[test]
+fn char8_atomic_macros_follow_c23_keywords_for_every_target_and_dialect() {
+    use crate::{
+        configuration::{
+            CStandard,
+            ExtensionPolicy,
+        },
+        target::Target,
+    };
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        for standard in [CStandard::C17, CStandard::C23, CStandard::C2y] {
+            for gnu in [false, true] {
+                let config = CompilerConfiguration::new(standard, ExtensionPolicy::Deny)
+                    .with_target(target)
+                    .with_gnu_extensions(gnu);
+                let observed = observe_with(
+                    "#ifdef __CLANG_ATOMIC_CHAR8_T_LOCK_FREE\nclang_char8 \
+                     __CLANG_ATOMIC_CHAR8_T_LOCK_FREE\n#endif\n#ifdef \
+                     __GCC_ATOMIC_CHAR8_T_LOCK_FREE\ngcc_char8 \
+                     __GCC_ATOMIC_CHAR8_T_LOCK_FREE\n#endif\n",
+                    config,
+                );
+                assert!(observed.errors.is_empty(), "{:?}", observed.errors);
+                let expected = if standard < CStandard::C23 {
+                    &[][..]
+                } else if target == Target::WindowsMsvc {
+                    &["clang_char8", "2"][..]
+                } else {
+                    &["clang_char8", "2", "gcc_char8", "2"][..]
+                };
+                assert_eq!(
+                    observed.spellings, expected,
+                    "{target:?} {standard:?} {gnu}"
+                );
+            }
+        }
+    }
+}
