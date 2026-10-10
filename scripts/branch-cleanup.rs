@@ -14,9 +14,10 @@ xshell = "0.2"
 tempfile = "3"
 ---
 
-//! Run from the repository with `cargo +nightly -Zscript
-//! scripts/branch-cleanup.rs [--all] [--dry-run]`; test with `cargo +nightly
-//! -Zscript test --manifest-path scripts/branch-cleanup.rs`.
+//! Run from the repository with `python scripts/run.py branch-cleanup [--all]
+//! [--dry-run]`; test with `CARGO_ENCODED_RUSTFLAGS= cargo +nightly -Zscript
+//! test --manifest-path scripts/branch-cleanup.rs`. Both clear the repository's
+//! rustflags, whose relative linker path does not resolve from `scripts/`.
 
 use std::{
     collections::HashSet,

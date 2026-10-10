@@ -517,12 +517,14 @@ compares two finished runs without surveying. Run the scripts' tests with
 
 [`scripts/branch-cleanup.rs`](scripts/branch-cleanup.rs) is a nightly Cargo
 script that deletes finished local branches. It needs an authenticated GitHub
-CLI (`gh`):
+CLI (`gh`). Run it through [`scripts/run.py`](scripts/run.py), which clears the
+repository's rustflags: their relative linker path does not resolve for a
+script package rooted in `scripts/`:
 
 ```sh
-cargo +nightly -Zscript scripts/branch-cleanup.rs                   # Update main and delete the latest merged PR's local branch.
-cargo +nightly -Zscript scripts/branch-cleanup.rs --all             # Also delete other clearly finished local branches.
-cargo +nightly -Zscript scripts/branch-cleanup.rs --all --dry-run   # Preview without switching, pulling, or deleting.
+python scripts/run.py branch-cleanup                   # Update main and delete the latest merged PR's local branch.
+python scripts/run.py branch-cleanup --all             # Also delete other clearly finished local branches.
+python scripts/run.py branch-cleanup --all --dry-run   # Preview without switching, pulling, or deleting.
 ```
 
 Cleanup reads every PR to find the most recent merge into `main`, fetches and
@@ -535,7 +537,7 @@ PRs, extra local commits, protected names (`main`, `master`, `develop`, `dev`,
 never authorize deleting a same-named local branch. Comparing the local tip with
 the merged PR's head commit recognizes squash merges. Commit or stash changes
 before a real cleanup; only local branches are deleted. Run its tests with
-`cargo +nightly -Zscript test --manifest-path scripts/branch-cleanup.rs`.
+`CARGO_ENCODED_RUSTFLAGS= cargo +nightly -Zscript test --manifest-path scripts/branch-cleanup.rs`.
 
 ### CodeGraph index
 
