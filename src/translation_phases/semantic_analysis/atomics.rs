@@ -460,6 +460,8 @@ impl Analyzer<'_, '_, '_> {
     /// complete object.
     /// C11: §6.7.2.4 paragraph 3, p. 121; PDF p. 139.
     /// C11: §6.7.3 paragraph 3, p. 121; PDF p. 139.
+    /// Clang extension: Clang rejects `_Atomic` on an incomplete type with
+    /// `err_atomic_specifier_bad_type` in `DiagnosticSemaKinds.td`.
     pub(super) fn atomic_type(
         &mut self,
         value: TypeId,
