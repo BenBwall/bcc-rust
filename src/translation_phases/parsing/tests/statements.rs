@@ -18,6 +18,7 @@ use crate::translation_phases::{
             InitializerType,
             ParameterDeclaration,
             StructDeclarator,
+            TypeSpecifiers,
         },
         errors::ParserErrorType,
         scope::ScopeKind,
@@ -1507,18 +1508,18 @@ fn function_block_implicit_and_label_scopes_restore_typedef_classification() {
                     "scope kind {kind:?} leaked"
                 );
             }
-            assert!(
+            assert!(matches!(
                 declaration(parsed, 3)
                     .declaration_specifiers
-                    .type_specifiers
-                    .is_typedef_name()
-            );
-            assert!(
+                    .type_specifiers,
+                TypeSpecifiers::TypedefName(_)
+            ));
+            assert!(matches!(
                 declaration(parsed, 4)
                     .declaration_specifiers
-                    .type_specifiers
-                    .is_typedef_name()
-            );
+                    .type_specifiers,
+                TypeSpecifiers::TypedefName(_)
+            ));
         },
     );
 }

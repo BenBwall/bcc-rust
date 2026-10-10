@@ -130,7 +130,7 @@ impl Integer {
         }
     }
 
-    /// C99: §6.3.1.1p2, p. 42; PDF p. 54.
+    /// C99: §6.3.1.1p2, pp. 42-43; PDF pp. 54-55.
     fn promote(self) -> Self {
         if self.bits < 32 {
             Self::int(self.value)
@@ -139,7 +139,7 @@ impl Integer {
         }
     }
 
-    /// C99: §6.5.3.3p1-5, pp. 79-80; PDF pp. 91-92.
+    /// C99: §6.5.3.3p1-5, p. 79; PDF p. 91.
     pub(crate) fn unary(self, op: UnaryOperator) -> Option<Self> {
         let v = self.promote();
         match op {
@@ -152,7 +152,10 @@ impl Integer {
         }
     }
 
-    /// GNU sign-bit shift extension to C99 §6.5.7p4, p. 84; PDF p. 96.
+    /// GNU extension: folds a nonnegative signed left shift into the sign bit.
+    /// GNU extension: GCC manual, "Integers".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Integers-implementation.html>
+    /// C99: §6.5.7 paragraph 4, p. 85; PDF p. 97.
     pub(crate) fn sign_bit_shift(self, op: BinaryOperator, right: Self) -> Option<Self> {
         let (l, r) = (self.promote(), right.promote());
         if op != BinaryOperator::LeftShift || !l.signed || l.value < 0 {
@@ -164,7 +167,8 @@ impl Integer {
     }
 
     /// Usual integer conversions and checked signed/modular unsigned
-    /// arithmetic. C99: §6.3.1.8p1, p. 45; PDF p. 57; §6.5.5p6, p. 82; PDF
+    /// arithmetic. C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57; §6.5.5p6, p. 82;
+    /// PDF
     /// p. 94.
     pub(crate) fn binary(self, op: BinaryOperator, right: Self) -> Option<Self> {
         use BinaryOperator as B;
@@ -358,7 +362,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Immediate floating operands are allowed in an integer-constant cast.
-    /// C99: §6.6p6, p. 95; PDF p. 107; §6.3.1.4p1, p. 44; PDF p. 56.
+    /// C99: §6.6p6, p. 95; PDF p. 107; §6.3.1.4p1, p. 43; PDF p. 55.
     pub(super) fn float_cast(
         &self,
         ty: TypeId,
@@ -449,7 +453,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ))
     }
 
-    /// C99: §6.3.1.1p2, p. 42; PDF p. 54; §6.3.1.8, p. 45; PDF p. 57;
+    /// C99: §6.3.1.1p2, pp. 42-43; PDF pp. 54-55; §6.3.1.8, p. 45; PDF p. 57;
     /// §6.5.17p2, p. 94; PDF p. 106 (comma keeps the right operand's type).
     fn integer_model(&mut self, expression: &'tu Expression<'tu>) -> Option<(u32, bool)> {
         let mut pending = super::ArenaVec::new_in(self.scratch);
@@ -923,6 +927,8 @@ fn unanalyzed_extended(specifiers: super::TypeSpecifiers<'_>) -> bool {
     )
 }
 
+/// Applies the usual arithmetic conversions to promoted integer values.
+/// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57.
 fn common(mut left: (u32, bool), mut right: (u32, bool)) -> (u32, bool) {
     if left.0 < 32 {
         left = (32, true);

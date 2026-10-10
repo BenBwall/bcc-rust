@@ -73,8 +73,9 @@ impl<T> RegionVec<T> {
 
     pub(crate) fn as_slice(&self) -> &[T] {
         // SAFETY: the first `len` elements are initialized in committed
-        // memory that `ptr` reaches; with none, `ptr` is dangling but
-        // aligned, which an empty slice allows.
+        // memory that `ptr` reaches, which the region keeps for as long as
+        // `self` is borrowed; with none, `ptr` is dangling but aligned, which
+        // an empty slice allows.
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
 
@@ -325,7 +326,8 @@ impl<T> ExactSizeIterator for IntoIter<T> {}
 
 impl<T> Drop for IntoIter<T> {
     fn drop(&mut self) {
-        // SAFETY: `next <= end`, inside the vector's elements.
+        // SAFETY: `next <= end`, so the offset stays inside the vector's
+        // elements or one past them; an empty vector's offset is zero.
         let first = unsafe { self.ptr.as_ptr().add(self.next) };
         let remaining = ptr::slice_from_raw_parts_mut(first, self.end - self.next);
         self.next = self.end;

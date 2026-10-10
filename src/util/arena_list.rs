@@ -90,7 +90,7 @@ impl<'a, T> ArenaList<'a, T> {
             header.write(values.len());
         }
         // SAFETY: the elements start one `usize` past the length, at
-        // `offset`, inside the block.
+        // `offset`, inside the block or, for zero-sized `T`, one past its end.
         let elements = unsafe { header.add(1) }.cast::<T>();
         // SAFETY: `elements` is aligned for `T`, which is no more aligned than
         // `usize`, and the layout leaves room for `values.len()` of them.

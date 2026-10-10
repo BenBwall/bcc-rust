@@ -48,12 +48,7 @@ pub(super) struct ConditionalGroup<'pp> {
 impl<'pp> ConditionalGroup<'pp> {
     fn new(pp: &'pp Bump, context: &Context<'_>, directive: PreprocessorToken) -> Self {
         Self {
-            source:   pp.alloc_slice_fill_iter(
-                context
-                    .get_source_vectors(directive.source_vectors)
-                    .iter()
-                    .cloned(),
-            ),
+            source:   context.copy_source_vectors_in(directive.source_vectors, pp),
             saw_else: false,
         }
     }

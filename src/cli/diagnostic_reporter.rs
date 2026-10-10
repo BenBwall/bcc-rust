@@ -227,7 +227,6 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             match diagnostic.severity {
                 | ErrorSeverity::Error => self.errors += 1,
                 | ErrorSeverity::Warning => self.warnings += 1,
-                | ErrorSeverity::Note => {},
             }
             out.write_all(self.renderer.render_text(&diagnostic, context).as_bytes())?;
         }

@@ -519,9 +519,7 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
             },
             | Self::Statement(frame) => &mut frame.source_vectors,
         };
-        *destination = Some(destination.map_or(recovered, |existing| {
-            context.merge_vectors(existing, recovered)
-        }));
+        context.merge_into(destination, recovered);
     }
 
     /// Runs the active frame until it returns an action for the driver,

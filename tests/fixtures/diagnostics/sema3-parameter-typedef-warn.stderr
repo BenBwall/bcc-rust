@@ -1,0 +1,9 @@
+warning: function definition parameter requires a name
+ --> sema3-parameter-typedef-warn.c:2:7
+  |
+2 | int f(I) { return 0; }
+  |       ^ parameter has no name
+  |
+  = note: C99 §6.9.1p5: each prototype-definition parameter includes an identifier, except the sole void parameter
+
+1 warning generated.

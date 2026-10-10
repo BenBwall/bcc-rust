@@ -21,6 +21,10 @@ use std::{
 };
 
 pub(crate) use context::Context;
+pub(crate) use extension::{
+    DiagnosticPolicy,
+    policy_severity,
+};
 pub(crate) use provenance::{
     SourcePosition,
     SourceVector,
@@ -102,6 +106,8 @@ impl ToDiagnostic for TranslationError<'_> {
         source: SourceVectors,
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
+        // C99 §5.1.1.3 and footnote 8: every primary label has a location.
+        _ = context.diagnostic_position(source);
         match self {
             | Self::InitialProcessing(error) => error.diagnostic_in(context, source, arena),
             | Self::PreprocessorTokenizining(error) => error.diagnostic_in(context, source, arena),
@@ -139,12 +145,10 @@ impl StrExt for str {
     }
 }
 
-#[expect(dead_code, reason = "We aren't using the Note variant yet")]
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub(crate) enum ErrorSeverity {
     Warning,
     Error,
-    Note,
 }
 
 pub(crate) trait GetSeverity {
@@ -179,7 +183,7 @@ pub(crate) trait SetPosition: GetPosition {
         not(test),
         expect(
             dead_code,
-            reason = "Position setters are retained for translation-phase implementations."
+            reason = "Only the tokenizer tests move a reader to another line."
         )
     )]
     #[inline(always)]

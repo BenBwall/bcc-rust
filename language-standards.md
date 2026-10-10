@@ -138,6 +138,19 @@ C99 §7.1.3p1 (printed p. 166; PDF p. 178) reserves implementation names without
 changing language grammar. These definitions can be undefined or redefined;
 required ISO builtins retain their existing protection.
 
+Char8 atomic lock-free definitions are selected by `Feature::C23Keywords`,
+whose acceptance is native C23/C2y only. Clang 23.1.1 defines
+`__CLANG_ATOMIC_CHAR8_T_LOCK_FREE` as `2` on all four targets and
+`__GCC_ATOMIC_CHAR8_T_LOCK_FREE` as `2` on the Linux and MinGW targets in C23
+and GNU23, with neither in C17/GNU17. No other atomic lock-free macro is added
+by C23. The GCC 13.2.0 `gcc` and `x86_64-w64-mingw32-gcc` on PATH reject the
+`c23`/`gnu23` option names; their supported `c2x`/`gnu2x` modes define the GCC
+char8 macro as `2`, while C17/GNU17 omit it. Thus they agree on availability
+for the shared GCC spelling. GCC has no Clang spelling and cannot probe the
+other Clang target triples. Frozen macro data is retained; no GNU17 char8
+capability is advertised. C23 §7.17.1p4 (printed p. 293; PDF p. 306) specifies
+the corresponding `ATOMIC_CHAR8_T_LOCK_FREE` header macro.
+
 Run `python scripts/update_target_macros.py --check` to compare all frozen
 spellings against the repository's Clang (`-dM -E -x c`, ISO C11 and GNU C17).
 The MSVC triple also passes `-fms-compatibility-version=19.33`, the version
@@ -264,6 +277,25 @@ and optional origin. C99 keyword IDs are stable. New grammar consumes these
 kinds rather than adding a second spelling classifier, and parser consumers keep
 the original tokens for spelling and provenance.
 
+The typed adapter, `Context::report_extension_diagnostic`, retains the phase's
+specific message, labels, notes and help. It shares native-feature suppression
+and system-header handling with the generic emitter; non-accepted features
+remain hard errors. `DiagnosticPolicy` and `policy_severity` also govern constraint
+and quality diagnostics: variadic marker misuse, macro redefinition and empty
+member declarations warn by default and become errors under Deny. Object-like
+macro-generated defined remains a warning under Deny, matching Clang's
+-Wexpansion-to-defined; function-like expansion uses the normal extension policy.
+Strict C99+ implicit old-style parameters retain their hard-error baseline.
+Unnamed definition parameters are native in C23; the earlier semantic fallback
+now warns by default and is promoted under Deny, matching Clang and avoiding
+duplicate reports from the parser.
+
+`KeywordClassification` also records whether the written assembly introducer is
+the ambiguous reserved __asm alias. Grammar owners use that metadata to choose
+GNU parentheses or MSVC instructions/blocks. __has_builtin takes keyword identity
+from classify and implementation support from `semantic_analysis::implemented_builtin`;
+ordinary-call builtins use their implementation owners' named predicates.
+
 ## Feature matrix
 
 ISO columns give revision availability: `Y` means native and `-` means not
@@ -298,6 +330,11 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | DelimitedEscapes | - | - | - | - | - | - | Y | native | lexer/preprocessor |
 | HexFloats | - | - | Y | Y | Y | Y | Y | extension | lexer/preprocessor |
 | VariadicMacros | - | - | Y | Y | Y | Y | Y | extension | lexer/preprocessor |
+| OmittedVariadicArguments | - | - | - | - | - | Y | Y | extension (MS exception) | preprocessor |
+| PreprocessorComma | - | - | - | - | - | - | - | extension | preprocessor |
+| MacroExpandedDefined | - | - | - | - | - | - | - | extension (object-like warning baseline) | preprocessor |
+| QuotedHeaderBackslash | - | - | - | - | - | - | - | extension | preprocessor |
+| UnnamedDefinitionParameters | - | - | - | - | - | Y | Y | extension (warning fallback) | parser/semantic analysis |
 | EmptyMacroArguments | - | - | Y | Y | Y | Y | Y | extension | lexer/preprocessor |
 | Inline | - | - | Y | Y | Y | Y | Y | GNU earlier | parser |
 | Restrict | - | - | Y | Y | Y | Y | Y | native | parser |
@@ -307,11 +344,14 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | ImplicitInt | Y | Y | - | - | - | - | - | extension | parser |
 | MixedDeclarations | - | - | Y | Y | Y | Y | Y | extension | parser |
 | ForDeclarations | - | - | Y | Y | Y | Y | Y | extension | parser |
+| ForNonVariableDeclarations | - | - | - | - | - | Y | Y | extension | semantic analysis |
+| ArrayParameterSyntax | - | - | Y | Y | Y | Y | Y | extension | parser |
 | DesignatedInitializers | - | - | Y | Y | Y | Y | Y | extension | parser |
 | CompoundLiterals | - | - | Y | Y | Y | Y | Y | extension | parser |
 | FlexibleArrayMembers | - | - | Y | Y | Y | Y | Y | extension | parser |
 | LongLong | - | - | Y | Y | Y | Y | Y | extension | parser |
 | TrailingEnumComma | - | - | Y | Y | Y | Y | Y | extension | parser |
+| OldStyleFunctionDeclarators | Y | Y | Y | Y | Y | - | - | native through C17 | parser |
 | Func | - | - | Y | Y | Y | Y | Y | extension | parser |
 | StaticAssert | - | - | - | Y | Y | Y | Y | extension | parser |
 | Generic | - | - | - | Y | Y | Y | Y | extension | parser and sema |
@@ -321,7 +361,8 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | ThreadLocal | - | - | - | Y | Y | Y | Y | extension | parser |
 | Atomic | - | - | - | Y | Y | Y | Y | extension | parser and sema |
 | AnonymousAggregates | - | - | - | Y | Y | Y | Y | extension | parser |
-| C23Keywords | - | - | - | - | - | Y | Y | native | parser |
+| TypedefRedefinition | - | - | - | Y | Y | Y | Y | extension | semantic analysis |
+| C23Keywords | - | - | - | - | - | Y | Y | native | preprocessor/parser |
 | Attributes | - | - | - | - | - | Y | Y | extension | parser |
 | BitInt | - | - | - | - | - | Y | Y | extension | parser |
 | DecimalTypes | - | - | - | - | - | Y | Y | extension | parser |
@@ -335,7 +376,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | IfSwitchDeclarations | - | - | - | - | - | - | Y | extension | parser |
 | NamedLoops | - | - | - | - | - | - | Y | extension | parser |
 | GenericTypeOperand | - | - | - | - | - | - | Y | extension | parser |
-| CaseRanges | - | - | - | - | - | - | Y | extension | parser |
+| CaseRanges | - | - | - | - | - | - | Y | GNU earlier | parser |
 | GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; vector_size/aligned sema |
 | GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
@@ -354,6 +395,8 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | Int128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | AutoType | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | GnuAlternateKeywords | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| AlignofExpression | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| VoidExpressionReturn | - | - | - | - | - | - | - | GNU only | semantic analysis |
 | RealImag | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | GnuDesignators | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | UnionCasts | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -382,6 +425,69 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | MsPragma | - | - | - | - | - | - | - | MS flag | lexer/preprocessor |
 | MsAnonymousStructs | - | - | - | - | - | - | - | MS flag | parser |
 | MsVaArgs | - | - | - | - | - | - | - | MS flag | lexer/preprocessor |
+
+The following vocabulary entries retain the established diagnostic contracts:
+
+- `OldStyleFunctionDeclarators` has origin `Removed { since: C89, removed: C23 }`.
+  Identifier-list (K&R) declarators are accepted without an extension diagnostic
+  through C17, in ISO and GNU modes. C23/C2y reject them under every policy,
+  including GNU dialects, with the existing hard prototype-list error. Parsing
+  retains the identifier-list shape for recovery. C99 §6.7.5p1 (printed p. 114;
+  PDF p. 126) contains this grammar; C23 §6.7.7.1p1 (printed pp. 126-127;
+  PDF pp. 139-140) removes it. The specialized error is retained pending the
+  later diagnostic-helper follow-up.
+- `OmittedVariadicArguments` has C23 origin and is accepted in every mode.
+  Before C23, Allow is silent, Warn emits the existing `MissingVariadicArgument`
+  warning, and Deny emits that specialized error, for ISO and GNU dialects.
+  `MsVaArgs` exempts omitted arguments from that diagnostic independently of
+  the revision. C23/C2y are silent. This covers direct calls, nested replacement
+  rescanning and preprocessing-expression expansion. C99 §6.10.3p4 (printed
+  p. 151; PDF p. 163) requires more arguments than named parameters;
+  C23 §6.10.5p4 (printed p. 178; PDF p. 191) requires at least as many.
+- `ArrayParameterSyntax` has C99 origin and accepts array qualifiers, `static`
+  bounds and `[*]` in every mode. C89/C95 report the existing C99-origin
+  spellings under Warn/Deny, including GNU modes; C99 and later are silent.
+  Parser `__extension__` suppression applies. C99 §6.7.5p1 (printed p. 114;
+  PDF p. 126) specifies all three forms.
+- `AlignofExpression` has GNU origin and accepts an expression operand in
+  every mode. ISO `_Alignof` and C23 `alignof` spellings report GNU origin under
+  Warn/Deny, including GNU dialects; Allow is silent. Reserved GNU aliases
+  retain their exemption, and parser suppression still applies. The source is
+  [GCC's alignment extension](https://gcc.gnu.org/onlinedocs/gcc/Alignment.html).
+  Keyword availability and spelling checks are independent and unchanged.
+- `TypedefRedefinition` has C11 origin. Redefining a typedef to the identical,
+  non-variably-modified type is accepted in every mode, reported as
+  `typedef redefinition` with C11 origin under Warn/Deny before C11 (GNU
+  included), and silent under Allow or from C11 onward. Different types and
+  variably modified typedefs retain their constraint errors. C11 §6.7p3
+  (printed p. 108; PDF p. 126) specifies this exception.
+- `ForNonVariableDeclarations` has C23 origin. A for-initializer declaration
+  without declarators is accepted in every mode and reported with the existing
+  `non-variable declaration in 'for' loop` spelling under Warn/Deny before
+  C23, including GNU modes. Allow and C23/C2y are silent. Existing storage-class
+  and other semantic constraints remain in force. C99 §6.8.5p3 (printed p. 135;
+  PDF p. 147) restricts this position to automatic objects; C23 §6.8.6.1p1-2
+  (printed p. 155; PDF p. 168) has declaration syntax without that restriction.
+- `VoidExpressionReturn` has GNU origin and requires a GNU dialect. Returning
+  a void expression from a void function reports the existing GNU-origin
+  `return with a void expression` diagnostic under Warn/Deny and is silent
+  under Allow. Every ISO revision retains `VoidReturnValue` as a hard error.
+  Returning a non-void value is still an error in GNU modes. C99 §6.8.6.4p1
+  (printed p. 139; PDF p. 151) forbids return expressions in void functions;
+  [GCC's `c_finish_return`](https://gnu.googlesource.com/gcc/+/refs/tags/basepoints/gcc-13/gcc/c/c-typeck.cc)
+  implements the void-expression exception.
+
+`CaseRanges` retains C2y origin ([WG14 N3370](https://www.open-std.org/JTC1/SC22/WG14/www/docs/n3370.htm)),
+extending C99 §6.8.1p1 (printed p. 131; PDF p. 143). Like `BinaryConstants`
+and `VaOpt`, acceptance is native or GNU: strict pre-C2y modes emit a hard
+syntax diagnostic regardless of extension policy or `__extension__` suppression.
+They still parse and retain the range and following input. GNU pre-C2y modes
+are silent under Allow and report **C2y** origin under Warn/Deny; parser
+suppression applies to that policy diagnostic. C2y is silent. There is no
+individual GNU feature CLI switch; `-std=gnu*` enables earlier case ranges.
+Pinned Clang 23.1.1 accepts them with a C2y warning in both `-std=c17 -pedantic`
+and `-std=gnu17 -pedantic`, and silently under `-std=c2y`. bcc's strict rejection
+is the maintainer-selected availability gate.
 
 Lexer and preprocessor rows also cover exact prefix and suffix recognition,
 `//` in GNU89 pedantic mode, `#elifndef`, `#sccs`, `, ## __VA_ARGS__`, and the

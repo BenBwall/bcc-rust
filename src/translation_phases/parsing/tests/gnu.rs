@@ -165,7 +165,8 @@ fn gnu_surface_smoke() {
     for source in samples {
         with_parse_configuration(
             &format!("{source}\n"),
-            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow),
+            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true),
             |p| {
                 assert_eq!(parser_errors(p).count(), 0, "{source}\n{:?}", p.errors);
             },
@@ -200,7 +201,7 @@ fn reserved_gnu_syntax_keeps_ast_under_every_policy_and_mode() {
                     |p| {
                         assert_eq!(
                             parser_errors(p).count(),
-                            0,
+                            usize::from(!gnu && standard < CStandard::C2y),
                             "{standard:?} {gnu} {policy:?}: {:?}",
                             p.errors
                         );
@@ -240,7 +241,7 @@ fn reserved_gnu_syntax_keeps_ast_under_every_policy_and_mode() {
                             ));
                             assert_eq!(
                                 extensions.iter().any(|x| x.contains("case range")),
-                                standard < CStandard::C2y
+                                gnu && standard < CStandard::C2y
                             );
                         }
                     },
@@ -502,7 +503,8 @@ fn gnu_nodes_preserve_typed_children_and_inspection() {
         modern::SyntaxOperand,
     };
     let source = include_str!("../../../../tests/fixtures/diagnostics/language/gnu-parser.c");
-    with_parse_configuration(source, CompilerConfiguration::default(), |p| {
+    let configuration = CompilerConfiguration::default().with_gnu_extensions(true);
+    with_parse_configuration(source, configuration, |p| {
         assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
         let assemblies: Vec<_> = p.parser.syntax.iter::<Asm<'_>>().collect();
         assert_eq!(assemblies.len(), 4);
@@ -537,7 +539,7 @@ fn gnu_nodes_preserve_typed_children_and_inspection() {
         assert!(matches!(designators[0].kind, DesignatorType::Range(_)));
         assert!(matches!(designators[1].kind, DesignatorType::GnuField(_)));
     });
-    super::with_parsed(source, |unit, context| {
+    super::with_parsed_in(source, configuration, |unit, context| {
         assert!(context.pop_pending_error().is_none());
         let output = unit.inspect(
             context.tu_arena(),

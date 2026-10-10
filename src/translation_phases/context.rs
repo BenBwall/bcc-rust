@@ -4,6 +4,8 @@
 //! It connects translation phases 1-7 (§5.1.1.2, pp. 9-10; PDF pp. 21-22)
 //! and holds the diagnostics they report (§5.1.1.3p1, p. 11; PDF p. 23).
 
+mod literals;
+
 use std::{
     cell::OnceCell,
     ffi::OsStr,
@@ -14,6 +16,7 @@ use rustc_hash::FxBuildHasher;
 
 use super::{
     ErrorSeverity,
+    GetPosition,
     GetSeverity,
     TranslationError,
     provenance::{
@@ -32,7 +35,6 @@ use crate::{
         parsing::ParserError,
         preprocessing::{
             KeywordTokenType,
-            LiteralId,
             LiteralUnit,
             PreprocessorError,
         },
@@ -502,142 +504,6 @@ impl<'tu> Context<'tu> {
             .sum()
     }
 
-    pub(crate) fn intern_literal(&mut self, units: &[LiteralUnit]) -> LiteralId {
-        let tu = self.tu;
-        LiteralId(
-            self.literal_values
-                .intern_by(units, || tu.alloc_slice_copy(units)),
-        )
-    }
-
-    pub(crate) fn literal_units(&self, id: LiteralId) -> &[LiteralUnit] {
-        self.literal_values[id.0]
-    }
-
-    /// Execution code units of an L-prefixed string, excluding its terminator.
-    /// Original source units remain available for diagnostics and inspection.
-    /// C99: implementation-defined encoding §6.4.5p5, pp. 62-63; PDF pp. 74-75.
-    pub(crate) fn wide_literal_units(&self, id: LiteralId) -> impl Iterator<Item = u32> + '_ {
-        let utf16 = self.configuration.target().layout().wide_utf16();
-        self.literal_units(id).iter().flat_map(move |unit| {
-            let mut units = [0; 2];
-            let count = match *unit {
-                | LiteralUnit::Character(c) if utf16 => {
-                    let mut encoded = [0; 2];
-                    let n = c.encode_utf16(&mut encoded).len();
-                    units = encoded.map(u32::from);
-                    n
-                },
-                | LiteralUnit::Character(c) => {
-                    units[0] = u32::from(c);
-                    1
-                },
-                | LiteralUnit::Numeric(code) => {
-                    units[0] = code;
-                    1
-                },
-            };
-            units.into_iter().take(count)
-        })
-    }
-
-    /// The literal's characters spelled in `arena`, if they are text.
-    /// Text-only consumers (filenames and tests) must reject non-UTF-8
-    /// values.
-    pub(crate) fn literal_text_in<'a>(
-        &self,
-        arena: &'a Bump,
-        id: LiteralId,
-        wide: bool,
-    ) -> Option<&'a str> {
-        let text = self.decode_literal_text(arena, id, wide)?.leak();
-        // SAFETY: decoding checked that these bytes are UTF-8.
-        Some(unsafe { std::str::from_utf8_unchecked(text) })
-    }
-
-    /// The literal's characters as UTF-8 in `arena`, if they are text.
-    fn decode_literal_text<'a>(
-        &self,
-        arena: &'a Bump,
-        id: LiteralId,
-        wide: bool,
-    ) -> Option<ArenaVec<'a, u8>> {
-        let mut text = ArenaVec::new_in(arena);
-        for unit in self.literal_units(id) {
-            let character = match *unit {
-                | LiteralUnit::Character(c) => c,
-                | LiteralUnit::Numeric(code) if wide => char::from_u32(code)?,
-                | LiteralUnit::Numeric(code) => {
-                    text.push(u8::try_from(code).expect("narrow escape checked during decoding"));
-                    continue;
-                },
-            };
-            text.extend_from_slice(character.encode_utf8(&mut [0; 4]).as_bytes());
-        }
-        std::str::from_utf8(&text).is_ok().then_some(text)
-    }
-
-    /// The literal as a C string literal in `arena`: quoted and escaped when
-    /// its characters are text, and as numeric escapes otherwise. The text is
-    /// decoded in `scratch` and taken back, unless something else is
-    /// allocated there meanwhile.
-    /// `prefix` selects byte decoding for ordinary/UTF-8 strings and full
-    /// code-unit decoding for `L`, `u`, and `U` strings.
-    ///
-    /// C11: numeric escapes use the corresponding character type,
-    /// §6.4.4.4 paragraph 9, p. 69; PDF p. 87; string element types are
-    /// specified by §6.4.5 paragraph 6, p. 71; PDF p. 89.
-    pub(crate) fn literal_spelling_in<'a>(
-        &self,
-        arena: &'a Bump,
-        scratch: &Bump,
-        id: LiteralId,
-        prefix: &str,
-    ) -> &'a str {
-        let wide = matches!(prefix, "L" | "u" | "U");
-        let mut spelling = ArenaString::new_in(arena);
-        let text = self.decode_literal_text(scratch, id, wide);
-        let text = text
-            .as_deref()
-            .and_then(|text| std::str::from_utf8(text).ok());
-        self.write_literal_spelling(&mut spelling, text, id, prefix)
-            .expect("arena formatting cannot fail");
-        spelling.into_str()
-    }
-
-    /// Writes the literal as a C string literal: quoted and escaped when
-    /// `text` holds its characters, and as numeric escapes otherwise.
-    fn write_literal_spelling(
-        &self,
-        out: &mut impl std::fmt::Write,
-        text: Option<&str>,
-        id: LiteralId,
-        prefix: &str,
-    ) -> std::fmt::Result {
-        let wide = matches!(prefix, "L" | "u" | "U");
-        if let Some(text) = text {
-            return crate::diagnostics::write_c_quoted(out, prefix, '"', text);
-        }
-        out.write_str(prefix)?;
-        out.write_char('"')?;
-        for unit in self.literal_units(id) {
-            match *unit {
-                | LiteralUnit::Character(c) if wide => write!(out, "\\x{:x}", u32::from(c))?,
-                | LiteralUnit::Numeric(code) if wide => write!(out, "\\x{code:x}")?,
-                | LiteralUnit::Character(c) =>
-                    for byte in c.encode_utf8(&mut [0; 4]).bytes() {
-                        write!(out, "\\{byte:03o}")?;
-                    },
-                | LiteralUnit::Numeric(code) => write!(
-                    out,
-                    "\\{:03o}",
-                    u8::try_from(code).expect("narrow escape checked during decoding")
-                )?,
-            }
-        }
-        out.write_char('"')
-    }
-
     pub(crate) fn push_source_vector(
         &mut self,
         start_position: SourcePosition,
@@ -892,6 +758,13 @@ impl<'tu> Context<'tu> {
         self.retained_vectors
             .push(SourceVector::new(start_position, source_file_index, length));
         SourceArena::Retained.encode(start, end)
+    }
+
+    /// Retains a zero-width diagnostic anchor immediately after `vector`.
+    /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
+    pub(crate) fn retain_source_end(&mut self, vector: &SourceVector) -> SourceVectors {
+        let anchor = vector.end_anchor();
+        self.create_retained_source_vectors(anchor.position(self), anchor.source_file_index, 0)
     }
 
     /// Discards the preprocessor provenance arena once nothing but pending
@@ -1201,6 +1074,45 @@ impl<'tu> Context<'tu> {
         &self.arena(arena)[start..start + source_vectors.length() as usize]
     }
 
+    /// Copies the first vector, or the default vector when no source is
+    /// available. This fallback is for internal preprocessing state, not
+    /// diagnostic positions.
+    /// C99: provenance across §5.1.1.2, pp. 9-10; PDF pp. 21-22.
+    pub(crate) fn first_source_vector_or_default(&self, source: SourceVectors) -> SourceVector {
+        self.get_source_vectors(source)
+            .first()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Copies the ordered source vectors into the caller's arena so they
+    /// survive changes to the context's provenance stores. Empty ranges
+    /// remain empty.
+    /// C99: provenance across §5.1.1.2, pp. 9-10; PDF pp. 21-22.
+    pub(crate) fn copy_source_vectors_in<'a>(
+        &self,
+        source: SourceVectors,
+        arena: &'a Bump,
+    ) -> &'a [SourceVector] {
+        arena.alloc_slice_fill_iter(self.get_source_vectors(source).iter().cloned())
+    }
+
+    /// Returns the primary diagnostic position from a non-empty source range.
+    /// A zero-width vector is a valid location; a range with no vectors is not.
+    /// Empty ranges assert in debug builds, so tests catch them; a release
+    /// build falls back to the default position instead of panicking.
+    /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
+    #[inline(always)]
+    pub(crate) fn diagnostic_position(&self, source: SourceVectors) -> SourcePosition {
+        debug_assert!(
+            source.length() != 0,
+            "diagnostic primary source range must be non-empty"
+        );
+        self.get_source_vectors(source)
+            .first()
+            .map_or_else(SourcePosition::default, |vector| vector.position(self))
+    }
+
     pub(super) fn first_source_vector(&self, source_vectors: SourceVectors) -> &SourceVector {
         let (arena, start) = SourceArena::decode(source_vectors);
         &self.arena(arena)[start as usize]
@@ -1331,12 +1243,16 @@ impl<'tu> Context<'tu> {
     /// header. The location's first source vector is its spelling: for a
     /// token from a macro expansion, the macro's replacement list. Errors
     /// are never withheld.
+    /// The primary range must be non-empty even if the diagnostic is withheld.
+    /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
     pub(crate) fn withholds(
         &self,
         severity: ErrorSeverity,
         extension: bool,
         source_vectors: SourceVectors,
     ) -> bool {
+        #[cfg(debug_assertions)]
+        let _ = self.diagnostic_position(source_vectors);
         (extension || severity == ErrorSeverity::Warning)
             && !self.system_headers.is_empty()
             && source_vectors.length() != 0
@@ -1524,6 +1440,92 @@ mod tests {
         SourceArena,
         SourceVector,
     };
+
+    #[test]
+    fn source_helpers_preserve_order_and_copies_survive_compaction() {
+        let tu = crate::util::bump::Bump::new();
+        let phase = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let position = super::SourcePosition {
+            index:  7,
+            line:   2,
+            column: 3,
+        };
+        let source = context.create_source_vectors(position, 4, 2);
+        let other = context.create_source_vectors(
+            super::SourcePosition {
+                index:  12,
+                line:   3,
+                column: 1,
+            },
+            5,
+            1,
+        );
+        let source = context.merge_vectors(source, other);
+        let expected = context.get_source_vectors(source).to_vec();
+        let parser = context.retain_token_source(source);
+        let retained = context.create_retained_source_vectors(position, 4, 2);
+        for range in [source, parser, retained] {
+            assert_eq!(context.first_source_vector_or_default(range), expected[0]);
+            assert_eq!(context.diagnostic_position(range), position);
+        }
+        let copy = context.copy_source_vectors_in(source, &phase);
+        let empty = super::SourceVectors::empty();
+        assert_eq!(
+            context.first_source_vector_or_default(empty),
+            SourceVector::default()
+        );
+        assert_eq!(context.copy_source_vectors_in(empty, &phase), []);
+        context.compact_preprocessor_vectors();
+        assert_eq!(copy, expected);
+        assert_eq!(context.get_source_vectors(parser), expected);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "diagnostic primary source range must be non-empty")]
+    fn diagnostic_positions_reject_empty_ranges_even_with_vectors_in_the_store() {
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        _ = context.create_source_vectors(super::SourcePosition::default(), 0, 1);
+        _ = context.diagnostic_position(super::SourceVectors::empty());
+    }
+
+    #[test]
+    fn retained_end_anchors_keep_the_file_line_and_end_column() {
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        for length in [0, 4] {
+            let vector = SourceVector {
+                index: 10,
+                column: 6,
+                line: 3,
+                source_file_index: 2,
+                length,
+            };
+            let source = context.retain_source_end(&vector);
+            assert_eq!(source.length(), 1);
+            assert_eq!(
+                context.get_source_vectors(source),
+                &[SourceVector {
+                    index: 10 + length,
+                    column: 6 + length,
+                    length: 0,
+                    ..vector
+                }]
+            );
+            assert_eq!(
+                context.diagnostic_position(source),
+                super::SourcePosition {
+                    index:  (10 + length) as usize,
+                    line:   3,
+                    column: 6 + length,
+                }
+            );
+            context.compact_preprocessor_vectors();
+            assert_eq!(context.get_source_vectors(source)[0].length, 0);
+        }
+    }
 
     #[test]
     fn source_arena_accepts_the_last_representable_vector() {

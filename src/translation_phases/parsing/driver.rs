@@ -78,7 +78,6 @@ use crate::{
         GetPosition,
         GetSeverity,
         GetSourceFileIndex,
-        SourcePosition,
         SourceVector,
         SourceVectors,
         TranslationError,
@@ -234,10 +233,9 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 },
                 | _ => continue,
             };
-            let vectors =
-                arena.alloc_slice_fill_iter(context.get_source_vectors(source).iter().cloned());
+            let vectors = context.copy_source_vectors_in(source, arena);
             token_diagnostics
-                .entry((spelling, &*vectors, context.user_source_end(source)))
+                .entry((spelling, vectors, context.user_source_end(source)))
                 .or_insert_with(|| ArenaQueue::new_in(arena))
                 .push_back(occurrence);
         }
@@ -910,6 +908,26 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// diagnostic under §5.1.1.3, p. 11; PDF p. 23: implementations must
     /// “produce at least one diagnostic message”.
     pub(super) fn report(&mut self, error_type: ParserErrorType<'tu>, token: Option<Token>) {
+        self.report_with_feature(error_type, token, None);
+    }
+
+    /// Typed extension diagnostic, including non-accepted syntax.
+    /// C99: §4p6, p. 7; PDF p. 19; §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(super) fn extension_diagnostic(
+        &mut self,
+        feature: crate::configuration::Feature,
+        error_type: ParserErrorType<'tu>,
+        token: Option<Token>,
+    ) {
+        self.report_with_feature(error_type, token, Some(feature));
+    }
+
+    fn report_with_feature(
+        &mut self,
+        error_type: ParserErrorType<'tu>,
+        token: Option<Token>,
+        feature: Option<crate::configuration::Feature>,
+    ) {
         let warning_group = error_type.warning_group();
         if warning_group == Some(ParserWarningGroup::RepeatedSpecifiers)
             && !self.context.configuration.repeated_specifier_warnings()
@@ -953,13 +971,14 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         } else {
             None
         };
-        self.context.parser_error(ParserError {
+        let error = ParserError {
             code: error_type.code(),
-            severity: if matches!(error_type, ParserErrorType::MemberDeclaresNothing)
-                && self.context.configuration.extension_policy()
-                    == crate::configuration::ExtensionPolicy::Deny
-            {
-                ErrorSeverity::Error
+            severity: if matches!(error_type, ParserErrorType::MemberDeclaresNothing) {
+                crate::translation_phases::policy_severity(
+                    self.context.configuration.extension_policy(),
+                    crate::translation_phases::DiagnosticPolicy::Warning,
+                )
+                .unwrap_or(ErrorSeverity::Warning)
             } else {
                 error_type.severity()
             },
@@ -979,7 +998,17 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 .context
                 .user_source_end(source_vectors)
                 .map(|location| (location.source_file_index, location.index)),
-        });
+        };
+        if let Some(feature) = feature {
+            self.context.report_extension_diagnostic(
+                feature,
+                crate::translation_phases::DiagnosticPolicy::Extension,
+                source_vectors,
+                |severity| TranslationError::Parsing(ParserError { severity, ..error }),
+            );
+        } else {
+            self.context.parser_error(error);
+        }
     }
 
     /// Attaches a "missing `;`" suggestion after `source` to the diagnostic
@@ -988,16 +1017,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         let Some(last) = self.context.user_source_end(source) else {
             return;
         };
-        let column = last.column + last.length;
-        let insertion_point = self.context.create_retained_source_vectors(
-            SourcePosition {
-                index: last.end(),
-                line: last.line,
-                column,
-            },
-            last.source_file_index,
-            0,
-        );
+        let insertion_point = self.context.retain_source_end(&last);
         let related = self.context.diagnostic_slice(&[RelatedParserDiagnostic {
             message:        "not a function, so later declarations were read as its parameters",
             source_vectors: source,
@@ -1008,7 +1028,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         }
     }
 
-    /// Returns an empty range just after the previous token when `found`
+    /// Returns a zero-width anchor just after the previous token when `found`
     /// starts a later line of the same file: the likely place of a missing
     /// `;`.
     fn semicolon_insertion_point(&mut self, found: Option<Token>) -> Option<SourceVectors> {
@@ -1022,16 +1042,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         if previous.source_file_index != next.source_file_index || previous.line >= next.line {
             return None;
         }
-        let column = previous.column + previous.length;
-        Some(self.context.create_retained_source_vectors(
-            SourcePosition {
-                index: previous.end(),
-                line: previous.line,
-                column,
-            },
-            previous.source_file_index,
-            0,
-        ))
+        Some(self.context.retain_source_end(&previous))
     }
 
     /// Adds a token's provenance to an optional accumulated source range.
@@ -1040,10 +1051,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// §5.1.1.3 and footnote 8, p. 11; PDF p. 23. `SourceVectors` is the
     /// implementation's macro/include provenance mechanism.
     pub(super) fn merge_source(&mut self, existing: &mut Option<SourceVectors>, token: Token) {
-        *existing = Some(existing.map_or(token.source_vectors, |source_vectors| {
-            self.context
-                .merge_vectors(source_vectors, token.source_vectors)
-        }));
+        self.context.merge_into(existing, token.source_vectors);
     }
 
     /// Reports a syntax feature through the shared mode policy.
@@ -1083,13 +1091,13 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         token.is_some_and(|x| self.declaration_starter(x))
     }
 
-    /// Reports unambiguous C99 grammar absent from the grouped feature table.
+    /// Reports the C99 array-parameter syntax feature.
     /// C99: array declarators §6.7.5 paragraph 1, p. 114; PDF p. 126.
     pub(super) fn c99_syntax_extension(&mut self, spelling: &'static str, token: Token) {
         if self.pedantic_suppression == 0 {
-            self.context.report_extension_since(
+            self.context.report_extension(
+                crate::configuration::Feature::ArrayParameterSyntax,
                 spelling,
-                crate::configuration::FeatureOrigin::Standard(crate::configuration::CStandard::C99),
                 token.source_vectors,
             );
         }

@@ -27,7 +27,9 @@ use crate::translation_phases::{
 };
 
 /// Intrinsics supporting standard headers are available even in strict modes.
-pub(super) fn modeled(keyword: KeywordTokenType) -> bool {
+/// GCC/Clang implementation keywords extending C99 §7.15, pp. 249-252;
+/// PDF pp. 261-264 and §7.17p3, p. 254; PDF p. 266.
+pub(crate) fn modeled(keyword: KeywordTokenType) -> bool {
     matches!(
         keyword,
         KeywordTokenType::BuiltinVaArg
@@ -44,6 +46,9 @@ pub(super) fn modeled(keyword: KeywordTokenType) -> bool {
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GNU typeof preserves the operand's declared type, without decay.
+    /// GNU extension: GCC manual, "Typeof".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Typeof.html>
+    /// C23: §6.7.3.6 paragraphs 4-5, p. 118; PDF p. 131.
     pub(super) fn operand_type(&self, operand: SyntaxOperand<'tu>) -> TypeId {
         match operand {
             | SyntaxOperand::Expression(e) => self.expression_info(e).ty,

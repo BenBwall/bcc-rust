@@ -20,7 +20,7 @@ use crate::{
 };
 
 /// Canonical unqualified type identity plus its compact qualifier set.
-/// C99: §6.2.5p26, p. 37; PDF p. 49; §6.7.3, pp. 108-109; PDF pp. 120-121.
+/// C99: §6.2.5p26, p. 36; PDF p. 48; §6.7.3, pp. 108-109; PDF pp. 120-121.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct TypeId {
     pub(crate) index:      usize,
@@ -99,9 +99,11 @@ pub(crate) struct Member {
 }
 
 impl Member {
-    /// Unnamed bit-fields do not participate in initialization (C99
-    /// §6.7.8p9, p. 126; PDF p. 138); an anonymous member's members belong
-    /// to the containing record, so it does.
+    /// Unnamed bit-fields do not participate in initialization; anonymous
+    /// structure/union members contribute their members to the containing
+    /// record.
+    /// C99: §6.7.8 paragraph 9, p. 126; PDF p. 138.
+    /// C11: §6.7.2.1 paragraph 13, p. 115; PDF p. 133.
     pub(crate) const fn initializable(&self) -> bool {
         self.name.is_some() || self.anonymous
     }
@@ -172,8 +174,9 @@ pub(crate) struct Tag<'tu> {
     pub(crate) complete:          Cell<bool>,
     pub(crate) tainted:           Cell<bool>,
     pub(crate) contains_flexible: Cell<bool>,
-    /// The integer type an enumeration is compatible with, fixed when its
-    /// list completes (§6.7.2.2p4, p. 105; PDF p. 117).
+    /// The implementation-defined compatible integer type fixed at enum
+    /// completion.
+    /// C99: §6.7.2.2 paragraph 4, p. 105; PDF p. 117.
     pub(crate) compatible:        Cell<Scalar>,
 }
 
@@ -192,9 +195,12 @@ pub(crate) enum TypeKind<'tu> {
         variadic:   bool,
     },
     Tag(usize),
-    /// C11: §6.2.5p20 and §6.7.2.4; distinct from the underlying type.
+    /// An atomic type is distinct from its corresponding non-atomic type.
+    /// C11: §6.2.5 paragraph 27, p. 43; PDF p. 61.
     Atomic(TypeId),
     /// GCC Vector Extensions: arithmetic element, lane count and ABI alignment.
+    /// GNU extension: GCC manual, "Vector Extensions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
     Vector {
         element: TypeId,
         count:   u64,
@@ -366,7 +372,8 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         self.keys[&TypeKind::Unknown]
     }
 
-    /// C11 §6.3.2.1p2: value conversions remove atomicity.
+    /// Removes atomicity as required by lvalue value conversion.
+    /// C11: §6.3.2.1 paragraph 2, p. 54; PDF p. 72.
     pub(crate) fn non_atomic(&self, ty: TypeId) -> TypeId {
         match self.nodes[ty.index] {
             | TypeKind::Atomic(value) => value.qualified(ty.qualifiers),
@@ -393,7 +400,8 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
 
     /// A variable or `[*]` array derivation reached through arrays, pointers
     /// atomic wrappers or function results; constant time for shared typedef
-    /// graphs. C99: §6.7.5p3, p. 114; PDF p. 126; §6.7.5.2p2, p. 116; PDF
+    /// graphs. C99: §6.7.5p3, pp. 114-115; PDF pp. 126-127; §6.7.5.2p2, p. 116;
+    /// PDF
     /// p. 128. C11: §6.7.6p3, p. 129; PDF p. 147.
     pub(crate) fn variably_modified(&self, ty: TypeId) -> bool {
         self.variably_modified[ty.index]
@@ -456,9 +464,9 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     }
 
     /// Compatibility and composite construction use an explicit postorder
-    /// stack. C99: §6.2.7p1-4, pp. 40-41; PDF pp. 52-53; §6.7.5.1p2, p.
-    /// 115; PDF p. 127; §6.7.5.2p6, p. 117; PDF p. 129; §6.7.5.3p15, p.
-    /// 119; PDF p. 131.
+    /// stack. C99: §6.2.7p1-4, p. 40; PDF p. 52; §6.7.5.1p2, p.
+    /// 115; PDF p. 127; §6.7.5.2p6, p. 117; PDF p. 129; §6.7.5.3p15, pp.
+    /// 119-120; PDF pp. 131-132.
     #[expect(
         clippy::many_single_char_names,
         reason = "Paired type derivations use conventional left/right algebra names."

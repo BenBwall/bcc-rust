@@ -51,6 +51,8 @@ use crate::{
 /// template, constraint and clobber string literals keep their provenance;
 /// C operands are parsed syntax children. `sections` counts the colons.
 /// C99: extension to §6.8, p. 131; PDF p. 143 and §6.7.5, p. 114; PDF p. 126.
+/// GNU extension: GCC manual, "Extended Asm".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Asm<'tu> {
     pub(crate) qualifiers:     AsmQualifiers,
@@ -64,12 +66,17 @@ pub(crate) struct Asm<'tu> {
     pub(crate) recovered:      bool,
 }
 /// The qualifiers written before a GNU assembly statement's `(`.
+/// GNU extension: GCC manual, "Extended Asm".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub(crate) struct AsmQualifiers {
     pub(crate) volatile: bool,
     pub(crate) inline:   bool,
     pub(crate) goto:     bool,
 }
+/// One GNU output/input operand with an optional symbolic name.
+/// GNU extension: GCC manual, "Extended Asm".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct AsmOperand<'tu> {
     pub(crate) name:       Option<Identifier>,
@@ -79,6 +86,10 @@ pub(crate) struct AsmOperand<'tu> {
 }
 /// Typed GNU builtin operands. Offset member paths use their own namespace.
 /// C99: extension to primary expressions §6.5.1, p. 69; PDF p. 81.
+/// GNU extension: GCC manual, "Other Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+/// GNU extension: GCC manual, "Offsetof".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Offsetof.html>
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Builtin<'tu> {
     pub(crate) keyword:        KeywordTokenType,
@@ -87,6 +98,10 @@ pub(crate) struct Builtin<'tu> {
     pub(crate) source_vectors: SourceVectors,
     pub(crate) recovered:      bool,
 }
+/// A field or array-index suffix in an offsetof member designator.
+/// GNU extension: GCC manual, "Offsetof".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Offsetof.html>
+/// C99: §7.17 paragraph 3, p. 254; PDF p. 266.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum OffsetMember<'tu> {
     Field(Identifier),
@@ -98,12 +113,26 @@ pub(super) enum GnuValue<'tu> {
     Builtin(&'tu Builtin<'tu>),
     LocalLabels(ArenaList<'tu, Identifier>, SourceVectors),
 }
+/// Selects GNU assembly, builtin operand or local-label grammar.
+/// GNU extension: GCC manual, "Extended Asm".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
+/// GNU extension: GCC manual, "Other Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+/// GNU extension: GCC manual, "Local Labels".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum GnuKind {
     Asm { label: bool },
     Builtin(KeywordTokenType),
     LocalLabels,
 }
+/// Resumable positions in GNU assembly, builtin and local-label grammar.
+/// GNU extension: GCC manual, "Extended Asm".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
+/// GNU extension: GCC manual, "Other Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+/// GNU extension: GCC manual, "Local Labels".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
 #[derive(Debug, Clone, Copy)]
 enum Phase {
     Start,
@@ -133,6 +162,12 @@ enum Phase {
 }
 /// GNU delimiter owner; all expression/type children run on the parser stack.
 /// C99: vendor extension to §6.5 and §6.8, pp. 67-139; PDF pp. 79-151.
+/// GNU extension: GCC manual, "Extended Asm".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
+/// GNU extension: GCC manual, "Other Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+/// GNU extension: GCC manual, "Local Labels".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
 #[derive(Debug)]
 pub(super) struct GnuFrame<'tu, 'p> {
     kind:                    GnuKind,
@@ -209,6 +244,14 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
         }
     }
 
+    /// Parses GNU assembly operands, builtin arguments and local-label
+    /// declarations.
+    /// GNU extension: GCC manual, "Extended Asm".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
+    /// GNU extension: GCC manual, "Other Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    /// GNU extension: GCC manual, "Local Labels".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
     pub(super) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
@@ -225,7 +268,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                 if let Some(token) = token {
                     // Reserved `__asm` has a deferred GNU/MSVC origin when
                     // both grammars are enabled; this owner chose GNU syntax.
-                    if token.contents == KeywordTokenType::MsAsm.cache_id()
+                    if token.uses_ambiguous_asm(parser.context.configuration)
                         && matches!(token.kind, TokenType::Keyword(KeywordTokenType::MsAsm))
                     {
                         parser.extension(crate::configuration::Feature::GnuAsm, "__asm", token);

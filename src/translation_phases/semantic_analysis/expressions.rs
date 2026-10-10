@@ -2,6 +2,10 @@
 //! C99: §6.3, pp. 42-50; PDF pp. 54-62; §6.5, pp. 67-94; PDF pp. 79-106.
 //! Statement control flow and return conversion are Stage 3 responsibilities.
 
+mod address;
+
+pub(crate) use address::AddressBase;
+
 use super::{
     super::preprocessing::{
         CharacterTokenType,
@@ -16,7 +20,6 @@ use super::{
     ArrayBound,
     BinaryOperator,
     BindingKind,
-    CStandard,
     ConditionalExpression,
     Constant,
     Duration,
@@ -39,7 +42,7 @@ use super::{
 use crate::float_parsing::LongDouble;
 
 /// The category before contextual lvalue conversion or decay.
-/// C99: §6.3.2.1p1-4, pp. 46-47; PDF pp. 58-59.
+/// C99: §6.3.2.1p1-4, p. 46; PDF p. 58.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ValueCategory {
     Lvalue,
@@ -126,21 +129,15 @@ pub(crate) enum ConversionKind {
     Assignment,
     DefaultArgument,
 }
+/// One contextual conversion and its resulting type.
+/// C99: §6.3.2.1 paragraphs 2-4, p. 46; PDF p. 58.
+/// C99: §6.5.2.2 paragraphs 6-7, pp. 71-72; PDF pp. 83-84.
+/// C99: §6.5.16.1 paragraph 2, p. 92; PDF p. 104.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Conversion<'tu> {
     pub(crate) expression: &'tu Expression<'tu>,
     pub(crate) ty:         TypeId,
     pub(crate) kind:       ConversionKind,
-}
-
-/// The object an address constant is based on. C99: §6.6p9, p. 96; PDF
-/// p. 108.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum AddressBase<'tu> {
-    /// An integer-valued pointer constant such as a null pointer.
-    Absolute,
-    Binding(usize),
-    String(&'tu Expression<'tu>),
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
@@ -188,6 +185,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Checks recursive const membership when classifying modifiable lvalues.
+    /// C99: §6.3.2.1 paragraph 1, p. 46; PDF p. 58.
     fn contains_const(&mut self, ty: TypeId) -> bool {
         let mut pending = ArenaVec::new_in(self.scratch);
         pending.push((ty, false));
@@ -241,12 +240,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.types.complete_object(ty)
     }
 
+    /// Classifies integer and floating types as arithmetic types.
+    /// C99: §6.2.5 paragraph 18, p. 35; PDF p. 47.
     pub(super) fn arithmetic(&self, ty: TypeId) -> bool {
         let ty = self.types.non_atomic(ty);
         self.integer_type(ty).is_some()
             || matches!(self.types.nodes[ty.index], TypeKind::Scalar(s) if s != Scalar::Void)
     }
 
+    /// Classifies integer and real floating types for relational operators.
+    /// C99: §6.2.5 paragraph 17, p. 35; PDF p. 47.
     fn real(&self, ty: TypeId) -> bool {
         self.integer_type(ty).is_some()
             || matches!(
@@ -257,12 +260,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             )
     }
 
+    /// Classifies arithmetic and pointer types as scalar types.
+    /// C99: §6.2.5 paragraph 21, p. 36; PDF p. 48.
     pub(super) fn scalar_type(&self, ty: TypeId) -> bool {
         self.arithmetic(ty) || self.pointer_target(ty).is_some()
     }
 
     /// Pointer arithmetic needs a complete object type (§6.5.6p2); an
     /// unanalyzed target, such as a GNU vector, is not checked.
+    /// C99: §6.5.6 paragraphs 2-3, pp. 82-83; PDF pp. 94-95.
     fn pointer_arithmetic_target(&self, target: TypeId) -> bool {
         self.complete_object(target) || self.types.unanalyzed(target)
     }
@@ -284,7 +290,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         });
     }
 
-    /// C99: §6.3.2.1p2-4, pp. 46-47; PDF pp. 58-59.
+    /// C99: §6.3.2.1p2-4, p. 46; PDF p. 58.
     pub(super) fn converted(&mut self, info: ExpressionInfo<'tu>) -> TypeId {
         let (ty, kind) = match self.types.nodes[info.ty.index] {
             | TypeKind::Array(element, _) => (
@@ -311,7 +317,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ty
     }
 
-    /// C99: §6.3.1.1p2, p. 42; PDF p. 54. Bit-field width can promote an
+    /// C99: §6.3.1.1p2, pp. 42-43; PDF pp. 54-55. Bit-field width can promote
+    /// an
     /// unsigned int field to int when all its values fit.
     pub(super) fn promote(&mut self, info: ExpressionInfo<'tu>, ty: TypeId) -> TypeId {
         // An enumeration's compatible type has at least the rank of int, so
@@ -460,7 +467,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// C99: §6.3.2.3p3, p. 48; PDF p. 60.
+    /// C99: §6.3.2.3p3, p. 47; PDF p. 59.
     pub(super) fn null_pointer_constant(&self, info: ExpressionInfo<'tu>) -> bool {
         (info.ice && info.integer.is_some_and(|v| v.value == 0))
             || (matches!(self.types.nodes[info.ty.index], TypeKind::Pointer(target) if matches!(self.types.nodes[target.index], TypeKind::Scalar(Scalar::Void)))
@@ -512,6 +519,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .is_some()
     }
 
+    /// Checks compatible pointer targets, allowing object/void pairs where
+    /// required.
+    /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
+    /// C99: §6.5.9 paragraph 2, p. 86; PDF p. 98.
     fn pointer_compatible(&mut self, left: TypeId, right: TypeId, void: bool) -> bool {
         if self.types.unanalyzed(left) || self.types.unanalyzed(right) {
             return true;
@@ -530,9 +541,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .is_some()
     }
 
-    /// C89 §3.3.2.2 implicit function declarations; GNU modes retain the
-    /// removed feature. Strict C99 and later require a declaration (§6.5.1p2,
-    /// p. 69; PDF p. 81).
+    /// C89 implicit function declarations are retained in GNU modes.
+    /// Strict C99 and later require a declaration.
+    /// C89: §3.3.2.2, p. 41; PDF p. 55.
+    /// C99: §6.5.1 paragraph 2, p. 69; PDF p. 81.
     pub(super) fn implicit_function(&mut self, mut e: &'tu Expression<'tu>) {
         if self.tainted {
             return;
@@ -570,7 +582,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if let ExpressionType::Identifier(name) = e.kind
             && self.lookup(Namespace::Ordinary, name.name).is_none()
-            && (self.context.configuration.standard() < CStandard::C99
+            && (self
+                .context
+                .configuration
+                .is_native(crate::configuration::Feature::ImplicitFunctionDeclaration)
                 || self.context.configuration.gnu_extensions())
         {
             let result = self.types.scalar(Scalar::Int);
@@ -596,9 +611,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// GCC builtins are reserved identifiers (C99 §7.1.3p1, p. 165; PDF p.
-    /// 177) that the implementation declares; an undeclared one is an
-    /// unmodeled function rather than an implicit `int` declaration.
+    /// GCC builtins use reserved identifiers declared by the implementation;
+    /// an undeclared builtin retains an unmodeled result rather than implicit
+    /// int.
+    /// C99: §7.1.3 paragraph 1, p. 166; PDF p. 178.
     pub(super) fn builtin_name(&self, name: Identifier) -> bool {
         super::atomics::modeled(self.context.string_cache.at(name.name))
             || self
@@ -611,6 +627,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GCC's `__builtin_constant_p` folds to whether its operand is an
     /// arithmetic constant; it returns `int` and is valid where a constant
     /// is required. GNU extension; C99: §6.6p10, p. 96; PDF p. 108.
+    /// GNU extension: GCC manual, "Other Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     fn constant_p(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -651,215 +669,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(info)
     }
 
-    /// The integer that the address of an lvalue reached from an
-    /// integer-valued pointer constant folds to, as in the classic `offsetof`
-    /// macro.
-    fn integer_address(&self, e: &'tu Expression<'tu>) -> Option<i128> {
-        match self.address_parts(e, true)? {
-            | (AddressBase::Absolute, offset) => Some(offset),
-            | _ => None,
-        }
-    }
-
-    /// Splits a pointer value (or, with `lvalue`, an lvalue's address) into
-    /// the object it is based on and a byte offset, following member,
-    /// subscript, cast and integer-offset steps. GCC folds differences of
-    /// such addresses, which §6.6p10 lets an implementation accept as
-    /// constant expressions. Each step has one address operand, so this is a
-    /// loop rather than recursion over syntax.
-    pub(super) fn address_parts(
-        &self,
-        mut e: &'tu Expression<'tu>,
-        mut lvalue: bool,
-    ) -> Option<(AddressBase<'tu>, i128)> {
-        let mut offset = 0_i128;
-        loop {
-            if let ExpressionType::Parenthesized { expression } = e.kind {
-                e = expression;
-                continue;
-            }
-            let info = self.expression_info(e);
-            if let Some(selected) = info.selected_expression {
-                e = selected;
-                continue;
-            }
-            if !lvalue {
-                if matches!(
-                    self.types.nodes[info.ty.index],
-                    TypeKind::Array(..) | TypeKind::Function { .. }
-                ) {
-                    // The decayed value addresses the designated object.
-                    lvalue = true;
-                    continue;
-                }
-                match e.kind {
-                    | ExpressionType::Cast {
-                        operand_expression, ..
-                    } => {
-                        let operand = self.expression_info(operand_expression);
-                        if operand.ice
-                            && let Some(value) = operand.integer
-                        {
-                            return Some((
-                                AddressBase::Absolute,
-                                offset.checked_add(if self.pointer_target(info.ty).is_some() {
-                                    info.integer?.to_i128()?
-                                } else {
-                                    value.to_i128()?
-                                })?,
-                            ));
-                        }
-                        e = operand_expression;
-                    },
-                    | ExpressionType::Unary {
-                        operator: UnaryOperator::AddressOf,
-                        operand_expression,
-                    } => {
-                        lvalue = true;
-                        e = operand_expression;
-                    },
-                    | ExpressionType::Binary {
-                        operator:
-                            operator @ (BinaryOperator::Addition | BinaryOperator::Subtraction),
-                        left_expression,
-                        right_expression,
-                    } => {
-                        let left = self.expression_info(left_expression);
-                        let right = self.expression_info(right_expression);
-                        let (pointer, index) = if right.ice {
-                            (left, right)
-                        } else {
-                            (right, left)
-                        };
-                        let index = index.integer.filter(|_| index.ice)?.to_i128()?;
-                        let target = self.pointer_target(info.ty)?;
-                        let size = i128::from(self.types.layout(target)?.size);
-                        let step = index.checked_mul(size)?;
-                        offset = if operator == BinaryOperator::Addition {
-                            offset.checked_add(step)?
-                        } else if std::ptr::eq(pointer.expression, left_expression) {
-                            offset.checked_sub(step)?
-                        } else {
-                            return None;
-                        };
-                        e = pointer.expression;
-                    },
-                    | _ => {
-                        let value = Self::pointer_value(info)?;
-                        return Some((AddressBase::Absolute, offset.checked_add(value)?));
-                    },
-                }
-                continue;
-            }
-            match e.kind {
-                | ExpressionType::Identifier(_) =>
-                    return Some((AddressBase::Binding(info.binding?), offset)),
-                | ExpressionType::StringLiteral(_) =>
-                    return Some((AddressBase::String(e), offset)),
-                | ExpressionType::DirectMember {
-                    base_expression,
-                    member,
-                }
-                | ExpressionType::IndirectMember {
-                    base_expression,
-                    member,
-                } => {
-                    let base = self.expression_info(base_expression);
-                    let indirect = matches!(e.kind, ExpressionType::IndirectMember { .. });
-                    let record = if indirect {
-                        self.pointer_target(base.ty)?
-                    } else {
-                        base.ty
-                    };
-                    let TypeKind::Tag(id) = self.types.nodes[record.index] else {
-                        return None;
-                    };
-                    let index = *self.member_indices.get(&(id, member.name))?;
-                    let field = self.types.tags[id].fields.get().get(index)?;
-                    offset = offset.checked_add(i128::from(field.offset))?;
-                    lvalue = !indirect;
-                    e = base_expression;
-                },
-                | ExpressionType::Binary {
-                    operator: BinaryOperator::Subscript,
-                    left_expression,
-                    right_expression,
-                } => {
-                    let left = self.expression_info(left_expression);
-                    let right = self.expression_info(right_expression);
-                    let (pointer, index) = if right.ice {
-                        (left, right)
-                    } else {
-                        (right, left)
-                    };
-                    let index = index.integer.filter(|_| index.ice)?.to_i128()?;
-                    let size = i128::from(self.types.layout(info.ty)?.size);
-                    offset = offset.checked_add(index.checked_mul(size)?)?;
-                    lvalue = false;
-                    e = pointer.expression;
-                },
-                | ExpressionType::Unary {
-                    operator: UnaryOperator::Indirection,
-                    operand_expression,
-                } => {
-                    lvalue = false;
-                    e = operand_expression;
-                },
-                | _ => return None,
-            }
-        }
-    }
-
-    /// Whether two address bases designate the same object; identical string
-    /// literals are merged, as GCC does.
-    fn same_address_base(&self, left: AddressBase<'tu>, right: AddressBase<'tu>) -> bool {
-        match (left, right) {
-            | (AddressBase::Absolute, AddressBase::Absolute) => true,
-            | (AddressBase::Binding(l), AddressBase::Binding(r)) => l == r,
-            | (AddressBase::String(l), AddressBase::String(r)) => match (l.kind, r.kind) {
-                | (
-                    ExpressionType::StringLiteral(StringTokenType::String(l)),
-                    ExpressionType::StringLiteral(StringTokenType::String(r)),
-                )
-                | (
-                    ExpressionType::StringLiteral(StringTokenType::WideString(l)),
-                    ExpressionType::StringLiteral(StringTokenType::WideString(r)),
-                ) => self.context.literal_units(l) == self.context.literal_units(r),
-                | _ => false,
-            },
-            | _ => false,
-        }
-    }
-
-    /// The element distance between two addresses of one object.
-    /// C99: §6.5.6p9, pp. 83-84; PDF pp. 95-96.
-    fn address_difference(
-        &self,
-        left: ExpressionInfo<'tu>,
-        right: ExpressionInfo<'tu>,
-        target: TypeId,
-    ) -> Option<Integer> {
-        let (left_base, left_offset) = self.address_parts(left.expression, false)?;
-        let (right_base, right_offset) = self.address_parts(right.expression, false)?;
-        let size = self.types.layout(target)?.size;
-        let bytes = left_offset.checked_sub(right_offset)?;
-        // Divide 64-bit magnitudes; i128 division is unavailable (see
-        // integer.rs).
-        let magnitude = u64::try_from(bytes.unsigned_abs()).ok()?;
-        if !self.same_address_base(left_base, right_base) || size == 0 || magnitude % size != 0 {
-            return None;
-        }
-        let elements = i128::from(magnitude / size);
-        Some(Integer::int(if bytes < 0 { -elements } else { elements }).cast(64, true))
-    }
-
-    fn pointer_value(info: ExpressionInfo<'tu>) -> Option<i128> {
-        (info.constant == ConstantClass::Address)
-            .then_some(info.integer)
-            .flatten()
-            .map(|v| v.value)
-    }
-
+    /// Checks integer switch expressions and scalar selection/iteration
+    /// conditions.
+    /// C99: §6.8.4.1 paragraph 1, p. 133; PDF p. 145.
+    /// C99: §6.8.4.2 paragraph 1, p. 134; PDF p. 146.
+    /// C99: §6.8.5 paragraph 2, p. 135; PDF p. 147.
     pub(super) fn check_condition(&mut self, mut slot: ExpressionSlot<'tu>, integer: bool) {
         while let ExpressionSlot::Selection(header) = slot {
             let Some(e) = header.expression else {
@@ -1136,7 +950,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     vector_callee = expression;
                 }
                 info = if let ExpressionType::Identifier(name) = vector_callee.kind
-                    && self.context.string_cache.at(name.name) == "__builtin_shufflevector"
+                    && super::vectors::named_builtin(self.context.string_cache.at(name.name))
                 {
                     self.context.report_extension(
                         crate::configuration::Feature::VectorBuiltins,
@@ -1282,7 +1096,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.expressions.push(info);
     }
 
-    /// C99: §6.4.5p5-6, p. 63; PDF p. 75. The count includes the final
+    /// C99: §6.4.5p5-6, pp. 62-63; PDF pp. 74-75. The count includes the final
     /// zero; narrow source characters contribute their UTF-8 code units.
     pub(super) fn string_type(&mut self, value: StringTokenType) -> Option<(TypeId, u64)> {
         let (id, wide) = match value {
@@ -1328,7 +1142,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Self::expression_result(e, self.types.unknown())
     }
 
-    /// C99: §6.5.3.4p1-5, pp. 80-81; PDF pp. 92-93.
+    /// C99: §6.5.3.4p1-5, p. 80; PDF p. 92.
     /// Alignment: C11 §6.5.3.4p3, p. 90; PDF p. 108 (extension in C99).
     fn type_sizeof(
         &mut self,
@@ -1500,15 +1314,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.constant = ConstantClass::Arithmetic;
         }
         info
-    }
-
-    pub(super) fn address_value(&self, info: ExpressionInfo<'tu>) -> bool {
-        info.constant == ConstantClass::Address
-            || (info.static_address
-                && matches!(
-                    self.types.nodes[info.ty.index],
-                    TypeKind::Array(..) | TypeKind::Function { .. }
-                ))
     }
 
     /// C99: §6.5.4p2-4, p. 81; PDF p. 93.

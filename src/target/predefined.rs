@@ -7,7 +7,9 @@ use super::Target;
 use crate::util::bump::Bump;
 
 impl Target {
-    /// C23 adds `char8_t` atomic lock-free macros; MSVC omits GCC spellings.
+    /// Clang and GCC expose char8 atomic lock-free macros with C23 keywords;
+    /// Clang's MSVC target omits GCC spellings. C23: §7.17.1 paragraph 4,
+    /// p. 293; PDF p. 306 specifies the corresponding header macro.
     pub(crate) fn atomic_c23_macros(self) -> &'static str {
         match self {
             | Self::LinuxGnu => include_str!("x86_64-unknown-linux-gnu-atomic-c23.h"),
@@ -60,6 +62,55 @@ mod tests {
     /// The Clang flag matching the `_MSC_VER` (1933) that bcc predefines;
     /// `scripts/update_target_macros.py` passes the same flag.
     const MSVC_COMPATIBILITY_VERSION: &str = "-fms-compatibility-version=19.33";
+
+    #[test]
+    fn char8_atomic_definitions_equal_live_clang_in_each_language_mode() {
+        use std::{
+            collections::BTreeSet,
+            process::Command,
+        };
+        let clang = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
+            "target/llvm/bin/clang.exe"
+        } else {
+            "target/llvm/bin/clang"
+        });
+        for target in [
+            Target::LinuxGnu,
+            Target::LinuxMusl,
+            Target::WindowsGnu,
+            Target::WindowsMsvc,
+        ] {
+            for mode in ["c17", "gnu17", "c23", "gnu23"] {
+                let output = Command::new(&clang)
+                    .args([
+                        format!("--target={}", target.triple()),
+                        format!("-std={mode}"),
+                    ])
+                    .args([
+                        MSVC_COMPATIBILITY_VERSION,
+                        "-dM",
+                        "-E",
+                        "-x",
+                        "c",
+                        if cfg!(windows) { "NUL" } else { "/dev/null" },
+                    ])
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{output:?}");
+                let reference = String::from_utf8(output.stdout).unwrap();
+                let actual: BTreeSet<_> = reference
+                    .lines()
+                    .filter(|line| line.contains("_ATOMIC_CHAR8_T_LOCK_FREE "))
+                    .collect();
+                let expected: BTreeSet<_> = if matches!(mode, "c23" | "gnu23") {
+                    target.atomic_c23_macros().lines().collect()
+                } else {
+                    BTreeSet::new()
+                };
+                assert_eq!(actual, expected, "{} {mode}", target.triple());
+            }
+        }
+    }
 
     #[test]
     fn msvc_compatibility_version_matches_the_predefined_msc_ver() {

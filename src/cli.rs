@@ -716,9 +716,13 @@ fn print_preprocessor_output_in<'tu>(
         errors = reporter.errors;
         warnings = reporter.warnings;
         drop(reporter);
+        // The reporter's copied locations and folding state are gone; only
+        // counts survive, and no raw pointer into its arena is retained.
         reporter_arena.reset();
         match token {
             | Some(token) => {
+                // The previous token description was written synchronously;
+                // neither the token nor context borrows this scratch arena.
                 scratch.reset();
                 expect_stderr(writeln!(
                     out,

@@ -522,7 +522,6 @@ impl Renderer {
         match severity {
             | ErrorSeverity::Error => Style::new().bright_red().bold(),
             | ErrorSeverity::Warning => Style::new().bright_yellow().bold(),
-            | ErrorSeverity::Note => Style::new().bright_green().bold(),
         }
     }
 
@@ -599,6 +598,8 @@ impl Renderer {
         diagnostic: &Diagnostic<'_>,
         context: &Context<'_>,
     ) -> &str {
+        // The previous text's borrow has ended; no raw scratch pointer is
+        // retained in the renderer, diagnostic, or context.
         self.scratch.reset();
         self.render_in_scratch(diagnostic, context)
     }
@@ -611,6 +612,8 @@ impl Renderer {
         reason = "Test-only owned copies, compiled only under `cfg(test)`."
     )]
     pub(crate) fn render(&mut self, diagnostic: &OwnedDiagnostic, context: &Context<'_>) -> String {
+        // Previous output was copied into owned text; no scratch pointer
+        // survives between renders.
         self.scratch.reset();
         let diagnostic = diagnostic.borrowed(&self.scratch);
         self.render_in_scratch(&diagnostic, context).to_owned()
@@ -623,7 +626,6 @@ impl Renderer {
         let severity = match diagnostic.severity {
             | ErrorSeverity::Error => "error:",
             | ErrorSeverity::Warning => "warning:",
-            | ErrorSeverity::Note => "note:",
         };
         let _ = writeln!(
             out,

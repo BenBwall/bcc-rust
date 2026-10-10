@@ -262,28 +262,19 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::HashHashAtVaOptBoundary
             | PreprocessorErrorType::ErrorDirective(..)
              => ErrorSeverity::Error,
-            | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(policy)
-            | PreprocessorErrorType::DefinedFromFunctionLikeMacroExpansion(policy)
-            | PreprocessorErrorType::MissingVariadicArgument(policy)
-            | PreprocessorErrorType::BackslashInQuotedHeaderName(policy) =>
-                match policy {
-                    | ExtensionPolicy::Allow => unreachable!(
-                        "allowed extensions produce no diagnostic"
-                    ),
-                    | ExtensionPolicy::Warn => ErrorSeverity::Warning,
-                    | ExtensionPolicy::Deny => ErrorSeverity::Error,
-                },
+            | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(severity)
+            | PreprocessorErrorType::DefinedFromFunctionLikeMacroExpansion(severity)
+            | PreprocessorErrorType::MissingVariadicArgument(severity)
+            | PreprocessorErrorType::BackslashInQuotedHeaderName(severity)
+            | PreprocessorErrorType::DefinedFromObjectLikeMacroExpansion(severity) => severity,
             | PreprocessorErrorType::VaArgsOutsideVariadicMacro(policy)
             | PreprocessorErrorType::VaOptOutsideVariadicMacro(policy)
             | PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(_, policy)
             | PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(_, policy)
             | PreprocessorErrorType::MacroRedefinedWithDifferentDefinition(_, policy) =>
-                match policy {
-                | ExtensionPolicy::Allow | ExtensionPolicy::Warn => ErrorSeverity::Warning,
-                | ExtensionPolicy::Deny => ErrorSeverity::Error,
-            },
+                crate::translation_phases::policy_severity(policy, crate::translation_phases::DiagnosticPolicy::Warning)
+                    .unwrap_or(ErrorSeverity::Warning),
             | PreprocessorErrorType::RedefinitionOfBuiltInMacro(..)
-            | PreprocessorErrorType::DefinedFromObjectLikeMacroExpansion
             | PreprocessorErrorType::UndefinitionOfBuiltInMacro(..)
             | PreprocessorErrorType::MissingWhitespaceAfterMacroName(..)
             | PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(..)
@@ -468,7 +459,7 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// An evaluated comma operator, an extension under the policy.
     ///
     /// C99: §6.6 paragraph 3, p. 95; PDF p. 107.
-    CommaOperatorInPreprocessorExpression(ExtensionPolicy),
+    CommaOperatorInPreprocessorExpression(ErrorSeverity),
     BinaryOperatorInsteadOfUnaryExpressionInPreprocessorExpression(PreprocessorExpressionOperator),
     // C99: a zero divisor is undefined, §6.5.5 paragraph 5, p. 82; PDF p. 94.
     DivideByZero,
@@ -524,14 +515,14 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// under every policy.
     ///
     /// C99: §6.10.1 paragraph 4, p. 148; PDF p. 160.
-    DefinedFromObjectLikeMacroExpansion,
+    DefinedFromObjectLikeMacroExpansion(ErrorSeverity),
     /// A `defined` operator that a function-like macro's replacement list
     /// produced. The behavior is undefined; it is evaluated as GCC and Clang
     /// do, and like Clang's pedantic `-Wexpansion-to-defined` it is an
     /// extension under the policy.
     ///
     /// C99: §6.10.1 paragraph 4, p. 148; PDF p. 160.
-    DefinedFromFunctionLikeMacroExpansion(ExtensionPolicy),
+    DefinedFromFunctionLikeMacroExpansion(ErrorSeverity),
     // C99: `# if constant-expression` and `# elif constant-expression`,
     // §6.10 paragraph 1, p. 145; PDF p. 157.
     NoConditionInIfDirective,
@@ -604,7 +595,7 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     ///
     /// C99: undefined by §6.4.7 paragraph 3, pp. 64-65; PDF pp. 76-77; the
     /// extension is permitted by §4 paragraph 6, p. 7; PDF p. 19.
-    BackslashInQuotedHeaderName(ExtensionPolicy),
+    BackslashInQuotedHeaderName(ErrorSeverity),
     UnexpectedEndOfInput(&'static str),
     /// C99: §6.10.3 paragraph 4, p. 151; PDF p. 163.
     WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
@@ -615,7 +606,7 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     ///
     /// C99: §6.10.3 paragraph 4, p. 151; PDF p. 163, requires one; omitting
     /// it is an extension under the policy.
-    MissingVariadicArgument(ExtensionPolicy),
+    MissingVariadicArgument(ErrorSeverity),
     // C99: a `#include` must name a header or source file that can be
     // processed, §6.10.2 paragraph 1, p. 149; PDF p. 161.
     HeaderNotFound {
@@ -1074,7 +1065,7 @@ impl PreprocessorErrorType<'_> {
                 kind.found(spelling)
             ))
             .label("expected `)`"),
-            | Self::DefinedFromObjectLikeMacroExpansion => defined_from_expansion().help(
+            | Self::DefinedFromObjectLikeMacroExpansion(_) => defined_from_expansion().help(
                 "test the macro name in `#if defined(NAME)` and define this macro as `1` or `0` \
                  instead",
             ),

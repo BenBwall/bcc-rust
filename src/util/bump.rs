@@ -96,7 +96,10 @@ impl Bump {
     /// padding and blocks a reset later reclaimed.
     #[cfg_attr(
         not(any(test, feature = "benchmarking-internals")),
-        expect(dead_code, reason = "Only measurements read the high-water mark.")
+        expect(
+            dead_code,
+            reason = "Only tests and measurements read the high-water mark."
+        )
     )]
     pub(crate) fn high_water(&self) -> usize {
         self.inner.borrow().high_water
@@ -139,8 +142,9 @@ impl Bump {
         unsafe {
             typed.as_ptr().write(value);
         }
-        // SAFETY: the region cannot move, and reset/drop require exclusive
-        // access to self.
+        // SAFETY: the write above initialized this fresh block, which nothing
+        // else refers to. The region cannot move, and reset/drop require
+        // exclusive access to self, so the block outlives the borrow.
         unsafe { &mut *typed.as_ptr() }
     }
 
@@ -154,13 +158,14 @@ impl Bump {
             .allocate(layout)
             .unwrap_or_else(|_| handle_alloc_error(layout));
         let typed = ptr.cast::<T>();
-        // SAFETY: source and new arena allocation do not overlap, and both
-        // cover `values.len()` items.
+        // SAFETY: source and new arena allocation do not overlap, both cover
+        // `values.len()` items, and both are aligned for `T`.
         unsafe {
             ptr::copy_nonoverlapping(values.as_ptr(), typed.as_ptr(), values.len());
         }
-        // SAFETY: all elements were initialized above and remain live with the
-        // arena.
+        // SAFETY: the fresh block, aligned for `T` and referred to by nothing
+        // else, holds `values.len()` elements initialized above; it remains
+        // live with the arena.
         unsafe { std::slice::from_raw_parts_mut(typed.as_ptr(), values.len()) }
     }
 
@@ -205,9 +210,8 @@ impl Bump {
             }
         }
         let bytes = bytes.into_slice();
-        if std::str::from_utf8(bytes).is_ok() {
-            // SAFETY: UTF-8 validation above covered these exact bytes.
-            return Ok(unsafe { std::str::from_utf8_unchecked(bytes) });
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            return Ok(text);
         }
 
         let mut repaired = self.tail_vec();
@@ -282,6 +286,11 @@ impl Bump {
     }
 
     /// Rewind the arena while retaining its committed pages for reuse.
+    ///
+    /// This invalidates every allocation and raw pointer previously obtained
+    /// from the arena. Raw pointers carry no borrow, so they may still exist
+    /// when this safe method is called; using them afterwards is the caller's
+    /// bug, even if a new allocation reuses the same address.
     pub(crate) fn reset(&mut self) {
         let inner = self.inner.get_mut();
         inner.used = 0;
@@ -370,12 +379,21 @@ impl Inner {
 }
 
 // SAFETY: each returned block belongs to a stable reservation. Moving Bump
-// does not move that reservation; reset/drop require exclusive access.
+// does not move it. Blocks stay valid until deallocated, resized, reset, or
+// dropped. Reset/drop invalidate every allocation and raw pointer; callers
+// must stop using them, since raw pointers carry no borrow. Tail rollback
+// invalidates only the abandoned tail, never earlier allocations.
 unsafe impl Allocator for Bump {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         self.inner.borrow_mut().allocate(layout)
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must denote a block currently allocated by this allocator, and
+    /// `layout` must fit it as defined by [`Allocator`]. No pointer to the
+    /// block may be used afterwards. Reset or release of the arena invalidates
+    /// all blocks, so a pointer retained across either cannot be deallocated.
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         if layout.size() == 0 {
             return;
@@ -390,6 +408,14 @@ unsafe impl Allocator for Bump {
         }
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must denote a block currently allocated by this allocator, and
+    /// `old_layout` must fit it as defined by [`Allocator`].
+    /// `new_layout.size()` must be at least `old_layout.size()`. On
+    /// success, use only the returned pointer, even if the address is
+    /// unchanged; on failure the old block remains valid. Reset or release
+    /// invalidates all blocks and raw pointers.
     unsafe fn grow(
         &self,
         ptr: NonNull<u8>,
@@ -424,33 +450,52 @@ unsafe impl Allocator for Bump {
             }
         }
         let new_ptr = self.allocate(new_layout)?;
-        // SAFETY: caller guarantees the old block is live; the fresh allocation
-        // is disjoint and large enough for the old contents.
+        // SAFETY: the caller guarantees the old block is live and fits
+        // `old_layout`, which is no larger than `new_layout`; the fresh
+        // allocation is disjoint and holds at least `new_layout.size()` bytes.
         unsafe {
             ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.as_ptr().cast(), old_layout.size());
         }
         Ok(new_ptr)
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must denote a block currently allocated by this allocator, and
+    /// `old_layout` must fit it as defined by [`Allocator`].
+    /// `new_layout.size()` must be at least `old_layout.size()`. On
+    /// success, use only the returned pointer, even if the address is
+    /// unchanged; on failure the old block remains valid. Reset or release
+    /// invalidates all blocks and raw pointers.
     unsafe fn grow_zeroed(
         &self,
         ptr: NonNull<u8>,
         old_layout: Layout,
         new_layout: Layout,
     ) -> Result<NonNull<[u8]>, AllocError> {
-        // SAFETY: the caller supplies a live old allocation and a larger
-        // layout.
+        // SAFETY: `grow_zeroed` has `grow`'s contract, so the caller supplies
+        // a live old allocation that fits `old_layout` and a layout at least
+        // as large.
         let grown = unsafe { self.grow(ptr, old_layout, new_layout) }?;
         // SAFETY: the returned allocation contains at least `new_layout.size()`
-        // bytes.
+        // bytes, and `old_layout.size()` is no larger.
         let tail = unsafe { grown.as_ptr().cast::<u8>().add(old_layout.size()) };
-        // SAFETY: the tail contains the newly allocated, writable bytes.
+        // SAFETY: the tail, from `old_layout.size()` to `new_layout.size()`,
+        // lies inside the returned block, which the caller may write.
         unsafe {
             tail.write_bytes(0, new_layout.size() - old_layout.size());
         }
         Ok(grown)
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must denote a block currently allocated by this allocator, and
+    /// `old_layout` must fit it as defined by [`Allocator`].
+    /// `new_layout.size()` must be at most `old_layout.size()`. On success,
+    /// use only the returned pointer, even if the address is unchanged; on
+    /// failure the old block remains valid. Reset or release invalidates
+    /// all blocks and raw pointers.
     unsafe fn shrink(
         &self,
         ptr: NonNull<u8>,
@@ -571,6 +616,8 @@ impl<'a, T: Copy> TailVec<'a, T> {
 
     /// Closes the tail, keeping exactly the written elements in the arena
     /// and returning the rest of the reservation to it.
+    /// Raw pointers into the returned elements remain valid until arena reset
+    /// or release; pointers into the reclaimed tail must not be used again.
     pub(crate) fn into_slice(self) -> &'a mut [T] {
         let this = ManuallyDrop::new(self);
         let mut inner = this.arena.inner.borrow_mut();
@@ -592,9 +639,14 @@ impl<'a, T: Copy> TailVec<'a, T> {
 
 impl<T: Copy> Drop for TailVec<'_, T> {
     /// Closes the tail without keeping anything; the elements need no drop.
+    /// Every raw pointer into this tail is invalidated. Raw pointers carry no
+    /// borrow; using one after this rollback is the caller's bug. Allocations
+    /// preceding the tail remain valid.
     fn drop(&mut self) {
         let mut inner = self.arena.inner.borrow_mut();
         inner.tail = None;
+        // Only this vector owns the abandoned tail; earlier blocks end at
+        // `restore`, and no tail element or raw pointer is used after drop.
         inner.used = self.restore;
         inner.last = self.restore_last;
     }
@@ -638,14 +690,16 @@ impl<'a> ArenaString<'a> {
     }
 
     pub(crate) fn as_str(&self) -> &str {
-        // SAFETY: construction and mutation only append valid UTF-8 sequences.
+        // SAFETY: mutation only appends whole UTF-8 strings or clears, so the
+        // bytes are always valid UTF-8.
         unsafe { std::str::from_utf8_unchecked(&self.bytes) }
     }
 
     /// Finishes the string, leaving its text in the arena.
     pub(crate) fn into_str(self) -> &'a str {
         let bytes = self.bytes.leak();
-        // SAFETY: construction and mutation only append valid UTF-8 sequences.
+        // SAFETY: mutation only appends whole UTF-8 strings or clears, so the
+        // bytes are always valid UTF-8.
         unsafe { std::str::from_utf8_unchecked(bytes) }
     }
 }
@@ -896,10 +950,12 @@ mod tests {
         // SAFETY: `first` is live and `new` is larger.
         let grown = unsafe { arena.grow(first, old, new) }.unwrap().cast::<u8>();
         assert_eq!(first, grown);
-        // SAFETY: `grown` is live and has 32 initialized bytes at its start.
+        // SAFETY: `grown` is live, and growing kept its first eight
+        // initialized bytes.
         assert_eq!(unsafe { *grown.as_ptr() }, 0x5A);
         _ = arena.allocate(old).unwrap();
-        // SAFETY: `grown` is still live and `new` is larger than `old`.
+        // SAFETY: `grown` is still live and fits `new`, and the 64-byte
+        // layout is larger.
         let copied = unsafe { arena.grow(grown, new, Layout::from_size_align(64, 8).unwrap()) }
             .unwrap()
             .cast::<u8>();
@@ -924,8 +980,8 @@ mod tests {
             .cast::<u8>();
         assert_eq!(grown, first);
         assert!(arena.committed() >= new.size());
-        // SAFETY: all reads lie in the live grown allocation; the new tail
-        // was initialized by `grow_zeroed`.
+        // SAFETY: the first byte lies in the live grown allocation, written
+        // before growing and kept in place.
         assert_eq!(unsafe { grown.as_ptr().read() }, 0xA5);
         // SAFETY: this is the first byte of the initialized tail.
         assert_eq!(unsafe { grown.as_ptr().wrapping_add(old.size()).read() }, 0);
@@ -943,12 +999,14 @@ mod tests {
         // SAFETY: `ptr` is live and the new layout is smaller.
         let shrunk = unsafe { arena.shrink(ptr, large, small) }.unwrap();
         assert_eq!(shrunk.cast::<u8>(), ptr);
-        // SAFETY: the returned block fits `small`, and `large` is larger.
-        let regrown = unsafe { arena.grow(ptr, small, large) }.unwrap();
+        // SAFETY: `shrunk` is the live block that `shrink` returned; it fits
+        // `small`, and `large` is larger.
+        let regrown = unsafe { arena.grow(shrunk.cast(), small, large) }.unwrap();
         assert_eq!(regrown.cast::<u8>(), ptr);
-        // SAFETY: the latest block is live and fits `small`.
+        // SAFETY: `regrown` is the live block that `grow` returned, and it
+        // fits `large`.
         unsafe {
-            arena.deallocate(ptr, small);
+            arena.deallocate(regrown.cast(), large);
         }
         assert_eq!(arena.used(), 0);
     }

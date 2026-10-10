@@ -45,6 +45,8 @@ pub(crate) enum SemanticErrorKind {
     /// C99: §6.7.1p5, p. 98; PDF p. 110 forbids static on a block-scope
     /// function. GNU nested definitions have no linkage, so GCC rejects
     /// extern on them too.
+    /// GNU extension: GCC manual, "Nested Functions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Nested-Functions.html>
     NestedFunctionStorage,
     /// C99: §6.9.1p3, p. 141; PDF p. 153.
     IncompleteFunctionReturn,
@@ -54,7 +56,7 @@ pub(crate) enum SemanticErrorKind {
     UnnamedDefinitionParameter,
     /// C99: §6.7.5.3p4, p. 118; PDF p. 130.
     IncompleteDefinitionParameter,
-    /// C99: §6.7.5.2p4, p. 117; PDF p. 129.
+    /// C99: §6.7.5.2p4, pp. 116-117; PDF pp. 128-129.
     DefinitionStarArray,
     /// C99: §5.1.2.2.1p1, p. 12; PDF p. 24.
     MainSignature,
@@ -84,15 +86,19 @@ pub(crate) enum SemanticErrorKind {
     InvalidReturnConversion,
     /// C99: §6.8.5p3, p. 135; PDF p. 147.
     InvalidForDeclaration,
-    /// C99: §6.8.1p3, p. 131; PDF p. 143.
+    /// C99: §6.8.1p3, p. 132; PDF p. 144.
     DuplicateLabel,
     /// C99: §6.8.6.1p1, p. 137; PDF p. 149.
     UndefinedLabel,
     /// GNU extension: local labels have lexical scope, unlike the function
     /// scope in C99 §6.2.1p3, p. 29; PDF p. 41.
+    /// GNU extension: GCC manual, "Local Labels".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
     DuplicateLocalLabel,
     /// GNU extension: a local-label declaration requires a definition.
     /// C99 labels are implicit definitions: §6.2.1p3, p. 29; PDF p. 41.
+    /// GNU extension: GCC manual, "Local Labels".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
     UndefinedLocalLabel,
     /// C99: §6.8.6.1p1, p. 137; PDF p. 149.
     JumpIntoVariableScope,
@@ -101,6 +107,8 @@ pub(crate) enum SemanticErrorKind {
     /// C99: §6.8.1p2, p. 131; PDF p. 143.
     CaseOutsideSwitch,
     /// C99: §6.8.4.2p3, p. 134; PDF p. 146.
+    /// GNU extension: GCC manual, "Case Ranges".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html>
     EmptyCaseRange,
     /// C99: §6.8.6.3p1, p. 138; PDF p. 150.
     BreakOutsideLoopOrSwitch,
@@ -123,7 +131,7 @@ pub(crate) enum SemanticErrorKind {
     InvalidSubscript,
     /// C99: §6.5.5p2, p. 82; PDF p. 94.
     InvalidArithmeticOperands,
-    /// C99: §6.5.6p2-3, p. 82; PDF p. 94.
+    /// C99: §6.5.6p2-3, pp. 82-83; PDF pp. 94-95.
     InvalidAdditiveOperands,
     /// C99: §6.5.7p2, p. 84; PDF p. 96.
     InvalidIntegerOperands,
@@ -196,7 +204,7 @@ pub(crate) enum SemanticErrorKind {
     IncompatibleDeclaration,
     /// C99: §6.7p3, p. 97; PDF p. 109.
     DuplicateDeclaration,
-    /// C99: §6.2.2p4-7, p. 30-31; PDF p. 42-43.
+    /// C99: §6.2.2p4-7, pp. 30-31; PDF pp. 42-43.
     ConflictingLinkage,
     /// C99: §6.7.2.3p2, p. 106; PDF p. 118.
     TagKindMismatch,
@@ -227,27 +235,56 @@ pub(crate) enum SemanticErrorKind {
     IncompleteObject,
     /// C11: §6.7.2.4p3, p. 121; PDF p. 139; §6.7.3p3.
     InvalidAtomicType,
-    /// C11: §6.5.1.1p2, p. 78; PDF p. 96.
+    /// C11: §6.5.1.1p2, p. 79; PDF p. 97.
     InvalidGenericSelection,
     /// Clang/GCC type-generic atomic builtin constraints.
+    /// Clang extension: Clang Language Extensions, "C11 atomic builtins".
+    /// <https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins>
+    /// GNU extension: GCC manual, "__atomic Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+    /// GNU extension: GCC manual, "__sync Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
     InvalidAtomicOperand,
     /// Clang diagnoses invalid constant orders as warnings.
+    /// GNU extension: GCC manual, "__atomic Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
     InvalidAtomicOrder,
     /// Compare-exchange failure order cannot release.
+    /// GNU extension: GCC manual, "__atomic Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+    /// C11: §7.17.7.4 paragraph 2, p. 283; PDF p. 301.
     InvalidAtomicFailureOrder,
     /// Clang warns when expected/output buffers discard qualifiers.
+    /// GNU extension: GCC manual, "__atomic Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+    /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
     AtomicBufferQualifiers,
     /// GCC Additional Floating Types, target availability.
+    /// GNU extension: GCC manual, "Floating Types".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Floating-Types.html>
     UnsupportedFloat128,
     /// GCC Other Builtins: `choose_expr` requires an integer constant.
+    /// GNU extension: GCC manual, "Other Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     InvalidChooseCondition,
     /// GCC Vector Extensions and Clang Vectors and Extended Vectors.
+    /// GNU extension: GCC manual, "Vector Extensions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
+    /// Clang extension: Clang Language Extensions, "Vectors and Extended
+    /// Vectors".
+    /// <https://clang.llvm.org/docs/LanguageExtensions.html#vectors-and-extended-vectors>
     InvalidVectorAttribute,
     /// GCC Vector Extensions: compatible lanes and safe scalar splats.
+    /// GNU extension: GCC manual, "Vector Extensions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
     InvalidVectorOperand,
     /// Clang Language Extensions: shuffle and conversion builtin contracts.
+    /// Clang extension: Clang Language Extensions, "Builtin Functions".
+    /// <https://clang.llvm.org/docs/LanguageExtensions.html#builtin-functions>
     InvalidVectorBuiltin,
     /// Clang x86 intrinsic immediate argument constraint.
+    /// GNU extension: GCC manual, "x86 Built-in Functions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Built-in-Functions.html>
     InvalidImmediate,
 }
 
@@ -859,10 +896,11 @@ impl SemanticErrorKind {
 /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SemanticError {
-    pub(crate) kind:           SemanticErrorKind,
-    pub(crate) source_vectors: SourceVectors,
-    pub(crate) name:           Option<StringCacheId>,
-    pub(crate) previous:       Option<SourceVectors>,
+    pub(crate) extension_severity: Option<ErrorSeverity>,
+    pub(crate) kind:               SemanticErrorKind,
+    pub(crate) source_vectors:     SourceVectors,
+    pub(crate) name:               Option<StringCacheId>,
+    pub(crate) previous:           Option<SourceVectors>,
 }
 
 impl fmt::Display for SemanticError {
@@ -873,6 +911,9 @@ impl fmt::Display for SemanticError {
 impl std::error::Error for SemanticError {}
 impl GetSeverity for SemanticError {
     fn severity(&self) -> ErrorSeverity {
+        if let Some(severity) = self.extension_severity {
+            return severity;
+        }
         if matches!(
             self.kind,
             SemanticErrorKind::QualifiedFunction
@@ -893,10 +934,7 @@ impl GetSeverity for SemanticError {
 }
 impl GetPosition for SemanticError {
     fn position(&self, context: &Context<'_>) -> SourcePosition {
-        context
-            .get_source_vectors(self.source_vectors)
-            .first()
-            .map_or_else(SourcePosition::default, |v| v.position(context))
+        self.source_vectors.position(context)
     }
 }
 impl GetSourceVectors for SemanticError {

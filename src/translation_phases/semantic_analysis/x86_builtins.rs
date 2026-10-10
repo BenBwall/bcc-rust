@@ -21,6 +21,10 @@ pub(crate) fn known(name: &str) -> bool {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Builds the declared result and parameter types of a recognized x86
+    /// intrinsic.
+    /// GNU extension: GCC manual, "x86 Built-in Functions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Built-in-Functions.html>
     pub(super) fn x86_builtin_type(&mut self, name: super::Identifier) -> Option<TypeId> {
         let i = BUILTINS
             .binary_search_by(|entry| entry.0.cmp(self.context.string_cache.at(name.name)))
@@ -89,6 +93,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(ty)
     }
 
+    /// Checks constant immediate arguments after prototype argument conversion.
+    /// GNU extension: GCC manual, "x86 Built-in Functions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Built-in-Functions.html>
+    /// C99: §6.5.2.2 paragraph 7, p. 72; PDF p. 84.
     pub(super) fn x86_immediates(
         &mut self,
         function: ExpressionInfo<'tu>,
@@ -136,6 +144,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Clang overloads these builtins by their operands; they cannot be given
     /// a single C prototype. Retain the checked operand-dependent result.
+    /// Clang extension: Clang Language Extensions, "Builtin Functions".
+    /// <https://clang.llvm.org/docs/LanguageExtensions.html#builtin-functions>
     pub(super) fn vector_overload(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -240,6 +250,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(Self::expression_result(e, self.types.unknown()))
     }
 
+    /// Checks scalar element eligibility for non-temporal load and store
+    /// builtins.
+    /// Clang extension: Clang Language Extensions, "Non-temporal load/store
+    /// builtins".
+    /// <https://clang.llvm.org/docs/LanguageExtensions.html#non-temporal-load-store-builtins>
     fn nontemporal_element(&self, ty: TypeId) -> bool {
         let element = self.vector(ty).map_or(ty, |v| v.0);
         self.integer_type(element).is_some()
@@ -253,6 +268,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GCC Other Builtins: prefetch accepts a pointer and two optional ICEs.
+    /// GNU extension: GCC manual, "Other Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     fn prefetch_builtin(
         &mut self,
         e: &'tu Expression<'tu>,

@@ -24,6 +24,7 @@ mod ffi {
         non_camel_case_types,
         non_snake_case,
         dead_code,
+        unreachable_pub,
         unused_results,
         clippy::all,
         clippy::allow_attributes,
@@ -53,7 +54,8 @@ impl LongDouble {
     }
 
     fn classify(self) -> FloatClass {
-        // SAFETY: The function only reads the value passed by copy.
+        // SAFETY: The bytes encode a host `long double` (every value comes
+        // from `ZERO` or a C helper), and the function only reads the copy.
         let class = i64::from(unsafe { ffi::long_double_classify(self.to_ffi()) });
         // Bindgen types anonymous enum constants per platform, so compare
         // through a common width.
@@ -120,8 +122,9 @@ impl LongDouble {
 impl Display for LongDouble {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut buffer = [0_u8; LONG_DOUBLE_HEX_CAPACITY];
-        // SAFETY: The buffer is writable for its full length, which is passed
-        // as the capacity; the function writes at most that many bytes.
+        // SAFETY: The bytes encode a host `long double`. The buffer is
+        // writable for its full length, which is passed as the capacity; the
+        // function writes at most that many bytes and keeps no pointer.
         let length = unsafe {
             ffi::long_double_to_hex(
                 self.to_ffi(),

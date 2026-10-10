@@ -35,7 +35,7 @@ group used to substantiate the row:
 - [P-COMPAT](./tests/fixtures/parser/compatibility/manifest.md) — reviewed,
   version-pinned strict-C99 compatibility fixtures and results.
 - [S-HANDOFF](./GLOSSARY.md#compiler-boundaries) — an explicit syntax fact
-  retained for the future semantic-analysis owner.
+  retained for semantic analysis.
 
 The standard requires at least one diagnostic when a preprocessing translation unit or translation unit violates any syntax rule or constraint. It does not require one diagnostic per violation, and it permits an implementation to continue translating invalid input after diagnosis. (§5.1.1.3, p. 11; PDF p. 23)
 

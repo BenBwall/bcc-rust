@@ -18,6 +18,13 @@ use super::{
     TypeQualifiers,
 };
 
+/// Vendor atomic intrinsic families.
+/// Clang extension: Clang Language Extensions, "C11 atomic builtins".
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins>
+/// GNU extension: GCC manual, "__atomic Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+/// GNU extension: GCC manual, "__sync Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Family {
     C11,
@@ -25,6 +32,13 @@ enum Family {
     Sync,
 }
 
+/// Atomic operations and their operand contracts.
+/// Clang extension: Clang Language Extensions, "C11 atomic builtins".
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins>
+/// GNU extension: GCC manual, "__atomic Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+/// GNU extension: GCC manual, "__sync Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Operation {
     Init,
@@ -45,6 +59,13 @@ enum Operation {
     ValueCompare,
 }
 
+/// Atomic builtin family, operation and required operand count.
+/// Clang extension: Clang Language Extensions, "C11 atomic builtins".
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins>
+/// GNU extension: GCC manual, "__atomic Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+/// GNU extension: GCC manual, "__sync Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
 #[derive(Clone, Copy)]
 struct Intrinsic {
     family:    Family,
@@ -53,6 +74,13 @@ struct Intrinsic {
     count:     usize,
 }
 
+/// Recognizes atomic builtin spellings and their signatures.
+/// Clang extension: Clang Language Extensions, "C11 atomic builtins".
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins>
+/// GNU extension: GCC manual, "__atomic Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+/// GNU extension: GCC manual, "__sync Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
 fn intrinsic(name: &str) -> Option<Intrinsic> {
     use Family as F;
     use Operation as O;
@@ -124,8 +152,12 @@ pub(crate) fn modeled(name: &str) -> bool {
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Clang/GCC type-generic atomic builtin contract, independent of lowering.
+    /// Clang extension: Clang Language Extensions, "C11 atomic builtins".
     /// <https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins>
+    /// GNU extension: GCC manual, "__atomic Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+    /// GNU extension: GCC manual, "__sync Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
     pub(super) fn atomic_call(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -333,6 +365,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(Self::expression_result(e, result))
     }
 
+    /// Applies the integer parameter conversion for an atomic order or size.
+    /// GNU extension: GCC manual, "__atomic Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+    /// C99: §6.5.2.2 paragraph 7, p. 72; PDF p. 84.
     fn atomic_integer_argument(&mut self, e: &'tu Expression<'tu>) {
         // Memory-order/size parameters have integer formal types and accept
         // ordinary scalar assignment conversions (including floating values).
@@ -340,6 +376,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.atomic_value_argument(e, integer);
     }
 
+    /// Checks and retains assignment conversion for an atomic value argument.
+    /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
+    /// C99: §6.5.2.2 paragraph 7, p. 72; PDF p. 84.
     fn atomic_value_argument(&mut self, e: &'tu Expression<'tu>, target: TypeId) {
         if !self.assignment_compatible(target, self.expression_info(e)) {
             self.error(
@@ -352,6 +391,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.convert(e, target, super::expressions::ConversionKind::Assignment);
     }
 
+    /// Checks atomic output/expected buffer types and discarded qualifiers.
+    /// GNU extension: GCC manual, "__atomic Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+    /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
     fn atomic_buffer_argument(&mut self, e: &'tu Expression<'tu>, value: TypeId) {
         let info = self.expression_info(e);
         let ty = self.converted(info);
@@ -380,6 +423,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.atomic_value_argument(e, target);
     }
 
+    /// Checks operation-specific constant memory orders, including failure
+    /// orders.
+    /// GNU extension: GCC manual, "__atomic Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+    /// C11: §7.17.7.2 paragraph 2, p. 282; PDF p. 300.
+    /// C11: §7.17.7.1 paragraph 2, p. 282; PDF p. 300.
+    /// C11: §7.17.7.4 paragraph 2, p. 283; PDF p. 301.
     fn atomic_order(&mut self, e: &'tu Expression<'tu>, operation: Operation, failure: bool) {
         self.atomic_integer_argument(e);
         let info = self.expression_info(e);
@@ -406,7 +456,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 impl Analyzer<'_, '_, '_> {
-    /// C11 §6.7.2.4p3 and §6.7.3p3; Clang also requires a complete object.
+    /// Checks atomic specifier/qualifier eligibility; Clang also requires a
+    /// complete object.
+    /// C11: §6.7.2.4 paragraph 3, p. 121; PDF p. 139.
+    /// C11: §6.7.3 paragraph 3, p. 121; PDF p. 139.
+    /// Clang extension: Clang rejects `_Atomic` on an incomplete type with
+    /// `err_atomic_specifier_bad_type` in `DiagnosticSemaKinds.td`.
     pub(super) fn atomic_type(
         &mut self,
         value: TypeId,

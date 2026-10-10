@@ -1,4 +1,4 @@
-error: function definition parameter requires a name
+warning: function definition parameter requires a name
  --> sema3-parameter-name.c:1:7
   |
 1 | int f(int) { return 0; }
@@ -6,4 +6,4 @@ error: function definition parameter requires a name
   |
   = note: C99 §6.9.1p5: each prototype-definition parameter includes an identifier, except the sole void parameter
 
-1 error generated.
+1 warning generated.

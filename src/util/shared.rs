@@ -143,8 +143,8 @@ where
     /// It is private to this module, which keeps that invariant, rather than
     /// `unsafe`.
     fn ref_cnt(&self) -> &Cell<usize> {
-        // SAFETY: self.ref_count always points to a valid instance of
-        // Cell<usize>.
+        // SAFETY: self.ref_count points to the Cell<usize> leaked by
+        // from_boxed, which is freed only after the last reference drops.
         unsafe { self.ref_count.as_ref() }
     }
 }
@@ -168,7 +168,9 @@ where
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY: self.contents always points to a valid instance of T.
+        // SAFETY: self.contents points to the leaked Box<T>, which is freed
+        // only after the last reference drops, and Shared never hands out
+        // mutable access to it.
         unsafe { self.contents.as_ref() }
     }
 }

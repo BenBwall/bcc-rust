@@ -91,8 +91,8 @@ corpus. [TinyCC aggregate test source](https://raw.githubusercontent.com/TinyCC/
 
 ## Interpreting a local parser run
 
-bcc-rust's existing [compatibility manifest](./tests/fixtures/parser/compatibility/manifest.md)
-and [C99 parser checklist](./c99-parser-compliance-checklist.md) separate syntax
+bcc-rust's existing [compatibility manifest](../../tests/fixtures/parser/compatibility/manifest.md)
+and [C99 parser checklist](../../c99-parser-compliance-checklist.md) separate syntax
 recognition from later semantic constraints. Keep that distinction in the
 external run:
 

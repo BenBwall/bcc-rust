@@ -715,8 +715,8 @@ mod measurements {
     fn statements_and_functions_allocate_only_from_arenas() {
         let source = "int a[]; extern int a[3]; static int helper(int); int (*fp(int a))(int b) \
                       {int b=a; return 0;} inline int in(int n) {static const int k=1; return \
-                      k+n;} static int helper(int n) {int a[n]; goto L; L: switch(n) {case 0 ... \
-                      2: return n; default: break;} for(int i=0;i<n;i++) {if(i) continue; break;} \
+                      k+n;} static int helper(int n) {int a[n]; goto L; L: switch(n) {case 0: \
+                      return n; default: break;} for(int i=0;i<n;i++) {if(i) continue; break;} \
                       return sizeof __func__;} int old(a,b) int a,b; {return a+b;}\n";
         let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
         assert_no_allocations("statement and function paths", summary, &allocations);
@@ -780,11 +780,48 @@ mod measurements {
                       _Thread_local int thread; _Static_assert(1,\"message\"); unsigned \
                       _BitInt(16) bits; enum E : unsigned { A [[deprecated]] }; int f(int) { int \
                       a[3]; int n=_Generic(a,int*:1,default:0); n+=_Alignof(int)+_Countof a; \
-                      if(int x=1;x) n=x; switch(n){case 1 ... 3:break;} outer: for(;;){break \
-                      outer;} label: int x=(static int){}; return n; }\n";
+                      if(int x=1;x) n=x; switch(n){case 1:break;} outer: for(;;){break outer;} \
+                      label: int x=(static int){}; return n; }\n";
         let (summary, allocations) = count_compile(|| bcc_rust::parse_source(source));
         assert_eq!(summary.external_declarations, 6);
         assert_no_allocations("ISO syntax source", summary, &allocations);
+    }
+
+    #[test]
+    fn case_range_acceptance_and_diagnostics_allocate_only_from_arenas() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/diagnostics/parser-case-range-gnu17.c");
+        for mode in ["-std=c99", "-std=c17", "-std=gnu17", "-std=c2y"] {
+            let mut buffer = [0u8; 1024];
+            let mut output = std::io::Cursor::new(buffer.as_mut_slice());
+            let mut parse_calls = None;
+            let mut report_calls = None;
+            bcc_rust::compile_file_with_arguments_measured(
+                &path,
+                &[mode],
+                &mut output,
+                |step, run| {
+                    let totals = count(false, run);
+                    match step {
+                        | bcc_rust::CompileStep::Parse => parse_calls = Some(totals),
+                        | bcc_rust::CompileStep::Report => report_calls = Some(totals),
+                    }
+                },
+            )
+            .expect("case range fixture compiles and renders");
+            assert_eq!(parse_calls, Some((0, 0)), "{mode}");
+            assert_eq!(report_calls, Some((0, 0)), "{mode}");
+            let length = usize::try_from(output.position()).unwrap();
+            let diagnostics = std::str::from_utf8(&output.get_ref()[..length]).unwrap();
+            if matches!(mode, "-std=c99" | "-std=c17") {
+                assert!(
+                    diagnostics.contains("expected a single case value in this language mode"),
+                    "{mode}: {diagnostics}"
+                );
+            } else {
+                assert_eq!(length, 0, "{mode}: {diagnostics}");
+            }
+        }
     }
 
     #[test]

@@ -507,7 +507,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     ) = token.kind
                 {
                     if keyword == KeywordTokenType::MsAsm
-                        && token.contents == KeywordTokenType::MsAsm.cache_id()
+                        && token.uses_ambiguous_asm(parser.context.configuration)
                         && parser.cursor.following().is_some_and(|next| {
                             matches!(
                                 next.kind,
@@ -929,14 +929,26 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 self.merge_constant_slot(parser.context, slot);
                 if is_operator(token, OperatorTokenType::Ellipsis) {
                     let token = token.expect("ellipsis exists");
-                    if parser.pedantic_suppression == 0
-                        && parser.context.configuration.standard()
-                            < crate::configuration::CStandard::C2y
+                    // C2y N3370 extends C99 §6.8.1p1, p. 131; PDF p. 143.
+                    // Earlier modes require GNU support; keep the range for
+                    // recovery.
+                    if parser
+                        .context
+                        .configuration
+                        .accepts(crate::configuration::Feature::CaseRanges)
                     {
-                        parser.context.report_extension_since(
+                        parser.extension(
+                            crate::configuration::Feature::CaseRanges,
                             "case range",
-                            crate::configuration::FeatureOrigin::Gnu,
-                            token.source_vectors,
+                            token,
+                        );
+                    } else {
+                        parser.report(
+                            ParserErrorType::ExpectedIsoSyntax(
+                                "a single case value in this language mode",
+                                Some(token.kind),
+                            ),
+                            Some(token),
                         );
                     }
                     self.merge_token(parser, token);
@@ -1724,10 +1736,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
 
     fn merge_statement(&mut self, context: &mut Context<'_>, statement: &'tu Statement<'tu>) {
         let source = statement.source_vectors;
-        self.source_vectors = Some(
-            self.source_vectors
-                .map_or(source, |existing| context.merge_vectors(existing, source)),
-        );
+        context.merge_into(&mut self.source_vectors, source);
     }
 
     fn parsed_slot(returned: Option<ParseValue<'tu>>) -> ExpressionSlot<'tu> {
@@ -1761,10 +1770,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | ExpressionSlot::Missing(source) => source,
         };
         if source.length() > 0 {
-            self.source_vectors = Some(
-                self.source_vectors
-                    .map_or(source, |existing| context.merge_vectors(existing, source)),
-            );
+            context.merge_into(&mut self.source_vectors, source);
         }
     }
 
@@ -1778,10 +1784,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             | ConstantExpressionSlot::Missing(source) => source,
         };
         if source.length() > 0 {
-            self.source_vectors = Some(
-                self.source_vectors
-                    .map_or(source, |existing| context.merge_vectors(existing, source)),
-            );
+            context.merge_into(&mut self.source_vectors, source);
         }
     }
 

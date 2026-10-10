@@ -31,6 +31,10 @@ use super::{
     expressions::ConversionKind,
 };
 
+/// Resumable statement scope, switch, loop and return checks.
+/// C99: §6.8.4 paragraph 3, p. 133; PDF p. 145.
+/// C99: §6.8.5 paragraphs 3-5, p. 135; PDF p. 147.
+/// C99: §6.8.6.4 paragraphs 1-3, p. 139; PDF p. 151.
 #[derive(Clone, Copy)]
 pub(super) enum StatementWork<'tu> {
     /// C99: §6.8.4p3, p. 133; PDF p. 145; §6.8.5p5, p. 135;
@@ -57,6 +61,11 @@ struct VmScope {
     depth:   usize,
 }
 
+/// A function-scoped label or a GNU local label and its definition.
+/// GNU extension: GCC manual, "Local Labels".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
+/// C99: §6.2.1 paragraph 3, p. 29; PDF p. 41.
+/// C99: §6.8.1 paragraph 3, p. 132; PDF p. 144.
 #[derive(Clone, Copy)]
 struct Label {
     local:      bool,
@@ -67,6 +76,8 @@ struct Label {
     used:       Option<Identifier>,
 }
 
+/// A goto target and the variably modified scope path at its use.
+/// C99: §6.8.6.1 paragraph 1, p. 137; PDF p. 149.
 #[derive(Clone, Copy)]
 struct Jump {
     function: usize,
@@ -75,6 +86,11 @@ struct Jump {
     vm:       Option<usize>,
 }
 
+/// A converted switch case value or inclusive GNU case interval.
+/// GNU extension: GCC manual, "Case Ranges".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html>
+/// C99: §6.8.4.2 paragraph 3, p. 134; PDF p. 146.
+/// C99: §6.8.4.2 paragraph 5, p. 134; PDF p. 146.
 #[derive(Clone, Copy)]
 struct Case {
     lower:   i128,
@@ -83,6 +99,8 @@ struct Case {
     ordinal: usize,
 }
 
+/// Promoted controlling type and scope/label state for one switch.
+/// C99: §6.8.4.2 paragraphs 2-5, p. 134; PDF p. 146.
 #[derive(Clone, Copy)]
 struct Switch<'s> {
     ty:    TypeId,
@@ -125,6 +143,12 @@ impl<'s> State<'s> {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Completes statement scope, switch promotion, for declaration and return
+    /// checks.
+    /// C99: §6.8.4 paragraph 3, p. 133; PDF p. 145.
+    /// C99: §6.8.4.2 paragraph 5, p. 134; PDF p. 146.
+    /// C99: §6.8.5 paragraphs 3-5, p. 135; PDF p. 147.
+    /// C99: §6.8.6.4 paragraphs 1-3, p. 139; PDF p. 151.
     pub(super) fn statement_work(&mut self, work: StatementWork<'tu>) {
         match work {
             | StatementWork::Substatement(statement) => {
@@ -170,9 +194,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // C99 §6.8.5p3, p. 135; PDF p. 147. C23 relaxes the
                 // restriction to object declarations in the for initializer.
                 if d.init_declarators.is_empty() {
-                    self.context.report_extension_since(
+                    self.context.report_extension(
+                        crate::configuration::Feature::ForNonVariableDeclarations,
                         "non-variable declaration in 'for' loop",
-                        crate::configuration::FeatureOrigin::Standard(CStandard::C23),
                         d.source_vectors,
                     );
                 }
@@ -255,11 +279,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if matches!(
                     self.types.nodes[info.ty.index],
                     TypeKind::Scalar(Scalar::Void)
-                ) && self.context.configuration.gnu_extensions()
+                ) && self
+                    .context
+                    .configuration
+                    .accepts(crate::configuration::Feature::VoidExpressionReturn)
                 {
-                    self.context.report_extension_since(
+                    self.context.report_extension(
+                        crate::configuration::Feature::VoidExpressionReturn,
                         "return with a void expression",
-                        crate::configuration::FeatureOrigin::Gnu,
                         source,
                     );
                 } else if !self.types.unanalyzed(info.ty) {
@@ -278,6 +305,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Records unique label definitions and goto uses in the current function.
+    /// C99: §6.8.1 paragraph 3, p. 132; PDF p. 144.
+    /// C99: §6.8.6.1 paragraph 1, p. 137; PDF p. 149.
     pub(super) fn label(&mut self, name: Identifier, definition: bool) {
         if self.tainted {
             return;
@@ -310,7 +340,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// GNU local labels participate in lexical lookup; ordinary labels have
     /// function scope. Extensions are already reported by parser owners.
-    /// C99: §6.2.1p3, p. 29; PDF p. 41; §6.8.1p3, p. 131; PDF p. 143.
+    /// C99: §6.2.1p3, p. 29; PDF p. 41; §6.8.1p3, p. 132; PDF p. 144.
+    /// GNU extension: GCC manual, "Local Labels".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
     pub(super) fn local_labels(&mut self, names: ArenaList<'tu, Identifier>) {
         if self.tainted || self.functions.current.is_none() {
             return;
@@ -340,6 +372,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Resolves GNU local labels before function-scoped ordinary labels.
+    /// GNU extension: GCC manual, "Local Labels".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
+    /// C99: §6.2.1 paragraph 3, p. 29; PDF p. 41.
     fn label_index(&mut self, name: Identifier) -> Option<usize> {
         if let Some(entry) = self.lookup(Namespace::Label, name.name) {
             return Some(entry.binding);
@@ -364,6 +400,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(index)
     }
 
+    /// Records a GNU label-address use as requiring a label definition.
+    /// GNU extension: GCC manual, "Labels as Values".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
     pub(super) fn label_address(&mut self, name: Identifier) {
         if !self.tainted
             && let Some(index) = self.label_index(name)
@@ -409,6 +448,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         result
     }
 
+    /// Finds a variably modified identifier whose scope a jump would enter.
+    /// C99: §6.8.6.1 paragraph 1, p. 137; PDF p. 149.
     fn find_entered_vm(&self, source: Option<usize>, mut target: Option<usize>) -> Option<usize> {
         let mut source = source;
         let depth = |path: Option<usize>| path.map_or(0, |p| self.statements.vm_scopes[p].depth);
@@ -432,6 +473,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         entered
     }
 
+    /// Checks label definitions and prohibits jumps into variably modified
+    /// scopes.
+    /// GNU extension: GCC manual, "Local Labels".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
+    /// C99: §6.8.6.1 paragraph 1, p. 137; PDF p. 149.
     pub(super) fn finish_labels(&mut self) {
         for i in 0..self.statements.labels.len() {
             let label = self.statements.labels[i];
@@ -469,6 +515,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C99: §6.8.1p2, p. 131; PDF p. 143; §6.8.4.2p2-3,p5,
     /// p. 134; PDF p. 146. GNU ranges use inclusive converted intervals.
+    /// GNU extension: GCC manual, "Case Ranges".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html>
     pub(super) fn case_label(
         &mut self,
         lower: ConstantExpressionSlot<'tu>,
@@ -496,6 +544,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Checks switch-label placement and entry into variably modified scopes.
+    /// C99: §6.8.1 paragraph 2, p. 131; PDF p. 143.
+    /// C99: §6.8.4.2 paragraph 2, p. 134; PDF p. 146.
     pub(super) fn switch_label(&mut self, source: SourceVectors) {
         if let Some(index) = self.statements.switch {
             if let Some(binding) =
@@ -513,6 +564,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Converts case constants to the promoted switch type and checks GNU
+    /// ranges.
+    /// GNU extension: GCC manual, "Case Ranges".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html>
+    /// C99: §6.8.4.2 paragraph 5, p. 134; PDF p. 146.
     fn case_done(
         &mut self,
         lower: Option<&'tu Expression<'tu>>,

@@ -1434,3 +1434,136 @@ fn reserved_variadic_marker_diagnostics_follow_pedantic_policy() {
         }
     }
 }
+
+#[test]
+fn omitted_variadic_arguments_keep_specialized_policy_in_each_expansion_path() {
+    let source = "#define V(x,...) x\n#define WRAP(...) V(__VA_ARGS__)\nV(first) \
+                  WRAP(second)\n#if V(1)\nthird\n#endif\n";
+    for standard in [CStandard::C17, CStandard::C23] {
+        for gnu in [false, true] {
+            for msvc in [false, true] {
+                for policy in [
+                    ExtensionPolicy::Allow,
+                    ExtensionPolicy::Warn,
+                    ExtensionPolicy::Deny,
+                ] {
+                    let config = CompilerConfiguration::new(standard, policy)
+                        .with_gnu_extensions(gnu)
+                        .with_msvc_feature(MsvcFeature::VaArgs, msvc);
+                    let (tokens, errors) = observe(source, config);
+                    let expected = usize::from(
+                        standard < CStandard::C23 && !msvc && policy != ExtensionPolicy::Allow,
+                    ) * 3;
+                    assert_eq!(
+                        errors.len(),
+                        expected,
+                        "{standard:?} {gnu} {msvc} {policy:?}: {errors:?}"
+                    );
+                    let severity = if policy == ExtensionPolicy::Warn {
+                        "Warning:"
+                    } else {
+                        "Error:"
+                    };
+                    assert!(
+                        errors.iter().all(|e| e
+                            == &format!(
+                                "{severity} this invocation supplies no argument for `...`"
+                            )),
+                        "{errors:?}"
+                    );
+                    for name in ["first", "second", "third"] {
+                        assert!(spellings(&tokens).contains(&format!("identifier `{name}`")));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn has_builtin_agrees_with_every_builtin_keyword_implementation() {
+    use crate::translation_phases::{
+        preprocessing::KeywordTokenType,
+        semantic_analysis,
+    };
+    for standard in [CStandard::C89, CStandard::C17, CStandard::C23] {
+        for gnu in [false, true] {
+            let config = mode(standard).with_gnu_extensions(gnu);
+            for &keyword in KeywordTokenType::ALL {
+                if !keyword.spelling().starts_with("__builtin_") {
+                    continue;
+                }
+                let source = format!(
+                    "#if __has_builtin({})\nyes\n#else\nno\n#endif\n",
+                    keyword.spelling()
+                );
+                let (output, errors) = observe(&source, config);
+                assert!(errors.is_empty(), "{errors:?}");
+                assert_eq!(output.len(), 1);
+                let expected = if semantic_analysis::implemented_builtin(keyword) {
+                    "identifier `yes`"
+                } else {
+                    "identifier `no`"
+                };
+                assert!(output[0].ends_with(expected), "{keyword:?}: {output:?}");
+            }
+            for (name, expected) in [
+                ("__builtin_classify_type", true),
+                ("__builtin_shufflevector", true),
+                ("__atomic_load_n", true),
+                ("__builtin_ia32_addsubps", true),
+                ("__builtin_not_implemented", false),
+                ("int", false),
+            ] {
+                let source = format!("#if __has_builtin({name})\nyes\n#else\nno\n#endif\n");
+                let (output, errors) = observe(&source, config);
+                assert!(errors.is_empty(), "{errors:?}");
+                assert_eq!(output.len(), 1);
+                assert!(
+                    output[0].ends_with(if expected {
+                        "identifier `yes`"
+                    } else {
+                        "identifier `no`"
+                    }),
+                    "{name}: {output:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn macro_redefinition_quality_diagnostics_share_policy_in_every_form() {
+    let source = "#define O 1\n#define O(x) x\n#define F(x) x\n#define F 1\n#define D 1\n#define \
+                  D 2\nafter\n";
+    for gnu in [false, true] {
+        for policy in [
+            ExtensionPolicy::Allow,
+            ExtensionPolicy::Warn,
+            ExtensionPolicy::Deny,
+        ] {
+            let (output, errors) = observe(
+                source,
+                mode(CStandard::C17)
+                    .with_gnu_extensions(gnu)
+                    .with_extension_policy(policy),
+            );
+            assert_eq!(output.len(), 1);
+            assert!(output[0].ends_with("identifier `after`"));
+            assert_eq!(errors.len(), 3, "{errors:?}");
+            let severity = if policy == ExtensionPolicy::Deny {
+                "Error:"
+            } else {
+                "Warning:"
+            };
+            assert!(errors.iter().all(|e| e.starts_with(severity)), "{errors:?}");
+            for (error, wording) in errors.iter().zip([
+                "object-like macro",
+                "function-like macro",
+                "redefined differently",
+            ]) {
+                assert!(error.contains(wording), "{errors:?}");
+            }
+        }
+    }
+}

@@ -591,17 +591,6 @@ impl<'tu> TypeSpecifiers<'tu> {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Retained for the future semantic type builder.")
-    )]
-    pub(super) fn is_struct_or_union(self) -> bool {
-        match self {
-            | TypeSpecifiers::StructOrUnion(_) => true,
-            | _ => false,
-        }
-    }
-
     pub(super) fn make_struct_or_union(
         &mut self,
         parser: &mut Parser<'_, 'tu, '_>,
@@ -614,17 +603,6 @@ impl<'tu> TypeSpecifiers<'tu> {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Retained for the future semantic type builder.")
-    )]
-    pub(super) fn is_enum(self) -> bool {
-        match self {
-            | TypeSpecifiers::Enum(_) => true,
-            | _ => false,
-        }
-    }
-
     pub(super) fn make_enum(
         &mut self,
         parser: &mut Parser<'_, 'tu, '_>,
@@ -634,17 +612,6 @@ impl<'tu> TypeSpecifiers<'tu> {
         match self {
             | TypeSpecifiers::Empty => *self = TypeSpecifiers::Enum(index),
             | _ => self.report_conflict(parser, token.contents, token),
-        }
-    }
-
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Retained for the future semantic type builder.")
-    )]
-    pub(super) fn is_typedef_name(self) -> bool {
-        match self {
-            | TypeSpecifiers::TypedefName(_) => true,
-            | _ => false,
         }
     }
 

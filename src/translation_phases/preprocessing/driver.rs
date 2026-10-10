@@ -39,7 +39,6 @@ use super::{
     },
 };
 use crate::{
-    configuration::ExtensionPolicy,
     translation_phases::{
         Context,
         GetSourceFileIndex,
@@ -330,10 +329,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     /// separately from its invocation through nested rescanning.
     fn spelling_location(&self, token: PreprocessorToken) -> SourceVector {
         self.context
-            .get_source_vectors(token.source_vectors)
-            .first()
-            .cloned()
-            .unwrap_or_default()
+            .first_source_vector_or_default(token.source_vectors)
     }
 
     pub(super) fn physical_source_file_index(&self) -> u32 {
@@ -993,21 +989,17 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             // C99 §6.10.3p4 requires an argument for `...`;
                             // omitting it is a common extension (§4p6), which
                             // the extension policy governs.
-                            let extension_policy = self.context.configuration.extension_policy();
-                            if extension_policy != ExtensionPolicy::Allow
-                                && self.context.configuration.standard()
-                                    < crate::configuration::CStandard::C23
-                                && !self
-                                    .context
-                                    .configuration
-                                    .accepts(crate::configuration::Feature::MsVaArgs)
+                            if !self
+                                .context
+                                .configuration
+                                .accepts(crate::configuration::Feature::MsVaArgs)
                             {
-                                self.context.preprocessor_error(PreprocessorError {
-                                    error_type:     PreprocessorErrorType::MissingVariadicArgument(
-                                        extension_policy,
-                                    ),
-                                    source_vectors: token.source_vectors,
-                                });
+                                self.context.preprocessor_extension(
+                                    crate::configuration::Feature::OmittedVariadicArguments,
+                                    crate::translation_phases::DiagnosticPolicy::Extension,
+                                    token.source_vectors,
+                                    PreprocessorErrorType::MissingVariadicArgument,
+                                );
                             }
                         }
                         if is_variadic {

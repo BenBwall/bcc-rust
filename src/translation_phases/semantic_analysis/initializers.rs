@@ -73,6 +73,8 @@ struct Current<'s> {
     root_index: u64,
 }
 
+/// Resumable brace-list and current-object initialization tasks.
+/// C99: §6.7.8 paragraphs 17-20, pp. 126-127; PDF pp. 138-139.
 #[derive(Clone, Copy)]
 enum InitWork<'tu, 's> {
     Value(TypeId, &'tu Initializer<'tu>),
@@ -86,6 +88,12 @@ enum InitWork<'tu, 's> {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Checks declaration initialization, completes array types and retains
+    /// constant values.
+    /// C99: §6.7.8 paragraphs 3-5, p. 125; PDF p. 137.
+    /// C99: §6.7.8 paragraph 22, p. 127; PDF p. 139.
+    /// C99: §6.7 paragraph 7, p. 98; PDF p. 110.
+    /// C99: §6.6 paragraph 10, p. 96; PDF p. 108.
     pub(super) fn initialize_declaration(
         &mut self,
         index: usize,
@@ -157,7 +165,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Applies scalar assignment conversion and aggregate current-object rules.
     /// The returned type completes an array of unknown size from its highest
-    /// initialized index. C99: §6.7.8p11-22, pp. 126-128; PDF pp. 138-140.
+    /// initialized index. C99: §6.7.8p11-22, pp. 126-127; PDF pp. 138-139.
     pub(super) fn check_initializer(
         &mut self,
         ty: TypeId,
@@ -510,6 +518,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.types.unanalyzed(ty)
     }
 
+    /// Recognizes string and compatible record expressions that initialize a
+    /// whole object.
+    /// C99: §6.7.8 paragraphs 13-15, p. 126; PDF p. 138.
     fn whole_object_expression(&mut self, target: TypeId, e: &'tu Expression<'tu>) -> bool {
         if let ExpressionType::StringLiteral(_) = unparenthesized(e).kind {
             return matches!(self.types.nodes[target.index], TypeKind::Array(element, _) if matches!(self.types.nodes[element.index], TypeKind::Scalar(Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar | Scalar::Int)));
@@ -575,6 +586,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(count)
     }
 
+    /// Selects the first initializable member, skipping unnamed bit-fields.
+    /// C99: §6.7.8 paragraph 9, p. 126; PDF p. 138.
+    /// C99: §6.7.8 paragraph 17, pp. 126-127; PDF pp. 138-139.
     fn first_subobject(&self, ty: TypeId) -> u64 {
         if let TypeKind::Tag(id) = self.types.nodes[ty.index]
             && self.types.tags[id].kind != TagKind::Enum
@@ -590,6 +604,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Selects an available array element or record member for initialization.
+    /// C99: §6.7.8 paragraphs 2-3, p. 125; PDF p. 137.
+    /// C99: §6.7.2.1 paragraph 16, p. 103; PDF p. 115.
+    /// C99: §6.7.8 paragraph 9, p. 126; PDF p. 138.
     fn subobject(&self, ty: TypeId, index: u64) -> Option<TypeId> {
         match self.types.nodes[ty.index] {
             | TypeKind::Vector { element, count, .. } => (index < count).then_some(element),
@@ -617,6 +635,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Advances the current object in member/element order after
+    /// initialization.
+    /// C99: §6.7.8 paragraphs 17-20, pp. 126-127; PDF pp. 138-139.
     fn advance_current<'s>(&self, mut cursor: Current<'s>) -> Current<'s> {
         loop {
             let mut next = cursor.index.saturating_add(1);

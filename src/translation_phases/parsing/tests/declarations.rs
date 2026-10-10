@@ -9,37 +9,33 @@ use super::{
     sourced_text,
     with_parse,
 };
-use crate::{
-    translation_phases::{
-        TranslationError,
-        parsing::{
-            declaration_syntax::{
-                DirectDeclarator,
-                EnumSpecifier,
-                Enumerator,
-                InitDeclarator,
-                StructDeclaration,
-                StructDeclarator,
-                StructOrUnion,
-                StructOrUnionSpecifier,
-                TypeQualifiers,
-                TypeSpecifiers,
-            },
-            errors::ParserErrorType,
-            syntax::{
-                BlockItem,
-                ExternalDeclaration,
-                Identifier,
-                StatementType,
-                StorageClass,
-            },
+use crate::translation_phases::{
+    TranslationError,
+    parsing::{
+        declaration_syntax::{
+            DirectDeclarator,
+            EnumSpecifier,
+            Enumerator,
+            InitDeclarator,
+            StructDeclaration,
+            StructDeclarator,
+            StructOrUnion,
+            StructOrUnionSpecifier,
+            TypeQualifiers,
+            TypeSpecifiers,
         },
-        preprocessing::{
-            OperatorTokenType,
-            TokenType,
+        errors::ParserErrorType,
+        syntax::{
+            BlockItem,
+            ExternalDeclaration,
+            StatementType,
+            StorageClass,
         },
     },
-    util::vector_slice::VectorSlice,
+    preprocessing::{
+        OperatorTokenType,
+        TokenType,
+    },
 };
 
 #[test]
@@ -297,12 +293,12 @@ fn conflicting_typedef_names_remain_specifiers_and_preserve_following_declaratio
                     .collect::<Vec<_>>(),
                 ["T", "x", "pointer", "nested", "y"]
             );
-            assert!(
+            assert!(matches!(
                 declaration(parsed, 4)
                     .declaration_specifiers
-                    .type_specifiers
-                    .is_typedef_name()
-            );
+                    .type_specifiers,
+                TypeSpecifiers::TypedefName(_)
+            ));
         },
     );
 }
@@ -477,32 +473,6 @@ fn specifier_combinations_and_conflicts_keep_legacy_diagnostics() {
             );
             assert!(TypeSpecifiers::Long.is_long());
             assert!(TypeSpecifiers::LongDouble.is_long_double());
-            let structure = StructOrUnionSpecifier {
-                attributes:              None,
-                struct_or_union:         StructOrUnion::Struct,
-                identifier:              None,
-                struct_declaration_list: None,
-                source_vectors:          VectorSlice::empty(),
-            };
-            assert!(TypeSpecifiers::StructOrUnion(&structure).is_struct_or_union());
-            let enumeration = EnumSpecifier {
-                attributes:       None,
-                underlying_type:  None,
-                name:             None,
-                enumeration_list: None,
-                source_vectors:   VectorSlice::empty(),
-            };
-            assert!(TypeSpecifiers::Enum(&enumeration).is_enum());
-            let duplicate = parsed
-                .parser
-                .context
-                .string_cache
-                .get_id_from_string("duplicate")
-                .expect("interned identifier");
-            assert!(
-                TypeSpecifiers::TypedefName(Identifier::new(duplicate, VectorSlice::empty()))
-                    .is_typedef_name()
-            );
         },
     );
 }

@@ -162,6 +162,9 @@ pub(crate) enum Feature {
     DelimitedEscapes,
     HexFloats,
     VariadicMacros,
+    /// Omitting the argument for a variadic macro's ellipsis.
+    /// C23: §6.10.5 paragraph 4, p. 178; PDF p. 191.
+    OmittedVariadicArguments,
     EmptyMacroArguments,
     Inline,
     Restrict,
@@ -172,11 +175,22 @@ pub(crate) enum Feature {
     ImplicitFunctionDeclaration,
     MixedDeclarations,
     ForDeclarations,
+    /// Non-variable declarations in a for initializer.
+    /// C23: §6.8.6.1 paragraphs 1-2, p. 155; PDF p. 168; relaxes
+    /// C99 §6.8.5 paragraph 3, p. 135; PDF p. 147.
+    ForNonVariableDeclarations,
+    /// Qualified, static and prototype-star array parameters.
+    /// C99: §6.7.5 paragraph 1, p. 114; PDF p. 126.
+    ArrayParameterSyntax,
     DesignatedInitializers,
     CompoundLiterals,
     FlexibleArrayMembers,
     LongLong,
     TrailingEnumComma,
+    /// Identifier-list function declarators, removed in C23.
+    /// C99: §6.7.5 paragraph 1, p. 114; PDF p. 126. C23: §6.7.7.1
+    /// paragraph 1, pp. 126-127; PDF pp. 139-140.
+    OldStyleFunctionDeclarators,
     Func,
     StaticAssert,
     Generic,
@@ -186,6 +200,9 @@ pub(crate) enum Feature {
     ThreadLocal,
     Atomic,
     AnonymousAggregates,
+    /// Same-type, non-variably-modified typedef redefinition.
+    /// C11: §6.7 paragraph 3, p. 108; PDF p. 126.
+    TypedefRedefinition,
     C23Keywords,
     Attributes,
     BitInt,
@@ -200,6 +217,9 @@ pub(crate) enum Feature {
     IfSwitchDeclarations,
     NamedLoops,
     GenericTypeOperand,
+    /// Inclusive case-label ranges, native in C2y and enabled earlier by GNU
+    /// modes. C2y: WG14 N3370, <https://www.open-std.org/JTC1/SC22/WG14/www/docs/n3370.htm>;
+    /// extends C99 §6.8.1 paragraph 1, p. 131; PDF p. 143.
     CaseRanges,
     GnuAttribute,
     GnuAsm,
@@ -217,6 +237,14 @@ pub(crate) enum Feature {
     Int128,
     AutoType,
     GnuAlternateKeywords,
+    /// Alignment of an expression rather than a type.
+    /// GNU extension: GCC manual, Determining the Alignment of Functions,
+    /// Types or Variables, <https://gcc.gnu.org/onlinedocs/gcc/Alignment.html>.
+    AlignofExpression,
+    /// Returning a void expression from a void function in GNU modes.
+    /// GNU extension to C99 §6.8.6.4 paragraph 1, p. 139; PDF p. 151;
+    /// GCC c/c-typeck.cc, `c_finish_return`, permits void expression operands.
+    VoidExpressionReturn,
     RealImag,
     GnuDesignators,
     UnionCasts,
@@ -247,6 +275,14 @@ pub(crate) enum Feature {
     MsVaArgs,
     Float128,
     VectorBuiltins,
+    /// Evaluated comma in #if, extending C99 §6.6p3, p. 95; PDF p. 107.
+    PreprocessorComma,
+    /// Macro-generated defined, extending C99 §6.10.1p4, p. 148; PDF p. 160.
+    MacroExpandedDefined,
+    /// Path backslashes, extending C99 §6.4.7p3, pp. 64-65; PDF pp. 76-77.
+    QuotedHeaderBackslash,
+    /// C23 §6.9.2p5, p. 160; PDF p. 173 permits unnamed definition parameters.
+    UnnamedDefinitionParameters,
 }
 
 impl Feature {
@@ -270,6 +306,7 @@ impl Feature {
         Self::DelimitedEscapes,
         Self::HexFloats,
         Self::VariadicMacros,
+        Self::OmittedVariadicArguments,
         Self::EmptyMacroArguments,
         Self::Inline,
         Self::Restrict,
@@ -280,11 +317,14 @@ impl Feature {
         Self::ImplicitFunctionDeclaration,
         Self::MixedDeclarations,
         Self::ForDeclarations,
+        Self::ForNonVariableDeclarations,
+        Self::ArrayParameterSyntax,
         Self::DesignatedInitializers,
         Self::CompoundLiterals,
         Self::FlexibleArrayMembers,
         Self::LongLong,
         Self::TrailingEnumComma,
+        Self::OldStyleFunctionDeclarators,
         Self::Func,
         Self::StaticAssert,
         Self::Generic,
@@ -294,6 +334,7 @@ impl Feature {
         Self::ThreadLocal,
         Self::Atomic,
         Self::AnonymousAggregates,
+        Self::TypedefRedefinition,
         Self::C23Keywords,
         Self::Attributes,
         Self::BitInt,
@@ -325,6 +366,8 @@ impl Feature {
         Self::Int128,
         Self::AutoType,
         Self::GnuAlternateKeywords,
+        Self::AlignofExpression,
+        Self::VoidExpressionReturn,
         Self::RealImag,
         Self::GnuDesignators,
         Self::UnionCasts,
@@ -355,6 +398,10 @@ impl Feature {
         Self::MsVaArgs,
         Self::Float128,
         Self::VectorBuiltins,
+        Self::PreprocessorComma,
+        Self::MacroExpandedDefined,
+        Self::QuotedHeaderBackslash,
+        Self::UnnamedDefinitionParameters,
     ];
 
     pub(crate) const fn origin(self) -> FeatureOrigin {
@@ -370,6 +417,7 @@ impl Feature {
             | Self::Complex
             | Self::Imaginary
             | Self::MixedDeclarations
+            | Self::ArrayParameterSyntax
             | Self::ForDeclarations
             | Self::DesignatedInitializers
             | Self::CompoundLiterals
@@ -386,6 +434,7 @@ impl Feature {
             | Self::Noreturn
             | Self::ThreadLocal
             | Self::Atomic
+            | Self::TypedefRedefinition
             | Self::AnonymousAggregates => FeatureOrigin::Standard(CStandard::C11),
             | Self::Utf8CharacterConstants
             | Self::DigitSeparators
@@ -397,7 +446,9 @@ impl Feature {
             | Self::HasInclude
             | Self::HasEmbed
             | Self::HasCAttribute
+            | Self::OmittedVariadicArguments
             | Self::VaOpt
+            | Self::ForNonVariableDeclarations
             | Self::C23Keywords
             | Self::Attributes
             | Self::BitInt
@@ -407,6 +458,7 @@ impl Feature {
             | Self::AutoTypeInference
             | Self::Constexpr
             | Self::Nullptr
+            | Self::UnnamedDefinitionParameters
             | Self::WideEnumerators => FeatureOrigin::Standard(CStandard::C23),
 
             | Self::OctalPrefix
@@ -417,6 +469,10 @@ impl Feature {
             | Self::GenericTypeOperand
             | Self::CaseRanges => FeatureOrigin::Standard(CStandard::C2y),
 
+            | Self::OldStyleFunctionDeclarators => FeatureOrigin::Removed {
+                since:   CStandard::C89,
+                removed: CStandard::C23,
+            },
             // C99: Foreword paragraph 5, p. xii; PDF p. 10 lists "remove
             // implicit int" among the changes from C89.
             | Self::ImplicitInt | Self::ImplicitFunctionDeclaration => FeatureOrigin::Removed {
@@ -439,6 +495,8 @@ impl Feature {
             | Self::ZeroLengthArrays
             | Self::Int128
             | Self::AutoType
+            | Self::VoidExpressionReturn
+            | Self::AlignofExpression
             | Self::GnuAlternateKeywords
             | Self::RealImag
             | Self::GnuDesignators
@@ -459,7 +517,10 @@ impl Feature {
             | Self::FlexibleArrayExtensions
             | Self::ConstantFolding
             | Self::Float128
-            | Self::VectorBuiltins => FeatureOrigin::Gnu,
+            | Self::VectorBuiltins
+            | Self::PreprocessorComma
+            | Self::MacroExpandedDefined
+            | Self::QuotedHeaderBackslash => FeatureOrigin::Gnu,
 
             | Self::MsDeclspec => FeatureOrigin::Msvc(MsvcFeature::Declspec),
             | Self::MsIntTypes => FeatureOrigin::Msvc(MsvcFeature::IntTypes),
@@ -627,6 +688,8 @@ impl CompilerConfiguration {
                 self.native |= feature.bit();
             }
             let accepted = match feature {
+                | Feature::OldStyleFunctionDeclarators
+                | Feature::VoidExpressionReturn
                 | Feature::Digraphs
                 | Feature::UnicodeLiteralPrefixes
                 | Feature::Utf8CharacterConstants
@@ -646,6 +709,7 @@ impl CompilerConfiguration {
                 | Feature::MsPragma
                 | Feature::MsAnonymousStructs
                 | Feature::MsVaArgs => native,
+                | Feature::CaseRanges
                 | Feature::LineComments
                 | Feature::BinaryConstants
                 | Feature::Elifdef
@@ -775,6 +839,26 @@ mod tests {
                     standard <= CStandard::C17
                 );
                 assert!(configuration.accepts(Feature::StaticAssert));
+                assert_eq!(
+                    configuration.accepts(Feature::CaseRanges),
+                    standard >= CStandard::C2y || gnu
+                );
+                assert_eq!(
+                    configuration.accepts(Feature::OldStyleFunctionDeclarators),
+                    standard < CStandard::C23
+                );
+                assert_eq!(configuration.accepts(Feature::VoidExpressionReturn), gnu);
+                for (feature, since) in [
+                    (Feature::OmittedVariadicArguments, CStandard::C23),
+                    (Feature::ArrayParameterSyntax, CStandard::C99),
+                    (Feature::TypedefRedefinition, CStandard::C11),
+                    (Feature::ForNonVariableDeclarations, CStandard::C23),
+                ] {
+                    assert!(configuration.accepts(feature));
+                    assert_eq!(configuration.is_native(feature), standard >= since);
+                }
+                assert!(configuration.accepts(Feature::AlignofExpression));
+                assert_eq!(configuration.is_native(Feature::AlignofExpression), gnu);
                 assert!(!configuration.accepts(Feature::MsSeh));
             }
         }
@@ -844,7 +928,7 @@ mod tests {
         }
         assert_eq!(
             Feature::ALL.last().map(|feature| *feature as usize),
-            Some(Feature::VectorBuiltins as usize)
+            Some(Feature::UnnamedDefinitionParameters as usize)
         );
         for (index, feature) in MsvcFeature::ALL.iter().enumerate() {
             assert_eq!(*feature as usize, index, "{feature:?}");

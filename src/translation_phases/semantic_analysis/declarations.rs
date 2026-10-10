@@ -44,6 +44,8 @@ use super::{
 };
 
 /// The x86-64 System V target ignores MSVC calling conventions.
+/// MSVC extension: Microsoft Learn, "Argument Passing and Naming Conventions".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/argument-passing-and-naming-conventions>
 fn calling_convention(keyword: super::super::preprocessing::KeywordTokenType) -> bool {
     use super::super::preprocessing::KeywordTokenType as K;
     matches!(
@@ -59,6 +61,8 @@ fn calling_convention(keyword: super::super::preprocessing::KeywordTokenType) ->
 ///
 /// MSVC extension; the integer types are C99: §6.7.2p2, pp. 99-100;
 /// PDF pp. 111-112.
+/// MSVC extension: Microsoft Learn, "__int8, __int16, __int32, __int64".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/int8-int16-int32-int64>
 fn ms_integer(width: u8, signedness: Option<bool>) -> Scalar {
     match (width, signedness) {
         | (8, None) => Scalar::Char,
@@ -247,8 +251,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Specifier extensions whose meaning this phase does not model:
     /// alignment, thread or constexpr storage, MSVC pointer modifiers and
     /// layout attributes. Other attributes, `__extension__` and x86-64
-    /// calling conventions leave the declared type unchanged. Extensions
-    /// follow C99 §4p6, p. 7; PDF p. 19.
+    /// calling conventions leave the declared type unchanged.
+    /// C99: §4 paragraph 6, p. 7; PDF p. 19.
     pub(super) fn unmodeled_extension(
         &self,
         mut chain: Option<&'tu super::SpecifierExtension<'tu>>,
@@ -271,6 +275,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GNU, standard-syntax vendor and MSVC attributes that change size,
     /// alignment or representation. Their arguments are not interpreted, so
     /// any such name, or an attribute that failed to parse, is conservative.
+    /// GNU extension: GCC manual, "Attribute Syntax".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+    /// MSVC extension: Microsoft Learn, "declspec".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/declspec>
     pub(super) fn layout_attribute(&self, attribute: &super::AttributeSpecifier<'tu>) -> bool {
         attribute.recovered
             || attribute.tokens.iter().any(|token| {
@@ -361,6 +369,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         (index, body)
     }
 
+    /// Creates a distinct incomplete structure, union or enumeration type.
+    /// C99: §6.7.2.3 paragraphs 4-5, p. 106; PDF p. 118.
     fn new_tag(&mut self, kind: TagKind, name: Option<Identifier>) -> usize {
         let index = self.types.tags.len();
         let tag = self.types.tu.alloc(Tag {
@@ -428,7 +438,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Declarator suffixes derive from the base inward, then grouped children.
-    /// C99: §6.7.5p4-6, pp. 114-115; PDF pp. 126-127.
+    /// C99: §6.7.5p4-6, p. 115; PDF p. 127.
     pub(super) fn direct(
         &mut self,
         direct: &'tu DirectDeclarator<'tu>,
@@ -792,8 +802,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Merges visible compatible linked declarations, checks hidden ones for
     /// compatibility, and rejects same-scope no-linkage repeats. Incompatible
     /// occurrences do not replace accepted lookup bindings.
-    /// C99: §6.7p3-4, p. 97; PDF p. 109; §6.2.7p2-4, pp. 40-41;
-    /// PDF pp. 52-53. Repeated typedef exception: C11 §6.7p3, p. 108;
+    /// C99: §6.7p3-4, p. 97; PDF p. 109; §6.2.7p2-4, p. 40; PDF p. 52. Repeated
+    /// typedef exception: C11 §6.7p3, p. 108;
     /// PDF p. 126.
     pub(super) fn bind(
         &mut self,
@@ -855,9 +865,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && !self.variably_modified(ty);
                 if same_typedef {
                     if !self.tainted {
-                        self.context.report_extension_since(
+                        self.context.report_extension(
+                            crate::configuration::Feature::TypedefRedefinition,
                             "typedef redefinition",
-                            crate::configuration::FeatureOrigin::Standard(CStandard::C11),
                             name.source_vectors,
                         );
                     }
@@ -914,7 +924,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// C99: §6.7.5p3, p. 114; PDF p. 126; §6.7.5.2p2, p. 116; PDF p. 128.
+    /// C99: §6.7.5p3, pp. 114-115; PDF pp. 126-127; §6.7.5.2p2, p. 116; PDF p.
+    /// 128.
     pub(super) fn variably_modified(&self, ty: TypeId) -> bool {
         self.types.variably_modified(ty)
     }

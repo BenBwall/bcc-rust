@@ -18,8 +18,9 @@ and `-fhosted` restores hosted, the later flag winning.
 
 ## Current status
 
-The CLI accepts a C source file or an input string, runs preprocessing and the
-language parser, and prints diagnostics. Pass `--syntax-tree` for a stable,
+The CLI accepts a C source file or an input string, runs preprocessing, the
+language parser, and semantic analysis, and prints diagnostics. Pass
+`--semantic-types` for resolved declarations and types, `--syntax-tree` for a stable,
 source-oriented tree, `--syntax-locations` to add locations, `--raw-syntax` for
 the raw Rust debug form of the tree, or `--tokens` for parser-facing
 preprocessing tokens. Normal operation does not dump internal storage. The CLI does not emit an object file
@@ -61,7 +62,7 @@ translation floors, diagnoses invalid phase-7 input, and has deterministic
 truncation/property coverage. The integrated language modes also cover C23
 attributes and feature queries, resource embedding into initializers, modern
 literals, GNU macros/keywords/imaginary constants, and MSVC macro pragmas and
-empty variadic calls through the CLI. Declaration semantic analysis now follows parsing in the default CLI mode;
+empty variadic calls through the CLI. Semantic analysis follows parsing in the default CLI mode;
 `--semantic-types` inspects resolved declaration types, linkage and duration.
 See [semantic-analysis.md](semantic-analysis.md) for implemented boundaries and
 validation gaps. Code generation remains unimplemented.
@@ -161,8 +162,8 @@ overrides that remove linker LTO.
 
 ### Native C, static linking, and cross-language LTO
 
-[`build_support/native.rs`](build_support/native.rs) compiles the C helper with
-the `cc` crate and Clang `-flto=full` into a static archive of LLVM bitcode.
+[`build_support/native.rs`](build_support/native.rs) compiles the C helper,
+[`build_support/float_parsing.c`](build_support/float_parsing.c), with the `cc` crate and Clang `-flto=full` into a static archive of LLVM bitcode.
 [`build_support/llvm.rs`](build_support/llvm.rs) uses the `cmake` crate and
 LLVM's `install-distribution` target to build only Clang, its resource headers,
 libclang, `llvm-ar`, and LLD from Rust's exact LLVM source revision. Only the
@@ -423,8 +424,8 @@ directory for each run. `--limit 30` runs a smoke sample; `--match` selects
 corpus-relative globs. Sources and detailed results stay in ignored `target/`.
 The runner reports crashes/timeouts with a nonzero exit status and does not
 execute C programs. It is a corpus survey rather than a conformance gate.
-See the [compiler corpus research](compiler-test-corpus-research.md) and
-[recorded parser results](gcc-torture-parser-results.md) for comparison profiles,
+See the [compiler corpus research](docs/research/compiler-test-corpus-research.md) and
+[recorded parser results](docs/research/gcc-torture-parser-results.md) for comparison profiles,
 known discrepancies, and interpretation limits.
 
 ### libc header survey
@@ -571,10 +572,14 @@ tests run with `python -m unittest discover -s scripts -p "test_codegraph_mcp.py
 | [`src/translation_phases/preprocessor_tokenizer.rs`](src/translation_phases/preprocessor_tokenizer.rs) and [`preprocessor_tokenizer/`](src/translation_phases/preprocessor_tokenizer/) | Lexes each source buffer completely when it is opened (phases 1-3: trigraphs, line splices, comments, and preprocessing tokens) and replays its tokens to preprocessing, retaining source provenance. |
 | [`src/translation_phases/preprocessing.rs`](src/translation_phases/preprocessing.rs) and [`preprocessing/`](src/translation_phases/preprocessing/) | Handles macros, directives, includes, conditional preprocessing, literals, and conversion to parser-facing tokens. It owns the preprocessor-expression evaluator and its values and diagnostics; each concern has its own submodule. |
 | [`src/translation_phases/parsing.rs`](src/translation_phases/parsing.rs) and [`parsing/`](src/translation_phases/parsing/) | Contains the explicit parser driver; declaration, function-definition, statement, expression, type-name, initializer, declarator, and tag frames (one submodule per frame); syntax nodes, which live in the translation-unit arena; scopes; and parser diagnostics. |
+| [`src/translation_phases/semantic_analysis.rs`](src/translation_phases/semantic_analysis.rs) and [`semantic_analysis/`](src/translation_phases/semantic_analysis/) | Analyzes the finished syntax tree: types and the target data model, scopes, bindings and linkage, expressions and constant evaluation, initializers, statements, and function definitions, with semantic diagnostics. |
 | [`src/translation_phases.rs`](src/translation_phases.rs) | Defines the shared translation-phase interface and diagnostic plumbing; [`context.rs`](src/translation_phases/context.rs) and [`provenance.rs`](src/translation_phases/provenance.rs) hold the compilation context and source provenance. |
 | [`src/util/`](src/util/) | Provides the virtual-memory regions, the arena allocator and its vectors, strings, queues, and lists, the per-compilation region vector and bit set, interned strings, and the lexer's byte scans. |
 | [`src/diagnostics.rs`](src/diagnostics.rs) | Builds diagnostics (message, labelled source ranges, notes, help) and renders them as annotated source snippets. Each phase's error type explains itself through a `ToDiagnostic` implementation. |
-| [`src/lib.rs`](src/lib.rs), [`src/cli.rs`](src/cli.rs), and [`src/pipeline.rs`](src/pipeline.rs) | Wire the inspection CLI to the parser by default and to the token dump with `--tokens`, create each phase's arenas in order, and report diagnostics. |
+| [`src/target.rs`](src/target.rs) and [`src/target/`](src/target/) | Select the translation target and its scalar data model, and hold the target macros frozen from the pinned Clang. |
+| [`src/headers.rs`](src/headers.rs) and [`src/headers/`](src/headers/) | Embed the resource headers and configure header search. |
+| [`src/float_parsing.rs`](src/float_parsing.rs) and [`build_support/`](build_support/) | Convert floating constants and print host `long double` values through the native C helper, which the build script compiles with the pinned Clang. |
+| [`src/lib.rs`](src/lib.rs), [`src/cli.rs`](src/cli.rs), and [`src/pipeline.rs`](src/pipeline.rs) | Wire the CLI to semantic analysis by default, to the syntax views with `--syntax-tree` and `--raw-syntax`, and to the token dump with `--tokens`; create each phase's arenas in order; and report diagnostics. |
 
 ## Parser direction
 
@@ -615,6 +620,9 @@ grammar ownership, supported behavior, and evidence.
 - [`GLOSSARY.md`](GLOSSARY.md) — canonical compiler-domain and parser vocabulary.
 - [`parser-roadmap.md`](parser-roadmap.md) — authoritative Phase 01–05 language-parser sequence and exit gates.
 - [`c99-parser-compliance-checklist.md`](c99-parser-compliance-checklist.md) — C99 grammar, ownership, and regression evidence.
+- [`semantic-analysis.md`](semantic-analysis.md) — semantic analysis interfaces, implementation choices, validation, and roadmap.
+- [`language-standards.md`](language-standards.md) — language modes, the extension feature matrix, and target macro exclusions.
+- [`docs/research/`](docs/research/) — compiler test-corpus research and recorded GCC torture parser results.
 - [`tests/fixtures/diagnostics/COVERAGE.md`](tests/fixtures/diagnostics/COVERAGE.md) — diagnostic golden corpus, review criteria, and remaining output issues.
 - [`.agents/AGENTS.md`](.agents/AGENTS.md) — compact operational guidance for coding agents; `.claude/CLAUDE.md` imports the same file.
 - [`scripts/agentbus/README.md`](scripts/agentbus/README.md) — agentbus, the Rust crate that lets coding agents working in this repository coordinate.

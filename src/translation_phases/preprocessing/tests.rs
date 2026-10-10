@@ -40,7 +40,6 @@ use crate::{
         ErrorSeverity,
         GetSeverity,
         GetSourceVectors,
-        SourceVectors,
         TranslationError,
         preprocessor_tokenizer::{
             PreprocessorToken,
@@ -288,11 +287,17 @@ fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
         &preprocess_arena,
         &mut context,
         PathBuf::from("<phase-7-totality-test>").into_boxed_path(),
-        "",
+        "internal-only\n",
         SharedVec::default(),
         SharedVec::default(),
     );
     let contents = context.string_cache.intern("internal-only");
+    let file = context.intern_source_file(std::path::Path::new("<phase-7-totality-test>"));
+    let source = context.create_source_vectors(
+        crate::translation_phases::SourcePosition::default(),
+        file,
+        "internal-only".len(),
+    );
 
     for kind in [
         PreprocessorTokenType::Placeholder,
@@ -300,7 +305,7 @@ fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
     ] {
         let token = PreprocessorToken {
             kind,
-            source_vectors: SourceVectors::default(),
+            source_vectors: source,
             contents,
         };
         assert_eq!(
@@ -410,7 +415,7 @@ fn strict_c99_diagnoses_an_evaluated_comma_after_reducing_to_rhs() {
                             TranslationError::Preprocessing(PreprocessorError {
                                 error_type:
                                     PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
-                                        ExtensionPolicy::Deny
+                                        ErrorSeverity::Error
                                     ),
                                 ..
                             })
@@ -438,7 +443,7 @@ fn warning_policy_reports_an_evaluated_comma_as_a_warning() {
                             TranslationError::Preprocessing(PreprocessorError {
                                 error_type:
                                     PreprocessorErrorType::CommaOperatorInPreprocessorExpression(
-                                        ExtensionPolicy::Warn
+                                        ErrorSeverity::Warning
                                     ),
                                 ..
                             })
@@ -940,7 +945,7 @@ fn variadic_macros_may_omit_the_variable_arguments() {
                     [error @ TranslationError::Preprocessing(PreprocessorError {
                         error_type: PreprocessorErrorType::MissingVariadicArgument(found),
                         ..
-                    })] if *found == policy && error.severity() == severity
+                    })] if *found == severity && error.severity() == severity
                 ),
                 "{errors:#?}"
             );
