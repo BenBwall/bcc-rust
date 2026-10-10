@@ -182,7 +182,9 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
             },
             | CompoundStatementPhase::AwaitDeclaration => {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
-                    unexpected_return!("block declaration returned an unexpected value", returned);
+                    unexpected_return!(
+                        "block declaration returned an unexpected value: {returned:?}"
+                    );
                 };
                 if declaration.is_definition_head() {
                     let mut extension = declaration.declaration_specifiers.extensions;
@@ -225,7 +227,9 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
             },
             | CompoundStatementPhase::AwaitStatement => {
                 let Some(ParseValue::Statement(statement)) = returned else {
-                    unexpected_return!("block statement returned an unexpected value", returned);
+                    unexpected_return!(
+                        "block statement returned an unexpected value: {returned:?}"
+                    );
                 };
                 let source = statement.source_vectors;
                 self.source_vectors.push(source);

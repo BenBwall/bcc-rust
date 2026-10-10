@@ -359,8 +359,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
             | ParameterListPhase::KAndRMixedSpecifiers => {
                 let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
                     unexpected_return!(
-                        "parameter specifiers returned an unexpected value",
-                        returned,
+                        "parameter specifiers returned an unexpected value: {returned:?}"
                     );
                 };
                 self.source_vectors.push(specifiers.source_vectors);
@@ -380,8 +379,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
             | ParameterListPhase::KAndRMixedDeclarator => {
                 let Some(ParseValue::Declarator(declarator)) = returned else {
                     unexpected_return!(
-                        "parameter declarator returned an unexpected value",
-                        returned,
+                        "parameter declarator returned an unexpected value: {returned:?}"
                     );
                 };
                 if let Some(declarator) = declarator {
@@ -479,8 +477,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
             | ParameterListPhase::AwaitSpecifiers => {
                 let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
                     unexpected_return!(
-                        "parameter specifiers returned an unexpected value",
-                        returned,
+                        "parameter specifiers returned an unexpected value: {returned:?}"
                     );
                 };
                 self.pending_specifiers = Some(specifiers);
@@ -511,8 +508,7 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
             | ParameterListPhase::AwaitDeclarator => {
                 let Some(ParseValue::Declarator(declarator)) = returned else {
                     unexpected_return!(
-                        "parameter declarator returned an unexpected value",
-                        returned,
+                        "parameter declarator returned an unexpected value: {returned:?}"
                     );
                 };
                 let declarator_source = declarator.map(|declarator| declarator.source_vectors);

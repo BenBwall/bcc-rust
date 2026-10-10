@@ -539,7 +539,9 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     recovered,
                 })) = returned
                 else {
-                    unexpected_return!("array designator returned an unexpected value", returned);
+                    unexpected_return!(
+                        "array designator returned an unexpected value: {returned:?}"
+                    );
                 };
                 if let Some(action) = self.continue_range(parser, token, index) {
                     return action;
@@ -755,8 +757,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                 })) = returned
                 else {
                     unexpected_return!(
-                        "initializer element returned an unexpected value",
-                        returned,
+                        "initializer element returned an unexpected value: {returned:?}"
                     );
                 };
                 self.push_element(parser.context, index);

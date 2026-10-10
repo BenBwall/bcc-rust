@@ -309,7 +309,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
             },
             | DeclaratorPhase::AwaitPointerAttributes | DeclaratorPhase::AwaitAttributes => {
                 let Some(ParseValue::Modern(ModernValue::Attributes(attributes))) = returned else {
-                    unexpected_return!("declarator attributes protocol", returned)
+                    unexpected_return!("declarator attributes protocol: {returned:?}")
                 };
                 parser
                     .context
@@ -510,7 +510,9 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
             },
             | DeclaratorPhase::AwaitNested => {
                 let Some(ParseValue::Declarator(declarator)) = returned else {
-                    unexpected_return!("nested declarator returned an unexpected value", returned);
+                    unexpected_return!(
+                        "nested declarator returned an unexpected value: {returned:?}"
+                    );
                 };
                 let Some(declarator) = declarator else {
                     parser.report(
@@ -751,8 +753,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     }) = returned
                     else {
                         unexpected_return!(
-                            "array-bound frame returned an unexpected value",
-                            returned,
+                            "array-bound frame returned an unexpected value: {returned:?}"
                         );
                     };
                     let source_vectors = index.source_vectors;
@@ -850,7 +851,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                     source_vectors,
                 })) = returned
                 else {
-                    unexpected_return!("parameter list returned an unexpected value", returned);
+                    unexpected_return!("parameter list returned an unexpected value: {returned:?}");
                 };
                 parser
                     .context

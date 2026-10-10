@@ -137,7 +137,9 @@ impl<'tu, 'p> ExternalDeclarationFrame {
             },
             | ExternalDeclarationPhase::AwaitDeclaration => {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
-                    unexpected_return!("declaration frame returned an unexpected value", returned);
+                    unexpected_return!(
+                        "declaration frame returned an unexpected value: {returned:?}"
+                    );
                 };
                 // C99 §6.9.1p1: `declaration-specifiers declarator
                 // declaration-list? compound-statement`.
@@ -199,8 +201,7 @@ impl<'tu, 'p> ExternalDeclarationFrame {
             | ExternalDeclarationPhase::AwaitFunctionDefinition => {
                 let Some(ParseValue::FunctionDefinition(definition)) = returned else {
                     unexpected_return!(
-                        "function-definition frame returned an unexpected value",
-                        returned,
+                        "function-definition frame returned an unexpected value: {returned:?}"
                     );
                 };
                 let recovered = definition.recovered;

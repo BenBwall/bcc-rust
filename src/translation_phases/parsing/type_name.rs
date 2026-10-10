@@ -101,8 +101,7 @@ impl<'tu, 'p> TypeNameFrame<'tu> {
             | TypeNamePhase::AwaitSpecifiers => {
                 let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
                     unexpected_return!(
-                        "type-name specifiers returned an unexpected value",
-                        returned,
+                        "type-name specifiers returned an unexpected value: {returned:?}"
                     );
                 };
                 self.declaration_specifiers = Some(specifiers);
@@ -120,8 +119,7 @@ impl<'tu, 'p> TypeNameFrame<'tu> {
             | TypeNamePhase::AwaitDeclarator => {
                 let Some(ParseValue::Declarator(declarator)) = returned else {
                     unexpected_return!(
-                        "type-name declarator returned an unexpected value",
-                        returned,
+                        "type-name declarator returned an unexpected value: {returned:?}"
                     );
                 };
                 self.phase = TypeNamePhase::Finish(declarator);

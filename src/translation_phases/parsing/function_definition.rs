@@ -324,8 +324,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
             | FunctionDefinitionPhase::AwaitDeclaration => {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
                     unexpected_return!(
-                        "old-style declaration returned an unexpected value",
-                        returned,
+                        "old-style declaration returned an unexpected value: {returned:?}"
                     );
                 };
                 let source = declaration.source_vectors;
@@ -354,7 +353,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
             },
             | FunctionDefinitionPhase::AwaitBody => {
                 let Some(ParseValue::CompoundStatement(body)) = returned else {
-                    unexpected_return!("function body returned an unexpected value", returned);
+                    unexpected_return!("function body returned an unexpected value: {returned:?}");
                 };
                 let source = body.source_vectors;
                 parser.context.merge_into(&mut self.source_vectors, source);

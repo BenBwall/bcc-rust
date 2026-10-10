@@ -190,7 +190,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         match self.phase {
             | DeclarationSpecifiersPhase::AwaitAttributes => {
                 let Some(ParseValue::Modern(ModernValue::Attributes(attributes))) = returned else {
-                    unexpected_return!("attribute protocol", returned)
+                    unexpected_return!("attribute protocol: {returned:?}")
                 };
                 self.add_extension(
                     parser,
@@ -204,7 +204,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             | DeclarationSpecifiersPhase::AwaitModern(keyword) => {
                 let Some(ParseValue::Modern(ModernValue::Operand(operand, source))) = returned
                 else {
-                    unexpected_return!("specifier operand protocol", returned)
+                    unexpected_return!("specifier operand protocol: {returned:?}")
                 };
                 if keyword == KeywordTokenType::Alignas {
                     self.add_extension(parser, SpecifierExtensionKind::Alignment(operand), source);
@@ -236,7 +236,9 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             },
             | DeclarationSpecifiersPhase::AwaitStructOrUnion => {
                 let Some(ParseValue::StructOrUnionSpecifier(index)) = returned else {
-                    unexpected_return!("struct specifier returned an unexpected value", returned);
+                    unexpected_return!(
+                        "struct specifier returned an unexpected value: {returned:?}"
+                    );
                 };
                 let token = self
                     .pending_type_specifier
@@ -265,7 +267,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                     stopped_before_declaration,
                 })) = returned
                 else {
-                    unexpected_return!("enum specifier returned an unexpected value", returned);
+                    unexpected_return!("enum specifier returned an unexpected value: {returned:?}");
                 };
                 let token = self
                     .pending_type_specifier
