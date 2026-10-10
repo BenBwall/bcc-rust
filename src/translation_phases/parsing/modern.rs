@@ -614,7 +614,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
             },
             | Phase::AwaitAssociationType => {
                 let Some(ParseValue::TypeName(x)) = returned else {
-                    unexpected_return("generic association type protocol", &returned)
+                    unexpected_return!("generic association type protocol", returned)
                 };
                 self.association_type = Some(x);
                 parser

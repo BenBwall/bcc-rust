@@ -219,7 +219,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
             },
             | StructOrUnionPhase::AwaitTagAttributes => {
                 let Some(ParseValue::Modern(ModernValue::Attributes(x))) = returned else {
-                    unexpected_return("aggregate attributes protocol", &returned)
+                    unexpected_return!("aggregate attributes protocol", returned)
                 };
                 self.attributes = Some(parser.alloc_syntax(SpecifierExtension {
                     kind:           SpecifierExtensionKind::Attributes(x),
@@ -232,7 +232,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
             },
             | StructOrUnionPhase::AwaitAssertion => {
                 let Some(ParseValue::Modern(ModernValue::Assertion(assertion))) = returned else {
-                    unexpected_return("member assertion protocol", &returned)
+                    unexpected_return!("member assertion protocol", returned)
                 };
                 self.declarations.push(StructDeclaration {
                     assertion:              Some(assertion),
@@ -382,7 +382,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
             },
             | StructOrUnionPhase::AwaitMemberSpecifiers => {
                 let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
-                    unexpected_return("member specifiers returned an unexpected value", &returned);
+                    unexpected_return!("member specifiers returned an unexpected value", returned);
                 };
                 self.member_specifiers = Some(specifiers);
                 self.member_source = Some(specifiers.source_vectors);
@@ -474,7 +474,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
             },
             | StructOrUnionPhase::AwaitMemberDeclarator => {
                 let Some(ParseValue::Declarator(declarator)) = returned else {
-                    unexpected_return("member declarator returned an unexpected value", &returned);
+                    unexpected_return!("member declarator returned an unexpected value", returned);
                 };
                 self.member_declarator = declarator;
                 if let Some(source_vectors) = declarator.map(|declarator| declarator.source_vectors)
@@ -535,7 +535,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                     recovered,
                 })) = returned
                 else {
-                    unexpected_return("bit-field frame returned an unexpected value", &returned);
+                    unexpected_return!("bit-field frame returned an unexpected value", returned);
                 };
                 self.width_recovered = recovered;
                 let source_vectors = index.expression().source_vectors;

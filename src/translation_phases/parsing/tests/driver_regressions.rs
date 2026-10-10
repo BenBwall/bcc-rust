@@ -176,3 +176,11 @@ fn missing_semicolon_help_uses_macro_invocations_after_full_batch_preprocessing(
         );
     }
 }
+
+/// A child result outside its parent frame's protocol panics with the
+/// protocol's message and the value, which the out-of-line reporter formats.
+#[test]
+#[should_panic(expected = "expression child returned an unexpected value: None")]
+fn unexpected_child_result_reports_the_protocol_and_value() {
+    _ = crate::translation_phases::parsing::machine::expression_value(None);
+}

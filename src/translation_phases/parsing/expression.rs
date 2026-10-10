@@ -570,7 +570,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                         },
                         source,
                     ),
-                    | _ => unexpected_return("ISO expression protocol", &returned),
+                    | _ => unexpected_return!("ISO expression protocol", returned),
                 };
                 let index = parser.store_expression(
                     kind,
@@ -946,7 +946,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             },
             | ExpressionPhase::AwaitTypeName(opening_source, use_kind) => {
                 let Some(ParseValue::TypeName(type_name)) = returned else {
-                    unexpected_return("type-name frame returned an unexpected value", &returned);
+                    unexpected_return!("type-name frame returned an unexpected value", returned);
                 };
                 self.phase = ExpressionPhase::CloseTypeName(opening_source, use_kind, type_name);
                 return ParseAction::Continue;
@@ -1059,9 +1059,9 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             | ExpressionPhase::AwaitCompoundLiteral(type_name, type_source, use_kind) => {
                 let Some(ParseValue::Initializer(InitializerResult { initializer, .. })) = returned
                 else {
-                    unexpected_return(
+                    unexpected_return!(
                         "compound-literal initializer returned an unexpected value",
-                        &returned,
+                        returned,
                     );
                 };
                 let source = parser
