@@ -103,6 +103,17 @@ impl PartialEq for Token {
     }
 }
 
+impl Token {
+    /// Takes written assembly role from shared keyword metadata.
+    /// GNU/MSVC extensions to C99 §6.8p1, p. 131; PDF p. 143.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Alternate-Keywords.html>
+    /// <https://learn.microsoft.com/en-us/cpp/assembler/inline/asm>
+    pub(crate) fn uses_ambiguous_asm(self, configuration: CompilerConfiguration) -> bool {
+        KeywordTokenType::classify(self.contents, configuration)
+            .is_some_and(|keyword| keyword.ambiguous_asm)
+    }
+}
+
 impl GetPosition for Token {
     #[inline(always)]
     fn position(&self, context: &Context<'_>) -> SourcePosition {
@@ -730,9 +741,10 @@ impl KeywordTokenType {
             if kind == Self::MsAsm {
                 let msvc = configuration.accepts(Feature::MsAsm);
                 return Some(KeywordClassification {
-                    kind:     if msvc { Self::MsAsm } else { Self::Asm },
-                    origin:   if msvc { None } else { Some(FeatureOrigin::Gnu) },
-                    spelling: kind.spelling(),
+                    kind:          if msvc { Self::MsAsm } else { Self::Asm },
+                    origin:        if msvc { None } else { Some(FeatureOrigin::Gnu) },
+                    spelling:      kind.spelling(),
+                    ambiguous_asm: true,
                 });
             }
             let (enabled, origin) = match kind {
@@ -901,6 +913,7 @@ impl KeywordTokenType {
                 kind,
                 origin,
                 spelling: kind.spelling(),
+                ambiguous_asm: false,
             });
         }
         let alias = KEYWORD_ALIASES.get(index.checked_sub(Self::ALL.len())?)?;
@@ -910,9 +923,10 @@ impl KeywordTokenType {
             | AliasGate::Feature(feature) => configuration.accepts(feature),
         };
         enabled.then_some(KeywordClassification {
-            kind:     alias.kind,
-            origin:   Some(alias.origin),
-            spelling: alias.spelling,
+            kind:          alias.kind,
+            origin:        Some(alias.origin),
+            spelling:      alias.spelling,
+            ambiguous_asm: false,
         })
     }
 
@@ -1136,7 +1150,12 @@ impl UnsignedIntegerLiteralType {
 /// Classification retains spelling origin independently of the parser kind.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct KeywordClassification {
-    pub(crate) spelling: &'static str,
-    pub(crate) kind:     KeywordTokenType,
-    pub(crate) origin:   Option<FeatureOrigin>,
+    /// Reserved __asm can introduce either GNU or MSVC assembly.
+    /// GNU/MSVC extensions to C99 §6.8p1, p. 131; PDF p. 143.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Alternate-Keywords.html>
+    /// <https://learn.microsoft.com/en-us/cpp/assembler/inline/asm>
+    pub(crate) ambiguous_asm: bool,
+    pub(crate) spelling:      &'static str,
+    pub(crate) kind:          KeywordTokenType,
+    pub(crate) origin:        Option<FeatureOrigin>,
 }

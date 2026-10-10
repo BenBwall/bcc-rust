@@ -329,7 +329,7 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
                 if let Some(token) = token {
                     // The reserved `__asm` alias defers its origin until the
                     // statement owner distinguishes GNU and MSVC grammar.
-                    if token.contents == KeywordTokenType::MsAsm.cache_id() {
+                    if token.uses_ambiguous_asm(parser.context.configuration) {
                         parser.extension(crate::configuration::Feature::MsAsm, "__asm", token);
                     }
                     self.own(parser, token);

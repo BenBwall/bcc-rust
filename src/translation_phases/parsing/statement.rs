@@ -507,7 +507,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
                     ) = token.kind
                 {
                     if keyword == KeywordTokenType::MsAsm
-                        && token.contents == KeywordTokenType::MsAsm.cache_id()
+                        && token.uses_ambiguous_asm(parser.context.configuration)
                         && parser.cursor.following().is_some_and(|next| {
                             matches!(
                                 next.kind,

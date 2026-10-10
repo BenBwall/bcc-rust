@@ -357,3 +357,39 @@ fn every_alias_spelling_has_its_keyword_gate_and_origin() {
         }
     }
 }
+
+#[test]
+fn assembly_role_metadata_distinguishes_only_the_ambiguous_reserved_alias() {
+    use crate::configuration::{
+        CompilerConfiguration,
+        MsvcFeature,
+    };
+    for gnu in [false, true] {
+        for msvc in [false, true] {
+            let tu = crate::util::bump::Bump::new();
+            let config = CompilerConfiguration::default()
+                .with_gnu_extensions(gnu)
+                .with_msvc_feature(MsvcFeature::Asm, msvc);
+            let mut context = Context::with_configuration(&tu, config);
+            for spelling in ["__asm", "__asm__", "_asm", "asm", "ordinary"] {
+                let id = context.string_cache.intern(spelling);
+                let metadata = KeywordTokenType::classify(id, config);
+                assert_eq!(
+                    metadata.is_some_and(|m| m.ambiguous_asm),
+                    spelling == "__asm",
+                    "{spelling}"
+                );
+                if spelling == "__asm" {
+                    assert_eq!(
+                        metadata.unwrap().kind,
+                        if msvc {
+                            KeywordTokenType::MsAsm
+                        } else {
+                            KeywordTokenType::Asm
+                        }
+                    );
+                }
+            }
+        }
+    }
+}

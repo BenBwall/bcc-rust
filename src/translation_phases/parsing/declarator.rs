@@ -548,7 +548,7 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
                 if token.is_some_and(|x| {
                     matches!(x.kind, TokenType::Keyword(KeywordTokenType::Asm))
                         || matches!(x.kind, TokenType::Keyword(KeywordTokenType::MsAsm))
-                            && x.contents == KeywordTokenType::MsAsm.cache_id()
+                            && x.uses_ambiguous_asm(parser.context.configuration)
                 }) {
                     self.phase = DeclaratorPhase::AwaitAsm;
                     return super::gnu::GnuFrame::push(
