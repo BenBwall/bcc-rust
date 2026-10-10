@@ -286,6 +286,11 @@ impl Bump {
     }
 
     /// Rewind the arena while retaining its committed pages for reuse.
+    ///
+    /// This invalidates every allocation and raw pointer previously obtained
+    /// from the arena. Raw pointers carry no borrow, so they may still exist
+    /// when this safe method is called; using them afterwards is the caller's
+    /// bug, even if a new allocation reuses the same address.
     pub(crate) fn reset(&mut self) {
         let inner = self.inner.get_mut();
         inner.used = 0;
@@ -374,12 +379,21 @@ impl Inner {
 }
 
 // SAFETY: each returned block belongs to a stable reservation. Moving Bump
-// does not move that reservation; reset/drop require exclusive access.
+// does not move it. Blocks stay valid until deallocated, resized, reset, or
+// dropped. Reset/drop invalidate every allocation and raw pointer; callers
+// must stop using them, since raw pointers carry no borrow. Tail rollback
+// invalidates only the abandoned tail, never earlier allocations.
 unsafe impl Allocator for Bump {
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         self.inner.borrow_mut().allocate(layout)
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must denote a block currently allocated by this allocator, and
+    /// `layout` must fit it as defined by [`Allocator`]. No pointer to the
+    /// block may be used afterwards. Reset or release of the arena invalidates
+    /// all blocks, so a pointer retained across either cannot be deallocated.
     unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
         if layout.size() == 0 {
             return;
@@ -394,6 +408,14 @@ unsafe impl Allocator for Bump {
         }
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must denote a block currently allocated by this allocator, and
+    /// `old_layout` must fit it as defined by [`Allocator`].
+    /// `new_layout.size()` must be at least `old_layout.size()`. On
+    /// success, use only the returned pointer, even if the address is
+    /// unchanged; on failure the old block remains valid. Reset or release
+    /// invalidates all blocks and raw pointers.
     unsafe fn grow(
         &self,
         ptr: NonNull<u8>,
@@ -437,6 +459,14 @@ unsafe impl Allocator for Bump {
         Ok(new_ptr)
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must denote a block currently allocated by this allocator, and
+    /// `old_layout` must fit it as defined by [`Allocator`].
+    /// `new_layout.size()` must be at least `old_layout.size()`. On
+    /// success, use only the returned pointer, even if the address is
+    /// unchanged; on failure the old block remains valid. Reset or release
+    /// invalidates all blocks and raw pointers.
     unsafe fn grow_zeroed(
         &self,
         ptr: NonNull<u8>,
@@ -458,6 +488,14 @@ unsafe impl Allocator for Bump {
         Ok(grown)
     }
 
+    /// # Safety
+    ///
+    /// `ptr` must denote a block currently allocated by this allocator, and
+    /// `old_layout` must fit it as defined by [`Allocator`].
+    /// `new_layout.size()` must be at most `old_layout.size()`. On success,
+    /// use only the returned pointer, even if the address is unchanged; on
+    /// failure the old block remains valid. Reset or release invalidates
+    /// all blocks and raw pointers.
     unsafe fn shrink(
         &self,
         ptr: NonNull<u8>,
@@ -578,6 +616,8 @@ impl<'a, T: Copy> TailVec<'a, T> {
 
     /// Closes the tail, keeping exactly the written elements in the arena
     /// and returning the rest of the reservation to it.
+    /// Raw pointers into the returned elements remain valid until arena reset
+    /// or release; pointers into the reclaimed tail must not be used again.
     pub(crate) fn into_slice(self) -> &'a mut [T] {
         let this = ManuallyDrop::new(self);
         let mut inner = this.arena.inner.borrow_mut();
@@ -599,9 +639,14 @@ impl<'a, T: Copy> TailVec<'a, T> {
 
 impl<T: Copy> Drop for TailVec<'_, T> {
     /// Closes the tail without keeping anything; the elements need no drop.
+    /// Every raw pointer into this tail is invalidated. Raw pointers carry no
+    /// borrow; using one after this rollback is the caller's bug. Allocations
+    /// preceding the tail remain valid.
     fn drop(&mut self) {
         let mut inner = self.arena.inner.borrow_mut();
         inner.tail = None;
+        // Only this vector owns the abandoned tail; earlier blocks end at
+        // `restore`, and no tail element or raw pointer is used after drop.
         inner.used = self.restore;
         inner.last = self.restore_last;
     }

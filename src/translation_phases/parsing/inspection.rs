@@ -909,6 +909,8 @@ impl<'tu> ParsedTranslationUnit<'tu> {
                         );
                         continue;
                     }
+                    // Previous labels were copied into `output`; work items
+                    // refer to syntax, never scratch allocations or pointers.
                     literal_scratch.reset();
                     Self::line(
                         &mut output,

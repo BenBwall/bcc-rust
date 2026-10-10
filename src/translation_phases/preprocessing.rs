@@ -524,8 +524,9 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         mut step: impl for<'c, 'x> FnMut(&mut Expander<'c, 'tu, 'pp, 'x>) -> ControlFlow<B>,
     ) -> B {
         loop {
-            // Nothing borrows the expansion arena between segments: the
-            // previous expander was suspended or dropped.
+            // The previous expander was suspended or dropped; resting state
+            // retains no expansion allocations or raw pointers, and output
+            // and diagnostics have been copied into longer-lived storage.
             self.expansion.reset();
             let resting = self
                 .resting
