@@ -542,8 +542,9 @@ before a real cleanup; only local branches are deleted. Run its tests with
 local symbol and call graph of the repository sources. The project configuration in
 `.mcp.json` (Claude Code) and `.codex/config.toml` (Codex) starts its MCP
 server only when CodeGraph resolves the checkout or worktree's own root as an
-initialized project, so an interrupted index or an enclosing checkout's index
-is not used. Agents can then query the graph instead of searching file by file.
+initialized project, so an empty index directory (without CodeGraph's database)
+or an enclosing checkout's index is not used. Agents can then query the graph
+instead of searching file by file.
 It is optional: install the `codegraph` CLI, then run `codegraph init` in each
 checkout or worktree:
 

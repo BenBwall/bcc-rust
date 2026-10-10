@@ -25,7 +25,7 @@ class CodeGraphLauncherTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="codegraph checkout ")
         self.addCleanup(temporary.cleanup)
         self.parent = Path(temporary.name).resolve()
-        self.checkout = self.parent / "worktree"
+        self.checkout = self.parent / "worktree é"
         self.checkout.mkdir()
         subprocess.run(["git", "init", "--quiet", str(self.checkout)], check=True)
         self.nested = self.checkout / "nested working directory"
@@ -33,7 +33,7 @@ class CodeGraphLauncherTests(unittest.TestCase):
         launcher = self.checkout / "scripts/codegraph_mcp.py"
         launcher.parent.mkdir()
         shutil.copyfile(ROOT / "scripts/codegraph_mcp.py", launcher)
-        # An interrupted init directory must not be enough to start the server.
+        # An empty index directory must not be enough to start the server.
         (self.checkout / ".codegraph").mkdir()
 
         self.bin = self.parent / "bin"
@@ -49,6 +49,7 @@ class CodeGraphLauncherTests(unittest.TestCase):
             "    print(os.environ['CODEGRAPH_STATUS_OUTPUT'])\n"
             "    print('status stderr must stay private', file=sys.stderr)\n"
             "    sys.exit(int(os.environ['CODEGRAPH_STATUS_EXIT']))\n"
+            "observed['stdin'] = sys.stdin.read()\n"
             "record.write_text(json.dumps(observed))\n"
             "print('MCP stream')\n"
             "sys.exit(int(os.environ['CODEGRAPH_SERVE_EXIT']))\n",
@@ -85,9 +86,11 @@ class CodeGraphLauncherTests(unittest.TestCase):
             "CODEGRAPH_STATUS_EXIT": str(status_exit),
             "CODEGRAPH_SERVE_EXIT": "37",
             "CODEGRAPH_RECORD": str(self.record),
+            "PYTHONUTF8": "0",
         }
         if missing:
             self.assertIsNone(shutil.which("codegraph", path=environment["PATH"]))
+        client_input = "MCP client input must not reach status\n"
         for name, configuration in self.configurations.items():
             with self.subTest(client=name):
                 self.record.unlink(missing_ok=True)
@@ -95,7 +98,7 @@ class CodeGraphLauncherTests(unittest.TestCase):
                 result = subprocess.run(
                     [sys.executable, *configuration["args"]], cwd=self.nested,
                     env=environment, text=True, capture_output=True,
-                    input="MCP client input must not reach status\n",
+                    input=client_input,
                 )
                 if error:
                     self.assert_refused(result, error)
@@ -108,6 +111,7 @@ class CodeGraphLauncherTests(unittest.TestCase):
                     self.assertEqual(len(observed["argv"]), 4)
                     self.assertEqual(Path(observed["argv"][3]), self.checkout)
                     self.assertEqual(Path(observed["cwd"]), self.nested)
+                    self.assertEqual(observed["stdin"], client_input)
                 if missing:
                     self.assertFalse(self.record.with_suffix(".status").exists())
                 if not missing:
@@ -146,6 +150,13 @@ class CodeGraphLauncherTests(unittest.TestCase):
         (self.checkout / ".codegraph").rmdir()
         (self.checkout / ".codegraph-wsl").mkdir()
         output = json.dumps({"initialized": True, "projectPath": str(self.checkout)})
+        self.check_clients(output)
+
+    def test_own_index_still_indexing_starts_serve(self):
+        output = json.dumps({
+            "initialized": True, "projectPath": str(self.checkout),
+            "index": {"state": "indexing"},
+        })
         self.check_clients(output)
 
     def test_missing_cli_is_refused_without_a_traceback(self):
