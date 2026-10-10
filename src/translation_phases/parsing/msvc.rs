@@ -225,6 +225,8 @@ impl<'tu, 'p> MsvcFrame<'tu, 'p> {
         parser.merge_source(&mut self.source_vectors, token);
     }
 
+    #[cold]
+    #[inline(never)]
     fn expected(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>, component: &'static str) {
         parser.report(
             ParserErrorType::ExpectedMsSyntax(component, token.map(|x| x.kind)),

@@ -20,6 +20,7 @@ use super::{
         ParseFrame,
         ParseValue,
         any_expression_value,
+        unexpected_return,
     },
     syntax::Expression,
     type_name::TypeNameFrame,
@@ -397,6 +398,8 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         false
     }
 
+    #[cold]
+    #[inline(never)]
     fn expected(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>, position: &'static str) {
         parser.report(
             ParserErrorType::ExpectedIsoSyntax(position, token.map(|x| x.kind)),
@@ -404,6 +407,8 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         );
     }
 
+    #[cold]
+    #[inline(never)]
     fn attribute_expected(
         &self,
         parser: &mut Parser<'_, 'tu, 'p>,
@@ -609,7 +614,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
             },
             | Phase::AwaitAssociationType => {
                 let Some(ParseValue::TypeName(x)) = returned else {
-                    panic!("generic association type protocol: {returned:?}")
+                    unexpected_return("generic association type protocol", &returned)
                 };
                 self.association_type = Some(x);
                 parser

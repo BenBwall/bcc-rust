@@ -568,9 +568,20 @@ impl<'tu, 'p> ParseFrame<'tu, 'p> {
     }
 }
 
+/// Panics on a child result that the parent frame's protocol never produces.
+///
+/// Frame steps are inlined into the driver loop, so the message formatting
+/// stays out of line and each violation costs the step only a call.
+#[cold]
+#[inline(never)]
+#[track_caller]
+pub(super) fn unexpected_return(protocol: &str, returned: &dyn Debug) -> ! {
+    panic!("{protocol}: {returned:?}")
+}
+
 pub(super) fn expression_value(returned: Option<ParseValue<'_>>) -> &Expression<'_> {
     let Some(ParseValue::Expression(ExpressionResult { expression, .. })) = returned else {
-        panic!("expression child returned an unexpected value: {returned:?}");
+        unexpected_return("expression child returned an unexpected value", &returned);
     };
     expression
 }
@@ -580,6 +591,6 @@ pub(super) fn any_expression_value(returned: Option<ParseValue<'_>>) -> &Express
         | Some(ParseValue::Expression(ExpressionResult { expression, .. })) => expression,
         | Some(ParseValue::ConstantExpression(ConstantExpressionResult { expression, .. })) =>
             expression.into(),
-        | returned => panic!("expression child returned an unexpected value: {returned:?}"),
+        | returned => unexpected_return("expression child returned an unexpected value", &returned),
     }
 }

@@ -66,6 +66,7 @@ use super::{
         ParseValue,
         any_expression_value,
         expression_value,
+        unexpected_return,
     },
     modern::{
         ModernFrame,
@@ -569,7 +570,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                         },
                         source,
                     ),
-                    | _ => panic!("ISO expression protocol: {returned:?}"),
+                    | _ => unexpected_return("ISO expression protocol", &returned),
                 };
                 let index = parser.store_expression(
                     kind,
@@ -945,7 +946,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             },
             | ExpressionPhase::AwaitTypeName(opening_source, use_kind) => {
                 let Some(ParseValue::TypeName(type_name)) = returned else {
-                    panic!("type-name frame returned an unexpected value: {returned:?}");
+                    unexpected_return("type-name frame returned an unexpected value", &returned);
                 };
                 self.phase = ExpressionPhase::CloseTypeName(opening_source, use_kind, type_name);
                 return ParseAction::Continue;
@@ -1058,8 +1059,9 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             | ExpressionPhase::AwaitCompoundLiteral(type_name, type_source, use_kind) => {
                 let Some(ParseValue::Initializer(InitializerResult { initializer, .. })) = returned
                 else {
-                    panic!(
-                        "compound-literal initializer returned an unexpected value: {returned:?}"
+                    unexpected_return(
+                        "compound-literal initializer returned an unexpected value",
+                        &returned,
                     );
                 };
                 let source = parser
@@ -2344,6 +2346,8 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         }
     }
 
+    #[cold]
+    #[inline(never)]
     fn push_error(&mut self, parser: &mut Parser<'_, 'tu, 'p>, anchor: Option<Token>) {
         let source_vectors = match anchor {
             | Some(token) if token.source_vectors.length() != 0 => {
@@ -2368,6 +2372,8 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         self.push_error_with_source(parser, source_vectors, None);
     }
 
+    #[cold]
+    #[inline(never)]
     fn push_error_with_source(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,

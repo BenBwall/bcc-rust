@@ -219,6 +219,8 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
         parser.merge_source(&mut self.source_vectors, token);
     }
 
+    #[cold]
+    #[inline(never)]
     fn expected(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>, position: &'static str) {
         parser.report(
             ParserErrorType::ExpectedGnuSyntax(position, token.map(|x| x.kind)),

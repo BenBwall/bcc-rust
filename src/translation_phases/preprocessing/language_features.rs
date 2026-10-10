@@ -151,6 +151,8 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
 
     /// Reports malformed later-standard operations with their original
     /// provenance. C99: §5.1.1.3p1, p. 11; PDF p. 23.
+    #[cold]
+    #[inline(never)]
     pub(super) fn language_error(&mut self, message: &'static str, source_vectors: SourceVectors) {
         self.context.preprocessor_error(PreprocessorError {
             error_type: PreprocessorErrorType::LanguageConstraint(message),
@@ -860,6 +862,8 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         value
     }
 
+    #[cold]
+    #[inline(never)]
     fn embed_error(
         &mut self,
         error_type: PreprocessorErrorType<'tu>,

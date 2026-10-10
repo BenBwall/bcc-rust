@@ -38,6 +38,7 @@ use super::{
         ParseAction,
         ParseFrame,
         ParseValue,
+        unexpected_return,
     },
     scope::{
         NameClass,
@@ -322,7 +323,10 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
             },
             | FunctionDefinitionPhase::AwaitDeclaration => {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
-                    panic!("old-style declaration returned an unexpected value: {returned:?}");
+                    unexpected_return(
+                        "old-style declaration returned an unexpected value",
+                        &returned,
+                    );
                 };
                 let source = declaration.source_vectors;
                 parser.context.merge_into(&mut self.source_vectors, source);
@@ -350,7 +354,7 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
             },
             | FunctionDefinitionPhase::AwaitBody => {
                 let Some(ParseValue::CompoundStatement(body)) = returned else {
-                    panic!("function body returned an unexpected value: {returned:?}");
+                    unexpected_return("function body returned an unexpected value", &returned);
                 };
                 let source = body.source_vectors;
                 parser.context.merge_into(&mut self.source_vectors, source);

@@ -1126,6 +1126,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ))
     }
 
+    #[cold]
+    #[inline(never)]
     pub(super) fn invalid_expression(
         &mut self,
         e: &'tu Expression<'tu>,

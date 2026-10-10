@@ -47,6 +47,7 @@ use super::{
         ParseFrame,
         ParseValue,
         expression_value,
+        unexpected_return,
     },
     recovery::DelimiterDepth,
     statement::is_statement_keyword,
@@ -538,7 +539,7 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     recovered,
                 })) = returned
                 else {
-                    panic!("array designator returned an unexpected value: {returned:?}");
+                    unexpected_return("array designator returned an unexpected value", &returned);
                 };
                 if let Some(action) = self.continue_range(parser, token, index) {
                     return action;
@@ -753,7 +754,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
                     initializer: index, ..
                 })) = returned
                 else {
-                    panic!("initializer element returned an unexpected value: {returned:?}");
+                    unexpected_return(
+                        "initializer element returned an unexpected value",
+                        &returned,
+                    );
                 };
                 self.push_element(parser.context, index);
                 self.phase = InitializerPhase::Separator;

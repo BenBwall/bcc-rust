@@ -30,6 +30,7 @@ use super::{
         ParseAction,
         ParseFrame,
         ParseValue,
+        unexpected_return,
     },
 };
 use crate::translation_phases::preprocessing::{
@@ -99,7 +100,10 @@ impl<'tu, 'p> TypeNameFrame<'tu> {
             },
             | TypeNamePhase::AwaitSpecifiers => {
                 let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
-                    panic!("type-name specifiers returned an unexpected value: {returned:?}");
+                    unexpected_return(
+                        "type-name specifiers returned an unexpected value",
+                        &returned,
+                    );
                 };
                 self.declaration_specifiers = Some(specifiers);
                 if token.is_some_and(|token| is_abstract_declarator_starter(token.kind)) {
@@ -115,7 +119,10 @@ impl<'tu, 'p> TypeNameFrame<'tu> {
             },
             | TypeNamePhase::AwaitDeclarator => {
                 let Some(ParseValue::Declarator(declarator)) = returned else {
-                    panic!("type-name declarator returned an unexpected value: {returned:?}");
+                    unexpected_return(
+                        "type-name declarator returned an unexpected value",
+                        &returned,
+                    );
                 };
                 self.phase = TypeNamePhase::Finish(declarator);
                 ParseAction::Continue

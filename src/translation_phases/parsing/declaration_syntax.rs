@@ -629,6 +629,8 @@ impl<'tu> TypeSpecifiers<'tu> {
 
     /// Reports `conflicting` against the accumulated specifiers using
     /// source spellings, so rendered diagnostics never expose syntax nodes.
+    #[cold]
+    #[inline(never)]
     pub(super) fn report_conflict(
         self,
         parser: &mut Parser<'_, 'tu, '_>,

@@ -1915,6 +1915,8 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     ///
     /// C99: §6.10.5 paragraph 1, p. 159; PDF p. 171, and §4 paragraph 4,
     /// p. 7; PDF p. 19.
+    #[cold]
+    #[inline(never)]
     fn parse_error_directive(&mut self, directive: PreprocessorToken) {
         let mut contents = ArenaString::new_in(self.scratch);
         // A directive ending at end of file is complete; the missing final

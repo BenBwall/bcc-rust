@@ -140,6 +140,20 @@ impl<'tu> Context<'tu> {
         else {
             return;
         };
+        self.emit_extension(spelling, origin, severity, source_vectors);
+    }
+
+    /// Queues the diagnostic once the policy has asked for one. Callers
+    /// inline only the policy checks above.
+    #[cold]
+    #[inline(never)]
+    fn emit_extension(
+        &mut self,
+        spelling: &str,
+        origin: FeatureOrigin,
+        severity: ErrorSeverity,
+        source_vectors: SourceVectors,
+    ) {
         let spelling = self.diagnostic_text(spelling);
         self.pending_errors
             .push_back(TranslationError::Extension(ExtensionDiagnostic {
