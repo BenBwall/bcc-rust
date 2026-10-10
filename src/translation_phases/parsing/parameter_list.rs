@@ -271,8 +271,10 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     // pp. 139-140 removes identifier-list declarators.
                     // Retain the legacy shape for recovery, but never
                     // present it as native C23 grammar.
-                    if parser.context.configuration.standard()
-                        >= crate::configuration::CStandard::C23
+                    if !parser
+                        .context
+                        .configuration
+                        .accepts(crate::configuration::Feature::OldStyleFunctionDeclarators)
                     {
                         parser.report(
                             ParserErrorType::ExpectedIsoSyntax(

@@ -1434,3 +1434,48 @@ fn reserved_variadic_marker_diagnostics_follow_pedantic_policy() {
         }
     }
 }
+
+#[test]
+fn omitted_variadic_arguments_keep_specialized_policy_in_each_expansion_path() {
+    let source = "#define V(x,...) x\n#define WRAP(...) V(__VA_ARGS__)\nV(first) \
+                  WRAP(second)\n#if V(1)\nthird\n#endif\n";
+    for standard in [CStandard::C17, CStandard::C23] {
+        for gnu in [false, true] {
+            for msvc in [false, true] {
+                for policy in [
+                    ExtensionPolicy::Allow,
+                    ExtensionPolicy::Warn,
+                    ExtensionPolicy::Deny,
+                ] {
+                    let config = CompilerConfiguration::new(standard, policy)
+                        .with_gnu_extensions(gnu)
+                        .with_msvc_feature(MsvcFeature::VaArgs, msvc);
+                    let (tokens, errors) = observe(source, config);
+                    let expected = usize::from(
+                        standard < CStandard::C23 && !msvc && policy != ExtensionPolicy::Allow,
+                    ) * 3;
+                    assert_eq!(
+                        errors.len(),
+                        expected,
+                        "{standard:?} {gnu} {msvc} {policy:?}: {errors:?}"
+                    );
+                    let severity = if policy == ExtensionPolicy::Warn {
+                        "Warning:"
+                    } else {
+                        "Error:"
+                    };
+                    assert!(
+                        errors.iter().all(|e| e
+                            == &format!(
+                                "{severity} this invocation supplies no argument for `...`"
+                            )),
+                        "{errors:?}"
+                    );
+                    for name in ["first", "second", "third"] {
+                        assert!(spellings(&tokens).contains(&format!("identifier `{name}`")));
+                    }
+                }
+            }
+        }
+    }
+}

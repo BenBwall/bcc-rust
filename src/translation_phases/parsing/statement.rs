@@ -929,16 +929,26 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 self.merge_constant_slot(parser.context, slot);
                 if is_operator(token, OperatorTokenType::Ellipsis) {
                     let token = token.expect("ellipsis exists");
-                    if parser.pedantic_suppression == 0
-                        && !parser
-                            .context
-                            .configuration
-                            .is_native(crate::configuration::Feature::CaseRanges)
+                    // C2y N3370 extends C99 §6.8.1p1, p. 131; PDF p. 143.
+                    // Earlier modes require GNU support; keep the range for
+                    // recovery.
+                    if parser
+                        .context
+                        .configuration
+                        .accepts(crate::configuration::Feature::CaseRanges)
                     {
-                        parser.context.report_extension_since(
+                        parser.extension(
+                            crate::configuration::Feature::CaseRanges,
                             "case range",
-                            crate::configuration::FeatureOrigin::Gnu,
-                            token.source_vectors,
+                            token,
+                        );
+                    } else {
+                        parser.report(
+                            ParserErrorType::ExpectedIsoSyntax(
+                                "a single case value in this language mode",
+                                Some(token.kind),
+                            ),
+                            Some(token),
                         );
                     }
                     self.merge_token(parser, token);

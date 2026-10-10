@@ -463,7 +463,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             // an extension (§4p6), which the extension policy governs.
             let policy = self.context.configuration.extension_policy();
             if policy != crate::configuration::ExtensionPolicy::Allow
-                && self.context.configuration.standard() < crate::configuration::CStandard::C23
+                && !self
+                    .context
+                    .configuration
+                    .is_native(Feature::OmittedVariadicArguments)
                 && !self.context.configuration.accepts(Feature::MsVaArgs)
             {
                 self.context.preprocessor_error(PreprocessorError {

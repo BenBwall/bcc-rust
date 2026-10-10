@@ -865,9 +865,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && !self.variably_modified(ty);
                 if same_typedef {
                     if !self.tainted {
-                        self.context.report_extension_since(
+                        self.context.report_extension(
+                            crate::configuration::Feature::TypedefRedefinition,
                             "typedef redefinition",
-                            crate::configuration::FeatureOrigin::Standard(CStandard::C11),
                             name.source_vectors,
                         );
                     }

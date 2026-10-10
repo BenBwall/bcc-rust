@@ -365,12 +365,19 @@ mod tests {
         for mode in ["-std=c17", "-std=gnu17"] {
             let output = run(&[mode, "--syntax-tree", "--input", source]);
             let tree = String::from_utf8_lossy(&output.stderr);
-            assert!(
-                !tree.contains("error:")
-                    && !tree.contains("warning:")
-                    && !tree.contains("recovered"),
-                "{mode}: {tree}"
-            );
+            assert!(!tree.contains("warning:"), "{mode}: {tree}");
+            if mode == "-std=c17" {
+                assert_eq!(tree.matches("error:").count(), 1, "{tree}");
+                assert!(
+                    tree.contains("a single case value in this language mode"),
+                    "{tree}"
+                );
+            } else {
+                assert!(
+                    !tree.contains("error:") && !tree.contains("recovered"),
+                    "{tree}"
+                );
+            }
             assert!(
                 tree.contains("nested-function") && tree.contains("builtin __builtin_va_arg"),
                 "{tree}"

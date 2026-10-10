@@ -992,8 +992,9 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                             // the extension policy governs.
                             let extension_policy = self.context.configuration.extension_policy();
                             if extension_policy != ExtensionPolicy::Allow
-                                && self.context.configuration.standard()
-                                    < crate::configuration::CStandard::C23
+                                && !self.context.configuration.is_native(
+                                    crate::configuration::Feature::OmittedVariadicArguments,
+                                )
                                 && !self
                                     .context
                                     .configuration

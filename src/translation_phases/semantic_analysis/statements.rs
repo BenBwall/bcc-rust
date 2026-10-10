@@ -194,9 +194,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // C99 §6.8.5p3, p. 135; PDF p. 147. C23 relaxes the
                 // restriction to object declarations in the for initializer.
                 if d.init_declarators.is_empty() {
-                    self.context.report_extension_since(
+                    self.context.report_extension(
+                        crate::configuration::Feature::ForNonVariableDeclarations,
                         "non-variable declaration in 'for' loop",
-                        crate::configuration::FeatureOrigin::Standard(CStandard::C23),
                         d.source_vectors,
                     );
                 }
@@ -279,11 +279,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if matches!(
                     self.types.nodes[info.ty.index],
                     TypeKind::Scalar(Scalar::Void)
-                ) && self.context.configuration.gnu_extensions()
+                ) && self
+                    .context
+                    .configuration
+                    .accepts(crate::configuration::Feature::VoidExpressionReturn)
                 {
-                    self.context.report_extension_since(
+                    self.context.report_extension(
+                        crate::configuration::Feature::VoidExpressionReturn,
                         "return with a void expression",
-                        crate::configuration::FeatureOrigin::Gnu,
                         source,
                     );
                 } else if !self.types.unanalyzed(info.ty) {

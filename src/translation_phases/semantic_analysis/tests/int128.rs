@@ -319,9 +319,10 @@ fn extended_bit_fields_use_clang_promotions() {
 
 #[test]
 fn full_width_unsigned_switch_intervals_keep_their_order() {
-    with_source(
+    with_configuration(
         "void f(__uint128_t u) { switch(u) { case 0: break; case ((__uint128_t)1 << 127) ... \
          (__uint128_t)-1: break; } }",
+        CompilerConfiguration::default().with_gnu_extensions(true),
         |context, _| {
             assert_eq!(
                 context.pending_error_count(),
@@ -331,9 +332,10 @@ fn full_width_unsigned_switch_intervals_keep_their_order() {
             );
         },
     );
-    with_source(
+    with_configuration(
         "void f(__uint128_t u) { switch(u) { case ((__uint128_t)1 << 127) ... (__uint128_t)-1: \
          break; case (__uint128_t)-1: break; } }",
+        CompilerConfiguration::default().with_gnu_extensions(true),
         |context, _| {
             assert_eq!(context.pending_error_count(), 1);
             assert!(

@@ -256,22 +256,102 @@ fn c2y_syntax_retains_selection_declarations_ranges_and_named_jumps() {
                   switch(int x=2) {case 1 ... 3: n=x; break;} outer: for(;;) {continue outer; \
                   break outer;} return n; }";
     clean(source, CStandard::C2y);
-    with_parse_configuration(source, mode(CStandard::C23, ExtensionPolicy::Warn), |p| {
-        assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
-        for feature in [
-            "_Countof",
-            "type-controlling _Generic",
-            "selection declaration",
-            "case range",
-            "named loop control",
+    with_parse_configuration(
+        source,
+        mode(CStandard::C23, ExtensionPolicy::Warn).with_gnu_extensions(true),
+        |p| {
+            assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
+            for feature in [
+                "_Countof",
+                "type-controlling _Generic",
+                "selection declaration",
+                "case range",
+                "named loop control",
+            ] {
+                assert!(
+                    extensions(p).iter().any(|x| x.contains(feature)),
+                    "{feature}: {:?}",
+                    p.errors
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn case_ranges_require_native_or_gnu_support_and_preserve_following_input() {
+    for (standard, gnu) in [
+        (CStandard::C99, false),
+        (CStandard::C17, false),
+        (CStandard::C17, true),
+        (CStandard::C2y, false),
+    ] {
+        for policy in [
+            ExtensionPolicy::Allow,
+            ExtensionPolicy::Warn,
+            ExtensionPolicy::Deny,
         ] {
-            assert!(
-                extensions(p).iter().any(|x| x.contains(feature)),
-                "{feature}: {:?}",
-                p.errors
-            );
+            for suppression in ["", "__extension__ "] {
+                let source = format!(
+                    "{suppression}int f(int x) {{switch(x) {{case 1 ... 3: return 1; case 4: \
+                     return 2; default: return 0;}}}} int following;"
+                );
+                let configuration = mode(standard, policy).with_gnu_extensions(gnu);
+                with_parse_configuration(&source, configuration, |p| {
+                    let accepted = standard == CStandard::C2y || gnu;
+                    let errors: Vec<_> = parser_errors(p).collect();
+                    if accepted {
+                        assert!(errors.is_empty(), "{:?}", p.errors);
+                    } else {
+                        assert!(
+                            matches!(
+                                errors.as_slice(),
+                                [super::super::errors::ParserErrorType::ExpectedIsoSyntax(
+                                    "a single case value in this language mode",
+                                    _
+                                )]
+                            ),
+                            "{:?}",
+                            p.errors
+                        );
+                        assert!(
+                            p.errors
+                                .iter()
+                                .any(|e| e.severity() == ErrorSeverity::Error)
+                        );
+                    }
+                    let reported = extensions(p);
+                    if gnu && policy != ExtensionPolicy::Allow && suppression.is_empty() {
+                        assert_eq!(reported, ["'case range' is a C2y extension"]);
+                        let severity = if policy == ExtensionPolicy::Warn {
+                            ErrorSeverity::Warning
+                        } else {
+                            ErrorSeverity::Error
+                        };
+                        assert!(p.errors.iter().any(|e| e.severity() == severity));
+                    } else {
+                        assert!(reported.is_empty(), "{reported:?}");
+                    }
+                    assert!(
+                        p.parser
+                            .syntax
+                            .iter::<super::super::syntax::Statement<'_>>()
+                            .any(|s| matches!(s.kind, StatementType::CaseRange(_)))
+                    );
+                    assert_eq!(p.items.len(), 2);
+                    let following = declaration(p, 1);
+                    assert!(!following.recovered);
+                    assert_eq!(
+                        super::identifier_name(p, following.init_declarators[0].declarator)
+                            .as_deref(),
+                        Some("following")
+                    );
+                    assert!(p.parser.frames.is_empty());
+                    assert_eq!(p.parser.pedantic_suppression, 0);
+                });
+            }
         }
-    });
+    }
 }
 
 #[test]
@@ -1097,4 +1177,42 @@ fn alignof_expression_is_accepted_as_a_gnu_extension() {
         mode(CStandard::C11, ExtensionPolicy::Deny),
         |p| assert!(p.errors.is_empty(), "{:?}", p.errors),
     );
+}
+
+#[test]
+fn identifier_list_declarators_keep_the_c23_hard_error_and_legacy_shape() {
+    for standard in [
+        CStandard::C89,
+        CStandard::C99,
+        CStandard::C17,
+        CStandard::C23,
+        CStandard::C2y,
+    ] {
+        for gnu in [false, true] {
+            for policy in [
+                ExtensionPolicy::Allow,
+                ExtensionPolicy::Warn,
+                ExtensionPolicy::Deny,
+            ] {
+                with_parse_configuration(
+                    "int f(a,b); int following;",
+                    mode(standard, policy).with_gnu_extensions(gnu),
+                    |p| {
+                        assert_eq!(
+                            parser_errors(p).count(),
+                            usize::from(standard >= CStandard::C23),
+                            "{:?}",
+                            p.errors
+                        );
+                        assert_eq!(extensions(p), Vec::<String>::new());
+                        assert!(declaration(p, 0).init_declarators[0].declarator.kind.iter()
+                        .any(|d| matches!(d, DirectDeclarator::KAndRStyleFunction { parameters }
+                            if parameters.len() == 2)));
+                        assert_eq!(p.items.len(), 2);
+                        assert!(!declaration(p, 1).recovered);
+                    },
+                );
+            }
+        }
+    }
 }

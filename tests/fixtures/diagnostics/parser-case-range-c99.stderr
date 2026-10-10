@@ -1,0 +1,7 @@
+error: expected a single case value in this language mode, found `...`
+ --> parser-case-range-c99.c:3:10
+  |
+3 |   case 1 ... 3: return 1;
+  |          ^^^ expected a single case value in this language mode
+
+1 error generated.

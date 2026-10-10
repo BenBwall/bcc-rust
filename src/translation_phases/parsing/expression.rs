@@ -1955,9 +1955,9 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
         } else {
             "alignof (expression)"
         };
-        parser.context.report_extension_since(
+        parser.context.report_extension(
+            crate::configuration::Feature::AlignofExpression,
             spelling,
-            crate::configuration::FeatureOrigin::Gnu,
             keyword.source_vectors,
         );
     }

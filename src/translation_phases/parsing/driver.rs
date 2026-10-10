@@ -1060,13 +1060,13 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         token.is_some_and(|x| self.declaration_starter(x))
     }
 
-    /// Reports unambiguous C99 grammar absent from the grouped feature table.
+    /// Reports the C99 array-parameter syntax feature.
     /// C99: array declarators §6.7.5 paragraph 1, p. 114; PDF p. 126.
     pub(super) fn c99_syntax_extension(&mut self, spelling: &'static str, token: Token) {
         if self.pedantic_suppression == 0 {
-            self.context.report_extension_since(
+            self.context.report_extension(
+                crate::configuration::Feature::ArrayParameterSyntax,
                 spelling,
-                crate::configuration::FeatureOrigin::Standard(crate::configuration::CStandard::C99),
                 token.source_vectors,
             );
         }
