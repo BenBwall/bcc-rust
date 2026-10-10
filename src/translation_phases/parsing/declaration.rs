@@ -50,6 +50,7 @@ use super::{
         ParseFrame,
         ParseFrameKind,
         ParseValue,
+        unexpected_return,
     },
     modern::{
         ExtendedType,
@@ -226,7 +227,7 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     .suppression_entry
                     .expect("declaration suppression entry");
                 let Some(ParseValue::Modern(ModernValue::Assertion(assertion))) = returned else {
-                    panic!("assertion declaration protocol: {returned:?}")
+                    unexpected_return!("assertion declaration protocol: {returned:?}")
                 };
                 ParseAction::Reduce(ParseValue::Declaration(parser.alloc_syntax(Declaration {
                     assertion:                   Some(assertion),
@@ -266,7 +267,9 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
             },
             | DeclarationPhase::AwaitSpecifiers => {
                 let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
-                    panic!("specifier frame returned an unexpected value: {returned:?}");
+                    unexpected_return!(
+                        "specifier frame returned an unexpected value: {returned:?}"
+                    );
                 };
                 let mut specifiers = specifiers;
                 if let Some(source_vectors) = self.leading_extension {
@@ -315,7 +318,9 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
             },
             | DeclarationPhase::AwaitDeclarator => {
                 let Some(ParseValue::Declarator(declarator)) = returned else {
-                    panic!("declarator frame returned an unexpected value: {returned:?}");
+                    unexpected_return!(
+                        "declarator frame returned an unexpected value: {returned:?}"
+                    );
                 };
                 let Some(declarator) = declarator else {
                     parser.report(
@@ -618,7 +623,9 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                     recovered,
                 })) = returned
                 else {
-                    panic!("initializer frame returned an unexpected value: {returned:?}");
+                    unexpected_return!(
+                        "initializer frame returned an unexpected value: {returned:?}"
+                    );
                 };
                 let _ = recovered;
                 let source_vectors = initializer_index.source_vectors;

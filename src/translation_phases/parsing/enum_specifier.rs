@@ -39,6 +39,7 @@ use super::{
         ParseFrame,
         ParseFrameKind,
         ParseValue,
+        unexpected_return,
     },
     modern::{
         ModernKind,
@@ -192,7 +193,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
             },
             | EnumPhase::AwaitUnderlyingType => {
                 let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
-                    panic!("enum underlying type protocol: {returned:?}")
+                    unexpected_return!("enum underlying type protocol: {returned:?}")
                 };
                 let x = parser.alloc_syntax(super::declaration_syntax::TypeName {
                     declaration_specifiers: specifiers,
@@ -213,7 +214,7 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
             },
             | EnumPhase::AwaitTagAttributes | EnumPhase::AwaitEnumeratorAttributes => {
                 let Some(ParseValue::Modern(ModernValue::Attributes(x))) = returned else {
-                    panic!("enum attributes protocol: {returned:?}")
+                    unexpected_return!("enum attributes protocol: {returned:?}")
                 };
                 let is_enumerator = matches!(self.phase, EnumPhase::AwaitEnumeratorAttributes);
                 let next = if is_enumerator {
@@ -482,7 +483,9 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
                     recovered,
                 })) = returned
                 else {
-                    panic!("enumerator-value frame returned an unexpected value: {returned:?}");
+                    unexpected_return!(
+                        "enumerator-value frame returned an unexpected value: {returned:?}"
+                    );
                 };
                 self.resuming_after_error = recovered;
                 let source_vectors = index.expression().source_vectors;

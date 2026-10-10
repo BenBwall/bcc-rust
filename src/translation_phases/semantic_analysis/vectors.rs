@@ -627,6 +627,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ))
     }
 
+    #[cold]
+    #[inline(never)]
     pub(super) fn vector_error(&mut self, e: &'tu Expression<'tu>) -> ExpressionInfo<'tu> {
         self.error(
             SemanticErrorKind::InvalidVectorOperand,

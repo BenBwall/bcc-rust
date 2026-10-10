@@ -25,6 +25,7 @@ use chrono::Local;
 
 use super::{
     Expander,
+    MacroDeprecation,
     errors::{
         DeprecatedMacroDiagnostic,
         MacroExpansionNote,
@@ -78,6 +79,18 @@ impl Expander<'_, '_, '_, '_> {
         else {
             return;
         };
+        self.report_deprecated_macro(token, deprecation);
+    }
+
+    /// Every expansion looks the macro up; only a deprecated one reaches the
+    /// diagnostic, which stays out of line.
+    #[cold]
+    #[inline(never)]
+    fn report_deprecated_macro(
+        &mut self,
+        token: PreprocessorToken,
+        deprecation: MacroDeprecation<'_>,
+    ) {
         let mut spelling = self.spelling_location(token);
         let mut invocation = spelling.clone();
         let mut expansions = ArenaVec::new_in(self.scratch);

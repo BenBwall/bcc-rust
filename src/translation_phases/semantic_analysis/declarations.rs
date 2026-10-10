@@ -392,6 +392,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// members inside its list, so later uses of them do not cascade. Its
     /// uninstalled tag is unanalyzed: neither the rejected nor the original
     /// contents is a trustworthy type for the declaration.
+    #[cold]
+    #[inline(never)]
     fn rejected_tag(&mut self, kind: TagKind, name: Option<Identifier>) -> usize {
         let index = self.new_tag(kind, name);
         self.types.tags[index].tainted.set(true);

@@ -58,6 +58,7 @@ use super::{
         ParseFrame,
         ParseFrameKind,
         ParseValue,
+        unexpected_return,
     },
     modern::{
         AttributeSpecifier,
@@ -383,7 +384,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             ),
             | StatementPhase::AwaitAttributes => {
                 let Some(ParseValue::Modern(ModernValue::Attributes(x))) = returned else {
-                    panic!("statement attributes protocol: {returned:?}")
+                    unexpected_return!("statement attributes protocol: {returned:?}")
                 };
                 self.source_vectors = Some(x.source_vectors);
                 self.phase = StatementPhase::AwaitAttributedStatement(x);
@@ -398,7 +399,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::AwaitAttributedStatement(attributes) => {
                 let Some(ParseValue::Statement(statement)) = returned else {
-                    panic!("attributed statement protocol: {returned:?}")
+                    unexpected_return!("attributed statement protocol: {returned:?}")
                 };
                 self.merge_statement(parser.context, statement);
                 let node = parser.alloc_syntax(AttributedStatement {
@@ -409,7 +410,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::AwaitLabeledDeclaration(prefix) => {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
-                    panic!("labeled declaration protocol: {returned:?}")
+                    unexpected_return!("labeled declaration protocol: {returned:?}")
                 };
                 let child = parser.alloc_syntax(Statement {
                     kind:           StatementType::Declaration(declaration),
@@ -431,7 +432,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             ),
             | StatementPhase::AwaitHeaderDeclaration(kind) => {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
-                    panic!("selection declaration protocol: {returned:?}")
+                    unexpected_return!("selection declaration protocol: {returned:?}")
                 };
                 self.source_vectors = Some(parser.context.merge_vectors(
                     self.source_vectors.unwrap_or_default(),
@@ -744,7 +745,9 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::AwaitCompound => {
                 let Some(ParseValue::CompoundStatement(statement)) = returned else {
-                    panic!("compound statement returned an unexpected value: {returned:?}");
+                    unexpected_return!(
+                        "compound statement returned an unexpected value: {returned:?}"
+                    );
                 };
                 self.merge_statement(parser.context, statement);
                 self.finish_existing(parser, statement)
@@ -1070,7 +1073,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::AwaitLabeled(prefix) => {
                 let Some(ParseValue::Statement(statement)) = returned else {
-                    panic!("labeled child returned an unexpected value: {returned:?}");
+                    unexpected_return!("labeled child returned an unexpected value: {returned:?}");
                 };
                 self.merge_statement(parser.context, statement);
                 let kind = prefix.label(parser, statement);
@@ -1187,7 +1190,9 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::AwaitHeaderBody(kind, expression) => {
                 let Some(ParseValue::Statement(body)) = returned else {
-                    panic!("selection/iteration body returned an unexpected value: {returned:?}");
+                    unexpected_return!(
+                        "selection/iteration body returned an unexpected value: {returned:?}"
+                    );
                 };
                 self.merge_statement(parser.context, body);
                 match kind {
@@ -1242,7 +1247,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::AwaitElse(expression, then_statement) => {
                 let Some(ParseValue::Statement(else_statement)) = returned else {
-                    panic!("else child returned an unexpected value: {returned:?}");
+                    unexpected_return!("else child returned an unexpected value: {returned:?}");
                 };
                 self.merge_statement(parser.context, else_statement);
                 self.finish(
@@ -1265,7 +1270,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::DoAwaitBody => {
                 let Some(ParseValue::Statement(body)) = returned else {
-                    panic!("do body returned an unexpected value: {returned:?}");
+                    unexpected_return!("do body returned an unexpected value: {returned:?}");
                 };
                 self.merge_statement(parser.context, body);
                 self.phase = StatementPhase::DoWhileKeyword(body);
@@ -1460,7 +1465,9 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::AwaitForInitializerDeclaration => {
                 let Some(ParseValue::Declaration(declaration)) = returned else {
-                    panic!("for declaration returned an unexpected value: {returned:?}");
+                    unexpected_return!(
+                        "for declaration returned an unexpected value: {returned:?}"
+                    );
                 };
                 let source = declaration.source_vectors;
                 parser.context.merge_into(&mut self.source_vectors, source);
@@ -1650,7 +1657,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
             | StatementPhase::ForAwaitBody(initializer, condition, iteration) => {
                 let Some(ParseValue::Statement(body)) = returned else {
-                    panic!("for body returned an unexpected value: {returned:?}");
+                    unexpected_return!("for body returned an unexpected value: {returned:?}");
                 };
                 self.merge_statement(parser.context, body);
                 let clauses = parser.alloc_syntax_part(ForStatement {
@@ -1745,7 +1752,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
             recovered,
         })) = returned
         else {
-            panic!("expression frame returned an unexpected value: {returned:?}");
+            unexpected_return!("expression frame returned an unexpected value: {returned:?}");
         };
         let _ = recovered;
         ExpressionSlot::Parsed(index)
@@ -1757,7 +1764,9 @@ impl<'tu, 'p> StatementFrame<'tu> {
             recovered,
         })) = returned
         else {
-            panic!("constant-expression frame returned an unexpected value: {returned:?}");
+            unexpected_return!(
+                "constant-expression frame returned an unexpected value: {returned:?}"
+            );
         };
         let _ = recovered;
         ConstantExpressionSlot::Parsed(index)

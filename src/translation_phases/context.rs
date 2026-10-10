@@ -394,15 +394,21 @@ impl<'tu> Context<'tu> {
         self.tu
     }
 
+    #[cold]
+    #[inline(never)]
     pub(crate) fn diagnostic_text(&self, text: &str) -> &'tu str {
         self.tu.alloc_str(text)
     }
 
     /// Formats diagnostic text straight into the translation-unit arena.
+    #[cold]
+    #[inline(never)]
     pub(crate) fn diagnostic_format(&self, arguments: std::fmt::Arguments<'_>) -> &'tu str {
         crate::diagnostics::format_arguments_in(self.tu, arguments)
     }
 
+    #[cold]
+    #[inline(never)]
     pub(crate) fn diagnostic_slice<T: Copy>(&self, values: &[T]) -> &'tu mut [T] {
         self.tu.alloc_slice_copy(values)
     }

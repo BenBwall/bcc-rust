@@ -1075,6 +1075,43 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
         tracker.advance_past_deletions(self.bytes.len())
     }
 
+    /// Queues a diagnostic from `start` to the end of input, which a scan
+    /// reached without closing its token. Scan loops keep only the call.
+    #[cold]
+    #[inline(never)]
+    fn diagnose_to_eof(
+        &mut self,
+        error_type: PreprocessorTokenizerErrorType,
+        start: SourcePosition,
+    ) {
+        let eof = self.eof_position();
+        self.pending.push(LexDiagnostic::Tokenizer {
+            error_type,
+            start,
+            length: eof.index - start.index,
+            character: None,
+        });
+        self.reached_eof = true;
+    }
+
+    /// Queues a diagnostic from `start` to the byte offset `end`.
+    #[cold]
+    #[inline(never)]
+    fn diagnose_to(
+        &mut self,
+        error_type: PreprocessorTokenizerErrorType,
+        start: SourcePosition,
+        end: usize,
+    ) {
+        let at = self.tracker.advance(end);
+        self.pending.push(LexDiagnostic::Tokenizer {
+            error_type,
+            start,
+            length: at.index - start.index,
+            character: None,
+        });
+    }
+
     fn run(mut self) -> LexingFile<'arena, 's> {
         loop {
             let start = self.pos;
@@ -1517,14 +1554,10 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
                 // Unterminated: the token ends past any trailing splice.
                 | None => {
                     let start = self.tracker.advance_past_deletions(body - 2);
-                    let eof = self.eof_position();
-                    self.pending.push(LexDiagnostic::Tokenizer {
-                        error_type: PreprocessorTokenizerErrorType::UnterminatedBlockComment,
+                    self.diagnose_to_eof(
+                        PreprocessorTokenizerErrorType::UnterminatedBlockComment,
                         start,
-                        length: eof.index - start.index,
-                        character: None,
-                    });
-                    self.reached_eof = true;
+                    );
                     return end;
                 },
                 | Some(b'*') => {
@@ -1566,14 +1599,7 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
             end += byte_scan::literal_run(&self.bytes[end..]);
             match self.peek(end) {
                 | None => {
-                    let eof = self.eof_position();
-                    self.pending.push(LexDiagnostic::Tokenizer {
-                        error_type: unterminated,
-                        start:      position,
-                        length:     eof.index - position.index,
-                        character:  None,
-                    });
-                    self.reached_eof = true;
+                    self.diagnose_to_eof(unterminated, position);
                     return self.spelled(start, end, kind);
                 },
                 | Some(b'\\') => {
@@ -1584,13 +1610,7 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
                     }
                 },
                 | Some(b'\n') => {
-                    let at = self.tracker.advance(end);
-                    self.pending.push(LexDiagnostic::Tokenizer {
-                        error_type: newline,
-                        start:      position,
-                        length:     at.index - position.index,
-                        character:  None,
-                    });
+                    self.diagnose_to(newline, position, end);
                     // Close the literal for recovery.
                     let quote = [quote];
                     let quote = std::str::from_utf8(&quote).expect("quotes are ASCII");

@@ -540,6 +540,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         analyzer
     }
 
+    #[cold]
+    #[inline(never)]
     fn error(
         &mut self,
         kind: SemanticErrorKind,

@@ -175,6 +175,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         None
     }
 
+    #[cold]
+    #[inline(never)]
     fn va_opt_error(
         &mut self,
         error_type: PreprocessorErrorType<'static>,

@@ -1063,6 +1063,8 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         }
     }
 
+    #[cold]
+    #[inline(never)]
     fn create_merge_error(
         &mut self,
         lhs: PreprocessorToken,

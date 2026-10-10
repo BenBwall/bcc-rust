@@ -569,6 +569,8 @@ impl<'pp> PreprocessorExpressionOperandStack<'pp> {
         self.pending_arithmetic_faults = self.join_faults(self.pending_arithmetic_faults, root);
     }
 
+    #[cold]
+    #[inline(never)]
     fn record_fault(&mut self, kind: ArithmeticFaultKind, source_vectors: SourceVectors) {
         let root = self.add_fault_node(ArithmeticFaultNode::Fault {
             kind,
@@ -750,6 +752,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     }
 
     /// Reports that `operator`'s operand is missing as it is reduced.
+    #[cold]
+    #[inline(never)]
     fn report_missing_operand(&mut self, operator: PreprocessorExpressionOperator) {
         let source_vectors = self.current_location();
         self.context.preprocessor_error(PreprocessorError {

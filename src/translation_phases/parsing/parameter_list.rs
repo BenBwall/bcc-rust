@@ -42,6 +42,7 @@ use super::{
         ParseFrame,
         ParseFrameKind,
         ParseValue,
+        unexpected_return,
     },
     recovery::{
         SynchronizationKind,
@@ -357,7 +358,9 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
             },
             | ParameterListPhase::KAndRMixedSpecifiers => {
                 let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
-                    panic!("parameter specifiers returned an unexpected value: {returned:?}");
+                    unexpected_return!(
+                        "parameter specifiers returned an unexpected value: {returned:?}"
+                    );
                 };
                 self.source_vectors.push(specifiers.source_vectors);
                 if is_operator(token, OperatorTokenType::Comma)
@@ -375,7 +378,9 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
             },
             | ParameterListPhase::KAndRMixedDeclarator => {
                 let Some(ParseValue::Declarator(declarator)) = returned else {
-                    panic!("parameter declarator returned an unexpected value: {returned:?}");
+                    unexpected_return!(
+                        "parameter declarator returned an unexpected value: {returned:?}"
+                    );
                 };
                 if let Some(declarator) = declarator {
                     self.source_vectors.push(declarator.source_vectors);
@@ -471,7 +476,9 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
             },
             | ParameterListPhase::AwaitSpecifiers => {
                 let Some(ParseValue::DeclarationSpecifiers(specifiers)) = returned else {
-                    panic!("parameter specifiers returned an unexpected value: {returned:?}");
+                    unexpected_return!(
+                        "parameter specifiers returned an unexpected value: {returned:?}"
+                    );
                 };
                 self.pending_specifiers = Some(specifiers);
                 self.pending_source = Some(specifiers.source_vectors);
@@ -500,7 +507,9 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
             },
             | ParameterListPhase::AwaitDeclarator => {
                 let Some(ParseValue::Declarator(declarator)) = returned else {
-                    panic!("parameter declarator returned an unexpected value: {returned:?}");
+                    unexpected_return!(
+                        "parameter declarator returned an unexpected value: {returned:?}"
+                    );
                 };
                 let declarator_source = declarator.map(|declarator| declarator.source_vectors);
                 // Parameter names enter prototype scope as soon as

@@ -579,6 +579,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// Unlike the upstream position, this does not depend on how far the
     /// preprocessor has read ahead, so every preprocessing strategy places
     /// recovered and missing nodes identically.
+    #[cold]
+    #[inline(never)]
     pub(super) fn missing_syntax_source(&mut self) -> SourceVectors {
         if let Some(token) = self.cursor.current()
             && let Some(first) = self
@@ -710,6 +712,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// C99: continued translation after a required diagnostic is permitted by
     /// §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23. C99 does not
     /// specify how an implementation resynchronizes.
+    #[cold]
+    #[inline(never)]
     fn recover(
         &mut self,
         set: SynchronizationSet,
@@ -907,6 +911,8 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     /// C99: syntax-rule and constraint violations require at least one
     /// diagnostic under §5.1.1.3, p. 11; PDF p. 23: implementations must
     /// “produce at least one diagnostic message”.
+    #[cold]
+    #[inline(never)]
     pub(super) fn report(&mut self, error_type: ParserErrorType<'tu>, token: Option<Token>) {
         self.report_with_feature(error_type, token, None);
     }
