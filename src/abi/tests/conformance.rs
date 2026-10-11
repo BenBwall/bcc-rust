@@ -382,6 +382,130 @@ fn structures_cross_between_bcc_and_clang() {
     }
 }
 
+/// The bcc side of the narrow integer exchange: functions Clang calls,
+/// whose results come from truncation and so need widening, and
+/// `bcc_narrow`, which passes Clang truncated arguments computed from its
+/// opaque parameter, so that their upper register bits are not already
+/// clean.
+const NARROW_BCC: &str = "\
+signed char b_ret_sc(int x) { return x; }
+unsigned char b_ret_uc(int x) { return x; }
+short b_ret_ss(int x) { return x; }
+unsigned short b_ret_us(int x) { return x; }
+_Bool b_ret_b(int x) { return x & 0x10; }
+char b_ret_ch(int x) { return x; }
+int b_sc(signed char c) { return c; }
+int b_uc(unsigned char c) { return c; }
+int b_ss(short s) { return s; }
+int b_us(unsigned short s) { return s; }
+int b_b(_Bool b) { return b; }
+long long b_mix(char a, unsigned char b, short c, unsigned short d, _Bool e, signed char f,
+                unsigned char g) {
+  return a + b + c + d + e + f + g;
+}
+
+int c_sc(signed char c);
+int c_uc(unsigned char c);
+int c_ss(short s);
+int c_us(unsigned short s);
+int c_b(_Bool b);
+int c_ch(char c);
+signed char c_ret_sc(int x);
+unsigned short c_ret_us(int x);
+_Bool c_ret_b(int x);
+long long c_mix(char a, unsigned char b, short c, unsigned short d, _Bool e, signed char f,
+                unsigned char g);
+
+int bcc_narrow(int k) {
+  if (c_sc((signed char)(k + 0x100)) != -16) return 1;
+  if (c_uc((unsigned char)(k + 0x100)) != 240) return 2;
+  if (c_ss((short)(k * 0x100 + 0x10000)) != -4096) return 3;
+  if (c_us((unsigned short)(k * 0x100 + 0x10000)) != 61440) return 4;
+  if (c_b((_Bool)(k & 0x10)) != 1) return 5;
+  if (c_ch((char)(k + 0x100)) != -16) return 6;
+  if (c_ret_sc(k + 0x100) != -16) return 7;
+  if (c_ret_us(k * 0x100 + 0x10000) != 61440) return 8;
+  if (c_ret_b(k) != 1) return 9;
+  long long m = c_mix((char)(k + 0x100), (unsigned char)(k + 0x100), (short)(k * 0x100 + 0x10000),
+                      (unsigned short)(k * 0x100 + 0x10000), (_Bool)(k & 0x10),
+                      (signed char)(k + 0x100), (unsigned char)(k + 0x200));
+  if (m != 57793) return 10;
+  return 0;
+}
+";
+
+/// The Clang side: callees that rely on their narrow arguments arriving
+/// widened as the target's convention says, and `main`, which checks bcc's
+/// narrow results without widening them again.
+const NARROW_CLANG: &str = "\
+signed char b_ret_sc(int x);
+unsigned char b_ret_uc(int x);
+short b_ret_ss(int x);
+unsigned short b_ret_us(int x);
+_Bool b_ret_b(int x);
+char b_ret_ch(int x);
+int b_sc(signed char c);
+int b_uc(unsigned char c);
+int b_ss(short s);
+int b_us(unsigned short s);
+int b_b(_Bool b);
+long long b_mix(char a, unsigned char b, short c, unsigned short d, _Bool e, signed char f,
+                unsigned char g);
+int bcc_narrow(int k);
+
+int c_sc(signed char c) { return c; }
+int c_uc(unsigned char c) { return c; }
+int c_ss(short s) { return s; }
+int c_us(unsigned short s) { return s; }
+int c_b(_Bool b) { return b; }
+int c_ch(char c) { return c; }
+signed char c_ret_sc(int x) { return x; }
+unsigned short c_ret_us(int x) { return x; }
+_Bool c_ret_b(int x) { return x & 0x10; }
+long long c_mix(char a, unsigned char b, short c, unsigned short d, _Bool e, signed char f,
+                unsigned char g) {
+  return a + b + c + d + e + f + g;
+}
+
+int main(void) {
+  if (b_ret_sc(0x1F0) != -16) return 1;
+  if (b_ret_uc(0x1F0) != 240) return 2;
+  if (b_ret_ss(0x1F000) != -4096) return 3;
+  if (b_ret_us(0x1F000) != 61440) return 4;
+  if (b_ret_b(0x1F0) != 1) return 5;
+  if (b_ret_ch(0x1F0) != -16) return 6;
+  if (b_sc(-16) != -16 || b_uc(240) != 240) return 7;
+  if (b_ss(-4096) != -4096 || b_us(61440) != 61440) return 8;
+  if (b_b(1) != 1) return 9;
+  if (b_mix(-16, 240, -4096, 61440, 1, -16, 240) != 57793) return 10;
+  int status = bcc_narrow(240);
+  return status ? 100 + status : 0;
+}
+";
+
+/// `char`, `signed char`, `unsigned char`, `short`, `unsigned short` and
+/// `_Bool` arguments and results cross between bcc and Clang in both
+/// directions, seven at a time so that some travel on the stack. Clang at
+/// `-O2` relies on what the target's convention widens: every narrow
+/// integer on System V, only `_Bool` on Win64.
+#[test]
+fn narrow_integers_cross_between_bcc_and_clang() {
+    for target in [Target::WindowsGnu, Target::LinuxGnu] {
+        let arena = Bump::new();
+        let tu = Bump::new();
+        let mut module = lower_c(&tu, &arena, NARROW_BCC, target);
+        let scratch = Bump::new();
+        let mut options = OptimizerOptions::default();
+        options.verify_each = true;
+        _ = optimize(&mut module, &options, &scratch);
+        lower_abi(&mut module, target, &scratch).unwrap();
+        assert_verified(&module, Profile::PostAbi, &module.to_string());
+        let mut text = String::new();
+        emit_module(&module, target, &mut text).unwrap();
+        assert_conforms("narrow", target, &text, NARROW_CLANG);
+    }
+}
+
 /// A bcc variadic function, written as IR since lowering does not lower
 /// `va_arg` yet, reads groups of a `long long`, a `double`, a pointer to an
 /// `int` and an `int` from Clang's call: more than either register class
