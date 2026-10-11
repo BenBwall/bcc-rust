@@ -37,6 +37,20 @@ use crate::{
 /// structures too large for registers.
 pub(crate) const PROGRAMS: &[Program] = &[
     Program {
+        name: "aggregate_argument_snapshot",
+        source: "struct S { int x; }; static struct S s; static int evaluations;
+static int mutate(void) { s.x = 2; return 0; }
+static struct S assign(void) { ++evaluations; return s = (struct S){1}; }
+static int take(struct S a, int b) { a.x += b; return a.x; }
+int main(void) {
+    int direct = take((s = (struct S){1}), mutate());
+    int (*indirect)(struct S, int) = take;
+    int via_pointer = indirect(assign(), mutate());
+    return direct == 1 && via_pointer == 1 && evaluations == 1 ? 0 : 1;
+}",
+        expected: 0,
+    },
+    Program {
         name:     "pair_in_registers",
         source:   "struct pair { long a, b; };
 static struct pair swap(struct pair p) { struct pair r; r.a = p.b; r.b = p.a; return r; }

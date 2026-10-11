@@ -214,6 +214,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             } => {
                 self.tasks.push(Task::Finish(expression));
                 for &argument in arguments.iter().rev() {
+                    self.tasks.push(Task::SnapshotArgument(argument));
                     self.tasks.push(Task::Evaluate(argument));
                 }
                 if self.direct_callee(function_expression)?.is_none() {
@@ -1101,6 +1102,26 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         })
     }
 
+    /// Snapshots the evaluated argument once, before later arguments can
+    /// modify its backing object. The call then consumes this private copy.
+    /// C99: §6.5.16p3, p. 91; PDF p. 103; §6.5.2.2p4,p10, pp. 71-72;
+    /// PDF pp. 83-84. Argument order is unspecified; lowering chooses left to
+    /// right.
+    pub(super) fn snapshot_argument(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+    ) -> Result<(), LoweringError> {
+        let source = expression.source_vectors;
+        let item = self.pop();
+        let operand = if self.repr(item.ty, source)? == Repr::Aggregate {
+            Operand::Aggregate(self.copy_argument(item, source)?)
+        } else {
+            item.operand
+        };
+        self.push_item(operand, item.ty);
+        Ok(())
+    }
+
     /// A call, with its arguments (and an indirect callee) on the stack.
     /// Arguments were converted to the parameter types, or promoted for an
     /// unprototyped callee or the variable part of a variadic one. A call
@@ -1183,8 +1204,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             result_object = Some(object);
         }
         for &item in &items {
-            let value = if self.repr(item.ty, source)? == Repr::Aggregate {
-                self.copy_argument(item, source)?
+            let value = if let Operand::Aggregate(copy) = item.operand {
+                copy
             } else {
                 self.value(item, source)?
             };

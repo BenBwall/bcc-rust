@@ -288,6 +288,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.evaluate_raw(expression)
             },
             | Task::EvaluateRaw(expression) => self.evaluate_raw(expression),
+            | Task::SnapshotArgument(expression) => self.snapshot_argument(expression),
             | Task::Convert { expression, skip } => self.convert_recorded(expression, skip),
             | Task::Finish(expression) => self.finish(expression),
             | Task::ReadForUpdate(expression) => {
