@@ -1035,7 +1035,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
 /// C99: §6.7.1 paragraph 1, p. 98; PDF p. 110. `typedef` is a storage-class
 /// specifier for syntactic convenience only (paragraph 3, p. 98;
 /// PDF p. 110).
-pub(in crate::translation_phases::parsing) fn storage_class(
+fn storage_class(
     token: TokenType,
 ) -> Option<StorageClass> {
     match token {

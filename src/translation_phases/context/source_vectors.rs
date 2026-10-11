@@ -179,7 +179,7 @@ impl Context<'_> {
     }
 
     /// Appends the vectors of `source` to `target`.
-    pub(super) fn copy_into(&mut self, target: SourceArena, source: SourceVectors) {
+    fn copy_into(&mut self, target: SourceArena, source: SourceVectors) {
         let (_, end) = Self::checked_source_append(
             target,
             self.arena(target).len(),
@@ -482,7 +482,7 @@ impl Context<'_> {
         (range_start, end)
     }
 
-    pub(super) fn arena(&self, arena: SourceArena) -> &[SourceVector] {
+    fn arena(&self, arena: SourceArena) -> &[SourceVector] {
         match arena {
             | SourceArena::Preprocessor => &self.source_vectors.0,
             | SourceArena::ParserTokens => &self.parser_token_vectors,

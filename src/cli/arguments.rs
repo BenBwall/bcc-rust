@@ -168,7 +168,7 @@ enum LanguageFlag {
 }
 
 impl LanguageFlag {
-    pub(super) fn parse(text: &str) -> Option<Self> {
+    fn parse(text: &str) -> Option<Self> {
         match text {
             | "-pedantic" | "-Wpedantic" => return Some(Self::Pedantic(ExtensionPolicy::Warn)),
             | "-pedantic-errors" => return Some(Self::Pedantic(ExtensionPolicy::Deny)),

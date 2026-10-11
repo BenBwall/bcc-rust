@@ -272,7 +272,7 @@ impl<'pp> TranslationTimestamp<'pp> {
     ///
     /// A pinned value stands in for the actual time of translation that
     /// C99 §6.10.8p1 names; that is GCC's and Clang's choice too.
-    pub(in crate::translation_phases::preprocessing) fn new(
+    fn new(
         pp: &'pp Bump,
         source_date_epoch: Option<i64>,
     ) -> Self {

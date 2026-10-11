@@ -743,7 +743,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
         }
     }
 
-    pub(in crate::translation_phases::parsing) fn new(
+    fn new(
         arena: &'p Bump,
         kind: GnuKind,
         errors: usize,

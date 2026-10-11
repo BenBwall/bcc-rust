@@ -1041,7 +1041,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Classifies integer and real floating types for relational operators.
     /// C99: §6.2.5 paragraph 17, p. 35; PDF p. 47.
-    pub(in crate::translation_phases::semantic_analysis) fn real(&self, ty: TypeId) -> bool {
+    fn real(&self, ty: TypeId) -> bool {
         self.integer_type(ty).is_some()
             || matches!(
                 self.types.nodes[ty.index],
@@ -1053,7 +1053,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Classifies arithmetic and pointer types as scalar types.
     /// C99: §6.2.5 paragraph 21, p. 36; PDF p. 48.
-    pub(in crate::translation_phases::semantic_analysis) fn scalar_type(&self, ty: TypeId) -> bool {
+    fn scalar_type(&self, ty: TypeId) -> bool {
         self.arithmetic(ty) || self.pointer_target(ty).is_some()
     }
 
