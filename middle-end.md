@@ -352,8 +352,15 @@ counter for bisecting a miscompile (`--opt-bisect-limit`), per-pass timing, and
 Planned passes, in pipeline order: stack-slot promotion (for slots that become
 promotable after other passes), CFG simplification, sparse conditional constant
 propagation, scoped-hash value numbering over the dominator tree, dead code
-elimination, loop-invariant code motion, and inlining. **Prototype:** constant
-folding, dead code elimination and CFG simplification.
+elimination, loop-invariant code motion, and inlining. **Prototype:** seven
+passes, run by default in this order and repeated until a round changes
+nothing: stack-slot promotion (`promote`), constant folding (`fold`), CFG
+simplification (`simplify-cfg`), sparse conditional constant propagation
+(`sccp`), value numbering over the dominator tree (`gvn`), loop-invariant code
+motion (`licm`) and dead code elimination (`dce`). Promotion runs first so the
+other passes see SSA values, value numbering before code motion so one copy of
+a repeated invariant moves, and dead code elimination last so it sweeps what
+the others leave. Inlining is not implemented.
 
 ## From the IR to machine code
 
