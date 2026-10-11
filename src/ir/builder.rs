@@ -59,8 +59,9 @@ impl FunctionBuilder<'_, '_> {
     }
 
     /// Inserts an instruction whose result value already exists, as the
-    /// textual parser does to keep the text's value numbers.
-    pub(super) fn insert_with_result(&mut self, data: InstData, result: Option<Value>) -> Inst {
+    /// textual parser does to keep the text's value numbers and the
+    /// optimizer does to rebuild a body in a chosen numbering.
+    pub(crate) fn insert_with_result(&mut self, data: InstData, result: Option<Value>) -> Inst {
         let block = self
             .current
             .expect("switch to a block before inserting instructions");
@@ -504,7 +505,7 @@ impl<'m, 'ir> FunctionBuilder<'m, 'ir> {
     /// A value whose definition comes later, through
     /// [`FunctionBuilder::insert_with_result`] or
     /// [`FunctionBuilder::define_block_param`].
-    pub(super) fn reserve_value(&mut self) -> Value {
+    pub(crate) fn reserve_value(&mut self) -> Value {
         self.body.values.push(ValueData {
             ty:  Type::Ptr,
             def: ValueDef::Param(Block::new(0), u32::MAX),
@@ -512,7 +513,7 @@ impl<'m, 'ir> FunctionBuilder<'m, 'ir> {
     }
 
     /// Appends a reserved value to `block`'s parameters.
-    pub(super) fn define_block_param(&mut self, block: Block, value: Value, ty: Type) {
+    pub(crate) fn define_block_param(&mut self, block: Block, value: Value, ty: Type) {
         let params = &mut self.body.blocks[block].params;
         let index = u32::try_from(params.len()).expect("too many block parameters");
         params.push(value);
