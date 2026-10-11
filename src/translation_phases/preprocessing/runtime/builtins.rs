@@ -1,3 +1,12 @@
+//! Expand predefined macros and execute the pragma operator.
+//!
+//! C99: translation phase 4, §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22;
+//! predefined macros, §6.10.8 paragraph 1, p. 160; PDF p. 172;
+//! pragma operator, §6.10.9 paragraph 1, p. 161; PDF p. 173;
+//! string spelling, §6.4.5 paragraphs 1 and 3, p. 62; PDF p. 74.
+//! Pragma payloads are passed to directive handling; dialect builtins are
+//! delegated.
+
 use std::{
     fmt::Write,
     mem::take,

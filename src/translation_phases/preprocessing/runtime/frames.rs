@@ -1,3 +1,11 @@
+//! Push and pop source-file and macro-replacement frames.
+//!
+//! C99: translation phase 4, §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22;
+//! includes, §6.10.2 paragraphs 2-3, pp. 149-150; PDF pp. 161-162;
+//! macro invocations, §6.10.3 paragraphs 9-11, p. 152; PDF p. 164;
+//! rescanning, §6.10.3.4 paragraph 1, p. 155; PDF p. 167.
+//! Directive handlers and replacement operators decide which frames to push.
+
 use std::mem::take;
 
 use super::super::{

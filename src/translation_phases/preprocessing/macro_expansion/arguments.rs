@@ -1,3 +1,11 @@
+//! Substitute macro arguments, caching prescans and preserving written
+//! operands.
+//!
+//! C99: translation phase 4; invocation arguments, §6.10.3 paragraph 11,
+//! p. 152; PDF p. 164; argument substitution, §6.10.3.1 paragraph 1, p. 153;
+//! PDF p. 165. Stringification and pasting consume the resulting operand
+//! frames.
+
 use super::{
     ArenaVec,
     Context,

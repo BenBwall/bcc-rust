@@ -1,3 +1,8 @@
+//! Replace hash operands with stringified written arguments.
+//!
+//! C99: translation phase 4; stringification, §6.10.3.2, p. 153; PDF p. 165.
+//! Pasting and subsequent rescanning belong to their separate readers.
+
 use super::{
     ArenaString,
     Bump,

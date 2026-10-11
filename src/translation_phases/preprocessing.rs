@@ -1,40 +1,68 @@
-//! C99 preprocessing (translation phase 4) and the token-level work that
-//! follows it: escape-sequence evaluation, adjacent string-literal
-//! concatenation, and conversion of preprocessing tokens into parser tokens.
+//! Preprocessing reads a stack of source files and macro replacements. It
+//! executes directives, substitutes macro arguments, and rescans replacements.
+//! Surviving tokens have their escapes decoded, adjacent strings joined, and
+//! their kinds converted for the parser. Temporary expansion memory is reused
+//! when reading reaches a point with no active macro expansion. The parser
+//! consumes the finished token array; syntax and semantic analysis belong to
+//! later modules.
 //!
-//! C99: translation phases 4-7, §5.1.1.2 paragraph 1, p. 10; PDF p. 22.
-//! Phase 4 is the preprocessing directives of §6.10, pp. 145-162; PDF
-//! pp. 157-174 (grammar summary §A.3, pp. 416-418; PDF pp. 428-430):
-//! directive recognition (`directives`), conditional inclusion (`conditional`,
-//! `expression`), and macro replacement (`driver`, `macro_expansion`).
-//! Phase 5 escape-sequence conversion, phase 6 string-literal concatenation
-//! (§6.4.5 paragraph 4, p. 62; PDF p. 74), and the phase-7 conversion of each
-//! preprocessing token into a token (§6.4 paragraphs 2-3, p. 49; PDF p. 61)
-//! live in `token_conversion`, with the resulting tokens in `token`.
+//! For `#define TWICE(x) x + x` followed by `TWICE(2) "a" "b"`, the directive
+//! stores a definition. The reader collects `2`, substitutes it twice, and
+//! rescans `2 + 2`. Conversion produces three parser tokens and joins the two
+//! following string literals into one containing `ab`.
 //!
+//! Read [`Preprocessor::preprocess_into_arena`], [`Preprocessor::run`], and
+//! [`Expander::next_iterator_item`] first. Then follow
+//! [`Expander::next_preprocessor_token`] for the macro-replacing reader.
+//! [`Preprocessor`] and [`Expander`] hold the state those loops run on.
+//!
+//! Files by role:
+//!
+//! - Input and working state: `command_line.rs`, `runtime.rs`, and `runtime/`.
+//! - Directive handling: `directives.rs` and `directives/`; conditional
+//!   inclusion is in `conditional.rs`, with its integer evaluator in
+//!   `expression.rs`.
+//! - Macro replacement: `macro_expansion.rs` and `macro_expansion/`.
+//! - Dialect queries and embedding: `language_features.rs`.
+//! - Parser tokens and literal conversion: `token.rs`, `token_conversion.rs`.
+//! - Diagnostics and regression coverage: `errors.rs`, `tests.rs`, and
+//!   `tests/`.
+//!
+//! C99: translation phases 4-7, §5.1.1.2 paragraph 1 items 4-7, p. 10; PDF p.
+//! 22.
+//!
+//! C99: preprocessing directives, §6.10, pp. 145-162; PDF pp. 157-174;
+//! grammar summary §A.3, pp. 416-418; PDF pp. 428-430.
+//!
+//! C99: adjacent string literals, §6.4.5 paragraph 4, p. 62; PDF p. 74.
+//!
+//! C99: preprocessing-token conversion, §6.4 paragraphs 2-3, p. 49; PDF p. 61.
 //! Phases 1-3 belong to `initial_processing` and `preprocessor_tokenizer`.
-//! The rest of phase 7, syntactic and semantic analysis, belongs to the
-//! parser and later work.
+//! The syntax and semantics of phase 7 belong to the parser and semantic
+//! analysis.
 
+// Input and working state.
 mod command_line;
+mod runtime;
 
+// Directives and conditional inclusion.
 mod conditional;
-
 mod directives;
-
-mod errors;
-
 mod expression;
 
+// Macro replacement and dialect features.
 mod language_features;
-
 mod macro_expansion;
 
+// Parser tokens and literal conversion.
 mod token;
-
 mod token_conversion;
 
+// Diagnostics.
+mod errors;
+
 use std::{
+    cell::OnceCell,
     fmt::Debug,
     ops::ControlFlow,
     path::Path,
@@ -47,7 +75,11 @@ pub(crate) use errors::{
 };
 use expression::PreprocessorExpressionParser;
 pub(crate) use macro_expansion::HashHash;
-use macro_expansion::MacroDefinition;
+use macro_expansion::{
+    FunctionLikeMacroArgument,
+    MacroArguments,
+    MacroDefinition,
+};
 use runtime::{
     FileFrame,
     MacroDeprecation,
@@ -90,6 +122,8 @@ use crate::{
         TranslationPhase,
         preprocessor_tokenizer::{
             LexedFiles,
+            PreprocessorToken,
+            PreprocessorTokenType,
             TokenSource,
         },
     },
@@ -103,20 +137,6 @@ use crate::{
         region_vec::RegionVec,
         string_cache::StringCacheId,
     },
-};
-
-mod runtime;
-
-use std::cell::OnceCell;
-
-use macro_expansion::{
-    FunctionLikeMacroArgument,
-    MacroArguments,
-};
-
-use crate::translation_phases::preprocessor_tokenizer::{
-    PreprocessorToken,
-    PreprocessorTokenType,
 };
 
 impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
@@ -810,6 +830,7 @@ struct Expander<'c, 'tu, 'pp: 'x, 'x> {
     pushed_frames:         usize,
 }
 
+// Tests.
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,

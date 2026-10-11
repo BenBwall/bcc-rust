@@ -1,16 +1,53 @@
-//! Macro definitions, argument collection, and `#`/`##` operators.
+//! Macro replacement reads arguments through the current frame stack,
+//! substitutes parameters, applies stringification and token pasting, and
+//! rescans the resulting tokens. Names already being replaced stay disabled
+//! during rescanning. An argument's expanded tokens are cached for repeated
+//! parameter uses; `#` and `##` read its written tokens instead. Directive
+//! recognition belongs to the outer preprocessing loop.
 //!
-//! C99: macro replacement §6.10.3, pp. 151-153; PDF pp. 163-165; argument
-//! substitution §6.10.3.1, p. 153; PDF p. 165; the `#` operator §6.10.3.2,
-//! p. 153; PDF p. 165; the `##` operator §6.10.3.3, p. 154; PDF p. 166;
-//! rescanning §6.10.3.4, p. 155; PDF p. 167.
+//! For `#define STR(x) #x` followed by `STR(a + b)`, replacement reads the
+//! written argument and stringifies it to `"a + b"`. For `#define CAT(a,b) a ##
+//! b`, `CAT(na,me)` pastes the two written tokens into `name`, which can then
+//! be rescanned as another macro name.
 //!
-//! The order of evaluation of `#` and `##` is unspecified (§6.10.3.2
-//! paragraph 2, p. 153; PDF p. 165, and §6.10.3.3 paragraph 3, p. 154;
-//! PDF p. 166). Here `#` stringifies its operand before an adjacent `##`
-//! pastes the result.
+//! Read [`Expander::expand_macros`], [`Expander::handle_macro_argument`], and
+//! [`Expander::handle_hash_hash_operator`] first. [`HashHash`] is the
+//! pending-paste state; [`MacroDefinition`] and [`FunctionLikeMacroArgument`]
+//! describe definitions and invocation arguments. The reader itself lives in
+//! the parent entry file.
+//!
+//! Files by role:
+//!
+//! - Definitions and invocation lookahead: `macro_expansion/definitions.rs`,
+//!   `macro_expansion/invocation.rs`.
+//! - Argument substitution and dialect variants:
+//!   `macro_expansion/arguments.rs`, `macro_expansion/variadic.rs`.
+//! - Replacement operators: `macro_expansion/stringification.rs`,
+//!   `macro_expansion/paste.rs`.
+//!
+//! C99: macro replacement, §6.10.3, pp. 151-153; PDF pp. 163-165.
+//!
+//! C99: argument substitution, §6.10.3.1, p. 153; PDF p. 165.
+//!
+//! C99: stringification, §6.10.3.2, p. 153; PDF p. 165;
+//! token pasting, §6.10.3.3, p. 154; PDF p. 166.
+//!
+//! C99: rescanning, §6.10.3.4, p. 155; PDF p. 167.
+//! The order of `#` and `##` evaluation is unspecified (§6.10.3.2 paragraph 2,
+//! p. 153; PDF p. 165; §6.10.3.3 paragraph 3, p. 154; PDF p. 166).
+//! Here stringification precedes an adjacent paste.
 
+// Definitions and invocation lookahead.
+mod definitions;
+mod invocation;
+
+// Argument substitution and dialect variants.
+mod arguments;
 mod variadic;
+
+// Replacement operators.
+mod paste;
+mod stringification;
 
 use std::{
     cell::OnceCell,
@@ -24,6 +61,13 @@ use std::{
         RangeBounds,
     },
 };
+
+pub(super) use arguments::find_argument;
+pub(crate) use arguments::{
+    FunctionLikeMacroArgument,
+    MacroArguments,
+};
+pub(crate) use definitions::MacroDefinition;
 
 use super::{
     Expander,
@@ -60,23 +104,6 @@ use crate::{
         string_cache::StringCacheId,
     },
 };
-
-mod invocation;
-
-mod arguments;
-
-mod stringification;
-
-mod paste;
-
-mod definitions;
-
-pub(super) use arguments::find_argument;
-pub(crate) use arguments::{
-    FunctionLikeMacroArgument,
-    MacroArguments,
-};
-pub(crate) use definitions::MacroDefinition;
 
 #[expect(
     clippy::needless_continue,

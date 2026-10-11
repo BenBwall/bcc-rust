@@ -1,3 +1,10 @@
+//! Macro deprecation warnings and their expansion notes.
+//!
+//! C99: translation phase 4; implementation-defined pragma behavior,
+//! §6.10.6 paragraph 1, p. 159; PDF p. 171; replacement rescanning,
+//! §6.10.3.4 paragraph 1, p. 155; PDF p. 167.
+//! Deprecation is a Clang extension and does not alter macro replacement.
+
 use super::super::{
     ArenaVec,
     Debug,

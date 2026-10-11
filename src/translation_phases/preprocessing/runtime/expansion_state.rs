@@ -1,3 +1,10 @@
+//! Output purpose, deferred-query state, and the expansion reset threshold.
+//!
+//! C99: translation phases 4-7, §5.1.1.2 paragraph 1 items 4-7, p. 10; PDF p.
+//! 22. Deferred queries implement C23 §6.10.4.2 paragraph 3, p. 174; PDF p.
+//! 187. These flags control reading and retained metadata, not language
+//! analysis.
+
 /// Parser-only diagnostics require invocation metadata; standalone token
 /// production does not retain that side information.
 #[derive(Debug, Clone, Copy)]

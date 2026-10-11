@@ -1,3 +1,10 @@
+//! Suspend and resume preprocessing around expansion-arena resets.
+//!
+//! C99: translation phase 4, §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22;
+//! replacement rescanning, §6.10.3.4 paragraph 1, p. 155; PDF p. 167.
+//! This storage boundary preserves input cursors; it does not change
+//! replacement rules.
+
 use super::super::{
     ArenaVec,
     Bump,

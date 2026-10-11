@@ -1,20 +1,52 @@
-//! Directive dispatch and the non-conditional directives.
+//! Directive dispatch reads the name after a line-leading `#` and selects the
+//! handler for it. Each handler consumes its directive line. Include handling
+//! opens a source-file frame; definitions update the macro table; conditional
+//! directives delegate to the conditional reader. Operands are macro-replaced
+//! only where the directive requires it. Language syntax is left to the parser.
 //!
-//! C99: the `group-part`, `control-line`, and `non-directive` grammar of
-//! §6.10 paragraph 1, pp. 145-146; PDF pp. 157-158 (also §A.3, pp. 416-418;
-//! PDF pp. 428-430), and the directives `#include` (§6.10.2, pp. 149-151;
-//! PDF pp. 161-163), `#define` (§6.10.3, pp. 151-153; PDF pp. 163-165),
-//! `#undef` (§6.10.3.5, p. 155; PDF p. 167), `#line` (§6.10.4, p. 158; PDF
-//! p. 170), `#error` (§6.10.5, p. 159; PDF p. 171), `#pragma` (§6.10.6,
-//! p. 159; PDF p. 171), and the null directive (§6.10.7, p. 160; PDF
-//! p. 172). Conditional directives are in `conditional`.
+//! For `#define N 2` followed by `#if N`, dispatch first calls the definition
+//! handler, which stores `2` as N's replacement. The conditional handler then
+//! evaluates N after macro replacement and keeps the following group.
 //!
-//! Directive tokens are not macro-replaced unless a clause says so (§6.10
-//! paragraph 7, p. 147; PDF p. 159). Of the directives here, only the
-//! operands of `#include` and `#line` are; `#pragma` operands are not, which
-//! footnote 152 permits (§6.10.6 paragraph 1, p. 159; PDF p. 171).
+//! Read [`Expander::parse_directive`] first, then
+//! [`Expander::parse_include_directive`] and
+//! [`Expander::parse_define_directive`]. The shared reading state is
+//! [`Expander`].
+//!
+//! Files by role:
+//!
+//! - Source files and presumed locations: `directives/include.rs`,
+//!   `directives/line.rs`.
+//! - Macro definitions: `directives/definitions.rs`.
+//! - Messages and pragmas: `directives/error.rs`, `directives/pragma.rs`.
+//! - Conditional groups: the sibling `conditional.rs` and `expression.rs`.
+//!
+//! C99: directive grammar, §6.10 paragraph 1, pp. 145-146; PDF pp. 157-158;
+//! grammar summary §A.3, pp. 416-418; PDF pp. 428-430.
+//!
+//! C99: includes, §6.10.2, pp. 149-151; PDF pp. 161-163.
+//!
+//! C99: definitions, §6.10.3, pp. 151-153; PDF pp. 163-165;
+//! undefinition, §6.10.3.5, p. 155; PDF p. 167.
+//!
+//! C99: line control, §6.10.4, p. 158; PDF p. 170.
+//!
+//! C99: error and pragma directives, §§6.10.5-6.10.6, p. 159; PDF p. 171;
+//! null directive, §6.10.7, p. 160; PDF p. 172.
+//!
+//! C99: operand replacement, §6.10 paragraph 7, p. 147; PDF p. 159.
+//! Pragma operands are not replaced, as §6.10.6 paragraph 1 footnote 152
+//! permits.
 
-use super::language_features;
+// Source files and presumed locations.
+mod include;
+mod line;
+
+// Macro definitions.
+mod definitions;
+
+// Messages and pragmas.
+mod error;
 mod pragma;
 
 use std::{
@@ -33,6 +65,7 @@ use super::{
         PreprocessorError,
         PreprocessorErrorType,
     },
+    language_features,
     runtime::{
         TokenizerFrame,
         TokenizerFrameType,
@@ -68,14 +101,6 @@ use crate::{
         Bump,
     },
 };
-
-mod include;
-
-mod definitions;
-
-mod line;
-
-mod error;
 
 impl Expander<'_, '_, '_, '_> {
     /// Executes the directive that `token`, a `#`, introduces.

@@ -1,3 +1,9 @@
+//! Constructors and output settings for preprocessing.
+//!
+//! C99: translation phase 4, §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22;
+//! predefined macros, §6.10.8 paragraph 1, p. 160; PDF p. 172.
+//! The constructed reader leaves C syntax and semantics to later phases.
+
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,

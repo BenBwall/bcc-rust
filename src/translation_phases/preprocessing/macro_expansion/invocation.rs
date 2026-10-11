@@ -1,3 +1,9 @@
+//! Capture macro calls across frame boundaries and track disabled macro names.
+//!
+//! C99: translation phase 4; replacement rescanning, §6.10.3.4 paragraphs 1-2,
+//! p. 155; PDF p. 167. Lookahead commits only when it recognizes a call;
+//! parameter substitution belongs to the argument reader.
+
 use super::{
     ArenaVec,
     Expander,

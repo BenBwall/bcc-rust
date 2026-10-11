@@ -1,3 +1,12 @@
+//! Parser-token production, provenance compaction guards, and token
+//! expectations.
+//!
+//! C99: translation phases 4-7, §5.1.1.2 paragraph 1 items 4-7, p. 10; PDF p.
+//! 22; directive grammar, §6.10 paragraph 1, p. 145; PDF p. 157;
+//! macro-invocation whitespace, §6.10.3 paragraph 10, p. 152; PDF p. 164.
+//! Token conversion and string concatenation are delegated to
+//! `token_conversion`.
+
 use super::super::{
     Context,
     ControlFlow,

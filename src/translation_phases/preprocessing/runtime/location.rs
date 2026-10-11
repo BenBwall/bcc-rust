@@ -1,3 +1,9 @@
+//! Invocation, spelling, and current source locations during replacement.
+//!
+//! C99: translation phase 4 rescanning, §6.10.3.4 paragraph 1, p. 155; PDF p.
+//! 167; predefined file and line macros, §6.10.8 paragraph 1, p. 160; PDF p.
+//! 172. Locations preserve provenance for other handlers and diagnostics.
+
 use super::super::{
     Expander,
     GetPosition,

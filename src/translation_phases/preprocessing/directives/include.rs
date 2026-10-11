@@ -1,3 +1,11 @@
+//! Read header operands, search for headers, and push included source files.
+//!
+//! C99: translation phase 4; includes, §6.10.2, pp. 149-151; PDF pp. 161-163.
+//! The nesting limit is implementation-defined (§6.10.2 paragraph 6, p. 150;
+//! PDF p. 162; minimum §5.2.4.1 paragraph 1, p. 21; PDF p. 33).
+//! Opened files return to the shared preprocessing reader for macro
+//! replacement.
+
 use super::{
     ArenaString,
     ArenaVec,

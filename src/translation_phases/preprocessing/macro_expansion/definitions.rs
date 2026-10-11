@@ -1,3 +1,9 @@
+//! Definitions retained until a macro is undefined or preprocessing ends.
+//!
+//! C99: translation phase 4; macro definitions, §6.10.3, pp. 151-153;
+//! PDF pp. 163-165; macro definition lifetime, §6.10.3.5 paragraph 1, p. 155;
+//! PDF p. 167. Replacement execution belongs to the macro reader.
+
 use super::{
     Debug,
     StringCacheId,

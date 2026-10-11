@@ -1,3 +1,8 @@
+//! Apply presumed line numbers and source-file names from line directives.
+//!
+//! C99: translation phase 4; line control, §6.10.4, p. 158; PDF p. 170.
+//! Physical file identity remains available to include handling.
+
 use super::{
     ControlFlow,
     Expander,

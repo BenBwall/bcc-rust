@@ -1,3 +1,10 @@
+//! Combine paste operands, validate their token spelling, and replay the
+//! result.
+//!
+//! C99: translation phase 4; token pasting, §6.10.3.3, p. 154; PDF p. 166;
+//! rescanning, §6.10.3.4 paragraph 1, p. 155; PDF p. 167.
+//! The resulting preprocessing token is converted to a parser token later.
+
 use super::{
     ArenaString,
     ArenaVec,

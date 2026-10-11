@@ -1,3 +1,9 @@
+//! Define and undefine macros, checking their replacement lists.
+//!
+//! C99: translation phase 4; macro replacement, §6.10.3, pp. 151-153;
+//! PDF pp. 163-165; undefinition, §6.10.3.5 paragraph 1, p. 155; PDF p. 167.
+//! Invocation and argument substitution belong to the macro-replacement reader.
+
 use std::ops::ControlFlow;
 
 use super::super::{
