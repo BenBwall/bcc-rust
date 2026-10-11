@@ -12,7 +12,11 @@
 //! each evaluated operand leaves an [`Item`] on an operand stack. Scalar
 //! locals whose address is never taken are SSA variables built with Braun et
 //! al.'s algorithm; the others, and every array and structure, live in stack
-//! slots. A construct outside the prototype subset stops its function with a
+//! slots. A structure or union passed or returned by value travels through a
+//! `ptr` that the pre-ABI signature describes: the caller passes a fresh copy
+//! of each such argument and a fresh object for such a result, and ABI
+//! lowering later decides how the target passes them. A construct outside
+//! the prototype subset stops its function with a
 //! [`LoweringError`] at that syntax, never with a panic or wrong code.
 //!
 //! For `int f(int a) { return a + 1; }`, the entry block's parameter defines

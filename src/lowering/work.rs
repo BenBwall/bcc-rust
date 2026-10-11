@@ -219,6 +219,9 @@ pub(super) enum Object {
 pub(super) enum Local {
     Variable(Var),
     Slot(StackSlot),
+    /// A structure or union parameter: the copy the caller passed, at the
+    /// address the entry block receives.
+    Address(Value),
 }
 
 /// Where `break` and `continue` go from inside a loop or switch.

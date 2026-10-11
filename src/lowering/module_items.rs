@@ -28,6 +28,7 @@ use super::{
 use crate::{
     diagnostics::format_in,
     ir::{
+        AggregateParam,
         Align,
         FuncId,
         GlobalDecl,
@@ -35,9 +36,12 @@ use crate::{
         GlobalInit,
         Linkage as IrLinkage,
         Module,
+        ParamAbi,
         Relocation,
         SigId,
+        Signature,
         Symbol,
+        Type,
     },
     target::Target,
     translation_phases::{
@@ -211,23 +215,67 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 "a function has no function type",
             ));
         };
-        let mut params = ArenaVec::with_capacity_in(parameters.len(), self.tables);
-        for &parameter in parameters {
-            match repr(&self.sema.types, parameter)? {
-                | Repr::Aggregate =>
-                    return Err(LoweringErrorKind::Unsupported(Construct::AggregateArgument)),
+        let signature =
+            self.signature_of(parameters.iter().copied(), result, variadic, self.tables)?;
+        Ok(self.module.intern(signature))
+    }
+
+    /// The pre-ABI signature of a call or function whose fixed parameters
+    /// have the C types `parameters`. A structure or union parameter is a
+    /// `ptr` to a copy the caller makes, described by
+    /// [`ParamAbi::Aggregate`]; a structure or union result is returned
+    /// through a `ptr` to the receiving object inserted as parameter 0 and
+    /// described by [`ParamAbi::Result`], and the signature has no result.
+    /// The lists are allocated in `scratch`.
+    /// C99: §6.5.2.2 paragraph 4, p. 71; PDF p. 83 (arguments are passed
+    /// by value); §6.9.1 paragraph 10, p. 142; PDF p. 154 (each parameter is
+    /// an object of the callee).
+    pub(super) fn signature_of<'s>(
+        &self,
+        parameters: impl IntoIterator<Item = TypeId>,
+        result: TypeId,
+        variadic: bool,
+        scratch: &'s Bump,
+    ) -> Result<Signature<'s>, LoweringErrorKind> {
+        let types = &self.sema.types;
+        let mut params = ArenaVec::new_in(scratch);
+        let mut aggregates = ArenaVec::new_in(scratch);
+        let result = match repr(types, result)? {
+            | Repr::Void => None,
+            | Repr::Aggregate => {
+                params.push(Type::Ptr);
+                aggregates.push(AggregateParam {
+                    index: 0,
+                    abi:   ParamAbi::Result(types::aggregate_layout(types, result, scratch)?),
+                });
+                None
+            },
+            | representation => representation.value_type(),
+        };
+        for parameter in parameters {
+            match repr(types, parameter)? {
+                | Repr::Aggregate => {
+                    let index = u32::try_from(params.len())
+                        .map_err(|_| LoweringErrorKind::MissingFact("too many parameters"))?;
+                    params.push(Type::Ptr);
+                    aggregates.push(AggregateParam {
+                        index,
+                        abi: ParamAbi::Aggregate(types::aggregate_layout(
+                            types, parameter, scratch,
+                        )?),
+                    });
+                },
                 | representation => params.push(representation.value_type().ok_or(
                     LoweringErrorKind::MissingFact("a parameter has no value type"),
                 )?),
             }
         }
-        let result = match repr(&self.sema.types, result)? {
-            | Repr::Void => None,
-            | Repr::Aggregate =>
-                return Err(LoweringErrorKind::Unsupported(Construct::AggregateResult)),
-            | representation => representation.value_type(),
-        };
-        Ok(self.module.intern_signature(&params, result, variadic))
+        Ok(Signature {
+            params: scratch.alloc_slice_copy(&params),
+            result,
+            variadic,
+            aggregates: scratch.alloc_slice_copy(&aggregates),
+        })
     }
 
     /// The global holding a static-duration object, declaring it on first

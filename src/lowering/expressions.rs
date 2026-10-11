@@ -39,12 +39,14 @@ use super::{
 };
 use crate::{
     ir::{
+        Align,
         Block,
         FloatCC,
         InstData,
         InstFlags,
         IntCC,
         Opcode,
+        ParamAbi,
         Type,
         Value,
     },
@@ -1101,9 +1103,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// A call, with its arguments (and an indirect callee) on the stack.
     /// Arguments were converted to the parameter types, or promoted for an
     /// unprototyped callee or the variable part of a variadic one. A call
-    /// whose arguments do not match the declared function's IR signature,
+    /// whose signature differs from the declared function's IR signature,
     /// as through an unprototyped declaration, calls its address with the
     /// call site's signature.
+    ///
+    /// A structure or union argument is copied into a fresh slot whose
+    /// address is passed, since the parameter is a new object the callee
+    /// may modify (§6.9.1p10). A structure or union result is stored by the
+    /// callee into a fresh slot passed first, which becomes the call's
+    /// value.
     /// C99: §6.5.2.2 paragraphs 4-7, pp. 71-72; PDF pp. 83-84.
     fn call(
         &mut self,
@@ -1112,21 +1120,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         info: &ExpressionInfo<'tu>,
         source: SourceVectors,
     ) -> Result<(), LoweringError> {
-        let mut args = ArenaVec::with_capacity_in(count, self.scratch);
-        let mut arg_types = ArenaVec::with_capacity_in(count, self.scratch);
         let start = self.operands.len() - count;
-        for index in start..self.operands.len() {
-            let item = self.operands[index];
-            if self.repr(item.ty, source)? == Repr::Aggregate {
-                return Err(LoweringError::unsupported(
-                    Construct::AggregateArgument,
-                    source,
-                ));
-            }
-            let value = self.value(item, source)?;
-            args.push(value);
-            arg_types.push(self.draft.value_type(value));
-        }
+        let mut items = ArenaVec::with_capacity_in(count, self.scratch);
+        items.extend_from_slice(&self.operands[start..]);
         self.operands.truncate(start);
         let direct = self.direct_callee(callee)?;
         let (function_type, callee_value) = match direct {
@@ -1151,56 +1147,118 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 source,
             ));
         };
-        let result = match self.repr(result, source)? {
-            | Repr::Void => None,
-            | Repr::Aggregate =>
-                return Err(LoweringError::unsupported(
-                    Construct::AggregateResult,
-                    source,
-                )),
-            | representation => representation.value_type(),
-        };
         let fixed = if prototype {
-            parameters.len().min(arg_types.len())
+            parameters.len().min(items.len())
         } else {
-            arg_types.len()
+            items.len()
         };
         let variadic = prototype && variadic;
-        let signature = (&arg_types[..fixed], result, variadic);
+        for item in &items[fixed..] {
+            if self.repr(item.ty, source)? == Repr::Aggregate {
+                return Err(LoweringError::unsupported(
+                    Construct::VariadicAggregate,
+                    source,
+                ));
+            }
+        }
+        let signature = self
+            .unit
+            .signature_of(
+                items[..fixed].iter().map(|item| item.ty),
+                result,
+                variadic,
+                self.scratch,
+            )
+            .map_err(|kind| at(kind, source))?;
+        let sig = self.unit.module.intern(signature);
+        let mut args = ArenaVec::with_capacity_in(count + 1, self.scratch);
+        let mut result_object = None;
+        if let Some(ParamAbi::Result(layout)) = signature.result_param() {
+            let object = self.fresh_object(layout.size, layout.align, source)?;
+            args.push(object);
+            result_object = Some(object);
+        }
+        for &item in &items {
+            let value = if self.repr(item.ty, source)? == Repr::Aggregate {
+                self.copy_argument(item, source)?
+            } else {
+                self.value(item, source)?
+            };
+            args.push(value);
+        }
+        let args = self.scratch.alloc_slice_copy(&args);
+        let result = signature.result;
         let value = match (direct, callee_value) {
             | (Some(binding), _) => {
                 let func = self
                     .unit
                     .function(binding)
                     .map_err(|kind| at(kind, source))?;
-                let declared = self.unit.module.function_signature(func);
-                let args = self.scratch.alloc_slice_copy(&args);
-                if (declared.params, declared.result, declared.variadic) == signature {
+                if self.unit.module.function(func).signature == sig {
                     self.draft.push(Op::Call(func, args), result)
                 } else {
-                    let sig = self
-                        .unit
-                        .module
-                        .intern_signature(signature.0, result, variadic);
                     let address = self.inst(InstData::FuncAddr { func }, Type::Ptr);
                     self.draft
                         .push(Op::CallIndirect(sig, address, args), result)
                 }
             },
-            | (None, Some(pointer)) => {
-                let sig = self
-                    .unit
-                    .module
-                    .intern_signature(signature.0, result, variadic);
-                let args = self.scratch.alloc_slice_copy(&args);
-                self.draft
-                    .push(Op::CallIndirect(sig, pointer, args), result)
-            },
+            | (None, Some(pointer)) => self
+                .draft
+                .push(Op::CallIndirect(sig, pointer, args), result),
             | (None, None) => unreachable!("an indirect callee was popped"),
         };
-        let operand = value.map_or(Operand::Void, Operand::Value);
+        let operand = match (result_object, value) {
+            | (Some(object), _) => Operand::Aggregate(object),
+            | (None, Some(value)) => Operand::Value(value),
+            | (None, None) => Operand::Void,
+        };
         self.push_item(operand, info.ty);
         Ok(())
+    }
+
+    /// A copy of the structure or union argument `item` in a fresh slot,
+    /// which the callee receives as its parameter object.
+    /// C99: §6.9.1 paragraph 10, p. 142; PDF p. 154.
+    fn copy_argument(&mut self, item: Item, source: SourceVectors) -> Result<Value, LoweringError> {
+        let from = match item.operand {
+            | Operand::Aggregate(address)
+            | Operand::Place(Place::Memory(address))
+            | Operand::Value(address) => address,
+            | _ =>
+                return Err(LoweringError::missing(
+                    "a structure argument has no address",
+                    source,
+                )),
+        };
+        let layout =
+            types::layout(&self.unit.sema.types, item.ty).map_err(|kind| at(kind, source))?;
+        let align = types::align(layout);
+        let copy = self.fresh_object(layout.size, align, source)?;
+        let size = self.iconst(Type::I64, i128::from(layout.size));
+        _ = self.draft.push(
+            Op::Inst(InstData::MemoryRange {
+                opcode: Opcode::Copy,
+                flags: InstFlags::empty(),
+                align,
+                args: [copy, from, size],
+            }),
+            None,
+        );
+        Ok(copy)
+    }
+
+    /// The address of a fresh stack slot of `size` bytes.
+    pub(super) fn fresh_object(
+        &mut self,
+        size: u64,
+        align: Align,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let size = u32::try_from(size).map_err(|_| {
+            LoweringError::missing("an automatic object is larger than 4 GiB", source)
+        })?;
+        let slot = self.draft.create_slot(size, align);
+        Ok(self.inst(InstData::StackAddr { slot }, Type::Ptr))
     }
 
     /// The function binding a callee names directly, if it is an

@@ -38,12 +38,8 @@ fn unsupported_constructs_name_themselves() {
             "variable length arrays",
         ),
         (
-            "struct s { int a; }; int f(struct s v) { return v.a; }",
-            "structures and unions passed by value",
-        ),
-        (
-            "struct s { int a; }; struct s f(void) { struct s v = { 1 }; return v; }",
-            "structures and unions returned by value",
+            "struct s { int a; }; int f(int n, ...); int g(struct s v) { return f(1, v); }",
+            "structures and unions passed as variable arguments",
         ),
         ("int f(void) { return ({ 1; }); }", "statement expressions"),
         ("void f(void) { __asm__(\"nop\"); }", "inline assembly"),

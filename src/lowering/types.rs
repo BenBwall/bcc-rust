@@ -8,6 +8,9 @@ use super::{
 };
 use crate::{
     ir::{
+        AggregateFlags,
+        AggregateLayout,
+        AggregateScalar,
         Align,
         Type,
     },
@@ -25,6 +28,10 @@ use crate::{
             TypeKind,
             Types,
         },
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -177,6 +184,177 @@ pub(super) fn align(layout: Layout) -> Align {
 
 pub(super) fn is_volatile(ty: TypeId) -> bool {
     ty.qualifiers.contains(TypeQualifiers::VOLATILE)
+}
+
+/// The facts calling conventions classify a structure or union by, for a
+/// signature that passes or returns it by value: its size and alignment,
+/// whether a member is misaligned or it ends in a flexible array member,
+/// and, when it is small enough to travel in registers, its scalars
+/// flattened by offset. The scalars land in `scratch`; interning the
+/// signature copies them into the module.
+///
+/// A member is misaligned when its offset from the start of the whole
+/// aggregate is not a multiple of its type's alignment, at any level of
+/// nesting, which is how Clang applies the System V rule for unaligned
+/// fields. A named bit-field contributes one `i8` scalar for each byte its
+/// bits reach.
+/// C99: §6.2.5 paragraph 20, pp. 35-36; PDF pp. 47-48 (structures, unions
+/// and arrays); §6.7.2.1 paragraphs 12-16, pp. 102-103; PDF pp. 114-115
+/// (member offsets, unions and flexible array members).
+pub(super) fn aggregate_layout<'s>(
+    types: &Types<'_>,
+    ty: TypeId,
+    scratch: &'s Bump,
+) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
+    let whole = layout(types, ty)?;
+    let mut flags = AggregateFlags::empty();
+    if types.tag(ty).is_some_and(|tag| tag.contains_flexible.get()) {
+        flags |= AggregateFlags::FLEXIBLE;
+    }
+    let mut scalars = ArenaVec::new_in(scratch);
+    if whole.size <= AggregateLayout::MAX_SCALAR_BYTES {
+        // Pending (type, offset) pairs, pushed in reverse so that they pop
+        // in member order and the scalars come out by offset.
+        let mut work = ArenaVec::new_in(scratch);
+        work.push((ty, 0_u64));
+        while let Some((ty, offset)) = work.pop() {
+            if types
+                .layout(ty)
+                .is_some_and(|layout| layout.align > 0 && offset % layout.align != 0)
+            {
+                flags |= AggregateFlags::UNALIGNED;
+            }
+            match types.kind(ty) {
+                | TypeKind::Unknown => return Err(LoweringErrorKind::UnanalyzedType),
+                | TypeKind::Scalar(scalar) => scalar_leaves(types, scalar, offset, &mut scalars)?,
+                | TypeKind::Pointer(_) => push_scalar(&mut scalars, offset, Type::Ptr)?,
+                | TypeKind::Array(element, bound) => {
+                    let count = match bound {
+                        | ArrayBound::Constant(count) => count,
+                        | ArrayBound::Incomplete => 0,
+                        | ArrayBound::Variable | ArrayBound::Star =>
+                            return Err(LoweringErrorKind::Unsupported(
+                                Construct::VariableLengthArray,
+                            )),
+                    };
+                    let size = layout(types, element)?.size;
+                    for index in (0..count).rev() {
+                        work.push((element, offset + index * size));
+                    }
+                },
+                | TypeKind::Tag(_) => {
+                    let tag = types.tag(ty).expect("a tag type names its tag");
+                    if tag.tainted.get() {
+                        return Err(LoweringErrorKind::UnanalyzedType);
+                    }
+                    if tag.contains_flexible.get() {
+                        flags |= AggregateFlags::FLEXIBLE;
+                    }
+                    if tag.kind == TagKind::Enum {
+                        scalar_leaves(types, tag.compatible.get(), offset, &mut scalars)?;
+                        continue;
+                    }
+                    for member in tag.members.get().iter().rev() {
+                        if member.invalid {
+                            continue;
+                        }
+                        if let Some(width) = member.width {
+                            // A named bit-field's bytes are INTEGER data, as
+                            // Clang classifies them; an unnamed one is
+                            // padding.
+                            if member.name.is_some() && width != 0 {
+                                let span = (member.bit_offset + width).div_ceil(8);
+                                for byte in 0..u64::from(span) {
+                                    push_scalar(
+                                        &mut scalars,
+                                        offset + member.offset + byte,
+                                        Type::I8,
+                                    )?;
+                                }
+                            }
+                            continue;
+                        }
+                        work.push((member.ty, offset + member.offset));
+                    }
+                },
+                | TypeKind::Function { .. } =>
+                    return Err(LoweringErrorKind::MissingFact(
+                        "an aggregate has a function member",
+                    )),
+                | TypeKind::Atomic(_) =>
+                    return Err(LoweringErrorKind::Unsupported(Construct::Atomic)),
+                | TypeKind::Vector { .. } =>
+                    return Err(LoweringErrorKind::Unsupported(Construct::Vector)),
+            }
+        }
+    }
+    Ok(AggregateLayout {
+        size: whole.size,
+        align: align(whole),
+        flags,
+        scalars: scratch.alloc_slice_copy(&scalars),
+    })
+}
+
+/// The scalars of a C scalar type at `offset`: one for a real type and two
+/// for a complex one. Floating types are recorded although lowering does not
+/// compute with floating values yet, because a structure that holds one
+/// travels in floating registers.
+/// C99: §6.2.5 paragraphs 10-13, pp. 34-35; PDF pp. 46-47.
+fn scalar_leaves(
+    types: &Types<'_>,
+    scalar: Scalar,
+    offset: u64,
+    scalars: &mut ArenaVec<'_, AggregateScalar>,
+) -> Result<(), LoweringErrorKind> {
+    let long_double = || match types.target.scalar(Scalar::LongDouble) {
+        | Some(Layout { size: 8, .. }) => Type::F64,
+        | _ => Type::F80,
+    };
+    let (ty, parts) = match scalar {
+        | Scalar::Void =>
+            return Err(LoweringErrorKind::MissingFact(
+                "an aggregate has a void member",
+            )),
+        | Scalar::Bool => (Type::I8, 1),
+        | Scalar::Float => (Type::F32, 1),
+        | Scalar::Double => (Type::F64, 1),
+        | Scalar::LongDouble => (long_double(), 1),
+        | Scalar::Float128 => (Type::F128, 1),
+        | Scalar::ComplexFloat => (Type::F32, 2),
+        | Scalar::ComplexDouble => (Type::F64, 2),
+        | Scalar::ComplexLongDouble => (long_double(), 2),
+        | Scalar::ComplexFloat128 => (Type::F128, 2),
+        | _ => {
+            let (bits, _) = types
+                .target
+                .integer(scalar)
+                .ok_or(LoweringErrorKind::MissingFact(
+                    "an integer type has no width",
+                ))?;
+            (int_type(bits), 1)
+        },
+    };
+    let stride = types
+        .target
+        .scalar(scalar)
+        .map_or(u64::from(ty.bytes()), |layout| layout.size / parts);
+    for part in 0..parts {
+        push_scalar(scalars, offset + part * stride, ty)?;
+    }
+    Ok(())
+}
+
+fn push_scalar(
+    scalars: &mut ArenaVec<'_, AggregateScalar>,
+    offset: u64,
+    ty: Type,
+) -> Result<(), LoweringErrorKind> {
+    let offset = u32::try_from(offset).map_err(|_| {
+        LoweringErrorKind::MissingFact("a small aggregate has a member beyond 4 GiB")
+    })?;
+    scalars.push(AggregateScalar { offset, ty });
+    Ok(())
 }
 
 /// The pointed-to or element type of a pointer or array type.

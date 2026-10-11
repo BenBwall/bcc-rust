@@ -308,6 +308,26 @@ int f(int a) {
 }
 
 #[test]
+fn structures_pass_and_return_through_described_pointers() {
+    golden(
+        "aggregates",
+        "struct pair { long a; double b; };
+struct three { char c[3]; };
+struct big { int x[10]; };
+struct pair bump(struct pair p) { struct pair r = p; r.a = p.a + 1; return r; }
+int first(struct three t, struct big b) { return t.c[2] + b.x[0]; }
+long use(struct pair p) {
+  struct pair q = bump(bump(p));
+  struct big b = { { 3 } };
+  struct three k = { { 1, 2, 3 } };
+  return q.a + first(k, b) + bump(p).a;
+}
+union u { float f; int i; char c[3]; };
+union u pass(union u v) { return v; }",
+    );
+}
+
+#[test]
 fn the_target_sets_type_widths_and_the_data_layout() {
     let source = "long f(long a) { return a + 1; }";
     let linux = lower_for(source, Target::LinuxGnu).unwrap();

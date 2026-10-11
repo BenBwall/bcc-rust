@@ -79,6 +79,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     | Some(Local::Variable(var)) => Place::Variable(var),
                     | Some(Local::Slot(slot)) =>
                         Place::Memory(self.inst(InstData::StackAddr { slot }, Type::Ptr)),
+                    | Some(Local::Address(address)) => Place::Memory(address),
                     | None =>
                         return Err(LoweringError::missing(
                             "an automatic object is used outside its function",

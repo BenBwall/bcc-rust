@@ -20,9 +20,11 @@ use super::{
     module_items::at,
     ssa::{
         Draft,
+        Op,
         Terminator,
     },
     types::{
+        self,
         Repr,
         repr,
     },
@@ -37,6 +39,10 @@ use crate::{
         Block,
         Entity,
         FuncId,
+        InstData,
+        InstFlags,
+        Opcode,
+        Type,
     },
     translation_phases::{
         SourceVectors,
@@ -523,12 +529,40 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     }
 
     /// Pops the returned value, converted to the result type, and returns.
+    /// A structure or union result is copied into the object the caller
+    /// passed as parameter 0.
     /// C99: §6.8.6.4 paragraph 3, p. 139; PDF p. 151.
     pub(super) fn return_value(&mut self) -> Result<(), LoweringError> {
         let item = self.pop();
         let source = self.record.syntax.source_vectors;
         let value = match self.repr(self.result, source)? {
             | Repr::Void => None,
+            | Repr::Aggregate => {
+                let Operand::Aggregate(from) = item.operand else {
+                    return Err(LoweringError::missing(
+                        "a returned structure has no address",
+                        source,
+                    ));
+                };
+                let to = *self
+                    .draft
+                    .block_params(Draft::entry())
+                    .first()
+                    .ok_or_else(|| LoweringError::missing("a result has no object", source))?;
+                let layout = types::layout(&self.unit.sema.types, self.result)
+                    .map_err(|kind| at(kind, source))?;
+                let size = self.iconst(Type::I64, i128::from(layout.size));
+                _ = self.draft.push(
+                    Op::Inst(InstData::MemoryRange {
+                        opcode: Opcode::Copy,
+                        flags:  InstFlags::empty(),
+                        align:  types::align(layout),
+                        args:   [to, from, size],
+                    }),
+                    None,
+                );
+                None
+            },
             | _ => Some(self.value(item, source)?),
         };
         self.draft
@@ -650,6 +684,8 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         };
         let signature = unit.module.function_signature(func);
         let draft = Draft::new(scratch, signature.params);
+        // A structure or union result comes first, before the C parameters.
+        let first = usize::from(signature.result_param().is_some());
         let mut lowerer = Self {
             unit,
             record,
@@ -672,7 +708,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 continue;
             };
             let (Some(&value), Some(&incoming)) = (
-                lowerer.draft.block_params(entry).get(index),
+                lowerer.draft.block_params(entry).get(first + index),
                 parameters.get(index),
             ) else {
                 return Err(LoweringError::missing(
@@ -682,6 +718,12 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             };
             let declared = lowerer.unit.sema.bindings[parameter].ty;
             let parameter_source = lowerer.unit.sema.bindings[parameter].name.source_vectors;
+            if lowerer.repr(declared, parameter_source)? == Repr::Aggregate {
+                // The argument is a copy the callee owns: the parameter
+                // object itself.
+                _ = lowerer.locals.insert(parameter, Local::Address(value));
+                continue;
+            }
             let argument = Item {
                 operand: Operand::Value(value),
                 ty:      incoming,
@@ -704,7 +746,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         let source = self.record.syntax.source_vectors;
         let value =
             match repr(&self.unit.sema.types, self.result).map_err(|kind| at(kind, source))? {
-                | Repr::Void => None,
+                | Repr::Void | Repr::Aggregate => None,
                 | representation => {
                     let ty = representation.value_type().ok_or_else(|| {
                         LoweringError::missing("a result has no value type", source)

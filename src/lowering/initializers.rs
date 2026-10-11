@@ -548,7 +548,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         bit_field: Option<BitFieldBits>,
     ) -> Result<(), LoweringError> {
         let item = self.pop();
-        let (slot, source) = match object {
+        let (base, source) = match object {
             | Object::Local(binding) => {
                 let source = self.unit.sema.bindings[binding].name.source_vectors;
                 match self.local(binding, source)? {
@@ -557,12 +557,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         self.draft.def_var(var, value);
                         return Ok(());
                     },
-                    | Local::Slot(slot) => (slot, source),
+                    | Local::Slot(slot) =>
+                        (self.inst(InstData::StackAddr { slot }, Type::Ptr), source),
+                    | Local::Address(address) => (address, source),
                 }
             },
-            | Object::Slot(slot) => (slot, SourceVectors::empty()),
+            | Object::Slot(slot) => (
+                self.inst(InstData::StackAddr { slot }, Type::Ptr),
+                SourceVectors::empty(),
+            ),
         };
-        let base = self.inst(InstData::StackAddr { slot }, Type::Ptr);
         let place = if let Some(bits) = bit_field {
             let bit_field = self.bit_field(ty, offset, bits, source)?;
             Place::BitField(self.offset_address(base, offset), bit_field)
@@ -594,9 +598,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Object::Slot(slot) => slot,
             | Object::Local(binding) => match self.local(binding, source)? {
                 | Local::Slot(slot) => slot,
-                | Local::Variable(_) =>
+                | Local::Variable(_) | Local::Address(_) =>
                     return Err(LoweringError::missing(
-                        "a character array is not in memory",
+                        "a character array is not in a stack slot",
                         source,
                     )),
             },
