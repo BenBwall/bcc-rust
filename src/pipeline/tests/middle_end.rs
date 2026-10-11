@@ -151,16 +151,22 @@ int main(void) {
 }";
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
         for optimize in [false, true] {
-            with_module(source, target, optimize, |module, target| {
-                assert_eq!(interpret(module, target).0, 0);
-                if optimize {
-                    let text = module.to_string();
-                    assert!(!text.contains("call @write"), "{text}");
-                    assert!(!text.contains("call @absolute"), "{text}");
-                    assert!(!text.contains("call @nested"), "{text}");
-                    assert!(!text.contains("stack_slot"), "{text}");
-                }
-            });
+            with_module(
+                source,
+                target,
+                optimize,
+                Profile::PreAbi,
+                |module, target| {
+                    assert_eq!(interpret(module, target).0, 0);
+                    if optimize {
+                        let text = module.to_string();
+                        assert!(!text.contains("call @write"), "{text}");
+                        assert!(!text.contains("call @absolute"), "{text}");
+                        assert!(!text.contains("call @nested"), "{text}");
+                        assert!(!text.contains("stack_slot"), "{text}");
+                    }
+                },
+            );
         }
     }
 }
