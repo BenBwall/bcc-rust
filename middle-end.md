@@ -218,6 +218,21 @@ post-ABI kinds:
   least as large as the registers. This settles post-ABI register pairs without
   multi-result values.
 
+**Narrow integers at calls.** Conventions differ in whether a `char`, `short`
+or `_Bool` argument or result arrives widened to 32 bits, so the signature
+records what C knew: before ABI lowering an `i8` or `i16` parameter or result
+of such a type carries `signed`, `unsigned` or `bool`, and ABI lowering
+replaces it by the target's decision, `signext`, `zeroext` or nothing:
+
+```text
+function @f(i8 signed, i16 unsigned, i8 bool) -> i8 signed external      ; pre-ABI
+function @f(i8 signext, i16 zeroext, i8 zeroext) -> i8 signext external  ; System V
+function @f(i8, i16, i8 zeroext) -> i8 external                          ; Win64
+```
+
+The values stay `i8` and `i16` in both profiles; only the LLVM attributes, and a
+native back end's extension instructions, depend on the decision.
+
 Terminators end every block and nothing else does:
 
 ```text
@@ -304,7 +319,8 @@ on every parsed test input. It checks:
   Cooper-Harvey-Kennedy algorithm);
 - the profile's constraints: no `va_arg` post-ABI; each aggregate kind only in
   its profile, on a `ptr` parameter, results on parameter 0 of a signature
-  without a result, and layout scalars within the aggregate. A post-ABI module
+  without a result, and layout scalars within the aggregate; each extension
+  only in its profile and on an `i8` or `i16` parameter or result. A post-ABI module
   prints an `abi lowered` line, which the interpreter reads to lay out
   `va_list` for the target.
 
@@ -455,25 +471,31 @@ registers only if all they need of the six general and eight vector registers
 are free; an `sret` pointer takes the first. `long double` aggregates go in
 memory as arguments and come back in ST0 (`registers(f80)`). `va_arg` follows
 psABI §3.5.7 for integers, pointers, `f32`, `f64`, `i128`, `f80` and `f128`.
+Every narrow integer argument and result is widened to 32 bits, signed ones with
+`signext` and unsigned ones and `_Bool` with `zeroext`: the psABI leaves those
+bits unspecified, but Clang widens them and relies on it.
 
 **Win64** (both Windows targets): aggregates of 1, 2, 4 or 8 bytes without a
 flexible array member travel as integers of that size and come back in RAX;
 any other is passed by reference to the caller's copy and returned through
 `sret`. `va_arg` reads 8-byte slots for scalars of at most eight bytes; `i128`,
-`f80` and `f128` are refused for now.
+`f80` and `f128` are refused for now. Only `_Bool` arguments and results are
+widened (`zeroext`), as Clang does; other narrow integers leave their upper bits
+unspecified.
 
-**Known gaps:** scalar `signext`/`zeroext` attributes for `char` and `short`
-parameters and results, which Clang emits on System V, are not produced yet;
-aggregates in the variable part of a call and `va_arg` of aggregates are
-unsupported; packed structures do not reach ABI lowering yet, since the front
-end does not model them. A named bit-field in a small aggregate contributes one
-`i8` scalar per byte its bits reach, so its bytes classify as INTEGER, as
-Clang classifies them.
+The LLVM back end prints the decision as Clang does: `i8 noundef signext` on a
+parameter or argument and `signext i8` before a result.
+
+**Known gaps:** aggregates in the variable part of a call and `va_arg` of
+aggregates are unsupported; packed structures do not reach ABI lowering yet,
+since the front end does not model them. A named bit-field in a small aggregate
+contributes one `i8` scalar per byte its bits reach, so its bytes classify as
+INTEGER, as Clang classifies them.
 
 The conformance tests in `src/abi/tests/conformance.rs` link bcc-compiled C with
-Clang-compiled C, exchanging every supported shape in both directions, and run
-the result: natively for Windows GNU and under WSL, as a freestanding static
-executable, for System V.
+Clang-compiled C, exchanging every supported shape and the narrow integers in
+both directions, and run the result at `-O0` and `-O2`: natively for Windows
+GNU and under WSL, as a freestanding static executable, for System V.
 
 ## From the IR to machine code
 
