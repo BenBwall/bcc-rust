@@ -305,6 +305,24 @@ pub(super) fn link_libraries(version: &str, tools: &std::path::Path) {
             println!("cargo:rustc-link-lib=static={library}");
         }
     } else if !host.ends_with("windows-msvc") {
+        // The static C++ runtime sits in the GCC installation's private
+        // library directory, which the linker does not search by default.
+        let path = ["g++", "gcc"]
+            .into_iter()
+            .filter_map(|compiler| {
+                let result = Command::new(compiler)
+                    .arg("-print-file-name=libstdc++.a")
+                    .output()
+                    .ok()?;
+                let path = PathBuf::from(String::from_utf8(result.stdout).ok()?.trim());
+                path.is_file().then_some(path)
+            })
+            .next()
+            .expect("the static C++ runtime libstdc++.a is needed to link LLVM; install g++");
+        println!(
+            "cargo:rustc-link-search=native={}",
+            path.parent().unwrap().display()
+        );
         println!("cargo:rustc-link-lib=static=stdc++");
     }
 }
