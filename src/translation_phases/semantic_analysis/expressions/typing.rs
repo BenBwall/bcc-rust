@@ -5,6 +5,8 @@
 //! C99: §6.3, pp. 42-48; PDF pp. 54-60;
 //! §6.5, pp. 67-94; PDF pp. 79-106.
 
+use std::num::NonZeroU32;
+
 use super::{
     Analyzer,
     ArenaList,
@@ -726,6 +728,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.category = self.object_category(field_ty);
         }
         info.bit_field = field.width;
+        info.field = u32::try_from(index + 1).ok().and_then(NonZeroU32::new);
         info.register = !indirect && base.register;
         info.static_address = if indirect {
             self.address_value(base)
@@ -989,6 +992,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             category: ValueCategory::Rvalue,
             binding: None,
             bit_field: None,
+            field: None,
             register: false,
             vector_element: false,
             static_address: false,

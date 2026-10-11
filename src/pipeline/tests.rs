@@ -1142,3 +1142,85 @@ fn function_records_mark_unnamed_prototype_parameters() {
         [None, Some(String::from("b"))]
     );
 }
+
+#[test]
+fn member_access_retains_the_selected_field() {
+    use crate::translation_phases::parsing::syntax::ExpressionType;
+    with_semantics(
+        "struct In { int x; };\nstruct S { char c; union { int u; float f; }; struct In in; int \
+         bits : 3; } s;\nstruct S *p = &s;\nint f(void) { return s.u + p->bits + (s).c + \
+         (p->in.x) + p->f; }",
+        |context, unit, sema| {
+            assert!(sema.lowerable(context));
+            let mut seen = Vec::new();
+            for info in sema.expressions {
+                let (ExpressionType::DirectMember { member, .. }
+                | ExpressionType::IndirectMember { member, .. }) = info.expression.kind
+                else {
+                    continue;
+                };
+                let name = context.string_cache.at(member.name);
+                let field = sema
+                    .selected_field(info.expression)
+                    .expect("member access selects a field");
+                assert_eq!(context.string_cache.at(field.name.name), name);
+                seen.push((name, field.offset, field.bit_offset, field.path.len()));
+            }
+            seen.sort_unstable();
+            assert_eq!(
+                seen,
+                [
+                    ("bits", 12, 0, 1),
+                    ("c", 0, 0, 1),
+                    ("f", 4, 0, 2),
+                    ("in", 8, 0, 1),
+                    ("u", 4, 0, 2),
+                    ("x", 0, 0, 1),
+                ]
+            );
+            // A parenthesized member access keeps the selection.
+            let returned = returned_expression(unit, 0);
+            let parenthesized = sema
+                .expressions
+                .iter()
+                .find(|info| {
+                    matches!(info.expression.kind, ExpressionType::Parenthesized { expression }
+                        if matches!(expression.kind, ExpressionType::DirectMember { .. }))
+                })
+                .expect("(p->in.x) is typed");
+            let field = sema.selected_field(parenthesized.expression).unwrap();
+            assert_eq!(context.string_cache.at(field.name.name), "x");
+            assert_eq!(parenthesized.field_index(), Some(0));
+            assert!(
+                sema.selected_field(returned).is_none(),
+                "a sum selects nothing"
+            );
+        },
+    );
+}
+
+#[test]
+fn selected_fields_survive_extension_and_generic_selection() {
+    use crate::translation_phases::parsing::syntax::ExpressionType;
+    with_semantics(
+        "struct S { int a; long b; } s;
+         long f(void) { return __extension__ s.b + _Generic(0, int: s.b, default: s.a); }",
+        |context, _, sema| {
+            let wrappers = sema
+                .expressions
+                .iter()
+                .filter(|info| {
+                    matches!(
+                        info.expression.kind,
+                        ExpressionType::Unary { .. } | ExpressionType::Generic(_)
+                    )
+                })
+                .map(|info| {
+                    let field = sema.selected_field(info.expression).expect("a member");
+                    context.string_cache.at(field.name.name)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(wrappers, ["b", "b"]);
+        },
+    );
+}

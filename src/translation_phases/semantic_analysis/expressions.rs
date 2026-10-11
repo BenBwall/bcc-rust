@@ -32,6 +32,8 @@ mod results;
 // Constant addresses
 mod address;
 
+use std::num::NonZeroU32;
+
 pub(crate) use address::AddressBase;
 pub(crate) use results::{
     ConstantClass,
@@ -473,28 +475,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
               evaluation; none is a state transition."
 )]
 pub(crate) struct ExpressionInfo<'tu> {
-    pub(crate) expression:          &'tu Expression<'tu>,
+    pub(crate) expression: &'tu Expression<'tu>,
     /// Selected operand identity for address decomposition.
     /// C11: §6.5.1.1p4, p. 79; PDF p. 97; GNU `choose_expr` follows it.
     pub(crate) selected_expression: Option<&'tu Expression<'tu>>,
-    pub(crate) ty:                  TypeId,
+    pub(crate) ty: TypeId,
     /// Arithmetic type before the final compound-assignment conversion.
-    pub(crate) operation_type:      Option<TypeId>,
-    pub(crate) category:            ValueCategory,
-    pub(crate) binding:             Option<usize>,
-    pub(crate) bit_field:           Option<u32>,
-    pub(crate) register:            bool,
+    pub(crate) operation_type: Option<TypeId>,
+    pub(crate) category: ValueCategory,
+    pub(crate) binding: Option<usize>,
+    pub(crate) bit_field: Option<u32>,
+    /// For `.` and `->`, one more than the index of the selected member in
+    /// the record's `Tag::fields`; read it through [`Self::field_index`].
+    /// Four bytes fit in the record's padding, so it does not grow.
+    pub(in crate::translation_phases::semantic_analysis) field: Option<NonZeroU32>,
+    pub(crate) register: bool,
     /// GNU vector extension: a lane remains assignable but has no address.
-    pub(crate) vector_element:      bool,
+    pub(crate) vector_element: bool,
     /// Whether designation can form an address constant without reading an
     /// object.
-    pub(crate) static_address:      bool,
+    pub(crate) static_address: bool,
     /// An arithmetic constant containing binary128, retained without
     /// approximate folding.
-    pub(crate) unfolded_binary128:  bool,
-    pub(crate) floating:            Option<Floating>,
-    pub(crate) integer:             Option<Integer>,
-    pub(crate) ice:                 bool,
-    pub(crate) constant:            ConstantClass,
-    pub(crate) folding:             ConstantFolding,
+    pub(crate) unfolded_binary128: bool,
+    pub(crate) floating: Option<Floating>,
+    pub(crate) integer: Option<Integer>,
+    pub(crate) ice: bool,
+    pub(crate) constant: ConstantClass,
+    pub(crate) folding: ConstantFolding,
 }

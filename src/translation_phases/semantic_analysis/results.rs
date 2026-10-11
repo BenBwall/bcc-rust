@@ -10,6 +10,8 @@ use super::{
     Conversion,
     Expression,
     ExpressionInfo,
+    ExpressionType,
+    Field,
     FunctionDefinition,
     Identifier,
     Integer,
@@ -17,7 +19,9 @@ use super::{
     SourceVectors,
     StringCacheId,
     TypeId,
+    TypeKind,
     Types,
+    UnaryOperator,
 };
 
 /// Durable semantic output. Working maps/stacks are gone when this is returned.
@@ -217,6 +221,48 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     /// C99: §6.3, pp. 42-48; PDF pp. 54-60.
     pub(crate) fn conversions_of(&self, index: usize) -> &'tu [Conversion<'tu>] {
         &self.conversions[self.conversion_starts[index]..self.conversion_starts[index + 1]]
+    }
+
+    /// The member that `.` or `->` selects, in O(1), with its byte and bit
+    /// offset from the record's start and the anonymous members on its path.
+    /// `member` may be wrapped in parentheses, `__extension__` or a generic
+    /// selection.
+    /// C99: §6.5.2.3 paragraphs 3-4, p. 73; PDF p. 85.
+    /// C11: §6.7.2.1 paragraph 13, p. 115; PDF p. 133 (anonymous members).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Lowering selects members; no lowering exists yet."
+        )
+    )]
+    pub(crate) fn selected_field(&self, mut member: &Expression<'tu>) -> Option<&'tu Field<'tu>> {
+        let index = self.expression_info(member)?.field_index()?;
+        let (base, indirect) = loop {
+            match member.kind {
+                | ExpressionType::DirectMember {
+                    base_expression, ..
+                } => break (base_expression, false),
+                | ExpressionType::IndirectMember {
+                    base_expression, ..
+                } => break (base_expression, true),
+                | ExpressionType::Parenthesized { expression } => member = expression,
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::Extension,
+                    operand_expression,
+                } => member = operand_expression,
+                // Each selection names a strict subexpression.
+                | _ => member = self.expression_info(member)?.selected_expression?,
+            }
+        };
+        let mut record = self.expression_info(base)?.ty;
+        if indirect {
+            record = match self.types.kind(self.types.non_atomic(record)) {
+                | TypeKind::Pointer(target) | TypeKind::Array(target, _) => target,
+                | _ => return None,
+            };
+        }
+        self.types.tag(record)?.fields.get().get(index)
     }
 
     /// The conversions applied to `expression`, empty when it has no record.

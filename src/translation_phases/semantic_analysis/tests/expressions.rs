@@ -610,3 +610,10 @@ fn sizeof_matches_shared_linux_clang_assertions() {
         "../../../../tests/fixtures/semantic/expression-sizeof-probe.c"
     ));
 }
+
+/// A retained record per typed expression; lowering's facts must not grow it
+/// carelessly. Pinned for the 64-bit hosts the arenas require.
+#[test]
+fn expression_record_size_is_pinned() {
+    assert_eq!(size_of::<ExpressionInfo<'_>>(), 160);
+}

@@ -385,6 +385,11 @@ to the member path, the qualifiers of the anonymous members on that path and the
 byte/bit offset from the record's start. Member access and designators use it
 through a scratch index with expected O(1) lookup; const-member queries cache
 explicit postorder results rather than rescanning aggregate trees for every use.
+A `.` or `->` record retains the index of the field it selected
+(`ExpressionInfo::field_index`, in four bytes the record's padding already
+had), and `SemanticTranslationUnit::selected_field` returns that `Field`
+without a name search, through parentheses, `__extension__` and generic
+selections.
 
 #### Constant expressions
 
