@@ -14,12 +14,12 @@ use super::{
         Token,
         expression::PreprocessorExpressionParser,
     },
-    FileFrame,
     OutputPurpose,
     PreprocessorState,
     QueryExpansion,
     TokenizerFrame,
     TokenizerFrameType,
+    frames::FileFrame,
 };
 use crate::{
     translation_phases::{

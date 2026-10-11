@@ -23,10 +23,10 @@ use super::{
         macro_expansion::MacroDefinition,
         token_conversion::LiteralScratch,
     },
-    FileFrame,
     OutputPurpose,
     PreprocessorState,
     Resting,
+    frames::FileFrame,
 };
 #[cfg(test)]
 use crate::util::shared::SharedVec;

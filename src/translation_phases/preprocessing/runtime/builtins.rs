@@ -272,10 +272,7 @@ impl<'pp> TranslationTimestamp<'pp> {
     ///
     /// A pinned value stands in for the actual time of translation that
     /// C99 §6.10.8p1 names; that is GCC's and Clang's choice too.
-    fn new(
-        pp: &'pp Bump,
-        source_date_epoch: Option<i64>,
-    ) -> Self {
+    fn new(pp: &'pp Bump, source_date_epoch: Option<i64>) -> Self {
         let time = source_date_epoch
             .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
             .map_or_else(|| Local::now().naive_local(), |time| time.naive_utc());
