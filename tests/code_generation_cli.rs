@@ -65,6 +65,49 @@ mod tests {
     }
 
     #[test]
+    fn closed_stdout_exits_quietly() {
+        use std::{
+            fmt::Write as _,
+            process::Stdio,
+        };
+        let mut source = String::from(
+            "int putchar(int); int main(void) { for (int i = 0; i < 20000; ++i) putchar(65); \
+             return 3; }\n",
+        );
+        for i in 0..300 {
+            writeln!(source, "int f{i}(int x) {{ return x + {i}; }}").unwrap();
+        }
+        for flag in [
+            "--emit=ir",
+            "--emit=ir-abi",
+            "--emit=llvm",
+            "--interpret",
+            "--print-default-passes",
+        ] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command
+                .arg(flag)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            if flag != "--print-default-passes" {
+                _ = command.args(["--input", &source]);
+            }
+            let mut child = command.spawn().unwrap();
+            // Close the read end before compilation finishes; enough output is
+            // produced to reach the OS pipe even with stdout buffering.
+            drop(child.stdout.take());
+            let output = child.wait_with_output().unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{flag}: {}",
+                text(&output.stderr)
+            );
+            assert!(output.stderr.is_empty(), "{flag}: {}", text(&output.stderr));
+        }
+    }
+
+    #[test]
     fn print_default_passes_lists_a_pipeline_that_passes_accepts() {
         let run = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
             .arg("--print-default-passes")

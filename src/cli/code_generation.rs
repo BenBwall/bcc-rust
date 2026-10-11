@@ -151,11 +151,17 @@ pub(super) fn print_default_passes() -> i32 {
     let mut separator = "";
     for pass in Pass::ALL {
         if let Err(error) = write!(stdout, "{separator}{pass}") {
+            if error.kind() == io::ErrorKind::BrokenPipe {
+                return 0;
+            }
             panic!("failed printing to stdout: {error}");
         }
         separator = ",";
     }
     if let Err(error) = writeln!(stdout).and_then(|()| stdout.flush()) {
+        if error.kind() == io::ErrorKind::BrokenPipe {
+            return 0;
+        }
         panic!("failed printing to stdout: {error}");
     }
     0
@@ -315,6 +321,9 @@ fn interpret(module: &Module<'_>, target: Target) -> i32 {
         .write_all(host.output())
         .and_then(|()| stdout.flush())
     {
+        if error.kind() == io::ErrorKind::BrokenPipe {
+            return 0;
+        }
         panic!("failed printing to stdout: {error}");
     }
     match result {
@@ -357,6 +366,9 @@ fn print_llvm(module: &Module<'_>, target: Target) -> i32 {
 fn print_stdout(text: fmt::Arguments<'_>) -> i32 {
     let mut stdout = io::stdout().lock();
     if let Err(error) = stdout.write_fmt(text).and_then(|()| stdout.flush()) {
+        if error.kind() == io::ErrorKind::BrokenPipe {
+            return 0;
+        }
         panic!("failed printing to stdout: {error}");
     }
     0
