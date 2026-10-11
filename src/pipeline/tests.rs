@@ -1,5 +1,8 @@
 //! Pipeline regressions: `--tokens` reporting order, and crate-level
-//! syntax-tree consumption.
+//! syntax-tree consumption. `middle_end.rs` runs whole programs through the
+//! middle end, the interpreter and LLVM.
+
+mod middle_end;
 
 use std::path::PathBuf;
 

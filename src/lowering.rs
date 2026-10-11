@@ -340,4 +340,4 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     reason = "Tests build inputs and expected values with std types; the arena rule covers the \
               compiler, not its tests."
 )]
-mod tests;
+pub(crate) mod tests;

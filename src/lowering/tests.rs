@@ -3,7 +3,7 @@
 //! lowering refuses (`refusals.rs`).
 
 mod golden;
-mod programs;
+pub(crate) mod programs;
 mod refusals;
 
 use std::path::Path;

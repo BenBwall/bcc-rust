@@ -1,18 +1,19 @@
 //! Small whole programs whose lowering must succeed and verify. Each
-//! records the status its `main` returns, so an IR interpreter can check
-//! the lowered code once one exists; until then these tests check that
-//! every program lowers to a module the verifier accepts.
+//! records the status its `main` returns; these tests check that every
+//! program lowers to a module the verifier accepts, and the end-to-end tests
+//! in `pipeline/tests/middle_end.rs` run them in the interpreter and through
+//! LLVM.
 
 use super::*;
 
 /// A C program and the value its `main` returns.
-pub(super) struct Program {
-    pub(super) name:     &'static str,
-    pub(super) source:   &'static str,
-    pub(super) expected: i32,
+pub(crate) struct Program {
+    pub(crate) name:     &'static str,
+    pub(crate) source:   &'static str,
+    pub(crate) expected: i32,
 }
 
-pub(super) const PROGRAMS: &[Program] = &[
+pub(crate) const PROGRAMS: &[Program] = &[
     Program {
         name:     "sum_to_ten",
         source:   "int main(void) { int s = 0; for (int i = 1; i <= 10; i++) s += i; return s; }",
@@ -193,6 +194,13 @@ int main(void) {
         name:     "printf_hello",
         source:   "int printf(const char *, ...);
 int main(void) { printf(\"%s %d\\n\", \"answer\", 42); return 0; }",
+        expected: 0,
+    },
+    Program {
+        name:     "printf_long",
+        source:   "int printf(const char *, ...);
+int main(void) { long l = -5; printf(\"%ld %lu %d\\n\", l, 3000000000ul, (int)sizeof l); return 0; \
+                   }",
         expected: 0,
     },
     Program {
