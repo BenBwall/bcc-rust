@@ -238,11 +238,6 @@ struct LexingFile<'arena, 's> {
 
 // Tests.
 #[cfg(test)]
-mod batch {
-    pub(super) use super::storage::LexedFile;
-}
-
-#[cfg(test)]
 #[expect(
     clippy::disallowed_types,
     clippy::disallowed_macros,
