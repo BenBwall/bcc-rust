@@ -44,6 +44,57 @@ fn access_texts(source: &str) -> [String; 2] {
 }
 
 #[test]
+fn replacing_string_initializer_clears_automatic_suffix() {
+    check_replacing_string("");
+}
+
+#[test]
+fn replacing_string_initializer_clears_static_suffix() {
+    check_replacing_string("static ");
+}
+
+fn check_replacing_string(storage: &str) {
+    let source = format!(
+        "int main(void) {{ {storage}char a[2][4] = {{ [1] = \"abc\", [0] = \"abc\", [0] = \"x\" \
+         }}; {storage}char b[1][3] = {{ [0] = \"abc\", [0] = \"x\" }}; return a[0][0] != 'x' || \
+         a[0][1] || a[0][2] || a[0][3] || a[1][0] != 'a' || a[1][1] != 'b' || a[1][2] != 'c' || \
+         a[1][3] || b[0][0] != 'x' || b[0][1] || b[0][2]; }}"
+    );
+    check(&source);
+    for text in access_texts(&source) {
+        let result = run_text(&text, "main");
+        assert!(
+            matches!(
+                result.result,
+                Ok(Outcome {
+                    termination: Termination::Returned(Some(RuntimeValue::Int(0))),
+                    ..
+                })
+            ),
+            "{result:?}\n{text}"
+        );
+    }
+}
+
+#[test]
+fn replacing_volatile_string_initializer_clears_suffix_observably() {
+    let source = "int main(void) { volatile char a[2][4] = { [0] = \"abc\", [0] = \"x\" }; return \
+                  a[0][2]; }";
+    check(source);
+    for text in access_texts(source) {
+        let fills: Vec<_> = text
+            .lines()
+            .filter(|line| line.trim_start().starts_with("fill "))
+            .collect();
+        // Whole-object zeroing plus the replacement string's implicit tail.
+        assert!(fills.len() >= 2, "{text}");
+        for line in fills {
+            assert!(line.contains("volatile"), "{line}\n{text}");
+        }
+    }
+}
+
+#[test]
 fn repeated_braced_subobject_clears_implicit_members() {
     check(
         "struct S { int a[2]; int b; }; static struct S s = { .a = {1, 2}, .b = 7, .a = {3} }; \

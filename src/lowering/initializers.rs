@@ -656,6 +656,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// Copies a string literal's bytes into a character array; a literal
     /// one longer than an exactly sized array loses its null character.
     /// C99: §6.7.8 paragraph 14, p. 126; PDF p. 138.
+    /// C99: §6.7.8 paragraphs 19 and 21, p. 127; PDF p. 139 (replacement
+    /// includes the implicitly zero-initialized remainder of the array).
     /// C99: §6.7.3 paragraph 6, p. 109; PDF p. 121.
     pub(super) fn initialize_string(
         &mut self,
@@ -682,16 +684,31 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let base = self.inst(InstData::StackAddr { slot }, Type::Ptr);
         let destination = self.offset_address(base, offset);
         let string = self.inst(InstData::GlobalAddr { global }, Type::Ptr);
-        let length = self.iconst(Type::I64, i128::from(length));
+        let copied_length = self.iconst(Type::I64, i128::from(length));
+        let flags = self.initialization_flags(ty);
         _ = self.draft.push(
             Op::Inst(InstData::MemoryRange {
                 opcode: Opcode::Copy,
-                flags:  self.initialization_flags(ty),
-                align:  Align::BYTE,
-                args:   [destination, string, length],
+                flags,
+                align: Align::BYTE,
+                args: [destination, string, copied_length],
             }),
             None,
         );
+        if length < size {
+            let tail = self.offset_address(destination, length);
+            let zero = self.iconst(Type::I8, 0);
+            let remaining = self.iconst(Type::I64, i128::from(size - length));
+            _ = self.draft.push(
+                Op::Inst(InstData::MemoryRange {
+                    opcode: Opcode::Fill,
+                    flags,
+                    align: Align::BYTE,
+                    args: [tail, zero, remaining],
+                }),
+                None,
+            );
+        }
         Ok(())
     }
 
