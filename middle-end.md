@@ -562,7 +562,12 @@ bits unspecified, but Clang widens them and relies on it.
 **Win64** (both Windows targets): aggregates of 1, 2, 4 or 8 bytes without a
 flexible array member travel as integers of that size and come back in RAX;
 any other is passed by reference to the caller's copy and returned through
-`sret`. `va_arg` reads 8-byte slots for scalars of at most eight bytes; `i128`,
+`sret`. Scalar `__int128` arguments instead use pointers to caller-owned,
+16-byte, 16-aligned storage, and scalar `__int128` results come back as
+`<2 x i64>` in XMM0, matching bundled Clang on GNU and MSVC targets. The
+post-ABI IR models that vector result with `registers(i128, align 16)` and
+a memory return area; the interpreter transports the same 128 bits.
+`va_arg` reads 8-byte slots for scalars of at most eight bytes; `i128`,
 `f80` and `f128` are refused for now. Only `_Bool` arguments and results are
 widened (`zeroext`), as Clang does; other narrow integers leave their upper bits
 unspecified.

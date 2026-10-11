@@ -39,6 +39,7 @@ use crate::{
         Inst,
         InstData,
         Module,
+        ParamAbi,
         Symbol,
         Type,
         Value,
@@ -92,6 +93,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
                 | (_, RuntimeValue::Poison)
                 | (Type::F32, RuntimeValue::F32(_))
                 | (Type::F64, RuntimeValue::F64(_))
+                | (Type::F128, RuntimeValue::F128(_))
                 | (Type::Ptr, RuntimeValue::Ptr(_)) => arg,
                 | _ => return Err(Trap::BadEntry(EntryError::Arguments)),
             };
@@ -170,7 +172,9 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
 
     /// Pushes a frame for the defined function `func`, binding the entry
     /// block's parameters to the fixed arguments, keeping the rest as
-    /// variadic arguments, and allocating its stack slots.
+    /// variadic arguments, and allocating its stack slots and private byval
+    /// copies. C99: §6.5.2.2 paragraph 4, p. 71; PDF p. 83 (parameter
+    /// assignment).
     fn push_frame(&mut self, func: FuncId, caller_value: Option<Value>) -> Result<(), Fault> {
         if self.frames.len() >= self.limits.stack_depth {
             return Err(Fault::StackDepthLimit);
@@ -181,9 +185,6 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
         self.values
             .resize(values + body.value_count(), RuntimeValue::Poison);
         let entry = Block::new(0);
-        for (&param, &arg) in body.block_params(entry).iter().zip(&self.arguments) {
-            self.values[values + param.index()] = arg;
-        }
         let varargs = self.varargs.len();
         let extra_types = self.argument_types.get(fixed..).unwrap_or_default();
         let extra_values = self.arguments.get(fixed..).unwrap_or_default();
@@ -199,6 +200,26 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
                 .memory
                 .allocate(ObjectKind::Stack, u64::from(data.size), data.align)?;
             self.slots.push(slot);
+        }
+        for (index, &param) in body.block_params(entry).iter().enumerate() {
+            let mut arg = self.arguments[index];
+            if let Some(ParamAbi::ByVal(layout)) =
+                self.module.function_signature(func).param_abi(index)
+            {
+                let copy = self
+                    .memory
+                    .allocate(ObjectKind::Stack, layout.size, layout.align)?;
+                self.slots.push(copy);
+                self.memory.copy(
+                    RuntimeValue::Ptr(copy),
+                    arg,
+                    RuntimeValue::Int(u128::from(layout.size)),
+                    layout.align,
+                    false,
+                )?;
+                arg = RuntimeValue::Ptr(copy);
+            }
+            self.values[values + param.index()] = arg;
         }
         self.frames.push(Frame {
             func,

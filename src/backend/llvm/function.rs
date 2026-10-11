@@ -30,6 +30,7 @@ use crate::{
         ParamAbi,
         ResultRegisters,
         Signature,
+        Type,
         Value,
         ValueDef,
     },
@@ -142,12 +143,7 @@ fn result_type(signature: Signature<'_>) -> impl fmt::Display {
     };
     let result = signature.result;
     fmt::from_fn(move |f| match registers {
-        | Some(ResultRegisters {
-            first,
-            second: Some(second),
-            ..
-        }) => write!(f, "{{ {}, {} }}", type_name(first), type_name(second)),
-        | Some(registers) => f.write_str(type_name(registers.first)),
+        | Some(registers) => write!(f, "{}", registers_type(registers)),
         | None => f.write_str(result.map_or("void", type_name)),
     })
 }
@@ -211,6 +207,8 @@ fn registers_type(registers: ResultRegisters) -> impl fmt::Display {
             type_name(registers.first),
             type_name(second)
         ),
+        // Win64 scalar __int128 returns in XMM0 as Clang's <2 x i64>.
+        | None if registers.first == Type::I128 => f.write_str("<2 x i64>"),
         | None => f.write_str(type_name(registers.first)),
     })
 }

@@ -215,3 +215,71 @@ block0(v0: i32):
         drop(lower_text(&text(ty), Target::LinuxGnu));
     }
 }
+
+/// Distinct nonzero halves expose either a split-register mistake or an
+/// overflow cursor rounded to eight bytes instead of sixteen.
+pub(super) const WIDE_VARIADIC: &str = r"
+function @b_wide(i32, ...) -> i32 external {
+    slot0 = stack_slot 24, align 8
+block0(v0: i32):
+    v1 = stack_addr slot0
+    va_start v1
+    v2 = iconst.i32 0
+    jump block1(v2)
+block1(v3: i32):
+    v4 = icmp.i32 slt v3, v0
+    brif v4, block2, block3
+block2:
+    v5 = va_arg.i64 v1
+    v6 = iconst.i32 1
+    v7 = iadd.i32 v3, v6
+    jump block1(v7)
+block3:
+    v8 = va_arg.i128 v1
+    v9 = iconst.i128 22774453838368691933757882222884355841
+    v10 = icmp.i128 ne v8, v9
+    v11 = va_arg.i64 v1
+    v12 = iconst.i64 999
+    v13 = icmp.i64 ne v11, v12
+    v14 = zext.i32 v10
+    v15 = zext.i32 v13
+    v16 = or.i32 v14, v15
+    va_end v1
+    return v16
+}
+";
+
+#[test]
+fn review_wide_varargs_execute_with_register_exhaustion_and_stack_alignment() {
+    for count in [0, 3, 4, 5, 6] {
+        let mut main = format!(
+            "target triple = \"x86_64-unknown-linux-gnu\"\n{WIDE_VARIADIC}\nfunction @main() -> \
+             i32 external {{\nblock0:\n v0 = iconst.i32 {count}\n"
+        );
+        let mut args = vec!["v0".to_string()];
+        for i in 0..count {
+            writeln!(main, " v{} = iconst.i64 {}", i + 1, i + 1).unwrap();
+            args.push(format!("v{}", i + 1));
+        }
+        writeln!(
+            main,
+            " v{} = iconst.i128 22774453838368691933757882222884355841",
+            count + 1
+        )
+        .unwrap();
+        writeln!(main, " v{} = iconst.i64 999", count + 2).unwrap();
+        args.push(format!("v{}", count + 1));
+        args.push(format!("v{}", count + 2));
+        writeln!(
+            main,
+            " v{} = call @b_wide({})\n return v{}\n}}",
+            count + 3,
+            args.join(", "),
+            count + 3
+        )
+        .unwrap();
+        assert_eq!(main_result(&main), 0, "{count} before ABI lowering");
+        let lowered = lower_text(&main, Target::LinuxGnu);
+        assert_eq!(main_result(&lowered), 0, "{count} after ABI lowering");
+    }
+}

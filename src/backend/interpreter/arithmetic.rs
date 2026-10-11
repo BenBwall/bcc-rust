@@ -219,10 +219,10 @@ pub(crate) fn convert(
     to: Type,
     a: RuntimeValue,
 ) -> Result<RuntimeValue, Fault> {
-    if from.is_float() {
+    if from.is_float() && !(opcode == Opcode::Bitcast && from == Type::F128) {
         supported_float(from)?;
     }
-    if to.is_float() {
+    if to.is_float() && !(opcode == Opcode::Bitcast && to == Type::F128) {
         supported_float(to)?;
     }
     if a.is_poison() {
@@ -258,7 +258,7 @@ pub(crate) fn convert(
 fn bitcast(to: Type, value: RuntimeValue) -> RuntimeValue {
     let bits = match value {
         | RuntimeValue::Ptr(_) | RuntimeValue::Poison => return value,
-        | RuntimeValue::Int(bits) => bits,
+        | RuntimeValue::Int(bits) | RuntimeValue::F128(bits) => bits,
         | RuntimeValue::F32(value) => u128::from(value.to_bits()),
         | RuntimeValue::F64(value) => u128::from(value.to_bits()),
     };
@@ -272,6 +272,7 @@ fn bitcast(to: Type, value: RuntimeValue) -> RuntimeValue {
             RuntimeValue::F32(f32::from_bits(bits))
         },
         | Type::F64 => RuntimeValue::F64(f64::from_bits(truncate_u64(bits))),
+        | Type::F128 => RuntimeValue::F128(bits),
         | _ => RuntimeValue::int(to, bits),
     }
 }

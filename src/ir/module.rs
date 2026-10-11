@@ -549,8 +549,10 @@ pub(crate) struct AggregateScalar {
     pub(crate) ty:     Type,
 }
 
-/// The registers an aggregate result comes back in: the first holds bytes
-/// 0-7 of the result and the second bytes 8-15.
+/// The registers a memory-backed result comes back in: the first starts
+/// at byte 0 and an optional second at byte 8. A lone `i128` represents the
+/// Win64 scalar extension's `<2 x i64>` result in XMM0; `f128` carries a
+/// System V SSE/SSEUP result in one vector register.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct ResultRegisters {
     pub(crate) first:  Type,

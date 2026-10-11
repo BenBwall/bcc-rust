@@ -93,6 +93,7 @@ pub(super) fn rewrite_body(
         old_signatures,
         convention: Convention::of(target),
         scratch,
+        wide_result: None,
     };
     rewriter.run(plan, &slots);
     rewriter.builder.finish();
@@ -115,11 +116,15 @@ struct Rewriter<'a, 'm, 'ir, 's> {
     old_signatures: &'a [SigId],
     convention:     Convention,
     scratch:        &'a Bump,
+    /// A scalar i128 result's post-ABI register return area.
+    wide_result:    Option<Value>,
 }
 
 /// What the entry block does for one parameter before the old code runs.
 #[derive(Clone, Copy)]
 enum Prologue<'s> {
+    /// Load the scalar from Win64's indirect argument into the old SSA value.
+    LoadI128 { param: Value, pointer: Value },
     /// Store the parts that arrived in registers into a fresh slot whose
     /// address is the old parameter.
     Rebuild {
@@ -183,6 +188,9 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
         let first = plan.first_arg();
         match plan.result {
             | ResultPlan::Scalar => {},
+            | ResultPlan::VectorI128 => {
+                self.wide_result = Some(self.builder.append_block_param(entry, Type::Ptr));
+            },
             | ResultPlan::Memory(_) | ResultPlan::Registers { .. } =>
                 self.builder.define_block_param(entry, params[0], Type::Ptr),
             | ResultPlan::Ignore(layout) => prologue.push(Prologue::Empty {
@@ -195,6 +203,10 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                 | ArgPlan::Keep | ArgPlan::Stack { .. } =>
                     self.builder
                         .define_block_param(entry, param, self.old.value_type(param)),
+                | ArgPlan::IndirectI128 => {
+                    let pointer = self.builder.append_block_param(entry, Type::Ptr);
+                    prologue.push(Prologue::LoadI128 { param, pointer });
+                },
                 | ArgPlan::Registers { layout, parts } => {
                     let first = self.builder.body().value_count();
                     for &ty in parts.types() {
@@ -217,6 +229,18 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
     /// every register's bytes, which may run past the aggregate.
     fn prologue(&mut self, item: Prologue<'_>) {
         match item {
+            | Prologue::LoadI128 { param, pointer } => {
+                _ = self.builder.insert_with_result(
+                    InstData::Load {
+                        ty:    Type::I128,
+                        flags: InstFlags::empty(),
+                        align: natural_align(Type::I128),
+                        tag:   None,
+                        addr:  pointer,
+                    },
+                    Some(param),
+                );
+            },
             | Prologue::Rebuild {
                 param,
                 layout,
@@ -224,7 +248,12 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                 first,
             } => {
                 let size = layout.size.max(parts.bytes());
-                let align = max_align(layout.align, 8);
+                let align = parts
+                    .types()
+                    .iter()
+                    .fold(max_align(layout.align, 8), |align, &ty| {
+                        max_align(align, natural_align(ty).bytes())
+                    });
                 let address = self.fresh_slot(param, size, align);
                 for (index, &ty) in parts.types().iter().enumerate() {
                     let value = Value::new(first + index);
@@ -254,6 +283,14 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
         let data = *old.inst(inst);
         let result = old.inst_result(inst);
         match data {
+            | InstData::Return { value: Some(value) } if self.wide_result.is_some() => {
+                self.builder.store(
+                    value,
+                    self.wide_result.expect("the wide result has an area"),
+                    MemFlags::aligned(natural_align(Type::I128)),
+                );
+                _ = self.builder.insert(InstData::Return { value: None });
+            },
             | InstData::Call { func, args } => {
                 let sig = self.old_signatures[func.index()];
                 self.call(sig, Callee::Direct(func), old.value_list(args), result);
@@ -342,8 +379,14 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
         }
         // A return area to copy into the caller's object after the call.
         let mut copy_back = None;
+        let mut wide_result = None;
         match plan.result {
             | ResultPlan::Scalar | ResultPlan::Ignore(_) => {},
+            | ResultPlan::VectorI128 => {
+                let area = self.temporary(16, natural_align(Type::I128));
+                lowered.push(area);
+                wide_result = Some(area);
+            },
             | ResultPlan::Memory(_) => lowered.push(args[0]),
             | ResultPlan::Registers { layout, registers } =>
                 if self.is_slot_address(args[0]) {
@@ -359,6 +402,7 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
         for (&value, &arg) in args[first..].iter().zip(plan.args) {
             match arg {
                 | ArgPlan::Keep => lowered.push(value),
+                | ArgPlan::IndirectI128 => lowered.push(self.indirect_i128(value)),
                 | ArgPlan::Registers { layout, parts } =>
                     for (index, &ty) in parts.types().iter().enumerate() {
                         let part = self.pack(value, layout, index, ty);
@@ -375,7 +419,16 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                 | ArgPlan::Ignore(_) => {},
             }
         }
-        lowered.extend_from_slice(&args[first + plan.args.len()..]);
+        for &value in &args[first + plan.args.len()..] {
+            let value = if self.convention == Convention::Win64
+                && self.old.value_type(value) == Type::I128
+            {
+                self.indirect_i128(value)
+            } else {
+                value
+            };
+            lowered.push(value);
+        }
         let data = match callee {
             | Callee::Direct(func) => InstData::Call {
                 func,
@@ -386,10 +439,33 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                 args: self.builder.value_list(&lowered),
             },
         };
-        _ = self.builder.insert_with_result(data, result);
+        _ = self
+            .builder
+            .insert_with_result(data, if wide_result.is_some() { None } else { result });
+        if let (Some(area), Some(result)) = (wide_result, result) {
+            _ = self.builder.insert_with_result(
+                InstData::Load {
+                    ty:    Type::I128,
+                    flags: InstFlags::empty(),
+                    align: natural_align(Type::I128),
+                    tag:   None,
+                    addr:  area,
+                },
+                Some(result),
+            );
+        }
         if let Some((area, object, layout)) = copy_back {
             self.copy(object, area, layout.size, layout.align);
         }
+    }
+
+    /// Stores a Win64 scalar argument in a fresh 16-aligned caller copy.
+    /// C99: §6.5.2.2 paragraph 4, p. 71; PDF p. 83; `__int128` is an extension.
+    fn indirect_i128(&mut self, value: Value) -> Value {
+        let copy = self.temporary(16, natural_align(Type::I128));
+        self.builder
+            .store(value, copy, MemFlags::aligned(natural_align(Type::I128)));
+        copy
     }
 
     /// The register part `index` of type `ty` of the aggregate at `base`:
@@ -397,21 +473,27 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
     /// loaded one by one, frozen so that one member never written does not
     /// make the others poison, and combined at their offsets. Overlapping
     /// union members are loaded a byte at a time, since which of them was
-    /// written last is not known. Padding bytes are zero.
+    /// written last is not known. Padding bytes are zero. SSE/SSEUP parts
+    /// cover all sixteen bytes of a single vector register.
+    /// C99: §6.2.6.1 paragraph 4, p. 37; PDF p. 49 (object representation);
+    /// `__float128` is an extension, classified by the System V psABI.
     fn pack(&mut self, base: Value, layout: AggregateLayout<'_>, index: usize, ty: Type) -> Value {
         let start = 8 * index as u64;
         let eightbyte = self.offset(base, start);
+        let bytes = u64::from(ty.bytes()).max(8);
+        let end = start + bytes;
+        let word = if bytes == 16 { Type::I128 } else { Type::I64 };
         let mut pieces = ArenaVec::new_in(self.scratch);
         for scalar in layout.scalars {
             let (from, to) = (
                 u64::from(scalar.offset),
                 u64::from(scalar.offset) + u64::from(scalar.ty.bytes()),
             );
-            if to > start && from < start + 8 {
-                let clipped = from < start || to > start + 8;
+            if to > start && from < end {
+                let clipped = from < start || to > end;
                 pieces.push((
                     from.max(start) - start,
-                    to.min(start + 8) - start,
+                    to.min(end) - start,
                     scalar.ty,
                     clipped,
                 ));
@@ -454,15 +536,15 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                 let align = align_at(layout.align, start + offset, step);
                 let loaded = self.builder.load(chunk_type, at, MemFlags::aligned(align));
                 let frozen = self.builder.unary(Opcode::Freeze, loaded);
-                let wide = if chunk_type == Type::I64 {
+                let wide = if chunk_type == word {
                     frozen
                 } else {
-                    self.builder.convert(Opcode::Zext, Type::I64, frozen)
+                    self.builder.convert(Opcode::Zext, word, frozen)
                 };
                 let shifted = if offset == 0 {
                     wide
                 } else {
-                    let amount = self.builder.iconst(Type::I64, i128::from(8 * offset));
+                    let amount = self.builder.iconst(word, i128::from(8 * offset));
                     self.builder
                         .binary(Opcode::Shl, InstFlags::empty(), wide, amount)
                 };
@@ -474,9 +556,10 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                 });
             }
         }
-        let combined = combined.unwrap_or_else(|| self.builder.iconst(Type::I64, 0));
+        let combined = combined.unwrap_or_else(|| self.builder.iconst(word, 0));
         match ty {
-            | Type::I64 => combined,
+            | Type::I64 | Type::I128 => combined,
+            | Type::F128 => self.builder.convert(Opcode::Bitcast, Type::F128, combined),
             | Type::F64 => self.builder.convert(Opcode::Bitcast, Type::F64, combined),
             | Type::F32 => {
                 let bits = self.builder.convert(Opcode::Trunc, Type::I32, combined);
@@ -701,12 +784,13 @@ fn align_at(align: Align, offset: u64, size: u64) -> Align {
     Align::from_bytes(bytes.min(size.next_power_of_two())).unwrap_or(Align::BYTE)
 }
 
-/// The integer type of `bytes` bytes, a power of two up to eight.
+/// The integer type of `bytes` bytes, a power of two up to sixteen.
 fn int_type(bytes: u64) -> Type {
     match bytes {
         | 1 => Type::I8,
         | 2 => Type::I16,
         | 4 => Type::I32,
+        | 16 => Type::I128,
         | _ => Type::I64,
     }
 }

@@ -109,8 +109,8 @@ impl Machine<'_, '_, '_> {
                         RuntimeValue::F32(f32::from_bits(bits))
                     },
                     | Type::F64 => RuntimeValue::F64(f64::from_bits(truncate_u64(bits))),
-                    | Type::F80 | Type::F128 =>
-                        return Err(Fault::Unsupported(Unsupported::WideFloat)),
+                    | Type::F128 => RuntimeValue::F128(bits),
+                    | Type::F80 => return Err(Fault::Unsupported(Unsupported::WideFloat)),
                     | _ => RuntimeValue::int(ty, bits),
                 }
             },

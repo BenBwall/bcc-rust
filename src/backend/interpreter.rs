@@ -42,10 +42,11 @@
 //! - `text.rs` runs textual IR for tests; `tests.rs` and `tests/` exercise the
 //!   interpreter.
 //!
-//! Limits: `f80` and `f128` values trap as unsupported. `inttoptr` maps an
-//! address to the live object containing it, a deterministic stand-in for a
-//! full provenance model. Declared globals without an initializer are
-//! zero-filled objects of their declared size.
+//! Limits: `f80` values and `f128` arithmetic trap as unsupported; `f128`
+//! representations support constants, loads, stores, freeze and bitcasts.
+//! `inttoptr` maps an address to the live object containing it, a deterministic
+//! stand-in for a full provenance model. Declared globals without an
+//! initializer are zero-filled objects of their declared size.
 
 // Execution
 mod execute;

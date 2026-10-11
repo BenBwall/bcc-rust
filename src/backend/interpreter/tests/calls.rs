@@ -264,3 +264,107 @@ block0:
     assert_eq!(undefined(text, "stale"), UbKind::InvalidVaList);
     assert_eq!(undefined(text, "outside"), UbKind::VaStartOutsideVariadic);
 }
+
+#[test]
+fn review_byval_parameters_are_private_copies() {
+    let text = r"abi lowered
+function @change(ptr byval(size 4, align 4)) external {
+block0(v0: ptr):
+ v1 = iconst.i32 9
+ store.i32 v1, v0, align 4
+ return
+}
+function @main() -> i32 external {
+ slot0 = stack_slot 4, align 4
+block0:
+ v0 = stack_addr slot0
+ v1 = iconst.i32 7
+ store.i32 v1, v0, align 4
+ call @change(v0)
+ v2 = load.i32 v0, align 4
+ return v2
+}
+";
+    assert_eq!(returned(text, "main"), int(7));
+}
+
+#[test]
+fn review_byval_copies_pointer_provenance_and_poison() {
+    let text = r#"abi lowered
+ global @g internal size 4, align 4 = bytes "2a000000"
+ function @read(ptr byval(size 16, align 8)) -> i32 internal {
+ block0(v0: ptr):
+     v1 = load.ptr v0, align 8
+     v2 = load.i32 v1, align 4
+     v3 = iconst.i64 8
+     v4 = ptr_add v0, v3
+     v5 = load.i32 v4, align 4
+     return v2
+ }
+ function @main() -> i32 external {
+     slot0 = stack_slot 16, align 8
+ block0:
+     v0 = stack_addr slot0
+     v1 = global_addr @g
+     store.ptr v1, v0, align 8
+     v2 = call @read(v0)
+     return v2
+ }
+ "#;
+    assert_eq!(returned(text, "main"), int(42));
+    assert_eq!(
+        returned(&text.replacen("return v2", "return v5", 1), "main"),
+        RuntimeValue::Poison
+    );
+}
+
+#[test]
+fn review_byval_copy_dies_with_its_frame() {
+    let text = r"
+abi lowered
+function @leak(ptr byval(size 4, align 4)) -> ptr internal {
+block0(v0: ptr):
+    return v0
+}
+function @main() -> i32 external {
+    slot0 = stack_slot 4, align 4
+block0:
+    v0 = stack_addr slot0
+    v1 = iconst.i32 7
+    store.i32 v1, v0, align 4
+    v2 = call @leak(v0)
+    v3 = load.i32 v2, align 4
+    return v3
+}
+";
+    assert_eq!(undefined(text, "main"), UbKind::DanglingPointer);
+}
+
+#[test]
+fn review_byval_copy_preserves_dangling_pointer_provenance() {
+    let text = r"
+abi lowered
+function @leak() -> ptr internal {
+    slot0 = stack_slot 4, align 4
+block0:
+    v0 = stack_addr slot0
+    return v0
+}
+function @read(ptr byval(size 8, align 8)) -> i32 internal {
+block0(v0: ptr):
+    v1 = load.ptr v0, align 8
+    v2 = load.i32 v1, align 4
+    return v2
+}
+function @main() -> i32 external {
+    slot0 = stack_slot 8, align 8
+block0:
+    v0 = stack_addr slot0
+    v1 = call @leak()
+    store.ptr v1, v0, align 8
+    v2 = call @read(v0)
+    return v2
+}
+";
+    assert_eq!(undefined(text, "main"), UbKind::DanglingPointer);
+}

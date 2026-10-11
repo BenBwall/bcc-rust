@@ -312,3 +312,47 @@ fn main_status(module: &Module<'_>) -> i32 {
         ),
     }
 }
+
+#[test]
+fn review_wide_scalars_execute_before_and_after_abi_lowering() {
+    let source = "__int128 f(__int128 x){return x+1;} long long low(__int128 x){return (long \
+                  long)x;} int main(void){ __int128 x=((__int128)0x1122334455667788ULL<<64)+42; \
+                  __int128 (*p)(__int128)=f; return low(42)!=42 || f(x)!=x+1 || p(x)!=x+1; }";
+    for target in [Target::WindowsGnu, Target::WindowsMsvc, Target::LinuxGnu] {
+        let arena = Bump::new();
+        let tu = Bump::new();
+        let mut module = lower_c(&tu, &arena, source, target);
+        assert_eq!(main_status(&module), 0);
+        lower_abi(&mut module, target, &Bump::new()).unwrap();
+        assert_eq!(main_status(&module), 0);
+    }
+}
+
+#[test]
+fn review_quad_aggregate_preserves_all_sixteen_bytes() {
+    let source = "struct S { __float128 x; }; struct S s; int f(struct S x){return 0;} struct S \
+                  echo(struct S x){return x;} int main(void){ if(f(s)) return 1; struct S a; \
+                  unsigned char *p=(unsigned char *)&a; for(int i=0;i<16;i++)p[i]=i+1; struct S \
+                  b=echo(a); unsigned char *q=(unsigned char *)&b; for(int \
+                  i=0;i<16;i++)if(q[i]!=i+1)return 2; return 0; }";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let arena = Bump::new();
+        let tu = Bump::new();
+        let mut module = lower_c(&tu, &arena, source, target);
+        lower_abi(&mut module, target, &Bump::new()).unwrap();
+        assert_eq!(main_status(&module), 0);
+    }
+}
+
+#[test]
+fn review_overlapping_quad_members_pack_a_full_vector() {
+    let source = "union U { __float128 x; float f; }; union U echo(union U x){return x;} int \
+                  main(void){ union U a; unsigned char *p=(unsigned char *)&a; for(int \
+                  i=0;i<16;i++)p[i]=i+1; union U b=echo(a); unsigned char *q=(unsigned char *)&b; \
+                  for(int i=0;i<16;i++)if(q[i]!=i+1)return 1; return 0; }";
+    let arena = Bump::new();
+    let tu = Bump::new();
+    let mut module = lower_c(&tu, &arena, source, Target::LinuxGnu);
+    lower_abi(&mut module, Target::LinuxGnu, &Bump::new()).unwrap();
+    assert_eq!(main_status(&module), 0);
+}

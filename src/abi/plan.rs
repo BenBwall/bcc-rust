@@ -30,6 +30,9 @@ use crate::{
 
 /// Plans the pre-ABI signature `sig` for `target` and interns the post-ABI
 /// signature it gives, whose id the plan records.
+/// C99: §6.5.2.2 paragraph 4, p. 71; PDF p. 83; §6.8.6.4 paragraph 3,
+/// p. 139; PDF p. 151. `__int128` is an extension; Win64 passes it through
+/// caller-owned storage and returns its bits in XMM0, as bundled Clang does.
 pub(crate) fn plan_signature<'ir: 's, 's>(
     module: &mut Module<'ir>,
     target: Target,
@@ -45,15 +48,21 @@ pub(crate) fn plan_signature<'ir: 's, 's>(
             | Convention::SystemV => sysv::result(layout, &mut registers)?,
             | Convention::Win64 => win64::result(layout),
         },
+        | _ if convention == Convention::Win64 && signature.result == Some(Type::I128) =>
+            ResultPlan::VectorI128,
         | _ => ResultPlan::Scalar,
     };
-    let first = usize::from(!matches!(result, ResultPlan::Scalar));
+    let first = usize::from(!matches!(
+        result,
+        ResultPlan::Scalar | ResultPlan::VectorI128
+    ));
     for (index, &ty) in signature.params.iter().enumerate().skip(first) {
         let plan = match signature.param_abi(index) {
             | Some(ParamAbi::Aggregate(layout)) => match convention {
                 | Convention::SystemV => sysv::argument(layout, &mut registers)?,
                 | Convention::Win64 => win64::argument(layout),
             },
+            | _ if convention == Convention::Win64 && ty == Type::I128 => ArgPlan::IndirectI128,
             | _ => {
                 // A scalar takes the registers it needs if they are free,
                 // else it goes on the stack and leaves them for later
@@ -88,7 +97,7 @@ impl SignaturePlan<'_> {
     /// aggregate result, else 0.
     pub(crate) const fn first_arg(&self) -> usize {
         match self.result {
-            | ResultPlan::Scalar => 0,
+            | ResultPlan::Scalar | ResultPlan::VectorI128 => 0,
             | _ => 1,
         }
     }
@@ -100,6 +109,8 @@ pub(crate) enum ArgPlan<'s> {
     /// Unchanged: a scalar, or, for an aggregate, the pointer to the
     /// caller's copy (Win64 passes larger aggregates by reference).
     Keep,
+    /// Win64 `__int128`: a pointer to a caller-owned, 16-aligned copy.
+    IndirectI128,
     /// In registers: one scalar parameter per part, part `i` holding bytes
     /// `8 * i` onwards of the aggregate.
     Registers {
@@ -121,6 +132,9 @@ pub(crate) enum ArgPlan<'s> {
 pub(crate) enum ResultPlan<'s> {
     /// The signature has no aggregate result.
     Scalar,
+    /// Win64 scalar `__int128`: a 16-byte vector in XMM0. The post-ABI IR
+    /// uses a register return area, with `i128` as its memory carrier.
+    VectorI128,
     /// In memory at the address the caller passes (`sret`).
     Memory(AggregateLayout<'s>),
     /// In registers loaded from the return area.
@@ -215,6 +229,17 @@ fn lowered_signature<'s>(
     };
     match *result {
         | ResultPlan::Scalar | ResultPlan::Ignore(_) => {},
+        | ResultPlan::VectorI128 => {
+            describe(
+                &params,
+                ParamAbi::Registers(ResultRegisters {
+                    first:  Type::I128,
+                    second: None,
+                    align:  Align::from_bytes(16).unwrap(),
+                }),
+            );
+            params.push(Type::Ptr);
+        },
         | ResultPlan::Memory(layout) => {
             describe(&params, ParamAbi::Sret(without_scalars(layout)));
             params.push(Type::Ptr);
@@ -224,7 +249,10 @@ fn lowered_signature<'s>(
             params.push(Type::Ptr);
         },
     }
-    let first = usize::from(!matches!(result, ResultPlan::Scalar));
+    let first = usize::from(!matches!(
+        result,
+        ResultPlan::Scalar | ResultPlan::VectorI128
+    ));
     for ((index, &ty), plan) in signature.params.iter().enumerate().skip(first).zip(args) {
         match *plan {
             | ArgPlan::Keep => {
@@ -239,6 +267,7 @@ fn lowered_signature<'s>(
                 }
                 params.push(ty);
             },
+            | ArgPlan::IndirectI128 => params.push(Type::Ptr),
             | ArgPlan::Registers { parts, .. } => params.extend_from_slice(parts.types()),
             | ArgPlan::Stack { layout, align } => {
                 describe(
@@ -252,7 +281,11 @@ fn lowered_signature<'s>(
     }
     Signature {
         params:           scratch.alloc_slice_copy(&params),
-        result:           signature.result,
+        result:           if matches!(result, ResultPlan::VectorI128) {
+            None
+        } else {
+            signature.result
+        },
         variadic:         signature.variadic,
         aggregates:       scratch.alloc_slice_copy(&aggregates),
         extensions:       scratch.alloc_slice_copy(&extensions),

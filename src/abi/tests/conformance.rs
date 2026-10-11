@@ -11,6 +11,7 @@
 //! test print why and pass.
 
 use std::{
+    fmt::Write as _,
     path::Path,
     process::Command,
 };
@@ -636,8 +637,7 @@ impl Runner {
     /// the test cannot run.
     fn for_target(target: Target) -> Option<Self> {
         let native = match target {
-            | Target::WindowsGnu => cfg!(all(windows, target_env = "gnu")),
-            | Target::WindowsMsvc => cfg!(all(windows, target_env = "msvc")),
+            | Target::WindowsGnu | Target::WindowsMsvc => cfg!(windows),
             | Target::LinuxGnu => cfg!(all(target_os = "linux", target_env = "gnu")),
             | Target::LinuxMusl => cfg!(all(target_os = "linux", target_env = "musl")),
         };
@@ -672,4 +672,130 @@ impl Runner {
         };
         output.unwrap().status.code()
     }
+}
+
+/// Wide scalars cross separately compiled C/IR boundaries in both directions.
+#[test]
+fn review_wide_scalars_cross_between_bcc_and_clang() {
+    let bcc = r"
+long long b_low(__int128 x) { return (long long)x; }
+__int128 b_inc(__int128 x) { return x + 1; }
+unsigned __int128 b_not(unsigned __int128 x) { return ~x; }
+__int128 b_make(void) { return ((__int128)0x1122334455667788ULL << 64) + 42; }
+long long c_low(__int128 x);
+__int128 c_inc(__int128 x);
+unsigned __int128 c_not(unsigned __int128 x);
+__int128 c_make(void);
+__int128 c_var(int n, ...);
+int bcc_wide(__int128 x) {
+  __int128 (*p)(__int128) = c_inc;
+  if (c_low(42) != 42 || c_inc(x) != x + 1 || p(x) != x + 1) return 10;
+  if (c_not((unsigned __int128)x) != ~(unsigned __int128)x) return 11;
+  if (c_make() != (((__int128)0x1122334455667788ULL << 64) + 42)) return 12;
+  if (c_var(1, x) != x) return 13;
+  return 0;
+}
+";
+    let clang = r"
+#include <stdarg.h>
+long long b_low(__int128 x);
+__int128 b_inc(__int128 x);
+unsigned __int128 b_not(unsigned __int128 x);
+__int128 b_make(void);
+int bcc_wide(__int128 x);
+long long c_low(__int128 x) { return (long long)x; }
+__int128 c_inc(__int128 x) { return x + 1; }
+unsigned __int128 c_not(unsigned __int128 x) { return ~x; }
+__int128 c_make(void) { return ((__int128)0x1122334455667788ULL << 64) + 42; }
+__int128 c_var(int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  __int128 x = va_arg(ap, __int128);
+  va_end(ap);
+  return x;
+}
+int main(void) {
+  __int128 x = ((__int128)0x1122334455667788ULL << 64) + 0x2233445566778842ULL;
+  __int128 (*p)(__int128) = b_inc;
+  if (b_low(42) != 42) return 1;
+  if (b_inc(x) != x + 1 || p(x) != x + 1) return 2;
+  if (b_not((unsigned __int128)x) != ~(unsigned __int128)x) return 3;
+  if (b_make() != (((__int128)0x1122334455667788ULL << 64) + 42)) return 4;
+  return bcc_wide(x);
+}
+";
+    for target in [Target::WindowsGnu, Target::WindowsMsvc, Target::LinuxGnu] {
+        let arena = Bump::new();
+        let tu = Bump::new();
+        let mut module = lower_c(&tu, &arena, bcc, target);
+        let scratch = Bump::new();
+        _ = optimize(&mut module, &OptimizerOptions::default(), &scratch);
+        lower_abi(&mut module, target, &scratch).unwrap();
+        let mut text = String::new();
+        emit_module(&module, target, &mut text).unwrap();
+        if target != Target::LinuxGnu {
+            assert!(text.contains("<2 x i64> @b_inc(ptr"), "{text}");
+        }
+        assert_conforms("wide-scalars", target, &text, clang);
+    }
+}
+
+#[test]
+fn review_quad_aggregates_cross_between_bcc_and_clang() {
+    let types = "struct Q128 { __float128 x; };\n";
+    let bcc = r"
+struct Q128 b_quad(struct Q128 x) { return x; }
+struct Q128 c_quad(struct Q128 x);
+int bcc_quad(void) {
+  struct Q128 x;
+  unsigned char *p = (unsigned char *)&x;
+  for (int i = 0; i < 16; i++) p[i] = i + 1;
+  struct Q128 y = c_quad(x);
+  unsigned char *q = (unsigned char *)&y;
+  for (int i = 0; i < 16; i++) if (q[i] != i + 1) return 2;
+  return 0;
+}
+";
+    let clang = r"
+struct Q128 b_quad(struct Q128 x);
+struct Q128 c_quad(struct Q128 x) { return x; }
+int bcc_quad(void);
+int main(void) {
+  struct Q128 x;
+  unsigned char *p = (unsigned char *)&x;
+  for (int i = 0; i < 16; i++) p[i] = i + 1;
+  struct Q128 y = b_quad(x);
+  unsigned char *q = (unsigned char *)&y;
+  for (int i = 0; i < 16; i++) if (q[i] != i + 1) return 1;
+  return bcc_quad();
+}
+";
+    for target in [Target::WindowsGnu, Target::LinuxGnu] {
+        let arena = Bump::new();
+        let tu = Bump::new();
+        let mut module = lower_c(&tu, &arena, &format!("{types}{bcc}"), target);
+        lower_abi(&mut module, target, &Bump::new()).unwrap();
+        let mut text = String::new();
+        emit_module(&module, target, &mut text).unwrap();
+        assert_conforms("quad", target, &text, &format!("{types}{clang}"));
+    }
+}
+
+#[test]
+fn review_wide_variadic_arguments_cross_from_clang() {
+    let arena = Bump::new();
+    let mut module = parse_module(&arena, varargs::WIDE_VARIADIC).unwrap();
+    lower_abi(&mut module, Target::LinuxGnu, &Bump::new()).unwrap();
+    let mut text = String::new();
+    emit_module(&module, Target::LinuxGnu, &mut text).unwrap();
+    let wide =
+        "(((__int128)0x1122334455667788ULL << 64) + (unsigned long long)0x99aabbccddeeff01ULL)";
+    let mut clang = "int b_wide(int n, ...); int main(void) {\n".to_string();
+    for count in [0, 3, 4, 5, 6] {
+        let mut args: Vec<String> = (1..=count).map(|i| format!("{i}LL")).collect();
+        args.extend([wide.to_string(), "999LL".to_string()]);
+        writeln!(clang, "if (b_wide({count}, {})) return 1;", args.join(", ")).unwrap();
+    }
+    clang.push_str("return 0; }\n");
+    assert_conforms("wide-varargs", Target::LinuxGnu, &text, &clang);
 }

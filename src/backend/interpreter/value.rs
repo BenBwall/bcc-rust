@@ -10,13 +10,15 @@ use crate::ir::Type;
 
 /// The contents of one SSA value.
 ///
-/// An `Int` of type `iN` always has its bits above `N` clear. `f80` and
-/// `f128` values are not supported yet; the interpreter traps on them.
+/// An `Int` of type `iN` always has its bits above `N` clear. `f128`
+/// representations can be transported; arithmetic and `f80` remain unsupported.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum RuntimeValue {
     Int(u128),
     F32(f32),
     F64(f64),
+    /// IEEE binary128 bits; moves and bitcasts preserve every bit.
+    F128(u128),
     Ptr(Pointer),
     /// The result of an operation whose `nsw`, `nuw`, `exact` or
     /// `inbounds` fact was violated, of a shift by the width or more, of a
@@ -39,6 +41,7 @@ impl RuntimeValue {
         match ty {
             | Type::F32 => Self::F32(0.0),
             | Type::F64 => Self::F64(0.0),
+            | Type::F128 => Self::F128(0),
             | Type::Ptr => Self::NULL,
             | _ => Self::Int(0),
         }

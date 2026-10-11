@@ -10,7 +10,6 @@ use super::{
 };
 use crate::{
     ir::{
-        Profile,
         parse_module,
         verify_module,
     },
@@ -43,7 +42,7 @@ pub(crate) fn run_text_with(
 ) -> TextRun {
     let arena = Bump::new();
     let module = parse_module(&arena, text).unwrap_or_else(|error| panic!("{error}\n{text}"));
-    let errors: Vec<String> = verify_module(&module, Profile::PreAbi, &arena)
+    let errors: Vec<String> = verify_module(&module, module.profile(), &arena)
         .iter()
         .map(ToString::to_string)
         .collect();

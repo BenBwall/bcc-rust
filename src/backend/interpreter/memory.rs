@@ -174,6 +174,7 @@ impl<'a> Memory<'a> {
             | Type::I1 if bits > 1 => RuntimeValue::Poison,
             | Type::F32 => RuntimeValue::F32(f32::from_bits(truncate_u32(bits))),
             | Type::F64 => RuntimeValue::F64(f64::from_bits(truncate_u64(bits))),
+            | Type::F128 => RuntimeValue::F128(bits),
             | Type::Ptr => {
                 let provenance = cells[0].provenance;
                 let whole = cells.iter().enumerate().all(|(index, cell)| {
@@ -211,7 +212,7 @@ impl<'a> Memory<'a> {
                 cells.fill(Cell::POISON);
                 return Ok(());
             },
-            | RuntimeValue::Int(bits) => (bits, None),
+            | RuntimeValue::Int(bits) | RuntimeValue::F128(bits) => (bits, None),
             | RuntimeValue::F32(value) => (u128::from(value.to_bits()), None),
             | RuntimeValue::F64(value) => (u128::from(value.to_bits()), None),
             | RuntimeValue::Ptr(pointer) => (u128::from(pointer.address), Some(pointer)),
@@ -598,7 +599,7 @@ impl Memory<'_> {
 /// The bytes a load or store of `ty` accesses.
 fn stored_size(ty: Type) -> Result<u32, Fault> {
     match ty {
-        | Type::F80 | Type::F128 => Err(Fault::Unsupported(Unsupported::WideFloat)),
+        | Type::F80 => Err(Fault::Unsupported(Unsupported::WideFloat)),
         | _ => Ok(ty.bytes()),
     }
 }
