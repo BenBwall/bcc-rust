@@ -205,7 +205,7 @@ impl<'s> AliasCheck<'s> {
 
     fn compute(draft: &Draft<'_, 's>) -> Self {
         let mut escaped = ArenaVec::new_in(draft.scratch);
-        escaped.resize(draft.body.stack_slot_count(), false);
+        escaped.resize(draft.stack_slot_count(), false);
         let mut escape = |value| {
             if draft.value_type(value) == Type::Ptr
                 && let Base::Stack(slot) = location(draft, value, Type::Ptr).base
