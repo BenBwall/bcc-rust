@@ -3,12 +3,13 @@
 //! Memory is a set of objects: stack slots, globals, heap allocations,
 //! functions (size zero, so a function's address is unique) and `va_list`
 //! cursors. Each object has a fresh base address, a size and an array of
-//! cells, one per byte. A cell holds the byte, whether it was ever written
-//! with a defined value, and, for the eight bytes of a stored pointer, which
-//! fragment of which pointer it is. Loading a pointer whose eight cells are
-//! the fragments of one pointer in order gives that pointer back with its
-//! provenance; loading it from other bytes treats them as an integer
-//! address, as `inttoptr` does.
+//! cells, with backing capacity rounded up to a power of two for reuse.
+//! Logical bounds remain the requested size. A cell holds the byte, whether it
+//! was ever written with a defined value, and, for the eight bytes of a stored
+//! pointer, which fragment of which pointer it is. Loading a pointer whose
+//! eight cells are the fragments of one pointer in order gives that pointer
+//! back with its provenance; loading it from other bytes treats them as an
+//! integer address, as `inttoptr` does.
 //!
 //! A [`Pointer`] is an address with an optional [`ObjectRef`]. An access
 //! through it checks, in order: that it has provenance (null and wild
@@ -60,7 +61,7 @@ pub(crate) struct Memory<'a> {
     objects:         ArenaVec<'a, Object<'a>>,
     /// The base address and index of every live object, sorted by address.
     live:            ArenaVec<'a, (u64, u32)>,
-    /// For each storage size, the first freed object of that size; the rest
+    /// For each power-of-two capacity, the first freed object; the rest
     /// are chained through [`Object::next_free`].
     free:            ArenaMap<'a, usize, u32>,
     next_address:    u64,
@@ -72,6 +73,8 @@ struct Object<'a> {
     base:       u64,
     generation: u32,
     kind:       ObjectKind,
+    /// Logical bounds, independent of the reusable backing capacity.
+    size:       usize,
     cells:      &'a mut [Cell],
     next_free:  Option<NonZeroU32>,
     /// The state of a [`ObjectKind::VaCursor`]; unused for other kinds.
@@ -318,7 +321,7 @@ impl<'a> Memory<'a> {
         else {
             return RuntimeValue::Poison;
         };
-        let end = object.base + object.cells.len() as u64;
+        let end = object.base + object.size as u64;
         let within = |address: u64| (object.base..=end).contains(&address);
         if within(pointer.address)
             && within(address)
@@ -337,7 +340,7 @@ impl<'a> Memory<'a> {
         let provenance = after.checked_sub(1).and_then(|position| {
             let (base, index) = self.live[position];
             let object = &self.objects[index as usize];
-            (address - base <= object.cells.len() as u64)
+            (address - base <= object.size as u64)
                 .then(|| ObjectRef::new(index as usize, object.generation))
         });
         Pointer {
@@ -375,7 +378,7 @@ impl<'a> Memory<'a> {
             | _ => {},
         }
         let offset = pointer.address.wrapping_sub(object.base);
-        let len = object.cells.len() as u64;
+        let len = object.size as u64;
         if offset > len || size > len - offset {
             return Err(UbKind::OutOfBounds.into());
         }
@@ -434,7 +437,10 @@ impl<'a> Memory<'a> {
 
 impl Memory<'_> {
     /// Allocates an object of `size` poison bytes and returns a pointer to
-    /// its start.
+    /// its start. Freed storage is reused by capacity class, while logical
+    /// bounds, addresses and generations describe this allocation alone.
+    /// C99: §7.20.3.3 paragraph 2, p. 314; PDF p. 326 (indeterminate bytes);
+    /// §6.2.4 paragraph 2, p. 32; PDF p. 44 (object lifetime).
     pub(crate) fn allocate(
         &mut self,
         kind: ObjectKind,
@@ -445,6 +451,12 @@ impl Memory<'_> {
             return Err(Fault::Unsupported(Unsupported::ObjectSize));
         }
         let len = usize::try_from(size).map_err(|_| Fault::Unsupported(Unsupported::ObjectSize))?;
+        let capacity = if len == 0 {
+            0
+        } else {
+            len.checked_next_power_of_two()
+                .ok_or(Fault::Unsupported(Unsupported::ObjectSize))?
+        };
         let alignment = align.bytes().max(BASE_ALIGN);
         let base = self
             .next_address
@@ -454,15 +466,16 @@ impl Memory<'_> {
             .checked_add(size)
             .and_then(|end| end.checked_add(OBJECT_GAP))
             .ok_or(Fault::Unsupported(Unsupported::AddressSpace))?;
-        let index = if let Some(&head) = self.free.get(&len) {
+        let index = if let Some(&head) = self.free.get(&capacity) {
             let index = head as usize;
             let object = &mut self.objects[index];
             match object.next_free {
-                | Some(next) => _ = self.free.insert(len, next.get() - 1),
-                | None => _ = self.free.remove(&len),
+                | Some(next) => _ = self.free.insert(capacity, next.get() - 1),
+                | None => _ = self.free.remove(&capacity),
             }
             object.base = base;
             object.kind = kind;
+            object.size = len;
             object.next_free = None;
             object.cells.fill(Cell::POISON);
             index
@@ -472,13 +485,14 @@ impl Memory<'_> {
             }
             let mut cells = ArenaVec::new_in(self.arena);
             cells
-                .try_reserve_exact(len)
+                .try_reserve_exact(capacity)
                 .map_err(|_| Fault::Unsupported(Unsupported::ObjectSize))?;
-            cells.resize(len, Cell::POISON);
+            cells.resize(capacity, Cell::POISON);
             self.objects.push(Object {
                 base,
                 generation: 0,
                 kind,
+                size: len,
                 cells: cells.leak(),
                 next_free: None,
                 cursor: VaCursor::default(),
@@ -549,7 +563,8 @@ impl Memory<'_> {
     pub(crate) fn initialize(&mut self, pointer: Pointer, bytes: &[u8]) {
         let index = pointer.provenance.expect("a fresh object").index();
         let mut bytes = bytes.iter().copied();
-        for cell in self.objects[index].cells.iter_mut() {
+        let object = &mut self.objects[index];
+        for cell in &mut object.cells[..object.size] {
             *cell = Cell::data(bytes.next().unwrap_or(0));
         }
     }
@@ -558,7 +573,8 @@ impl Memory<'_> {
     /// does, ignoring alignment and constness.
     pub(crate) fn relocate(&mut self, object: Pointer, offset: u64, value: Pointer) {
         let index = object.provenance.expect("a fresh object").index();
-        let cells = &mut self.objects[index].cells;
+        let object = &mut self.objects[index];
+        let cells = &mut object.cells[..object.size];
         for position in 0..8 {
             let cell = usize::try_from(offset + position)
                 .ok()
@@ -583,7 +599,8 @@ impl Memory<'_> {
         out: &mut ArenaVec<'_, u8>,
     ) -> Result<(), Fault> {
         let (index, offset) = self.resolve(pointer, 0, Align::BYTE, false)?;
-        for cell in &self.objects[index].cells[offset..] {
+        let object = &self.objects[index];
+        for cell in &object.cells[offset..object.size] {
             if cell.tag == Cell::POISON_TAG {
                 return Err(UbKind::PoisonInHostCall.into());
             }

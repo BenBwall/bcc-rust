@@ -2,6 +2,81 @@
 //! copies and fills, provenance, and every undefined access.
 
 use super::*;
+use crate::ir::{
+    Align,
+    Type,
+};
+
+#[test]
+fn varying_heap_sizes_retain_bounded_storage() {
+    let arena = Bump::new();
+    let mut memory = Memory::new(&arena, 4096);
+    for size in 1..=2048 {
+        let pointer = memory
+            .allocate(ObjectKind::Heap, size, Align::BYTE)
+            .unwrap();
+        memory.free_heap(RuntimeValue::Ptr(pointer)).unwrap();
+    }
+    assert!(arena.used() < 128 * 1024, "retained {} bytes", arena.used());
+}
+
+#[test]
+fn reused_heap_capacity_keeps_bounds_provenance_and_poison() {
+    let arena = Bump::new();
+    let mut memory = Memory::new(&arena, 4096);
+    let old = memory.allocate(ObjectKind::Heap, 15, Align::BYTE).unwrap();
+    memory.initialize(old, &[42; 15]);
+    memory.free_heap(RuntimeValue::Ptr(old)).unwrap();
+    let used = arena.used();
+    let fresh = memory.allocate(ObjectKind::Heap, 9, Align::BYTE).unwrap();
+    assert_eq!(arena.used(), used, "same size class must reuse storage");
+    assert_ne!(fresh.address, old.address);
+    assert_ne!(fresh.provenance, old.provenance);
+    assert!(matches!(
+        memory.load(Type::I8, RuntimeValue::Ptr(old), Align::BYTE),
+        Err(Fault::Ub(UbKind::DanglingPointer))
+    ));
+    assert_eq!(
+        memory
+            .load(Type::I8, RuntimeValue::Ptr(fresh), Align::BYTE)
+            .unwrap(),
+        RuntimeValue::Poison
+    );
+    let mut beyond = fresh;
+    beyond.address += 9;
+    assert!(matches!(
+        memory.load(Type::I8, RuntimeValue::Ptr(beyond), Align::BYTE),
+        Err(Fault::Ub(UbKind::OutOfBounds))
+    ));
+    beyond.address += 1;
+    assert_eq!(memory.pointer_from_address(beyond.address).provenance, None);
+    assert_eq!(
+        memory.ptr_add(RuntimeValue::Ptr(fresh), RuntimeValue::Int(10), true),
+        RuntimeValue::Poison
+    );
+    memory.initialize(fresh, &[b'x'; 9]);
+    let text_arena = Bump::new();
+    let mut text = ArenaVec::new_in(&text_arena);
+    assert!(matches!(
+        memory.read_c_string(RuntimeValue::Ptr(fresh), &mut text),
+        Err(Fault::Ub(UbKind::OutOfBounds))
+    ));
+    memory.free_heap(RuntimeValue::Ptr(fresh)).unwrap();
+    let grown = memory.allocate(ObjectKind::Heap, 16, Align::BYTE).unwrap();
+    assert_eq!(
+        arena.used(),
+        used,
+        "growing within the class must reuse storage"
+    );
+    let mut last = grown;
+    last.address += 15;
+    assert_eq!(
+        memory
+            .load(Type::I8, RuntimeValue::Ptr(last), Align::BYTE)
+            .unwrap(),
+        RuntimeValue::Poison
+    );
+}
 
 #[test]
 fn stack_slots_store_little_endian_bytes() {
