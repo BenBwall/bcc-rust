@@ -35,86 +35,6 @@ use crate::{
 };
 
 impl Expander<'_, '_, '_, '_> {
-    /// The source text a `_Pragma` string literal stands for (C99 §6.10.9p1),
-    /// with a final newline, in the translation-unit arena, where diagnostics
-    /// can still quote it.
-    ///
-    /// C99: §6.10.9 paragraph 1, p. 161; PDF p. 173: destringizing drops an
-    /// `L` prefix and the quotes, and turns `\"` into `"` and `\\` into `\`.
-    pub(in crate::translation_phases::preprocessing) fn prepare_pragma_operator_string<'c>(
-        context: &Context<'c>,
-        string: StringCacheId,
-    ) -> &'c str {
-        let string = context.string_cache.at(string);
-        // Nothing else is allocated in the arena while the text is written.
-        let mut text = context.tu_arena().tail_vec::<u8>();
-        // A quote is written only once another character follows it, so the
-        // literal's closing quote is never written.
-        let mut quote_pending = false;
-        let mut write = |c: char| {
-            if std::mem::take(&mut quote_pending) {
-                text.push(b'"');
-            }
-            if c == '"' {
-                quote_pending = true;
-            } else {
-                for &byte in c.encode_utf8(&mut [0; 4]).as_bytes() {
-                    text.push(byte);
-                }
-            }
-        };
-        // Skip the leading quote.
-        let mut index = 1;
-        if string.char_at(0) == Some('L') {
-            index += 1;
-        }
-        while let Some(c) = string.char_at(index) {
-            match c {
-                | '\\' => match string.char_at(index + 1) {
-                    | Some('"') => {
-                        write('"');
-                        index += 2;
-                    },
-                    | Some('\\') => {
-                        write('\\');
-                        index += 2;
-                    },
-                    | _ => {
-                        // Only escaped quotes and backslashes are removed by
-                        // C99 §6.10.9p1. Preserve other escapes and progress.
-                        write('\\');
-                        index += 1;
-                    },
-                },
-                | _ => {
-                    write(c);
-                    index += c.len_utf8();
-                },
-            }
-        }
-        // A final pending quote is the trailing quote, which is dropped.
-        text.push(b'\n');
-        let text = text.into_slice();
-        // SAFETY: only complete UTF-8 encodings of characters were written.
-        unsafe { std::str::from_utf8_unchecked(text) }
-    }
-
-    /// `#pragma GCC system_header`: the rest of the current header is a
-    /// system header, as in GCC and Clang. The primary source file never is.
-    /// C99: an implementation-defined pragma, §6.10.6 paragraph 1, p. 159;
-    /// PDF p. 171.
-    fn pragma_system_header(&mut self, source_vectors: SourceVectors, from: u32) {
-        if !self.current_is_header() {
-            self.context.preprocessor_error(PreprocessorError {
-                error_type: PreprocessorErrorType::SystemHeaderPragmaInMainFile,
-                source_vectors,
-            });
-            return;
-        }
-        let file = self.physical_source_file_index();
-        self.context.mark_system_header(file, from);
-    }
-
     /// Executes a `#pragma` directive, or the pragma of a `_Pragma` operator,
     /// whose operands are not macro-replaced. Returns whether the directive's
     /// new-line was consumed.
@@ -324,6 +244,86 @@ impl Expander<'_, '_, '_, '_> {
             }
         }
         consumed_newline
+    }
+
+    /// The source text a `_Pragma` string literal stands for (C99 §6.10.9p1),
+    /// with a final newline, in the translation-unit arena, where diagnostics
+    /// can still quote it.
+    ///
+    /// C99: §6.10.9 paragraph 1, p. 161; PDF p. 173: destringizing drops an
+    /// `L` prefix and the quotes, and turns `\"` into `"` and `\\` into `\`.
+    pub(in crate::translation_phases::preprocessing) fn prepare_pragma_operator_string<'c>(
+        context: &Context<'c>,
+        string: StringCacheId,
+    ) -> &'c str {
+        let string = context.string_cache.at(string);
+        // Nothing else is allocated in the arena while the text is written.
+        let mut text = context.tu_arena().tail_vec::<u8>();
+        // A quote is written only once another character follows it, so the
+        // literal's closing quote is never written.
+        let mut quote_pending = false;
+        let mut write = |c: char| {
+            if std::mem::take(&mut quote_pending) {
+                text.push(b'"');
+            }
+            if c == '"' {
+                quote_pending = true;
+            } else {
+                for &byte in c.encode_utf8(&mut [0; 4]).as_bytes() {
+                    text.push(byte);
+                }
+            }
+        };
+        // Skip the leading quote.
+        let mut index = 1;
+        if string.char_at(0) == Some('L') {
+            index += 1;
+        }
+        while let Some(c) = string.char_at(index) {
+            match c {
+                | '\\' => match string.char_at(index + 1) {
+                    | Some('"') => {
+                        write('"');
+                        index += 2;
+                    },
+                    | Some('\\') => {
+                        write('\\');
+                        index += 2;
+                    },
+                    | _ => {
+                        // Only escaped quotes and backslashes are removed by
+                        // C99 §6.10.9p1. Preserve other escapes and progress.
+                        write('\\');
+                        index += 1;
+                    },
+                },
+                | _ => {
+                    write(c);
+                    index += c.len_utf8();
+                },
+            }
+        }
+        // A final pending quote is the trailing quote, which is dropped.
+        text.push(b'\n');
+        let text = text.into_slice();
+        // SAFETY: only complete UTF-8 encodings of characters were written.
+        unsafe { std::str::from_utf8_unchecked(text) }
+    }
+
+    /// `#pragma GCC system_header`: the rest of the current header is a
+    /// system header, as in GCC and Clang. The primary source file never is.
+    /// C99: an implementation-defined pragma, §6.10.6 paragraph 1, p. 159;
+    /// PDF p. 171.
+    fn pragma_system_header(&mut self, source_vectors: SourceVectors, from: u32) {
+        if !self.current_is_header() {
+            self.context.preprocessor_error(PreprocessorError {
+                error_type: PreprocessorErrorType::SystemHeaderPragmaInMainFile,
+                source_vectors,
+            });
+            return;
+        }
+        let file = self.physical_source_file_index();
+        self.context.mark_system_header(file, from);
     }
 
     /// Clang's implementation-defined macro deprecation pragma.

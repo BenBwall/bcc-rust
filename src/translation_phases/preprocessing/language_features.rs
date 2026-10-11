@@ -14,13 +14,13 @@ use std::{
 use super::{
     Expander,
     QueryExpansion,
-    driver::{
-        TokenizerFrame,
-        TokenizerFrameType,
-    },
     errors::{
         PreprocessorError,
         PreprocessorErrorType,
+    },
+    runtime::{
+        TokenizerFrame,
+        TokenizerFrameType,
     },
     token::KeywordTokenType,
 };
@@ -49,96 +49,312 @@ use crate::{
     },
 };
 
-/// Predefined dialect macros and later-standard conditional query operators.
-/// GNU extension: GCC preprocessor manual, "Common Predefined Macros".
-/// <https://gcc.gnu.org/onlinedocs/cpp/Common-Predefined-Macros.html>
-/// Clang extension: Clang Language Extensions, "Feature Checking Macros".
-/// <https://clang.llvm.org/docs/LanguageExtensions.html#feature-checking-macros>
-/// MSVC extension: Microsoft Learn, "Pragma directives and the __pragma
-/// keyword".
-/// <https://learn.microsoft.com/en-us/cpp/preprocessor/pragma-directives-and-the-pragma-keyword>
-/// C23: §6.10.2 paragraph 1, p. 166; PDF p. 179.
-/// C23: §6.10.4.1 paragraph 7, p. 171; PDF p. 184.
-pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
-    ("__COUNTER__", Feature::Counter),
-    ("__has_include", Feature::HasInclude),
-    ("__has_include_next", Feature::IncludeNext),
-    ("__has_embed", Feature::HasEmbed),
-    ("__has_c_attribute", Feature::HasCAttribute),
-    ("__has_attribute", Feature::HasAttribute),
-    ("__has_builtin", Feature::HasBuiltin),
-    ("__pragma", Feature::MsPragma),
-    ("__STDC_EMBED_NOT_FOUND__", Feature::Embed),
-    ("__STDC_EMBED_FOUND__", Feature::Embed),
-    ("__STDC_EMBED_EMPTY__", Feature::Embed),
-];
+impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
+    /// Evaluates query operators and consumes the MSVC token-form pragma
+    /// operator. C23: §6.10.2p6-11, pp. 166-167; PDF pp. 179-180.
+    pub(super) fn language_builtin(
+        &mut self,
+        token: PreprocessorToken,
+    ) -> Option<PreprocessorToken> {
+        // Invalid nested query operands must not exhaust the native call stack.
+        if self.state.query_depth == 64 {
+            self.language_error(
+                "preprocessing query nesting limit exceeded",
+                token.source_vectors,
+            );
+            return Some(self.integer_pp_token(0, token.source_vectors));
+        }
+        self.state.query_depth += 1;
+        let result = self.language_builtin_inner(token);
+        self.state.query_depth -= 1;
+        // A malformed conditional operand still occupies its expression
+        // position. C99: diagnostics and recovery, §5.1.1.3p1, p. 11;
+        // PDF p. 23. Keep its boundary replay, but avoid diagnosing a second
+        // missing operand at the following directive. Token-form pragmas
+        // intentionally disappear and must never introduce an integer.
+        if result.is_none() && self.context.string_cache.at(token.contents) != "__pragma" {
+            Some(self.integer_pp_token(0, token.source_vectors))
+        } else {
+            result
+        }
+    }
 
-/// Appends the compiler-identity macros to the target's predefined
-/// `definitions`, as source read before user input. Following Clang, every
-/// language mode claims GCC 4.2.1 with its inline-semantics macro, and
-/// `-fms-extensions` claims MSVC 19.33, Clang's default
-/// `-fms-compatibility-version`. `__bcc__` and its version are defined in
-/// every mode; `__clang__` never is. They are ordinary macros, so `#undef`
-/// works as in Clang.
-///
-/// C99: further predefined macro names begin with `__` or `_` and an
-/// uppercase letter, §6.10.8 paragraph 4, p. 161; PDF p. 173; reserved
-/// identifiers, §7.1.3 paragraph 1, p. 166; PDF p. 178.
-pub(super) fn with_identity_macros<'a>(
-    arena: &'a Bump,
-    definitions: &str,
-    configuration: CompilerConfiguration,
-) -> &'a str {
-    let mut out = ArenaString::new_in(arena);
-    out.push_str(definitions);
-    _ = write!(
-        out,
-        "#define __bcc__ 1\n#define __bcc_major__ {}\n#define __bcc_minor__ {}\n#define \
-         __bcc_patchlevel__ {}\n#define __bcc_version__ \"{}\"\n",
-        env!("CARGO_PKG_VERSION_MAJOR"),
-        env!("CARGO_PKG_VERSION_MINOR"),
-        env!("CARGO_PKG_VERSION_PATCH"),
-        env!("CARGO_PKG_VERSION"),
-    );
-    out.push_str("#define __GNUC__ 4\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 1\n");
-    // GNU89 inline semantics before C99, C99 semantics from it on.
-    out.push_str(if configuration.standard() < CStandard::C99 {
-        "#define __GNUC_GNU_INLINE__ 1\n"
-    } else {
-        "#define __GNUC_STDC_INLINE__ 1\n"
-    });
-    if configuration.msvc_compatibility() {
-        out.push_str(
-            "#define _MSC_VER 1933\n#define _MSC_FULL_VER 193300000\n#define _MSC_BUILD \
-             1\n#define _MSC_EXTENSIONS 1\n",
+    /// Expands conditional queries, resource status macros and vendor
+    /// preprocessing operators.
+    /// GNU extension: GCC preprocessor manual, "Common Predefined Macros".
+    /// <https://gcc.gnu.org/onlinedocs/cpp/Common-Predefined-Macros.html>
+    /// Clang extension: Clang Language Extensions, "Feature Checking Macros".
+    /// <https://clang.llvm.org/docs/LanguageExtensions.html#feature-checking-macros>
+    /// MSVC extension: Microsoft Learn, "Pragma directives and the __pragma
+    /// keyword".
+    /// <https://learn.microsoft.com/en-us/cpp/preprocessor/pragma-directives-and-the-pragma-keyword>
+    /// GNU extension: GCC preprocessor manual, "Wrapper Headers".
+    /// <https://gcc.gnu.org/onlinedocs/cpp/Wrapper-Headers.html>
+    /// C23: §6.10.2 paragraphs 6-11, pp. 166-167; PDF pp. 179-180.
+    /// C23: §6.10.4.1 paragraph 7, p. 171; PDF p. 184.
+    fn language_builtin_inner(&mut self, token: PreprocessorToken) -> Option<PreprocessorToken> {
+        let name = self.context.string_cache.at(token.contents);
+        // C23 §6.10.4.2p3: only the limit's evaluation uses conditional
+        // inclusion rules. Keep query calls intact during the directive's
+        // initial replacement, including their written header names.
+        if self.query_expansion == QueryExpansion::Defer
+            && matches!(name, "__has_include" | "__has_embed" | "__has_c_attribute")
+        {
+            let arguments = self.query_arguments::<true>(token)?.leak();
+            let tokenizer = TokenSource::replay(
+                self.context,
+                self.scratch,
+                &[arguments],
+                SourceVector::default(),
+            );
+            self.push_tokenizer_frame(TokenizerFrame {
+                frame_type: TokenizerFrameType::DeferredQuery,
+                tokenizer,
+            });
+            return Some(token);
+        }
+        let &(name, feature) = LANGUAGE_BUILTINS
+            .iter()
+            .find(|(spelling, _)| *spelling == name)
+            .expect("registered language builtin");
+        self.context
+            .report_extension(feature, name, token.source_vectors);
+        let name = self.context.string_cache.at(token.contents);
+        // C23 §6.10.2p11, p. 167; PDF p. 180: these names are
+        // conditional-inclusion operators, not ordinary expression macros.
+        // GNU `__has_include_next` follows `__has_include`.
+        if matches!(
+            name,
+            "__has_include" | "__has_include_next" | "__has_embed" | "__has_c_attribute"
+        ) && !self.state.conditional_queries
+        {
+            self.language_error(
+                "resource and C attribute queries require a preprocessing conditional expression",
+                token.source_vectors,
+            );
+            drop(self.query_arguments::<false>(token));
+            return Some(self.integer_pp_token(0, token.source_vectors));
+        }
+        let value = match name {
+            | "__COUNTER__" => {
+                let value = self.state.counter;
+                self.state.counter = value.wrapping_add(1);
+                value
+            },
+            | "__STDC_EMBED_NOT_FOUND__" => 0,
+            | "__STDC_EMBED_FOUND__" => 1,
+            | "__STDC_EMBED_EMPTY__" => 2,
+            | _ => {
+                let from = self.invocation_location(token).index;
+                let tokens = self.query_arguments::<false>(token)?.leak();
+                let name = self.context.string_cache.at(token.contents);
+                if name == "__pragma" {
+                    let newline = PreprocessorToken {
+                        kind:           T::Newline,
+                        contents:       self.context.string_cache.intern("\n"),
+                        source_vectors: token.source_vectors,
+                    };
+                    let old = std::mem::replace(
+                        &mut self.tokenizer,
+                        TokenSource::replay(
+                            self.context,
+                            self.scratch,
+                            &[tokens, &[newline]],
+                            SourceVector::default(),
+                        ),
+                    );
+                    _ = self.parse_pragma_directive(from);
+                    self.tokenizer = old;
+                    return None;
+                }
+                if matches!(name, "__has_include" | "__has_include_next" | "__has_embed") {
+                    let embed = name == "__has_embed";
+                    // GNU `__has_include_next` answers whether
+                    // `#include_next` would find the header, with its
+                    // diagnostics for a lookup that cannot continue.
+                    let start = (name == "__has_include_next")
+                        .then(|| {
+                            self.include_next_start("__has_include_next", token.source_vectors)
+                        })
+                        .flatten();
+                    let (name, system, end) =
+                        self.resource_operand(tokens, token.source_vectors)?;
+                    let params =
+                        self.embed_parameters(&tokens[end..], token.source_vectors, embed, true)?;
+                    if !params.supported {
+                        return Some(self.integer_pp_token(0, token.source_vectors));
+                    }
+                    if let Some(path) = self.find_resource(name, system, embed, start) {
+                        if embed
+                            && (params.limit == Some(0)
+                                || std::fs::metadata(self.context.get_source_file(path))
+                                    .is_ok_and(|m| m.len() == 0))
+                        {
+                            2
+                        } else {
+                            1
+                        }
+                    } else {
+                        0
+                    }
+                } else {
+                    let mut operand = ArenaString::new_in(self.scratch);
+                    for t in tokens.iter().filter(|t| t.kind != T::Whitespace) {
+                        let spelling = self.context.string_cache.at(t.contents);
+                        let spelling = if name != "__has_builtin" && t.kind.is_identifier() {
+                            spelling
+                                .strip_prefix("__")
+                                .and_then(|s| s.strip_suffix("__"))
+                                .unwrap_or(spelling)
+                        } else {
+                            spelling
+                        };
+                        operand.push_str(spelling);
+                    }
+                    let mut significant = ArenaVec::new_in(self.scratch);
+                    significant.extend(tokens.iter().filter(|t| t.kind != T::Whitespace).copied());
+                    if !matches!(&significant[..], [t] if t.kind.is_identifier())
+                        && !matches!(&significant[..], [a,b,c,d] if name != "__has_builtin" && a.kind.is_identifier() && b.kind == T::Colon && c.kind == T::Colon && d.kind.is_identifier())
+                    {
+                        self.language_error(
+                            "expected an identifier in preprocessing feature query",
+                            token.source_vectors,
+                        );
+                        return Some(self.integer_pp_token(0, token.source_vectors));
+                    }
+                    match (name, &*operand) {
+                        | ("__has_builtin", builtin) =>
+                            u64::from(has_builtin(self.context, builtin)),
+                        // C23 §6.7.13.2p2, p. 143; PDF p. 156: the standard
+                        // attributes, `_Noreturn` included (§6.7.13.7p1).
+                        | (
+                            "__has_c_attribute",
+                            "deprecated" | "fallthrough" | "nodiscard" | "maybe_unused"
+                            | "noreturn" | "_Noreturn" | "unsequenced" | "reproducible",
+                        ) => 202_311,
+                        | (
+                            "__has_attribute",
+                            "unused" | "deprecated" | "aligned" | "packed" | "noreturn" | "weak"
+                            | "section" | "visibility" | "format" | "always_inline" | "noinline",
+                        ) => 1,
+                        | _ => 0,
+                    }
+                }
+            },
+        };
+        Some(self.integer_pp_token(value, token.source_vectors))
+    }
+
+    /// Replaces resource inclusion with ordinary integer preprocessing tokens.
+    /// C23: §6.10.4.1p7, p. 171; PDF p. 184, and §6.10.4.2p4,
+    /// p. 174; PDF p. 187.
+    pub(super) fn parse_embed_directive(&mut self, directive: PreprocessorToken) {
+        self.context
+            .report_extension(Feature::Embed, "#embed", directive.source_vectors);
+        let mut tokens = ArenaVec::new_in(self.scratch);
+        _ = self.collect_written_resource(&mut tokens);
+        let query_expansion = std::mem::replace(&mut self.query_expansion, QueryExpansion::Defer);
+        // The rest of the line, through its new-line, belongs to the
+        // directive whether or not the resource is valid. C99: §6.10p2,
+        // pp. 146-147; PDF pp. 158-159.
+        while let Some(token) = self.next_preprocessor_token::<false>() {
+            if token.kind == T::Newline {
+                break;
+            }
+            tokens.push(token);
+        }
+        self.query_expansion = query_expansion;
+        self.resume_at_line_start();
+        let tokens = tokens.leak();
+        let Some((name, system, end)) = self.resource_operand(tokens, directive.source_vectors)
+        else {
+            return;
+        };
+        let Some(params) =
+            self.embed_parameters(&tokens[end..], directive.source_vectors, true, false)
+        else {
+            return;
+        };
+        let Some(path) = self.find_resource(name, system, true, None) else {
+            self.embed_error(
+                PreprocessorErrorType::EmbeddedResourceNotFound(self.context.diagnostic_text(name)),
+                directive,
+            );
+            return;
+        };
+        let read = std::fs::File::open(self.context.get_source_file(path)).and_then(|file| {
+            let length = file.metadata()?.len();
+            Ok((file, length))
+        });
+        let (mut file, length) = match read {
+            | Ok(opened) => opened,
+            | Err(error) => {
+                self.embed_unreadable(name, &error, directive);
+                return;
+            },
+        };
+        let length = length.min(params.limit.unwrap_or(u64::MAX));
+        let Ok(length) = usize::try_from(length) else {
+            self.embed_error(
+                PreprocessorErrorType::EmbeddedResourceTooLarge(self.context.diagnostic_text(name)),
+                directive,
+            );
+            return;
+        };
+        let bytes = self
+            .scratch
+            .alloc_slice_fill_iter(std::iter::repeat_n(0u8, length));
+        if let Err(error) = file.read_exact(bytes) {
+            self.embed_unreadable(name, &error, directive);
+            return;
+        }
+        let mut output = ArenaVec::new_in(self.scratch);
+        if bytes.is_empty() {
+            output.extend_from_slice(params.if_empty);
+        } else {
+            output.extend_from_slice(params.prefix);
+            for (index, byte) in bytes.iter().enumerate() {
+                if index != 0 {
+                    output.push(PreprocessorToken {
+                        kind:           T::Comma,
+                        contents:       self.context.string_cache.intern(","),
+                        source_vectors: directive.source_vectors,
+                    });
+                }
+                output.push(self.integer_pp_token(u64::from(*byte), directive.source_vectors));
+            }
+            output.extend_from_slice(params.suffix);
+        }
+        output.push(PreprocessorToken {
+            kind:           T::Newline,
+            contents:       self.context.string_cache.intern("\n"),
+            source_vectors: directive.source_vectors,
+        });
+        let tokenizer = TokenSource::replay(
+            self.context,
+            self.scratch,
+            &[&output],
+            SourceVector::default(),
         );
+        self.push_tokenizer_frame(TokenizerFrame {
+            frame_type: TokenizerFrameType::Rescan { argument: false },
+            tokenizer,
+        });
+        self.resume_at_line_start();
     }
-    if configuration.accepts(Feature::C23Keywords) {
-        out.push_str(configuration.target().atomic_c23_macros());
-    }
-    out.into_str()
 }
 
-/// GNU builtins can be overridden with a warning, like GCC and Clang. ISO
-/// predefined macros and standard query operators retain their protection.
-/// GNU extension: GCC preprocessor manual, "Common Predefined Macros".
-/// <https://gcc.gnu.org/onlinedocs/cpp/Common-Predefined-Macros.html>
-/// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173.
-pub(super) fn overridable_gnu_builtin(name: &str) -> bool {
-    LANGUAGE_BUILTINS.iter().any(|(spelling, feature)| {
-        *spelling == name && matches!(feature.origin(), FeatureOrigin::Gnu)
-    })
-}
-
-/// Uses keyword identity and the implementation owners' predicates.
-/// Clang Language Extensions, Feature Checking Macros:
-/// <https://clang.llvm.org/docs/LanguageExtensions.html#has-builtin>
-/// Extension to C99 §6.10.1p4, p. 148; PDF p. 160.
-fn has_builtin(context: &mut Context<'_>, spelling: &str) -> bool {
-    let id = context.string_cache.intern(spelling);
-    KeywordTokenType::classify(id, context.configuration).is_some_and(|keyword| {
-        crate::translation_phases::semantic_analysis::implemented_builtin(keyword.kind)
-    }) || crate::translation_phases::semantic_analysis::named_builtin(spelling)
+/// Resource inclusion parameter values and replacement token sequences.
+/// C23: §6.10.4.2 paragraphs 1-4, p. 174; PDF p. 187.
+/// C23: §6.10.4.3 paragraphs 1-2, p. 176; PDF p. 189.
+/// C23: §6.10.4.4 paragraphs 1-2, p. 176; PDF p. 189.
+/// C23: §6.10.4.5 paragraphs 1-2, p. 177; PDF p. 190.
+struct EmbedParameters<'x> {
+    supported: bool,
+    limit:     Option<u64>,
+    prefix:    &'x [PreprocessorToken],
+    suffix:    &'x [PreprocessorToken],
+    if_empty:  &'x [PreprocessorToken],
 }
 
 impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
@@ -466,201 +682,6 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         })
     }
 
-    /// Evaluates query operators and consumes the MSVC token-form pragma
-    /// operator. C23: §6.10.2p6-11, pp. 166-167; PDF pp. 179-180.
-    pub(super) fn language_builtin(
-        &mut self,
-        token: PreprocessorToken,
-    ) -> Option<PreprocessorToken> {
-        // Invalid nested query operands must not exhaust the native call stack.
-        if self.state.query_depth == 64 {
-            self.language_error(
-                "preprocessing query nesting limit exceeded",
-                token.source_vectors,
-            );
-            return Some(self.integer_pp_token(0, token.source_vectors));
-        }
-        self.state.query_depth += 1;
-        let result = self.language_builtin_inner(token);
-        self.state.query_depth -= 1;
-        // A malformed conditional operand still occupies its expression
-        // position. C99: diagnostics and recovery, §5.1.1.3p1, p. 11;
-        // PDF p. 23. Keep its boundary replay, but avoid diagnosing a second
-        // missing operand at the following directive. Token-form pragmas
-        // intentionally disappear and must never introduce an integer.
-        if result.is_none() && self.context.string_cache.at(token.contents) != "__pragma" {
-            Some(self.integer_pp_token(0, token.source_vectors))
-        } else {
-            result
-        }
-    }
-
-    /// Expands conditional queries, resource status macros and vendor
-    /// preprocessing operators.
-    /// GNU extension: GCC preprocessor manual, "Common Predefined Macros".
-    /// <https://gcc.gnu.org/onlinedocs/cpp/Common-Predefined-Macros.html>
-    /// Clang extension: Clang Language Extensions, "Feature Checking Macros".
-    /// <https://clang.llvm.org/docs/LanguageExtensions.html#feature-checking-macros>
-    /// MSVC extension: Microsoft Learn, "Pragma directives and the __pragma
-    /// keyword".
-    /// <https://learn.microsoft.com/en-us/cpp/preprocessor/pragma-directives-and-the-pragma-keyword>
-    /// GNU extension: GCC preprocessor manual, "Wrapper Headers".
-    /// <https://gcc.gnu.org/onlinedocs/cpp/Wrapper-Headers.html>
-    /// C23: §6.10.2 paragraphs 6-11, pp. 166-167; PDF pp. 179-180.
-    /// C23: §6.10.4.1 paragraph 7, p. 171; PDF p. 184.
-    fn language_builtin_inner(&mut self, token: PreprocessorToken) -> Option<PreprocessorToken> {
-        let name = self.context.string_cache.at(token.contents);
-        // C23 §6.10.4.2p3: only the limit's evaluation uses conditional
-        // inclusion rules. Keep query calls intact during the directive's
-        // initial replacement, including their written header names.
-        if self.query_expansion == QueryExpansion::Defer
-            && matches!(name, "__has_include" | "__has_embed" | "__has_c_attribute")
-        {
-            let arguments = self.query_arguments::<true>(token)?.leak();
-            let tokenizer = TokenSource::replay(
-                self.context,
-                self.scratch,
-                &[arguments],
-                SourceVector::default(),
-            );
-            self.push_tokenizer_frame(TokenizerFrame {
-                frame_type: TokenizerFrameType::DeferredQuery,
-                tokenizer,
-            });
-            return Some(token);
-        }
-        let &(name, feature) = LANGUAGE_BUILTINS
-            .iter()
-            .find(|(spelling, _)| *spelling == name)
-            .expect("registered language builtin");
-        self.context
-            .report_extension(feature, name, token.source_vectors);
-        let name = self.context.string_cache.at(token.contents);
-        // C23 §6.10.2p11, p. 167; PDF p. 180: these names are
-        // conditional-inclusion operators, not ordinary expression macros.
-        // GNU `__has_include_next` follows `__has_include`.
-        if matches!(
-            name,
-            "__has_include" | "__has_include_next" | "__has_embed" | "__has_c_attribute"
-        ) && !self.state.conditional_queries
-        {
-            self.language_error(
-                "resource and C attribute queries require a preprocessing conditional expression",
-                token.source_vectors,
-            );
-            drop(self.query_arguments::<false>(token));
-            return Some(self.integer_pp_token(0, token.source_vectors));
-        }
-        let value = match name {
-            | "__COUNTER__" => {
-                let value = self.state.counter;
-                self.state.counter = value.wrapping_add(1);
-                value
-            },
-            | "__STDC_EMBED_NOT_FOUND__" => 0,
-            | "__STDC_EMBED_FOUND__" => 1,
-            | "__STDC_EMBED_EMPTY__" => 2,
-            | _ => {
-                let from = self.invocation_location(token).index;
-                let tokens = self.query_arguments::<false>(token)?.leak();
-                let name = self.context.string_cache.at(token.contents);
-                if name == "__pragma" {
-                    let newline = PreprocessorToken {
-                        kind:           T::Newline,
-                        contents:       self.context.string_cache.intern("\n"),
-                        source_vectors: token.source_vectors,
-                    };
-                    let old = std::mem::replace(
-                        &mut self.tokenizer,
-                        TokenSource::replay(
-                            self.context,
-                            self.scratch,
-                            &[tokens, &[newline]],
-                            SourceVector::default(),
-                        ),
-                    );
-                    _ = self.parse_pragma_directive(from);
-                    self.tokenizer = old;
-                    return None;
-                }
-                if matches!(name, "__has_include" | "__has_include_next" | "__has_embed") {
-                    let embed = name == "__has_embed";
-                    // GNU `__has_include_next` answers whether
-                    // `#include_next` would find the header, with its
-                    // diagnostics for a lookup that cannot continue.
-                    let start = (name == "__has_include_next")
-                        .then(|| {
-                            self.include_next_start("__has_include_next", token.source_vectors)
-                        })
-                        .flatten();
-                    let (name, system, end) =
-                        self.resource_operand(tokens, token.source_vectors)?;
-                    let params =
-                        self.embed_parameters(&tokens[end..], token.source_vectors, embed, true)?;
-                    if !params.supported {
-                        return Some(self.integer_pp_token(0, token.source_vectors));
-                    }
-                    if let Some(path) = self.find_resource(name, system, embed, start) {
-                        if embed
-                            && (params.limit == Some(0)
-                                || std::fs::metadata(self.context.get_source_file(path))
-                                    .is_ok_and(|m| m.len() == 0))
-                        {
-                            2
-                        } else {
-                            1
-                        }
-                    } else {
-                        0
-                    }
-                } else {
-                    let mut operand = ArenaString::new_in(self.scratch);
-                    for t in tokens.iter().filter(|t| t.kind != T::Whitespace) {
-                        let spelling = self.context.string_cache.at(t.contents);
-                        let spelling = if name != "__has_builtin" && t.kind.is_identifier() {
-                            spelling
-                                .strip_prefix("__")
-                                .and_then(|s| s.strip_suffix("__"))
-                                .unwrap_or(spelling)
-                        } else {
-                            spelling
-                        };
-                        operand.push_str(spelling);
-                    }
-                    let mut significant = ArenaVec::new_in(self.scratch);
-                    significant.extend(tokens.iter().filter(|t| t.kind != T::Whitespace).copied());
-                    if !matches!(&significant[..], [t] if t.kind.is_identifier())
-                        && !matches!(&significant[..], [a,b,c,d] if name != "__has_builtin" && a.kind.is_identifier() && b.kind == T::Colon && c.kind == T::Colon && d.kind.is_identifier())
-                    {
-                        self.language_error(
-                            "expected an identifier in preprocessing feature query",
-                            token.source_vectors,
-                        );
-                        return Some(self.integer_pp_token(0, token.source_vectors));
-                    }
-                    match (name, &*operand) {
-                        | ("__has_builtin", builtin) =>
-                            u64::from(has_builtin(self.context, builtin)),
-                        // C23 §6.7.13.2p2, p. 143; PDF p. 156: the standard
-                        // attributes, `_Noreturn` included (§6.7.13.7p1).
-                        | (
-                            "__has_c_attribute",
-                            "deprecated" | "fallthrough" | "nodiscard" | "maybe_unused"
-                            | "noreturn" | "_Noreturn" | "unsequenced" | "reproducible",
-                        ) => 202_311,
-                        | (
-                            "__has_attribute",
-                            "unused" | "deprecated" | "aligned" | "packed" | "noreturn" | "weak"
-                            | "section" | "visibility" | "format" | "always_inline" | "noinline",
-                        ) => 1,
-                        | _ => 0,
-                    }
-                }
-            },
-        };
-        Some(self.integer_pp_token(value, token.source_vectors))
-    }
-
     /// Scans parameter clauses using the balanced-token grammar shared by
     /// resource inclusion and its conditional query.
     /// C23: §6.10.1p1, pp. 163-164; PDF pp. 176-177.
@@ -893,115 +914,96 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         };
         self.embed_error(error_type, directive);
     }
-
-    /// Replaces resource inclusion with ordinary integer preprocessing tokens.
-    /// C23: §6.10.4.1p7, p. 171; PDF p. 184, and §6.10.4.2p4,
-    /// p. 174; PDF p. 187.
-    pub(super) fn parse_embed_directive(&mut self, directive: PreprocessorToken) {
-        self.context
-            .report_extension(Feature::Embed, "#embed", directive.source_vectors);
-        let mut tokens = ArenaVec::new_in(self.scratch);
-        _ = self.collect_written_resource(&mut tokens);
-        let query_expansion = std::mem::replace(&mut self.query_expansion, QueryExpansion::Defer);
-        // The rest of the line, through its new-line, belongs to the
-        // directive whether or not the resource is valid. C99: §6.10p2,
-        // pp. 146-147; PDF pp. 158-159.
-        while let Some(token) = self.next_preprocessor_token::<false>() {
-            if token.kind == T::Newline {
-                break;
-            }
-            tokens.push(token);
-        }
-        self.query_expansion = query_expansion;
-        self.resume_at_line_start();
-        let tokens = tokens.leak();
-        let Some((name, system, end)) = self.resource_operand(tokens, directive.source_vectors)
-        else {
-            return;
-        };
-        let Some(params) =
-            self.embed_parameters(&tokens[end..], directive.source_vectors, true, false)
-        else {
-            return;
-        };
-        let Some(path) = self.find_resource(name, system, true, None) else {
-            self.embed_error(
-                PreprocessorErrorType::EmbeddedResourceNotFound(self.context.diagnostic_text(name)),
-                directive,
-            );
-            return;
-        };
-        let read = std::fs::File::open(self.context.get_source_file(path)).and_then(|file| {
-            let length = file.metadata()?.len();
-            Ok((file, length))
-        });
-        let (mut file, length) = match read {
-            | Ok(opened) => opened,
-            | Err(error) => {
-                self.embed_unreadable(name, &error, directive);
-                return;
-            },
-        };
-        let length = length.min(params.limit.unwrap_or(u64::MAX));
-        let Ok(length) = usize::try_from(length) else {
-            self.embed_error(
-                PreprocessorErrorType::EmbeddedResourceTooLarge(self.context.diagnostic_text(name)),
-                directive,
-            );
-            return;
-        };
-        let bytes = self
-            .scratch
-            .alloc_slice_fill_iter(std::iter::repeat_n(0u8, length));
-        if let Err(error) = file.read_exact(bytes) {
-            self.embed_unreadable(name, &error, directive);
-            return;
-        }
-        let mut output = ArenaVec::new_in(self.scratch);
-        if bytes.is_empty() {
-            output.extend_from_slice(params.if_empty);
-        } else {
-            output.extend_from_slice(params.prefix);
-            for (index, byte) in bytes.iter().enumerate() {
-                if index != 0 {
-                    output.push(PreprocessorToken {
-                        kind:           T::Comma,
-                        contents:       self.context.string_cache.intern(","),
-                        source_vectors: directive.source_vectors,
-                    });
-                }
-                output.push(self.integer_pp_token(u64::from(*byte), directive.source_vectors));
-            }
-            output.extend_from_slice(params.suffix);
-        }
-        output.push(PreprocessorToken {
-            kind:           T::Newline,
-            contents:       self.context.string_cache.intern("\n"),
-            source_vectors: directive.source_vectors,
-        });
-        let tokenizer = TokenSource::replay(
-            self.context,
-            self.scratch,
-            &[&output],
-            SourceVector::default(),
-        );
-        self.push_tokenizer_frame(TokenizerFrame {
-            frame_type: TokenizerFrameType::Rescan { argument: false },
-            tokenizer,
-        });
-        self.resume_at_line_start();
-    }
 }
 
-/// Resource inclusion parameter values and replacement token sequences.
-/// C23: §6.10.4.2 paragraphs 1-4, p. 174; PDF p. 187.
-/// C23: §6.10.4.3 paragraphs 1-2, p. 176; PDF p. 189.
-/// C23: §6.10.4.4 paragraphs 1-2, p. 176; PDF p. 189.
-/// C23: §6.10.4.5 paragraphs 1-2, p. 177; PDF p. 190.
-struct EmbedParameters<'x> {
-    supported: bool,
-    limit:     Option<u64>,
-    prefix:    &'x [PreprocessorToken],
-    suffix:    &'x [PreprocessorToken],
-    if_empty:  &'x [PreprocessorToken],
+/// Predefined dialect macros and later-standard conditional query operators.
+/// GNU extension: GCC preprocessor manual, "Common Predefined Macros".
+/// <https://gcc.gnu.org/onlinedocs/cpp/Common-Predefined-Macros.html>
+/// Clang extension: Clang Language Extensions, "Feature Checking Macros".
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#feature-checking-macros>
+/// MSVC extension: Microsoft Learn, "Pragma directives and the __pragma
+/// keyword".
+/// <https://learn.microsoft.com/en-us/cpp/preprocessor/pragma-directives-and-the-pragma-keyword>
+/// C23: §6.10.2 paragraph 1, p. 166; PDF p. 179.
+/// C23: §6.10.4.1 paragraph 7, p. 171; PDF p. 184.
+pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
+    ("__COUNTER__", Feature::Counter),
+    ("__has_include", Feature::HasInclude),
+    ("__has_include_next", Feature::IncludeNext),
+    ("__has_embed", Feature::HasEmbed),
+    ("__has_c_attribute", Feature::HasCAttribute),
+    ("__has_attribute", Feature::HasAttribute),
+    ("__has_builtin", Feature::HasBuiltin),
+    ("__pragma", Feature::MsPragma),
+    ("__STDC_EMBED_NOT_FOUND__", Feature::Embed),
+    ("__STDC_EMBED_FOUND__", Feature::Embed),
+    ("__STDC_EMBED_EMPTY__", Feature::Embed),
+];
+
+/// Appends the compiler-identity macros to the target's predefined
+/// `definitions`, as source read before user input. Following Clang, every
+/// language mode claims GCC 4.2.1 with its inline-semantics macro, and
+/// `-fms-extensions` claims MSVC 19.33, Clang's default
+/// `-fms-compatibility-version`. `__bcc__` and its version are defined in
+/// every mode; `__clang__` never is. They are ordinary macros, so `#undef`
+/// works as in Clang.
+///
+/// C99: further predefined macro names begin with `__` or `_` and an
+/// uppercase letter, §6.10.8 paragraph 4, p. 161; PDF p. 173; reserved
+/// identifiers, §7.1.3 paragraph 1, p. 166; PDF p. 178.
+pub(super) fn with_identity_macros<'a>(
+    arena: &'a Bump,
+    definitions: &str,
+    configuration: CompilerConfiguration,
+) -> &'a str {
+    let mut out = ArenaString::new_in(arena);
+    out.push_str(definitions);
+    _ = write!(
+        out,
+        "#define __bcc__ 1\n#define __bcc_major__ {}\n#define __bcc_minor__ {}\n#define \
+         __bcc_patchlevel__ {}\n#define __bcc_version__ \"{}\"\n",
+        env!("CARGO_PKG_VERSION_MAJOR"),
+        env!("CARGO_PKG_VERSION_MINOR"),
+        env!("CARGO_PKG_VERSION_PATCH"),
+        env!("CARGO_PKG_VERSION"),
+    );
+    out.push_str("#define __GNUC__ 4\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 1\n");
+    // GNU89 inline semantics before C99, C99 semantics from it on.
+    out.push_str(if configuration.standard() < CStandard::C99 {
+        "#define __GNUC_GNU_INLINE__ 1\n"
+    } else {
+        "#define __GNUC_STDC_INLINE__ 1\n"
+    });
+    if configuration.msvc_compatibility() {
+        out.push_str(
+            "#define _MSC_VER 1933\n#define _MSC_FULL_VER 193300000\n#define _MSC_BUILD \
+             1\n#define _MSC_EXTENSIONS 1\n",
+        );
+    }
+    if configuration.accepts(Feature::C23Keywords) {
+        out.push_str(configuration.target().atomic_c23_macros());
+    }
+    out.into_str()
+}
+
+/// GNU builtins can be overridden with a warning, like GCC and Clang. ISO
+/// predefined macros and standard query operators retain their protection.
+/// GNU extension: GCC preprocessor manual, "Common Predefined Macros".
+/// <https://gcc.gnu.org/onlinedocs/cpp/Common-Predefined-Macros.html>
+/// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173.
+pub(super) fn overridable_gnu_builtin(name: &str) -> bool {
+    LANGUAGE_BUILTINS.iter().any(|(spelling, feature)| {
+        *spelling == name && matches!(feature.origin(), FeatureOrigin::Gnu)
+    })
+}
+
+/// Uses keyword identity and the implementation owners' predicates.
+/// Clang Language Extensions, Feature Checking Macros:
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#has-builtin>
+/// Extension to C99 §6.10.1p4, p. 148; PDF p. 160.
+fn has_builtin(context: &mut Context<'_>, spelling: &str) -> bool {
+    let id = context.string_cache.intern(spelling);
+    KeywordTokenType::classify(id, context.configuration).is_some_and(|keyword| {
+        crate::translation_phases::semantic_analysis::implemented_builtin(keyword.kind)
+    }) || crate::translation_phases::semantic_analysis::named_builtin(spelling)
 }

@@ -16,13 +16,13 @@
 
 use super::{
     Expander,
-    driver::{
-        TokenizerFrame,
-        TokenizerFrameType,
-    },
     errors::{
         PreprocessorError,
         PreprocessorErrorType,
+    },
+    runtime::{
+        TokenizerFrame,
+        TokenizerFrameType,
     },
     token::{
         CharacterTokenType,
@@ -73,218 +73,230 @@ use crate::{
     },
 };
 
-/// The integer representation an integer constant is typed against.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(super) enum IntegerRepresentation {
-    /// Translation phase 7 using the configured target scalar widths.
+impl<'pp> Expander<'_, '_, 'pp, '_> {
+    /// Converts one preprocessing token into a token, or returns `None` for
+    /// one that is not passed on: a new-line, a directive that `#` begins,
+    /// or a token in no token's lexical form, which is diagnosed. A name
+    /// whose macro was being replaced is an ordinary identifier again, since
+    /// macros mean nothing after phase 4 (§6.10.3.5 paragraph 1, p. 155; PDF
+    /// p. 167).
     ///
-    /// C99: the widths are implementation-defined (§5.2.4.2.1 paragraph 1,
-    /// pp. 21-22; PDF pp. 33-34).
-    Target,
-    /// An `#if` or `#elif` expression, where every signed type acts as
-    /// `intmax_t` and every unsigned type as `uintmax_t`, here 64 bits. So
-    /// `0xFFFFFFFF` is a signed, positive `int` there although it is
-    /// `unsigned int` in phase 7.
-    ///
-    /// C99: §6.10.1 paragraph 4 and footnote 145, p. 148; PDF p. 160.
-    IntMax,
-}
+    /// C99: §6.4 paragraphs 2-3, p. 49; PDF p. 61.
+    pub(super) fn map_preprocessor_token(&mut self, token: PreprocessorToken) -> Option<Token> {
+        Some(match token.kind {
+            | PreprocessorTokenType::Other => {
+                let character = self
+                    .context
+                    .string_cache
+                    .at(token.contents)
+                    .chars()
+                    .next()
+                    .expect("Other tokens contain one character");
+                let source = self
+                    .context
+                    .first_source_vector(token.source_vectors)
+                    .clone();
+                self.context.preprocessor_tokenizer_error(
+                    PreprocessorTokenizerError::unknown_character(source, character),
+                );
+                return None;
+            },
+            | PreprocessorTokenType::Number =>
+                self.parse_number(token, IntegerRepresentation::Target),
+            | PreprocessorTokenType::Newline => return None,
+            | PreprocessorTokenType::Hash => {
+                if matches!(
+                    self.tokenizer_stack.last(),
+                    Some(TokenizerFrame {
+                        frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { .. },
+                        ..
+                    })
+                ) {
+                    unreachable!("Handled in next_preprocessor_token");
+                }
+                // C99 §6.10p2: expanded directive operands still end at
+                // the first new-line, including within query operators.
+                let in_directive = std::mem::replace(&mut self.state.in_directive, true);
+                self.parse_directive(token);
+                self.state.in_directive = in_directive;
+                return None;
+            },
+            | PreprocessorTokenType::GeneratedString
+            | PreprocessorTokenType::WideGeneratedString => {
+                let wide = token.kind == PreprocessorTokenType::WideGeneratedString;
+                let spelling = self.context.string_cache.at(token.contents);
+                let encoding = wide.then(|| literal_encoding(spelling)).flatten();
+                let prefix_length = encoding.map_or(usize::from(wide), |e| e.prefix().len());
+                let text = &spelling[prefix_length..];
+                let mut units = self.state.literal_scratch.take_units();
+                units.extend(text.chars().map(LiteralUnit::Character));
+                let id = self.context.intern_literal(&units);
+                self.state.literal_scratch.return_units(units);
+                Token {
+                    kind: TokenType::String(string_token_type(id, encoding, wide)),
+                    ..Self::build_token(token, TokenType::Identifier)
+                }
+            },
+            | PreprocessorTokenType::String => Token {
+                kind:           TokenType::String(self.parse_string(token)),
+                contents:       token.contents,
+                source_vectors: token.source_vectors,
+            },
+            | PreprocessorTokenType::Character => Token {
+                kind:           TokenType::Character(self.parse_character(token)),
+                contents:       token.contents,
+                source_vectors: token.source_vectors,
+            },
+            | PreprocessorTokenType::Identifier
+            | PreprocessorTokenType::UniversalIdentifier
+            | PreprocessorTokenType::UnavailableIdentifier
+            | PreprocessorTokenType::UnavailableUniversalIdentifier
+            | PreprocessorTokenType::Defined => {
+                let contents = token.identifier_id(self.context);
+                let classification =
+                    KeywordTokenType::classify(contents, self.context.configuration);
+                if let Some(keyword) = classification
+                    && let Some(origin) = keyword.origin
+                {
+                    self.context.report_extension_since(
+                        keyword.spelling,
+                        origin,
+                        token.source_vectors,
+                    );
+                }
+                Token {
+                    kind: classification.map_or(TokenType::Identifier, |keyword| {
+                        TokenType::Keyword(keyword.kind)
+                    }),
+                    contents,
+                    source_vectors: token.source_vectors,
+                }
+            },
+            | PreprocessorTokenType::Plus =>
+                Self::build_operator_token(token, OperatorTokenType::Plus),
+            | PreprocessorTokenType::Minus =>
+                Self::build_operator_token(token, OperatorTokenType::Minus),
+            | PreprocessorTokenType::Asterisk =>
+                Self::build_operator_token(token, OperatorTokenType::Asterisk),
+            | PreprocessorTokenType::ForwardSlash =>
+                Self::build_operator_token(token, OperatorTokenType::ForwardSlash),
+            | PreprocessorTokenType::Percent =>
+                Self::build_operator_token(token, OperatorTokenType::Percent),
+            | PreprocessorTokenType::LessThanLessThan =>
+                Self::build_operator_token(token, OperatorTokenType::LessThanLessThan),
+            | PreprocessorTokenType::GreaterThanGreaterThan =>
+                Self::build_operator_token(token, OperatorTokenType::GreaterThanGreaterThan),
+            | PreprocessorTokenType::LessThan =>
+                Self::build_operator_token(token, OperatorTokenType::LessThan),
+            | PreprocessorTokenType::LessThanEquals =>
+                Self::build_operator_token(token, OperatorTokenType::LessThanEquals),
+            | PreprocessorTokenType::GreaterThan =>
+                Self::build_operator_token(token, OperatorTokenType::GreaterThan),
+            | PreprocessorTokenType::GreaterThanEquals =>
+                Self::build_operator_token(token, OperatorTokenType::GreaterThanEquals),
+            | PreprocessorTokenType::EqualsEquals =>
+                Self::build_operator_token(token, OperatorTokenType::EqualsEquals),
+            | PreprocessorTokenType::ExclamationMarkEquals =>
+                Self::build_operator_token(token, OperatorTokenType::ExclamationMarkEquals),
+            | PreprocessorTokenType::Ampersand =>
+                Self::build_operator_token(token, OperatorTokenType::Ampersand),
+            | PreprocessorTokenType::Caret =>
+                Self::build_operator_token(token, OperatorTokenType::Caret),
+            | PreprocessorTokenType::Pipe =>
+                Self::build_operator_token(token, OperatorTokenType::Pipe),
+            | PreprocessorTokenType::AmpersandAmpersand =>
+                Self::build_operator_token(token, OperatorTokenType::AmpersandAmpersand),
+            | PreprocessorTokenType::PipePipe =>
+                Self::build_operator_token(token, OperatorTokenType::PipePipe),
+            | PreprocessorTokenType::QuestionMark =>
+                Self::build_operator_token(token, OperatorTokenType::QuestionMark),
+            | PreprocessorTokenType::Colon =>
+                Self::build_operator_token(token, OperatorTokenType::Colon),
+            | PreprocessorTokenType::SemiColon =>
+                Self::build_operator_token(token, OperatorTokenType::Semicolon),
+            | PreprocessorTokenType::OpeningParenthesis =>
+                Self::build_operator_token(token, OperatorTokenType::OpeningParenthesis),
+            | PreprocessorTokenType::ClosingParenthesis =>
+                Self::build_operator_token(token, OperatorTokenType::ClosingParenthesis),
+            | PreprocessorTokenType::OpeningSquareBracket =>
+                Self::build_operator_token(token, OperatorTokenType::OpeningSquareBracket),
+            | PreprocessorTokenType::ClosingSquareBracket =>
+                Self::build_operator_token(token, OperatorTokenType::ClosingSquareBracket),
+            | PreprocessorTokenType::OpeningCurlyBrace =>
+                Self::build_operator_token(token, OperatorTokenType::OpeningCurlyBrace),
+            | PreprocessorTokenType::ClosingCurlyBrace =>
+                Self::build_operator_token(token, OperatorTokenType::ClosingCurlyBrace),
+            | PreprocessorTokenType::Period =>
+                Self::build_operator_token(token, OperatorTokenType::Period),
+            | PreprocessorTokenType::Arrow =>
+                Self::build_operator_token(token, OperatorTokenType::Arrow),
+            | PreprocessorTokenType::PlusPlus =>
+                Self::build_operator_token(token, OperatorTokenType::PlusPlus),
+            | PreprocessorTokenType::MinusMinus =>
+                Self::build_operator_token(token, OperatorTokenType::MinusMinus),
+            | PreprocessorTokenType::AsteriskEquals =>
+                Self::build_operator_token(token, OperatorTokenType::AsteriskEquals),
+            | PreprocessorTokenType::ForwardSlashEquals =>
+                Self::build_operator_token(token, OperatorTokenType::ForwardSlashEquals),
+            | PreprocessorTokenType::PercentEquals =>
+                Self::build_operator_token(token, OperatorTokenType::PercentEquals),
+            | PreprocessorTokenType::PlusEquals =>
+                Self::build_operator_token(token, OperatorTokenType::PlusEquals),
+            | PreprocessorTokenType::MinusEquals =>
+                Self::build_operator_token(token, OperatorTokenType::MinusEquals),
+            | PreprocessorTokenType::LessThanLessThanEquals =>
+                Self::build_operator_token(token, OperatorTokenType::LessThanLessThanEquals),
+            | PreprocessorTokenType::GreaterThanGreaterThanEquals =>
+                Self::build_operator_token(token, OperatorTokenType::GreaterThanGreaterThanEquals),
+            | PreprocessorTokenType::AmpersandEquals =>
+                Self::build_operator_token(token, OperatorTokenType::AmpersandEquals),
+            | PreprocessorTokenType::CaretEquals =>
+                Self::build_operator_token(token, OperatorTokenType::CaretEquals),
+            | PreprocessorTokenType::PipeEquals =>
+                Self::build_operator_token(token, OperatorTokenType::PipeEquals),
+            | PreprocessorTokenType::Equals =>
+                Self::build_operator_token(token, OperatorTokenType::Equals),
+            | PreprocessorTokenType::Comma =>
+                Self::build_operator_token(token, OperatorTokenType::Comma),
+            | PreprocessorTokenType::Tilde =>
+                Self::build_operator_token(token, OperatorTokenType::Tilde),
+            | PreprocessorTokenType::ExclamationMark =>
+                Self::build_operator_token(token, OperatorTokenType::ExclamationMark),
+            | PreprocessorTokenType::Ellipsis =>
+                Self::build_operator_token(token, OperatorTokenType::Ellipsis),
+            // `##` is a punctuator (C99 §6.4.6p1) that only replacement
+            // lists give a meaning (§6.10.3.3).
+            | PreprocessorTokenType::HashHash => {
+                let error_type = if matches!(
+                    self.tokenizer_stack.last(),
+                    Some(TokenizerFrame {
+                        frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. }
+                            | TokenizerFrameType::FunctionLikeMacroInvocation { .. }
+                            | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
+                        ..
+                    })
+                ) {
+                    PreprocessorErrorType::CannotUseHashHashAfterFunctionLikeMacroCall
+                } else {
+                    PreprocessorErrorType::HashHashUsedOutsideOfMacro
+                };
+                self.context.preprocessor_error(PreprocessorError {
+                    error_type,
+                    source_vectors: token.source_vectors,
+                });
+                return None;
+            },
 
-/// A type an integer constant can have.
-///
-/// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum IntegerConstantType {
-    Int,
-    UnsignedInt,
-    Long,
-    UnsignedLong,
-    LongLong,
-    UnsignedLongLong,
-}
-
-impl IntegerConstantType {
-    /// The list of types an integer constant tries in order, taking the
-    /// first that can represent its value. A decimal constant without `u`
-    /// tries only signed types; an octal or hexadecimal constant also tries
-    /// the unsigned counterpart after each signed type. Binary constants, an
-    /// extension, use the octal and hexadecimal lists, as GCC and Clang do.
-    ///
-    /// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
-    fn candidates(
-        suffix: Option<IntegerSuffix>,
-        is_decimal: bool,
-        standard: CStandard,
-    ) -> &'static [Self] {
-        use IntegerConstantType::{
-            Int,
-            Long,
-            LongLong,
-            UnsignedInt,
-            UnsignedLong,
-            UnsignedLongLong,
-        };
-        // C89: §3.1.3.2; PDF p. 42. Decimal constants may have unsigned
-        // long type, and long-long types are absent from the native lists.
-        // Explicit ll suffixes keep the later-standard extension below.
-        if standard < CStandard::C99 {
-            match (suffix, is_decimal) {
-                | (None, true) => return &[Int, Long, UnsignedLong, LongLong, UnsignedLongLong],
-                | (None, false) =>
-                    return &[
-                        Int,
-                        UnsignedInt,
-                        Long,
-                        UnsignedLong,
-                        LongLong,
-                        UnsignedLongLong,
-                    ],
-                | (Some(IntegerSuffix::Unsigned), _) =>
-                    return &[UnsignedInt, UnsignedLong, UnsignedLongLong],
-                | (Some(IntegerSuffix::Long), _) =>
-                    return &[Long, UnsignedLong, LongLong, UnsignedLongLong],
-                | (Some(IntegerSuffix::UnsignedLong), _) =>
-                    return &[UnsignedLong, UnsignedLongLong],
-                | _ => {},
-            }
-        }
-        match (suffix, is_decimal) {
-            | (None, true) => &[Int, Long, LongLong],
-            | (None, false) => &[
-                Int,
-                UnsignedInt,
-                Long,
-                UnsignedLong,
-                LongLong,
-                UnsignedLongLong,
-            ],
-            | (Some(IntegerSuffix::Unsigned), _) => &[UnsignedInt, UnsignedLong, UnsignedLongLong],
-            | (Some(IntegerSuffix::Long), true) => &[Long, LongLong],
-            | (Some(IntegerSuffix::Long), false) =>
-                &[Long, UnsignedLong, LongLong, UnsignedLongLong],
-            | (Some(IntegerSuffix::UnsignedLong), _) => &[UnsignedLong, UnsignedLongLong],
-            | (Some(IntegerSuffix::LongLong), true) => &[LongLong],
-            | (Some(IntegerSuffix::LongLong), false) => &[LongLong, UnsignedLongLong],
-            | (Some(IntegerSuffix::UnsignedLongLong), _) => &[UnsignedLongLong],
-        }
-    }
-
-    /// The largest value this type holds under `representation`.
-    fn max(
-        self,
-        representation: IntegerRepresentation,
-        target: &crate::target::TargetLayout,
-    ) -> u64 {
-        if representation == IntegerRepresentation::Target {
-            let scalar = match self {
-                | Self::Int => crate::target::Scalar::Int,
-                | Self::UnsignedInt => crate::target::Scalar::UnsignedInt,
-                | Self::Long => crate::target::Scalar::Long,
-                | Self::UnsignedLong => crate::target::Scalar::UnsignedLong,
-                | Self::LongLong => crate::target::Scalar::LongLong,
-                | Self::UnsignedLongLong => crate::target::Scalar::UnsignedLongLong,
-            };
-            let (bits, signed) = target
-                .integer(scalar)
-                .expect("integer literal candidate is an integer type");
-            return u64::MAX >> (64 - bits + u32::from(signed));
-        }
-        let scalar = match self {
-            | Self::Int | Self::Long | Self::LongLong => target.intmax_t,
-            | Self::UnsignedInt | Self::UnsignedLong | Self::UnsignedLongLong => target.uintmax_t,
-        };
-        let (bits, signed) = target.integer(scalar).unwrap();
-        u64::MAX >> (64 - bits + u32::from(signed))
-    }
-
-    /// A token holding `value`, which this type can represent. Under
-    /// [`IntegerRepresentation::IntMax`] every type is 64 bits wide, so the
-    /// token is `long long` or `unsigned long long` by signedness.
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_possible_wrap,
-        reason = "`max` has bounded `value` by this type's range."
-    )]
-    fn token_type(
-        self,
-        value: u64,
-        representation: IntegerRepresentation,
-        target: &crate::target::TargetLayout,
-    ) -> IntegerTokenType {
-        debug_assert!(
-            value <= self.max(representation, target),
-            "the type was chosen to hold the value"
-        );
-        match (self, representation) {
-            | (Self::Int, IntegerRepresentation::Target) => IntegerTokenType::Int(value as i32),
-            | (Self::UnsignedInt, IntegerRepresentation::Target) =>
-                IntegerTokenType::UnsignedInt(value as u32),
-            | (Self::Long, IntegerRepresentation::Target) =>
-                IntegerTokenType::Long(Packed::new(value as i64)),
-            | (Self::UnsignedLong, IntegerRepresentation::Target) =>
-                IntegerTokenType::UnsignedLong(Packed::new(value)),
-            | (Self::Int | Self::Long | Self::LongLong, _) =>
-                IntegerTokenType::LongLong(Packed::new(value as i64)),
-            | (Self::UnsignedInt | Self::UnsignedLong | Self::UnsignedLongLong, _) =>
-                IntegerTokenType::UnsignedLongLong(Packed::new(value)),
-        }
-    }
-}
-
-/// Storage that string-literal conversion reuses, kept with the
-/// preprocessor's long-lived state so that converting a literal leaves
-/// nothing behind.
-pub(super) struct LiteralScratch<'pp> {
-    arena:   &'pp Bump,
-    /// The units of the literal being decoded.
-    units:   ArenaVec<'pp, LiteralUnit>,
-    /// A spare builder for adjacent-literal concatenation.
-    builder: Option<LiteralBuilder<'pp>>,
-}
-
-/// One concatenation of adjacent string literals in progress.
-struct LiteralBuilder<'pp> {
-    units:    ArenaVec<'pp, LiteralUnit>,
-    sources:  ArenaVec<'pp, SourceVectors>,
-    spelling: ArenaString<'pp>,
-}
-
-impl<'pp> LiteralScratch<'pp> {
-    pub(super) fn new(arena: &'pp Bump) -> Self {
-        Self {
-            arena,
-            units: ArenaVec::new_in(arena),
-            builder: None,
-        }
-    }
-
-    /// The empty unit storage, which a nested conversion would not share.
-    fn take_units(&mut self) -> ArenaVec<'pp, LiteralUnit> {
-        std::mem::replace(&mut self.units, ArenaVec::new_in(self.arena))
-    }
-
-    fn return_units(&mut self, mut units: ArenaVec<'pp, LiteralUnit>) {
-        units.clear();
-        self.units = units;
-    }
-
-    fn take_builder(&mut self) -> LiteralBuilder<'pp> {
-        self.builder.take().unwrap_or_else(|| LiteralBuilder {
-            units:    ArenaVec::new_in(self.arena),
-            sources:  ArenaVec::new_in(self.arena),
-            spelling: ArenaString::new_in(self.arena),
+            | PreprocessorTokenType::Placeholder | PreprocessorTokenType::Whitespace => {
+                self.context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::UnexpectedTokenAtPhase7(token.kind),
+                    source_vectors: token.source_vectors,
+                });
+                return None;
+            },
         })
     }
 
-    fn return_builder(&mut self, mut builder: LiteralBuilder<'pp>) {
-        builder.units.clear();
-        builder.sources.clear();
-        builder.spelling.clear();
-        self.builder = Some(builder);
-    }
-}
-
-impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
     /// Joins `first` with the string literals that follow it. The result is
     /// wide if any part is. Escapes were decoded per literal beforehand, so
     /// `"\x12" "3"` holds two characters.
@@ -391,6 +403,456 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         };
         self.state.literal_scratch.return_builder(builder);
         token
+    }
+}
+
+/// Storage that string-literal conversion reuses, kept with the
+/// preprocessor's long-lived state so that converting a literal leaves
+/// nothing behind.
+pub(super) struct LiteralScratch<'pp> {
+    arena:   &'pp Bump,
+    /// The units of the literal being decoded.
+    units:   ArenaVec<'pp, LiteralUnit>,
+    /// A spare builder for adjacent-literal concatenation.
+    builder: Option<LiteralBuilder<'pp>>,
+}
+
+/// The integer representation an integer constant is typed against.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(super) enum IntegerRepresentation {
+    /// Translation phase 7 using the configured target scalar widths.
+    ///
+    /// C99: the widths are implementation-defined (§5.2.4.2.1 paragraph 1,
+    /// pp. 21-22; PDF pp. 33-34).
+    Target,
+    /// An `#if` or `#elif` expression, where every signed type acts as
+    /// `intmax_t` and every unsigned type as `uintmax_t`, here 64 bits. So
+    /// `0xFFFFFFFF` is a signed, positive `int` there although it is
+    /// `unsigned int` in phase 7.
+    ///
+    /// C99: §6.10.1 paragraph 4 and footnote 145, p. 148; PDF p. 160.
+    IntMax,
+}
+
+/// A type an integer constant can have.
+///
+/// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum IntegerConstantType {
+    Int,
+    UnsignedInt,
+    Long,
+    UnsignedLong,
+    LongLong,
+    UnsignedLongLong,
+}
+
+/// One concatenation of adjacent string literals in progress.
+struct LiteralBuilder<'pp> {
+    units:    ArenaVec<'pp, LiteralUnit>,
+    sources:  ArenaVec<'pp, SourceVectors>,
+    spelling: ArenaString<'pp>,
+}
+
+impl<'tu> Expander<'_, 'tu, '_, '_> {
+    /// Converts a pp-number into an integer or floating constant, which then
+    /// acquires its type and value.
+    ///
+    /// C99: §6.4.8 paragraph 4, p. 65; PDF p. 77; the forms are those of
+    /// §6.4.4.1 paragraph 1, pp. 54-55; PDF pp. 66-67, and §6.4.4.2
+    /// paragraph 1, p. 57; PDF p. 69.
+    ///
+    /// Integer constants are typed under `representation`: phase 7 uses
+    /// [`IntegerRepresentation::Target`] and `#if` evaluation
+    /// [`IntegerRepresentation::IntMax`].
+    pub(super) fn parse_number(
+        &mut self,
+        token: PreprocessorToken,
+        representation: IntegerRepresentation,
+    ) -> Token {
+        let contents = self.context.string_cache.at(token.contents);
+        let spelling = contents.trim_end_matches('\0');
+        let imaginary = match spelling.as_bytes() {
+            | [.., b'i' | b'I' | b'j' | b'J'] => Some(spelling.len() - 1),
+            // Joined to a hexadecimal integer, an `f` suffix would read as a
+            // digit; an integer takes no `f` suffix (C99 §6.4.4.1p1).
+            | [.., b'i' | b'I' | b'j' | b'J', b'f' | b'F']
+                if (spelling.starts_with("0x") || spelling.starts_with("0X"))
+                    && !spelling.contains(['p', 'P']) =>
+                None,
+            // GNU imaginary and binary128 suffixes extend C99 §6.4.4.2p1;
+            // either suffix order preserves the real component's precision.
+            | [
+                ..,
+                b'i' | b'I' | b'j' | b'J',
+                b'f' | b'F' | b'l' | b'L' | b'q' | b'Q',
+            ] => Some(spelling.len() - 2),
+            | _ => None,
+        };
+        if self
+            .context
+            .configuration
+            .accepts(Feature::ImaginaryConstants)
+            && let Some(index) = imaginary
+        {
+            let mut real = ArenaString::new_in(self.scratch);
+            real.push_str(&spelling[..index]);
+            real.push_str(&spelling[index + 1..]);
+            real.push('\0');
+            let real_contents = self.context.string_cache.intern(&*real);
+            self.context.report_extension(
+                Feature::ImaginaryConstants,
+                "imaginary constant",
+                token.source_vectors,
+            );
+            let real_token = self.parse_plain_number(
+                PreprocessorToken {
+                    contents: real_contents,
+                    ..token
+                },
+                representation,
+            );
+            let kind = match real_token.kind {
+                | TokenType::Float(FloatTokenType::Float(v)) =>
+                    TokenType::Float(FloatTokenType::ImaginaryFloat(v)),
+                | TokenType::Float(FloatTokenType::Double(v)) =>
+                    TokenType::Float(FloatTokenType::ImaginaryDouble(v)),
+                | TokenType::Float(FloatTokenType::Float128(v)) =>
+                    TokenType::Float(FloatTokenType::ImaginaryFloat128(v)),
+                | TokenType::Float(FloatTokenType::LongDouble(v)) =>
+                    TokenType::Float(FloatTokenType::ImaginaryLongDouble(v)),
+                | TokenType::Integer(v) => {
+                    let component = match v {
+                        | IntegerTokenType::Int(_) => ImaginaryIntegerKind::Int,
+                        | IntegerTokenType::Long(_) => ImaginaryIntegerKind::Long,
+                        | IntegerTokenType::LongLong(_) => ImaginaryIntegerKind::LongLong,
+                        | IntegerTokenType::UnsignedInt(_) => ImaginaryIntegerKind::UnsignedInt,
+                        | IntegerTokenType::UnsignedLong(_) => ImaginaryIntegerKind::UnsignedLong,
+                        | _ => ImaginaryIntegerKind::UnsignedLongLong,
+                    };
+                    TokenType::Integer(IntegerTokenType::Imaginary(
+                        Packed::new(
+                            u64::try_from(i128::from(v))
+                                .expect("integer constant magnitudes fit u64"),
+                        ),
+                        component,
+                    ))
+                },
+                | kind => kind,
+            };
+            return Self::build_token(token, kind);
+        }
+        self.parse_plain_number(token, representation)
+    }
+
+    /// Converts the real component without recursively stripping imaginary
+    /// suffixes. C99: §6.4.4.1-2, pp. 54-58; PDF pp. 66-70.
+    fn parse_plain_number(
+        &mut self,
+        token: PreprocessorToken,
+        representation: IntegerRepresentation,
+    ) -> Token {
+        let contents = self.context.string_cache.at(token.contents);
+        let is_hex = contents.starts_with("0x") || contents.starts_with("0X");
+        let is_binary = contents.starts_with("0b") || contents.starts_with("0B");
+        let prefixed_octal = contents.starts_with("0o") || contents.starts_with("0O");
+        if prefixed_octal && self.context.configuration.accepts(Feature::OctalPrefix) {
+            return self.parse_integer_radix(
+                8,
+                2,
+                PreprocessorErrorType::InvalidOctalIntegerLiteral,
+                token,
+                representation,
+            );
+        }
+        let is_octal = contents.starts_with('0') && !is_hex && !is_binary;
+        if is_hex {
+            if contents.contains(['.', 'p', 'P']) {
+                self.context.report_extension(
+                    Feature::HexFloats,
+                    "hexadecimal floating constant",
+                    token.source_vectors,
+                );
+                self.parse_hexadecimal_float(token)
+            } else {
+                self.parse_hexadecimal_integer(token, representation)
+            }
+        } else if is_binary {
+            if self.context.configuration.accepts(Feature::BinaryConstants) {
+                self.context.report_extension(
+                    Feature::BinaryConstants,
+                    "binary integer constant",
+                    token.source_vectors,
+                );
+            } else {
+                self.context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::InvalidBinaryIntegerLiteral,
+                    source_vectors: token.source_vectors,
+                });
+            }
+            self.parse_binary_integer(token, representation)
+        } else if contents.contains(['.', 'e', 'E']) {
+            self.parse_decimal_float(token)
+        } else if is_octal {
+            self.parse_octal_integer(token, representation)
+        } else {
+            self.parse_decimal_integer(token, representation)
+        }
+    }
+
+    pub(super) fn parse_character(&mut self, token: PreprocessorToken) -> CharacterTokenType {
+        let mut units = self.state.literal_scratch.take_units();
+        let had_escape_error = Self::eval_escape_sequences(self.context, token, &mut units);
+        let wide = self
+            .context
+            .string_cache
+            .at(token.contents)
+            .starts_with('L');
+        _ = self.context.intern_literal(&units);
+        let character = if let Some(encoding) =
+            literal_encoding(self.context.string_cache.at(token.contents))
+        {
+            let value = units.first().map_or(0, |unit| match *unit {
+                | LiteralUnit::Character(c) => u32::from(c),
+                | LiteralUnit::Numeric(v) => v,
+            });
+            let max = match encoding {
+                | LiteralEncoding::Utf8 if matches!(units.first(), Some(LiteralUnit::Numeric(_))) =>
+                    255,
+                | LiteralEncoding::Utf8 => 127,
+                | LiteralEncoding::Utf16 => 65535,
+                | LiteralEncoding::Utf32
+                    if matches!(units.first(), Some(LiteralUnit::Numeric(_))) =>
+                    u32::MAX,
+                | LiteralEncoding::Utf32 => 0x0010_FFFF,
+            };
+            if (units.len() != 1 && (!units.is_empty() || !had_escape_error)) || value > max {
+                self.context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::LanguageConstraint(
+                        "character constant must encode exactly one code unit",
+                    ),
+                    source_vectors: token.source_vectors,
+                });
+            }
+            CharacterTokenType::EncodedChar(value, encoding)
+        } else {
+            Self::character_value(self.context, token, &units, wide, had_escape_error)
+        };
+        self.state.literal_scratch.return_units(units);
+        character
+    }
+
+    /// Decodes a character or wide string literal.
+    ///
+    /// C99: §6.4.5 paragraphs 1-3, p. 62; PDF p. 74.
+    fn parse_string(&mut self, token: PreprocessorToken) -> StringTokenType {
+        let mut units = self.state.literal_scratch.take_units();
+        _ = Self::eval_escape_sequences(self.context, token, &mut units);
+        let cached_contents = self.context.intern_literal(&units);
+        self.state.literal_scratch.return_units(units);
+        let spelling = self.context.string_cache.at(token.contents);
+        string_token_type(
+            cached_contents,
+            literal_encoding(spelling),
+            spelling.starts_with('L'),
+        )
+    }
+
+    /// Appends the units `token` spells to `units`, which start empty, and
+    /// returns whether an escape sequence was invalid.
+    ///
+    /// C99: phase 5, §5.1.1.2 paragraph 1 item 5, p. 10; PDF p. 22, and
+    /// `escape-sequence`, §6.4.4.4 paragraphs 1 and 3-8, pp. 59-60; PDF
+    /// pp. 71-72. An octal escape takes at most three digits and a hex escape
+    /// all that follow (paragraph 7). A narrow octal or hex escape must fit
+    /// in an 8-bit `unsigned char` (paragraph 9, p. 61; PDF p. 73), and a
+    /// wide one in 32 bits. A universal character name needs exactly 4 or 8
+    /// digits and must not name a surrogate or a character below U+00A0 other
+    /// than `$`, `@`, and `` ` `` (§6.4.3 paragraphs 1-2, p. 53; PDF p. 65).
+    /// Any other character after `\` requires a diagnostic (footnote 65,
+    /// p. 60; PDF p. 72).
+    fn eval_escape_sequences(
+        context: &mut Context<'_>,
+        token: PreprocessorToken,
+        units: &mut ArenaVec<'_, LiteralUnit>,
+    ) -> bool {
+        let string = context.string_cache.at(token.contents);
+        let prefix = string.find(['"', '\'']).unwrap_or(0);
+        let wide = prefix != 0 && !string.starts_with("u8");
+        // The largest value a numeric escape may give one code unit of the
+        // literal's element type: C99 §6.4.4.4p9, p. 61; PDF p. 73, with
+        // C11's 16-bit `u` literals.
+        let max_escape = if (string.starts_with('u') && !string.starts_with("u8"))
+            || (string.starts_with('L') && context.configuration.target().layout().wide_utf16())
+        {
+            65535
+        } else if wide {
+            u32::MAX
+        } else {
+            255
+        };
+        let mut index = prefix + 1;
+        let quote = string.as_bytes().get(index - 1).copied();
+        let end = if string.len() > index && string.as_bytes().last().copied() == quote {
+            string.len() - 1
+        } else {
+            string.len()
+        };
+        let mut failed = false;
+        while index < end {
+            let c = string[index..].chars().next().unwrap();
+            index += c.len_utf8();
+            if c != '\\' {
+                units.push(LiteralUnit::Character(c));
+                continue;
+            }
+            let mut error = None;
+            let unit = if index == end {
+                error = Some(PreprocessorErrorType::UnterminatedEscapeSequence);
+                None
+            } else {
+                let c = string[index..].chars().next().unwrap();
+                index += c.len_utf8();
+                match c {
+                    | 'a' => Some(LiteralUnit::Character('\x07')),
+                    | 'b' => Some(LiteralUnit::Character('\x08')),
+                    | 'f' => Some(LiteralUnit::Character('\x0c')),
+                    | 'n' => Some(LiteralUnit::Character('\n')),
+                    | 'r' => Some(LiteralUnit::Character('\r')),
+                    | 't' => Some(LiteralUnit::Character('\t')),
+                    | 'v' => Some(LiteralUnit::Character('\x0b')),
+                    | '\'' | '"' | '?' | '\\' => Some(LiteralUnit::Character(c)),
+                    | 'x' | 'o'
+                        if string.as_bytes().get(index) == Some(&b'{')
+                            && context.configuration.accepts(Feature::DelimitedEscapes) =>
+                    {
+                        index += 1;
+                        let radix = if c == 'x' { 16 } else { 8 };
+                        let mut value = Some(0u32);
+                        let mut count = 0;
+                        while index < end {
+                            let Some(digit) = string.as_bytes()[index]
+                                .is_ascii()
+                                .then(|| char::from(string.as_bytes()[index]).to_digit(radix))
+                                .flatten()
+                            else {
+                                break;
+                            };
+                            value = value
+                                .and_then(|v| v.checked_mul(radix))
+                                .and_then(|v| v.checked_add(digit));
+                            count += 1;
+                            index += 1;
+                        }
+                        if count == 0 || string.as_bytes().get(index) != Some(&b'}') {
+                            error = Some(PreprocessorErrorType::LanguageConstraint(
+                                "invalid delimited escape sequence",
+                            ));
+                            None
+                        } else {
+                            index += 1;
+                            if let Some(value) = value.filter(|v| *v <= max_escape) {
+                                Some(LiteralUnit::Numeric(value))
+                            } else {
+                                error = Some(PreprocessorErrorType::LanguageConstraint(
+                                    "delimited escape sequence is too large",
+                                ));
+                                None
+                            }
+                        }
+                    },
+                    | 'x' | '0'..='7' => {
+                        let hex = c == 'x';
+                        let radix = if hex { 16 } else { 8 };
+                        let mut count = usize::from(!hex);
+                        let mut value = Some(if hex { 0u32 } else { c.to_digit(8).unwrap() });
+                        while index < end && (hex || count < 3) {
+                            let Some(digit) = string[index..]
+                                .chars()
+                                .next()
+                                .and_then(|c| c.to_digit(radix))
+                            else {
+                                break;
+                            };
+                            index += 1;
+                            count += 1;
+                            value = value
+                                .and_then(|value| value.checked_mul(radix))
+                                .and_then(|value| value.checked_add(digit));
+                        }
+                        if count == 0 {
+                            error = Some(PreprocessorErrorType::InvalidHexEscapeSequence);
+                            None
+                        } else if let Some(value) = value.filter(|value| *value <= max_escape) {
+                            Some(LiteralUnit::Numeric(value))
+                        } else {
+                            error = Some(if hex {
+                                PreprocessorErrorType::HexEscapeSequenceTooLarge
+                            } else {
+                                PreprocessorErrorType::OctalEscapeSequenceTooLarge
+                            });
+                            None
+                        }
+                    },
+                    | 'u' | 'U' => {
+                        let required = if c == 'u' { 4 } else { 8 };
+                        let mut count = 0;
+                        let mut value = 0u32;
+                        while count < required && index < end {
+                            let Some(digit) =
+                                string[index..].chars().next().and_then(|c| c.to_digit(16))
+                            else {
+                                break;
+                            };
+                            value = value * 16 + digit;
+                            index += 1;
+                            count += 1;
+                        }
+                        if count != required {
+                            error = Some(if c == 'u' {
+                                PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort
+                            } else {
+                                PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall
+                            });
+                            None
+                        } else if let Some(character) = char::from_u32(value).filter(|_| {
+                            // C23 §6.4.3p2, p. 56; PDF p. 69 permits basic
+                            // and control characters inside literals.
+                            context.configuration.standard() >= CStandard::C23
+                                || value >= 0xA0
+                                || matches!(value, 0x24 | 0x40 | 0x60)
+                        }) {
+                            Some(LiteralUnit::Character(character))
+                        } else {
+                            error = Some(if c == 'u' {
+                                PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence
+                            } else {
+                                PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence
+                            });
+                            None
+                        }
+                    },
+                    | _ => {
+                        error = Some(PreprocessorErrorType::InvalidEscapeSequence);
+                        None
+                    },
+                }
+            };
+            if let Some(unit) = unit {
+                units.push(unit);
+            }
+            if let Some(error_type) = error {
+                failed = true;
+                Context::raw_preprocessor_error(
+                    &mut context.pending_errors,
+                    PreprocessorError {
+                        error_type,
+                        source_vectors: token.source_vectors,
+                    },
+                );
+            }
+        }
+        failed
     }
 
     /// Converts an integer pp-number in `radix`, giving it the first type of
@@ -777,203 +1239,6 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
         self.parse_float(PreprocessorErrorType::InvalidDecimalFloatLiteral, token)
     }
 
-    /// Appends the units `token` spells to `units`, which start empty, and
-    /// returns whether an escape sequence was invalid.
-    ///
-    /// C99: phase 5, §5.1.1.2 paragraph 1 item 5, p. 10; PDF p. 22, and
-    /// `escape-sequence`, §6.4.4.4 paragraphs 1 and 3-8, pp. 59-60; PDF
-    /// pp. 71-72. An octal escape takes at most three digits and a hex escape
-    /// all that follow (paragraph 7). A narrow octal or hex escape must fit
-    /// in an 8-bit `unsigned char` (paragraph 9, p. 61; PDF p. 73), and a
-    /// wide one in 32 bits. A universal character name needs exactly 4 or 8
-    /// digits and must not name a surrogate or a character below U+00A0 other
-    /// than `$`, `@`, and `` ` `` (§6.4.3 paragraphs 1-2, p. 53; PDF p. 65).
-    /// Any other character after `\` requires a diagnostic (footnote 65,
-    /// p. 60; PDF p. 72).
-    fn eval_escape_sequences(
-        context: &mut Context<'_>,
-        token: PreprocessorToken,
-        units: &mut ArenaVec<'_, LiteralUnit>,
-    ) -> bool {
-        let string = context.string_cache.at(token.contents);
-        let prefix = string.find(['"', '\'']).unwrap_or(0);
-        let wide = prefix != 0 && !string.starts_with("u8");
-        // The largest value a numeric escape may give one code unit of the
-        // literal's element type: C99 §6.4.4.4p9, p. 61; PDF p. 73, with
-        // C11's 16-bit `u` literals.
-        let max_escape = if (string.starts_with('u') && !string.starts_with("u8"))
-            || (string.starts_with('L') && context.configuration.target().layout().wide_utf16())
-        {
-            65535
-        } else if wide {
-            u32::MAX
-        } else {
-            255
-        };
-        let mut index = prefix + 1;
-        let quote = string.as_bytes().get(index - 1).copied();
-        let end = if string.len() > index && string.as_bytes().last().copied() == quote {
-            string.len() - 1
-        } else {
-            string.len()
-        };
-        let mut failed = false;
-        while index < end {
-            let c = string[index..].chars().next().unwrap();
-            index += c.len_utf8();
-            if c != '\\' {
-                units.push(LiteralUnit::Character(c));
-                continue;
-            }
-            let mut error = None;
-            let unit = if index == end {
-                error = Some(PreprocessorErrorType::UnterminatedEscapeSequence);
-                None
-            } else {
-                let c = string[index..].chars().next().unwrap();
-                index += c.len_utf8();
-                match c {
-                    | 'a' => Some(LiteralUnit::Character('\x07')),
-                    | 'b' => Some(LiteralUnit::Character('\x08')),
-                    | 'f' => Some(LiteralUnit::Character('\x0c')),
-                    | 'n' => Some(LiteralUnit::Character('\n')),
-                    | 'r' => Some(LiteralUnit::Character('\r')),
-                    | 't' => Some(LiteralUnit::Character('\t')),
-                    | 'v' => Some(LiteralUnit::Character('\x0b')),
-                    | '\'' | '"' | '?' | '\\' => Some(LiteralUnit::Character(c)),
-                    | 'x' | 'o'
-                        if string.as_bytes().get(index) == Some(&b'{')
-                            && context.configuration.accepts(Feature::DelimitedEscapes) =>
-                    {
-                        index += 1;
-                        let radix = if c == 'x' { 16 } else { 8 };
-                        let mut value = Some(0u32);
-                        let mut count = 0;
-                        while index < end {
-                            let Some(digit) = string.as_bytes()[index]
-                                .is_ascii()
-                                .then(|| char::from(string.as_bytes()[index]).to_digit(radix))
-                                .flatten()
-                            else {
-                                break;
-                            };
-                            value = value
-                                .and_then(|v| v.checked_mul(radix))
-                                .and_then(|v| v.checked_add(digit));
-                            count += 1;
-                            index += 1;
-                        }
-                        if count == 0 || string.as_bytes().get(index) != Some(&b'}') {
-                            error = Some(PreprocessorErrorType::LanguageConstraint(
-                                "invalid delimited escape sequence",
-                            ));
-                            None
-                        } else {
-                            index += 1;
-                            if let Some(value) = value.filter(|v| *v <= max_escape) {
-                                Some(LiteralUnit::Numeric(value))
-                            } else {
-                                error = Some(PreprocessorErrorType::LanguageConstraint(
-                                    "delimited escape sequence is too large",
-                                ));
-                                None
-                            }
-                        }
-                    },
-                    | 'x' | '0'..='7' => {
-                        let hex = c == 'x';
-                        let radix = if hex { 16 } else { 8 };
-                        let mut count = usize::from(!hex);
-                        let mut value = Some(if hex { 0u32 } else { c.to_digit(8).unwrap() });
-                        while index < end && (hex || count < 3) {
-                            let Some(digit) = string[index..]
-                                .chars()
-                                .next()
-                                .and_then(|c| c.to_digit(radix))
-                            else {
-                                break;
-                            };
-                            index += 1;
-                            count += 1;
-                            value = value
-                                .and_then(|value| value.checked_mul(radix))
-                                .and_then(|value| value.checked_add(digit));
-                        }
-                        if count == 0 {
-                            error = Some(PreprocessorErrorType::InvalidHexEscapeSequence);
-                            None
-                        } else if let Some(value) = value.filter(|value| *value <= max_escape) {
-                            Some(LiteralUnit::Numeric(value))
-                        } else {
-                            error = Some(if hex {
-                                PreprocessorErrorType::HexEscapeSequenceTooLarge
-                            } else {
-                                PreprocessorErrorType::OctalEscapeSequenceTooLarge
-                            });
-                            None
-                        }
-                    },
-                    | 'u' | 'U' => {
-                        let required = if c == 'u' { 4 } else { 8 };
-                        let mut count = 0;
-                        let mut value = 0u32;
-                        while count < required && index < end {
-                            let Some(digit) =
-                                string[index..].chars().next().and_then(|c| c.to_digit(16))
-                            else {
-                                break;
-                            };
-                            value = value * 16 + digit;
-                            index += 1;
-                            count += 1;
-                        }
-                        if count != required {
-                            error = Some(if c == 'u' {
-                                PreprocessorErrorType::SmallUnicodeEscapeSequenceTooShort
-                            } else {
-                                PreprocessorErrorType::LargeUnicodeEscapeSequenceTooSmall
-                            });
-                            None
-                        } else if let Some(character) = char::from_u32(value).filter(|_| {
-                            // C23 §6.4.3p2, p. 56; PDF p. 69 permits basic
-                            // and control characters inside literals.
-                            context.configuration.standard() >= CStandard::C23
-                                || value >= 0xA0
-                                || matches!(value, 0x24 | 0x40 | 0x60)
-                        }) {
-                            Some(LiteralUnit::Character(character))
-                        } else {
-                            error = Some(if c == 'u' {
-                                PreprocessorErrorType::InvalidSmallUnicodeEscapeSequence
-                            } else {
-                                PreprocessorErrorType::InvalidLargeUnicodeEscapeSequence
-                            });
-                            None
-                        }
-                    },
-                    | _ => {
-                        error = Some(PreprocessorErrorType::InvalidEscapeSequence);
-                        None
-                    },
-                }
-            };
-            if let Some(unit) = unit {
-                units.push(unit);
-            }
-            if let Some(error_type) = error {
-                failed = true;
-                Context::raw_preprocessor_error(
-                    &mut context.pending_errors,
-                    PreprocessorError {
-                        error_type,
-                        source_vectors: token.source_vectors,
-                    },
-                );
-            }
-        }
-        failed
-    }
-
     fn build_token(token: PreprocessorToken, kind: TokenType) -> Token {
         Token {
             kind,
@@ -984,209 +1249,6 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
 
     fn build_operator_token(token: PreprocessorToken, kind: OperatorTokenType) -> Token {
         Self::build_token(token, TokenType::Operator(kind))
-    }
-
-    /// Converts a pp-number into an integer or floating constant, which then
-    /// acquires its type and value.
-    ///
-    /// C99: §6.4.8 paragraph 4, p. 65; PDF p. 77; the forms are those of
-    /// §6.4.4.1 paragraph 1, pp. 54-55; PDF pp. 66-67, and §6.4.4.2
-    /// paragraph 1, p. 57; PDF p. 69.
-    ///
-    /// Integer constants are typed under `representation`: phase 7 uses
-    /// [`IntegerRepresentation::Target`] and `#if` evaluation
-    /// [`IntegerRepresentation::IntMax`].
-    pub(super) fn parse_number(
-        &mut self,
-        token: PreprocessorToken,
-        representation: IntegerRepresentation,
-    ) -> Token {
-        let contents = self.context.string_cache.at(token.contents);
-        let spelling = contents.trim_end_matches('\0');
-        let imaginary = match spelling.as_bytes() {
-            | [.., b'i' | b'I' | b'j' | b'J'] => Some(spelling.len() - 1),
-            // Joined to a hexadecimal integer, an `f` suffix would read as a
-            // digit; an integer takes no `f` suffix (C99 §6.4.4.1p1).
-            | [.., b'i' | b'I' | b'j' | b'J', b'f' | b'F']
-                if (spelling.starts_with("0x") || spelling.starts_with("0X"))
-                    && !spelling.contains(['p', 'P']) =>
-                None,
-            // GNU imaginary and binary128 suffixes extend C99 §6.4.4.2p1;
-            // either suffix order preserves the real component's precision.
-            | [
-                ..,
-                b'i' | b'I' | b'j' | b'J',
-                b'f' | b'F' | b'l' | b'L' | b'q' | b'Q',
-            ] => Some(spelling.len() - 2),
-            | _ => None,
-        };
-        if self
-            .context
-            .configuration
-            .accepts(Feature::ImaginaryConstants)
-            && let Some(index) = imaginary
-        {
-            let mut real = ArenaString::new_in(self.scratch);
-            real.push_str(&spelling[..index]);
-            real.push_str(&spelling[index + 1..]);
-            real.push('\0');
-            let real_contents = self.context.string_cache.intern(&*real);
-            self.context.report_extension(
-                Feature::ImaginaryConstants,
-                "imaginary constant",
-                token.source_vectors,
-            );
-            let real_token = self.parse_plain_number(
-                PreprocessorToken {
-                    contents: real_contents,
-                    ..token
-                },
-                representation,
-            );
-            let kind = match real_token.kind {
-                | TokenType::Float(FloatTokenType::Float(v)) =>
-                    TokenType::Float(FloatTokenType::ImaginaryFloat(v)),
-                | TokenType::Float(FloatTokenType::Double(v)) =>
-                    TokenType::Float(FloatTokenType::ImaginaryDouble(v)),
-                | TokenType::Float(FloatTokenType::Float128(v)) =>
-                    TokenType::Float(FloatTokenType::ImaginaryFloat128(v)),
-                | TokenType::Float(FloatTokenType::LongDouble(v)) =>
-                    TokenType::Float(FloatTokenType::ImaginaryLongDouble(v)),
-                | TokenType::Integer(v) => {
-                    let component = match v {
-                        | IntegerTokenType::Int(_) => ImaginaryIntegerKind::Int,
-                        | IntegerTokenType::Long(_) => ImaginaryIntegerKind::Long,
-                        | IntegerTokenType::LongLong(_) => ImaginaryIntegerKind::LongLong,
-                        | IntegerTokenType::UnsignedInt(_) => ImaginaryIntegerKind::UnsignedInt,
-                        | IntegerTokenType::UnsignedLong(_) => ImaginaryIntegerKind::UnsignedLong,
-                        | _ => ImaginaryIntegerKind::UnsignedLongLong,
-                    };
-                    TokenType::Integer(IntegerTokenType::Imaginary(
-                        Packed::new(
-                            u64::try_from(i128::from(v))
-                                .expect("integer constant magnitudes fit u64"),
-                        ),
-                        component,
-                    ))
-                },
-                | kind => kind,
-            };
-            return Self::build_token(token, kind);
-        }
-        self.parse_plain_number(token, representation)
-    }
-
-    /// Converts the real component without recursively stripping imaginary
-    /// suffixes. C99: §6.4.4.1-2, pp. 54-58; PDF pp. 66-70.
-    fn parse_plain_number(
-        &mut self,
-        token: PreprocessorToken,
-        representation: IntegerRepresentation,
-    ) -> Token {
-        let contents = self.context.string_cache.at(token.contents);
-        let is_hex = contents.starts_with("0x") || contents.starts_with("0X");
-        let is_binary = contents.starts_with("0b") || contents.starts_with("0B");
-        let prefixed_octal = contents.starts_with("0o") || contents.starts_with("0O");
-        if prefixed_octal && self.context.configuration.accepts(Feature::OctalPrefix) {
-            return self.parse_integer_radix(
-                8,
-                2,
-                PreprocessorErrorType::InvalidOctalIntegerLiteral,
-                token,
-                representation,
-            );
-        }
-        let is_octal = contents.starts_with('0') && !is_hex && !is_binary;
-        if is_hex {
-            if contents.contains(['.', 'p', 'P']) {
-                self.context.report_extension(
-                    Feature::HexFloats,
-                    "hexadecimal floating constant",
-                    token.source_vectors,
-                );
-                self.parse_hexadecimal_float(token)
-            } else {
-                self.parse_hexadecimal_integer(token, representation)
-            }
-        } else if is_binary {
-            if self.context.configuration.accepts(Feature::BinaryConstants) {
-                self.context.report_extension(
-                    Feature::BinaryConstants,
-                    "binary integer constant",
-                    token.source_vectors,
-                );
-            } else {
-                self.context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::InvalidBinaryIntegerLiteral,
-                    source_vectors: token.source_vectors,
-                });
-            }
-            self.parse_binary_integer(token, representation)
-        } else if contents.contains(['.', 'e', 'E']) {
-            self.parse_decimal_float(token)
-        } else if is_octal {
-            self.parse_octal_integer(token, representation)
-        } else {
-            self.parse_decimal_integer(token, representation)
-        }
-    }
-
-    /// Decodes a character or wide string literal.
-    ///
-    /// C99: §6.4.5 paragraphs 1-3, p. 62; PDF p. 74.
-    fn parse_string(&mut self, token: PreprocessorToken) -> StringTokenType {
-        let mut units = self.state.literal_scratch.take_units();
-        _ = Self::eval_escape_sequences(self.context, token, &mut units);
-        let cached_contents = self.context.intern_literal(&units);
-        self.state.literal_scratch.return_units(units);
-        let spelling = self.context.string_cache.at(token.contents);
-        string_token_type(
-            cached_contents,
-            literal_encoding(spelling),
-            spelling.starts_with('L'),
-        )
-    }
-
-    pub(super) fn parse_character(&mut self, token: PreprocessorToken) -> CharacterTokenType {
-        let mut units = self.state.literal_scratch.take_units();
-        let had_escape_error = Self::eval_escape_sequences(self.context, token, &mut units);
-        let wide = self
-            .context
-            .string_cache
-            .at(token.contents)
-            .starts_with('L');
-        _ = self.context.intern_literal(&units);
-        let character = if let Some(encoding) =
-            literal_encoding(self.context.string_cache.at(token.contents))
-        {
-            let value = units.first().map_or(0, |unit| match *unit {
-                | LiteralUnit::Character(c) => u32::from(c),
-                | LiteralUnit::Numeric(v) => v,
-            });
-            let max = match encoding {
-                | LiteralEncoding::Utf8 if matches!(units.first(), Some(LiteralUnit::Numeric(_))) =>
-                    255,
-                | LiteralEncoding::Utf8 => 127,
-                | LiteralEncoding::Utf16 => 65535,
-                | LiteralEncoding::Utf32
-                    if matches!(units.first(), Some(LiteralUnit::Numeric(_))) =>
-                    u32::MAX,
-                | LiteralEncoding::Utf32 => 0x0010_FFFF,
-            };
-            if (units.len() != 1 && (!units.is_empty() || !had_escape_error)) || value > max {
-                self.context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::LanguageConstraint(
-                        "character constant must encode exactly one code unit",
-                    ),
-                    source_vectors: token.source_vectors,
-                });
-            }
-            CharacterTokenType::EncodedChar(value, encoding)
-        } else {
-            Self::character_value(self.context, token, &units, wide, had_escape_error)
-        };
-        self.state.literal_scratch.return_units(units);
-        character
     }
 
     /// The value of a character constant whose units are `units`.
@@ -1254,228 +1316,168 @@ impl<'tu, 'pp> Expander<'_, 'tu, 'pp, '_> {
             }
         }
     }
+}
 
-    /// Converts one preprocessing token into a token, or returns `None` for
-    /// one that is not passed on: a new-line, a directive that `#` begins,
-    /// or a token in no token's lexical form, which is diagnosed. A name
-    /// whose macro was being replaced is an ordinary identifier again, since
-    /// macros mean nothing after phase 4 (§6.10.3.5 paragraph 1, p. 155; PDF
-    /// p. 167).
+impl IntegerConstantType {
+    /// The list of types an integer constant tries in order, taking the
+    /// first that can represent its value. A decimal constant without `u`
+    /// tries only signed types; an octal or hexadecimal constant also tries
+    /// the unsigned counterpart after each signed type. Binary constants, an
+    /// extension, use the octal and hexadecimal lists, as GCC and Clang do.
     ///
-    /// C99: §6.4 paragraphs 2-3, p. 49; PDF p. 61.
-    pub(super) fn map_preprocessor_token(&mut self, token: PreprocessorToken) -> Option<Token> {
-        Some(match token.kind {
-            | PreprocessorTokenType::Other => {
-                let character = self
-                    .context
-                    .string_cache
-                    .at(token.contents)
-                    .chars()
-                    .next()
-                    .expect("Other tokens contain one character");
-                let source = self
-                    .context
-                    .first_source_vector(token.source_vectors)
-                    .clone();
-                self.context.preprocessor_tokenizer_error(
-                    PreprocessorTokenizerError::unknown_character(source, character),
-                );
-                return None;
-            },
-            | PreprocessorTokenType::Number =>
-                self.parse_number(token, IntegerRepresentation::Target),
-            | PreprocessorTokenType::Newline => return None,
-            | PreprocessorTokenType::Hash => {
-                if matches!(
-                    self.tokenizer_stack.last(),
-                    Some(TokenizerFrame {
-                        frame_type: TokenizerFrameType::FunctionLikeMacroInvocation { .. },
-                        ..
-                    })
-                ) {
-                    unreachable!("Handled in next_preprocessor_token");
-                }
-                // C99 §6.10p2: expanded directive operands still end at
-                // the first new-line, including within query operators.
-                let in_directive = std::mem::replace(&mut self.state.in_directive, true);
-                self.parse_directive(token);
-                self.state.in_directive = in_directive;
-                return None;
-            },
-            | PreprocessorTokenType::GeneratedString
-            | PreprocessorTokenType::WideGeneratedString => {
-                let wide = token.kind == PreprocessorTokenType::WideGeneratedString;
-                let spelling = self.context.string_cache.at(token.contents);
-                let encoding = wide.then(|| literal_encoding(spelling)).flatten();
-                let prefix_length = encoding.map_or(usize::from(wide), |e| e.prefix().len());
-                let text = &spelling[prefix_length..];
-                let mut units = self.state.literal_scratch.take_units();
-                units.extend(text.chars().map(LiteralUnit::Character));
-                let id = self.context.intern_literal(&units);
-                self.state.literal_scratch.return_units(units);
-                Token {
-                    kind: TokenType::String(string_token_type(id, encoding, wide)),
-                    ..Self::build_token(token, TokenType::Identifier)
-                }
-            },
-            | PreprocessorTokenType::String => Token {
-                kind:           TokenType::String(self.parse_string(token)),
-                contents:       token.contents,
-                source_vectors: token.source_vectors,
-            },
-            | PreprocessorTokenType::Character => Token {
-                kind:           TokenType::Character(self.parse_character(token)),
-                contents:       token.contents,
-                source_vectors: token.source_vectors,
-            },
-            | PreprocessorTokenType::Identifier
-            | PreprocessorTokenType::UniversalIdentifier
-            | PreprocessorTokenType::UnavailableIdentifier
-            | PreprocessorTokenType::UnavailableUniversalIdentifier
-            | PreprocessorTokenType::Defined => {
-                let contents = token.identifier_id(self.context);
-                let classification =
-                    KeywordTokenType::classify(contents, self.context.configuration);
-                if let Some(keyword) = classification
-                    && let Some(origin) = keyword.origin
-                {
-                    self.context.report_extension_since(
-                        keyword.spelling,
-                        origin,
-                        token.source_vectors,
-                    );
-                }
-                Token {
-                    kind: classification.map_or(TokenType::Identifier, |keyword| {
-                        TokenType::Keyword(keyword.kind)
-                    }),
-                    contents,
-                    source_vectors: token.source_vectors,
-                }
-            },
-            | PreprocessorTokenType::Plus =>
-                Self::build_operator_token(token, OperatorTokenType::Plus),
-            | PreprocessorTokenType::Minus =>
-                Self::build_operator_token(token, OperatorTokenType::Minus),
-            | PreprocessorTokenType::Asterisk =>
-                Self::build_operator_token(token, OperatorTokenType::Asterisk),
-            | PreprocessorTokenType::ForwardSlash =>
-                Self::build_operator_token(token, OperatorTokenType::ForwardSlash),
-            | PreprocessorTokenType::Percent =>
-                Self::build_operator_token(token, OperatorTokenType::Percent),
-            | PreprocessorTokenType::LessThanLessThan =>
-                Self::build_operator_token(token, OperatorTokenType::LessThanLessThan),
-            | PreprocessorTokenType::GreaterThanGreaterThan =>
-                Self::build_operator_token(token, OperatorTokenType::GreaterThanGreaterThan),
-            | PreprocessorTokenType::LessThan =>
-                Self::build_operator_token(token, OperatorTokenType::LessThan),
-            | PreprocessorTokenType::LessThanEquals =>
-                Self::build_operator_token(token, OperatorTokenType::LessThanEquals),
-            | PreprocessorTokenType::GreaterThan =>
-                Self::build_operator_token(token, OperatorTokenType::GreaterThan),
-            | PreprocessorTokenType::GreaterThanEquals =>
-                Self::build_operator_token(token, OperatorTokenType::GreaterThanEquals),
-            | PreprocessorTokenType::EqualsEquals =>
-                Self::build_operator_token(token, OperatorTokenType::EqualsEquals),
-            | PreprocessorTokenType::ExclamationMarkEquals =>
-                Self::build_operator_token(token, OperatorTokenType::ExclamationMarkEquals),
-            | PreprocessorTokenType::Ampersand =>
-                Self::build_operator_token(token, OperatorTokenType::Ampersand),
-            | PreprocessorTokenType::Caret =>
-                Self::build_operator_token(token, OperatorTokenType::Caret),
-            | PreprocessorTokenType::Pipe =>
-                Self::build_operator_token(token, OperatorTokenType::Pipe),
-            | PreprocessorTokenType::AmpersandAmpersand =>
-                Self::build_operator_token(token, OperatorTokenType::AmpersandAmpersand),
-            | PreprocessorTokenType::PipePipe =>
-                Self::build_operator_token(token, OperatorTokenType::PipePipe),
-            | PreprocessorTokenType::QuestionMark =>
-                Self::build_operator_token(token, OperatorTokenType::QuestionMark),
-            | PreprocessorTokenType::Colon =>
-                Self::build_operator_token(token, OperatorTokenType::Colon),
-            | PreprocessorTokenType::SemiColon =>
-                Self::build_operator_token(token, OperatorTokenType::Semicolon),
-            | PreprocessorTokenType::OpeningParenthesis =>
-                Self::build_operator_token(token, OperatorTokenType::OpeningParenthesis),
-            | PreprocessorTokenType::ClosingParenthesis =>
-                Self::build_operator_token(token, OperatorTokenType::ClosingParenthesis),
-            | PreprocessorTokenType::OpeningSquareBracket =>
-                Self::build_operator_token(token, OperatorTokenType::OpeningSquareBracket),
-            | PreprocessorTokenType::ClosingSquareBracket =>
-                Self::build_operator_token(token, OperatorTokenType::ClosingSquareBracket),
-            | PreprocessorTokenType::OpeningCurlyBrace =>
-                Self::build_operator_token(token, OperatorTokenType::OpeningCurlyBrace),
-            | PreprocessorTokenType::ClosingCurlyBrace =>
-                Self::build_operator_token(token, OperatorTokenType::ClosingCurlyBrace),
-            | PreprocessorTokenType::Period =>
-                Self::build_operator_token(token, OperatorTokenType::Period),
-            | PreprocessorTokenType::Arrow =>
-                Self::build_operator_token(token, OperatorTokenType::Arrow),
-            | PreprocessorTokenType::PlusPlus =>
-                Self::build_operator_token(token, OperatorTokenType::PlusPlus),
-            | PreprocessorTokenType::MinusMinus =>
-                Self::build_operator_token(token, OperatorTokenType::MinusMinus),
-            | PreprocessorTokenType::AsteriskEquals =>
-                Self::build_operator_token(token, OperatorTokenType::AsteriskEquals),
-            | PreprocessorTokenType::ForwardSlashEquals =>
-                Self::build_operator_token(token, OperatorTokenType::ForwardSlashEquals),
-            | PreprocessorTokenType::PercentEquals =>
-                Self::build_operator_token(token, OperatorTokenType::PercentEquals),
-            | PreprocessorTokenType::PlusEquals =>
-                Self::build_operator_token(token, OperatorTokenType::PlusEquals),
-            | PreprocessorTokenType::MinusEquals =>
-                Self::build_operator_token(token, OperatorTokenType::MinusEquals),
-            | PreprocessorTokenType::LessThanLessThanEquals =>
-                Self::build_operator_token(token, OperatorTokenType::LessThanLessThanEquals),
-            | PreprocessorTokenType::GreaterThanGreaterThanEquals =>
-                Self::build_operator_token(token, OperatorTokenType::GreaterThanGreaterThanEquals),
-            | PreprocessorTokenType::AmpersandEquals =>
-                Self::build_operator_token(token, OperatorTokenType::AmpersandEquals),
-            | PreprocessorTokenType::CaretEquals =>
-                Self::build_operator_token(token, OperatorTokenType::CaretEquals),
-            | PreprocessorTokenType::PipeEquals =>
-                Self::build_operator_token(token, OperatorTokenType::PipeEquals),
-            | PreprocessorTokenType::Equals =>
-                Self::build_operator_token(token, OperatorTokenType::Equals),
-            | PreprocessorTokenType::Comma =>
-                Self::build_operator_token(token, OperatorTokenType::Comma),
-            | PreprocessorTokenType::Tilde =>
-                Self::build_operator_token(token, OperatorTokenType::Tilde),
-            | PreprocessorTokenType::ExclamationMark =>
-                Self::build_operator_token(token, OperatorTokenType::ExclamationMark),
-            | PreprocessorTokenType::Ellipsis =>
-                Self::build_operator_token(token, OperatorTokenType::Ellipsis),
-            // `##` is a punctuator (C99 §6.4.6p1) that only replacement
-            // lists give a meaning (§6.10.3.3).
-            | PreprocessorTokenType::HashHash => {
-                let error_type = if matches!(
-                    self.tokenizer_stack.last(),
-                    Some(TokenizerFrame {
-                        frame_type: TokenizerFrameType::FunctionLikeMacroArgument { .. }
-                            | TokenizerFrameType::FunctionLikeMacroInvocation { .. }
-                            | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
-                        ..
-                    })
-                ) {
-                    PreprocessorErrorType::CannotUseHashHashAfterFunctionLikeMacroCall
-                } else {
-                    PreprocessorErrorType::HashHashUsedOutsideOfMacro
-                };
-                self.context.preprocessor_error(PreprocessorError {
-                    error_type,
-                    source_vectors: token.source_vectors,
-                });
-                return None;
-            },
+    /// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
+    fn candidates(
+        suffix: Option<IntegerSuffix>,
+        is_decimal: bool,
+        standard: CStandard,
+    ) -> &'static [Self] {
+        use IntegerConstantType::{
+            Int,
+            Long,
+            LongLong,
+            UnsignedInt,
+            UnsignedLong,
+            UnsignedLongLong,
+        };
+        // C89: §3.1.3.2; PDF p. 42. Decimal constants may have unsigned
+        // long type, and long-long types are absent from the native lists.
+        // Explicit ll suffixes keep the later-standard extension below.
+        if standard < CStandard::C99 {
+            match (suffix, is_decimal) {
+                | (None, true) => return &[Int, Long, UnsignedLong, LongLong, UnsignedLongLong],
+                | (None, false) =>
+                    return &[
+                        Int,
+                        UnsignedInt,
+                        Long,
+                        UnsignedLong,
+                        LongLong,
+                        UnsignedLongLong,
+                    ],
+                | (Some(IntegerSuffix::Unsigned), _) =>
+                    return &[UnsignedInt, UnsignedLong, UnsignedLongLong],
+                | (Some(IntegerSuffix::Long), _) =>
+                    return &[Long, UnsignedLong, LongLong, UnsignedLongLong],
+                | (Some(IntegerSuffix::UnsignedLong), _) =>
+                    return &[UnsignedLong, UnsignedLongLong],
+                | _ => {},
+            }
+        }
+        match (suffix, is_decimal) {
+            | (None, true) => &[Int, Long, LongLong],
+            | (None, false) => &[
+                Int,
+                UnsignedInt,
+                Long,
+                UnsignedLong,
+                LongLong,
+                UnsignedLongLong,
+            ],
+            | (Some(IntegerSuffix::Unsigned), _) => &[UnsignedInt, UnsignedLong, UnsignedLongLong],
+            | (Some(IntegerSuffix::Long), true) => &[Long, LongLong],
+            | (Some(IntegerSuffix::Long), false) =>
+                &[Long, UnsignedLong, LongLong, UnsignedLongLong],
+            | (Some(IntegerSuffix::UnsignedLong), _) => &[UnsignedLong, UnsignedLongLong],
+            | (Some(IntegerSuffix::LongLong), true) => &[LongLong],
+            | (Some(IntegerSuffix::LongLong), false) => &[LongLong, UnsignedLongLong],
+            | (Some(IntegerSuffix::UnsignedLongLong), _) => &[UnsignedLongLong],
+        }
+    }
 
-            | PreprocessorTokenType::Placeholder | PreprocessorTokenType::Whitespace => {
-                self.context.preprocessor_error(PreprocessorError {
-                    error_type:     PreprocessorErrorType::UnexpectedTokenAtPhase7(token.kind),
-                    source_vectors: token.source_vectors,
-                });
-                return None;
-            },
+    /// The largest value this type holds under `representation`.
+    fn max(
+        self,
+        representation: IntegerRepresentation,
+        target: &crate::target::TargetLayout,
+    ) -> u64 {
+        if representation == IntegerRepresentation::Target {
+            let scalar = match self {
+                | Self::Int => crate::target::Scalar::Int,
+                | Self::UnsignedInt => crate::target::Scalar::UnsignedInt,
+                | Self::Long => crate::target::Scalar::Long,
+                | Self::UnsignedLong => crate::target::Scalar::UnsignedLong,
+                | Self::LongLong => crate::target::Scalar::LongLong,
+                | Self::UnsignedLongLong => crate::target::Scalar::UnsignedLongLong,
+            };
+            let (bits, signed) = target
+                .integer(scalar)
+                .expect("integer literal candidate is an integer type");
+            return u64::MAX >> (64 - bits + u32::from(signed));
+        }
+        let scalar = match self {
+            | Self::Int | Self::Long | Self::LongLong => target.intmax_t,
+            | Self::UnsignedInt | Self::UnsignedLong | Self::UnsignedLongLong => target.uintmax_t,
+        };
+        let (bits, signed) = target.integer(scalar).unwrap();
+        u64::MAX >> (64 - bits + u32::from(signed))
+    }
+
+    /// A token holding `value`, which this type can represent. Under
+    /// [`IntegerRepresentation::IntMax`] every type is 64 bits wide, so the
+    /// token is `long long` or `unsigned long long` by signedness.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "`max` has bounded `value` by this type's range."
+    )]
+    fn token_type(
+        self,
+        value: u64,
+        representation: IntegerRepresentation,
+        target: &crate::target::TargetLayout,
+    ) -> IntegerTokenType {
+        debug_assert!(
+            value <= self.max(representation, target),
+            "the type was chosen to hold the value"
+        );
+        match (self, representation) {
+            | (Self::Int, IntegerRepresentation::Target) => IntegerTokenType::Int(value as i32),
+            | (Self::UnsignedInt, IntegerRepresentation::Target) =>
+                IntegerTokenType::UnsignedInt(value as u32),
+            | (Self::Long, IntegerRepresentation::Target) =>
+                IntegerTokenType::Long(Packed::new(value as i64)),
+            | (Self::UnsignedLong, IntegerRepresentation::Target) =>
+                IntegerTokenType::UnsignedLong(Packed::new(value)),
+            | (Self::Int | Self::Long | Self::LongLong, _) =>
+                IntegerTokenType::LongLong(Packed::new(value as i64)),
+            | (Self::UnsignedInt | Self::UnsignedLong | Self::UnsignedLongLong, _) =>
+                IntegerTokenType::UnsignedLongLong(Packed::new(value)),
+        }
+    }
+}
+
+impl<'pp> LiteralScratch<'pp> {
+    /// The empty unit storage, which a nested conversion would not share.
+    fn take_units(&mut self) -> ArenaVec<'pp, LiteralUnit> {
+        std::mem::replace(&mut self.units, ArenaVec::new_in(self.arena))
+    }
+
+    fn return_units(&mut self, mut units: ArenaVec<'pp, LiteralUnit>) {
+        units.clear();
+        self.units = units;
+    }
+
+    fn take_builder(&mut self) -> LiteralBuilder<'pp> {
+        self.builder.take().unwrap_or_else(|| LiteralBuilder {
+            units:    ArenaVec::new_in(self.arena),
+            sources:  ArenaVec::new_in(self.arena),
+            spelling: ArenaString::new_in(self.arena),
         })
+    }
+
+    fn return_builder(&mut self, mut builder: LiteralBuilder<'pp>) {
+        builder.units.clear();
+        builder.sources.clear();
+        builder.spelling.clear();
+        self.builder = Some(builder);
+    }
+
+    pub(super) fn new(arena: &'pp Bump) -> Self {
+        Self {
+            arena,
+            units: ArenaVec::new_in(arena),
+            builder: None,
+        }
     }
 }
 
