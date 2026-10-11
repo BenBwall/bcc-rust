@@ -49,10 +49,9 @@
 //!   counts and times.
 //! - Working copy: `draft.rs` lifts and edits a function; `draft/analysis.rs`
 //!   computes reachability, ordering, predecessors, use counts and the
-//!   control-flow graph; `draft/dominance.rs` dominators and dominance
-//!   frontiers; `draft/lower.rs` writes the body back.
-//! - Analyses: `loops.rs` finds natural loops and their nesting from the
-//!   dominator tree.
+//!   control-flow graph; `draft/lower.rs` writes the body back.
+//! - Analyses over the IR's dominator tree of that graph: `loops.rs` finds
+//!   natural loops and their nesting, `frontiers.rs` dominance frontiers.
 //! - Passes: `fold.rs` (with `fold/eval.rs`, exact integer evaluation),
 //!   `dce.rs`, `simplify_cfg.rs`, `promote.rs` (stack-slot promotion),
 //!   `sccp.rs` (sparse conditional constant propagation), `gvn.rs` (value
@@ -79,6 +78,7 @@ mod report;
 mod draft;
 
 // Analyses
+mod frontiers;
 mod loops;
 
 // Passes

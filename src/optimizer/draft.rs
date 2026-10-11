@@ -36,14 +36,9 @@
 //! [`lower`]: Draft::lower
 
 mod analysis;
-mod dominance;
 mod lower;
 
 pub(super) use analysis::Predecessors;
-pub(super) use dominance::{
-    Dominators,
-    Frontiers,
-};
 
 use crate::{
     ir::{

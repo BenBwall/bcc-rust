@@ -13,9 +13,10 @@
 //! The pass uses the classic construction of Cytron et al. ("Efficiently
 //! computing static single assignment form and the control dependence graph",
 //! 1991), pruned by liveness, rather than Braun et al.'s on-the-fly one: the
-//! draft already holds a whole CFG, so dominators and frontiers are cheap
-//! ([`Draft::dominators`]), and the construction needs neither recursion nor
-//! the use lists that Braun's trivial-phi removal relies on. For each slot:
+//! draft already holds a whole CFG, so the dominator tree
+//! ([`DominatorTree::from_cfg`]) and its frontiers ([`DominanceFrontiers`])
+//! are cheap, and the construction needs neither recursion nor the use lists
+//! that Braun's trivial-phi removal relies on. For each slot:
 //!
 //! 1. **Liveness.** A block is live-in if it loads the slot before storing it,
 //!    or if a successor is live-in and the block does not store it; a backwards
@@ -68,16 +69,16 @@
 use super::{
     draft::{
         Constant,
-        Dominators,
         Draft,
-        Frontiers,
-        Predecessors,
     },
+    frontiers::DominanceFrontiers,
     report::OptimizationReport,
 };
 use crate::{
     ir::{
         Block,
+        ControlFlowGraph,
+        DominatorTree,
         Entity,
         Inst,
         InstData,
@@ -100,10 +101,10 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
     if (0..slots).all(|index| accesses.promotable(draft, StackSlot::new(index)).is_none()) {
         return false;
     }
-    let predecessors = draft.predecessors();
-    let dominators = draft.dominators(&predecessors);
-    let frontiers = dominators.frontiers(&predecessors, draft.scratch);
-    let mut promoter = Promoter::new(draft, &predecessors, &dominators, &frontiers);
+    let cfg = draft.control_flow_graph();
+    let tree = DominatorTree::from_cfg(&cfg, draft.scratch);
+    let frontiers = DominanceFrontiers::compute(&cfg, &tree, draft.scratch);
+    let mut promoter = Promoter::new(draft, &cfg, &tree, &frontiers);
     let mut changed = false;
     for index in 0..slots {
         let slot = StackSlot::new(index);
@@ -284,33 +285,33 @@ fn stack_addr(draft: &Draft<'_, '_>, inst: Inst) -> Option<StackSlot> {
 /// The analyses and per-block buffers that promoting one slot after another
 /// shares; the buffers are reset for each slot.
 struct Promoter<'a, 's> {
-    predecessors: &'a Predecessors<'s>,
-    dominators:   &'a Dominators<'s>,
-    frontiers:    &'a Frontiers<'s>,
+    cfg:         &'a ControlFlowGraph<'s>,
+    tree:        &'a DominatorTree<'s>,
+    frontiers:   &'a DominanceFrontiers<'s>,
     /// Each block's accesses of the slot, as a range of its rows.
-    ranges:       ArenaVec<'s, (u32, u32)>,
+    ranges:      ArenaVec<'s, (u32, u32)>,
     /// Whether the block stores the slot.
-    stores:       ArenaVec<'s, bool>,
-    live_in:      ArenaVec<'s, bool>,
+    stores:      ArenaVec<'s, bool>,
+    live_in:     ArenaVec<'s, bool>,
     /// Whether the block is in the iterated dominance frontier of the stores.
-    in_frontier:  ArenaVec<'s, bool>,
+    in_frontier: ArenaVec<'s, bool>,
     /// Whether the block was queued for the frontier walk.
-    queued:       ArenaVec<'s, bool>,
+    queued:      ArenaVec<'s, bool>,
     /// The new parameter of each block that got one.
-    params:       ArenaVec<'s, Option<Value>>,
+    params:      ArenaVec<'s, Option<Value>>,
     /// The slot's value at each block's exit; `None` is `poison`.
-    exits:        ArenaVec<'s, Option<Value>>,
-    worklist:     ArenaVec<'s, Block>,
+    exits:       ArenaVec<'s, Option<Value>>,
+    worklist:    ArenaVec<'s, Block>,
     /// The `poison` constant of each type, once added.
-    poison:       [Option<Value>; Type::ALL.len()],
+    poison:      [Option<Value>; Type::ALL.len()],
 }
 
 impl<'a, 's> Promoter<'a, 's> {
     fn new(
         draft: &Draft<'_, 's>,
-        predecessors: &'a Predecessors<'s>,
-        dominators: &'a Dominators<'s>,
-        frontiers: &'a Frontiers<'s>,
+        cfg: &'a ControlFlowGraph<'s>,
+        tree: &'a DominatorTree<'s>,
+        frontiers: &'a DominanceFrontiers<'s>,
     ) -> Self {
         let blocks = draft.blocks.len();
         let flags = || {
@@ -326,8 +327,8 @@ impl<'a, 's> Promoter<'a, 's> {
         let mut ranges = ArenaVec::with_capacity_in(blocks, draft.scratch);
         ranges.resize(blocks, (0, 0));
         Self {
-            predecessors,
-            dominators,
+            cfg,
+            tree,
             frontiers,
             ranges,
             stores: flags(),
@@ -359,9 +360,9 @@ impl<'a, 's> Promoter<'a, 's> {
         self.summarize(rows);
         self.find_live_in();
         self.place_params(draft, ty);
-        let order = self.dominators.reverse_post_order();
+        let order = self.tree.reverse_post_order();
         for &block in order {
-            let entry = match (self.params[block.index()], self.dominators.idom(block)) {
+            let entry = match (self.params[block.index()], self.tree.idom(block)) {
                 | (Some(param), _) => Some(param),
                 | (None, Some(idom)) => self.exits[idom.index()],
                 | (None, None) => None,
@@ -370,7 +371,7 @@ impl<'a, 's> Promoter<'a, 's> {
         }
         for index in 0..draft.blocks.len() {
             let block = Block::new(index);
-            if draft.block(block).alive && !self.dominators.is_reachable(block) {
+            if draft.block(block).alive && !self.tree.is_reachable(block) {
                 self.exits[index] = self.rename(draft, rows, block, None, ty);
             }
         }
@@ -409,15 +410,15 @@ impl<'a, 's> Promoter<'a, 's> {
     /// stopping at blocks that store.
     fn find_live_in(&mut self) {
         self.worklist.clear();
-        for &block in self.dominators.reverse_post_order() {
+        for &block in self.tree.reverse_post_order() {
             if self.live_in[block.index()] {
                 self.worklist.push(block);
             }
         }
         while let Some(block) = self.worklist.pop() {
-            for &predecessor in self.predecessors.of(block) {
+            for &predecessor in self.cfg.predecessors(block) {
                 let index = predecessor.index();
-                if self.dominators.is_reachable(predecessor)
+                if self.tree.is_reachable(predecessor)
                     && !self.live_in[index]
                     && !self.stores[index]
                 {
@@ -432,7 +433,7 @@ impl<'a, 's> Promoter<'a, 's> {
     /// dominance frontier of the stores, in reverse post-order.
     fn place_params(&mut self, draft: &mut Draft<'_, 's>, ty: Type) {
         self.worklist.clear();
-        for &block in self.dominators.reverse_post_order() {
+        for &block in self.tree.reverse_post_order() {
             if self.stores[block.index()] {
                 self.queued[block.index()] = true;
                 self.worklist.push(block);
@@ -448,7 +449,7 @@ impl<'a, 's> Promoter<'a, 's> {
                 }
             }
         }
-        for &block in self.dominators.reverse_post_order() {
+        for &block in self.tree.reverse_post_order() {
             let index = block.index();
             if self.in_frontier[index] && self.live_in[index] {
                 self.params[index] = Some(draft.add_block_param(block, ty));
