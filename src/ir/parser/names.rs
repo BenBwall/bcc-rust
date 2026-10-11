@@ -29,6 +29,9 @@ impl<'t> Token<'t> {
         let bad_escape = || self.error(ParseErrorKind::BadSymbolEscape);
         while let Some(c) = chars.next() {
             if c != '\\' {
+                if c == '\0' {
+                    return Err(bad_escape());
+                }
                 decoded.push(c);
                 continue;
             }
@@ -53,7 +56,7 @@ impl<'t> Token<'t> {
                             return Err(bad_escape());
                         }
                     }
-                    if digits == 0 {
+                    if digits == 0 || scalar == 0 {
                         return Err(bad_escape());
                     }
                     char::from_u32(scalar).ok_or_else(bad_escape)?

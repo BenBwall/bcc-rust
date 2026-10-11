@@ -2,6 +2,34 @@
 
 use super::*;
 
+#[test]
+fn symbol_names_cannot_contain_nul() {
+    let arena = Bump::new();
+    let scratch = Bump::new();
+    let mut module = Module::new(&arena);
+    let signature = module.intern_signature(&[], None, false);
+    let func = module.declare_function("f\0tail", signature, Linkage::External);
+    _ = module.declare_global(
+        "g\0tail",
+        GlobalDecl {
+            linkage:  Linkage::External,
+            size:     4,
+            align:    Align::from_bytes(4).unwrap(),
+            constant: false,
+        },
+    );
+    for profile in [Profile::PreAbi, Profile::PostAbi] {
+        let errors = verify_module(&module, profile, &scratch);
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .all(|error| error.kind.to_string() == "a symbol name contains NUL")
+        );
+        assert_eq!(verify_function(&module, func, profile, &scratch).len(), 1);
+    }
+}
+
 /// Asserts the pre-ABI verifier's messages for each function or global text.
 fn assert_rejects(cases: &[(&str, &[&str])]) {
     for &(text, expected) in cases {

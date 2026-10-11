@@ -127,7 +127,7 @@ fn symbol_names_round_trip_through_definitions_and_uses() {
         "with space",
         "punctuation;:@(){}[]",
         "quote\"slash\\",
-        "line\n\r\t\0\u{1}",
+        "line\n\r\t\u{1}",
         "",
     ] {
         let arena = Bump::new();
@@ -177,6 +177,8 @@ fn symbol_names_round_trip_through_definitions_and_uses() {
 fn malformed_symbol_escapes_are_parse_errors() {
     let arena = Bump::new();
     for name in [
+        r#"@"nul\u{0}name""#,
+        "@\"nul\0name\"",
         r#"@"bad\q""#,
         r#"@"\u{}""#,
         r#"@"\u{d800}""#,

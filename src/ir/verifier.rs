@@ -86,6 +86,13 @@ fn verify_function_into<'m, 's>(
     errors: &mut ArenaVec<'s, VerifierError<'m>>,
 ) {
     let function = module.function(func);
+    if function.name.contains('\0') {
+        errors.push(VerifierError {
+            item:     function.name,
+            location: Location::Item,
+            kind:     VerifierErrorKind::NulSymbolName,
+        });
+    }
     let Some(signature) = module.get_signature(function.signature) else {
         errors.push(VerifierError {
             item:     function.name,
@@ -833,6 +840,9 @@ fn verify_global<'m>(
             kind,
         });
     };
+    if data.name.contains('\0') {
+        error(VerifierErrorKind::NulSymbolName);
+    }
     let Some(GlobalInit::Bytes { bytes, relocations }) = data.init else {
         return;
     };
@@ -889,6 +899,8 @@ pub(crate) enum Location {
 /// What the verifier found wrong.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum VerifierErrorKind {
+    /// LLVM and the native symbol interfaces require NUL-free names.
+    NulSymbolName,
     /// A defined function has no blocks.
     NoBlocks,
     EmptyBlock,
@@ -1059,6 +1071,7 @@ impl fmt::Display for VerifierErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let optional = |ty: Option<Type>| ty.map_or("nothing", Type::name);
         match *self {
+            | Self::NulSymbolName => f.write_str("a symbol name contains NUL"),
             | Self::NoBlocks => f.write_str("a defined function has no blocks"),
             | Self::EmptyBlock => f.write_str("the block is empty"),
             | Self::MissingTerminator => f.write_str("the block does not end in a terminator"),
