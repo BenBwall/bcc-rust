@@ -1,0 +1,54 @@
+; struct inner { char c; long l; };
+; struct outer { int a; struct inner in; int arr[3]; };
+; long f(struct outer *o, int i) {
+;   struct outer local;
+;   local.in.l = o->in.c;
+;   local.arr[i] = o->arr[1];
+;   local = *o;
+;   return local.in.l + o->a;
+; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @f(ptr, i32) -> i64 external {
+    slot0 = stack_slot 40, align 8
+block0(v0: ptr, v1: i32):
+    v2 = stack_addr slot0
+    v3 = iconst.i64 8
+    v4 = ptr_add inbounds v2, v3
+    v5 = iconst.i64 8
+    v6 = ptr_add inbounds v4, v5
+    v7 = iconst.i64 8
+    v8 = ptr_add inbounds v0, v7
+    v9 = load.i8 v8, align 1
+    v10 = sext.i64 v9
+    store.i64 v10, v6, align 8
+    v11 = stack_addr slot0
+    v12 = iconst.i64 24
+    v13 = ptr_add inbounds v11, v12
+    v14 = sext.i64 v1
+    v15 = iconst.i64 4
+    v16 = imul.i64 nsw v14, v15
+    v17 = ptr_add inbounds v13, v16
+    v18 = iconst.i64 24
+    v19 = ptr_add inbounds v0, v18
+    v20 = iconst.i32 1
+    v21 = iconst.i64 4
+    v22 = ptr_add inbounds v19, v21
+    v23 = load.i32 v22, align 4
+    store.i32 v23, v17, align 4
+    v24 = stack_addr slot0
+    v25 = iconst.i64 40
+    copy may_overlap v24, v0, v25, align 8
+    v26 = stack_addr slot0
+    v27 = iconst.i64 8
+    v28 = ptr_add inbounds v26, v27
+    v29 = iconst.i64 8
+    v30 = ptr_add inbounds v28, v29
+    v31 = load.i64 v30, align 8
+    v32 = load.i32 v0, align 4
+    v33 = sext.i64 v32
+    v34 = iadd.i64 nsw v31, v33
+    return v34
+}

@@ -50,6 +50,14 @@ pub(crate) mod ir;
     not(test),
     expect(
         dead_code,
+        reason = "No command lowers to the IR yet; its tests exercise it."
+    )
+)]
+mod lowering;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
         unused_imports,
         reason = "Nothing runs the optimizer yet; its tests exercise it until the driver does."
     )

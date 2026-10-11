@@ -1,0 +1,38 @@
+; _Bool from_int(int x) { return x; }
+; _Bool from_pointer(int *p) { return p; }
+; int to_int(_Bool b) { return b + 1; }
+; int step(_Bool b) { b++; return b; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @from_int(i32) -> i8 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    v2 = icmp.i32 ne v0, v1
+    v3 = zext.i8 v2
+    return v3
+}
+
+function @from_pointer(ptr) -> i8 external {
+block0(v0: ptr):
+    v1 = null
+    v2 = icmp.ptr ne v0, v1
+    v3 = zext.i8 v2
+    return v3
+}
+
+function @to_int(i8) -> i32 external {
+block0(v0: i8):
+    v1 = zext.i32 v0
+    v2 = iconst.i32 1
+    v3 = iadd.i32 nsw v1, v2
+    return v3
+}
+
+function @step(i8) -> i32 external {
+block0(v0: i8):
+    v1 = iconst.i8 1
+    v2 = iconst.i32 1
+    return v2
+}

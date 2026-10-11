@@ -1,0 +1,60 @@
+; long difference(int *p, int *q) { return q - p; }
+; int *advance(int *p, int i) { return p + i; }
+; int *back(int *p, unsigned i) { return p - i; }
+; char *bytes(char *p, long i) { return 2 + p + i; }
+; int deref(int **pp) { return **pp + (*pp)[3]; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @difference(ptr, ptr) -> i64 external {
+block0(v0: ptr, v1: ptr):
+    v2 = ptrtoint.i64 v1
+    v3 = ptrtoint.i64 v0
+    v4 = isub.i64 v2, v3
+    v5 = iconst.i64 4
+    v6 = sdiv.i64 exact v4, v5
+    return v6
+}
+
+function @advance(ptr, i32) -> ptr external {
+block0(v0: ptr, v1: i32):
+    v2 = sext.i64 v1
+    v3 = iconst.i64 4
+    v4 = imul.i64 nsw v2, v3
+    v5 = ptr_add inbounds v0, v4
+    return v5
+}
+
+function @back(ptr, i32) -> ptr external {
+block0(v0: ptr, v1: i32):
+    v2 = zext.i64 v1
+    v3 = iconst.i64 4
+    v4 = imul.i64 nsw v2, v3
+    v5 = iconst.i64 0
+    v6 = isub.i64 nsw v5, v4
+    v7 = ptr_add inbounds v0, v6
+    return v7
+}
+
+function @bytes(ptr, i64) -> ptr external {
+block0(v0: ptr, v1: i64):
+    v2 = iconst.i32 2
+    v3 = iconst.i64 2
+    v4 = ptr_add inbounds v0, v3
+    v5 = ptr_add inbounds v4, v1
+    return v5
+}
+
+function @deref(ptr) -> i32 external {
+block0(v0: ptr):
+    v1 = load.ptr v0, align 8
+    v2 = load.i32 v1, align 4
+    v3 = load.ptr v0, align 8
+    v4 = iconst.i32 3
+    v5 = iconst.i64 12
+    v6 = ptr_add inbounds v3, v5
+    v7 = load.i32 v6, align 4
+    v8 = iadd.i32 nsw v2, v7
+    return v8
+}

@@ -1,0 +1,64 @@
+; void g(int *);
+; int f(int a) {
+;   int x = a;
+;   int y = a + 1;
+;   int arr[4];
+;   g(&x);
+;   arr[0] = y;
+;   arr[a] = x;
+;   return arr[0] + x + y;
+; }
+; int v(void) { volatile int n = 3; n = n + 1; return n; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @f(i32) -> i32 external {
+    slot0 = stack_slot 4, align 4
+    slot1 = stack_slot 16, align 4
+block0(v0: i32):
+    v1 = stack_addr slot0
+    store.i32 v0, v1, align 4
+    v2 = iconst.i32 1
+    v3 = iadd.i32 nsw v0, v2
+    v4 = stack_addr slot0
+    call @g(v4)
+    v5 = stack_addr slot1
+    v6 = iconst.i32 0
+    store.i32 v3, v5, align 4
+    v7 = stack_addr slot1
+    v8 = sext.i64 v0
+    v9 = iconst.i64 4
+    v10 = imul.i64 nsw v8, v9
+    v11 = ptr_add inbounds v7, v10
+    v12 = stack_addr slot0
+    v13 = load.i32 v12, align 4
+    store.i32 v13, v11, align 4
+    v14 = stack_addr slot1
+    v15 = iconst.i32 0
+    v16 = load.i32 v14, align 4
+    v17 = stack_addr slot0
+    v18 = load.i32 v17, align 4
+    v19 = iadd.i32 nsw v16, v18
+    v20 = iadd.i32 nsw v19, v3
+    return v20
+}
+
+function @v() -> i32 external {
+    slot0 = stack_slot 4, align 4
+block0:
+    v0 = iconst.i32 3
+    v1 = stack_addr slot0
+    store.i32 v0, v1, align 4
+    v2 = stack_addr slot0
+    v3 = stack_addr slot0
+    v4 = load.i32 volatile v3, align 4
+    v5 = iconst.i32 1
+    v6 = iadd.i32 nsw v4, v5
+    store.i32 volatile v6, v2, align 4
+    v7 = stack_addr slot0
+    v8 = load.i32 volatile v7, align 4
+    return v8
+}
+
+function @g(ptr) external

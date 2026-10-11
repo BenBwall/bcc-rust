@@ -1,0 +1,49 @@
+; int printf(const char *, ...);
+; int old();
+; long proto(long, char);
+; int (*pick(void))(int);
+; int f(char c, short s, int (*fp)(int)) {
+;   printf("%d %d\n", c, s);
+;   old(c, s);
+;   proto(c, 300);
+;   pick()(c);
+;   return fp(s) + (*fp)(1);
+; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+global @.str internal constant size 7, align 1 = bytes "25642025640a00"
+
+function @f(i8, i16, ptr) -> i32 external {
+block0(v0: i8, v1: i16, v2: ptr):
+    v3 = global_addr @.str
+    v4 = sext.i32 v0
+    v5 = sext.i32 v1
+    v6 = call @printf(v3, v4, v5)
+    v7 = sext.i32 v0
+    v8 = sext.i32 v1
+    v9 = func_addr @old
+    v10 = call_indirect v9(v7, v8) : (i32, i32) -> i32
+    v11 = sext.i64 v0
+    v12 = iconst.i32 300
+    v13 = iconst.i8 44
+    v14 = call @proto(v11, v13)
+    v15 = call @pick()
+    v16 = sext.i32 v0
+    v17 = call_indirect v15(v16) : (i32) -> i32
+    v18 = sext.i32 v1
+    v19 = call_indirect v2(v18) : (i32) -> i32
+    v20 = iconst.i32 1
+    v21 = call_indirect v2(v20) : (i32) -> i32
+    v22 = iadd.i32 nsw v19, v21
+    return v22
+}
+
+function @printf(ptr, ...) -> i32 external
+
+function @old() -> i32 external
+
+function @proto(i64, i8) -> i64 external
+
+function @pick() -> ptr external

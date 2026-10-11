@@ -1,0 +1,31 @@
+; int f(int i, char c, int *p, unsigned u) {
+;   int old = i++;
+;   ++c;
+;   p--;
+;   --u;
+;   return old + i + c + *p++ + (int)u;
+; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @f(i32, i8, ptr, i32) -> i32 external {
+block0(v0: i32, v1: i8, v2: ptr, v3: i32):
+    v4 = iconst.i32 1
+    v5 = iadd.i32 nsw v0, v4
+    v6 = iconst.i8 1
+    v7 = iadd.i8 v1, v6
+    v8 = iconst.i64 -4
+    v9 = ptr_add inbounds v2, v8
+    v10 = iconst.i32 1
+    v11 = isub.i32 v3, v10
+    v12 = iadd.i32 nsw v0, v5
+    v13 = sext.i32 v7
+    v14 = iadd.i32 nsw v12, v13
+    v15 = iconst.i64 4
+    v16 = ptr_add inbounds v9, v15
+    v17 = load.i32 v9, align 4
+    v18 = iadd.i32 nsw v14, v17
+    v19 = iadd.i32 nsw v18, v11
+    return v19
+}

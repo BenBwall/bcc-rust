@@ -1,0 +1,41 @@
+; int f(char c, int x) {
+;   int r = 0;
+;   switch (c) {
+;   case 'a': r = 1;
+;   case 'b': r += 2; break;
+;   case -1: return 7;
+;   default: r = x;
+;   }
+;   switch (x) { case 1: r++; }
+;   return r;
+; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @f(i8, i32) -> i32 external {
+block0(v0: i8, v1: i32):
+    v2 = iconst.i32 0
+    v3 = sext.i32 v0
+    switch v3, block1, [97: block2, 98: block3(v2), -1: block7]
+block1:
+    jump block4(v1)
+block2:
+    v4 = iconst.i32 1
+    jump block3(v4)
+block3(v5: i32):
+    v6 = iconst.i32 2
+    v7 = iadd.i32 nsw v5, v6
+    jump block4(v7)
+block4(v8: i32):
+    switch v1, block6(v8), [1: block5]
+block5:
+    v9 = iconst.i32 1
+    v10 = iadd.i32 nsw v8, v9
+    jump block6(v10)
+block6(v11: i32):
+    return v11
+block7:
+    v12 = iconst.i32 7
+    return v12
+}

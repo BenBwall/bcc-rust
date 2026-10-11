@@ -1,0 +1,54 @@
+; int counter;
+; static int limit = 10;
+; const char message[] = "hi";
+; char buffer[4] = "abc";
+; const char *greeting = "hello";
+; int table[4] = { 1, 2, [3] = 4 - 0 };
+; int *pointer = &table[2];
+; struct pair { char a; int b; } pair = { 'x', -1 };
+; int f(void) { static int calls = 5; calls++; counter += limit; return calls + message[0] + greeting[1]; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+global @counter external size 4, align 4 = zero
+global @limit internal size 4, align 4 = bytes "0a000000"
+global @message external constant size 3, align 1 = bytes "686900"
+global @buffer external size 4, align 1 = bytes "61626300"
+global @greeting external size 8, align 8 = bytes "0000000000000000" relocs [0: @.str]
+global @.str internal constant size 6, align 1 = bytes "68656c6c6f00"
+global @table external size 16, align 4 = bytes "01000000020000000000000004000000"
+global @pointer external size 8, align 8 = bytes "0000000000000000" relocs [0: @table + 8]
+global @pair external size 8, align 4 = bytes "78000000ffffffff"
+global @f.calls internal size 4, align 4 = bytes "05000000"
+
+function @f() -> i32 external {
+block0:
+    v0 = global_addr @f.calls
+    v1 = load.i32 v0, align 4
+    v2 = iconst.i32 1
+    v3 = iadd.i32 nsw v1, v2
+    store.i32 v3, v0, align 4
+    v4 = global_addr @counter
+    v5 = load.i32 v4, align 4
+    v6 = global_addr @limit
+    v7 = load.i32 v6, align 4
+    v8 = iadd.i32 nsw v5, v7
+    store.i32 v8, v4, align 4
+    v9 = global_addr @f.calls
+    v10 = load.i32 v9, align 4
+    v11 = global_addr @message
+    v12 = iconst.i32 0
+    v13 = load.i8 v11, align 1
+    v14 = sext.i32 v13
+    v15 = iadd.i32 nsw v10, v14
+    v16 = global_addr @greeting
+    v17 = load.ptr v16, align 8
+    v18 = iconst.i32 1
+    v19 = iconst.i64 1
+    v20 = ptr_add inbounds v17, v19
+    v21 = load.i8 v20, align 1
+    v22 = sext.i32 v21
+    v23 = iadd.i32 nsw v15, v22
+    return v23
+}

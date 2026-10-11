@@ -1,0 +1,75 @@
+; int add(int a, int b) { return a + b * 3 - (a << 2); }
+; unsigned wrap(unsigned a, unsigned b) { return a * b + (a >> 1) - b / a % 7u; }
+; int divide(int a, int b) { return a / b + a % b + (a >> b) + (a & b | a ^ ~b) + -a; }
+; long widen(int i, unsigned u, char c, short s) { return i + u + c + s + (long)u; }
+; char narrow(long l) { return (char)l + (unsigned char)l; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @add(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    v2 = iconst.i32 3
+    v3 = imul.i32 nsw v1, v2
+    v4 = iadd.i32 nsw v0, v3
+    v5 = iconst.i32 2
+    v6 = shl.i32 nsw v0, v5
+    v7 = isub.i32 nsw v4, v6
+    return v7
+}
+
+function @wrap(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    v2 = imul.i32 v0, v1
+    v3 = iconst.i32 1
+    v4 = lshr.i32 v0, v3
+    v5 = iadd.i32 v2, v4
+    v6 = udiv.i32 v1, v0
+    v7 = iconst.i32 7
+    v8 = urem.i32 v6, v7
+    v9 = isub.i32 v5, v8
+    return v9
+}
+
+function @divide(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    v2 = sdiv.i32 v0, v1
+    v3 = srem.i32 v0, v1
+    v4 = iadd.i32 nsw v2, v3
+    v5 = ashr.i32 v0, v1
+    v6 = iadd.i32 nsw v4, v5
+    v7 = and.i32 v0, v1
+    v8 = iconst.i32 -1
+    v9 = xor.i32 v1, v8
+    v10 = xor.i32 v0, v9
+    v11 = or.i32 v7, v10
+    v12 = iadd.i32 nsw v6, v11
+    v13 = iconst.i32 0
+    v14 = isub.i32 nsw v13, v0
+    v15 = iadd.i32 nsw v12, v14
+    return v15
+}
+
+function @widen(i32, i32, i8, i16) -> i64 external {
+block0(v0: i32, v1: i32, v2: i8, v3: i16):
+    v4 = iadd.i32 v0, v1
+    v5 = sext.i32 v2
+    v6 = iadd.i32 v4, v5
+    v7 = sext.i32 v3
+    v8 = iadd.i32 v6, v7
+    v9 = zext.i64 v8
+    v10 = zext.i64 v1
+    v11 = iadd.i64 nsw v9, v10
+    return v11
+}
+
+function @narrow(i64) -> i8 external {
+block0(v0: i64):
+    v1 = trunc.i8 v0
+    v2 = sext.i32 v1
+    v3 = trunc.i8 v0
+    v4 = zext.i32 v3
+    v5 = iadd.i32 nsw v2, v4
+    v6 = trunc.i8 v5
+    return v6
+}
