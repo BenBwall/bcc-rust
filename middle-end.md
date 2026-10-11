@@ -17,6 +17,9 @@ The research behind the decisions lives in `docs/research/`:
   compares ways to drive LLVM and checks them against the pinned toolchain.
 - [optimizer-comparison-methodology.md](docs/research/optimizer-comparison-methodology.md)
   designs the experiments that compare our optimizer with LLVM's.
+- [optimizer-gap-analysis.md](docs/research/optimizer-gap-analysis.md)
+  measures the optimizer gap, introduces control arm N, and prioritizes missing
+  transformations.
 
 ## Goals
 
@@ -72,10 +75,15 @@ arms below differ only in who optimizes; LLVM's code generator is shared
 | Arm | Middle end | LLVM invocation | Question it answers |
 | --- | --- | --- | --- |
 | A0 | none | `clang -O0 x.ll` | baseline |
+| N | none | `clang -O2 -Xclang -disable-llvm-passes x.ll` | codegen-only control on unoptimized bcc IR |
 | A1 | bcc pipeline | `clang -O2 -Xclang -disable-llvm-passes x.ll` | our optimizer alone, LLVM codegen |
 | A2 | none | `clang -O2 x.ll` | LLVM's optimizer alone on our IR |
 | A3 | bcc pipeline | `clang -O2 x.ll` | does our optimizer help or hurt LLVM |
 | R | clang front end | `clang -O2 x.c` | reference ceiling |
+
+A1/N isolates what our optimizer adds on top of LLVM's code generator;
+N/A2 measures the work left to it. A ratio below 1 means the numerator arm
+is faster.
 
 `-Xclang -disable-llvm-passes` keeps the `-O2` code generator but runs no IR
 pass; the integration note verified it on the pinned clang. It is a clang
@@ -591,6 +599,7 @@ is one invocation:
 | Arm | Flags |
 | --- | --- |
 | A0 | `--llvm-opt=O0` |
+| N | `--llvm-opt=O2 --llvm-codegen-only` |
 | A1 | `--opt=bcc --llvm-opt=O2 --llvm-codegen-only` |
 | A2 | `--llvm-opt=O2` |
 | A3 | `--opt=bcc --llvm-opt=O2` |
@@ -637,10 +646,11 @@ triple to produce a runnable program; `main` is called without arguments.
 
 Stage 7 status: promotion, SCCP, GVN and LICM exist (the prototype pipeline
 above); inlining does not. The comparison harness exists:
-`scripts/compare_optimizers.py` runs arms A0-A3 and R, with `--passes` ablation,
+`scripts/compare_optimizers.py` runs arms A0-A3, N and R, with `--passes` ablation,
 over the ten self-checking programs in `benches/c` and writes JSON Lines plus a
-summary of per-benchmark medians, ratios to A2 and their geometric mean with a
-bootstrap interval (README, "Optimizer comparison harness"). What remains for
+summary of per-benchmark medians, ratios to A2, a separate A1/N comparison,
+and their geometric means with a bootstrap interval (README, "Optimizer
+comparison harness"). What remains for
 the exit criterion is inlining, a run on native Linux with CPU isolation, a
 larger corpus (Embench, Polybench) and the report itself.
 

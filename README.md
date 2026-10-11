@@ -559,11 +559,18 @@ uses only the standard library and the bundled `target/llvm/bin/clang`.
 
 ```sh
 cargo build --release
-python scripts/run.py compare_optimizers                       # A0 A1 A2 A3 R, 7 repetitions
+python scripts/run.py compare_optimizers                       # A0 N A1 A2 A3 R, 7 repetitions
 python scripts/run.py compare_optimizers --reps 11 --match 'sort*' --arms A2,A3,R
 python scripts/run.py compare_optimizers --ablate leave-one-out --arms none
 python scripts/run.py compare_optimizers --summarize target/optimizer-bench/RUN/results.jsonl
 ```
+
+Arm N sends bcc's unoptimized IR through LLVM's `-O2` code generator with
+every LLVM IR pass disabled:
+`bcc-rust x.c --target=<triple> --llvm-opt=O2 --llvm-codegen-only -o x.exe`.
+Comparing A1 to N isolates what the bcc optimizer adds on top of that code
+generator; N/A2 measures the work left to it. N is included by default and
+recorded in the JSON output alongside the other arms.
 
 The harness finds `bcc-rust` under `target/*/release` (then `debug`; `--bcc`
 overrides) and builds for the host's triple (`--target` overrides; on Windows
@@ -595,9 +602,12 @@ differs from it) and the host. The harness warns if `src/` is newer than the
 each arm's ratio to the baseline (`--baseline`, default A2, below 1 is faster);
 the geometric mean of those ratios with a 95% percentile-bootstrap interval
 (resampling the repetitions of both arms within each benchmark), the geometric
-mean of the minima, and how many benchmarks the arm wins; the build times; and
-every excluded cell with its reason. The statistic is user plus system CPU time
-on POSIX and whole-process wall time on Windows (`--metric` overrides):
+mean of the minima, and how many benchmarks the arm wins; a separate A1/N
+comparison with the same statistics when both arms are present; the build
+times; and every excluded cell with its reason. Below 1 in A1/N means the bcc
+optimizer improves run time over N, regardless of `--baseline`.
+The statistic is user plus system CPU time on POSIX and whole-process wall
+time on Windows (`--metric` overrides):
 `GetProcessTimes` ticks every 15.6 ms there, too coarse for 0.2 s runs. Wall
 time includes process start-up, which the summary reports.
 
