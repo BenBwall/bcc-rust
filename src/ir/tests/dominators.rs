@@ -137,6 +137,58 @@ block3:
 }
 
 #[test]
+fn large_switch_preserves_order_and_builds_edges_quickly() {
+    let targets = 20_000;
+    let mut text =
+        format!("function @f(i32) external {{\nblock0(v0: i32):\n    switch v0, block{targets}, [");
+    for (case, target) in (1..=targets).rev().enumerate() {
+        if case != 0 {
+            text.push_str(", ");
+        }
+        // Each target appears twice, as well as the default's repetition.
+        write!(
+            text,
+            "{}: block{target}, {}: block{target}",
+            case * 2,
+            case * 2 + 1
+        )
+        .unwrap();
+    }
+    text.push_str("]\n");
+    for target in 1..=targets {
+        writeln!(text, "block{target}:").unwrap();
+        text.push_str(if target == 2 {
+            "    jump block1\n"
+        } else {
+            "    return\n"
+        });
+    }
+    text.push_str("}\n");
+    let arena = Bump::new();
+    let module = parse(&arena, &text);
+    let body = module.functions().next().unwrap().1.body.as_ref().unwrap();
+    let start = std::time::Instant::now();
+    for _ in 0..4 {
+        let scratch = Bump::new();
+        let cfg = ControlFlowGraph::compute(body, &scratch);
+        assert_eq!(cfg.successors(Block::new(0)).len(), targets);
+        for (index, &block) in cfg.successors(Block::new(0)).iter().enumerate() {
+            assert_eq!(block, Block::new(targets - index));
+        }
+        assert_eq!(cfg.predecessors(Block::new(0)), []);
+        assert_eq!(cfg.predecessors(Block::new(1)), blocks(&[0, 2]));
+        for target in 2..=targets {
+            assert_eq!(cfg.predecessors(Block::new(target)), blocks(&[0]));
+        }
+    }
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(1),
+        "four CFG constructions took {:?}; successor deduplication must be linear",
+        start.elapsed()
+    );
+}
+
+#[test]
 fn deep_chains_need_no_native_recursion() {
     let mut text = String::from("function @f() external {\nblock0:\n    jump block1\n");
     let depth = 50_000;

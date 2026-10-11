@@ -5,6 +5,9 @@
 //! from its terminator, with repeated targets listed once, and predecessors
 //! are the reverse. Both are stored in compressed rows: one flat array of
 //! blocks with a start offset per block.
+//! A block-indexed source stamp deduplicates targets in O(blocks + edges)
+//! time, preserving the first occurrence even for large switches.
+//! C99: §6.8.4.2 paragraph 5, p. 134; PDF p. 146 (switch transfers).
 
 use super::{
     Body,
@@ -54,11 +57,18 @@ impl<'s> ControlFlowGraph<'s> {
         let mut successors = ArenaVec::new_in(scratch);
         let mut predecessor_counts = ArenaVec::with_capacity_in(blocks + 1, scratch);
         predecessor_counts.resize(blocks + 1, 0_u32);
+        let mut last_source = ArenaVec::with_capacity_in(blocks, scratch);
+        // Stamps need no clearing between rows except for the final possible
+        // u32 source index, which shares the initial unused-source stamp.
+        last_source.resize(blocks, u32::MAX);
         for block in (0..blocks).map(Block::new) {
+            if block.as_u32() == u32::MAX {
+                last_source.fill(0);
+            }
             successor_starts.push(offset(successors.len()));
-            let first = successors.len();
             successors_of(block, &mut |target| {
-                if !successors[first..].contains(&target) && target.index() < blocks {
+                if target.index() < blocks && last_source[target.index()] != block.as_u32() {
+                    last_source[target.index()] = block.as_u32();
                     successors.push(target);
                     predecessor_counts[target.index() + 1] += 1;
                 }
