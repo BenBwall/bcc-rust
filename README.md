@@ -471,6 +471,27 @@ See the [compiler corpus research](docs/research/compiler-test-corpus-research.m
 [recorded parser results](docs/research/gcc-torture-parser-results.md) for comparison profiles,
 known discrepancies, and interpretation limits.
 
+To survey code generation against an already extracted GCC release, build the
+ordinary release binary with `cargo build --release`, then run:
+
+```sh
+python scripts/run_gcc_torture_execute.py --source <gcc-15.2.0> --output target/compiler-corpus/execute-run --jobs 8 --timeout 10
+```
+
+This runner makes no downloads and executes the top-level `execute/*.c` sources
+through the unoptimized and bcc-optimized interpreter, A0 native code, and A1
+native code. It targets `x86_64-w64-windows-gnu`; see the
+[optimizer comparison harness](#optimizer-comparison-harness) for the native
+arm definitions. Each process has a deadline, and each test has its own working
+directory beneath `target/`. JSON Lines retain per-arm commands, source hashes,
+diagnostics, trap kinds, and program exit statuses; the Markdown summary records
+unsupported constructs, crashes, and every arm disagreement. Differences and
+wrong results produce a nonzero survey exit. `--match`, `--limit`, and
+`--recursive` select samples or include the nested `ieee/` and `builtins/` tests.
+GCC target skips and `dg-options` are recorded without applying them, so read
+the [execute results](docs/research/gcc-torture-execute-results.md) before treating
+a failure as a miscompile.
+
 ### libc header survey
 
 The header survey measures how many of a C library's public headers bcc
