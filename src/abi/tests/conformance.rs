@@ -615,7 +615,9 @@ fn assert_conforms(name: &str, target: Target, module: &Module<'_>, c: &str) {
             "{name} for {target:?} at {opt:?} does not build:\n{}\n{ll}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let status = runner.run(&executable);
+        let status = runner
+            .run(&executable)
+            .unwrap_or_else(|error| panic!("{name} for {target:?} at {opt:?}: {error}\n{ll}"));
         assert_eq!(
             status,
             Some(0),
@@ -647,9 +649,7 @@ impl Runner {
         }
         if target == Target::LinuxGnu
             && cfg!(windows)
-            && Command::new("wsl.exe")
-                .args(["-e", "true"])
-                .output()
+            && crate::test_support::native::run_native(Command::new("wsl.exe").args(["-e", "true"]))
                 .is_ok_and(|output| output.status.success())
         {
             return Some(Self::Wsl);
@@ -659,19 +659,21 @@ impl Runner {
     }
 
     /// Runs `executable`, returning its exit status.
-    fn run(self, executable: &Path) -> Option<i32> {
+    fn run(self, executable: &Path) -> std::io::Result<Option<i32>> {
         let output = match self {
-            | Self::Native => Command::new(executable).output(),
-            | Self::Wsl => Command::new("wsl.exe")
-                .arg("-e")
-                .arg(format!(
-                    "./{}",
-                    executable.file_name().unwrap().to_str().unwrap()
-                ))
-                .current_dir(executable.parent().unwrap())
-                .output(),
+            | Self::Native =>
+                crate::test_support::native::run_native(&mut Command::new(executable)),
+            | Self::Wsl => crate::test_support::native::run_native(
+                Command::new("wsl.exe")
+                    .arg("-e")
+                    .arg(format!(
+                        "./{}",
+                        executable.file_name().unwrap().to_str().unwrap()
+                    ))
+                    .current_dir(executable.parent().unwrap()),
+            ),
         };
-        output.unwrap().status.code()
+        Ok(output?.status.code())
     }
 }
 

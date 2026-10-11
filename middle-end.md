@@ -708,6 +708,12 @@ triple to produce a runnable program; `main` is called without arguments.
   A0-A3 for the host, running them side by side and comparing status and
   output with the interpreter. `tests/code_generation_cli.rs` covers the
   command line.
+  Native test programs run with captured stdout/stderr and a 20-second
+  deadline; `BCC_TEST_TIMEOUT_MS` overrides it with a positive millisecond
+  count. On timeout the shared runner kills and reaps the process and reports
+  its command and output. Differential failures also include the seed, arm,
+  rerun command and both bcc and LLVM IR. Object-only output needs no MinGW
+  discovery; the CLI regression removes `MINGW_ROOT` and clears `PATH`.
 - `benches/c` holds ten self-checking performance programs; their reduced
   workloads (`-DBENCH_REDUCED`) run in the interpreter, with and without the
   bcc optimizer, in `tests/bench_corpus.rs`.

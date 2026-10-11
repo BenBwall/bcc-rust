@@ -519,9 +519,8 @@ fn run_through_llvm(
         };
         compile_module(&module, &executable, options)
             .unwrap_or_else(|error| panic!("{}: {error}", program.name));
-        std::process::Command::new(&executable)
-            .output()
-            .unwrap()
+        crate::test_support::native::run_native(&mut std::process::Command::new(&executable))
+            .unwrap_or_else(|error| panic!("{}: {error}\n{ir}", program.name))
             .status
             .code()
             .unwrap()

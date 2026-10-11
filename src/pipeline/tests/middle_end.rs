@@ -310,7 +310,8 @@ fn host() -> Option<Target> {
 /// Runs an executable, returning its exit status and standard output with
 /// Windows line ends made plain.
 fn run_native(executable: &Path) -> (i32, String) {
-    let output = Command::new(executable).output().unwrap();
+    let output = crate::test_support::native::run_native(&mut Command::new(executable))
+        .unwrap_or_else(|error| panic!("{error}"));
     let stdout = String::from_utf8(output.stdout)
         .unwrap()
         .replace("\r\n", "\n");

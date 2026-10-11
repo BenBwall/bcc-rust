@@ -4,6 +4,9 @@
     reason = "Integration tests exercise the compiled CLI."
 )]
 
+#[path = "support/native.rs"]
+mod native;
+
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -26,6 +29,11 @@ mod tests {
             AtomicU32,
             Ordering,
         },
+    };
+
+    use super::native::{
+        run_native,
+        run_native_with_timeout,
     };
 
     const SUM: &str = "int main(void) {\n  int s = 0;\n  for (int i = 1; i <= 4; i++)\n    s += \
@@ -339,7 +347,7 @@ mod tests {
             ],
         );
         assert!(built.status.success(), "{}", text(&built.stderr));
-        let run = Command::new(&executable).output().unwrap();
+        let run = run_native(&mut Command::new(&executable)).unwrap();
         assert_eq!(run.status.code(), Some(3));
         assert_eq!(text(&run.stdout), "answer 42\n");
 
@@ -355,11 +363,88 @@ mod tests {
                 &[&[&target[..], "-o", &path(&pair)][..], flags].concat(),
             );
             assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
-            let run = Command::new(&pair).output().unwrap();
+            let run = run_native(&mut Command::new(&pair)).unwrap();
             assert_eq!(run.status.code(), Some(42), "{flags:?}");
         }
         drop(std::fs::remove_file(executable));
         drop(std::fs::remove_file(object));
         drop(std::fs::remove_file(pair));
+    }
+
+    #[test]
+    fn windows_gnu_object_output_needs_no_mingw() {
+        let object = temporary("no-mingw.o");
+        let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(["--target=x86_64-pc-windows-gnu", "-c", "--input", SUM, "-o"])
+            .arg(&object)
+            .env_remove("MINGW_ROOT")
+            .env("PATH", "")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        let bytes = std::fs::read(&object).unwrap();
+        assert!(bytes.len() > 20, "object has no COFF header");
+        assert_eq!(&bytes[..2], &[0x64, 0x86], "object is x86-64 COFF");
+        std::fs::remove_file(object).unwrap();
+    }
+
+    #[test]
+    fn looping_native_program_reports_timeout() {
+        let Some(target) = host() else {
+            return;
+        };
+        let executable = temporary("loop.exe");
+        // A volatile access keeps the deliberate infinite loop defined in C.
+        let built = bcc(
+            "int printf(const char *, ...); int fflush(void *); int main(void) { volatile int x = \
+             0; printf(\"loop started\\n\"); fflush(0); for (;;) x = 0; }",
+            &[
+                &format!("--target={target}"),
+                "-o",
+                executable.to_str().unwrap(),
+            ],
+        );
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let start = std::time::Instant::now();
+        let error = run_native_with_timeout(
+            &mut Command::new(&executable),
+            std::time::Duration::from_millis(100),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(
+            error.to_string().contains("native execution timed out"),
+            "{error}"
+        );
+        assert!(error.to_string().contains("loop.exe"), "{error}");
+        assert!(error.to_string().contains("loop started"), "{error}");
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "{error}"
+        );
+        std::fs::remove_file(executable).unwrap();
+    }
+
+    #[test]
+    fn native_output_exceeding_pipe_capacity_is_captured() {
+        let Some(target) = host() else {
+            return;
+        };
+        let executable = temporary("large-output.exe");
+        let built = bcc(
+            "int putchar(int); int main(void) { for (int i = 0; i < 200000; i++) putchar('x'); \
+             return 7; }",
+            &[
+                &format!("--target={target}"),
+                "-o",
+                executable.to_str().unwrap(),
+            ],
+        );
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let output = run_native(&mut Command::new(&executable)).unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(output.stdout, vec![b'x'; 200_000]);
+        assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
+        std::fs::remove_file(executable).unwrap();
     }
 }

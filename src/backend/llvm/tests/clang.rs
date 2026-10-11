@@ -217,7 +217,8 @@ fn assert_runs(name: &str, program: &str, status: i32, stdout: &str) {
 
 /// Runs an executable, returning its exit status and standard output.
 fn run(executable: &Path) -> (i32, String) {
-    let output = Command::new(executable).output().unwrap();
+    let output = crate::test_support::native::run_native(&mut Command::new(executable))
+        .unwrap_or_else(|error| panic!("{error}"));
     let stdout = String::from_utf8(output.stdout)
         .unwrap()
         .replace("\r\n", "\n");

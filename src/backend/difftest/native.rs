@@ -121,9 +121,15 @@ fn check_arm(
     };
     compile_module(&module, &executable, options)
         .map_err(|error| format!("seed {:#x} {arm:?}: {error}\n{text}\n{llvm}", case.seed))?;
-    let output = Command::new(&executable)
-        .output()
-        .expect("the compiled program starts");
+    let output = crate::test_support::native::run_native(&mut Command::new(&executable)).map_err(
+        |error| {
+            format!(
+                "seed {:#x}, arm {arm:?}: {error}\nrerun with BCC_DIFFTEST_SEED={:#x} \
+                 BCC_DIFFTEST_NATIVE_CASES=1\n\nthe compiled module:\n{text}\nits LLVM IR:\n{llvm}",
+                case.seed, case.seed
+            )
+        },
+    )?;
     let stdout = if cfg!(windows) {
         String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n")
     } else {
