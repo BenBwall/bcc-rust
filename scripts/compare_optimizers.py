@@ -10,10 +10,13 @@ writes a results file and a summary. The arms (middle-end.md, "Comparison
 arms"):
 
     A0  bcc-rust --llvm-opt=O0                                     baseline
+    N   bcc-rust --llvm-opt=O2 --llvm-codegen-only                  codegen only
     A1  bcc-rust --opt=bcc --llvm-opt=O2 --llvm-codegen-only       bcc only
     A2  bcc-rust --llvm-opt=O2                                     LLVM only
     A3  bcc-rust --opt=bcc --llvm-opt=O2                           bcc, then LLVM
     R   clang -O2 x.c                                              reference
+
+A1/N isolates what the bcc optimizer adds on top of LLVM's code generator.
 
 `--ablate leave-one-out` adds arm A1-all (the default pass list as one
 explicit `--passes` list, repeated --ablate-rounds times) and one arm
@@ -67,6 +70,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXE = ".exe" if os.name == "nt" else ""
 STANDARD_ARMS = {
     "A0": ("--llvm-opt=O0",),
+    "N": ("--llvm-opt=O2", "--llvm-codegen-only"),
     "A1": ("--opt=bcc", "--llvm-opt=O2", "--llvm-codegen-only"),
     "A2": ("--llvm-opt=O2",),
     "A3": ("--opt=bcc", "--llvm-opt=O2"),
@@ -74,6 +78,7 @@ STANDARD_ARMS = {
 }
 ARM_DESCRIPTIONS = {
     "A0": "bcc front end, no optimizer, clang -O0 code generation",
+    "N": "unoptimized bcc IR, clang -O2 code generation with LLVM IR passes disabled",
     "A1": "bcc optimizer only (fixpoint pipeline), clang -O2 code generation",
     "A2": "LLVM -O2 only, on the unoptimized bcc IR",
     "A3": "bcc optimizer, then LLVM -O2",
@@ -620,6 +625,8 @@ def summarize(records, resamples, seed, baseline, metric):
         lines += time_table("Run time", standard)
         if any(a != baseline for a in standard):
             lines += ratio_tables(f"Ratios to {baseline}", standard, baseline)
+        if "A1" in standard and "N" in standard:
+            lines += ratio_tables("Bcc optimizer ratios (A1/N)", ["A1"], "N")
     if ablation:
         lines += time_table("Ablation run time", ablation)
         lines += ratio_tables(f"Ablation ratios to {ABLATION_BASELINE}", ablation, ABLATION_BASELINE)
@@ -670,7 +677,7 @@ def parse_arguments(argv):
     parser.add_argument("--corpus", type=Path, default=ROOT / "benches" / "c", help="directory of benchmark .c files")
     parser.add_argument("--match", action="append", default=[], metavar="GLOB",
                         help="only benchmarks whose name matches (repeatable)")
-    parser.add_argument("--arms", default="A0,A1,A2,A3,R", help="comma-separated arms, or 'none' (default: all)")
+    parser.add_argument("--arms", default=",".join(STANDARD_ARMS), help="comma-separated arms, or 'none' (default: all)")
     parser.add_argument("--ablate", choices=["none", "leave-one-out", "prefix"], default="none",
                         help="add pass-ablation arms of A1 (default: none)")
     parser.add_argument("--ablate-rounds", type=int, default=2, metavar="N",
