@@ -29,7 +29,7 @@
 //! - Token sources: `token_source.rs` reads lexed files; `replay.rs` reads
 //!   tokens made in phase 4.
 //! - Token and diagnostic types: `token.rs` defines preprocessing tokens;
-//!   `errors.rs` defines lexical and final-newline diagnostics.
+//!   `errors.rs` defines the lexical diagnostics.
 //! - Tests: `tests.rs` checks lexer snapshots, replay, and preprocessing;
 //!   `storage.rs` also holds the packed-entry layout test.
 //!
@@ -58,7 +58,7 @@ mod replay;
 mod token_source;
 
 // Token and diagnostic types.
-pub(super) mod errors;
+mod errors;
 mod token;
 
 pub(crate) use errors::{

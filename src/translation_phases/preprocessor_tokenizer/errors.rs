@@ -1,10 +1,9 @@
-//! Diagnostics recorded by translation phases 1-3. Lexical errors describe
+//! Diagnostics recorded by translation phase 3. Lexical errors describe
 //! partial comments, partial quoted tokens, and characters that cannot become
-//! C tokens. [`InitialProcessorError`] describes the final physical newline.
-//! The lexer records locations; token sources decide when to replay
+//! C tokens. The lexer records locations; token sources decide when to replay
 //! diagnostics. Literal values and other phase-7 constraints are checked later.
 //!
-//! C99: §5.1.1.2 paragraph 1 (phases 2-3), p. 10; PDF p. 22;
+//! C99: §5.1.1.2 paragraph 1 (phase 3), p. 10; PDF p. 22;
 //! §6.4 paragraphs 2-3, p. 49; PDF p. 61;
 //! comments §6.4.9 paragraphs 1-2, p. 66; PDF p. 78;
 //! character constants §6.4.4.4 paragraph 1, p. 59; PDF p. 71;
@@ -14,8 +13,6 @@ use std::fmt::{
     self,
     Display,
 };
-
-use thiserror::Error;
 
 use crate::{
     diagnostics::{
@@ -69,20 +66,6 @@ pub(crate) enum PreprocessorTokenizerErrorType {
     /// A new-line cannot occur in an `s-char`.
     /// C99: §6.4.5p1, p. 62; PDF p. 74.
     NewlineInString,
-}
-
-/// Violations of the required final physical newline before line splicing.
-/// C99: §5.1.1.2p2, p. 10; PDF p. 22.
-#[derive(Debug, Error)]
-pub(crate) enum InitialProcessorError {
-    /// A nonempty source file ends without a new-line character.
-    /// C99: §5.1.1.2p2, p. 10; PDF p. 22.
-    #[error("no newline at end of file")]
-    MissingFinalNewline(SourceVector),
-    /// A backslash immediately precedes the final physical newline.
-    /// C99: §5.1.1.2p2, p. 10; PDF p. 22.
-    #[error("final newline is escaped")]
-    EscapedFinalNewline(SourceVector),
 }
 
 impl PreprocessorTokenizerErrorType {
@@ -209,62 +192,5 @@ impl Display for PreprocessorTokenizerErrorType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let arena = Bump::new();
         f.write_str(self.explain_in(&arena, None).message)
-    }
-}
-
-impl ToDiagnostic for InitialProcessorError {
-    fn diagnostic_in<'d>(
-        &self,
-        _context: &Context<'_>,
-        source: SourceVectors,
-        arena: &'d Bump,
-    ) -> Diagnostic<'d> {
-        let message = format_in!(arena, "{self}");
-        match self {
-            | Self::EscapedFinalNewline(_) => Explanation::new(arena, message)
-                .label("this splice removes the final physical newline")
-                .note(
-                    "C99 5.1.1.2p2: the final newline shall not be immediately preceded by a \
-                     backslash before splicing",
-                )
-                .help("add an unescaped newline at the end of the file")
-                .at(self.severity(), source),
-            | Self::MissingFinalNewline(_) => Explanation::new(arena, message)
-                .label("the file ends without a newline")
-                .note("C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character")
-                .help("add a newline at the end of the file")
-                .at(self.severity(), source),
-        }
-    }
-}
-
-impl GetPosition for InitialProcessorError {
-    #[inline(always)]
-    fn position(&self, context: &Context<'_>) -> SourcePosition {
-        match self {
-            | Self::MissingFinalNewline(vector) | Self::EscapedFinalNewline(vector) =>
-                vector.position(context),
-        }
-    }
-}
-
-impl GetSeverity for InitialProcessorError {
-    fn severity(&self) -> ErrorSeverity {
-        match self {
-            | Self::MissingFinalNewline(_) | Self::EscapedFinalNewline(_) => ErrorSeverity::Warning,
-        }
-    }
-}
-
-impl GetSourceVectors for InitialProcessorError {
-    fn source_vectors(&self, context: &mut Context<'_>) -> SourceVectors {
-        match self {
-            | Self::MissingFinalNewline(vector) | Self::EscapedFinalNewline(vector) => context
-                .create_source_vectors(
-                    vector.position(context),
-                    vector.source_file_index,
-                    vector.length as usize,
-                ),
-        }
     }
 }
