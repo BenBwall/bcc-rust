@@ -3,9 +3,13 @@
 //! The verifier runs after lowering, after each pass in debug and test
 //! builds, and on every parsed test input. It never panics on broken IR: it
 //! records each problem as a [`VerifierError`] and keeps going where it
-//! safely can. A function is checked in four steps: its block structure, the
-//! records of where each value is defined, each instruction's types, flags
-//! and edges, and finally that every use is dominated by its definition.
+//! safely can. A function is checked in five steps: its block structure, the
+//! records of where each value is defined, its operand-pool encodings (in
+//! `pools.rs`), each instruction's types, flags and edges, and finally that
+//! every use is dominated by its definition.
+
+// Operand-pool validation before any unchecked body query.
+mod pools;
 
 use std::fmt;
 
@@ -119,6 +123,9 @@ fn verify_function_into<'m, 's>(
         return;
     }
     verifier.definitions();
+    if !verifier.pools() {
+        return;
+    }
     for block in body.blocks() {
         for &inst in body.block_insts(block) {
             verifier.instruction(inst);
@@ -345,11 +352,18 @@ impl Verifier<'_, '_, '_, '_> {
             }
         }
         for block in body.blocks() {
-            for &param in body.block_params(block) {
+            for (position, &param) in body.block_params(block).iter().enumerate() {
                 if param.index() >= body.value_count() {
                     self.error(
                         Location::Block(block),
                         VerifierErrorKind::InvalidReference(EntityKind::Value, param.as_u32()),
+                    );
+                } else if !matches!(body.value_def(param), ValueDef::Param(def_block, def_position)
+                    if def_block == block && def_position as usize == position)
+                {
+                    self.error(
+                        Location::Block(block),
+                        VerifierErrorKind::ValueDefinition(param),
                     );
                 }
             }
@@ -363,6 +377,14 @@ impl Verifier<'_, '_, '_, '_> {
                         VerifierErrorKind::InvalidReference(EntityKind::Value, value.as_u32()),
                     );
                     continue;
+                }
+                if let Some(value) = result
+                    && body.value_def(value) != ValueDef::Result(inst)
+                {
+                    self.error(
+                        Location::Inst(inst),
+                        VerifierErrorKind::ValueDefinition(value),
+                    );
                 }
                 let expected = self.module.result_type(body.inst(inst));
                 let found = result.map(|value| body.value_type(value));
@@ -1011,6 +1033,9 @@ pub(crate) enum EntityKind {
     Function,
     Global,
     Signature,
+    ValueList,
+    BlockCall,
+    CaseList,
 }
 
 impl fmt::Display for VerifierError<'_> {
@@ -1163,6 +1188,9 @@ impl fmt::Display for EntityKind {
             | Self::Function => "function",
             | Self::Global => "global",
             | Self::Signature => "signature",
+            | Self::ValueList => "value list",
+            | Self::BlockCall => "block call",
+            | Self::CaseList => "case list",
         })
     }
 }

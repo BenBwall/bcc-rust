@@ -262,7 +262,10 @@ fn errors_only_broken_records_can_have() {
             builder.body.values[param].def = ValueDef::Param(Block::new(0), 7);
             builder.ret(Some(param));
         }),
-        ["@f: v0 is not defined where the value table says"]
+        [
+            "@f: v0 is not defined where the value table says",
+            "@f, block0: v0 is not defined where the value table says"
+        ]
     );
     assert_eq!(
         build_and_verify(|builder, param| {
@@ -331,5 +334,157 @@ block0(v0: i32):
     assert_eq!(
         VerifierErrorKind::InvalidReference(EntityKind::Value, 3).to_string(),
         "value 3 does not exist"
+    );
+}
+
+#[test]
+fn duplicate_result_definitions_are_rejected() {
+    let errors = build_and_verify(|builder, param| {
+        let value = builder.reserve_value();
+        for bits in [1, 2] {
+            let data = builder.constant(Opcode::Iconst, Type::I32, bits);
+            _ = builder.insert_with_result(data, Some(value));
+        }
+        builder.ret(Some(param));
+    });
+    assert_eq!(
+        errors,
+        ["@f, inst0: v1 is not defined where the value table says"]
+    );
+}
+
+#[test]
+fn duplicate_parameter_definitions_are_rejected() {
+    let errors = build_and_verify(|builder, param| {
+        let block = builder.create_block();
+        let value = builder.reserve_value();
+        builder.define_block_param(block, value, Type::I32);
+        builder.define_block_param(block, value, Type::I32);
+        builder.ret(Some(param));
+        builder.switch_to_block(block);
+        builder.ret(Some(value));
+    });
+    assert_eq!(
+        errors,
+        ["@f, block1: v1 is not defined where the value table says"]
+    );
+}
+
+#[test]
+fn foreign_operand_pool_handle_is_rejected() {
+    let arena = Bump::new();
+    let mut module = Module::new(&arena);
+    let sig = module.intern_signature(&[], None, false);
+    let donor = module.declare_function("donor", sig, Linkage::External);
+    let mut builder = FunctionBuilder::new(&mut module, donor);
+    let entry = builder.create_entry_block();
+    builder.switch_to_block(entry);
+    for _ in 0..10 {
+        _ = builder.value_list(&[]);
+    }
+    let foreign = builder.value_list(&[]);
+    builder.ret(None);
+    builder.finish();
+    let recipient = module.declare_function("recipient", sig, Linkage::External);
+    let mut builder = FunctionBuilder::new(&mut module, recipient);
+    let entry = builder.create_entry_block();
+    builder.switch_to_block(entry);
+    _ = builder.insert(InstData::Call {
+        func: donor,
+        args: foreign,
+    });
+    builder.ret(None);
+    builder.finish();
+    assert_eq!(
+        verify(&module, Profile::PreAbi),
+        ["@recipient, inst0: value list 10 does not exist"]
+    );
+}
+
+#[test]
+fn malformed_operand_pool_encodings_are_rejected() {
+    // Missing length, truncated payload, and a maximal encoded length.
+    for pool in [&[][..], &[1][..], &[2, 0][..], &[u32::MAX][..]] {
+        for kind in ["call", "indirect", "jump", "brif", "switch", "cases"] {
+            let errors = build_and_verify(|builder, param| {
+                let target = builder.create_block();
+                let sig = builder.intern_signature(&[], None, false);
+                let default = builder.block_call(target, &[]);
+                let cases = builder.case_list(&[]);
+                let offset = u32::try_from(builder.body.pool.len()).unwrap();
+                for &raw in pool {
+                    builder.body.pool.push(Value::new(raw as usize));
+                }
+                let data = match kind {
+                    | "call" => InstData::Call {
+                        func: FuncId::new(0),
+                        args: ValueList(offset),
+                    },
+                    | "indirect" => InstData::CallIndirect {
+                        sig,
+                        args: ValueList(offset),
+                    },
+                    | "jump" => InstData::Jump {
+                        dest: BlockCall(offset),
+                    },
+                    | "brif" => InstData::Brif {
+                        cond:  param,
+                        dests: [BlockCall(offset); 2],
+                    },
+                    | "switch" => InstData::Switch {
+                        value: param,
+                        default: BlockCall(offset),
+                        cases,
+                    },
+                    | "cases" => InstData::Switch {
+                        value: param,
+                        default,
+                        cases: CaseList(offset),
+                    },
+                    | _ => unreachable!(),
+                };
+                let terminator = data.is_terminator();
+                _ = builder.insert(data);
+                if !terminator {
+                    builder.ret(Some(param));
+                }
+                builder.switch_to_block(target);
+                builder.ret(Some(param));
+            });
+            let entity = match kind {
+                | "call" | "indirect" => "value list",
+                | "cases" => "case list",
+                | _ => "block call",
+            };
+            let expected = format!("@f, inst0: {entity} 3 does not exist");
+            if kind == "brif" {
+                assert_eq!(errors, [expected.clone(), expected], "{kind}, {pool:?}");
+            } else {
+                assert_eq!(errors, [expected], "{kind}, {pool:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn malformed_switch_pool_references_are_rejected() {
+    let errors = build_and_verify(|builder, param| {
+        let target = builder.create_block();
+        let default = builder.block_call(target, &[]);
+        let cases = builder.case_list(&[(ConstId::new(99), BlockCall(99))]);
+        _ = builder.insert(InstData::Switch {
+            value: param,
+            default,
+            cases,
+        });
+        builder.switch_to_block(target);
+        builder.ret(Some(param));
+    });
+    assert_eq!(
+        errors,
+        [
+            "@f, inst0: constant 99 does not exist",
+            "@f, inst0: block call 99 does not exist"
+        ]
     );
 }
