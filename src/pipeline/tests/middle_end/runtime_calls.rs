@@ -2,6 +2,61 @@
 
 use super::*;
 
+const OPEN_MEMCPY: &str = r"
+void *memcpy();
+int builtin_copy(void) {
+    int x = 1, y = 2;
+    __builtin_memcpy(&x, &y, sizeof x);
+    return x;
+}
+int main(void) {
+    int x = 0, y = 3;
+    builtin_copy();
+    void *result = memcpy((void *)&x, (const void *)&y, sizeof x);
+    return x != 3 || result != &x;
+}
+";
+
+#[test]
+fn open_calls_to_prototyped_host_symbols_accept_compatible_arguments() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        for (optimize, profile) in STAGES {
+            let actual = with_module(OPEN_MEMCPY, target, optimize, profile, interpret);
+            assert_eq!(actual.0, 0, "{target:?} {optimize} {profile:?}");
+        }
+    }
+}
+
+#[test]
+fn open_calls_to_prototyped_host_symbols_reject_incompatible_arguments() {
+    for call in [
+        "memcpy((void *)&x, (const void *)&y, (int)sizeof x)",
+        "memcpy((void *)&x, (const void *)&y)",
+        "memcpy(1.0, (const void *)&y, sizeof x)",
+    ] {
+        let source = OPEN_MEMCPY.replace("memcpy((void *)&x, (const void *)&y, sizeof x)", call);
+        for target in [Target::LinuxGnu, Target::WindowsGnu] {
+            for (optimize, profile) in STAGES {
+                with_module(&source, target, optimize, profile, |module, target| {
+                    let arena = Bump::new();
+                    let mut host = DefaultHost::for_target(&arena, target);
+                    let result = interpreter::run(module, "main", &[], &mut host);
+                    assert!(
+                        matches!(
+                            result,
+                            Err(interpreter::Trap::UndefinedBehavior(
+                                interpreter::UbKind::SignatureMismatch,
+                                _
+                            ))
+                        ),
+                        "{call} {target:?} {optimize} {profile:?}: {result:?}"
+                    );
+                });
+            }
+        }
+    }
+}
+
 #[test]
 fn torture_library_builtin_prototypes_reject_invalid_calls() {
     for source in [
@@ -26,6 +81,7 @@ fn torture_library_builtin_prototypes_reject_invalid_calls() {
 }
 
 const PROGRAMS: &[(&str, &str)] = &[
+    ("builtin_alias_unprototyped", OPEN_MEMCPY),
     (
         "bounded_strings",
         "extern void *memchr(const void *, int, unsigned long long); extern char *strchr(const \

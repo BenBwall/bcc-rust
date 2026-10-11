@@ -167,15 +167,33 @@ impl Machine<'_, '_, '_> {
                 // A declared host function with an open external signature
                 // represents a C declaration without a prototype. Its call
                 // site supplies the default-promoted parameter types, also
-                // through function pointers. Defined functions retain exact
-                // signature checks. C99: §6.5.2.2 paragraph 6, pp. 71-72;
-                // PDF pp. 83-84.
+                // through function pointers. C99: §6.5.2.2 paragraph 6, pp.
+                // 71-72; PDF pp. 83-84.
                 let open_host = self.module.function(func).body.is_none()
                     && actual.variadic
                     && actual.params.is_empty()
                     && actual.result == expected.result
                     && actual.result_extension == expected.result_extension;
-                if actual != expected && !open_host {
+                // An open call site can also resolve to a prototype (for
+                // example after a builtin declares the same host symbol).
+                // Lowering already applied default argument promotions;
+                // compare those operand types with the resolved parameters.
+                // A variadic prototype cannot be called without a prototype.
+                // C99: §6.5.2.2 paragraphs 6 and 9, pp. 71-72; PDF pp. 83-84.
+                let compatible_open_call = expected.variadic
+                    && expected.params.is_empty()
+                    && !actual.variadic
+                    && actual.result == expected.result
+                    && actual.result_extension == expected.result_extension
+                    && actual.aggregates == expected.aggregates
+                    && actual.extensions == expected.extensions
+                    && actual.params.len() == args.len()
+                    && actual
+                        .params
+                        .iter()
+                        .zip(args)
+                        .all(|(&param, &arg)| param == body.value_type(arg));
+                if actual != expected && !open_host && !compatible_open_call {
                     return Err(UbKind::SignatureMismatch.into());
                 }
                 return self.call(body, func, args, result, host);
