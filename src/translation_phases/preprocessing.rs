@@ -124,15 +124,6 @@ use crate::{
 };
 
 impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
-    /// Runs translation phases 4 through 6 without the parser's resource
-    /// budget, for direct preprocessing tests.
-    #[cfg(test)]
-    pub(crate) fn preprocess_all(&mut self, context: &mut Context<'tu>) -> RegionVec<Token> {
-        let mut tokens = RegionVec::new();
-        let _ = self.preprocess_into_arena(context, usize::MAX, &mut tokens);
-        tokens
-    }
-
     /// Appends phase-6 output to the caller's token buffer before parsing
     /// starts. Diagnostics stay pending in `context`; retained provenance
     /// survives compaction of preprocessor working storage between tokens.
@@ -191,23 +182,6 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         });
     }
 
-    /// Calls `visit` with each phase-6 token as [`Expander::next_item`]
-    /// produces it, without compacting provenance.
-    #[cfg(test)]
-    pub(crate) fn for_each_item(
-        &mut self,
-        context: &mut Context<'tu>,
-        mut visit: impl FnMut(&mut Context<'tu>, Token),
-    ) {
-        self.run(context, |preprocessor| match preprocessor.next_item() {
-            | Some(token) => {
-                visit(preprocessor.context, token);
-                ControlFlow::Continue(())
-            },
-            | None => ControlFlow::Break(()),
-        });
-    }
-
     /// Calls `step` until it breaks. Between calls, once enough frames were
     /// pushed and no expansion is active, the expansion arena is reset.
     ///
@@ -246,6 +220,32 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                 return value;
             }
         }
+    }
+
+    /// Runs translation phases 4 through 6 without the parser's resource
+    /// budget, for direct preprocessing tests.
+    #[cfg(test)]
+    pub(crate) fn preprocess_all(&mut self, context: &mut Context<'tu>) -> RegionVec<Token> {
+        let mut tokens = RegionVec::new();
+        let _ = self.preprocess_into_arena(context, usize::MAX, &mut tokens);
+        tokens
+    }
+
+    /// Calls `visit` with each phase-6 token as [`Expander::next_item`]
+    /// produces it, without compacting provenance.
+    #[cfg(test)]
+    pub(crate) fn for_each_item(
+        &mut self,
+        context: &mut Context<'tu>,
+        mut visit: impl FnMut(&mut Context<'tu>, Token),
+    ) {
+        self.run(context, |preprocessor| match preprocessor.next_item() {
+            | Some(token) => {
+                visit(preprocessor.context, token);
+                ControlFlow::Continue(())
+            },
+            | None => ControlFlow::Break(()),
+        });
     }
 }
 
