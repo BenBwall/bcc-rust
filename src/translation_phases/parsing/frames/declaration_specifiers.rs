@@ -1035,9 +1035,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
 /// C99: §6.7.1 paragraph 1, p. 98; PDF p. 110. `typedef` is a storage-class
 /// specifier for syntactic convenience only (paragraph 3, p. 98;
 /// PDF p. 110).
-fn storage_class(
-    token: TokenType,
-) -> Option<StorageClass> {
+fn storage_class(token: TokenType) -> Option<StorageClass> {
     match token {
         | TokenType::Keyword(KeywordTokenType::Auto) => Some(StorageClass::Auto),
         | TokenType::Keyword(KeywordTokenType::Register) => Some(StorageClass::Register),

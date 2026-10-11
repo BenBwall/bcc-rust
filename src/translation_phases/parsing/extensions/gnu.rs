@@ -743,11 +743,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
         }
     }
 
-    fn new(
-        arena: &'p Bump,
-        kind: GnuKind,
-        errors: usize,
-    ) -> Self {
+    fn new(arena: &'p Bump, kind: GnuKind, errors: usize) -> Self {
         Self {
             kind,
             phase: Phase::Start,
