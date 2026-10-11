@@ -215,7 +215,7 @@ impl Expander<'_, '_, '_, '_> {
 /// space before a day below 10, and `"hh:mm:ss"`. The values stay constant
 /// for the translation unit (§6.10.8 paragraph 3, p. 161; PDF p. 173).
 #[derive(Debug)]
-pub(in crate::translation_phases::preprocessing) struct TranslationTimestamp<'pp> {
+pub(super) struct TranslationTimestamp<'pp> {
     date: ArenaString<'pp>,
     time: ArenaString<'pp>,
 }

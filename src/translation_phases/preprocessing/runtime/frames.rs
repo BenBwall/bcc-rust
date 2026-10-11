@@ -159,7 +159,7 @@ const _: () = {
 
 /// A source-file frame kept while no expansion is active.
 #[derive(Debug)]
-pub(in crate::translation_phases::preprocessing) struct FileFrame<'pp> {
+pub(super) struct FileFrame<'pp> {
     pub(super) conditional_base:           usize,
     pub(super) physical_source_file_index: u32,
     pub(super) include_search_index:       Option<usize>,

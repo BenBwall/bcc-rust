@@ -86,10 +86,7 @@ impl Expander<'_, '_, '_, '_> {
 
     /// A zero-length diagnostic location at `position` of the current token
     /// source.
-    pub(in crate::translation_phases::preprocessing) fn location_at(
-        &mut self,
-        position: SourcePosition,
-    ) -> SourceVectors {
+    pub(super) fn location_at(&mut self, position: SourcePosition) -> SourceVectors {
         self.tokenizer.location_at(self.context, position)
     }
 }

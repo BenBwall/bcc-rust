@@ -352,7 +352,7 @@ pub(crate) type MacroArguments<'x> = &'x [FunctionLikeMacroArgument<'x>];
 
 /// The argument for parameter `name`. Excess arguments kept for recovery
 /// share one name; as with a map insert, the last one wins.
-pub(in crate::translation_phases::preprocessing) fn find_argument(
+pub(super) fn find_argument(
     arguments: MacroArguments<'_>,
     name: StringCacheId,
 ) -> Option<&FunctionLikeMacroArgument<'_>> {
