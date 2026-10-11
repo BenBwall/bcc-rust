@@ -66,6 +66,46 @@ fn expression_categories_and_contextual_conversions_are_retained() {
     );
 }
 
+/// C99 §6.5.3.3p5: `!E` compares E with 0. The operand keeps its own type;
+/// only its lvalue conversion is recorded, as for `&&` and `||`.
+#[test]
+fn logical_not_records_no_arithmetic_conversion_of_its_operand() {
+    with_source(
+        "int f(double d, int *p, char c) { return !d + !p + !c + !0.5; }",
+        |context, unit| {
+            assert_eq!(context.pending_error_count(), 0);
+            let mut negations = 0;
+            for info in unit.expressions {
+                let ExpressionType::Unary {
+                    operator: UnaryOperator::LogicalNot,
+                    operand_expression,
+                } = info.expression.kind
+                else {
+                    continue;
+                };
+                negations += 1;
+                assert_eq!(
+                    unit.types.nodes[info.ty.index],
+                    TypeKind::Scalar(Scalar::Int)
+                );
+                let operand = unit.expression_info(operand_expression).unwrap();
+                let kinds = unit
+                    .expression_conversions(operand_expression)
+                    .iter()
+                    .map(|c| (c.kind, c.ty))
+                    .collect::<Vec<_>>();
+                if matches!(operand_expression.kind, ExpressionType::Identifier(_)) {
+                    assert_eq!(kinds, [(ConversionKind::Lvalue, operand.ty.unqualified())]);
+                } else {
+                    assert!(kinds.is_empty(), "{kinds:?}");
+                    assert_eq!(info.integer.map(|v| v.value), Some(0), "!0.5 is 0");
+                }
+            }
+            assert_eq!(negations, 4);
+        },
+    );
+}
+
 #[test]
 fn every_core_operator_has_positive_coverage() {
     accepts(

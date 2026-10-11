@@ -355,6 +355,10 @@ A stable counting sort at the end of analysis groups the records by expression
 ordinal, so `conversions_of(index)` and `expression_conversions(node)` return
 one contiguous run in application order. Records whose operand has no retained
 result, which only recovered syntax produces, follow the last run.
+Truth-value contexts record no conversion beyond lvalue conversion or decay:
+the operands of `!`, `&&` and `||` and controlling expressions keep their own
+type, and lowering compares them with zero (§6.5.3.3p5, printed p. 79, PDF
+p. 91).
 These are contextual operations, separate from the expression's original category;
 sizeof and unary address operands therefore keep their unconverted identities.
 Compound assignments also retain their arithmetic/pointer operation type before

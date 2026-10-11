@@ -44,6 +44,8 @@ use super::{
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.5.3.1-§6.5.3.3, pp. 78-80; PDF pp. 90-92;
     /// postfix increments §6.5.2.4, p. 75; PDF p. 87.
+    /// C99: §6.5.3.3 paragraph 5, p. 79; PDF p. 91 (`!` records only the
+    /// operand's lvalue conversion or decay).
     pub(in crate::translation_phases::semantic_analysis) fn type_unary(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -146,11 +148,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return self.real_imag(e, op, operand);
         }
         let ty = if op == U::LogicalNot {
+            // C99 §6.5.3.3p5: `!E` compares E with 0, like `&&` and `||`,
+            // and converts nothing; an `int` conversion would read `!0.5`
+            // as `!0`.
             self.types.scalar(Scalar::Int)
         } else {
-            self.promote(operand, ty)
+            let promoted = self.promote(operand, ty);
+            self.convert(operand.expression, promoted, ConversionKind::Arithmetic);
+            promoted
         };
-        self.convert(operand.expression, ty, ConversionKind::Arithmetic);
         let mut info = Self::expression_result(e, ty);
         info.unfolded_binary128 = operand.unfolded_binary128;
         info.integer = operand.integer.and_then(|v| v.unary(op));
