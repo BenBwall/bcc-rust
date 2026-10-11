@@ -3,9 +3,10 @@
 //! recompute which features are accepted and which belong to the selected
 //! language mode. Phases query these sets instead of repeating dialect checks.
 //!
-//! For strict C99, `inline` is native. Enabling GNU extensions also accepts
-//! GNU syntax, while [`CompilerConfiguration::is_native`] still distinguishes
-//! it from the ISO language.
+//! For strict C99, `inline` is native. Most GNU syntax, such as statement
+//! expressions, is accepted in every mode; enabling GNU extensions makes it
+//! native too, so [`CompilerConfiguration::is_native`] separates a GNU mode
+//! from a strict one. [`Feature::origin`] still marks the syntax as non-ISO.
 //!
 //! Read [`CompilerConfiguration::accepts`] and
 //! [`CompilerConfiguration::is_native`], then [`CompilerConfiguration`],

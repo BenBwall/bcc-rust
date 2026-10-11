@@ -1,5 +1,5 @@
-//! Parses caller-provided source or files and summarizes the resulting
-//! syntax roots, tokens, and errors.
+//! Parses caller-provided source or files and counts the resulting external
+//! declarations and diagnostics.
 
 use std::path::Path;
 

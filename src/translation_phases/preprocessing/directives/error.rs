@@ -1,4 +1,5 @@
-//! Emit an error-directive message from the rest of its line.
+//! Emit the message of an `#error` or `#warning` directive from the rest of
+//! its line.
 //!
 //! C99: translation phase 4; error directive, §6.10.5 paragraph 1, p. 159;
 //! PDF p. 171. This handler reports the directive, without analyzing C syntax.

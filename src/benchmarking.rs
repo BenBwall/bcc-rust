@@ -3,9 +3,9 @@
 //! measure arena use. Prepared parsing holds preprocessing results separately
 //! so a benchmark can time parsing without preprocessing again.
 //!
-//! For `parse_source("int x;")`, the driver copies source into the context,
-//! parses the declaration, and counts the external declarations and
-//! diagnostics.
+//! For `parse_source("int x;")`, the source is copied into the
+//! translation-unit arena, the declaration is parsed, and the summary counts
+//! the external declarations and diagnostics.
 //!
 //! Read [`parse`], [`ParseBenchmarkSummary`], and [`BenchmarkInput`], then
 //! [`with_prepared_parse`] for parser-only measurements.
