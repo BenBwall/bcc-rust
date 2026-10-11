@@ -32,7 +32,7 @@ so nothing needs to be declared before it is used.
   then trait impls such as `Debug`, `Display`, and `Default`. `#[cfg(test)]`
   modules come last.
 - **A family of parallel files gets its own directory.** When a module has one
-  file per grammar frame, extension, builtin table, directive, or scanner
+  file per grammar frame, extension frame, builtin table, directive, or scanner
   concern, those files move into a subdirectory with its own entry file, as in
   `parsing/frames/`, `parsing/extensions/`, `semantic_analysis/builtins/`,
   `preprocessing/directives/`, and `preprocessor_tokenizer/scanning/`. A
