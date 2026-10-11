@@ -35,8 +35,8 @@
 //! - Machine core: `machine.rs` dispatches frames; `frame_pool.rs` recycles
 //!   their storage; `token_cursor.rs` owns token access; `scope.rs` classifies
 //!   names; `recovery.rs` scans to production-specific boundaries.
-//! - Input and shared operations: `input.rs` creates parsers; `limits.rs`
-//!   handles resource exhaustion; `allocation.rs` allocates syntax;
+//! - Construction and shared operations: `construction.rs` creates parsers;
+//!   `limits.rs` handles resource exhaustion; `allocation.rs` allocates syntax;
 //!   `lookahead.rs` resolves declaration/type ambiguity; `errors.rs` reports
 //!   diagnostics; `token_diagnostics.rs` tracks pending diagnostic occurrences.
 //! - Grammar frames: `frames.rs` groups `frames/external_declaration.rs`,
@@ -75,7 +75,7 @@ mod recovery;
 mod scope;
 mod token_cursor;
 
-// Input and shared operations
+// Construction and shared operations
 mod allocation;
 mod construction;
 mod errors;

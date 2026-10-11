@@ -11,8 +11,8 @@
 //! [`parse_with_arena`], then [`analyze_translation_unit`].
 //!
 //! Files by role:
-//! - Phase storage and token collection: `storage.rs`.
-//! - Semantic handoff: `analysis.rs`.
+//! - Stage drivers: `stages.rs` scopes the preprocessing and parser arenas to
+//!   their stages and collects the preprocessed tokens.
 //! - End-to-end fixtures: `tests.rs`.
 //!
 //! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;

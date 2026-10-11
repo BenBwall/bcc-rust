@@ -1,5 +1,5 @@
-//! Scopes preprocessing and parser work arenas to their phases and retains
-//! output token ranges before temporary provenance is compacted.
+//! Stage drivers scope preprocessing and parser work arenas to their phases
+//! and retain output token ranges before temporary provenance is compacted.
 
 use std::path::Path;
 
