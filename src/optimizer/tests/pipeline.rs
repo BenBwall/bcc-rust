@@ -146,7 +146,6 @@ fn code_that_is_already_minimal_is_returned_unchanged() {
 fn a_constant_in_a_loop_moves_to_its_preheader() {
     let input = "\
 function @count(i32) -> i32 external {
-    slot0 = stack_slot 4, align 4
 block0(v0: i32):
     v1 = iconst.i32 0
     jump block1(v1, v1)
@@ -169,7 +168,6 @@ mod tests_loop {
     /// The loop of the middle-end plan, with its constant already hoisted.
     pub(super) const COUNT_LOOP: &str = "\
 function @count(i32) -> i32 external {
-    slot0 = stack_slot 4, align 4
 block0(v0: i32):
     v1 = iconst.i32 0
     v2 = iconst.i32 1
@@ -460,36 +458,50 @@ fn print_after_all_prints_even_when_a_pass_changes_nothing() {
     assert!(printed.ends_with(tests_loop::COUNT_LOOP), "{printed}");
 }
 
-#[test]
-fn the_report_counts_rewrites_and_times_passes() {
-    // A dead loop for `fold`, `simplify-cfg` and `dce`, then a live one with
-    // a repeated invariant product for `gvn` and `licm`.
-    let input = "\
+/// Two loops that give every pass work. The first keeps a flag in a slot:
+/// `promote` turns the slot into a parameter, `fold` drops the `+ 0` and `dce`
+/// drops the unused product. The second computes an invariant product twice,
+/// for `gvn` and then `licm`, and its exit chain is for `simplify-cfg`.
+const EVERY_PASS: &str = "\
 function @f(i32) -> i32 external {
+    slot0 = stack_slot 4, align 4
 block0(v0: i32):
-    v1 = iconst.i32 0
-    jump block1(v1)
-block1(v2: i32):
-    v3 = iconst.i1 0
-    brif v3, block2, block3
+    v1 = stack_addr slot0
+    v2 = iconst.i32 1
+    store.i32 v2, v1, align 4
+    v3 = iconst.i32 0
+    jump block1(v3)
+block1(v4: i32):
+    v5 = load.i32 v1, align 4
+    v6 = icmp.i32 slt v4, v0
+    brif v6, block2, block3
 block2:
-    v4 = iadd.i32 nsw v2, v0
-    jump block1(v4)
+    v7 = iadd.i32 v5, v3
+    store.i32 v7, v1, align 4
+    v8 = iadd.i32 nsw v4, v5
+    jump block1(v8)
 block3:
-    jump block4(v2)
-block4(v5: i32):
-    v6 = imul.i32 v0, v0
-    v7 = imul.i32 v0, v0
-    v8 = iadd.i32 v6, v7
-    v9 = iadd.i32 v5, v8
-    v10 = icmp.i32 slt v9, v0
-    brif v10, block4(v9), block5
+    v9 = imul.i32 v4, v4
+    jump block4(v4)
+block4(v10: i32):
+    v11 = imul.i32 v0, v0
+    v12 = imul.i32 v0, v0
+    v13 = iadd.i32 v11, v12
+    v14 = iadd.i32 v10, v13
+    v15 = icmp.i32 slt v14, v0
+    brif v15, block4(v14), block5
 block5:
-    return v9
+    jump block6
+block6:
+    v16 = iadd.i32 v14, v5
+    return v16
 }
 ";
+
+#[test]
+fn the_report_counts_rewrites_and_times_passes() {
     let (_, report) = optimize_text(
-        input,
+        EVERY_PASS,
         &OptimizerOptions {
             verify_each: true,
             ..OptimizerOptions::default()

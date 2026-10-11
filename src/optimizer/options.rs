@@ -58,18 +58,21 @@ pub(crate) enum Pass {
     Gvn,
     /// Loop-invariant code motion.
     Licm,
+    /// Stack-slot promotion (mem2reg).
+    Promote,
 }
 
 impl Pass {
     /// Every pass, in default pipeline order.
     pub(crate) const ALL: [Self; Self::COUNT] = [
+        Self::Promote,
         Self::Fold,
         Self::SimplifyCfg,
         Self::Gvn,
         Self::Licm,
         Self::Dce,
     ];
-    pub(crate) const COUNT: usize = 5;
+    pub(crate) const COUNT: usize = 6;
 
     /// The name `--passes` and reports use.
     pub(crate) const fn name(self) -> &'static str {
@@ -79,6 +82,7 @@ impl Pass {
             | Self::SimplifyCfg => "simplify-cfg",
             | Self::Gvn => "gvn",
             | Self::Licm => "licm",
+            | Self::Promote => "promote",
         }
     }
 
@@ -94,6 +98,7 @@ impl Pass {
             | Self::SimplifyCfg => 2,
             | Self::Gvn => 3,
             | Self::Licm => 4,
+            | Self::Promote => 5,
         }
     }
 }
@@ -154,8 +159,8 @@ pub(crate) fn parse_pass_list(text: &str) -> Result<PassList, PassListError<'_>>
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Error)]
 pub(crate) enum PassListError<'a> {
     /// A name that is empty or not a pass; the known passes are `fold`,
-    /// `dce`, `simplify-cfg`, `gvn` and `licm`.
-    #[error("unknown pass `{0}` (the passes are fold, dce, simplify-cfg, gvn and licm)")]
+    /// `dce`, `simplify-cfg`, `gvn`, `licm` and `promote`.
+    #[error("unknown pass `{0}` (the passes are fold, dce, simplify-cfg, gvn, licm and promote)")]
     Unknown(&'a str),
     #[error("a pass list holds at most {} passes", PassList::CAPACITY)]
     TooMany,

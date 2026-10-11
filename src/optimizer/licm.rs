@@ -201,7 +201,7 @@ impl Hoisting<'_> {
         let mut args = ArenaVec::new_in(draft.scratch);
         for index in 0..draft.block(header).params.len() {
             let ty = draft.value_type(draft.block(header).params[index]);
-            let param = draft.add_param(preheader, ty);
+            let param = draft.add_block_param(preheader, ty);
             args.push(param);
             self.defined_in.push(Some(preheader));
             debug_assert_eq!(

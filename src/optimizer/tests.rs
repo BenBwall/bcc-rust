@@ -13,6 +13,7 @@ mod licm;
 mod loops;
 mod options;
 mod pipeline;
+mod promote;
 mod simplify_cfg;
 
 use super::*;

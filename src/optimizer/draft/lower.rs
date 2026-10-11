@@ -17,35 +17,40 @@ use crate::{
         InstData,
         Module,
         Opcode,
+        StackSlot,
         Type,
         Value,
     },
     util::bump::ArenaVec,
 };
 
-/// How the original blocks and values are named in the new body.
+/// How the draft's blocks, values and stack slots are named in the new body.
 struct Numbering<'s> {
     blocks: ArenaVec<'s, Option<Block>>,
     values: ArenaVec<'s, Option<Value>>,
+    slots:  ArenaVec<'s, Option<StackSlot>>,
 }
 
 impl<'s> Draft<'_, 's> {
     /// Makes the draft the body of `func`, replacing the body it has. Live
     /// blocks keep their layout order and are renumbered without gaps; so are
     /// the values, in the order the textual form lists them: each block's
-    /// parameters, then its instructions' results. Stack slots keep their
-    /// numbers.
+    /// parameters, then its instructions' results. Stack slots that remain
+    /// keep their order.
     pub(in crate::optimizer) fn lower(&self, module: &mut Module<'_>, func: FuncId) {
         let body = self.body;
         let mut builder = FunctionBuilder::new(module, func);
-        for (_, slot) in body.stack_slots() {
-            _ = builder.create_stack_slot(slot.size, slot.align);
-        }
-
         let mut numbering = Numbering {
             blocks: ArenaVec::with_capacity_in(self.blocks.len(), self.scratch),
             values: ArenaVec::with_capacity_in(self.value_count(), self.scratch),
+            slots:  ArenaVec::with_capacity_in(body.stack_slot_count(), self.scratch),
         };
+        for (slot, data) in body.stack_slots() {
+            numbering.slots.push(
+                (!self.is_stack_slot_removed(slot))
+                    .then(|| builder.create_stack_slot(data.size, data.align)),
+            );
+        }
         numbering.blocks.resize(self.blocks.len(), None);
         numbering.values.resize(self.value_count(), None);
         for block in self.alive_blocks() {
@@ -60,7 +65,7 @@ impl<'s> Draft<'_, 's> {
             }
             for &inst in &self.block(block).insts {
                 if !self.is_removed(inst)
-                    && let Some(result) = body.inst_result(inst)
+                    && let Some(result) = self.inst_result(inst)
                 {
                     numbering.values[result.index()] = Some(builder.reserve_value());
                 }
@@ -98,7 +103,7 @@ impl<'s> Draft<'_, 's> {
     ) {
         let body = self.body;
         let map = |value: Value| numbering.value(self.resolve(value));
-        let result = body.inst_result(inst).map(|result| numbering.value(result));
+        let result = self.inst_result(inst).map(|result| numbering.value(result));
         let original = *self.inst(inst);
         let data = if let Some(constant) = self.folded[inst.index()] {
             match constant {
@@ -158,8 +163,10 @@ impl<'s> Draft<'_, 's> {
                         ty,
                         body.const_bits(&original).unwrap_or_default(),
                     ),
+                | InstData::StackAddr { slot } => InstData::StackAddr {
+                    slot: numbering.slot(slot),
+                },
                 | InstData::Nullary { .. }
-                | InstData::StackAddr { .. }
                 | InstData::GlobalAddr { .. }
                 | InstData::FuncAddr { .. } => original,
                 | InstData::Load {
@@ -287,6 +294,10 @@ impl Numbering<'_> {
 
     fn value(&self, value: Value) -> Value {
         self.values[value.index()].expect("an operand is defined by a live instruction or block")
+    }
+
+    fn slot(&self, slot: StackSlot) -> StackSlot {
+        self.slots[slot.index()].expect("a `stack_addr` names a stack slot that remains")
     }
 }
 

@@ -11,16 +11,17 @@
 //! once the function is done (or earlier, when the verifier or a printer
 //! asks to see the function after a pass).
 //!
-//! The default pipeline is `fold`, `simplify-cfg`, `gvn`, `licm`, `dce`
-//! (value numbering before code motion, so one copy of a repeated invariant
-//! moves, and dead code last, so it sweeps what the others leave), repeated
-//! until a round changes nothing or [`MAX_ROUNDS`] rounds have run. An explicit
-//! `--passes=` list runs once, in the order given. Every rewrite first asks
-//! [`OptimizationReport::allow`], which counts rewrites globally and refuses
-//! them all once the bisect limit is reached, so `--opt-bisect-limit=N`
-//! applies exactly the first `N` rewrites and a miscompile can be bisected on
-//! `N`. With `verify_each`, the verifier checks a function before the first
-//! pass and after every pass that changed it.
+//! The default pipeline is `promote`, `fold`, `simplify-cfg`, `gvn`, `licm`,
+//! `dce` (promotion first, so the others see SSA values instead of loads and
+//! stores; value numbering before code motion, so one copy of a repeated
+//! invariant moves; and dead code last, so it sweeps what the others leave),
+//! repeated until a round changes nothing or [`MAX_ROUNDS`] rounds have run.
+//! An explicit `--passes=` list runs once, in the order given. Every rewrite
+//! first asks [`OptimizationReport::allow`], which counts rewrites globally
+//! and refuses them all once the bisect limit is reached, so
+//! `--opt-bisect-limit=N` applies exactly the first `N` rewrites and a
+//! miscompile can be bisected on `N`. With `verify_each`, the verifier checks
+//! a function before the first pass and after every pass that changed it.
 //!
 //! For a function whose entry branches on a constant,
 //!
@@ -48,12 +49,14 @@
 //!   counts and times.
 //! - Working copy: `draft.rs` lifts and edits a function; `draft/analysis.rs`
 //!   computes reachability, ordering, predecessors, use counts and the
-//!   control-flow graph; `draft/lower.rs` writes the body back.
+//!   control-flow graph; `draft/dominance.rs` dominators and dominance
+//!   frontiers; `draft/lower.rs` writes the body back.
 //! - Analyses: `loops.rs` finds natural loops and their nesting from the
 //!   dominator tree.
 //! - Passes: `fold.rs` (with `fold/eval.rs`, exact integer evaluation),
-//!   `dce.rs`, `simplify_cfg.rs`, `gvn.rs` (value numbering over the dominator
-//!   tree) and `licm.rs` (loop-invariant code motion).
+//!   `dce.rs`, `simplify_cfg.rs`, `promote.rs` (stack-slot promotion), `gvn.rs`
+//!   (value numbering over the dominator tree) and `licm.rs` (loop-invariant
+//!   code motion).
 //! - `tests.rs` and `tests/` exercise each pass on textual IR, the pipeline as
 //!   a whole, and run programs in the interpreter before and after `gvn` and
 //!   `licm`.
@@ -82,6 +85,7 @@ mod dce;
 mod fold;
 mod gvn;
 mod licm;
+mod promote;
 mod simplify_cfg;
 
 // Tests
@@ -228,6 +232,7 @@ fn run_pass(
         | Pass::SimplifyCfg => simplify_cfg::run(draft, report),
         | Pass::Gvn => gvn::run(draft, report),
         | Pass::Licm => licm::run(draft, report),
+        | Pass::Promote => promote::run(draft, report),
     };
     report.end_pass(pass, start.elapsed());
     #[cfg(test)]

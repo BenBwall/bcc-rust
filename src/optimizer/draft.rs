@@ -16,10 +16,14 @@
 //!   flags directly;
 //! - **moving an instruction** takes its id out of one block's list and puts it
 //!   into another's;
-//! - **adding a block or a block parameter** appends to the draft: added blocks
-//!   are numbered after the body's, and so are added values;
+//! - **adding a block** appends one, numbered after the body's blocks;
+//! - **adding values**: a new block parameter, or a new constant at the top of
+//!   the entry block, gets a value numbered after the original body's (and a
+//!   constant an instruction numbered after its instructions);
 //! - **weakening flags** records new flags for an instruction, which
-//!   [`Draft::inst`] then reports.
+//!   [`Draft::inst`] then reports;
+//! - **removing a stack slot** drops it from the lowered body, whose remaining
+//!   slots are renumbered.
 //!
 //! The original body is never mutated, so ids into it and the pool handles of
 //! instructions that were not touched stay valid for the whole run. [`lower`]
@@ -32,9 +36,14 @@
 //! [`lower`]: Draft::lower
 
 mod analysis;
+mod dominance;
 mod lower;
 
 pub(super) use analysis::Predecessors;
+pub(super) use dominance::{
+    Dominators,
+    Frontiers,
+};
 
 use crate::{
     ir::{
@@ -45,8 +54,10 @@ use crate::{
         InstData,
         InstFlags,
         Opcode,
+        StackSlot,
         Type,
         Value,
+        ValueData,
         ValueDef,
     },
     util::bump::{
@@ -69,12 +80,17 @@ pub(super) struct Draft<'b, 's> {
     folded:             ArenaVec<'s, Option<Constant>>,
     /// Whether an instruction was removed, by instruction index.
     removed:            ArenaVec<'s, bool>,
-    /// An instruction's record with flags a pass changed, by instruction
-    /// index.
+    /// An instruction's record with flags a pass changed, by index of an
+    /// instruction of the body.
     edited:             ArenaVec<'s, Option<InstData>>,
-    /// The type and definition of each value a pass added; value
-    /// `body.value_count() + i` is entry `i`.
-    added_values:       ArenaVec<'s, (Type, ValueDef)>,
+    /// The values the passes added; value `body.value_count() + i` is entry
+    /// `i`.
+    added_values:       ArenaVec<'s, ValueData>,
+    /// The result of each constant instruction the passes added, numbered
+    /// after the body's instructions. Each one is folded to its constant.
+    added_insts:        ArenaVec<'s, Value>,
+    /// Whether a stack slot was removed, by slot index.
+    removed_slots:      ArenaVec<'s, bool>,
 }
 
 /// A block of a draft.
@@ -156,6 +172,8 @@ impl<'b, 's> Draft<'b, 's> {
         removed.resize(body.inst_count(), false);
         let mut edited = ArenaVec::with_capacity_in(body.inst_count(), scratch);
         edited.resize(body.inst_count(), None);
+        let mut removed_slots = ArenaVec::with_capacity_in(body.stack_slot_count(), scratch);
+        removed_slots.resize(body.stack_slot_count(), false);
         Self {
             body,
             scratch,
@@ -165,6 +183,8 @@ impl<'b, 's> Draft<'b, 's> {
             removed,
             edited,
             added_values: ArenaVec::new_in(scratch),
+            added_insts: ArenaVec::new_in(scratch),
+            removed_slots,
         }
     }
 
@@ -184,14 +204,84 @@ impl<'b, 's> Draft<'b, 's> {
         panic!("the replacements of value {value} form a cycle")
     }
 
-    /// Redirects every use of `from` to `to`. `to` must dominate the uses of
-    /// `from`.
+    /// Redirects every use of `from` to `to`, either of which may be an added
+    /// value. `to` must dominate the uses of `from`.
     pub(super) fn replace(&mut self, from: Value, to: Value) {
         let from = self.resolve(from);
         let to = self.resolve(to);
         if from != to {
             self.replacements[from.index()] = to;
         }
+    }
+
+    /// How many values the draft has: the body's, then the added ones.
+    pub(super) fn value_count(&self) -> usize {
+        self.body.value_count() + self.added_values.len()
+    }
+
+    pub(super) fn value_type(&self, value: Value) -> Type {
+        self.value_data(value).ty
+    }
+
+    /// Where a value is defined. An added parameter records the position it
+    /// was added at, which later edits to the block's parameters may change.
+    pub(super) fn value_def(&self, value: Value) -> ValueDef {
+        self.value_data(value).def
+    }
+
+    fn value_data(&self, value: Value) -> ValueData {
+        match value.index().checked_sub(self.body.value_count()) {
+            | Some(added) => self.added_values[added],
+            | None => ValueData {
+                ty:  self.body.value_type(value),
+                def: self.body.value_def(value),
+            },
+        }
+    }
+
+    /// Appends a parameter of type `ty` to `block` and returns it. The pass
+    /// must append a matching argument to every edge into the block.
+    pub(super) fn add_block_param(&mut self, block: Block, ty: Type) -> Value {
+        let index = u32::try_from(self.block(block).params.len())
+            .expect("a block has fewer than 2^32 parameters");
+        let value = self.add_value(ValueData {
+            ty,
+            def: ValueDef::Param(block, index),
+        });
+        self.block_mut(block).params.push(value);
+        value
+    }
+
+    /// Adds an instruction defining `constant` to the entry block, after the
+    /// constants added before it and ahead of the original instructions, and
+    /// returns its result, which dominates every block.
+    pub(super) fn add_constant(&mut self, constant: Constant) -> Value {
+        let inst = Inst::new(self.inst_count());
+        let ty = match constant {
+            | Constant::Int(ty, _) | Constant::Poison(ty) => ty,
+        };
+        let value = self.add_value(ValueData {
+            ty,
+            def: ValueDef::Result(inst),
+        });
+        self.added_insts.push(value);
+        self.folded.push(Some(constant));
+        self.removed.push(false);
+        let original = self.body.inst_count();
+        let entry = &mut self.blocks[Self::entry().index()].insts;
+        let position = entry
+            .iter()
+            .position(|inst| inst.index() < original)
+            .unwrap_or(entry.len());
+        entry.insert(position, inst);
+        value
+    }
+
+    fn add_value(&mut self, data: ValueData) -> Value {
+        let value = Value::new(self.value_count());
+        self.added_values.push(data);
+        self.replacements.push(value);
+        value
     }
 
     /// The constant a value is, if it is the result of an integer constant or
@@ -236,45 +326,20 @@ impl<'b, 's> Draft<'b, 's> {
         self.folded[inst.index()] = Some(constant);
     }
 
-    /// The number of values: the body's, then those passes added.
-    pub(super) fn value_count(&self) -> usize {
-        self.replacements.len()
-    }
-
-    pub(super) fn value_type(&self, value: Value) -> Type {
-        match value.index().checked_sub(self.body.value_count()) {
-            | Some(added) => self.added_values[added].0,
-            | None => self.body.value_type(value),
-        }
-    }
-
-    /// Where a value is defined. An added parameter keeps the block and
-    /// position it was added with.
-    pub(super) fn value_def(&self, value: Value) -> ValueDef {
-        match value.index().checked_sub(self.body.value_count()) {
-            | Some(added) => self.added_values[added].1,
-            | None => self.body.value_def(value),
-        }
-    }
-
-    /// Appends a parameter of type `ty` to `block` and returns it. The pass
-    /// must add a matching argument to every edge into the block.
-    pub(super) fn add_param(&mut self, block: Block, ty: Type) -> Value {
-        let value = Value::new(self.replacements.len());
-        let position = u32::try_from(self.block(block).params.len()).expect("too many parameters");
-        self.replacements.push(value);
-        self.added_values
-            .push((ty, ValueDef::Param(block, position)));
-        self.block_mut(block).params.push(value);
-        value
-    }
-
     // Instructions
 
     /// The instruction's current data: its original record, with the flags
     /// a pass set. For a folded instruction it is still that record; use
-    /// [`Draft::inst_constant`] first.
+    /// [`Draft::inst_constant`] first. An added constant has a placeholder
+    /// record without operands.
     pub(super) fn inst(&self, inst: Inst) -> &InstData {
+        const PLACEHOLDER: InstData = InstData::Nullary {
+            opcode: Opcode::Poison,
+            ty:     Type::I1,
+        };
+        if inst.index() >= self.body.inst_count() {
+            return &PLACEHOLDER;
+        }
         self.edited[inst.index()]
             .as_ref()
             .unwrap_or_else(|| self.body.inst(inst))
@@ -298,11 +363,20 @@ impl<'b, 's> Draft<'b, 's> {
     }
 
     pub(super) fn inst_result(&self, inst: Inst) -> Option<Value> {
-        self.body.inst_result(inst)
+        match inst.index().checked_sub(self.body.inst_count()) {
+            | Some(added) => Some(self.added_insts[added]),
+            | None => self.body.inst_result(inst),
+        }
+    }
+
+    /// How many instructions the draft has: the body's, then the added ones.
+    pub(super) fn inst_count(&self) -> usize {
+        self.body.inst_count() + self.added_insts.len()
     }
 
     /// Calls `visit` with each value the instruction uses, after
-    /// replacement. A folded instruction uses nothing.
+    /// replacement. A folded instruction, an added one included, uses
+    /// nothing.
     pub(super) fn for_each_operand(&self, inst: Inst, mut visit: impl FnMut(Value)) {
         if self.folded[inst.index()].is_none() {
             self.body
@@ -326,6 +400,18 @@ impl<'b, 's> Draft<'b, 's> {
         for block in &mut self.blocks {
             block.insts.retain(|inst| !removed[inst.index()]);
         }
+    }
+
+    // Stack slots
+
+    /// Drops a stack slot from the function. The pass must have removed every
+    /// `stack_addr` of it.
+    pub(super) fn remove_stack_slot(&mut self, slot: StackSlot) {
+        self.removed_slots[slot.index()] = true;
+    }
+
+    pub(super) fn is_stack_slot_removed(&self, slot: StackSlot) -> bool {
+        self.removed_slots[slot.index()]
     }
 
     // Blocks
