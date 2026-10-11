@@ -30,6 +30,10 @@ use crate::{
         Align,
         Type,
     },
+    target::{
+        Scalar,
+        Target,
+    },
     util::bump::{
         ArenaVec,
         Bump,
@@ -77,9 +81,11 @@ pub(crate) enum HostReturn {
 /// C99: §7.21.6.1, p. 333; PDF p. 345.
 /// C99: §7.21.6.3, p. 334; PDF p. 346.
 pub(crate) struct DefaultHost<'a> {
-    output:  ArenaVec<'a, u8>,
-    scratch: ArenaVec<'a, u8>,
-    text:    ArenaVec<'a, u8>,
+    output:     ArenaVec<'a, u8>,
+    scratch:    ArenaVec<'a, u8>,
+    text:       ArenaVec<'a, u8>,
+    /// The width of `long` in bits, which `printf`'s `l` modifier reads.
+    long_width: u32,
 }
 
 impl Host for DefaultHost<'_> {
@@ -177,11 +183,19 @@ impl DefaultHost<'_> {
                 spec.width = spec.width * 10 + usize::from(digit - b'0');
                 position += 1;
             }
+            // C99: §7.19.6.1 paragraph 7, pp. 276-277; PDF pp. 288-289:
+            // `l` names `long`, whose width is the target's, and `ll`
+            // names `long long`.
             let mut length = 32;
+            let mut ells = 0;
             loop {
                 match self.scratch.get(position) {
                     | Some(b'h') => length /= 2,
-                    | Some(b'l' | b'z' | b'j') => length = 64,
+                    | Some(b'l') => {
+                        ells += 1;
+                        length = if ells == 1 { self.long_width } else { 64 };
+                    },
+                    | Some(b'z' | b'j') => length = 64,
                     | _ => break,
                 }
                 position += 1;
@@ -361,9 +375,23 @@ impl<'a> DefaultHost<'a> {
     /// A host whose output and scratch space live in `arena`.
     pub(crate) fn new_in(arena: &'a Bump) -> Self {
         Self {
-            output:  ArenaVec::new_in(arena),
-            scratch: ArenaVec::new_in(arena),
-            text:    ArenaVec::new_in(arena),
+            output:     ArenaVec::new_in(arena),
+            scratch:    ArenaVec::new_in(arena),
+            text:       ArenaVec::new_in(arena),
+            long_width: 64,
+        }
+    }
+
+    /// A host in `arena` whose C library has `target`'s type widths:
+    /// `long` is 64 bits under LP64 (Linux) and 32 under LLP64 (Windows).
+    pub(crate) fn for_target(arena: &'a Bump, target: Target) -> Self {
+        let long_width = target
+            .layout()
+            .integer(Scalar::Long)
+            .map_or(64, |(bits, _)| bits);
+        Self {
+            long_width,
+            ..Self::new_in(arena)
         }
     }
 }

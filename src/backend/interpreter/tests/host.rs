@@ -11,6 +11,7 @@ use crate::{
         Type,
         parse_module,
     },
+    target::Target,
     util::bump::Bump,
 };
 
@@ -68,6 +69,40 @@ fn printf_formats_each_conversion() {
     assert_eq!(
         run.result.unwrap().termination,
         Termination::Returned(Some(int(expected.len() as u128)))
+    );
+}
+
+/// `%ld` reads a `long`, which is 32 bits on Windows: a Windows program
+/// passes `-5L` as an `i32`, and `%lld` still reads 64 bits.
+#[test]
+fn printf_reads_long_at_the_targets_width() {
+    let text = format!(
+        "{}\n{DECLARATIONS}\nfunction @main() -> i32 external {{\nblock0:
+    v0 = global_addr @format
+    v1 = iconst.i32 -5
+    v2 = iconst.i64 -9000000000
+    v3 = call @printf(v0, v1, v1, v2)
+    return v3
+}}\n",
+        c_string("format", "%ld %lu %lld")
+    );
+    let arena = Bump::new();
+    let module = parse_module(&arena, &text).unwrap();
+    for (target, expected) in [
+        (Target::WindowsGnu, "-5 4294967291 -9000000000"),
+        (Target::WindowsMsvc, "-5 4294967291 -9000000000"),
+    ] {
+        let mut host = DefaultHost::for_target(&arena, target);
+        _ = run(&module, "main", &[], &mut host).unwrap();
+        assert_eq!(host.output(), expected.as_bytes(), "{target:?}");
+    }
+    let mut host = DefaultHost::for_target(&arena, Target::LinuxGnu);
+    let linux = text.replace("iconst.i32 -5", "iconst.i64 -5");
+    let module = parse_module(&arena, &linux).unwrap();
+    _ = run(&module, "main", &[], &mut host).unwrap();
+    assert_eq!(
+        host.output(),
+        b"-5 18446744073709551611 -9000000000".as_slice()
     );
 }
 
