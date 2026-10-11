@@ -273,7 +273,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// Placemarkers left by `##` are dropped here (C99: §6.10.3.4 paragraph
     /// 1, p. 155; PDF p. 167), and a name met while its macro is being
     /// replaced is marked unavailable for good (§6.10.3.4 paragraph 2).
-    pub(super) fn next_preprocessor_token<const SHOULD_IGNORE_WHITESPACE: bool>(
+    fn next_preprocessor_token<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
     ) -> Option<PreprocessorToken> {
         self.last_was_newline = self.current_is_newline;

@@ -59,7 +59,7 @@ impl Parser<'_, '_, '_> {
         }
     }
 
-    pub(super) fn suppress_diagnostic_occurrence(&mut self, token: Token, spelling: Option<&str>) {
+    fn suppress_diagnostic_occurrence(&mut self, token: Token, spelling: Option<&str>) {
         let spelling = spelling.unwrap_or_else(|| self.context.string_cache.at(token.contents));
         let vectors = self.context.get_source_vectors(token.source_vectors);
         let user_end = self.context.user_source_end(token.source_vectors);

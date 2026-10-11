@@ -43,9 +43,7 @@ impl Expander<'_, '_, '_, '_> {
     /// only in the replacement list of a function-like macro.
     ///
     /// C99: §6.10.3.2 paragraph 1, p. 153; PDF p. 165.
-    pub(in crate::translation_phases::preprocessing) fn handle_hash_operator<
-        const SHOULD_IGNORE_WHITESPACE: bool,
-    >(
+    pub(super) fn handle_hash_operator<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
     ) -> Option<PreprocessorToken> {
         let token = self.expand_macros::<SHOULD_IGNORE_WHITESPACE>()?;
@@ -173,7 +171,7 @@ impl Expander<'_, '_, '_, '_> {
 
     /// Spells replaced operand tokens as `#` does (C99 §6.10.3.2p2), with
     /// each run of whitespace as one space.
-    pub(in crate::translation_phases::preprocessing) fn stringify(
+    pub(super) fn stringify(
         context: &mut Context<'_>,
         scratch: &Bump,
         tokens: &[PreprocessorToken],

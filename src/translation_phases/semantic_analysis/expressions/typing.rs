@@ -58,7 +58,7 @@ use crate::{
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.5.3.1-§6.5.3.3, pp. 78-80; PDF pp. 90-92;
     /// postfix increments §6.5.2.4, p. 75; PDF p. 87.
-    pub(in crate::translation_phases::semantic_analysis) fn type_unary(
+    pub(super) fn type_unary(
         &mut self,
         e: &'tu Expression<'tu>,
         op: UnaryOperator,
@@ -192,7 +192,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C99: §6.5.5-§6.5.17, pp. 82-94; PDF pp. 94-106.
-    pub(in crate::translation_phases::semantic_analysis) fn type_binary(
+    pub(super) fn type_binary(
         &mut self,
         e: &'tu Expression<'tu>,
         op: BinaryOperator,
@@ -481,7 +481,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C99: §6.5.15p2-6, pp. 90-91; PDF pp. 102-103.
-    pub(in crate::translation_phases::semantic_analysis) fn type_conditional(
+    pub(super) fn type_conditional(
         &mut self,
         e: &'tu Expression<'tu>,
         c: &'tu ConditionalExpression<'tu>,
@@ -582,7 +582,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C99: §6.5.2.2p1-7, pp. 71-72; PDF pp. 83-84.
-    pub(in crate::translation_phases::semantic_analysis) fn type_call(
+    pub(super) fn type_call(
         &mut self,
         e: &'tu Expression<'tu>,
         function: ExpressionInfo<'tu>,
@@ -677,7 +677,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C99: §6.5.2.3p1-4, pp. 72-73; PDF pp. 84-85.
-    pub(in crate::translation_phases::semantic_analysis) fn type_member(
+    pub(super) fn type_member(
         &mut self,
         e: &'tu Expression<'tu>,
         base: ExpressionInfo<'tu>,
@@ -744,7 +744,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C99: §6.5.4p2-4, p. 81; PDF p. 93.
-    pub(in crate::translation_phases::semantic_analysis) fn type_cast(
+    pub(super) fn type_cast(
         &mut self,
         e: &'tu Expression<'tu>,
         target: TypeId,
@@ -877,7 +877,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C99: §6.5.3.4p1-5, p. 80; PDF p. 92.
     /// Alignment: C11 §6.5.3.4p3, p. 90; PDF p. 108 (extension in C99).
-    pub(in crate::translation_phases::semantic_analysis) fn type_sizeof(
+    pub(super) fn type_sizeof(
         &mut self,
         e: &'tu Expression<'tu>,
         ty: TypeId,
@@ -914,10 +914,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         info
     }
 
-    pub(in crate::translation_phases::semantic_analysis) fn retain_expression(
-        &mut self,
-        info: ExpressionInfo<'tu>,
-    ) {
+    pub(super) fn retain_expression(&mut self, info: ExpressionInfo<'tu>) {
         let key = std::ptr::from_ref(info.expression).addr();
         if self.expression_indices.contains_key(&key) {
             return;
@@ -965,10 +962,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.3.2.1p1, p. 46; PDF p. 58. A structure/union containing
     /// const members is not modifiable; arrays and incomplete types are
     /// excluded.
-    pub(in crate::translation_phases::semantic_analysis) fn object_category(
-        &mut self,
-        ty: TypeId,
-    ) -> ValueCategory {
+    pub(super) fn object_category(&mut self, ty: TypeId) -> ValueCategory {
         if self.complete_object(ty)
             && !matches!(self.types.nodes[ty.index], TypeKind::Array(..))
             && !self.contains_const(ty)
@@ -981,10 +975,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Checks recursive const membership when classifying modifiable lvalues.
     /// C99: §6.3.2.1 paragraph 1, p. 46; PDF p. 58.
-    pub(in crate::translation_phases::semantic_analysis) fn contains_const(
-        &mut self,
-        ty: TypeId,
-    ) -> bool {
+    fn contains_const(&mut self, ty: TypeId) -> bool {
         let mut pending = ArenaVec::new_in(self.scratch);
         pending.push((ty, false));
         while let Some((current, ready)) = pending.pop() {
@@ -1069,17 +1060,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Pointer arithmetic needs a complete object type (§6.5.6p2); an
     /// unanalyzed target, such as a GNU vector, is not checked.
     /// C99: §6.5.6 paragraphs 2-3, pp. 82-83; PDF pp. 94-95.
-    pub(in crate::translation_phases::semantic_analysis) fn pointer_arithmetic_target(
-        &self,
-        target: TypeId,
-    ) -> bool {
+    fn pointer_arithmetic_target(&self, target: TypeId) -> bool {
         self.complete_object(target) || self.types.unanalyzed(target)
     }
 
-    pub(in crate::translation_phases::semantic_analysis) fn pointer_target(
-        &self,
-        ty: TypeId,
-    ) -> Option<TypeId> {
+    pub(super) fn pointer_target(&self, ty: TypeId) -> Option<TypeId> {
         let ty = self.types.non_atomic(ty);
         if let TypeKind::Pointer(target) = self.types.nodes[ty.index] {
             Some(target)
@@ -1187,7 +1172,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57. Preserve ranks even
     /// when long and long long have the same LP64 width.
-    pub(in crate::translation_phases::semantic_analysis) fn common_arithmetic(
+    fn common_arithmetic(
         &mut self,
         left: ExpressionInfo<'tu>,
         right: ExpressionInfo<'tu>,
@@ -1275,10 +1260,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ty
     }
 
-    pub(in crate::translation_phases::semantic_analysis) fn scalar_representation(
-        &self,
-        ty: TypeId,
-    ) -> Option<Scalar> {
+    fn scalar_representation(&self, ty: TypeId) -> Option<Scalar> {
         let ty = self.types.non_atomic(ty);
         match self.types.nodes[ty.index] {
             | TypeKind::Scalar(s) => Some(s),
@@ -1347,12 +1329,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// required.
     /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
     /// C99: §6.5.9 paragraph 2, p. 86; PDF p. 98.
-    pub(in crate::translation_phases::semantic_analysis) fn pointer_compatible(
-        &mut self,
-        left: TypeId,
-        right: TypeId,
-        void: bool,
-    ) -> bool {
+    fn pointer_compatible(&mut self, left: TypeId, right: TypeId, void: bool) -> bool {
         if self.types.unanalyzed(left) || self.types.unanalyzed(right) {
             return true;
         }
@@ -1464,7 +1441,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// is required. GNU extension; C99: §6.6p10, p. 96; PDF p. 108.
     /// GNU extension: GCC manual, "Other Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
-    pub(in crate::translation_phases::semantic_analysis) fn constant_p(
+    pub(super) fn constant_p(
         &mut self,
         e: &'tu Expression<'tu>,
         function: &'tu Expression<'tu>,

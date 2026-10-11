@@ -256,7 +256,7 @@ impl Parser<'_, '_, '_> {
 
     /// Reports whether `token`, followed by `next`, begins an attribute
     /// specifier. A `[` starts one only when another `[` follows it.
-    pub(super) fn attribute_starter_before(token: Token, next: Option<Token>) -> bool {
+    fn attribute_starter_before(token: Token, next: Option<Token>) -> bool {
         match token.kind {
             | TokenType::Keyword(KeywordTokenType::Attribute | KeywordTokenType::Declspec) => true,
             | TokenType::Operator(OperatorTokenType::OpeningSquareBracket) =>
@@ -274,7 +274,7 @@ impl Parser<'_, '_, '_> {
     /// read by lookahead. The token after a `[` is known only when the `[` is
     /// the current token or the one following it; at any later position the
     /// `[` is not taken as an attribute start.
-    pub(super) fn attribute_starter_in_lookahead(&self, token: Token) -> bool {
+    fn attribute_starter_in_lookahead(&self, token: Token) -> bool {
         if !matches!(
             token.kind,
             TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
@@ -371,7 +371,7 @@ impl Parser<'_, '_, '_> {
     /// C99: parenthesized direct-declarator and pointer are §6.7.5,
     /// p. 114; PDF p. 126; typedef-name is §6.7.7, pp. 123-124;
     /// PDF pp. 135-136.
-    pub(super) fn parenthesized_declarator_follows_typedef(&mut self) -> bool {
+    fn parenthesized_declarator_follows_typedef(&mut self) -> bool {
         let mut index = 0;
         while is_operator(
             self.cursor.lookahead(index),

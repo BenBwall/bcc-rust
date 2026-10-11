@@ -571,7 +571,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// and otherwise the token itself.
     ///
     /// C99: §6.10.3.3 paragraph 2, p. 154; PDF p. 166.
-    pub(in crate::translation_phases::preprocessing) fn paste_operand(
+    pub(super) fn paste_operand(
         &mut self,
         arguments: Option<MacroArguments<'x>>,
         token: PreprocessorToken,
@@ -591,7 +591,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// leaves the other unchanged.
     ///
     /// C99: §6.10.3.3 paragraphs 2-3, p. 154; PDF p. 166.
-    pub(in crate::translation_phases::preprocessing) fn paste_onto(
+    pub(super) fn paste_onto(
         &mut self,
         left: &mut ArenaVec<'x, PreprocessorToken>,
         mut right: ArenaVec<'x, PreprocessorToken>,

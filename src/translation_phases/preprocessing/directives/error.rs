@@ -29,10 +29,7 @@ impl Expander<'_, '_, '_, '_> {
     /// p. 7; PDF p. 19.
     #[cold]
     #[inline(never)]
-    pub(in crate::translation_phases::preprocessing) fn parse_error_directive(
-        &mut self,
-        directive: PreprocessorToken,
-    ) {
+    pub(super) fn parse_error_directive(&mut self, directive: PreprocessorToken) {
         let mut contents = ArenaString::new_in(self.scratch);
         // A directive ending at end of file is complete; the missing final
         // newline is diagnosed on its own.

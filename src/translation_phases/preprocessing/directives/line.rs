@@ -37,7 +37,7 @@ impl Expander<'_, '_, '_, '_> {
     /// other; a wide or encoded one is diagnosed and its name ignored.
     /// C11: §6.10.4 paragraph 1, p. 173; PDF p. 191, retains the character
     /// string literal requirement for the newly available encoded literals.
-    pub(in crate::translation_phases::preprocessing) fn parse_line_directive(&mut self) {
+    pub(super) fn parse_line_directive(&mut self) {
         let Some(token) = self.expect_token_without_rewind::<true>(
             |_, t| t.kind == PreprocessorTokenType::Number,
             |_, t| {

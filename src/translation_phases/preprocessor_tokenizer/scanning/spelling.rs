@@ -79,9 +79,7 @@ impl Lexer<'_, '_, '_, '_> {
     }
 
     /// Leaves room for the one-past-last entry used when reading EOF.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn checked_entry_index(
-        length: usize,
-    ) -> u32 {
+    pub(super) fn checked_entry_index(length: usize) -> u32 {
         let next = length
             .checked_add(1)
             .and_then(|count| u32::try_from(count).ok())
@@ -90,7 +88,7 @@ impl Lexer<'_, '_, '_, '_> {
     }
 
     /// Finishes a token spelled exactly by `start..end`.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn spelled(
+    pub(super) fn spelled(
         &mut self,
         start: usize,
         end: usize,
@@ -106,7 +104,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// Digraph-only diagnostics stay outside the common token completion path.
     /// C95 amendment 1 introduced the alternative token spellings.
     /// C99: §6.4.6p3, p. 64; PDF p. 76.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn digraph(
+    pub(super) fn digraph(
         &mut self,
         start: usize,
         end: usize,
@@ -119,7 +117,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// Maps a spelling's endpoints to original source bytes. Adjacent splices
     /// stay outside the diagnostic, while splices within the spelling are kept.
     /// C99: phase-2 deletion §5.1.1.2p1, pp. 9-10; PDF pp. 21-22.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn record_spliced_extension(
+    pub(super) fn record_spliced_extension(
         &mut self,
         feature: Feature,
         spelling: &'static str,
@@ -133,7 +131,7 @@ impl Lexer<'_, '_, '_, '_> {
 
     /// Keeps extension diagnostics beside their entry, so skipped groups stay
     /// silent. C99: §5.1.1.3p1, p. 11; PDF p. 23; GNU lexical extensions.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn record_extension(
+    pub(super) fn record_extension(
         &mut self,
         feature: Feature,
         spelling: &'static str,
@@ -173,7 +171,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// reached without closing its token. Scan loops keep only the call.
     #[cold]
     #[inline(never)]
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn diagnose_to_eof(
+    pub(super) fn diagnose_to_eof(
         &mut self,
         error_type: PreprocessorTokenizerErrorType,
         start: SourcePosition,
@@ -191,7 +189,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// Queues a diagnostic from `start` to the byte offset `end`.
     #[cold]
     #[inline(never)]
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn diagnose_to(
+    pub(super) fn diagnose_to(
         &mut self,
         error_type: PreprocessorTokenizerErrorType,
         start: SourcePosition,
@@ -215,10 +213,7 @@ impl Lexer<'_, '_, '_, '_> {
         self.intern_spelling(&text[start..end])
     }
 
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn intern_spelling(
-        &mut self,
-        spelling: &str,
-    ) -> StringCacheId {
+    fn intern_spelling(&mut self, spelling: &str) -> StringCacheId {
         if let [byte @ 0..=127] = spelling.as_bytes() {
             let index = usize::from(*byte);
             if let Some(id) = self.ascii[index] {
@@ -246,9 +241,7 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
 
     /// Where reading past the end stands:
     /// beyond every trailing splice.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn eof_position(
-        &self,
-    ) -> SourcePosition {
+    fn eof_position(&self) -> SourcePosition {
         let mut tracker = self.tracker.clone();
         tracker.advance_past_deletions(self.bytes.len())
     }

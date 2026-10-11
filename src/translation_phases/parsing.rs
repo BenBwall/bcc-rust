@@ -206,7 +206,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
     ///
     /// C99: translation-unit is a nonempty sequence of external-declaration
     /// values under §6.9, p. 140; PDF p. 152.
-    pub(super) fn drive(&mut self) -> Option<ExternalDeclaration<'tu>> {
+    fn drive(&mut self) -> Option<ExternalDeclaration<'tu>> {
         // A resource failure is terminal: the remaining input is neither
         // fetched nor parsed, so it cannot grow the exhausted storage.
         if self.resource_limit_reported {

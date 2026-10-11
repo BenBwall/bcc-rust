@@ -187,7 +187,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// A one-character punctuator, or a two-character one when the next
     /// character is listed.
     /// C99: `punctuator` §6.4.6p1, p. 63; PDF p. 75.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn one_of(
+    fn one_of(
         &mut self,
         start: usize,
         single: PreprocessorTokenType,
@@ -203,11 +203,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// Recognizes `identifier` spellings and the phase-4 `defined` operator.
     /// C99: §6.4.2.1p1, p. 51; PDF p. 63; §6.10.1p1, pp. 147-148;
     /// PDF pp. 159-160.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn lex_identifier(
-        &mut self,
-        start: usize,
-        mut end: usize,
-    ) -> Lexed {
+    fn lex_identifier(&mut self, start: usize, mut end: usize) -> Lexed {
         end += byte_scan::identifier_run(&self.bytes[end..]);
         let next = self.peek(end);
         if matches!(next, Some(b'\\' | 0x80..))
@@ -231,11 +227,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// C99: §6.4.2.1p1-3, p. 51; PDF p. 63; UCN form §6.4.3p1, p. 53;
     /// PDF p. 65.
     #[cold]
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn lex_extended_identifier(
-        &mut self,
-        start: usize,
-        mut end: usize,
-    ) -> Lexed {
+    fn lex_extended_identifier(&mut self, start: usize, mut end: usize) -> Lexed {
         let mut universal = false;
         loop {
             end += byte_scan::identifier_run(&self.bytes[end..]);
@@ -280,11 +272,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// C99: §6.4.8p1-4, p. 65; PDF p. 77; maximal munch §6.4p4, p. 50;
     /// PDF p. 62.
     #[inline(always)]
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn lex_number(
-        &mut self,
-        start: usize,
-        mut end: usize,
-    ) -> Lexed {
+    fn lex_number(&mut self, start: usize, mut end: usize) -> Lexed {
         loop {
             let run = byte_scan::number_run(&self.bytes[end..]);
             end += run;
@@ -344,19 +332,13 @@ impl Lexer<'_, '_, '_, '_> {
     /// the `'` ends the pp-number before it. Conversion then requires digits
     /// of the radix. After `' nondigit`, the grammar's `e sign` rule still
     /// applies, so `0x1'e+1` is one pp-number, as GCC lexes it.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn number_separator_end(
-        &mut self,
-        apostrophe: usize,
-    ) -> Option<usize> {
+    fn number_separator_end(&mut self, apostrophe: usize) -> Option<usize> {
         let index = apostrophe + 1;
         let byte = self.peek(index)?;
         (byte.is_ascii_alphanumeric() || byte == b'_').then_some(index + 1)
     }
 
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn lex_other(
-        &mut self,
-        start: usize,
-    ) -> Lexed {
+    fn lex_other(&mut self, start: usize) -> Lexed {
         let character = self.char_at(start);
         let position = self.tracker.advance_past_deletions(start);
         let length = if self.tracker.at_trigraph() {

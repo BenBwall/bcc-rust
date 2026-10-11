@@ -66,7 +66,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         )
     }
 
-    pub(super) fn preprocess_with_limit(
+    fn preprocess_with_limit(
         mut preprocessor: Preprocessor<'tu, '_>,
         context: &mut Context<'tu>,
         source_segment_limit: usize,
@@ -77,11 +77,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         PreprocessedTranslationUnit { upstream }
     }
 
-    pub(super) fn with_upstream(
-        upstream: Upstream,
-        context: &'c mut Context<'tu>,
-        arena: &'p Bump,
-    ) -> Self {
+    fn with_upstream(upstream: Upstream, context: &'c mut Context<'tu>, arena: &'p Bump) -> Self {
         let mut token_diagnostics: TokenDiagnostics<'tu, 'p> =
             ArenaMap::with_hasher_in(FxBuildHasher, arena);
         for (index, error) in context.pending_errors.iter().enumerate() {
@@ -188,7 +184,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
     }
 
     #[cfg(test)]
-    pub(super) fn new_with_config(
+    fn new_with_config(
         preprocessor: Preprocessor<'tu, '_>,
         context: &'c mut Context<'tu>,
         limits: ParserLimits,
