@@ -497,6 +497,9 @@ triple to produce a runnable program; `main` is called without arguments.
   A0-A3 for the host, running them side by side and comparing status and
   output with the interpreter. `tests/code_generation_cli.rs` covers the
   command line.
+- `benches/c` holds ten self-checking performance programs; their reduced
+  workloads (`-DBENCH_REDUCED`) run in the interpreter, with and without the
+  bcc optimizer, in `tests/bench_corpus.rs`.
 - Corpora later: GCC c-torture `execute`, then Csmith/YARPGen differential runs,
   then Embench and Polybench for performance (see the methodology note).
 
@@ -513,6 +516,15 @@ triple to produce a runnable program; `main` is called without arguments.
 | 6 | Floats, switch, globals with initializers, varargs, ABI lowering for x86-64 SysV and Win64 | GCC torture `execute` subset passes |
 | 7 | SCCP, GVN, LICM, inlining, slot promotion; comparison harness | first optimizer-vs-LLVM report |
 | 8 | Native back end exploration | — |
+
+Stage 7 status: promotion, SCCP, GVN and LICM exist (the prototype pipeline
+above); inlining does not. The comparison harness exists:
+`scripts/compare_optimizers.py` runs arms A0-A3 and R, with `--passes` ablation,
+over the ten self-checking programs in `benches/c` and writes JSON Lines plus a
+summary of per-benchmark medians, ratios to A2 and their geometric mean with a
+bootstrap interval (README, "Optimizer comparison harness"). What remains for
+the exit criterion is inlining, a run on native Linux with CPU isolation, a
+larger corpus (Embench, Polybench) and the report itself.
 
 ## Open questions
 

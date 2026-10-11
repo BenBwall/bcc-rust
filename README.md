@@ -545,6 +545,70 @@ rejects relative to an earlier run, and adding `--against NEW/results.json`
 compares two finished runs without surveying. Run the scripts' tests with
 `python -m unittest discover -s scripts -p "test_*.py"`.
 
+### Optimizer comparison harness
+
+[`scripts/compare_optimizers.py`](scripts/compare_optimizers.py) times the
+comparison arms of [middle-end.md](middle-end.md#comparison-arms) on the C
+programs in [`benches/c`](benches/c) (design and statistics:
+[methodology note](docs/research/optimizer-comparison-methodology.md)). It
+uses only the standard library and the bundled `target/llvm/bin/clang`.
+
+```sh
+cargo build --release
+python scripts/run.py compare_optimizers                       # A0 A1 A2 A3 R, 7 repetitions
+python scripts/run.py compare_optimizers --reps 11 --match 'sort*' --arms A2,A3,R
+python scripts/run.py compare_optimizers --ablate leave-one-out --arms none
+python scripts/run.py compare_optimizers --summarize target/optimizer-bench/RUN/results.jsonl
+```
+
+The harness finds `bcc-rust` under `target/*/release` (then `debug`; `--bcc`
+overrides) and builds for the host's triple (`--target` overrides; on Windows
+it is `x86_64-w64-windows-gnu`). Each run writes a fresh directory,
+`target/optimizer-bench/<time>/`, holding `results.jsonl` (one JSON object per
+line, appended as the run proceeds), `summary.md` and the built programs.
+
+For each program and arm it builds once and records the build's wall time
+(`compile_s`: the whole bcc process including the clang invocation, or clang
+alone for arm R). It then checks every arm's binary: exit status 0 (the
+programs return 0 only when their checksum matches a constant) and the same
+stdout as arm R. Unless `--no-interpreter-check` is given, it also builds each
+program with `-DBENCH_REDUCED`, a workload small enough for the IR interpreter,
+and requires each arm's binary to print what `bcc-rust --interpret` prints; a
+disagreement is a miscompile or an interpreter bug and is listed under
+"Excluded or failed", never dropped silently. Verified cells are then timed
+for `--reps` repetitions, interleaved so that drift in machine state hits every
+arm, with the arm order rotated each repetition.
+
+Records have a `kind`: `meta` (arms, clang version, start-up floor of an empty
+program), `oracle` and `interpreter_check` (reduced workload), `build_failed`,
+`verify` (the checked warm-up run) and `run` (one timed repetition: `benchmark`,
+`arm`, `rep`, `compile_s`, `run_s`, `cpu_user_s`, `cpu_sys_s`, `exit`,
+`output_ok`). Every record carries the compiler commit (`-dirty` if the tree
+differs from it) and the host. The harness warns if `src/` is newer than the
+`bcc-rust` it found.
+
+`summary.md` gives, per benchmark, the median and minimum seconds of each arm;
+each arm's ratio to the baseline (`--baseline`, default A2, below 1 is faster);
+the geometric mean of those ratios with a 95% percentile-bootstrap interval
+(resampling the repetitions of both arms within each benchmark), the geometric
+mean of the minima, and how many benchmarks the arm wins; the build times; and
+every excluded cell with its reason. The statistic is user plus system CPU time
+on POSIX and whole-process wall time on Windows (`--metric` overrides):
+`GetProcessTimes` ticks every 15.6 ms there, too coarse for 0.2 s runs. Wall
+time includes process start-up, which the summary reports.
+
+`--ablate leave-one-out` adds arm `A1-all` (the pass list printed by
+`bcc-rust --print-default-passes`, repeated `--ablate-rounds` times, default 2,
+because `--passes` runs a list once while the default pipeline repeats to a
+fixpoint) and `A1-no-<pass>` for each pass, compared with `A1-all`;
+`--ablate prefix` adds `A1-prefix-<k>` (the first k passes, k = 0 to n-1)
+beside `A1-all` instead. `--pin-cpu N` pins the harness and its programs to one
+CPU and `--high-priority` raises their priority on Windows. Nothing here isolates a CPU or fixes the clock, so a
+Windows run shows trends only; take final generated-code numbers on native
+Linux, as the methodology note's section 4.2 says. Run the harness's tests
+with `python -m unittest discover -s scripts -p "test_compare_optimizers.py"`;
+`cargo test --test bench_corpus` runs the reduced programs in the interpreter.
+
 ### Branch cleanup
 
 [`scripts/branch-cleanup.rs`](scripts/branch-cleanup.rs) is a nightly Cargo
