@@ -385,3 +385,37 @@ block3:
     assert_eq!(report.transformations(), 0);
     assert!(report.limit_reached());
 }
+
+/// Found by the differential tests (seed 0xbcc0d217): `block3` forwards to
+/// `block4`, which uses its parameter, so an edge may be threaded to
+/// `block3` but not past it.
+#[test]
+fn a_forwarding_block_whose_parameter_is_used_later_is_kept() {
+    let input = "\
+function @f(i32, i1) -> i32 external {
+block0(v0: i32, v1: i1):
+    brif v1, block1, block2
+block1:
+    jump block3(v0)
+block2:
+    v2 = iconst.i32 7
+    jump block3(v2)
+block3(v3: i32):
+    jump block4
+block4:
+    return v3
+}
+";
+    let expected = "\
+function @f(i32, i1) -> i32 external {
+block0(v0: i32, v1: i1):
+    brif v1, block2(v0), block1
+block1:
+    v2 = iconst.i32 7
+    jump block2(v2)
+block2(v3: i32):
+    return v3
+}
+";
+    assert_pass(Pass::SimplifyCfg, input, expected);
+}

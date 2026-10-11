@@ -8,9 +8,12 @@
 //!    forwards to, with the forwarding block's parameters replaced by the
 //!    edge's arguments. The arguments the forwarding block passes on may be its
 //!    own parameters or values defined above it; the latter dominate the
-//!    forwarding block and so every predecessor. An edge is left alone when
-//!    redirecting it would give one terminator two edges to a block with
-//!    different arguments, which the verifier forbids.
+//!    forwarding block and so every predecessor. A forwarding block whose
+//!    parameters are used anywhere but in its own `jump` is not skipped: the
+//!    blocks it dominates may use them, and a threaded edge would reach those
+//!    blocks without defining them. An edge is left alone when redirecting it
+//!    would give one terminator two edges to a block with different arguments,
+//!    which the verifier forbids.
 //! 2. **Fold identical branches**: a `brif` whose two edges agree, or a
 //!    `switch` whose edges all agree, becomes a `jump`.
 //! 3. **Remove unreachable blocks**, all at once and counted as one rewrite: a
@@ -69,13 +72,16 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
 fn thread_jumps(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> bool {
     let mut changed = false;
     let reachable = draft.reachable();
+    // Threading only redirects edges, so it never adds a use of a forwarding
+    // block's parameter outside that block; counts taken now stay safe.
+    let uses = draft.use_counts();
     for index in 0..draft.blocks.len() {
         let block = Block::new(index);
         if !draft.block(block).alive || !reachable[index] {
             continue;
         }
         for edge_index in 0..draft.block(block).term.edges().count() {
-            let Some((target, args)) = threaded(draft, block, edge_index) else {
+            let Some((target, args)) = threaded(draft, &uses, block, edge_index) else {
                 continue;
             };
             if !report.allow() {
@@ -98,9 +104,10 @@ fn thread_jumps(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> b
 /// Where the `edge_index`th edge of `block` would lead if it skipped every
 /// forwarding block on its way, with the arguments it would pass. `None` if
 /// it would not move, or if moving would give the terminator two edges to a
-/// block with different arguments.
+/// block with different arguments. `uses` are the draft's use counts.
 fn threaded<'s>(
     draft: &Draft<'_, 's>,
+    uses: &[u32],
     block: Block,
     edge_index: usize,
 ) -> Option<(Block, ArenaVec<'s, Value>)> {
@@ -124,6 +131,19 @@ fn threaded<'s>(
         }
         if visited.contains(&next.target) {
             return None;
+        }
+        let own_uses = |param: Value| {
+            next.args
+                .iter()
+                .filter(|&&arg| draft.resolve(arg) == param)
+                .count()
+        };
+        if forwarder
+            .params
+            .iter()
+            .any(|&param| uses[param.index()] as usize != own_uses(param))
+        {
+            break;
         }
         let mut next_args = ArenaVec::with_capacity_in(next.args.len(), draft.scratch);
         for &arg in &next.args {
