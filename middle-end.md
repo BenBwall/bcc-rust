@@ -177,10 +177,47 @@ dyn_alloca size, align           → ptr     (VLAs; later)
 ```
 
 Calls: `call func(args)` and `call_indirect sig, callee(args)`, each with zero
-or one result before ABI lowering (multi-result calls are reserved for post-ABI
-register pairs). A call to a variadic signature carries its extra arguments after
-the fixed ones. `va_start`, `va_arg`, `va_copy` and `va_end` are operations until
-ABI lowering expands `va_arg` for the target.
+or one result in both profiles. A call to a variadic signature carries its extra
+arguments after the fixed ones. `va_start`, `va_arg`, `va_copy` and `va_end` are
+operations until ABI lowering expands `va_arg` for the target; `va_start`,
+`va_copy` and `va_end` stay operations after it.
+
+**Aggregates at calls.** The IR has no aggregate values, so a structure or union
+passed or returned by value is a `ptr` parameter that the signature describes
+with an aggregate kind and the layout facts conventions classify by: size,
+alignment, whether a member is misaligned (`unaligned`) or the aggregate ends in
+a flexible array (`flexible`), and, for aggregates of at most 16 bytes, the
+scalars it flattens to by offset (lowering records these from sema's type
+graph, since the IR has none). Before ABI lowering there are two kinds:
+
+```text
+function @swap(ptr result(size 16, align 8, [0: i64, 8: f64]),
+               ptr aggregate(size 16, align 8, [0: i64, 8: f64])) external
+```
+
+- `aggregate(...)`: the argument is a copy the caller made for this call; the
+  callee owns it until it returns, may write it, and nothing else addresses it.
+  The callee uses it as the parameter object itself.
+- `result(...)`, parameter 0 only, in a signature without a result: the address
+  of a fresh object the caller passes, which the callee stores the result into
+  before returning.
+
+Aggregates in the variable part of a call are not described and are refused by
+lowering. ABI lowering replaces each description by the target's decision:
+plain scalars for an aggregate in registers, a plain `ptr` for one passed by
+reference (Win64), nothing for an empty one (System V), or one of three
+post-ABI kinds:
+
+- `byval(size, align)`: copied to the stack argument area (LLVM `byval`); the
+  alignment is the stack slot's.
+- `sret(size, align)`, parameter 0: returned in memory (LLVM `sret`).
+- `registers(t1[, t2], align a)`, parameter 0: returned in one or two registers.
+  The IR keeps storing the result through the parameter, a *return area*, but
+  the parameter is not passed: a back end reserves the area in the callee and
+  loads the registers from it at `return`, and in the caller stores the
+  returned registers to the area the call passes, which ABI lowering makes at
+  least as large as the registers. This settles post-ABI register pairs without
+  multi-result values.
 
 Terminators end every block and nothing else does:
 
@@ -266,7 +303,11 @@ on every parsed test input. It checks:
   types, and duplicate edges to one block pass identical arguments;
 - every use is dominated by its definition (dominators from the iterative
   Cooper-Harvey-Kennedy algorithm);
-- the profile's constraints (no aggregate-typed call operands post-ABI).
+- the profile's constraints: no `va_arg` post-ABI; each aggregate kind only in
+  its profile, on a `ptr` parameter, results on parameter 0 of a signature
+  without a result, and layout scalars within the aggregate. A post-ABI module
+  prints an `abi lowered` line, which the interpreter reads to lay out
+  `va_list` for the target.
 
 ## From the front end to the IR (lowering)
 
@@ -343,7 +384,8 @@ analysis, and builds IR with a function builder:
 The first lowering covers: integer and pointer arithmetic, comparisons, casts
 between integer types, `&& || ?: !`, assignment and compound assignment, `++`
 and `--`, local scalars (SSA and address-taken), arrays and structs in stack
-slots with member access and subscripts, direct calls, string literals,
+slots with member access and subscripts, direct and indirect calls, structures
+and unions passed and returned by value, string literals,
 `if`/`while`/`do`/`for`/`break`/`continue`/`return`, and file-scope functions.
 It rejects anything else with a "not yet supported by lowering" diagnostic
 rather than producing wrong code.
@@ -379,6 +421,56 @@ motion (`licm`) and dead code elimination (`dce`). Promotion runs first so the
 other passes see SSA values, value numbering before code motion so one copy of
 a repeated invariant moves, and dead code elimination last so it sweeps what
 the others leave. Inlining is not implemented.
+
+## ABI lowering
+
+`abi::lower_abi(module, target, scratch)` turns a verified pre-ABI module into a
+post-ABI one. The driver calls it after the optimizer and before any back end:
+
+```text
+lower_translation_unit → optimize → lower_abi → emit_module (LLVM) | run (interpreter)
+```
+
+It plans every interned signature for the target, gives each function its
+lowered signature, and rebuilds each body: the entry block rebuilds an
+aggregate that arrived in registers in a fresh slot standing for the old
+pointer parameter; each call loads the register parts of its aggregate
+arguments from their copies (one load for a lone scalar, else scalar by scalar
+with `freeze`, so an unwritten member does not poison its neighbours, and byte
+by byte for overlapping union members), makes `byval` copies and return areas
+as aligned and large as the target needs, and drops ignored aggregates; each
+`va_arg` becomes the target's walk over `va_list` and a load. Unsupported cases
+are reported before anything changes. The interpreter runs both profiles; in a
+post-ABI module its `va_start` lays the variadic arguments out as the target
+passes them.
+
+**System V x86-64** (Linux): eightbyte classification per the psABI §3.2.3, with
+Clang's choices where the document leaves room — aggregates over 16 bytes,
+with a misaligned member or a flexible array member are MEMORY; INTEGER
+eightbytes travel as the narrowest integer covering their scalars (or the lone
+scalar's own type), SSE ones as `f32` or `f64`, SSE+SSEUP as `f128`, and a
+narrow low part before a narrow high part widens to eight bytes. Arguments get
+registers only if all they need of the six general and eight vector registers
+are free; an `sret` pointer takes the first. `long double` aggregates go in
+memory as arguments and come back in ST0 (`registers(f80)`). `va_arg` follows
+psABI §3.5.7 for integers, pointers, `f32`, `f64`, `i128`, `f80` and `f128`.
+
+**Win64** (both Windows targets): aggregates of 1, 2, 4 or 8 bytes without a
+flexible array member travel as integers of that size and come back in RAX;
+any other is passed by reference to the caller's copy and returned through
+`sret`. `va_arg` reads 8-byte slots for scalars of at most eight bytes; `i128`,
+`f80` and `f128` are refused for now.
+
+**Known gaps:** scalar `signext`/`zeroext` attributes for `char` and `short`
+parameters and results, which Clang emits on System V, are not produced yet;
+aggregates in the variable part of a call and `va_arg` of aggregates are
+unsupported; packed structures and bit-fields in small aggregates do not reach
+ABI lowering yet, since the front end does not model them.
+
+The conformance tests in `src/abi/tests/conformance.rs` link bcc-compiled C with
+Clang-compiled C, exchanging every supported shape in both directions, and run
+the result: natively for Windows GNU and under WSL, as a freestanding static
+executable, for System V.
 
 ## From the IR to machine code
 
@@ -531,7 +623,9 @@ larger corpus (Embench, Polybench) and the report itself.
 - Byte-offset `getelementptr i8` versus typed GEPs: measure LLVM's response on
   one benchmark before settling the printer.
 - Multi-result values versus a pair projection for post-ABI calls returning two
-  registers.
+  registers: ABI lowering avoids both for now with return areas
+  (`registers(...)`); revisit when a native back end wants the registers as
+  values.
 - Whether contiguous per-block instruction storage stays cheap once inlining and
   LICM move code; measure before switching to linked lists.
 - The `returns_twice` rule for the in-house optimizer needs a test written from
