@@ -16,6 +16,7 @@ use std::{
     thread,
 };
 
+mod asm_labels;
 mod runtime_calls;
 mod union_initializers;
 

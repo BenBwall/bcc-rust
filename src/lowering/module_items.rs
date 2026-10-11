@@ -13,6 +13,7 @@ use super::{
     LoweringError,
     LoweringErrorKind,
     address_taken,
+    extensions::SymbolNames,
     floats,
     initializers::{
         self,
@@ -96,15 +97,18 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     pub(super) context:       &'a Context<'tu>,
     pub(super) sema:          &'a SemanticTranslationUnit<'tu>,
     pub(super) module:        Module<'ir>,
-    tables:                   &'a Bump,
+    pub(super) tables:        &'a Bump,
+    pub(super) target:        Target,
+    pub(super) names:         SymbolNames<'a>,
     /// Each binding by its declared identifier, so a declarator finds its
     /// binding without a search.
     declarators:              ArenaMap<'a, (StringCacheId, SourceVectors), usize>,
     definitions:              ArenaMap<'a, usize, DefinitionKind>,
-    /// Completed types of linked object definitions, including tentative ones.
+    /// Completed types of linked object definitions, including tentative ones,
+    /// indexed by emitted symbol name after applying GNU assembler labels.
     /// C99: §6.2.7 paragraph 4, p. 40; PDF p. 52; §6.9.2 paragraph 2,
     /// p. 143; PDF p. 155.
-    defined_objects:          ArenaMap<'a, StringCacheId, usize>,
+    defined_objects:          ArenaMap<'a, &'a str, usize>,
     /// Definitions share their linked name across separate semantic bindings.
     /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42.
     defined_functions:        ArenaSet<'a, StringCacheId>,
@@ -129,12 +133,45 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         syntax: &ParsedTranslationUnit<'tu>,
         errors: &mut ArenaVec<'_, LoweringError>,
     ) -> ArenaVec<'a, (&'tu FunctionRecord<'tu>, Option<FuncId>)> {
+        // Reserve an alias with its definition's completed layout even when
+        // the alias's C identifier differs (GNU extension to C99 §6.2.2p2).
+        for definition in self.sema.definitions {
+            let binding = self.sema.bindings[definition.binding];
+            if matches!(
+                definition.kind,
+                DefinitionKind::Object | DefinitionKind::Tentative
+            ) && binding.linkage != Linkage::None
+            {
+                let previous = self
+                    .defined_objects
+                    .insert(self.symbol_name(definition.binding), definition.binding);
+                if let Some(previous) = previous
+                    && self.sema.bindings[previous].name.name != binding.name.name
+                {
+                    errors.push(LoweringError::unsupported(
+                        Construct::AssemblerLabel,
+                        binding.name.source_vectors,
+                    ));
+                    return ArenaVec::new_in(self.tables);
+                }
+            }
+        }
         let mut functions = ArenaVec::with_capacity_in(self.sema.functions.len(), self.tables);
+        let mut bodies = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
         for record in self.sema.functions {
-            let func = self.declare_definition(record).unwrap_or_else(|error| {
+            let mut func = self.declare_definition(record).unwrap_or_else(|error| {
                 errors.push(error);
                 None
             });
+            if let Some(id) = func
+                && !bodies.insert(id)
+            {
+                errors.push(LoweringError::unsupported(
+                    Construct::AssemblerLabel,
+                    record.syntax.source_vectors,
+                ));
+                func = None;
+            }
             functions.push((record, func));
         }
         let mut initializers: ArenaMap<'_, usize, &'tu Initializer<'tu>> =
@@ -200,7 +237,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// with the signature of the binding's type.
     pub(super) fn function(&mut self, binding: usize) -> Result<FuncId, LoweringErrorKind> {
         let data = self.sema.bindings[binding];
-        let name = self.context.string_cache.at(data.name.name);
+        let name = self.symbol_name(binding);
         let runtime = library_builtin_name(name);
         let name = runtime.unwrap_or(name);
         if let Some(Symbol::Function(func)) = self.module.symbol(name) {
@@ -213,9 +250,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             return Ok(func);
         }
         if self.module.symbol(name).is_some() {
-            return Err(LoweringErrorKind::MissingFact(
-                "a function and an object share a name",
-            ));
+            return Err(LoweringErrorKind::Unsupported(Construct::AssemblerLabel));
         }
         let signature = if self.unprototyped_external(binding) {
             // C99 §6.5.2.2p6: a declaration without a prototype accepts
@@ -357,19 +392,18 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             };
             return Ok(self.function_name(binding, name));
         }
-        let name = self.context.string_cache.at(data.name.name);
+        let name = self.symbol_name(binding);
         match self.module.symbol(name) {
             | Some(Symbol::Global(global)) => Ok(global),
-            | Some(Symbol::Function(_)) => Err(LoweringErrorKind::MissingFact(
-                "a function and an object share a name",
-            )),
+            | Some(Symbol::Function(_)) =>
+                Err(LoweringErrorKind::Unsupported(Construct::AssemblerLabel)),
             | None => {
                 // C99 §6.2.7p4, §6.9.2p2: an initializer can refer to an
                 // earlier incomplete declaration. Reserve the same symbol
                 // using the definition's completed type from the outset.
                 let data = self
                     .defined_objects
-                    .get(&data.name.name)
+                    .get(name)
                     .map_or(data, |&binding| self.sema.bindings[binding]);
                 let declaration = self.global_declaration(data, linkage(data))?;
                 Ok(self.module.declare_global(name, declaration))
@@ -397,7 +431,17 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     "{function}.{}",
                     self.context.string_cache.at(data.name.name)
                 );
-                let name = self.unique_name(base);
+                let name = if let Some(name) = self.names.local(binding) {
+                    if self.module.symbol(name).is_some() {
+                        return Err(LoweringError::unsupported(
+                            Construct::AssemblerLabel,
+                            source,
+                        ));
+                    }
+                    name
+                } else {
+                    self.unique_name(base)
+                };
                 let declaration = self
                     .global_declaration(data, IrLinkage::Internal)
                     .map_err(|kind| at(kind, source))?;
@@ -1009,17 +1053,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         for definition in sema.definitions {
             _ = definitions.insert(definition.binding, definition.kind);
         }
-        let mut defined_objects = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
-        for definition in sema.definitions {
-            let binding = sema.bindings[definition.binding];
-            if matches!(
-                definition.kind,
-                DefinitionKind::Object | DefinitionKind::Tentative
-            ) && binding.linkage != Linkage::None
-            {
-                _ = defined_objects.insert(binding.name.name, definition.binding);
-            }
-        }
+        let defined_objects = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
         let mut defined_functions = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables);
         for function in sema.functions {
             if let Some(binding) = function.binding {
@@ -1031,6 +1065,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             sema,
             module,
             tables,
+            target,
+            names: SymbolNames::new(tables),
             declarators,
             definitions,
             defined_functions,

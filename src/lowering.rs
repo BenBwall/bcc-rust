@@ -33,7 +33,8 @@
 //! Files by role:
 //! - Translation unit: `module_items.rs` declares functions and globals and
 //!   lays out static initializers; `address_taken.rs` finds the locals that
-//!   need memory.
+//!   need memory; `extensions.rs` checks calling conventions and records asm
+//!   labels from the retained declaration syntax.
 //! - Function bodies: `work.rs` defines tasks and operands; `statements.rs`
 //!   lowers statements and declarations; `expressions.rs` operators, calls and
 //!   conversions, including the floating ones; `places.rs` lvalues, loads and
@@ -52,6 +53,7 @@
 
 // Translation unit
 mod address_taken;
+mod extensions;
 mod module_items;
 
 // Function bodies
@@ -149,6 +151,7 @@ pub(crate) fn lower_translation_unit<'tu, 'ir>(
     }
     let tables = Bump::new();
     let mut unit = Unit::new(context, sema, target, arena, &tables);
+    unit.prepare_extensions(&mut errors);
     let functions = unit.declare_items(syntax, &mut errors);
     for record in functions {
         scratch.reset();

@@ -69,7 +69,11 @@ graph (`Types`, `TypeId`, `TypeKind`, `Tag`, `TagKind`, `Member`, `Field`,
 The semantic working arena (`'s`) owns continuations, value stacks, interning
 lookup, visible-binding lookup, linkage lookup and scope restoration lists. It
 is dropped before returning `SemanticTranslationUnit<'tu>`. Retained values have
-no destruction requirements. Collections use the repository's arena-backed
+no destruction requirements. Lowering also receives vendor-modified declarators visited by
+type construction and their specifier extension chains. It uses these to honor
+GNU assembler labels and reject unsupported calling conventions on declarations,
+typedefs, parameters and abstract type names before constructing IR symbols.
+Collections use the repository's arena-backed
 `ArenaMap`/`ArenaVec`; no compiler global allocator collections are introduced.
 
 One explicit `Work` stack composes specifier resolution, declarator construction,

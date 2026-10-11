@@ -22,12 +22,16 @@ use crate::{
     translation_phases::{
         Context,
         SourceVectors,
-        parsing::syntax::{
-            Expression,
-            ExpressionType,
-            FunctionDefinition,
-            Identifier,
-            UnaryOperator,
+        parsing::{
+            SpecifierExtension,
+            declaration_syntax::Declarator,
+            syntax::{
+                Expression,
+                ExpressionType,
+                FunctionDefinition,
+                Identifier,
+                UnaryOperator,
+            },
         },
     },
     util::{
@@ -39,6 +43,13 @@ use crate::{
 /// Durable semantic output. Working maps/stacks are gone when this is returned.
 #[derive(Debug)]
 pub(crate) struct SemanticTranslationUnit<'tu> {
+    /// Declarators with vendor modifiers visited by the explicit type stack,
+    /// including abstract declarators, retained for the lowering gate.
+    /// C99: §6.7.5-6.7.6, pp. 114-122; PDF pp. 126-134 (extensions).
+    pub(crate) declarators:        &'tu [Declarator<'tu>],
+    /// Specifier extension chains, including those on type names and
+    /// parameters. C99: §6.7, p. 97; PDF p. 109 (vendor extensions).
+    pub(crate) spec_extensions:    &'tu [&'tu SpecifierExtension<'tu>],
     pub(crate) types:              Types<'tu>,
     pub(crate) bindings:           &'tu [Binding],
     pub(crate) definitions:        &'tu [Definition],

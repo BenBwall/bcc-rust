@@ -302,7 +302,11 @@ digits, `_`, `.`, `$`, or non-ASCII characters other than controls. UTF-8
 identifiers (including decoded C universal character names) remain UTF-8.
 Other names use `@"name"`: quotes and backslashes escape as `\"` and `\\`,
 and controls as `\u{hex}` Unicode scalars. The parser accepts these same
-escapes and rejects invalid scalars. Values, blocks and stack slots have
+escapes and rejects invalid scalars and NUL (`\u{0}` or a literal NUL).
+Every function and global symbol name must be NUL-free; the verifier enforces
+this invariant for programmatically constructed modules too. C identifiers
+cannot introduce NUL (C99 §6.4.3p2); lowering also rejects it in asm labels.
+Values, blocks and stack slots have
 numeric IDs (`v0`, `block0`, `slot0`), not source identifier names.
 
 All alignments are powers of two from 1 through 2^31 bytes. `Align` construction
@@ -435,6 +439,15 @@ and unions passed and returned by value, string literals,
 `if`/`while`/`do`/`for`/`break`/`continue`/`return`, and file-scope functions.
 It rejects anything else with a "not yet supported by lowering" diagnostic
 rather than producing wrong code.
+
+GNU assembler labels select the IR symbol name of functions and static-duration
+objects, and propagate across linked declarations. Labels must be nonempty,
+NUL-free UTF-8; automatic register labels are unsupported. Lowering checks
+calling-convention modifiers on every declaration and type name, including
+typedefs and abstract function-pointer types. It accepts the target's default
+(`ms_abi` on Windows, `sysv_abi` on Linux) and the conventions bundled Clang
+ignores on x86-64 (`stdcall`, `cdecl`, `fastcall`, `thiscall`, `regparm`). Other
+conventions, such as the opposite target ABI or `vectorcall`, are refused.
 
 Floating point and bit-fields are lowered as well. `float`, `double` and
 `long double` become `f32`, `f64` and, on the x86 GNU targets, `f80` (`long

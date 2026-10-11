@@ -224,6 +224,8 @@ pub(crate) fn analyze<'tu>(
     analyzer.finish_translation_unit();
     let index = analyzer.retain_expression_index();
     SemanticTranslationUnit {
+        declarators:        analyzer.declarators.leak(),
+        spec_extensions:    analyzer.spec_extensions.leak(),
         expressions:        analyzer.expressions.leak(),
         expression_indices: index.expressions,
         conversions:        index.conversions,
@@ -508,6 +510,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     _ = self.resolved_type_names.insert(source, ty);
                 },
             | Work::Declarator(d, mut base, parameter) => {
+                if d.pointer
+                    .levels
+                    .iter()
+                    .any(|level| level.attributes.is_some())
+                    || d.kind.iter().any(|direct| {
+                        matches!(
+                            direct,
+                            DirectDeclarator::Attributes(_)
+                                | DirectDeclarator::MsModifier(..)
+                                | DirectDeclarator::AsmLabel(_)
+                        )
+                    })
+                {
+                    self.declarators.push(d);
+                }
                 for level in d.pointer.levels {
                     if !(level.qualifiers
                         - (TypeQualifiers::CONST
@@ -1294,6 +1311,8 @@ struct Analyzer<'a, 'tu, 's> {
     scratch:             &'s Bump,
     types:               TypeInterner<'tu, 's>,
     bindings:            ArenaVec<'tu, Binding>,
+    declarators:         ArenaVec<'tu, Declarator<'tu>>,
+    spec_extensions:     ArenaVec<'tu, &'tu SpecifierExtension<'tu>>,
     definitions:         ArenaVec<'tu, Definition>,
     /// Indexed by the function definition's traversal id.
     function_records:    ArenaVec<'tu, FunctionRecord<'tu>>,
