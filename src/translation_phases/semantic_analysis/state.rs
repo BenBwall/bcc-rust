@@ -34,6 +34,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             types: TypeInterner::new(tu, scratch, &target),
             bindings: ArenaVec::new_in(tu),
             definitions: ArenaVec::new_in(tu),
+            function_records: ArenaVec::new_in(tu),
             scopes: ArenaVec::new_in(tu),
             type_names: ArenaVec::new_in(tu),
             parameter_lists: ArenaVec::new_in(tu),

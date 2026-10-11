@@ -969,3 +969,176 @@ fn conversion_runs_cover_every_record_and_belong_to_their_expression() {
         },
     );
 }
+
+/// The function record of the definition named `name`, with its binding.
+fn function_record<'s, 'tu>(
+    context: &Context<'tu>,
+    sema: &'s crate::translation_phases::semantic_analysis::SemanticTranslationUnit<'tu>,
+    name: &str,
+) -> &'s crate::translation_phases::semantic_analysis::FunctionRecord<'tu> {
+    sema.functions
+        .iter()
+        .find(|f| {
+            f.binding
+                .is_some_and(|b| context.string_cache.at(sema.bindings[b].name.name) == name)
+        })
+        .expect("the function has a record")
+}
+
+/// Names and types of a record's parameter bindings.
+fn parameter_names(
+    context: &Context<'_>,
+    sema: &crate::translation_phases::semantic_analysis::SemanticTranslationUnit<'_>,
+    record: &crate::translation_phases::semantic_analysis::FunctionRecord<'_>,
+) -> Vec<Option<String>> {
+    use crate::translation_phases::semantic_analysis::{
+        BindingKind,
+        Duration,
+    };
+    record
+        .parameters
+        .iter()
+        .map(|parameter| {
+            parameter.map(|b| {
+                let binding = sema.bindings[b];
+                assert_eq!(binding.kind, BindingKind::Parameter);
+                assert_eq!(binding.duration, Duration::Automatic);
+                assert_eq!(
+                    binding.scope, record.scope,
+                    "parameters live in the function scope"
+                );
+                String::from(context.string_cache.at(binding.name.name))
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn function_records_link_a_prototype_definition_to_its_bindings() {
+    use crate::translation_phases::semantic_analysis::{
+        BindingKind,
+        Scalar,
+        ScopeKind,
+        TypeKind,
+    };
+    with_semantics(
+        "int helper(void) { return 0; }\nlong add(int a, long b) { int a2 = a; return a2 + b; }",
+        |context, unit, sema| {
+            assert!(sema.lowerable(context));
+            assert_eq!(sema.functions.len(), 2);
+            let helper = function_record(context, sema, "helper");
+            assert!(helper.parameters.is_empty(), "a lone void declares nothing");
+            let add = function_record(context, sema, "add");
+            let ExternalDeclaration::FunctionDefinition(syntax) = unit.external_declarations()[1]
+            else {
+                panic!("add is a function definition");
+            };
+            assert!(std::ptr::eq(add.syntax, syntax));
+            let binding = sema.bindings[add.binding.expect("add is bound")];
+            assert_eq!(binding.kind, BindingKind::Function);
+            assert!(matches!(
+                sema.types.kind(binding.ty),
+                TypeKind::Function { .. }
+            ));
+            assert_eq!(sema.types.kind(add.result), TypeKind::Scalar(Scalar::Long));
+            assert_eq!(sema.scopes[add.scope].kind, ScopeKind::Function);
+            assert_eq!(
+                parameter_names(context, sema, add),
+                [Some(String::from("a")), Some(String::from("b"))]
+            );
+            let b = sema.bindings[add.parameters[1].unwrap()];
+            assert_eq!(sema.types.kind(b.ty), TypeKind::Scalar(Scalar::Long));
+            // A use of the parameter in the body resolves to the same binding.
+            assert!(
+                sema.expressions
+                    .iter()
+                    .any(|info| info.binding == add.parameters[1])
+            );
+        },
+    );
+}
+
+#[test]
+fn function_records_list_old_style_parameters_in_identifier_order() {
+    use crate::translation_phases::semantic_analysis::{
+        Scalar,
+        TypeKind,
+    };
+    with_semantics(
+        "int old(a, b, c) float b; int a; char *c; { return a + (int)b + *c; }",
+        |context, _, sema| {
+            assert!(sema.lowerable(context));
+            let old = function_record(context, sema, "old");
+            assert_eq!(
+                parameter_names(context, sema, old),
+                [
+                    Some(String::from("a")),
+                    Some(String::from("b")),
+                    Some(String::from("c")),
+                ]
+            );
+            // The body sees the declared float; callers pass the promoted
+            // double that the composite function type lists (C99 §6.9.1p10).
+            let b = sema.bindings[old.parameters[1].unwrap()];
+            assert_eq!(sema.types.kind(b.ty), TypeKind::Scalar(Scalar::Float));
+            let function = sema.bindings[old.binding.unwrap()];
+            let TypeKind::Function {
+                parameters,
+                prototype,
+                ..
+            } = sema.types.kind(function.ty)
+            else {
+                panic!("old has a function type");
+            };
+            assert!(!prototype);
+            assert_eq!(
+                sema.types.kind(parameters[1]),
+                TypeKind::Scalar(Scalar::Double)
+            );
+        },
+    );
+}
+
+#[test]
+fn function_records_keep_implicit_int_parameters() {
+    let tu = Bump::new();
+    let mut context = Context::with_configuration(
+        &tu,
+        CompilerConfiguration::new(CStandard::C89, ExtensionPolicy::Allow),
+    );
+    let unit = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        "int old(x, y) double y; { return x; }\n",
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &unit);
+    assert!(sema.lowerable(&context));
+    let old = function_record(&context, &sema, "old");
+    assert_eq!(
+        parameter_names(&context, &sema, old),
+        [Some(String::from("x")), Some(String::from("y"))]
+    );
+}
+
+#[test]
+fn function_records_mark_unnamed_prototype_parameters() {
+    let tu = Bump::new();
+    let mut context = Context::with_configuration(
+        &tu,
+        CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow),
+    );
+    let unit = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        "int pick(int, int b) { return b; }\n",
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &unit);
+    assert!(sema.lowerable(&context), "C23 permits unnamed parameters");
+    let pick = function_record(&context, &sema, "pick");
+    assert_eq!(
+        parameter_names(&context, &sema, pick),
+        [None, Some(String::from("b"))]
+    );
+}

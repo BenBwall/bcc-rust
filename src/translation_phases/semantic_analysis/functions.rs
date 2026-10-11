@@ -19,6 +19,7 @@ use super::{
     Duration,
     Expression,
     FunctionDefinition,
+    FunctionRecord,
     FxBuildHasher,
     Identifier,
     Linkage,
@@ -166,6 +167,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.statements.switch = None;
         let id = self.functions.next_function;
         self.functions.next_function += 1;
+        debug_assert_eq!(
+            id,
+            self.function_records.len(),
+            "records follow function ids"
+        );
+        self.function_records.push(FunctionRecord {
+            syntax: f,
+            binding,
+            result,
+            scope: self.scope,
+            parameters: &[],
+        });
         self.functions.current = Some(FunctionContext {
             id,
             syntax: f,
@@ -200,10 +213,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if !old_style {
             let void = matches!(parameters, [Parameter { name: None, ty, .. }] if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Void)));
+            let mut parameter_bindings = ArenaVec::new_in(self.scratch);
             for (parameter_index, parameter) in parameters.iter().enumerate() {
                 if void {
                     continue;
                 }
+                parameter_bindings.push(None);
                 let syntax = match derivation {
                     | Some(DirectDeclarator::Function { parameter_list, .. }) =>
                         parameter_list.as_slice().get(parameter_index),
@@ -249,6 +264,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         None,
                     );
                     self.record_vm(self.bindings.len() - 1);
+                    if let Some(slot) = parameter_bindings.last_mut() {
+                        *slot = Some(self.bindings.len() - 1);
+                    }
                     // The body binding is distinct from its prototype binding.
                     // C99 §6.5.3.2p1, p. 78; PDF p. 90.
                     if matches!(derivation, Some(DirectDeclarator::Function { parameter_list, .. })
@@ -287,6 +305,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
             self.validate_definition_stars(derivation);
+            self.function_records[id].parameters =
+                self.types.tu.alloc_slice_copy(&parameter_bindings);
         }
         self.define_func_name(name);
         if !old_style {
@@ -565,7 +585,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let mut seen = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut parameters = ArenaVec::new_in(self.scratch);
+        let mut parameter_bindings = ArenaVec::new_in(self.scratch);
         for parameter in current.parameters {
+            parameter_bindings.push(None);
             let Some(name) = parameter.name else {
                 continue;
             };
@@ -582,6 +604,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .lookup(Namespace::Ordinary, name.name)
                 .filter(|e| e.scope == self.scope);
             let declared = if let Some(entry) = entry {
+                if let Some(slot) = parameter_bindings.last_mut() {
+                    *slot = Some(entry.binding);
+                }
                 self.bindings[entry.binding].ty
             } else {
                 let int = self.types.scalar(Scalar::Int);
@@ -593,6 +618,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Duration::Automatic,
                     None,
                 );
+                if let Some(slot) = parameter_bindings.last_mut() {
+                    *slot = Some(self.bindings.len() - 1);
+                }
                 if !self
                     .context
                     .configuration
@@ -629,6 +657,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             parameters.push(promoted);
         }
+        self.function_records[current.id].parameters =
+            self.types.tu.alloc_slice_copy(&parameter_bindings);
         let Some(index) = current.binding else {
             return;
         };

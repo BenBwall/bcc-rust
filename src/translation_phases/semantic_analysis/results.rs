@@ -10,6 +10,7 @@ use super::{
     Conversion,
     Expression,
     ExpressionInfo,
+    FunctionDefinition,
     Identifier,
     Integer,
     Parameter,
@@ -32,6 +33,16 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
         )
     )]
     pub(crate) definitions:        &'tu [Definition],
+    /// Every function definition in traversal order, nested GNU definitions
+    /// included, with its binding, body and parameter bindings.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Function records are retained for backend lowering."
+        )
+    )]
+    pub(crate) functions:          &'tu [FunctionRecord<'tu>],
     pub(crate) scopes:             &'tu [Scope],
     pub(crate) type_names:         &'tu [(SourceVectors, TypeId)],
     pub(crate) parameters:         &'tu [(SourceVectors, &'tu [Parameter])],
@@ -95,6 +106,39 @@ pub(crate) enum Duration {
     None,
     Automatic,
     Static,
+}
+
+/// A function definition with the facts lowering starts from, so that it
+/// never matches bindings by source position. Recovered definitions also
+/// have a record; lowering refuses their unit through the error gate.
+/// C99: §6.9.1 paragraphs 2-10, pp. 141-142; PDF pp. 153-154.
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Lowering reads these records; no lowering exists yet."
+    )
+)]
+pub(crate) struct FunctionRecord<'tu> {
+    pub(crate) syntax:     &'tu FunctionDefinition<'tu>,
+    /// The function's binding; its type is the composite function type,
+    /// which for an old-style definition lists the promoted parameter types
+    /// (§6.9.1p7). `None` when the declarator names nothing.
+    pub(crate) binding:    Option<usize>,
+    /// The declared result type, `Unknown` when it is invalid; a return
+    /// converts to its unqualified version (§6.8.6.4p3).
+    pub(crate) result:     TypeId,
+    /// The function scope that holds the parameters and the body's
+    /// outermost declarations (§6.9.1p9).
+    pub(crate) scope:      usize,
+    /// One entry per declared parameter in the declarator's order (the
+    /// identifier list for an old-style definition), each the parameter's
+    /// body binding. A lone `void` gives no entries. An unnamed parameter or
+    /// a repeated name has `None`. A binding's own type is the declared
+    /// type, which an old-style definition converts to from the promoted
+    /// argument type on entry (§6.9.1p10).
+    pub(crate) parameters: &'tu [Option<usize>],
 }
 
 /// A lexical scope and its enclosing scope.

@@ -477,6 +477,16 @@ Thus `int (*fp(int a))(int b)` binds `a` in its body, and a grouped
 K&R signature comparison uses that identical suffix and labels the previous
 declaration on a mismatch.
 
+`SemanticTranslationUnit.functions` retains one `FunctionRecord` per function
+definition in traversal order, nested GNU definitions and recovered ones
+included: the `FunctionDefinition` syntax, its binding, its result type, its
+function scope and the body bindings of its parameters in declarator order (the
+identifier list for an old-style definition). Unnamed parameters and repeated
+names have no binding; a lone `void` has no entry. An old-style parameter's
+binding keeps its declared type while the binding of the function holds the
+composite type with promoted parameter types, so lowering converts each
+argument on entry (§6.9.1p10, printed p. 142, PDF p. 154).
+
 Prototype definitions require named, complete adjusted parameters, with the sole
 unnamed `void` exception (§6.9.1p5 and §6.7.5.3p4, printed pp. 141 and 118,
 PDF pp. 153 and 130). C23 permits unnamed parameters. Earlier-mode pedantic
@@ -591,8 +601,9 @@ known calls. Opaque results suppress dependent return-conversion errors.
   effects remain conservative. The five requested GNU statement forms retain
   parser-owned extension policy; accepted opaque constructs are not certified.
 - The existing parameter-inspection metadata still uses source provenance;
-  definition binding and K&R comparisons use suffix identity. A backend requiring
-  arbitrary parameter-site lookup should index the immutable suffixes itself.
+  definition binding and K&R comparisons use suffix identity. Lowering reaches
+  a definition's parameter bindings through its `FunctionRecord`; other
+  parameter sites, such as nested prototypes, have no retained index.
 - Initializer materialization, implicit object bytes, relocations and backend
   emitted-symbol selection remain lowering work. Definition records distinguish
   inline-only bodies from externally provided definitions.
