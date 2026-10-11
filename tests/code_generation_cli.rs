@@ -141,6 +141,20 @@ mod tests {
         }
     }
 
+    /// Opens a stdout handle whose writes fail. Rust's standard library
+    /// treats EBADF as a closed stdout and drops the output silently, so on
+    /// Unix a read-only descriptor does not fail; `/dev/full` reports ENOSPC.
+    fn failing_stdout(path: &Path) -> std::fs::File {
+        if cfg!(unix) {
+            std::fs::File::options()
+                .write(true)
+                .open("/dev/full")
+                .unwrap()
+        } else {
+            std::fs::File::open(path).unwrap()
+        }
+    }
+
     #[test]
     fn read_only_stdout_reports_an_error_without_panicking() {
         let path = temporary("read-only-stdout.txt");
@@ -152,7 +166,7 @@ mod tests {
             "--interpret",
             "--print-default-passes",
         ] {
-            let file = std::fs::File::open(&path).unwrap();
+            let file = failing_stdout(&path);
             let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
             _ = command.arg(flag).stdout(file);
             if flag != "--print-default-passes" {
