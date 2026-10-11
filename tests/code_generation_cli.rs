@@ -81,7 +81,6 @@ mod tests {
             "--emit=ir",
             "--emit=ir-abi",
             "--emit=llvm",
-            "--interpret",
             "--print-default-passes",
         ] {
             let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
@@ -104,6 +103,99 @@ mod tests {
                 text(&output.stderr)
             );
             assert!(output.stderr.is_empty(), "{flag}: {}", text(&output.stderr));
+        }
+    }
+
+    #[test]
+    fn closed_stdout_preserves_interpreter_status_and_traps() {
+        use std::process::Stdio;
+        for (ending, status, diagnostic) in [
+            ("return 42;", 42, ""),
+            ("exit(23);", 23, ""),
+            ("abort();", 134, ""),
+            (
+                "return 1 / zero;",
+                70,
+                "error: the interpreter stopped the program:",
+            ),
+        ] {
+            let source = format!(
+                "int putchar(int); void exit(int); void abort(void); int main(void) {{ int zero = \
+                 0; for (int i = 0; i < 20000; ++i) putchar(65); {ending} }}\n"
+            );
+            let mut child = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args(["--interpret", "--input", &source])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            drop(child.stdout.take());
+            let output = child.wait_with_output().unwrap();
+            let stderr = text(&output.stderr);
+            assert_eq!(output.status.code(), Some(status), "{ending}: {stderr}");
+            if diagnostic.is_empty() {
+                assert!(stderr.is_empty(), "{ending}: {stderr}");
+            } else {
+                assert!(stderr.contains(diagnostic), "{ending}: {stderr}");
+            }
+        }
+    }
+
+    #[test]
+    fn read_only_stdout_reports_an_error_without_panicking() {
+        let path = temporary("read-only-stdout.txt");
+        std::fs::write(&path, b"unchanged").unwrap();
+        for flag in [
+            "--emit=ir",
+            "--emit=ir-abi",
+            "--emit=llvm",
+            "--interpret",
+            "--print-default-passes",
+        ] {
+            let file = std::fs::File::open(&path).unwrap();
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command.arg(flag).stdout(file);
+            if flag != "--print-default-passes" {
+                _ = command.args(["--input", HELLO]);
+            }
+            let output = command.output().unwrap();
+            let stderr = text(&output.stderr);
+            assert_eq!(output.status.code(), Some(1), "{flag}: {stderr}");
+            assert!(
+                stderr.starts_with("error: failed writing to stdout: "),
+                "{flag}: {stderr}"
+            );
+            assert!(!stderr.contains("panicked"), "{flag}: {stderr}");
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), b"unchanged");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn interpreter_rejects_excessive_printf_widths_and_precisions() {
+        for format in [
+            "%18446744073709551616d",
+            "%999999999999999999999999999999d",
+            "%1048577d",
+            "%.18446744073709551616d",
+            "%.1048577d",
+        ] {
+            let source = format!(
+                "int printf(const char *, ...); int main(void) {{ printf(\"{format}\", 1); return \
+                 0; }}\n"
+            );
+            let output = bcc(&source, &["--interpret"]);
+            let stderr = text(&output.stderr);
+            assert_eq!(output.status.code(), Some(70), "{format}: {stderr}");
+            assert!(
+                stderr.starts_with("error: the interpreter stopped the program:"),
+                "{format}: {stderr}"
+            );
+            assert!(
+                output.stdout.is_empty(),
+                "{format}: output was padded before rejecting the format"
+            );
+            assert!(!stderr.contains("panicked"), "{format}: {stderr}");
         }
     }
 

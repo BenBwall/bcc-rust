@@ -203,6 +203,8 @@ pub(crate) enum Unsupported {
     AddressSpace,
     /// A `printf` conversion other than those the default host implements.
     FormatConversion,
+    /// A field width over the host's bounded padding limit.
+    FormatWidth,
     /// A post-ABI `va_start` in a module without a supported target.
     VaListTarget,
     /// A variadic argument wider than a Win64 slot, which the target would
@@ -217,6 +219,7 @@ impl fmt::Display for Unsupported {
             | Self::ObjectSize => "an object larger than the size limit",
             | Self::AddressSpace => "more objects than the interpreter can address",
             | Self::FormatConversion => "a printf conversion the host does not implement",
+            | Self::FormatWidth => "a printf field width larger than the size limit",
             | Self::VaListTarget => "a target va_list in a module without a known target",
             | Self::WideVariadic => "a Win64 variadic argument wider than eight bytes",
         })

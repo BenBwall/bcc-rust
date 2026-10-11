@@ -151,18 +151,12 @@ pub(super) fn print_default_passes() -> i32 {
     let mut separator = "";
     for pass in Pass::ALL {
         if let Err(error) = write!(stdout, "{separator}{pass}") {
-            if error.kind() == io::ErrorKind::BrokenPipe {
-                return 0;
-            }
-            panic!("failed printing to stdout: {error}");
+            return stdout_error(&error);
         }
         separator = ",";
     }
     if let Err(error) = writeln!(stdout).and_then(|()| stdout.flush()) {
-        if error.kind() == io::ErrorKind::BrokenPipe {
-            return 0;
-        }
-        panic!("failed printing to stdout: {error}");
+        return stdout_error(&error);
     }
     0
 }
@@ -320,11 +314,9 @@ fn interpret(module: &Module<'_>, target: Target) -> i32 {
     if let Err(error) = stdout
         .write_all(host.output())
         .and_then(|()| stdout.flush())
+        && error.kind() != io::ErrorKind::BrokenPipe
     {
-        if error.kind() == io::ErrorKind::BrokenPipe {
-            return 0;
-        }
-        panic!("failed printing to stdout: {error}");
+        return stdout_error(&error);
     }
     match result {
         // C99: §5.1.2.2.3 paragraph 1, p. 13; PDF p. 25: returning from
@@ -366,12 +358,19 @@ fn print_llvm(module: &Module<'_>, target: Target) -> i32 {
 fn print_stdout(text: fmt::Arguments<'_>) -> i32 {
     let mut stdout = io::stdout().lock();
     if let Err(error) = stdout.write_fmt(text).and_then(|()| stdout.flush()) {
-        if error.kind() == io::ErrorKind::BrokenPipe {
-            return 0;
-        }
-        panic!("failed printing to stdout: {error}");
+        return stdout_error(&error);
     }
     0
+}
+
+/// Closed consumers end forwarding quietly; other output errors are CLI
+/// failures rather than compiler panics.
+fn stdout_error(error: &io::Error) -> i32 {
+    if error.kind() == io::ErrorKind::BrokenPipe {
+        return 0;
+    }
+    eprintln!("error: failed writing to stdout: {error}");
+    FAILURE_STATUS
 }
 
 /// Emits an object in-process and links an executable when requested.

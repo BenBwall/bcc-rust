@@ -336,7 +336,12 @@ impl DefaultHost<'_> {
                 position += 1;
             }
             while let Some(&digit @ b'0'..=b'9') = self.scratch.get(position) {
-                spec.width = spec.width * 10 + usize::from(digit - b'0');
+                spec.width = spec
+                    .width
+                    .checked_mul(10)
+                    .and_then(|width| width.checked_add(usize::from(digit - b'0')))
+                    .filter(|&width| width <= MAX_FORMAT_WIDTH)
+                    .ok_or(Fault::Unsupported(Unsupported::FormatWidth))?;
                 position += 1;
             }
             // C99: §7.19.6.1 paragraph 7, pp. 276-277; PDF pp. 288-289:
@@ -421,6 +426,11 @@ struct Spec {
     zero:  bool,
     width: usize,
 }
+
+/// Interpreter limit on padding for one conversion (one MiB). Precision
+/// conversions are unsupported and trap before any precision is accumulated.
+/// C99: §7.19.6.1 paragraph 4, p. 275; PDF p. 287 (decimal field width).
+const MAX_FORMAT_WIDTH: usize = 1024 * 1024;
 
 impl Spec {
     /// Appends `body` to `output`, padded to the field width: with spaces
