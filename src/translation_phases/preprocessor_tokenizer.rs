@@ -1,12 +1,241 @@
-//! Preprocessing-token formation in translation phase 3.
+//! Each source buffer is processed once through translation phases 1-3.
+//! Trigraph replacement, newline mapping, and line splicing run first. The
+//! lexer then reads the resulting text from left to right, records token
+//! boundaries and original source positions, and saves diagnostics for replay
+//! when phase 4 reads each token. Comments and horizontal whitespace become one
+//! space; newlines stay.
 //!
-//! C99: §5.1.1.2p3, p. 10; PDF p. 22; lexical categories and maximal munch are
-//! §6.4p1-4, pp. 49-50; PDF pp. 61-62. This lexer does not form header-name
-//! tokens; `#include` handling interprets their source spelling in phase 4
-//! (§6.4p4, p. 50; PDF p. 62; §6.4.7, pp. 64-65; PDF pp. 76-77).
+//! For example, `ab` followed by a backslash, a physical newline, and `cd + 1`
+//! becomes `abcd + 1` after splicing. The lexing loop records an identifier, a
+//! space, `+`, a space, and a preprocessing number. Their positions still refer
+//! to the physical source. [`TokenSource`] reads these saved entries without
+//! lexing again.
+//!
+//! Read [`LexedFile::lex`] first, then [`Lexer::run`], [`Lexer`], and
+//! [`LexingFile`]. Follow [`splicing::splice`] for phases 1-2,
+//! [`Lexer::lex_token`] for token selection, and [`LexingFile::finish`] for
+//! packed storage. [`TokenSource`] and [`LexedFiles`] connect the saved file to
+//! phase 4.
+//!
+//! Files by role:
+//! - Source mapping: `splicing.rs` replaces trigraphs and deletes splices;
+//!   `positions.rs` maps offsets back to physical source positions.
+//! - Scanning: `scanning.rs` reads bytes and handles the end of input;
+//!   `scanning/tokens.rs` selects tokens, identifiers, and numbers;
+//!   `scanning/literals.rs` reads quoted tokens and comments;
+//!   `scanning/spelling.rs` records entries, spellings, and diagnostics;
+//!   `ucn.rs` canonicalizes identifier universal character names.
+//! - Packed storage: `storage.rs` packs entries and side tables.
+//! - Token sources: `token_source.rs` reads lexed files; `replay.rs` reads
+//!   tokens made in phase 4.
+//! - Token and diagnostic types: `token.rs` defines preprocessing tokens;
+//!   `errors.rs` defines the lexical diagnostics.
+//! - Tests: `tests.rs` checks lexer snapshots, replay, and preprocessing;
+//!   `storage.rs` also holds the packed-entry layout test.
+//!
+//! C99: §5.1.1.2 paragraph 1 (phases 1-3), pp. 9-10; PDF pp. 21-22;
+//! trigraph replacement §5.2.1.1 paragraph 1, p. 18; PDF p. 30;
+//! lexical categories and maximal munch §6.4 paragraphs 1-4, pp. 49-50;
+//! PDF pp. 61-62. Collapsing horizontal whitespace is the
+//! implementation-defined choice in phase 3. Header names are interpreted by
+//! phase-4 `#include` handling (§6.4 paragraph 4, p. 50; PDF p. 62; §6.4.7, pp.
+//! 64-65; PDF pp. 76-77). Escape values and conversion to C tokens belong to
+//! later phases.
 
-mod batch;
+// Source mapping.
+mod positions;
+mod splicing;
+
+// Token scanning.
+mod scanning;
+pub(crate) mod ucn;
+
+// Packed storage.
+mod storage;
+
+// Token sources.
 mod replay;
+mod token_source;
+
+// Token and diagnostic types.
+mod errors;
+mod token;
+
+pub(crate) use errors::{
+    PreprocessorTokenizerError,
+    PreprocessorTokenizerErrorType,
+};
+use positions::PositionTracker;
+pub(crate) use positions::position_after;
+use splicing::splice;
+pub(crate) use splicing::{
+    LogicalCharacter,
+    logical_characters,
+};
+use storage::{
+    Entry,
+    LexDiagnostic,
+    LexedFile,
+};
+pub(crate) use token::{
+    PreprocessorToken,
+    PreprocessorTokenType,
+};
+pub(crate) use token_source::{
+    LexedFiles,
+    TokenSource,
+};
+
+use super::{
+    Context,
+    SourcePosition,
+    SourceVector,
+    initial_processing::terminal_splice_length,
+    provenance::source_offset,
+};
+use crate::{
+    configuration::Feature,
+    util::{
+        bump::{
+            ArenaVec,
+            Bump,
+            TailVec,
+        },
+        string_cache::StringCacheId,
+    },
+};
+
+impl<'a> LexedFile<'a> {
+    /// Runs translation phases 1 through 3 over all of `source`, keeping the
+    /// result in `arena`.
+    /// C99: §5.1.1.2p1-3, pp. 9-10; PDF pp. 21-22.
+    ///
+    /// Lexing's temporary storage (text that phases 1 and 2 change, side
+    /// tables until they are copied beside the entries, and canonical UCN
+    /// spellings) comes from an arena of its own. It reserves a region only
+    /// when the file needs one of them, and releases it when the file is
+    /// lexed, so a large file's spliced copy does not stay committed for the
+    /// rest of preprocessing.
+    pub(super) fn lex(
+        context: &mut Context<'_>,
+        arena: &'a Bump,
+        source_file_index: u32,
+        source: &str,
+    ) -> Self {
+        assert!(
+            u32::try_from(source.len()).is_ok(),
+            "source file exceeds u32::MAX bytes"
+        );
+        let scratch = Bump::new();
+        let trigraphs = context.configuration.accepts(Feature::Trigraphs);
+        let (text, remaps) = splice(source, &scratch, trigraphs);
+        let terminal_splice = terminal_splice_length(source, trigraphs);
+        let file = Lexer::new(context, arena, &scratch, text, remaps, source.is_empty())
+            .with_terminal_splice(terminal_splice.is_some())
+            .run();
+        let escaped_final_newline = terminal_splice.map(|length| {
+            let index = source.len() - length;
+            let line_start = source[..index].rfind(['\r', '\n']).map_or(0, |i| i + 1);
+            SourceVector {
+                index: source_offset(index),
+                column: u32::try_from(source[line_start..index].chars().count() + 1)
+                    .expect("source column exceeds u32::MAX"),
+                line: file.eof.line.saturating_sub(1),
+                source_file_index,
+                length: source_offset(length),
+            }
+        });
+        file.finish(arena, source_file_index, escaped_final_newline)
+    }
+}
+
+impl<'arena, 's> Lexer<'_, '_, 'arena, 's> {
+    fn run(mut self) -> LexingFile<'arena, 's> {
+        loop {
+            let start = self.pos;
+            let position = self.tracker.advance(start);
+            self.read_end = false;
+            self.read_final_newline = false;
+            let Some(byte) = self.peek(start) else {
+                break;
+            };
+            self.reached_eof = false;
+            let lexed = if start == self.bytes.len() {
+                // The supplied final newline, read at the start of a token.
+                self.reached_eof = true;
+                self.file.final_newline_entry = Some(self.file.entries.len());
+                self.respelled(start, PreprocessorTokenType::Newline, "\n")
+            } else {
+                self.lex_token(start, position, byte)
+            };
+            self.push(position, lexed);
+        }
+        // Reading past the last entry is the cursor's to report.
+        self.pending.clear();
+        let end = self.tracker.advance(self.bytes.len());
+        self.file.eof = self.tracker.advance_past_deletions(self.bytes.len());
+        self.file.end_of_tokens = if self.reached_eof { self.file.eof } else { end };
+        self.file
+    }
+}
+
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is one piece of the end-of-input reading state."
+)]
+struct Lexer<'a, 'tu, 'arena, 's> {
+    /// One-byte spellings recur for punctuation and canonical whitespace.
+    /// Cache their IDs lazily to preserve the interner's insertion order.
+    ascii:               [Option<StringCacheId>; 128],
+    context:             &'a mut Context<'tu>,
+    text:                &'a str,
+    bytes:               &'a [u8],
+    tracker:             PositionTracker<'a>,
+    /// Spliced offset of the next token.
+    pos:                 usize,
+    /// High byte of the line number stored for the previous entry.
+    current_line_high:   u8,
+    /// Whether the input lacks a final newline, so one is supplied.
+    lacks_final_newline: bool,
+    /// Whether reading the end of input now yields the supplied newline.
+    /// Reading it withholds it until a real character is read again.
+    virtual_newline:     bool,
+    /// Whether the token being lexed read through the end of input.
+    reached_eof:         bool,
+    /// Whether the source's final newline is escaped by a line splice.
+    terminal_splice:     bool,
+    /// Whether reading the end of input now reports the escaped final
+    /// newline: until a real character is read again, it is reported once.
+    splice_armed:        bool,
+    /// Whether the token being lexed looked at the end of input.
+    read_end:            bool,
+    /// Whether the token being lexed read the supplied final newline.
+    read_final_newline:  bool,
+    /// Lexing's temporary storage.
+    scratch:             &'s Bump,
+    /// Diagnostics raised while lexing the current token, in order.
+    pending:             ArenaVec<'s, LexDiagnostic>,
+    file:                LexingFile<'arena, 's>,
+}
+
+/// A [`LexedFile`] while its entries are being lexed. Its side tables grow
+/// in the lexing scratch arena until they are copied after the entries.
+struct LexingFile<'arena, 's> {
+    /// The rest of the arena's reservation while lexing, committed as
+    /// entries are written, so it never moves or overcommits.
+    entries:               TailVec<'arena, Entry>,
+    line_high_starts:      ArenaVec<'s, (u32, u8)>,
+    end_of_tokens:         SourcePosition,
+    eof:                   SourcePosition,
+    diagnostics:           ArenaVec<'s, (u32, LexDiagnostic)>,
+    other_locations:       ArenaVec<'s, (u32, SourceVector)>,
+    final_newline_entry:   Option<usize>,
+    final_newline_readers: ArenaVec<'s, u32>,
+    lacks_final_newline:   bool,
+    end_readers:           ArenaVec<'s, u32>,
+}
+
+// Tests.
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -16,431 +245,3 @@ mod replay;
               compiler, not its tests."
 )]
 mod tests;
-mod token_source;
-pub(crate) mod ucn;
-
-use std::fmt::{
-    self,
-    Display,
-};
-
-pub(crate) use batch::{
-    LogicalCharacter,
-    logical_characters,
-    position_after,
-};
-pub(crate) use token_source::{
-    LexedFiles,
-    TokenSource,
-};
-
-use super::{
-    Context,
-    ErrorSeverity,
-    GetPosition,
-    GetSeverity,
-    GetSourceVectors,
-    SourcePosition,
-    SourceVector,
-    SourceVectors,
-};
-use crate::{
-    diagnostics::{
-        Diagnostic,
-        Explanation,
-        ToDiagnostic,
-        format_in,
-        quote_spelling,
-    },
-    util::{
-        bump::Bump,
-        string_cache::StringCacheId,
-    },
-};
-
-/// Phase-3 lexical failures and partial tokens.
-/// C99: §5.1.1.2p3, p. 10; PDF p. 22; §6.4p2-3, p. 49; PDF p. 61; §6.4.9p1-2,
-/// p. 66; PDF p. 78.
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum PreprocessorTokenizerErrorType {
-    /// An other preprocessing token cannot become a phase-7 token.
-    /// C99: §6.4p2-3, p. 49; PDF p. 61.
-    UnknownToken,
-    /// A source file ends in a partial comment.
-    /// C99: §5.1.1.2p3, p. 10; PDF p. 22.
-    UnterminatedBlockComment,
-    /// A source file ends in a partial `character-constant`.
-    /// C99: §5.1.1.2p3, p. 10; PDF p. 22; §6.4.4.4p1, p. 59; PDF p. 71.
-    UnterminatedCharacter,
-    /// A source file ends in a partial `string-literal`.
-    /// C99: §5.1.1.2p3, p. 10; PDF p. 22; §6.4.5p1, p. 62; PDF p. 74.
-    UnterminatedString,
-    /// A new-line cannot occur in a `c-char`.
-    /// C99: §6.4.4.4p1, p. 59; PDF p. 71.
-    NewlineInCharacter,
-    /// A new-line cannot occur in an `s-char`.
-    /// C99: §6.4.5p1, p. 62; PDF p. 74.
-    NewlineInString,
-}
-
-impl PreprocessorTokenizerErrorType {
-    /// Describes the error; `spelling` is the source text it points at.
-    pub(crate) fn explain_in<'d>(self, arena: &'d Bump, spelling: Option<&str>) -> Explanation<'d> {
-        let new = |message: &'d str| Explanation::new(arena, message);
-        match self {
-            | Self::UnknownToken => {
-                let character = spelling.and_then(|spelling| spelling.chars().next());
-                let quoted = fmt::from_fn(|f| match character {
-                    | Some('`') => f.write_str("'`'"),
-                    | Some(c) if c.is_control() => write!(f, "U+{:04X}", u32::from(c)),
-                    | Some(c) => write!(f, "`{c}`"),
-                    | None => f.write_str("character"),
-                });
-                new(format_in!(arena, "unexpected character {quoted} in source"))
-                    .label("no C token starts with this character")
-                    .note(
-                        "C99 §6.4: a preprocessing token that survives replacement must be \
-                         convertible to a C token",
-                    )
-            },
-            | Self::UnterminatedBlockComment => new("unterminated block comment")
-                .label("the file ends before the closing `*/`")
-                .note("C99 §5.1.1.2p3: a source file shall not end in a partial comment")
-                .help("close the comment with `*/`"),
-            | Self::UnterminatedCharacter =>
-                new("unterminated character constant").label("the file ends before the closing `'`"),
-            | Self::UnterminatedString =>
-                new("unterminated string literal").label("the file ends before the closing `\"`"),
-            | Self::NewlineInCharacter => new("unterminated character constant")
-                .label("the line ends before the closing `'`")
-                .note("C99 §6.4.4.4: a character constant cannot span lines")
-                .help("write `\\n` for a newline character"),
-            | Self::NewlineInString => new("unterminated string literal")
-                .label("the line ends before the closing `\"`")
-                .note("C99 §6.4.5: a string literal cannot span lines")
-                .help(
-                    "close the literal on this line and start another on the next; adjacent \
-                     literals are concatenated",
-                ),
-        }
-    }
-}
-
-impl Display for PreprocessorTokenizerErrorType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let arena = Bump::new();
-        f.write_str(self.explain_in(&arena, None).message)
-    }
-}
-
-impl PreprocessorTokenType {
-    /// Names the token kind for use in a message, such as "identifier" or
-    /// "`(`".
-    pub(crate) fn description(self) -> &'static str {
-        match self {
-            | Self::Identifier
-            | Self::UnavailableIdentifier
-            | Self::UnavailableUniversalIdentifier
-            | Self::UniversalIdentifier => "identifier",
-            | Self::Number => "number",
-            | Self::String | Self::GeneratedString => "string literal",
-            | Self::WideGeneratedString => "wide string literal",
-            | Self::Character => "character constant",
-            | Self::Other => "character",
-            | Self::Placeholder => "empty macro argument",
-            | Self::Newline => "end of line",
-            | Self::Whitespace => "whitespace",
-            | Self::Defined => "`defined`",
-            | Self::OpeningSquareBracket => "`[`",
-            | Self::ClosingSquareBracket => "`]`",
-            | Self::OpeningParenthesis => "`(`",
-            | Self::ClosingParenthesis => "`)`",
-            | Self::OpeningCurlyBrace => "`{`",
-            | Self::ClosingCurlyBrace => "`}`",
-            | Self::Period => "`.`",
-            | Self::Arrow => "`->`",
-            | Self::PlusPlus => "`++`",
-            | Self::MinusMinus => "`--`",
-            | Self::Ampersand => "`&`",
-            | Self::Asterisk => "`*`",
-            | Self::Plus => "`+`",
-            | Self::Minus => "`-`",
-            | Self::Tilde => "`~`",
-            | Self::ExclamationMark => "`!`",
-            | Self::ForwardSlash => "`/`",
-            | Self::Percent => "`%`",
-            | Self::LessThanLessThan => "`<<`",
-            | Self::GreaterThanGreaterThan => "`>>`",
-            | Self::LessThan => "`<`",
-            | Self::GreaterThan => "`>`",
-            | Self::LessThanEquals => "`<=`",
-            | Self::GreaterThanEquals => "`>=`",
-            | Self::EqualsEquals => "`==`",
-            | Self::ExclamationMarkEquals => "`!=`",
-            | Self::Caret => "`^`",
-            | Self::Pipe => "`|`",
-            | Self::AmpersandAmpersand => "`&&`",
-            | Self::PipePipe => "`||`",
-            | Self::QuestionMark => "`?`",
-            | Self::Colon => "`:`",
-            | Self::SemiColon => "`;`",
-            | Self::Ellipsis => "`...`",
-            | Self::Equals => "`=`",
-            | Self::AsteriskEquals => "`*=`",
-            | Self::ForwardSlashEquals => "`/=`",
-            | Self::PercentEquals => "`%=`",
-            | Self::PlusEquals => "`+=`",
-            | Self::MinusEquals => "`-=`",
-            | Self::LessThanLessThanEquals => "`<<=`",
-            | Self::GreaterThanGreaterThanEquals => "`>>=`",
-            | Self::AmpersandEquals => "`&=`",
-            | Self::CaretEquals => "`^=`",
-            | Self::PipeEquals => "`|=`",
-            | Self::Comma => "`,`",
-            | Self::Hash => "`#`",
-            | Self::HashHash => "`##`",
-        }
-    }
-
-    pub(crate) fn is_identifier(self) -> bool {
-        matches!(
-            self,
-            Self::Identifier
-                | Self::UniversalIdentifier
-                | Self::UnavailableIdentifier
-                | Self::UnavailableUniversalIdentifier
-        )
-    }
-
-    /// Describes a found token, quoting its spelling when the kind alone
-    /// does not say what was written.
-    pub(crate) fn found(self, spelling: Option<&str>) -> impl Display {
-        let spelled = matches!(
-            self,
-            Self::Identifier
-                | Self::Number
-                | Self::String
-                | Self::GeneratedString
-                | Self::WideGeneratedString
-                | Self::Character
-                | Self::Other
-        );
-        fmt::from_fn(move |f| match spelling {
-            | Some(spelling) if spelled && !spelling.is_empty() =>
-                write!(f, "{} {}", self.description(), quote_spelling(spelling)),
-            | _ => f.write_str(self.description()),
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct PreprocessorTokenizerError {
-    source_vector: SourceVector,
-    error_type:    PreprocessorTokenizerErrorType,
-    /// For an unknown token, the character after phases 1 and 2 that no
-    /// token starts with; its raw spelling may be a trigraph.
-    character:     Option<char>,
-}
-
-impl PreprocessorTokenizerError {
-    pub(crate) fn is_unclosed_header_string_at(&self, source: &SourceVector) -> bool {
-        matches!(
-            self.error_type,
-            PreprocessorTokenizerErrorType::UnterminatedString
-                | PreprocessorTokenizerErrorType::NewlineInString
-        ) && self.source_vector == *source
-    }
-
-    /// Reports a phase-3 character that survived preprocessing but cannot
-    /// become a C token in phase 7.
-    pub(crate) fn unknown_character(source_vector: SourceVector, character: char) -> Self {
-        Self {
-            source_vector,
-            error_type: PreprocessorTokenizerErrorType::UnknownToken,
-            character: Some(character),
-        }
-    }
-}
-
-impl std::error::Error for PreprocessorTokenizerError {}
-
-impl GetPosition for PreprocessorTokenizerError {
-    #[inline(always)]
-    fn position(&self, context: &Context<'_>) -> SourcePosition {
-        self.source_vector.position(context)
-    }
-}
-
-impl GetSourceVectors for PreprocessorTokenizerError {
-    #[inline(always)]
-    fn source_vectors(&self, context: &mut Context<'_>) -> SourceVectors {
-        context.create_source_vectors(
-            self.source_vector.position(context),
-            self.source_vector.source_file_index,
-            self.source_vector.length as usize,
-        )
-    }
-}
-
-impl GetSeverity for PreprocessorTokenizerError {
-    fn severity(&self) -> ErrorSeverity {
-        match self.error_type {
-            | PreprocessorTokenizerErrorType::UnknownToken
-            | PreprocessorTokenizerErrorType::UnterminatedBlockComment
-            | PreprocessorTokenizerErrorType::UnterminatedCharacter
-            | PreprocessorTokenizerErrorType::UnterminatedString
-            | PreprocessorTokenizerErrorType::NewlineInCharacter
-            | PreprocessorTokenizerErrorType::NewlineInString => ErrorSeverity::Error,
-        }
-    }
-}
-
-impl Display for PreprocessorTokenizerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.error_type)
-    }
-}
-
-impl ToDiagnostic for PreprocessorTokenizerError {
-    fn diagnostic_in<'d>(
-        &self,
-        context: &Context<'_>,
-        source: SourceVectors,
-        arena: &'d Bump,
-    ) -> Diagnostic<'d> {
-        let mut buffer = [0; 4];
-        let spelling = match self.character {
-            | Some(character) => Some(&*character.encode_utf8(&mut buffer)),
-            | None => context.source_spelling(source),
-        };
-        self.error_type
-            .explain_in(arena, spelling)
-            .at(self.severity(), source)
-    }
-}
-
-/// Phase-3 preprocessing-token categories plus phase-4 internal markers.
-/// C99: §6.4p1-3, p. 49; PDF p. 61; placemarkers §6.10.3.3, p. 154; PDF p. 166.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum PreprocessorTokenType {
-    // Identifiers: C99 §6.4.2.1p1, p. 51; PDF p. 63.
-    Identifier,
-    /// Suppressed during rescan; remains unavailable in later rescans
-    /// C99: §6.10.3.4p2, p. 155; PDF p. 167.
-    UnavailableIdentifier,
-    /// Canonical identity is in contents; this payload preserves source
-    /// spelling.
-    UniversalIdentifier,
-    UnavailableUniversalIdentifier,
-    // `pp-number`: C99 §6.4.8p1, p. 65; PDF p. 77.
-    Number,
-    // Quoted preprocessing tokens: C99 §6.4.5p1, p. 62; PDF p. 74;
-    // §6.4.4.4p1, p. 59; PDF p. 71.
-    String,
-    Character,
-
-    /// A non-whitespace character outside the other pp-token categories
-    /// (C99 §6.4p3). It can be discarded or stringified in phase 4.
-    Other,
-
-    // Stringification: C99 §6.10.3.2p2, p. 153; PDF p. 165.
-    // Expanded from hash operator
-    GeneratedString,
-    // A generated string with an L, u, U or u8 prefix formed by pasting.
-    WideGeneratedString,
-
-    // Placemarkers are internal to phase 4: C99 §6.10.3.3p2,
-    // p. 154; PDF p. 166.
-    // Generated when a macro argument generated no tokens
-    Placeholder,
-
-    // Phase-3 whitespace: C99 §5.1.1.2p3, p. 10; PDF p. 22.
-    // Whitespace
-    Newline,
-    Whitespace,
-
-    // The `defined` operator: C99 §6.10.1p1, pp. 147-148;
-    // PDF pp. 159-160.
-    // Phase-4 conditional operator
-    Defined,
-
-    // Punctuation: C99 §6.4.6p1, p. 63; PDF p. 75; digraphs
-    // §6.4.6p3, p. 64; PDF p. 76.
-    // In order of appearance in the C99 standard.
-    OpeningSquareBracket,
-    ClosingSquareBracket,
-    OpeningParenthesis,
-    ClosingParenthesis,
-    OpeningCurlyBrace,
-    ClosingCurlyBrace,
-    Period,
-    Arrow,
-    PlusPlus,
-    MinusMinus,
-    Ampersand,
-    Asterisk,
-    Plus,
-    Minus,
-    Tilde,
-    ExclamationMark,
-    ForwardSlash,
-    Percent,
-    LessThanLessThan,
-    GreaterThanGreaterThan,
-    LessThan,
-    GreaterThan,
-    LessThanEquals,
-    GreaterThanEquals,
-    EqualsEquals,
-    ExclamationMarkEquals,
-    Caret,
-    Pipe,
-    AmpersandAmpersand,
-    PipePipe,
-    QuestionMark,
-    Colon,
-    SemiColon,
-    Ellipsis,
-    Equals,
-    AsteriskEquals,
-    ForwardSlashEquals,
-    PercentEquals,
-    PlusEquals,
-    MinusEquals,
-    LessThanLessThanEquals,
-    GreaterThanGreaterThanEquals,
-    AmpersandEquals,
-    CaretEquals,
-    PipeEquals,
-    Comma,
-    Hash,
-    HashHash,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct PreprocessorToken {
-    pub(crate) kind:           PreprocessorTokenType,
-    pub(crate) source_vectors: SourceVectors,
-    pub(crate) contents:       StringCacheId,
-}
-
-impl PreprocessorToken {
-    pub(crate) fn identifier_id(self, context: &Context<'_>) -> StringCacheId {
-        match self.kind {
-            | PreprocessorTokenType::UniversalIdentifier
-            | PreprocessorTokenType::UnavailableUniversalIdentifier =>
-                context.canonical_identifiers[&self.contents],
-            | _ => self.contents,
-        }
-    }
-}
-
-impl Default for PreprocessorToken {
-    fn default() -> Self {
-        Self {
-            kind:           PreprocessorTokenType::WideGeneratedString,
-            source_vectors: SourceVectors::empty(),
-            contents:       StringCacheId::from_u32(u32::MAX),
-        }
-    }
-}

@@ -24,23 +24,6 @@ use crate::util::{
     vector_slice::VectorSlice,
 };
 
-#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
-pub(crate) struct SourcePosition {
-    pub(crate) index:  usize,
-    pub(crate) line:   u32,
-    pub(crate) column: u32,
-}
-
-impl Default for SourcePosition {
-    fn default() -> Self {
-        Self {
-            index:  0,
-            line:   1,
-            column: 1,
-        }
-    }
-}
-
 /// One contiguous source segment. Byte offsets and lengths are `u32`, which
 /// limits a source file to 4 GiB and keeps the many vectors the parser
 /// retains at 20 bytes each.
@@ -54,25 +37,6 @@ pub(crate) struct SourceVector {
 }
 
 impl SourceVector {
-    pub(crate) fn new(
-        start_position: SourcePosition,
-        source_file_index: u32,
-        length: usize,
-    ) -> Self {
-        let index = source_offset(start_position.index);
-        let length = source_offset(length);
-        _ = index
-            .checked_add(length)
-            .expect("source vector end exceeds u32::MAX");
-        Self {
-            index,
-            column: start_position.column,
-            line: start_position.line,
-            source_file_index,
-            length,
-        }
-    }
-
     /// The byte offset just past this segment.
     pub(crate) fn end(&self) -> usize {
         self.index as usize + self.length as usize
@@ -93,6 +57,34 @@ impl SourceVector {
     pub(crate) fn range(&self) -> Range<usize> {
         self.index as usize..self.end()
     }
+
+    pub(crate) fn new(
+        start_position: SourcePosition,
+        source_file_index: u32,
+        length: usize,
+    ) -> Self {
+        let index = source_offset(start_position.index);
+        let length = source_offset(length);
+        _ = index
+            .checked_add(length)
+            .expect("source vector end exceeds u32::MAX");
+        Self {
+            index,
+            column: start_position.column,
+            line: start_position.line,
+            source_file_index,
+            length,
+        }
+    }
+}
+
+pub(crate) type SourceVectors = VectorSlice<SourceVector>;
+
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
+pub(crate) struct SourcePosition {
+    pub(crate) index:  usize,
+    pub(crate) line:   u32,
+    pub(crate) column: u32,
 }
 
 /// Converts a source byte offset or length to its stored width.
@@ -102,67 +94,6 @@ impl SourceVector {
 /// If a source file exceeds 4 GiB.
 pub(crate) fn source_offset(offset: usize) -> u32 {
     u32::try_from(offset).expect("source files larger than 4 GiB are not supported")
-}
-
-impl Default for SourceVector {
-    fn default() -> Self {
-        Self {
-            index:             0,
-            column:            1,
-            line:              1,
-            source_file_index: 0,
-            length:            0,
-        }
-    }
-}
-
-impl GetPosition for SourceVector {
-    #[inline(always)]
-    fn position(&self, _context: &Context<'_>) -> SourcePosition {
-        SourcePosition {
-            index:  self.index as usize,
-            line:   self.line,
-            column: self.column,
-        }
-    }
-}
-
-pub(crate) type SourceVectors = VectorSlice<SourceVector>;
-
-impl GetPosition for SourceVectors {
-    #[inline(always)]
-    fn position(&self, context: &Context<'_>) -> SourcePosition {
-        context.diagnostic_position(*self)
-    }
-}
-
-impl GetSourceVectors for SourceVectors {
-    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
-        *self
-    }
-}
-
-impl GetPosition for SourcePosition {
-    #[inline(always)]
-    fn position(&self, _context: &Context<'_>) -> SourcePosition {
-        *self
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct SourceVectorStack(pub(crate) RegionVec<SourceVector>);
-
-impl Display for SourceVectorStack {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        for (i, vector) in self.0.iter().enumerate() {
-            writeln!(
-                f,
-                "SourceVector {}: index: {}, line: {}, column: {}, length: {}",
-                i, vector.index, vector.line, vector.column, vector.length
-            )?;
-        }
-        Ok(())
-    }
 }
 
 /// Storage that a [`SourceVectors`] range indexes, encoded in the two high bits
@@ -197,6 +128,75 @@ impl SourceArena {
     #[inline(always)]
     pub(super) fn encode(self, start: u32, end: u32) -> SourceVectors {
         SourceVectors::with_arena_tag(start, end, self as u32)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SourceVectorStack(pub(crate) RegionVec<SourceVector>);
+
+impl Default for SourcePosition {
+    fn default() -> Self {
+        Self {
+            index:  0,
+            line:   1,
+            column: 1,
+        }
+    }
+}
+
+impl Default for SourceVector {
+    fn default() -> Self {
+        Self {
+            index:             0,
+            column:            1,
+            line:              1,
+            source_file_index: 0,
+            length:            0,
+        }
+    }
+}
+
+impl GetPosition for SourceVector {
+    #[inline(always)]
+    fn position(&self, _context: &Context<'_>) -> SourcePosition {
+        SourcePosition {
+            index:  self.index as usize,
+            line:   self.line,
+            column: self.column,
+        }
+    }
+}
+
+impl GetPosition for SourceVectors {
+    #[inline(always)]
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
+        context.diagnostic_position(*self)
+    }
+}
+
+impl GetSourceVectors for SourceVectors {
+    fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
+        *self
+    }
+}
+
+impl GetPosition for SourcePosition {
+    #[inline(always)]
+    fn position(&self, _context: &Context<'_>) -> SourcePosition {
+        *self
+    }
+}
+
+impl Display for SourceVectorStack {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        for (i, vector) in self.0.iter().enumerate() {
+            writeln!(
+                f,
+                "SourceVector {}: index: {}, line: {}, column: {}, length: {}",
+                i, vector.index, vector.line, vector.column, vector.length
+            )?;
+        }
+        Ok(())
     }
 }
 

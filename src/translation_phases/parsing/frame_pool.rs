@@ -20,6 +20,7 @@ use std::{
 };
 
 use super::{
+    Parser,
     declaration_syntax::{
         Declaration,
         DirectDeclarator,
@@ -31,25 +32,31 @@ use super::{
         StructDeclaration,
         StructDeclarator,
     },
-    expression::{
-        CallState,
-        ExpressionOperand,
+    extensions::{
+        gnu::{
+            AsmOperand,
+            GnuFrame,
+            OffsetMember,
+        },
+        modern::{
+            GenericAssociation,
+            ModernFrame,
+            ModernKind,
+            SyntaxOperand,
+        },
+        msvc::MsvcFrame,
     },
-    expression_operators::LanguageExpressionOperator,
-    gnu::{
-        AsmOperand,
-        GnuFrame,
-        OffsetMember,
+    frames::{
+        expression::{
+            CallState,
+            ExpressionOperand,
+        },
+        expression_operators::LanguageExpressionOperator,
+        initializer::DesignationState,
+        parameter_list::ParameterListFrame,
+        struct_or_union::StructOrUnionSpecifierFrame,
     },
-    initializer::DesignationState,
-    modern::{
-        GenericAssociation,
-        ModernFrame,
-        SyntaxOperand,
-    },
-    msvc::MsvcFrame,
-    parameter_list::ParameterListFrame,
-    struct_or_union::StructOrUnionSpecifierFrame,
+    machine::ParseFrame,
     syntax::{
         BlockItem,
         Identifier,
@@ -65,79 +72,6 @@ use crate::{
         Bump,
     },
 };
-
-/// An owned value in the parse arena. Frames keep one only while the pools
-/// can take it back, so its storage is reused rather than abandoned.
-pub(super) type PoolBox<'p, T> = allocator_api2::boxed::Box<T, &'p Bump>;
-
-/// Spare vectors of one element type.
-pub(super) struct VecPool<'p, T> {
-    spare: ArenaVec<'p, ArenaVec<'p, T>>,
-}
-
-impl<'p, T> VecPool<'p, T> {
-    fn new_in(arena: &'p Bump) -> Self {
-        Self {
-            spare: ArenaVec::new_in(arena),
-        }
-    }
-
-    /// Gives `vector` a spare allocation if it has none yet.
-    pub(super) fn lend(&mut self, vector: &mut ArenaVec<'p, T>) {
-        if vector.capacity() == 0
-            && let Some(spare) = self.spare.pop()
-        {
-            *vector = spare;
-        }
-    }
-
-    /// Takes back `vector`'s allocation, discarding its contents. Every
-    /// allocation is kept, since the arena could not reuse a dropped one.
-    pub(super) fn reclaim(&mut self, vector: &mut ArenaVec<'p, T>) {
-        if vector.capacity() != 0 {
-            vector.clear();
-            let empty = ArenaVec::new_in(*vector.allocator());
-            self.spare.push(mem::replace(vector, empty));
-        }
-    }
-}
-
-/// Spare boxes of one type, reused whole.
-pub(super) struct BoxPool<'p, T> {
-    spare: ArenaVec<'p, PoolBox<'p, T>>,
-}
-
-impl<'p, T> BoxPool<'p, T> {
-    fn new_in(arena: &'p Bump) -> Self {
-        Self {
-            spare: ArenaVec::new_in(arena),
-        }
-    }
-
-    /// A spare box, or a new one holding `make()`. A spare keeps whatever
-    /// its last owner left in it.
-    fn take(&mut self, arena: &'p Bump, make: impl FnOnce() -> T) -> PoolBox<'p, T> {
-        self.spare
-            .pop()
-            .unwrap_or_else(|| PoolBox::new_in(make(), arena))
-    }
-
-    /// Boxes `value`, reusing a spare box when one exists.
-    fn boxed(&mut self, arena: &'p Bump, value: T) -> PoolBox<'p, T> {
-        match self.spare.pop() {
-            | Some(mut spare) => {
-                *spare = value;
-                spare
-            },
-            | None => PoolBox::new_in(value, arena),
-        }
-    }
-
-    /// Takes back a box that its owner no longer needs.
-    pub(super) fn reclaim(&mut self, boxed: PoolBox<'p, T>) {
-        self.spare.push(boxed);
-    }
-}
 
 /// Spare frame storage in the parse arena, one pool per element type.
 pub(super) struct FramePools<'tu, 'p> {
@@ -175,41 +109,113 @@ pub(super) struct FramePools<'tu, 'p> {
     chain_flags: ArenaVec<'p, &'p Cell<bool>>,
 }
 
-impl<'tu, 'p> FramePools<'tu, 'p> {
-    pub(super) fn new_in(arena: &'p Bump) -> Self {
-        Self {
-            arena,
-            source_vectors: VecPool::new_in(arena),
-            operands: VecPool::new_in(arena),
-            operators: VecPool::new_in(arena),
-            pointer_levels: VecPool::new_in(arena),
-            direct_declarators: VecPool::new_in(arena),
-            init_declarators: VecPool::new_in(arena),
-            block_items: VecPool::new_in(arena),
-            initializers: VecPool::new_in(arena),
-            parameters: VecPool::new_in(arena),
-            identifiers: VecPool::new_in(arena),
-            struct_members: VecPool::new_in(arena),
-            struct_declarators: VecPool::new_in(arena),
-            enumerators: VecPool::new_in(arena),
-            declarations: VecPool::new_in(arena),
-            calls: BoxPool::new_in(arena),
-            designations: BoxPool::new_in(arena),
-            parameter_lists: BoxPool::new_in(arena),
-            gnu_frames: BoxPool::new_in(arena),
-            opaque_tokens: VecPool::new_in(arena),
-            asm_operands: VecPool::new_in(arena),
-            builtin_operands: VecPool::new_in(arena),
-            modern_associations: VecPool::new_in(arena),
-            delimiters: VecPool::new_in(arena),
-            offset_members: VecPool::new_in(arena),
-            modern_frames: BoxPool::new_in(arena),
-            msvc_frames: BoxPool::new_in(arena),
-            struct_or_union_specifiers: BoxPool::new_in(arena),
-            chain_flags: ArenaVec::new_in(arena),
+impl<'p, T> VecPool<'p, T> {
+    /// Gives `vector` a spare allocation if it has none yet.
+    pub(super) fn lend(&mut self, vector: &mut ArenaVec<'p, T>) {
+        if vector.capacity() == 0
+            && let Some(spare) = self.spare.pop()
+        {
+            *vector = spare;
         }
     }
 
+    /// Takes back `vector`'s allocation, discarding its contents. Every
+    /// allocation is kept, since the arena could not reuse a dropped one.
+    pub(super) fn reclaim(&mut self, vector: &mut ArenaVec<'p, T>) {
+        if vector.capacity() != 0 {
+            vector.clear();
+            let empty = ArenaVec::new_in(*vector.allocator());
+            self.spare.push(mem::replace(vector, empty));
+        }
+    }
+}
+
+impl<'p, T> BoxPool<'p, T> {
+    /// Takes back a box that its owner no longer needs.
+    pub(super) fn reclaim(&mut self, boxed: PoolBox<'p, T>) {
+        self.spare.push(boxed);
+    }
+
+    /// A spare box, or a new one holding `make()`. A spare keeps whatever
+    /// its last owner left in it.
+    fn take(&mut self, arena: &'p Bump, make: impl FnOnce() -> T) -> PoolBox<'p, T> {
+        self.spare
+            .pop()
+            .unwrap_or_else(|| PoolBox::new_in(make(), arena))
+    }
+}
+
+/// An owned value in the parse arena. Frames keep one only while the pools
+/// can take it back, so its storage is reused rather than abandoned.
+pub(super) type PoolBox<'p, T> = allocator_api2::boxed::Box<T, &'p Bump>;
+
+/// Spare vectors of one element type.
+pub(super) struct VecPool<'p, T> {
+    spare: ArenaVec<'p, ArenaVec<'p, T>>,
+}
+
+/// Spare boxes of one type, reused whole.
+pub(super) struct BoxPool<'p, T> {
+    spare: ArenaVec<'p, PoolBox<'p, T>>,
+}
+
+impl<'tu, 'p> Parser<'_, 'tu, 'p> {
+    pub(super) fn push_frame(&mut self, mut frame: ParseFrame<'tu, 'p>) {
+        frame.lend_pooled(&mut self.pools);
+        self.retained_frame_nodes = self
+            .retained_frame_nodes
+            .checked_add(frame.retained_node_count())
+            .expect("retained syntax node count overflows usize");
+        self.frames.push(frame);
+    }
+
+    pub(super) fn pop_frame(&mut self) -> ParseFrame<'tu, 'p> {
+        let frame = self.frames.pop().expect("parser frame stack is nonempty");
+        self.retained_frame_nodes = self
+            .retained_frame_nodes
+            .checked_sub(frame.retained_node_count())
+            .expect("pending syntax count matches the frame stack");
+        frame
+    }
+
+    /// Reuses the parser arena's pooled storage for a modern syntax frame.
+    pub(super) fn pooled_modern_frame(&mut self, kind: ModernKind) -> ParseFrame<'tu, 'p> {
+        ParseFrame::Modern(self.pools.modern(ModernFrame::new(
+            self.arena,
+            kind,
+            self.hard_error_count,
+        )))
+    }
+}
+
+impl<'p, T> VecPool<'p, T> {
+    fn new_in(arena: &'p Bump) -> Self {
+        Self {
+            spare: ArenaVec::new_in(arena),
+        }
+    }
+}
+
+impl<'p, T> BoxPool<'p, T> {
+    /// Boxes `value`, reusing a spare box when one exists.
+    fn boxed(&mut self, arena: &'p Bump, value: T) -> PoolBox<'p, T> {
+        match self.spare.pop() {
+            | Some(mut spare) => {
+                *spare = value;
+                spare
+            },
+            | None => PoolBox::new_in(value, arena),
+        }
+    }
+
+    fn new_in(arena: &'p Bump) -> Self {
+        Self {
+            spare: ArenaVec::new_in(arena),
+        }
+    }
+}
+
+impl<'tu, 'p> FramePools<'tu, 'p> {
     /// An emptied call state.
     pub(super) fn take_call(&mut self) -> PoolBox<'p, CallState<'tu, 'p>> {
         let arena = self.arena;
@@ -265,5 +271,39 @@ impl<'tu, 'p> FramePools<'tu, 'p> {
     /// Takes back a chain flag once no declarator of its chain remains.
     pub(super) fn reclaim_chain_flag(&mut self, flag: &'p Cell<bool>) {
         self.chain_flags.push(flag);
+    }
+
+    pub(super) fn new_in(arena: &'p Bump) -> Self {
+        Self {
+            arena,
+            source_vectors: VecPool::new_in(arena),
+            operands: VecPool::new_in(arena),
+            operators: VecPool::new_in(arena),
+            pointer_levels: VecPool::new_in(arena),
+            direct_declarators: VecPool::new_in(arena),
+            init_declarators: VecPool::new_in(arena),
+            block_items: VecPool::new_in(arena),
+            initializers: VecPool::new_in(arena),
+            parameters: VecPool::new_in(arena),
+            identifiers: VecPool::new_in(arena),
+            struct_members: VecPool::new_in(arena),
+            struct_declarators: VecPool::new_in(arena),
+            enumerators: VecPool::new_in(arena),
+            declarations: VecPool::new_in(arena),
+            calls: BoxPool::new_in(arena),
+            designations: BoxPool::new_in(arena),
+            parameter_lists: BoxPool::new_in(arena),
+            gnu_frames: BoxPool::new_in(arena),
+            opaque_tokens: VecPool::new_in(arena),
+            asm_operands: VecPool::new_in(arena),
+            builtin_operands: VecPool::new_in(arena),
+            modern_associations: VecPool::new_in(arena),
+            delimiters: VecPool::new_in(arena),
+            offset_members: VecPool::new_in(arena),
+            modern_frames: BoxPool::new_in(arena),
+            msvc_frames: BoxPool::new_in(arena),
+            struct_or_union_specifiers: BoxPool::new_in(arena),
+            chain_flags: ArenaVec::new_in(arena),
+        }
     }
 }

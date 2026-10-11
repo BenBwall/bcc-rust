@@ -3,22 +3,32 @@
 use std::path::PathBuf;
 
 use super::{
-    CStandard,
-    CompilerConfiguration,
-    Context,
-    ErrorSeverity,
-    ExtensionPolicy,
-    GetSeverity,
-    GetSourceVectors,
-    Preprocessor,
-    PreprocessorError,
-    PreprocessorErrorType,
-    SharedVec,
-    TranslationError,
     preprocess,
     preprocess_with_configuration,
 };
-use crate::translation_phases::SourceVector;
+use crate::{
+    configuration::{
+        CStandard,
+        CompilerConfiguration,
+        ExtensionPolicy,
+    },
+    translation_phases::{
+        Context,
+        ErrorSeverity,
+        GetSeverity,
+        GetSourceVectors,
+        SourceVector,
+        TranslationError,
+        preprocessing::{
+            Preprocessor,
+            errors::{
+                PreprocessorError,
+                PreprocessorErrorType,
+            },
+        },
+    },
+    util::shared::SharedVec,
+};
 
 fn assert_true_expression(expression: &str) {
     let source =

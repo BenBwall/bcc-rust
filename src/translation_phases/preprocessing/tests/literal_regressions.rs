@@ -3,7 +3,6 @@
 
 use std::path::PathBuf;
 
-use super::Preprocessor;
 use crate::{
     translation_phases::{
         Context,
@@ -13,6 +12,7 @@ use crate::{
         preprocessing::{
             CharacterTokenType,
             IntegerTokenType,
+            Preprocessor,
             StringTokenType,
             Token,
             TokenType,

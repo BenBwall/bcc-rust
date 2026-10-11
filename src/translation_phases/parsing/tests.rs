@@ -26,13 +26,13 @@ use std::path::PathBuf;
 use super::{
     ParsedTranslationUnit,
     Parser,
-    ParserLimits,
     declaration_syntax::{
         Declaration,
         Declarator,
     },
     errors::ParserErrorType,
     inspection::InspectionOptions,
+    limits::ParserLimits,
     syntax::{
         BlockItem,
         ConstantExpression,

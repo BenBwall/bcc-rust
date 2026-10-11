@@ -5,30 +5,123 @@
 
 use super::{
     Analyzer,
+    ScopeKind,
+    Work,
+};
+use crate::translation_phases::parsing::syntax::{
     Expression,
     ExpressionSlot,
     ExpressionType,
     ForInitializer,
-    ScopeKind,
     Statement,
     StatementType,
-    Work,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
-    pub(super) fn expression_slot(&mut self, slot: ExpressionSlot<'tu>) {
-        match slot {
-            | ExpressionSlot::Parsed(e) => {
-                self.work.push(Work::ValueExpression(e));
-                self.work.push(Work::Expression(e));
+    /// Resolve type names and type children before the enclosing expression.
+    /// C99: §6.7.6, p. 122; PDF p. 134.
+    pub(super) fn expression(&mut self, e: &'tu Expression<'tu>) {
+        use ExpressionType as E;
+        if self
+            .expression_indices
+            .contains_key(&std::ptr::from_ref(e).addr())
+        {
+            return;
+        }
+        if !e.recovered
+            && let E::LabelAddress(name) = e.kind
+        {
+            self.label_address(name);
+        }
+        if matches!(e.kind, E::SizeofExpr(_) | E::SizeofType(_)) {
+            self.enter_sizeof(e);
+        }
+        self.taint(
+            e.recovered
+                || matches!(e.kind, E::Builtin(b) if !super::builtins::modeled(b.keyword))
+                || matches!(e.kind, E::Countof(_) | E::Nullptr),
+        );
+        self.work.push(Work::ExpressionDone(e));
+        match e.kind {
+            | E::Parenthesized { expression }
+            | E::Unary {
+                operand_expression: expression,
+                ..
+            }
+            | E::SizeofExpr(expression)
+            | E::AlignofExpr(expression) => self.work.push(Work::Expression(expression)),
+            | E::Binary {
+                left_expression,
+                right_expression,
+                ..
+            } => {
+                self.work.push(Work::Expression(right_expression));
+                self.work.push(Work::Expression(left_expression));
             },
-            | ExpressionSlot::Selection(header) => {
-                if let Some(e) = header.expression {
-                    self.work.push(Work::Slot(e));
+            | E::Conditional(c) | E::OmittedConditional(c) => {
+                self.work.push(Work::Expression(c.else_expression));
+                self.work.push(Work::Expression(c.then_expression));
+                self.work.push(Work::Expression(c.condition_expression));
+            },
+            | E::Cast {
+                target_type,
+                operand_expression,
+            } => {
+                self.work.push(Work::Expression(operand_expression));
+                self.work.push(Work::DiscardType);
+                self.work.push(Work::TypeName(target_type));
+            },
+            | E::SizeofType(name) | E::AlignofType(name) => {
+                self.work.push(Work::DiscardType);
+                self.work.push(Work::TypeName(name));
+            },
+            | E::CompoundLiteral {
+                type_name,
+                initializer,
+            } => {
+                _ = self.work.pop();
+                self.work.push(Work::CompoundInitializer(e, initializer));
+                self.work.push(Work::DiscardType);
+                self.work.push(Work::TypeName(type_name));
+            },
+            | E::Call {
+                function_expression,
+                arguments,
+            } => {
+                for &argument in arguments.iter().rev() {
+                    self.work.push(Work::Expression(argument));
                 }
-                self.work.push(Work::Declaration(header.declaration));
+                self.implicit_function(function_expression);
+                self.work.push(Work::Expression(function_expression));
             },
-            | ExpressionSlot::Missing(_) => {},
+            | E::DirectMember {
+                base_expression, ..
+            }
+            | E::IndirectMember {
+                base_expression, ..
+            } => self.work.push(Work::Expression(base_expression)),
+            | E::StatementExpression(s) => self.work.push(Work::Statement(s, true)),
+            | E::Generic(g) => {
+                for association in g.associations.iter().rev() {
+                    self.work.push(Work::Expression(association.expression));
+                    if let Some(name) = association.type_name {
+                        self.syntax_operand(super::SyntaxOperand::Type(name));
+                    }
+                }
+                self.syntax_operand(g.controlling);
+            },
+            | E::Countof(operand) => self.syntax_operand(operand),
+            | E::Builtin(b) => {
+                for &member in b.members.iter().rev() {
+                    if let super::super::parsing::OffsetMember::Index(index) = member {
+                        self.work.push(Work::Expression(index));
+                    }
+                }
+                for &operand in b.operands.iter().rev() {
+                    self.syntax_operand(operand);
+                }
+            },
+            | _ => {},
         }
     }
 
@@ -174,110 +267,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Resolve type names and type children before the enclosing expression.
-    /// C99: §6.7.6, p. 122; PDF p. 134.
-    pub(super) fn expression(&mut self, e: &'tu Expression<'tu>) {
-        use ExpressionType as E;
-        if self
-            .expression_indices
-            .contains_key(&std::ptr::from_ref(e).addr())
-        {
-            return;
-        }
-        if !e.recovered
-            && let E::LabelAddress(name) = e.kind
-        {
-            self.label_address(name);
-        }
-        if matches!(e.kind, E::SizeofExpr(_) | E::SizeofType(_)) {
-            self.enter_sizeof(e);
-        }
-        self.taint(
-            e.recovered
-                || matches!(e.kind, E::Builtin(b) if !super::builtins::modeled(b.keyword))
-                || matches!(e.kind, E::Countof(_) | E::Nullptr),
-        );
-        self.work.push(Work::ExpressionDone(e));
-        match e.kind {
-            | E::Parenthesized { expression }
-            | E::Unary {
-                operand_expression: expression,
-                ..
-            }
-            | E::SizeofExpr(expression)
-            | E::AlignofExpr(expression) => self.work.push(Work::Expression(expression)),
-            | E::Binary {
-                left_expression,
-                right_expression,
-                ..
-            } => {
-                self.work.push(Work::Expression(right_expression));
-                self.work.push(Work::Expression(left_expression));
+    pub(super) fn expression_slot(&mut self, slot: ExpressionSlot<'tu>) {
+        match slot {
+            | ExpressionSlot::Parsed(e) => {
+                self.work.push(Work::ValueExpression(e));
+                self.work.push(Work::Expression(e));
             },
-            | E::Conditional(c) | E::OmittedConditional(c) => {
-                self.work.push(Work::Expression(c.else_expression));
-                self.work.push(Work::Expression(c.then_expression));
-                self.work.push(Work::Expression(c.condition_expression));
-            },
-            | E::Cast {
-                target_type,
-                operand_expression,
-            } => {
-                self.work.push(Work::Expression(operand_expression));
-                self.work.push(Work::DiscardType);
-                self.work.push(Work::TypeName(target_type));
-            },
-            | E::SizeofType(name) | E::AlignofType(name) => {
-                self.work.push(Work::DiscardType);
-                self.work.push(Work::TypeName(name));
-            },
-            | E::CompoundLiteral {
-                type_name,
-                initializer,
-            } => {
-                _ = self.work.pop();
-                self.work.push(Work::CompoundInitializer(e, initializer));
-                self.work.push(Work::DiscardType);
-                self.work.push(Work::TypeName(type_name));
-            },
-            | E::Call {
-                function_expression,
-                arguments,
-            } => {
-                for &argument in arguments.iter().rev() {
-                    self.work.push(Work::Expression(argument));
+            | ExpressionSlot::Selection(header) => {
+                if let Some(e) = header.expression {
+                    self.work.push(Work::Slot(e));
                 }
-                self.implicit_function(function_expression);
-                self.work.push(Work::Expression(function_expression));
+                self.work.push(Work::Declaration(header.declaration));
             },
-            | E::DirectMember {
-                base_expression, ..
-            }
-            | E::IndirectMember {
-                base_expression, ..
-            } => self.work.push(Work::Expression(base_expression)),
-            | E::StatementExpression(s) => self.work.push(Work::Statement(s, true)),
-            | E::Generic(g) => {
-                for association in g.associations.iter().rev() {
-                    self.work.push(Work::Expression(association.expression));
-                    if let Some(name) = association.type_name {
-                        self.syntax_operand(super::SyntaxOperand::Type(name));
-                    }
-                }
-                self.syntax_operand(g.controlling);
-            },
-            | E::Countof(operand) => self.syntax_operand(operand),
-            | E::Builtin(b) => {
-                for &member in b.members.iter().rev() {
-                    if let super::super::parsing::OffsetMember::Index(index) = member {
-                        self.work.push(Work::Expression(index));
-                    }
-                }
-                for &operand in b.operands.iter().rev() {
-                    self.syntax_operand(operand);
-                }
-            },
-            | _ => {},
+            | ExpressionSlot::Missing(_) => {},
         }
     }
 }

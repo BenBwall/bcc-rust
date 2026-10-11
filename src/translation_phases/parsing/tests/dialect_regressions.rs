@@ -27,7 +27,7 @@ use crate::{
                 TypeSpecifiers,
             },
             errors::ParserErrorType,
-            modern::{
+            extensions::modern::{
                 AttributeSyntax,
                 ExtendedType,
                 SpecifierExtensionKind,

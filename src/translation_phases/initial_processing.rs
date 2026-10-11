@@ -1,9 +1,24 @@
-//! Diagnostics of translation phases 1 and 2: the source file's final
-//! newline. The phases themselves run over whole buffers in
-//! [`super::preprocessor_tokenizer`].
+//! The final physical newline is checked before line splicing removes it.
+//! [`terminal_splice_length`] recognizes a backslash or enabled `??/` trigraph
+//! followed by LF, CRLF, or CR at the end of the source. Whole-buffer rewriting
+//! and token formation run in [`super::preprocessor_tokenizer`].
+//! [`InitialProcessorError`] reports a missing or escaped final newline.
 //!
-//! C99: §5.1.1.2p1, p. 9; PDF p. 21; the final-newline rule is §5.1.1.2p2,
-//! p. 10; PDF p. 22.
+//! For example, a source ending in a backslash and LF has a terminal splice of
+//! two bytes. The lexer saves that physical span and reports an escaped final
+//! newline when the token source reads the end of the file.
+//!
+//! Read [`terminal_splice_length`] first, then [`InitialProcessorError`] for
+//! the missing-newline and escaped-newline diagnostics.
+//!
+//! Files by role:
+//! - Final-newline recognition and diagnostics: `initial_processing.rs`.
+//! - Source mapping and lexing: `preprocessor_tokenizer/splicing.rs` and
+//!   `preprocessor_tokenizer.rs`.
+//!
+//! C99: §5.1.1.2 paragraph 1 (phases 1-2), pp. 9-10; PDF pp. 21-22;
+//! the final-newline rule is in phase 2, p. 10; PDF p. 22.
+//! Trigraph replacement is §5.2.1.1 paragraph 1, p. 18; PDF p. 30.
 
 use thiserror::Error;
 
@@ -26,6 +41,17 @@ use crate::{
     },
     util::bump::Bump,
 };
+
+/// The length of the line splice that escapes the final newline of
+/// `source`, spelled before trigraph replacement and line splicing.
+/// C99: trigraph replacement §5.2.1.1p1, p. 18; PDF p. 30; line splicing
+/// §5.1.1.2p2, p. 10; PDF p. 22.
+pub(crate) fn terminal_splice_length(source: &str, trigraphs: bool) -> Option<usize> {
+    ["\\\r\n", "??/\r\n", "\\\n", "??/\n", "\\\r", "??/\r"]
+        .into_iter()
+        .find(|suffix| (trigraphs || !suffix.starts_with("??")) && source.ends_with(suffix))
+        .map(str::len)
+}
 
 /// Violations of the required final physical newline before line splicing.
 /// C99: §5.1.1.2p2, p. 10; PDF p. 22.
@@ -96,15 +122,4 @@ impl GetSourceVectors for InitialProcessorError {
                 ),
         }
     }
-}
-
-/// The length of the line splice that escapes the final newline of
-/// `source`, spelled before trigraph replacement and line splicing.
-/// C99: trigraph replacement §5.2.1.1p1, p. 18; PDF p. 30; line splicing
-/// §5.1.1.2p2, p. 10; PDF p. 22.
-pub(crate) fn terminal_splice_length(source: &str, trigraphs: bool) -> Option<usize> {
-    ["\\\r\n", "??/\r\n", "\\\n", "??/\n", "\\\r", "??/\r"]
-        .into_iter()
-        .find(|suffix| (trigraphs || !suffix.starts_with("??")) && source.ends_with(suffix))
-        .map(str::len)
 }

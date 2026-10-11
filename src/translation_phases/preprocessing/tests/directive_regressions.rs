@@ -3,25 +3,29 @@ use std::path::{
     PathBuf,
 };
 
-use super::{
-    Context,
-    IntegerTokenType,
-    Preprocessor,
-    PreprocessorError,
-    PreprocessorErrorType,
-    SharedVec,
-    StringTokenType,
-    Token,
-    TokenType,
-    TranslationError,
-    with_tokens_of,
-};
+use super::with_tokens_of;
 use crate::{
     test_support::TempDir,
     translation_phases::{
+        Context,
         ErrorSeverity,
         GetSeverity,
+        TranslationError,
+        preprocessing::{
+            Preprocessor,
+            errors::{
+                PreprocessorError,
+                PreprocessorErrorType,
+            },
+            token::{
+                IntegerTokenType,
+                StringTokenType,
+                Token,
+                TokenType,
+            },
+        },
     },
+    util::shared::SharedVec,
 };
 fn with_directive_tokens_at_path<R>(
     source: &str,

@@ -1,40 +1,91 @@
-//! Semantic analysis, the second half of translation phase 7.
-//! C99: §5.1.1.2p1, pp. 9-10; PDF pp. 21-22; scopes/linkage §6.2.1-§6.2.4,
-//! pp. 29-32; PDF pp. 41-44; declarations §6.7, pp. 97-124;
-//! PDF pp. 109-136; expressions/initializers §6.3, §6.5-§6.7.8, pp. 42-128;
-//! PDF pp. 54-140; statements/functions §6.8-§6.9.2, pp. 131-143;
-//! PDF pp. 143-155. Backend control-flow and emitted code are not constructed.
+//! Semantic analysis checks the finished syntax tree and retains its types,
+//! bindings, scopes, expression results and definitions. Each external
+//! declaration starts one explicit stack of continuations. The driver pops a
+//! continuation, performs its step and pushes any remaining work. Scratch maps
+//! and stacks are dropped after translation-unit checks; the retained results
+//! stay in the translation-unit arena. Semantic lookup is independent of the
+//! parser's typedef lookup.
+//!
+//! For `int x = 1;`, the loop first resolves `int`, constructs the declarator
+//! and installs `x` in file scope. It then visits the initializer's literal,
+//! records its type and checks the conversion to `x`'s type. Translation-unit
+//! completion checks the definition before returning the retained graph.
+//!
+//! Read [`analyze`], [`Analyzer::step`], [`Work`] and [`Analyzer`] first. Then
+//! follow the dispatched method into the file for that concern.
+//! [`SemanticTranslationUnit`] describes what callers retain;
+//! [`SemanticTranslationUnit::inspect`] shows it.
+//!
+//! - Driver storage and names: `state.rs` initializes the analyzer and checks
+//!   stack balance; `collection.rs` builds scratch lists; `scopes.rs` installs,
+//!   finds and restores names; `results.rs` defines the retained output.
+//! - Syntax and constraints: `traversal.rs` schedules child syntax;
+//!   `declarations.rs` constructs types and bindings; `expressions.rs` and
+//!   `expressions/` type expressions and conversions; `initializers.rs` walks
+//!   subobjects; `statements.rs` checks jumps and returns; `functions.rs`
+//!   checks definitions and completes the translation unit.
+//! - Types and values: `types.rs` interns and compares types and computes
+//!   layouts; `integer.rs` evaluates integer constants; `constants.rs` folds
+//!   floating values.
+//! - Language extensions: `generic.rs` selects C11 generic associations;
+//!   `type_generic.rs` checks GNU type selections and math calls; `vectors.rs`
+//!   constructs vector types and checks operators; `builtins.rs` and
+//!   `builtins/` recognize and check header intrinsics, atomics and x86 calls.
+//! - Diagnostics and inspection: `diagnostics.rs` reports constraints and
+//!   extensions; `errors.rs` defines diagnostic kinds and renders them;
+//!   `inspection.rs` formats retained results. `tests.rs` and `tests/` exercise
+//!   these paths.
+//!
+//! C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22 (translation phase 7).
+//! C99: §6.2.1-§6.2.4, pp. 29-32; PDF pp. 41-44 (scopes, linkage and duration).
+//! C99: §6.7-§6.7.7, pp. 97-124; PDF pp. 109-136 (declarations and type names).
+//! C99: §6.3, pp. 42-48; PDF pp. 54-60; §6.5, pp. 67-94; PDF pp. 79-106
+//! (conversions and expressions).
+//! C99: §6.7.8, pp. 125-130; PDF pp. 137-142 (initializers).
+//! C99: §6.8-§6.9.2, pp. 131-144; PDF pp. 143-156 (statements and definitions).
+//! Backend control-flow and emitted code are not constructed.
 
-mod atomics;
-mod builtins;
-pub(crate) use atomics::modeled as atomic_builtin;
-pub(crate) use builtins::modeled as implemented_builtin;
-mod constants;
+// Driver storage and names
+mod collection;
+mod results;
+mod scopes;
+mod state;
+
+// Syntax traversal and constraints
 mod declarations;
-mod errors;
 mod expressions;
 mod functions;
-mod generic;
 mod initializers;
-mod inspection;
-mod integer;
 mod statements;
-#[cfg(test)]
-#[expect(
-    clippy::disallowed_types,
-    clippy::disallowed_macros,
-    reason = "Tests own generated inputs and expected values outside compilation."
-)]
-mod tests;
 mod traversal;
-mod type_generic;
-mod types;
-mod vectors;
-mod x86_builtin_table;
-pub(crate) mod x86_builtins;
 
+// Types and constant values
+mod constants;
+mod integer;
+mod types;
+
+// Language extensions and builtin calls
+mod builtins;
+mod generic;
+mod type_generic;
+mod vectors;
+
+// Diagnostics and inspection
+mod diagnostics;
+mod errors;
+mod inspection;
+
+#[cfg(test)]
 use std::cell::Cell;
 
+pub(crate) use builtins::{
+    atomics::modeled as atomic_builtin,
+    implemented_builtin,
+    named_builtin,
+    x86_builtins,
+};
+use collection::Collection;
+use declarations::compatible_enum_type;
 pub(crate) use errors::{
     SemanticError,
     SemanticErrorKind,
@@ -45,26 +96,35 @@ use expressions::{
     ExpressionInfo,
 };
 use integer::Integer;
+pub(crate) use results::{
+    Binding,
+    BindingKind,
+    Duration,
+    Linkage,
+    Scope,
+    ScopeKind,
+    SemanticTranslationUnit,
+};
 use rustc_hash::FxBuildHasher;
+use scopes::{
+    Entry,
+    Namespace,
+};
 use types::{
     ArrayBound,
-    Layout,
     Member,
     Parameter,
     Scalar,
-    Tag,
-    TagKind,
     TypeId,
     TypeInterner,
     TypeKind,
-    Types,
-    align_up,
 };
 
 use super::{
     Context,
+    DiagnosticPolicy,
+    ErrorSeverity,
     SourceVectors,
-    TranslationError,
     parsing::{
         AttributeSpecifier,
         ExtendedType,
@@ -84,7 +144,6 @@ use super::{
             ParameterDeclaration,
             StructDeclaration,
             StructDeclarator,
-            StructOrUnion,
             TypeName,
             TypeQualifiers,
             TypeSpecifiers,
@@ -98,11 +157,9 @@ use super::{
             ExpressionSlot,
             ExpressionType,
             ExternalDeclaration,
-            ForInitializer,
             FunctionDefinition,
             Identifier,
             Statement,
-            StatementType,
             StorageClass,
             UnaryOperator,
         },
@@ -111,6 +168,7 @@ use super::{
 use crate::{
     configuration::CStandard,
     util::{
+        arena_list::ArenaList,
         bump::{
             ArenaMap,
             ArenaVec,
@@ -119,333 +177,6 @@ use crate::{
         string_cache::StringCacheId,
     },
 };
-
-/// Builtins parsed as ordinary calls, queried by the preprocessor.
-/// GCC/Clang extensions to C99 §6.5.2.2, pp. 71-72; PDF pp. 83-84.
-pub(crate) fn named_builtin(name: &str) -> bool {
-    type_generic::named_builtin(name)
-        || vectors::named_builtin(name)
-        || atomic_builtin(name)
-        || x86_builtins::known(name)
-}
-
-/// The three C linkage states, distinct from lexical scope.
-/// C99: §6.2.2, pp. 30-31; PDF pp. 42-43.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Linkage {
-    None,
-    Internal,
-    External,
-}
-/// Object lifetime, separate from identifier visibility.
-/// C99: §6.2.4, p. 32; PDF p. 44.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Duration {
-    None,
-    Automatic,
-    Static,
-}
-/// Semantic ordinary binding category.
-/// C99: §6.2.3, p. 31; PDF p. 43; typedefs §6.7.7, pp. 123-124; PDF pp.
-/// 135-136.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BindingKind {
-    Object,
-    Function,
-    Typedef,
-    Enumerator,
-    Parameter,
-}
-
-/// A resolved declaration occurrence, retained in lexical traversal order.
-/// C99: §6.7p3-4, p. 97; PDF p. 109.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Binding {
-    pub(crate) name:     Identifier,
-    pub(crate) ty:       TypeId,
-    pub(crate) scope:    usize,
-    pub(crate) kind:     BindingKind,
-    pub(crate) linkage:  Linkage,
-    pub(crate) duration: Duration,
-    pub(crate) value:    Option<Integer>,
-}
-
-/// Semantic scope kinds; members belong to nominal records, labels to
-/// functions. C99: §6.2.1, pp. 29-30; PDF pp. 41-42.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ScopeKind {
-    File,
-    Function,
-    Block,
-    Prototype,
-}
-/// A lexical scope and its enclosing scope.
-/// C99: §6.2.1 paragraphs 1-4, pp. 29-30; PDF pp. 41-42.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Scope {
-    pub(crate) parent: Option<usize>,
-    pub(crate) kind:   ScopeKind,
-}
-
-/// Durable semantic output. Working maps/stacks are gone when this is returned.
-#[derive(Debug)]
-pub(crate) struct SemanticTranslationUnit<'tu> {
-    pub(crate) types:            Types<'tu>,
-    pub(crate) bindings:         &'tu [Binding],
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Finalized definitions are retained for backend lowering."
-        )
-    )]
-    pub(crate) definitions:      &'tu [functions::Definition],
-    pub(crate) scopes:           &'tu [Scope],
-    pub(crate) type_names:       &'tu [(SourceVectors, TypeId)],
-    pub(crate) parameters:       &'tu [(SourceVectors, &'tu [Parameter])],
-    pub(crate) expressions:      &'tu [ExpressionInfo<'tu>],
-    pub(crate) conversions:      &'tu [Conversion<'tu>],
-    pub(crate) tag_declarations: &'tu [(usize, usize)],
-}
-
-/// Separate identifier namespaces for ordinary names, tags and GNU local
-/// labels.
-/// GNU extension: GCC manual, "Local Labels".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
-/// C99: §6.2.3 paragraph 1, p. 31; PDF p. 43.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Namespace {
-    Ordinary,
-    Tag,
-    Label,
-}
-#[derive(Clone, Copy)]
-struct Entry {
-    name:      Identifier,
-    namespace: Namespace,
-    scope:     usize,
-    binding:   usize,
-    previous:  Option<usize>,
-}
-
-/// A scratch cons list builds nested parameter/member lists in linear space.
-struct Collection<'s, T: Copy> {
-    head: Cell<Option<&'s Link<'s, T>>>,
-}
-struct Link<'s, T: Copy> {
-    value: T,
-    next:  Option<&'s Link<'s, T>>,
-}
-impl<'s, T: Copy> Collection<'s, T> {
-    fn new() -> Self {
-        Self {
-            head: Cell::new(None),
-        }
-    }
-
-    fn push(&self, scratch: &'s Bump, value: T) {
-        self.head.set(Some(scratch.alloc(Link {
-            value,
-            next: self.head.get(),
-        })));
-    }
-
-    fn finish<'tu>(&self, tu: &'tu Bump, scratch: &Bump) -> &'tu [T] {
-        let mut items = ArenaVec::new_in(scratch);
-        let mut next = self.head.get();
-        while let Some(link) = next {
-            items.push(link.value);
-            next = link.next;
-        }
-        items.reverse();
-        tu.alloc_slice_copy(&items)
-    }
-}
-
-// Continuations compose type construction, ICE evaluation and structural
-// walking. No task invokes the driver recursively, including nested
-// record/function types.
-#[derive(Clone, Copy)]
-enum Work<'tu, 's> {
-    Root(ExternalDeclaration<'tu>),
-    Declaration(&'tu Declaration<'tu>),
-    DeclarationBase(&'tu Declaration<'tu>),
-    Bind(Declarator<'tu>, DeclarationSpecifiers<'tu>, bool),
-    Function(&'tu FunctionDefinition<'tu>),
-    FunctionBase(&'tu FunctionDefinition<'tu>),
-    FunctionBody(&'tu FunctionDefinition<'tu>),
-    FunctionWork(functions::FunctionWork<'tu>),
-    StatementWork(statements::StatementWork<'tu>),
-    Statement(&'tu Statement<'tu>, bool),
-    BlockItem(BlockItem<'tu>),
-    Expression(&'tu Expression<'tu>),
-    ExpressionDone(&'tu Expression<'tu>),
-    ValueExpression(&'tu Expression<'tu>),
-    CompoundInitializer(&'tu Expression<'tu>, &'tu Initializer<'tu>),
-    InitializeDeclaration(Declarator<'tu>, &'tu Initializer<'tu>),
-    InitializeDone(usize, &'tu Initializer<'tu>),
-    Condition(ExpressionSlot<'tu>, bool),
-    RequireConstant(
-        &'tu Expression<'tu>,
-        Option<&'tu super::parsing::StaticAssertion<'tu>>,
-        usize,
-    ),
-    Slot(ExpressionSlot<'tu>),
-    Initializer(&'tu Initializer<'tu>),
-    PopScope,
-    RestoreTaint(bool),
-    RestoreParameterMode(bool),
-    /// Sets whether exceptional evaluation makes an array bound variable
-    /// rather than reporting an overflow.
-    RuntimeBound(bool),
-    OldSignature(&'tu FunctionDefinition<'tu>),
-    DiscardType,
-    VectorAttributes(Option<&'tu SpecifierExtension<'tu>>),
-    VectorDeclaratorAttributes(ArenaList<'tu, DirectDeclarator<'tu>>),
-    UnknownType,
-    Spec(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
-    Qualify(TypeQualifiers, SourceVectors),
-    TypeName(&'tu TypeName<'tu>),
-    TypeNameBase(&'tu TypeName<'tu>),
-    TypeNameDone(SourceVectors),
-    Declarator(Declarator<'tu>, TypeId, bool),
-    Direct(&'tu DirectDeclarator<'tu>, SourceVectors, bool),
-    ArrayDone(
-        TypeId,
-        TypeQualifiers,
-        &'tu Expression<'tu>,
-        SourceVectors,
-        usize,
-    ),
-    FunctionParameters(
-        ArenaList<'tu, ParameterDeclaration<'tu>>,
-        usize,
-        &'s Collection<'s, Parameter>,
-        TypeId,
-        bool,
-        SourceVectors,
-        usize,
-    ),
-    ParameterBase(ParameterDeclaration<'tu>),
-    ParameterDone(ParameterDeclaration<'tu>, &'s Collection<'s, Parameter>),
-    RecordMembers(
-        usize,
-        ArenaList<'tu, StructDeclaration<'tu>>,
-        usize,
-        &'s Collection<'s, Member>,
-    ),
-    RecordMemberBase(usize, StructDeclaration<'tu>, &'s Collection<'s, Member>),
-    MemberBase(
-        usize,
-        StructDeclarator<'tu>,
-        TypeId,
-        &'s Collection<'s, Member>,
-    ),
-    MemberDone(
-        usize,
-        StructDeclarator<'tu>,
-        &'s Collection<'s, Member>,
-        usize,
-    ),
-    MemberWidth(
-        usize,
-        StructDeclarator<'tu>,
-        TypeId,
-        &'s Collection<'s, Member>,
-        usize,
-    ),
-    EnumMembers(
-        usize,
-        ArenaList<'tu, Enumerator<'tu>>,
-        usize,
-        Option<Integer>,
-    ),
-    EnumeratorDone(usize, ArenaList<'tu, Enumerator<'tu>>, usize, usize, bool),
-    Eval(&'tu Expression<'tu>),
-    Unary(UnaryOperator, SourceVectors),
-    Binary(BinaryOperator, SourceVectors),
-    Logical(BinaryOperator, &'tu Expression<'tu>, SourceVectors),
-    Conditional(&'tu ConditionalExpression<'tu>),
-    CastBase(&'tu Expression<'tu>, SourceVectors),
-    CastDone(TypeId, SourceVectors),
-    ConvertInteger(u32, bool),
-    SizeofDone(bool, SourceVectors),
-    Atomic(SourceVectors),
-    TypeofDone(SyntaxOperand<'tu>, bool),
-}
-
-use crate::util::arena_list::ArenaList;
-
-struct Analyzer<'a, 'tu, 's> {
-    // Deterministic scaling-test counts: VM ancestors, offset members,
-    // initializer type nodes. They are absent from production compilation.
-    #[cfg(test)]
-    review_steps:        Cell<[usize; 3]>,
-    context:             &'a mut Context<'tu>,
-    scratch:             &'s Bump,
-    types:               TypeInterner<'tu, 's>,
-    bindings:            ArenaVec<'tu, Binding>,
-    definitions:         ArenaVec<'tu, functions::Definition>,
-    scopes:              ArenaVec<'tu, Scope>,
-    type_names:          ArenaVec<'tu, (SourceVectors, TypeId)>,
-    parameter_lists:     ArenaVec<'tu, (SourceVectors, &'tu [Parameter])>,
-    scope:               usize,
-    entries:             ArenaVec<'s, Entry>,
-    visible:             ArenaMap<'s, (Namespace, StringCacheId), usize>,
-    external:            ArenaMap<'s, StringCacheId, usize>,
-    scope_entries:       ArenaVec<'s, &'s Collection<'s, usize>>,
-    parameters:          ArenaMap<'s, usize, (&'tu [Parameter], usize)>,
-    work:                ArenaVec<'s, Work<'tu, 's>>,
-    values:              ArenaVec<'s, TypeId>,
-    integers:            ArenaVec<'s, Option<Integer>>,
-    tainted:             bool,
-    function_name:       Option<Identifier>,
-    old_parameter_mode:  bool,
-    /// Exceptional evaluation yields a variable array bound, not an error.
-    runtime_bound:       bool,
-    semantic_errors:     usize,
-    member_indices:      ArenaMap<'s, (usize, StringCacheId), usize>,
-    member_names:        ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
-    tag_declarations:    ArenaVec<'tu, (usize, usize)>,
-    resolved_type_names: ArenaMap<'s, SourceVectors, TypeId>,
-    integer_models:      ArenaMap<'s, usize, Option<(u32, bool)>>,
-    expressions:         ArenaVec<'tu, ExpressionInfo<'tu>>,
-    expression_indices:  ArenaMap<'s, usize, usize>,
-    conversions:         ArenaVec<'tu, Conversion<'tu>>,
-    const_members:       ArenaMap<'s, usize, bool>,
-    register_bindings:   ArenaMap<'s, usize, bool>,
-    ice_operands:        ArenaMap<'s, (usize, bool), bool>,
-    functions:           functions::State<'tu, 's>,
-    va_list_type:        Option<TypeId>,
-    statements:          statements::State<'s>,
-    /// Tags whose member or enumerator list is open.
-    defining:            ArenaMap<'s, usize, ()>,
-    /// Least and greatest enumerator values of an open enumeration.
-    enum_ranges:         ArenaMap<'s, usize, (i128, i128)>,
-}
-
-/// GCC and Clang choose an enumeration's compatible integer type from
-/// its range; the target may instead select a fixed type. Nonnegative
-/// ranges use unsigned int and widen to the target unsigned maximum type;
-/// negative ranges use int and widen to the signed maximum type.
-/// This choice is implementation-defined.
-/// C99: §6.7.2.2 paragraph 4, p. 105; PDF p. 117.
-fn compatible_enum_type((low, high): (i128, i128), target: &crate::target::TargetLayout) -> Scalar {
-    if let Some(scalar) = target.fixed_enum_type {
-        return scalar;
-    }
-    if low >= 0 {
-        if high <= i128::from(u32::MAX) {
-            Scalar::UnsignedInt
-        } else {
-            target.uintmax_t
-        }
-    } else if low >= i128::from(i32::MIN) && high <= i128::from(i32::MAX) {
-        Scalar::Int
-    } else {
-        target.intmax_t
-    }
-}
 
 /// Runs declaration analysis only after the complete immutable syntax tree
 /// exists. C99: §5.1.1.2p1, pp. 9-10; PDF pp. 21-22.
@@ -477,237 +208,7 @@ pub(crate) fn analyze<'tu>(
     }
 }
 
-impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
-    #[cfg(test)]
-    fn review_step(&self, kind: usize) {
-        let mut steps = self.review_steps.get();
-        steps[kind] += 1;
-        self.review_steps.set(steps);
-    }
-
-    fn new(context: &'c mut Context<'tu>, scratch: &'s Bump) -> Self {
-        let tu = context.tu_arena();
-        let target = context.configuration.target().layout();
-        let mut analyzer = Self {
-            #[cfg(test)]
-            review_steps: Cell::new([0; 3]),
-            context,
-            scratch,
-            types: TypeInterner::new(tu, scratch, &target),
-            bindings: ArenaVec::new_in(tu),
-            definitions: ArenaVec::new_in(tu),
-            scopes: ArenaVec::new_in(tu),
-            type_names: ArenaVec::new_in(tu),
-            parameter_lists: ArenaVec::new_in(tu),
-            scope: 0,
-            entries: ArenaVec::new_in(scratch),
-            visible: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            external: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            scope_entries: ArenaVec::new_in(scratch),
-            parameters: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            work: ArenaVec::new_in(scratch),
-            values: ArenaVec::new_in(scratch),
-            integers: ArenaVec::new_in(scratch),
-            tainted: false,
-            function_name: None,
-            old_parameter_mode: false,
-            runtime_bound: false,
-            semantic_errors: 0,
-            member_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            member_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            tag_declarations: ArenaVec::new_in(tu),
-            resolved_type_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            integer_models: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            expressions: ArenaVec::new_in(tu),
-            expression_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            conversions: ArenaVec::new_in(tu),
-            const_members: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            register_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            ice_operands: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            functions: functions::State::new(scratch),
-            va_list_type: None,
-            statements: statements::State::new(scratch),
-            defining: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            enum_ranges: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-        };
-        analyzer.scopes.push(Scope {
-            parent: None,
-            kind:   ScopeKind::File,
-        });
-        analyzer
-            .scope_entries
-            .push(scratch.alloc(Collection::new()));
-        analyzer
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn error(
-        &mut self,
-        kind: SemanticErrorKind,
-        source_vectors: SourceVectors,
-        name: Option<StringCacheId>,
-        previous: Option<SourceVectors>,
-    ) {
-        if !self.tainted {
-            self.semantic_errors += 1;
-            let error = SemanticError {
-                extension_severity: None,
-                kind,
-                source_vectors,
-                name,
-                previous,
-            };
-            if !self.context.withholds(
-                crate::translation_phases::GetSeverity::severity(&error),
-                false,
-                source_vectors,
-            ) {
-                self.context
-                    .append_pending_errors([TranslationError::Semantic(error)]);
-            }
-        }
-    }
-
-    /// Reports a typed semantic extension without duplicating policy decisions.
-    /// C99: §4p6, p. 7; PDF p. 19; §5.1.1.3p1, p. 11; PDF p. 23.
-    fn extension_error(
-        &mut self,
-        feature: crate::configuration::Feature,
-        baseline: super::DiagnosticPolicy,
-        kind: SemanticErrorKind,
-        source_vectors: SourceVectors,
-        name: Option<StringCacheId>,
-    ) {
-        if !self.tainted {
-            let semantic_errors = &mut self.semantic_errors;
-            self.context.report_extension_diagnostic(
-                feature,
-                baseline,
-                source_vectors,
-                |severity| {
-                    *semantic_errors += usize::from(severity == super::ErrorSeverity::Error);
-                    TranslationError::Semantic(SemanticError {
-                        extension_severity: Some(severity),
-                        kind,
-                        source_vectors,
-                        name,
-                        previous: None,
-                    })
-                },
-            );
-        }
-    }
-
-    /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42.
-    fn enter(&mut self, kind: ScopeKind) {
-        let next = self.scopes.len();
-        self.scopes.push(Scope {
-            parent: Some(self.scope),
-            kind,
-        });
-        self.scope_entries
-            .push(self.scratch.alloc(Collection::new()));
-        self.statements.scope_vm.push(self.statements.vm);
-        self.scope = next;
-    }
-
-    /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42.
-    fn leave(&mut self) {
-        let mut next = self.scope_entries[self.scope].head.get();
-        while let Some(link) = next {
-            next = link.next;
-            let entry = self.entries[link.value];
-            if let Some(previous) = entry.previous {
-                _ = self
-                    .visible
-                    .insert((entry.namespace, entry.name.name), previous);
-            } else {
-                _ = self.visible.remove(&(entry.namespace, entry.name.name));
-            }
-        }
-        self.statements.vm = self.statements.scope_vm[self.scope];
-        self.scope = self.scopes[self.scope].parent.unwrap_or(0);
-    }
-
-    /// C99: §6.2.1p2-4, pp. 29-30; PDF pp. 41-42; §6.2.3p1, p. 31; PDF p. 43.
-    fn lookup(&self, namespace: Namespace, name: StringCacheId) -> Option<Entry> {
-        self.visible
-            .get(&(namespace, name))
-            .map(|&i| self.entries[i])
-    }
-
-    /// C99: §6.2.1p7, p. 30; PDF p. 42; §6.2.3p1, p. 31; PDF p. 43.
-    fn install(&mut self, name: Identifier, namespace: Namespace, binding: usize) {
-        let previous = self.visible.get(&(namespace, name.name)).copied();
-        let index = self.entries.len();
-        self.entries.push(Entry {
-            name,
-            namespace,
-            binding,
-            scope: self.scope,
-            previous,
-        });
-        _ = self.visible.insert((namespace, name.name), index);
-        self.scope_entries[self.scope].push(self.scratch, index);
-    }
-
-    fn take_type(&mut self) -> TypeId {
-        debug_assert!(!self.values.is_empty(), "a type continuation has a value");
-        self.values.pop().unwrap_or_else(|| self.types.unknown())
-    }
-
-    /// Every external declaration starts and ends with empty continuation and
-    /// value stacks, so an unbalanced task cannot silently feed the next root.
-    fn assert_balanced(&self) {
-        debug_assert!(self.work.is_empty(), "no continuation outlives its root");
-        debug_assert!(self.values.is_empty(), "no type value outlives its root");
-        debug_assert!(
-            self.integers.is_empty(),
-            "no integer value outlives its root"
-        );
-    }
-
-    /// Exceptional evaluation violates the representability constraint where
-    /// an integer constant expression is required; an array bound instead
-    /// becomes variable length.
-    /// C99: §6.6 paragraph 4, p. 95; PDF p. 107.
-    /// C99: §6.7.5.2 paragraph 4, pp. 116-117; PDF pp. 128-129.
-    fn exceptional_constant(&mut self, source: SourceVectors) {
-        if !self.runtime_bound {
-            self.error(SemanticErrorKind::ConstantOverflow, source, None, None);
-        }
-    }
-
-    fn taint(&mut self, recovered: bool) {
-        self.work.push(Work::RestoreTaint(self.tainted));
-        self.tainted |= recovered;
-    }
-
-    /// Unmodeled specifier extensions make only this declaration's type
-    /// unanalyzed; a tag named here keeps its own completion and layout.
-    /// C99: §6.7.2p2-5, pp. 99-100; PDF pp. 111-112.
-    fn spec(&mut self, spec: DeclarationSpecifiers<'tu>, force_tag: bool) {
-        if spec.auto_with_storage_class || self.unmodeled_extension(spec.extensions) {
-            self.taint(true);
-            self.work.push(Work::UnknownType);
-        }
-        self.work.push(Work::VectorAttributes(spec.extensions));
-        self.work.push(Work::Spec(
-            spec.type_specifiers,
-            spec.type_qualifiers,
-            spec.source_vectors,
-            force_tag,
-        ));
-        let mut extension = spec.extensions;
-        while let Some(item) = extension {
-            if let SpecifierExtensionKind::Alignment(operand) = item.kind {
-                self.syntax_operand(operand);
-            }
-            extension = item.next;
-        }
-    }
-
+impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Iterative declaration/type/constant continuations.
     /// C99: §6.6, pp. 95-96; PDF pp. 107-108; §6.7, pp. 97-124; PDF pp.
     /// 109-136.
@@ -1639,3 +1140,172 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         }
     }
 }
+
+// Continuations compose type construction, ICE evaluation and structural
+// walking. No task invokes the driver recursively, including nested
+// record/function types.
+#[derive(Clone, Copy)]
+enum Work<'tu, 's> {
+    Root(ExternalDeclaration<'tu>),
+    Declaration(&'tu Declaration<'tu>),
+    DeclarationBase(&'tu Declaration<'tu>),
+    Bind(Declarator<'tu>, DeclarationSpecifiers<'tu>, bool),
+    Function(&'tu FunctionDefinition<'tu>),
+    FunctionBase(&'tu FunctionDefinition<'tu>),
+    FunctionBody(&'tu FunctionDefinition<'tu>),
+    FunctionWork(functions::FunctionWork<'tu>),
+    StatementWork(statements::StatementWork<'tu>),
+    Statement(&'tu Statement<'tu>, bool),
+    BlockItem(BlockItem<'tu>),
+    Expression(&'tu Expression<'tu>),
+    ExpressionDone(&'tu Expression<'tu>),
+    ValueExpression(&'tu Expression<'tu>),
+    CompoundInitializer(&'tu Expression<'tu>, &'tu Initializer<'tu>),
+    InitializeDeclaration(Declarator<'tu>, &'tu Initializer<'tu>),
+    InitializeDone(usize, &'tu Initializer<'tu>),
+    Condition(ExpressionSlot<'tu>, bool),
+    RequireConstant(
+        &'tu Expression<'tu>,
+        Option<&'tu super::parsing::StaticAssertion<'tu>>,
+        usize,
+    ),
+    Slot(ExpressionSlot<'tu>),
+    Initializer(&'tu Initializer<'tu>),
+    PopScope,
+    RestoreTaint(bool),
+    RestoreParameterMode(bool),
+    /// Sets whether exceptional evaluation makes an array bound variable
+    /// rather than reporting an overflow.
+    RuntimeBound(bool),
+    OldSignature(&'tu FunctionDefinition<'tu>),
+    DiscardType,
+    VectorAttributes(Option<&'tu SpecifierExtension<'tu>>),
+    VectorDeclaratorAttributes(ArenaList<'tu, DirectDeclarator<'tu>>),
+    UnknownType,
+    Spec(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
+    Qualify(TypeQualifiers, SourceVectors),
+    TypeName(&'tu TypeName<'tu>),
+    TypeNameBase(&'tu TypeName<'tu>),
+    TypeNameDone(SourceVectors),
+    Declarator(Declarator<'tu>, TypeId, bool),
+    Direct(&'tu DirectDeclarator<'tu>, SourceVectors, bool),
+    ArrayDone(
+        TypeId,
+        TypeQualifiers,
+        &'tu Expression<'tu>,
+        SourceVectors,
+        usize,
+    ),
+    FunctionParameters(
+        ArenaList<'tu, ParameterDeclaration<'tu>>,
+        usize,
+        &'s Collection<'s, Parameter>,
+        TypeId,
+        bool,
+        SourceVectors,
+        usize,
+    ),
+    ParameterBase(ParameterDeclaration<'tu>),
+    ParameterDone(ParameterDeclaration<'tu>, &'s Collection<'s, Parameter>),
+    RecordMembers(
+        usize,
+        ArenaList<'tu, StructDeclaration<'tu>>,
+        usize,
+        &'s Collection<'s, Member>,
+    ),
+    RecordMemberBase(usize, StructDeclaration<'tu>, &'s Collection<'s, Member>),
+    MemberBase(
+        usize,
+        StructDeclarator<'tu>,
+        TypeId,
+        &'s Collection<'s, Member>,
+    ),
+    MemberDone(
+        usize,
+        StructDeclarator<'tu>,
+        &'s Collection<'s, Member>,
+        usize,
+    ),
+    MemberWidth(
+        usize,
+        StructDeclarator<'tu>,
+        TypeId,
+        &'s Collection<'s, Member>,
+        usize,
+    ),
+    EnumMembers(
+        usize,
+        ArenaList<'tu, Enumerator<'tu>>,
+        usize,
+        Option<Integer>,
+    ),
+    EnumeratorDone(usize, ArenaList<'tu, Enumerator<'tu>>, usize, usize, bool),
+    Eval(&'tu Expression<'tu>),
+    Unary(UnaryOperator, SourceVectors),
+    Binary(BinaryOperator, SourceVectors),
+    Logical(BinaryOperator, &'tu Expression<'tu>, SourceVectors),
+    Conditional(&'tu ConditionalExpression<'tu>),
+    CastBase(&'tu Expression<'tu>, SourceVectors),
+    CastDone(TypeId, SourceVectors),
+    ConvertInteger(u32, bool),
+    SizeofDone(bool, SourceVectors),
+    Atomic(SourceVectors),
+    TypeofDone(SyntaxOperand<'tu>, bool),
+}
+
+struct Analyzer<'a, 'tu, 's> {
+    // Deterministic scaling-test counts: VM ancestors, offset members,
+    // initializer type nodes. They are absent from production compilation.
+    #[cfg(test)]
+    review_steps:        Cell<[usize; 3]>,
+    context:             &'a mut Context<'tu>,
+    scratch:             &'s Bump,
+    types:               TypeInterner<'tu, 's>,
+    bindings:            ArenaVec<'tu, Binding>,
+    definitions:         ArenaVec<'tu, functions::Definition>,
+    scopes:              ArenaVec<'tu, Scope>,
+    type_names:          ArenaVec<'tu, (SourceVectors, TypeId)>,
+    parameter_lists:     ArenaVec<'tu, (SourceVectors, &'tu [Parameter])>,
+    scope:               usize,
+    entries:             ArenaVec<'s, Entry>,
+    visible:             ArenaMap<'s, (Namespace, StringCacheId), usize>,
+    external:            ArenaMap<'s, StringCacheId, usize>,
+    scope_entries:       ArenaVec<'s, &'s Collection<'s, usize>>,
+    parameters:          ArenaMap<'s, usize, (&'tu [Parameter], usize)>,
+    work:                ArenaVec<'s, Work<'tu, 's>>,
+    values:              ArenaVec<'s, TypeId>,
+    integers:            ArenaVec<'s, Option<Integer>>,
+    tainted:             bool,
+    function_name:       Option<Identifier>,
+    old_parameter_mode:  bool,
+    /// Exceptional evaluation yields a variable array bound, not an error.
+    runtime_bound:       bool,
+    semantic_errors:     usize,
+    member_indices:      ArenaMap<'s, (usize, StringCacheId), usize>,
+    member_names:        ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
+    tag_declarations:    ArenaVec<'tu, (usize, usize)>,
+    resolved_type_names: ArenaMap<'s, SourceVectors, TypeId>,
+    integer_models:      ArenaMap<'s, usize, Option<(u32, bool)>>,
+    expressions:         ArenaVec<'tu, ExpressionInfo<'tu>>,
+    expression_indices:  ArenaMap<'s, usize, usize>,
+    conversions:         ArenaVec<'tu, Conversion<'tu>>,
+    const_members:       ArenaMap<'s, usize, bool>,
+    register_bindings:   ArenaMap<'s, usize, bool>,
+    ice_operands:        ArenaMap<'s, (usize, bool), bool>,
+    functions:           functions::State<'tu, 's>,
+    va_list_type:        Option<TypeId>,
+    statements:          statements::State<'s>,
+    /// Tags whose member or enumerator list is open.
+    defining:            ArenaMap<'s, usize, ()>,
+    /// Least and greatest enumerator values of an open enumeration.
+    enum_ranges:         ArenaMap<'s, usize, (i128, i128)>,
+}
+
+// Tests
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "Tests own generated inputs and expected values outside compilation."
+)]
+mod tests;

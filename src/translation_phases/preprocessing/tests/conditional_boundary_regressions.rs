@@ -5,13 +5,13 @@ use std::path::{
     PathBuf,
 };
 
-use super::Preprocessor;
 use crate::{
     test_support::TempDir,
     translation_phases::{
         Context,
         SourceVector,
         TranslationError,
+        preprocessing::Preprocessor,
     },
     util::shared::SharedVec,
 };

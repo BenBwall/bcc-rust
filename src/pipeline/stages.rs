@@ -1,0 +1,84 @@
+//! Stage drivers scope preprocessing and parser work arenas to their phases
+//! and retain output token ranges before temporary provenance is compacted.
+
+use std::path::Path;
+
+use crate::{
+    headers::HeaderSearch,
+    translation_phases::{
+        Context,
+        TranslationError,
+        parsing::{
+            ParsedTranslationUnit,
+            Parser,
+            PreprocessedTranslationUnit,
+        },
+        preprocessing::{
+            Preprocessor,
+            Token,
+        },
+    },
+    util::{
+        bump::Bump,
+        region_vec::RegionVec,
+    },
+};
+
+/// Runs translation phases 4 through 6 over the whole translation unit and
+/// returns its parser-facing tokens with their diagnostics, each diagnostic
+/// before the token whose production reported it.
+///
+/// Token provenance is retained in the translation-unit context as each
+/// token is produced, and pending diagnostics keep theirs across
+/// preprocessor-arena compaction, so every item stays renderable afterwards.
+pub(crate) fn preprocess_with_diagnostics<'tu>(
+    mut preprocessor: Preprocessor<'tu, '_>,
+    context: &mut Context<'tu>,
+) -> RegionVec<Result<Token, TranslationError<'tu>>> {
+    let mut tokens = RegionVec::new();
+    preprocessor.for_each_iterator_item(context, |context, mut token| {
+        token.source_vectors = context.retain_token_source(token.source_vectors);
+        tokens.push((token, context.pending_error_count()));
+    });
+    let mut items = RegionVec::new();
+    let mut reported = 0;
+    for (token, errors_before) in tokens {
+        while reported < errors_before {
+            items.push(Err(context
+                .pop_pending_error()
+                .expect("counted diagnostics are pending")));
+            reported += 1;
+        }
+        items.push(Ok(token));
+    }
+    items.extend(std::iter::from_fn(|| context.pop_pending_error()).map(Err));
+    items
+}
+
+/// Keeps phase-4 working storage within preprocessing: the preprocessing
+/// arena is dropped when `run` returns. `run` also receives that arena, so a
+/// measurement can read its high-water mark.
+pub(crate) fn with_preprocessor<'tu, R>(
+    context: &mut Context<'tu>,
+    source_filename: &Path,
+    source: &'tu str,
+    search: HeaderSearch<'_>,
+    run: impl for<'pp> FnOnce(Preprocessor<'tu, 'pp>, &mut Context<'tu>, &'pp Bump) -> R,
+) -> R {
+    let pp = Bump::new();
+    let preprocessor =
+        Preprocessor::new_with_arena_source(&pp, context, source_filename, source, search);
+    run(preprocessor, context, &pp)
+}
+
+/// Keeps phase-7 working storage scoped to parsing: the parser's frames,
+/// their pools, its scopes, and its recovery state come from `parse`, which
+/// the caller frees when parsing ends. The syntax tree goes into the
+/// translation-unit arena.
+pub(crate) fn parse_with_arena<'tu>(
+    preprocessed: PreprocessedTranslationUnit,
+    context: &mut Context<'tu>,
+    parse: &Bump,
+) -> ParsedTranslationUnit<'tu> {
+    Parser::from_preprocessed(preprocessed, context, parse).parse_translation_unit()
+}

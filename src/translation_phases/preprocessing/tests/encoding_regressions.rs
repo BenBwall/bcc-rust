@@ -3,13 +3,13 @@
 
 use std::path::PathBuf;
 
-use super::Preprocessor;
 use crate::{
     translation_phases::{
         Context,
         preprocessing::{
             LiteralId,
             LiteralUnit,
+            Preprocessor,
             StringTokenType,
             Token,
             TokenType,
