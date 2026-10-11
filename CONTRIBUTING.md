@@ -20,6 +20,12 @@ so nothing needs to be declared before it is used.
      loop runs on. Constructors, helpers, error types, token types, and debug
      views live in submodules. A module with no loop, such as a collection of
      utilities, gives this place to its entry point or its central type.
+
+  A file that implements one grammar frame or one view and keeps a single
+  helper child beside it (`parsing/frames/expression.rs` with
+  `expression/lookahead.rs`, `parsing/inspection.rs` with
+  `inspection/labels.rs`) is not a module entry file in this sense: it keeps
+  its body, with its central item first, as any other file does.
 - **Every file puts its most important item first.** Order items as a reader
   should meet them: the entry point or core algorithm, then the types and
   helpers it uses in the order it uses them, then constructors and accessors,
