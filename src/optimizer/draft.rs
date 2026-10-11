@@ -24,6 +24,8 @@
 //! - **rewriting instructions** keeps result identity and clears old folds;
 //! - **weakening flags** records new flags for an instruction, which
 //!   [`Draft::inst`] then reports;
+//! - **adding stack slots and constant bits** copies foreign frame objects and
+//!   wide constants without retaining foreign pool handles;
 //! - **removing a stack slot** drops it from the lowered body, whose remaining
 //!   slots are renumbered.
 //!
@@ -52,6 +54,7 @@ use crate::{
         InstFlags,
         Opcode,
         StackSlot,
+        StackSlotData,
         Type,
         Value,
         ValueData,
@@ -89,6 +92,11 @@ pub(super) struct Draft<'b, 's> {
     call_args:          ArenaVec<'s, Option<&'s [Value]>>,
     /// Whether a stack slot was removed, by slot index.
     removed_slots:      ArenaVec<'s, bool>,
+    /// Slots copied from an inlined body, after the original slots.
+    added_slots:        ArenaVec<'s, StackSlotData>,
+    /// Owned bits for copied wide constants; foreign pool handles are never
+    /// read.
+    constant_bits:      ArenaVec<'s, Option<u128>>,
 }
 
 /// A block of a draft.
@@ -186,6 +194,12 @@ impl<'b, 's> Draft<'b, 's> {
             added_insts: ArenaVec::new_in(scratch),
             removed_slots,
             call_args,
+            added_slots: ArenaVec::new_in(scratch),
+            constant_bits: {
+                let mut bits = ArenaVec::new_in(scratch);
+                bits.resize(body.inst_count(), None);
+                bits
+            },
         }
     }
 
@@ -312,8 +326,7 @@ impl<'b, 's> Draft<'b, 's> {
                 ty,
                 ..
             } => self
-                .body
-                .const_bits(self.inst(inst))
+                .const_bits(inst)
                 .map(|bits| Constant::Int(ty, bits & ty.mask())),
             | InstData::Nullary {
                 opcode: Opcode::Poison,
@@ -362,6 +375,7 @@ impl<'b, 's> Draft<'b, 's> {
         self.edited[inst.index()] = Some(data);
         self.folded[inst.index()] = None;
         self.call_args[inst.index()] = None;
+        self.constant_bits[inst.index()] = None;
     }
 
     /// Moves an instruction without changing its result identity. Its operands
@@ -378,13 +392,6 @@ impl<'b, 's> Draft<'b, 's> {
     }
 
     /// Copies a call's variable-length operands into the draft's arena.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "General draft support for passes that create calls."
-        )
-    )]
     pub(super) fn set_call_args(&mut self, inst: Inst, args: &[Value]) {
         assert!(
             matches!(
@@ -414,7 +421,36 @@ impl<'b, 's> Draft<'b, 's> {
         self.removed.push(false);
         self.edited.push(Some(data));
         self.call_args.push(None);
+        self.constant_bits.push(None);
         (inst, result)
+    }
+
+    /// Owns a foreign constant's bits independently of its pool handle.
+    pub(super) fn set_const_bits(&mut self, inst: Inst, bits: u128) {
+        self.constant_bits[inst.index()] = Some(bits);
+    }
+
+    pub(super) fn const_bits(&self, inst: Inst) -> Option<u128> {
+        self.constant_bits[inst.index()].or_else(|| self.body.const_bits(self.inst(inst)))
+    }
+
+    /// Adds an independent frame object for one inlined call site.
+    pub(super) fn add_stack_slot(&mut self, data: StackSlotData) -> StackSlot {
+        let slot = StackSlot::new(self.stack_slot_count());
+        self.added_slots.push(data);
+        self.removed_slots.push(false);
+        slot
+    }
+
+    pub(super) fn stack_slot_count(&self) -> usize {
+        self.body.stack_slot_count() + self.added_slots.len()
+    }
+
+    pub(super) fn stack_slot(&self, slot: StackSlot) -> StackSlotData {
+        match slot.index().checked_sub(self.body.stack_slot_count()) {
+            | Some(index) => self.added_slots[index],
+            | None => self.body.stack_slot(slot),
+        }
     }
 
     /// Gives `inst`, a `Binary` instruction, the flags `flags`. Passes only

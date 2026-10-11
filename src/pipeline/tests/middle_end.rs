@@ -134,6 +134,38 @@ const STAGES: [(bool, Profile); 4] = [
 ];
 
 #[test]
+fn inline_handles_nested_calls_address_taken_locals_and_multiple_returns() {
+    let source = "
+static void write(int *p, int x) { *p = x; }
+static int absolute(int x) {
+    int y;
+    write(&y, x);
+    if (y < 0) return -y;
+    return y;
+}
+static int nested(int x) { return absolute(x) + absolute(x + 1); }
+int main(void) {
+    int sum = 0;
+    for (int i = -4; i < 5; ++i) sum += nested(i);
+    return sum == 41 ? 0 : 1;
+}";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        for optimize in [false, true] {
+            with_module(source, target, optimize, |module, target| {
+                assert_eq!(interpret(module, target).0, 0);
+                if optimize {
+                    let text = module.to_string();
+                    assert!(!text.contains("call @write"), "{text}");
+                    assert!(!text.contains("call @absolute"), "{text}");
+                    assert!(!text.contains("call @nested"), "{text}");
+                    assert!(!text.contains("stack_slot"), "{text}");
+                }
+            });
+        }
+    }
+}
+
+#[test]
 fn every_program_interprets_to_its_status() {
     for program in PROGRAMS.iter().chain(BY_VALUE_PROGRAMS) {
         for (optimize, profile) in STAGES {

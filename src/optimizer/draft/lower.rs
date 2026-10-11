@@ -38,14 +38,15 @@ impl<'s> Draft<'_, 's> {
     /// parameters, then its instructions' results. Stack slots that remain
     /// keep their order.
     pub(in crate::optimizer) fn lower(&self, module: &mut Module<'_>, func: FuncId) {
-        let body = self.body;
         let mut builder = FunctionBuilder::new(module, func);
         let mut numbering = Numbering {
             blocks: ArenaVec::with_capacity_in(self.blocks.len(), self.scratch),
             values: ArenaVec::with_capacity_in(self.value_count(), self.scratch),
-            slots:  ArenaVec::with_capacity_in(body.stack_slot_count(), self.scratch),
+            slots:  ArenaVec::with_capacity_in(self.stack_slot_count(), self.scratch),
         };
-        for (slot, data) in body.stack_slots() {
+        for index in 0..self.stack_slot_count() {
+            let slot = StackSlot::new(index);
+            let data = self.stack_slot(slot);
             numbering.slots.push(
                 (!self.is_stack_slot_removed(slot))
                     .then(|| builder.create_stack_slot(data.size, data.align)),
@@ -101,7 +102,6 @@ impl<'s> Draft<'_, 's> {
         numbering: &Numbering<'_>,
         inst: Inst,
     ) {
-        let body = self.body;
         let map = |value: Value| numbering.value(self.resolve(value));
         let result = self.inst_result(inst).map(|result| numbering.value(result));
         let original = *self.inst(inst);
@@ -161,7 +161,7 @@ impl<'s> Draft<'_, 's> {
                         builder,
                         opcode,
                         ty,
-                        body.const_bits(&original).unwrap_or_default(),
+                        self.const_bits(inst).unwrap_or_default(),
                     ),
                 | InstData::StackAddr { slot } => InstData::StackAddr {
                     slot: numbering.slot(slot),

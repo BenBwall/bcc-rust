@@ -499,7 +499,13 @@ block0(v0: i32):
     v2 = iconst.i32 4
     v3 = and.i32 v0, v1
     v4 = sdiv.i32 v3, v2
-    return v4
+    v5 = call @identity(v4)
+    return v5
+}
+
+function @identity(i32) -> i32 internal {
+block0(v0: i32):
+    return v0
 }
 
 ";

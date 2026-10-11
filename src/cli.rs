@@ -155,7 +155,7 @@ struct Cli {
     /// Select the C target ABI (independent of the compiler host).
     #[arg(long, default_value = "x86_64-unknown-linux-gnu", value_parser = TargetParser)]
     target: crate::target::Target,
-    /// Print the default bcc pass list, such as `promote,fold,...`, for
+    /// Print the default bcc pass list, such as `inline,promote,fold,...`, for
     /// `--passes` ablation scripts, and exit.
     #[arg(long = "print-default-passes", exclusive = true)]
     _print_default_passes: bool,

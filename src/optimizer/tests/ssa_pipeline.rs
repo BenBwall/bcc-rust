@@ -150,7 +150,7 @@ block3:
 ";
 
 /// A mode kept in a slot picks a `switch` arm; another slot escapes to a
-/// callee that writes it, so it stays in memory.
+/// callee that writes it; inlining now exposes that slot to promotion.
 const SWITCH_AND_ESCAPE: &str = "\
 function @set(ptr, i32) internal {
 block0(v0: ptr, v1: i32):
@@ -392,18 +392,16 @@ block0(v0: i32):
 }
 
 #[test]
-fn a_switch_on_a_promoted_mode_keeps_the_escaping_slot() {
+fn a_switch_on_a_promoted_mode_also_promotes_the_inlined_slot() {
     let (text, _) = optimize_text(SWITCH_AND_ESCAPE, &verified());
     let main = text
         .split("function @main")
         .nth(1)
         .expect("the module keeps @main");
     let expected = "(i32) -> i32 external {
-    slot0 = stack_slot 4, align 4
 block0(v0: i32):
-    v1 = stack_addr slot0
-    call @set(v1, v0)
-    v2 = load.i32 v1, align 4
+    v1 = iconst.i32 2
+    v2 = imul.i32 v0, v1
     v3 = iconst.i32 1
     v4 = iadd.i32 v2, v3
     return v4

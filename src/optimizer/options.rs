@@ -48,6 +48,8 @@ impl Default for OptimizerOptions<'_> {
 /// A transformation the optimizer can run.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Pass {
+    /// Bottom-up direct-call inlining before stack-slot promotion.
+    Inline,
     /// Constant folding and algebraic simplification.
     Fold,
     /// Dead code elimination.
@@ -69,6 +71,7 @@ pub(crate) enum Pass {
 impl Pass {
     /// Every pass, in default pipeline order.
     pub(crate) const ALL: [Self; Self::COUNT] = [
+        Self::Inline,
         Self::Promote,
         Self::Fold,
         Self::SimplifyCfg,
@@ -78,11 +81,12 @@ impl Pass {
         Self::Licm,
         Self::Dce,
     ];
-    pub(crate) const COUNT: usize = 8;
+    pub(crate) const COUNT: usize = 9;
 
     /// The name `--passes` and reports use.
     pub(crate) const fn name(self) -> &'static str {
         match self {
+            | Self::Inline => "inline",
             | Self::Fold => "fold",
             | Self::Dce => "dce",
             | Self::SimplifyCfg => "simplify-cfg",
@@ -101,6 +105,7 @@ impl Pass {
     /// A dense index for per-pass tables.
     pub(crate) const fn index(self) -> usize {
         match self {
+            | Self::Inline => 8,
             | Self::Fold => 0,
             | Self::Dce => 1,
             | Self::SimplifyCfg => 2,
@@ -170,10 +175,10 @@ pub(crate) fn parse_pass_list(text: &str) -> Result<PassList, PassListError<'_>>
 pub(crate) enum PassListError<'a> {
     /// A name that is empty or not a pass; the known passes are `fold`,
     /// `dce`, `simplify-cfg`, `gvn`, `licm`, `promote`, `sccp` and
-    /// `known-bits`.
+    /// `known-bits` and `inline`.
     #[error(
         "unknown pass `{0}` (the passes are fold, dce, simplify-cfg, gvn, licm, promote, sccp and \
-         known-bits)"
+         known-bits and inline)"
     )]
     Unknown(&'a str),
     #[error("a pass list holds at most {} passes", PassList::CAPACITY)]

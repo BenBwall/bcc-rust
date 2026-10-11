@@ -37,6 +37,7 @@ pub(super) fn generate(seed: u64, probe: bool) -> String {
     let mut costs: Vec<u64> = Vec::new();
     let mut out = String::new();
     out.push_str(GLOBALS);
+    out.push_str(INLINE_HELPERS);
     out.push('\n');
     out.push_str("function @putchar(i32) -> i32 external\n");
     out.push_str("function @printf(ptr, ...) -> i32 external\n");
@@ -79,6 +80,33 @@ global @g0 internal size 16, align 8 = zero
 global @g1 internal size 64, align 8 = zero
 global @table internal constant size 16, align 8 = bytes \"00000000000000000000000000000000\" \
                        relocs [0: @g1 + 32, 8: @f0]
+";
+
+/// Kept small so both the single inline pass and the default pipeline copy
+/// slots, branches and nested calls on every generated program.
+const INLINE_HELPERS: &str = "\
+function @inline_leaf(i32) -> i32 internal {
+    slot0 = stack_slot 4, align 4
+block0(v0: i32):
+    v1 = stack_addr slot0
+    store.i32 v0, v1, align 4
+    v2 = load.i32 v1, align 4
+    v3 = iconst.i32 0
+    v4 = icmp.i32 slt v2, v3
+    brif v4, block1, block2
+block1:
+    v5 = isub.i32 v3, v2
+    return v5
+block2:
+    return v2
+}
+
+function @inline_chain(i32) -> i32 internal {
+block0(v0: i32):
+    v1 = call @inline_leaf(v0)
+    v2 = call @inline_leaf(v1)
+    return v2
+}
 ";
 
 /// The data objects besides the stack slots, with their sizes: two
@@ -164,6 +192,14 @@ impl FunctionGen<'_> {
         self.statements(statements);
         if main {
             self.call_every_function();
+            // Every seed exercises a small nested, multi-return call graph.
+            let input = self.rng.int(201) - 100;
+            let input = self.constant_value(Ty::I32, input);
+            _ = self.def(
+                Ty::I32,
+                Range::new(0, 100),
+                format_args!("call @inline_chain(v{})", input.id),
+            );
             self.return_checksum();
         } else {
             let value = self.operand(self.result);

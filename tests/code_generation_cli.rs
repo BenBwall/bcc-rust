@@ -121,9 +121,9 @@ mod tests {
             text(&bcc(SUM, &["--emit=ir"]).stdout)
         );
 
-        let unknown = bcc(SUM, &["--emit=ir", "--passes=fold,inline"]);
+        let unknown = bcc(SUM, &["--emit=ir", "--passes=fold,unknown"]);
         assert_eq!(unknown.status.code(), Some(2));
-        assert!(text(&unknown.stderr).contains("unknown pass `inline`"));
+        assert!(text(&unknown.stderr).contains("unknown pass `unknown`"));
     }
 
     #[test]

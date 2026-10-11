@@ -4,6 +4,10 @@ use super::*;
 
 #[test]
 fn pass_lists_parse() {
+    assert_eq!(
+        parse_pass_list("inline,promote").unwrap().as_slice(),
+        [Pass::Inline, Pass::Promote]
+    );
     let list = parse_pass_list("fold,dce, simplify-cfg").unwrap();
     assert_eq!(list.as_slice(), [Pass::Fold, Pass::Dce, Pass::SimplifyCfg]);
     let repeated = parse_pass_list("dce,dce,fold").unwrap();
@@ -14,8 +18,8 @@ fn pass_lists_parse() {
 #[test]
 fn bad_pass_lists_are_rejected() {
     assert_eq!(
-        parse_pass_list("fold,inline"),
-        Err(PassListError::Unknown("inline"))
+        parse_pass_list("fold,unknown"),
+        Err(PassListError::Unknown("unknown"))
     );
     assert_eq!(
         parse_pass_list("fold,,dce"),

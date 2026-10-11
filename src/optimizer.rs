@@ -1,23 +1,25 @@
 //! The optimizer: a fixed pipeline of passes over the bcc IR.
 //!
 //! [`optimize`] takes a [`Module`] and rewrites every defined function in
-//! turn. There is no pass-manager framework: the pipeline is one list of
-//! passes run in one function, as in QBE and Cranelift, and each pass
-//! recomputes the analyses it needs ([`Draft::use_counts`], reachability,
-//! predecessors) instead of keeping them. The IR has no use lists and stores
-//! each block's instructions contiguously, so a function is *lifted* into a
-//! [`Draft`], an editable copy with a value-replacement map. The passes edit
-//! the draft, and it is *lowered* back into a fresh, densely numbered body
-//! once the function is done (or earlier, when the verifier or a printer
-//! asks to see the function after a pass).
+//! turn, in bottom-up call-graph order when inlining is enabled. There is no
+//! pass-manager framework: the pipeline is one list of passes run in one
+//! function, as in QBE and Cranelift, and each pass recomputes the analyses it
+//! needs ([`Draft::use_counts`], reachability, predecessors) instead of keeping
+//! them. The IR has no use lists and stores each block's instructions
+//! contiguously, so a function is *lifted* into a [`Draft`], an editable copy
+//! with a value-replacement map. The passes edit the draft, and it is *lowered*
+//! back into a fresh, densely numbered body once the function is done (or
+//! earlier, when the verifier or a printer asks to see the function after a
+//! pass).
 //!
-//! The default pipeline is `promote`, `fold`, `simplify-cfg`, `sccp`,
+//! The default pipeline is `inline`, `promote`, `fold`, `simplify-cfg`, `sccp`,
 //! `known-bits`, `gvn`, `licm`, `dce` (promotion first, so the others see SSA
 //! values instead of loads and stores; value numbering before code motion, so
 //! one copy of a repeated invariant moves; and dead code last, so it sweeps
-//! what the others leave), repeated until a round changes nothing or
-//! [`MAX_ROUNDS`] rounds have run. An explicit `--passes=` list runs once, in
-//! the order given. Every rewrite first asks [`OptimizationReport::allow`],
+//! what the others leave). Inlining runs once per function, using already
+//! optimized callees; the remaining passes repeat until a round changes nothing
+//! or [`MAX_ROUNDS`] rounds have run. An explicit `--passes=` list runs once,
+//! in the order given. Every rewrite first asks [`OptimizationReport::allow`],
 //! which counts rewrites globally and refuses them all once the bisect limit is
 //! reached, so `--opt-bisect-limit=N` applies exactly the first `N` rewrites
 //! and a miscompile can be bisected on `N`. With `verify_each`, the verifier
@@ -55,10 +57,11 @@
 //!   natural loops and their nesting, `frontiers.rs` dominance frontiers.
 //! - Passes: `fold.rs` (with `fold/eval.rs`, exact integer evaluation),
 //!   `dce.rs`, `simplify_cfg.rs` (with `simplify_cfg/select.rs`, bounded select
-//!   formation), `promote.rs` (stack-slot promotion), `sccp.rs` (sparse
-//!   conditional constant propagation), `known_bits.rs` (integer facts from
-//!   dominating conditions and division rewrites), `gvn.rs` (value numbering
-//!   over the dominator tree) and `licm.rs` (loop-invariant code motion).
+//!   formation), `inline.rs` (module call graph and direct-call expansion),
+//!   `promote.rs` (stack-slot promotion), `sccp.rs` (sparse conditional
+//!   constant propagation), `known_bits.rs` (integer facts from dominating
+//!   conditions and division rewrites), `gvn.rs` (value numbering over the
+//!   dominator tree) and `licm.rs` (loop-invariant code motion).
 //! - `tests.rs` and `tests/` exercise each pass on textual IR, the pipeline as
 //!   a whole, and run programs in the interpreter before and after
 //!   optimization.
@@ -87,6 +90,7 @@ mod loops;
 mod dce;
 mod fold;
 mod gvn;
+mod inline;
 mod known_bits;
 mod licm;
 mod promote;
@@ -152,8 +156,17 @@ pub(crate) fn optimize(
             .filter(|(_, function)| function.body.is_some())
             .map(|(func, _)| func),
     );
+    let graph = inline::CallGraph::compute(module, scratch);
+    let inline_enabled = options
+        .passes
+        .as_ref()
+        .is_none_or(|list| list.as_slice().contains(&Pass::Inline));
+    if inline_enabled {
+        functions.clear();
+        functions.extend_from_slice(&graph.order);
+    }
     for func in functions {
-        optimize_function(module, func, options, &mut report, scratch);
+        optimize_function(module, func, options, &mut report, &graph, scratch);
         report.functions += 1;
     }
     report
@@ -174,6 +187,7 @@ fn optimize_function(
     func: FuncId,
     options: &OptimizerOptions<'_>,
     report: &mut OptimizationReport,
+    graph: &inline::CallGraph<'_>,
     scratch: &Bump,
 ) {
     if options.verify_each {
@@ -191,11 +205,14 @@ fn optimize_function(
         | Some(list) => (list.as_slice(), 1),
         | None => (&Pass::ALL[..], MAX_ROUNDS),
     };
-    for _ in 0..rounds {
+    for round in 0..rounds {
         let mut changed = false;
         for &pass in passes {
+            if pass == Pass::Inline && options.passes.is_none() && round != 0 {
+                continue;
+            }
             changed |= run_pass(
-                pass, &mut draft, module, func, options, report, &mut state, scratch,
+                pass, &mut draft, module, func, options, report, &mut state, graph, scratch,
             );
         }
         report.rounds += 1;
@@ -227,11 +244,13 @@ fn run_pass(
     options: &OptimizerOptions<'_>,
     report: &mut OptimizationReport,
     state: &mut Materialized,
+    graph: &inline::CallGraph<'_>,
     scratch: &Bump,
 ) -> bool {
     report.begin_pass(pass);
     let start = Instant::now();
     let changed = match pass {
+        | Pass::Inline => inline::run(draft, module, graph, report),
         | Pass::Fold => fold::run(draft, report),
         | Pass::Dce => dce::run(draft, report),
         | Pass::SimplifyCfg => simplify_cfg::run(draft, report),

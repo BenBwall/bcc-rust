@@ -10,6 +10,7 @@ mod draft;
 mod equivalence;
 mod fold;
 mod gvn;
+mod inline;
 mod known_bits;
 mod licm;
 mod loops;

@@ -16,7 +16,8 @@ use crate::{
 
 /// The pass lists each program is checked under; `None` is the default
 /// pipeline.
-const PIPELINES: [Option<&[Pass]>; 5] = [
+const PIPELINES: [Option<&[Pass]>; 6] = [
+    Some(&[Pass::Inline]),
     Some(&[Pass::Gvn]),
     Some(&[Pass::Licm]),
     Some(&[Pass::Gvn, Pass::Licm, Pass::Dce]),
@@ -26,7 +27,7 @@ const PIPELINES: [Option<&[Pass]>; 5] = [
 
 /// Optimizes `text` under every pipeline and checks that `entry` returns
 /// the same value for each argument list.
-fn assert_equivalent(text: &str, entry: &str, inputs: &[&[i64]]) {
+pub(super) fn assert_equivalent(text: &str, entry: &str, inputs: &[&[i64]]) {
     for passes in PIPELINES {
         let options = match passes {
             | Some(passes) => only(passes),
@@ -54,7 +55,7 @@ fn assert_equivalent(text: &str, entry: &str, inputs: &[&[i64]]) {
 }
 
 /// What `entry` returned, panicking if it trapped or returned nothing.
-fn returned(text: &str, entry: &str, args: &[RuntimeValue]) -> RuntimeValue {
+pub(super) fn returned(text: &str, entry: &str, args: &[RuntimeValue]) -> RuntimeValue {
     let run = run_text_with(text, entry, args, Limits::default());
     match run.result {
         | Ok(Outcome {

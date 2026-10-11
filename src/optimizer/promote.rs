@@ -93,7 +93,7 @@ use crate::{
 /// Promotes every promotable stack slot of one function. Returns whether it
 /// promoted any.
 pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> bool {
-    let slots = draft.body.stack_slot_count();
+    let slots = draft.stack_slot_count();
     if slots == 0 {
         return false;
     }
@@ -154,7 +154,7 @@ struct Accesses<'s> {
 impl<'s> Accesses<'s> {
     /// Scans the live blocks, unreachable ones included.
     fn collect(draft: &Draft<'_, 's>) -> Self {
-        let slots = draft.body.stack_slot_count();
+        let slots = draft.stack_slot_count();
         let mut uses = ArenaVec::with_capacity_in(slots, draft.scratch);
         uses.resize(slots, SlotUse::Unused);
         let mut addresses: ArenaVec<'s, Option<StackSlot>> =
@@ -257,7 +257,7 @@ impl<'s> Accesses<'s> {
             return None;
         }
         match self.uses[slot.index()] {
-            | SlotUse::Typed(ty) if ty.bytes() != draft.body.stack_slot(slot).size => None,
+            | SlotUse::Typed(ty) if ty.bytes() != draft.stack_slot(slot).size => None,
             | SlotUse::Escaped => None,
             | slot_use @ (SlotUse::Unused | SlotUse::Typed(_)) => Some(slot_use),
         }

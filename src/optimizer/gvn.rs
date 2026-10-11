@@ -300,7 +300,7 @@ fn key(draft: &Draft<'_, '_>, inst: Inst) -> Option<Key> {
             Key::Const {
                 opcode,
                 ty,
-                bits: draft.body.const_bits(&data)?,
+                bits: draft.const_bits(inst)?,
             },
         | InstData::Nullary {
             opcode: Opcode::Null,
