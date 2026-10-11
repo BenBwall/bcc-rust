@@ -204,11 +204,7 @@ impl Lexer<'_, '_, '_, '_> {
         });
     }
 
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn intern(
-        &mut self,
-        start: usize,
-        end: usize,
-    ) -> StringCacheId {
+    fn intern(&mut self, start: usize, end: usize) -> StringCacheId {
         let text = self.text;
         self.intern_spelling(&text[start..end])
     }

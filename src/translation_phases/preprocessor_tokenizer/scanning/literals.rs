@@ -1,7 +1,8 @@
 //! Quoted tokens, whitespace, and comments in translation phase 3.
 //! The scanners retain newlines and replace horizontal whitespace and comments
-//! with a space. Quoted-token scanning records spellings and recovers partial
-//! tokens; escape validity and literal values are checked after lexing.
+//! with a space; a block comment's own newlines become part of that space.
+//! Quoted-token scanning records spellings and recovers partial tokens; escape
+//! validity and literal values are checked after lexing.
 //!
 //! C99: §5.1.1.2 paragraph 1 (phase 3), p. 10; PDF p. 22;
 //! comments §6.4.9 paragraphs 1-2, p. 66; PDF p. 78;

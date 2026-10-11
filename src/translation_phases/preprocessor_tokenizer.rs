@@ -3,7 +3,7 @@
 //! lexer then reads the resulting text from left to right, records token
 //! boundaries and original source positions, and saves diagnostics for replay
 //! when phase 4 reads each token. Comments and horizontal whitespace become one
-//! space; newlines stay.
+//! space, a block comment's own newlines included; other newlines stay.
 //!
 //! For example, `ab` followed by a backslash, a physical newline, and `cd + 1`
 //! becomes `abcd + 1` after splicing. The lexing loop records an identifier, a
