@@ -71,7 +71,8 @@ pub(crate) enum HostReturn {
 }
 
 /// The default host: `putchar`, `puts`, `printf`, `malloc`, `calloc`,
-/// `free`, `memcpy`, `memset`, `strlen`, `exit` and `abort`, with output
+/// `free`, memory and string operations, `sprintf`, `abs`, `fabs`, `floor`,
+/// `exit` and `abort`, with output
 /// captured in an arena buffer. Each follows its C library description;
 /// misuse the standard leaves undefined, such as an overlapping `memcpy`,
 /// traps.
@@ -80,6 +81,11 @@ pub(crate) enum HostReturn {
 /// C99: §7.21.2.1, p. 325; PDF p. 337.
 /// C99: §7.21.6.1, p. 333; PDF p. 345.
 /// C99: §7.21.6.3, p. 334; PDF p. 346.
+/// C99: §7.19.6.6, p. 291; PDF p. 303 (`sprintf`).
+/// C99: §7.20.6.1, p. 320; PDF p. 332 (`abs`).
+/// C99: §7.12.7.2 and §7.12.9.2, pp. 228 and 232; PDF pp. 240 and 244
+/// (`fabs` and `floor`).
+/// C99: §7.4.1.8, p. 183; PDF p. 195 (`isprint` in the initial C locale).
 pub(crate) struct DefaultHost<'a> {
     output:     ArenaVec<'a, u8>,
     scratch:    ArenaVec<'a, u8>,
@@ -108,6 +114,31 @@ impl Host for DefaultHost<'_> {
                 self.printf(arg(0), args.get(1..).unwrap_or_default(), memory)?;
                 RuntimeValue::Int((self.output.len() - before) as u128)
             },
+            | "sprintf" => {
+                // C99 §7.19.6.6: format into the destination, including the
+                // terminating null, and exclude that null from the count.
+                let before = self.output.len();
+                let result = self.printf(arg(1), args.get(2..).unwrap_or_default(), memory);
+                let count = self.output.len() - before;
+                let result = result.and_then(|()| {
+                    for (offset, byte) in
+                        self.output[before..].iter().copied().chain([0]).enumerate()
+                    {
+                        let address =
+                            memory.ptr_add(arg(0), RuntimeValue::Int(offset as u128), true);
+                        memory.store(
+                            Type::I8,
+                            RuntimeValue::Int(u128::from(byte)),
+                            address,
+                            Align::BYTE,
+                        )?;
+                    }
+                    Ok(())
+                });
+                self.output.truncate(before);
+                result?;
+                RuntimeValue::Int(count as u128)
+            },
             | "malloc" => allocate(memory, integer(arg(0))?, false)?,
             | "calloc" => {
                 let size = integer(arg(0))?.checked_mul(integer(arg(1))?);
@@ -124,6 +155,82 @@ impl Host for DefaultHost<'_> {
                 memory.copy(arg(0), arg(1), arg(2), Align::BYTE, false)?;
                 arg(0)
             },
+            | "memmove" => {
+                memory.copy(arg(0), arg(1), arg(2), Align::BYTE, true)?;
+                arg(0)
+            },
+            | "memcmp" | "strcmp" | "strncmp" => {
+                let count = match call.name {
+                    | "strcmp" => u128::from(u64::MAX),
+                    | _ => integer(arg(2))?,
+                };
+                compare_bytes(memory, arg(0), arg(1), count, call.name != "memcmp")?
+            },
+            | "strcpy" => {
+                self.scratch.clear();
+                memory.read_c_string(arg(1), &mut self.scratch)?;
+                let count = RuntimeValue::Int((self.scratch.len() + 1) as u128);
+                memory.copy(arg(0), arg(1), count, Align::BYTE, false)?;
+                arg(0)
+            },
+            | "strncpy" => {
+                // C99: §7.21.2.4 paragraphs 2-3, p. 326; PDF p. 338.
+                // Copy at most n source bytes, then pad the destination with
+                // zeros. A full-length copy need not have a terminating null.
+                let count = integer(arg(2))?;
+                let count = u64::try_from(count)
+                    .map_err(|_| Fault::Unsupported(Unsupported::ObjectSize))?;
+                let mut copied = 0;
+                for offset in 0..count {
+                    let address =
+                        memory.ptr_add(arg(1), RuntimeValue::Int(u128::from(offset)), true);
+                    let byte = integer(memory.load(Type::I8, address, Align::BYTE)?)?;
+                    if byte == 0 {
+                        break;
+                    }
+                    copied += 1;
+                }
+                // Use the memory copy's overlap check for the accessed prefix.
+                let prefix = RuntimeValue::Int(u128::from(copied));
+                memory.copy(arg(0), arg(1), prefix, Align::BYTE, false)?;
+                let tail = memory.ptr_add(arg(0), prefix, true);
+                memory.fill(
+                    tail,
+                    RuntimeValue::Int(0),
+                    RuntimeValue::Int(u128::from(count - copied)),
+                    Align::BYTE,
+                )?;
+                arg(0)
+            },
+            | "memchr" | "strchr" | "strrchr" => {
+                // C99: §7.21.5.1-§7.21.5.2, p. 330; PDF p. 342;
+                // §7.21.5.5, p. 331; PDF p. 343. Search includes the string
+                // terminator; memchr reads only its bounded prefix.
+                let count = if call.name == "memchr" {
+                    integer(arg(2))?
+                } else {
+                    u128::from(u64::MAX)
+                };
+                let count = u64::try_from(count)
+                    .map_err(|_| Fault::Unsupported(Unsupported::ObjectSize))?;
+                let character = truncate_u8(integer(arg(1))?);
+                let mut found = RuntimeValue::NULL;
+                for offset in 0..count {
+                    let address =
+                        memory.ptr_add(arg(0), RuntimeValue::Int(u128::from(offset)), true);
+                    let byte = integer(memory.load(Type::I8, address, Align::BYTE)?)?;
+                    if byte == u128::from(character) {
+                        found = address;
+                        if call.name != "strrchr" {
+                            break;
+                        }
+                    }
+                    if call.name != "memchr" && byte == 0 {
+                        break;
+                    }
+                }
+                found
+            },
             | "memset" => {
                 memory.fill(arg(0), arg(1), arg(2), Align::BYTE)?;
                 arg(0)
@@ -132,6 +239,28 @@ impl Host for DefaultHost<'_> {
                 self.scratch.clear();
                 memory.read_c_string(arg(0), &mut self.scratch)?;
                 RuntimeValue::Int(self.scratch.len() as u128)
+            },
+            | "abs" => {
+                let value = super::arithmetic::sext(Type::I32, integer(arg(0))?);
+                if value == i128::from(i32::MIN) {
+                    RuntimeValue::Poison
+                } else {
+                    RuntimeValue::Int(value.unsigned_abs())
+                }
+            },
+            | "fabs" | "floor" => {
+                let RuntimeValue::F64(value) = arg(0) else {
+                    return Err(UbKind::PoisonInHostCall.into());
+                };
+                RuntimeValue::F64(if call.name == "fabs" {
+                    value.abs()
+                } else {
+                    value.floor()
+                })
+            },
+            | "isprint" => {
+                let value = super::arithmetic::sext(Type::I32, integer(arg(0))?);
+                RuntimeValue::Int(u128::from((32..=126).contains(&value)))
             },
             | "exit" => {
                 #[expect(clippy::cast_possible_truncation, reason = "`exit` takes an int.")]
@@ -146,6 +275,33 @@ impl Host for DefaultHost<'_> {
             | value => value,
         })))
     }
+}
+
+/// Compares bytes as unsigned char, stopping at n or the first string null.
+/// Reading only the selected prefix permits nonterminated strncmp arrays.
+/// C99: §7.21.4 paragraphs 1-2, p. 328; PDF p. 340;
+/// §7.21.4.1-§7.21.4.4, pp. 328-330; PDF pp. 340-342.
+fn compare_bytes(
+    memory: &Memory<'_>,
+    left: RuntimeValue,
+    right: RuntimeValue,
+    count: u128,
+    string: bool,
+) -> Result<RuntimeValue, Fault> {
+    let count = u64::try_from(count).map_err(|_| Fault::Unsupported(Unsupported::ObjectSize))?;
+    for offset in 0..count {
+        let at = |pointer| memory.ptr_add(pointer, RuntimeValue::Int(u128::from(offset)), true);
+        let a = integer(memory.load(Type::I8, at(left), Align::BYTE)?)?;
+        let b = integer(memory.load(Type::I8, at(right), Align::BYTE)?)?;
+        if a != b {
+            let difference = a.wrapping_sub(b);
+            return Ok(RuntimeValue::int(Type::I32, difference));
+        }
+        if string && a == 0 {
+            break;
+        }
+    }
+    Ok(RuntimeValue::Int(0))
 }
 
 impl DefaultHost<'_> {

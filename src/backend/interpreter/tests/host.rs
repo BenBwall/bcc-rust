@@ -28,6 +28,15 @@ function @memset(ptr, i32, i64) -> ptr external
 function @strlen(ptr) -> i64 external
 function @exit(i32) external
 function @abort() external
+function @memmove(ptr, ptr, i64) -> ptr external
+function @memcmp(ptr, ptr, i64) -> i32 external
+function @strcmp(ptr, ptr) -> i32 external
+function @strncmp(ptr, ptr, i64) -> i32 external
+function @strcpy(ptr, ptr) -> ptr external
+function @sprintf(ptr, ptr, ...) -> i32 external
+function @abs(i32) -> i32 external
+function @fabs(f64) -> f64 external
+function @floor(f64) -> f64 external
 ";
 
 /// Runs `@main`, whose body is `body`, after `globals` and the
@@ -38,6 +47,60 @@ fn run_main(globals: &str, body: &str) -> TextRun {
          16, align 8\nblock0:\n{body}}}\n"
     );
     run_text(&text, "main")
+}
+
+#[test]
+fn torture_string_comparisons_use_unsigned_bytes_and_stop_at_the_limit() {
+    let globals = "global @a internal constant size 3, align 1 = bytes \"ff0061\"\nglobal @b \
+                   internal constant size 3, align 1 = bytes \"010062\"\n";
+    let body = "    v0 = global_addr @a\n    v1 = global_addr @b\nv2 = iconst.i64 1\n    v3 = \
+                call @strncmp(v0, v1, v2)\nv4 = call @strcmp(v0, v1)\n    v5 = iconst.i64 3\nv6 = \
+                call @memcmp(v0, v1, v5)\n    v7 = iconst.i32 254\nv8 = icmp.i32 eq v3, v7\n    \
+                v9 = icmp.i32 eq v4, v7\nv10 = icmp.i32 eq v6, v7\n    v11 = and.i1 v8, v9\nv12 = \
+                and.i1 v11, v10\n    v13 = zext.i32 v12\n    return v13\n";
+    assert_eq!(
+        run_main(globals, body).result.unwrap().termination,
+        Termination::Returned(Some(int(1)))
+    );
+    // A nonterminated one-byte array is valid for strncmp with n == 1.
+    let run = run_main(
+        "global @byte internal constant size 1, align 1 = bytes \"61\"\n",
+        "    v0 = global_addr @byte\n    v1 = iconst.i64 1\nv2 = call @strncmp(v0, v0, v1)\n    \
+         return v2\n",
+    );
+    assert_eq!(
+        run.result.unwrap().termination,
+        Termination::Returned(Some(int(0)))
+    );
+}
+
+#[test]
+fn torture_sprintf_writes_a_terminated_string_without_stdout() {
+    let run = run_main(
+        &c_string("format", "%d-%s"),
+        "    v0 = stack_addr slot0\n    v1 = global_addr @format\nv2 = iconst.i32 42\n    v3 = \
+         call @sprintf(v0, v1, v2, v1)\nv4 = call @strlen(v0)\n    v5 = trunc.i32 v4\nv6 = \
+         icmp.i32 eq v3, v5\n    v7 = zext.i32 v6\n    return v7\n",
+    );
+    assert_eq!(run.output, "");
+    assert_eq!(
+        run.result.unwrap().termination,
+        Termination::Returned(Some(int(1)))
+    );
+}
+
+#[test]
+fn torture_strcpy_and_overlapping_memmove_preserve_the_bytes() {
+    let run = run_main(
+        &c_string("word", "abc"),
+        "    v0 = stack_addr slot0\n    v1 = global_addr @word\nv2 = call @strcpy(v0, v1)\n    v3 \
+         = iconst.i64 1\nv4 = ptr_add inbounds v0, v3\n    v5 = iconst.i64 4\nv6 = call \
+         @memmove(v4, v0, v5)\n    v7 = call @strcmp(v4, v1)\n    return v7\n",
+    );
+    assert_eq!(
+        run.result.unwrap().termination,
+        Termination::Returned(Some(int(0)))
+    );
 }
 
 #[test]
