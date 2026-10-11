@@ -38,6 +38,15 @@ spellings, and redeclaration errors include a previous-declaration label. They
 use `SemanticErrorKind` and `ToDiagnostic`, with C99 notes, rather than strings
 as error identities. No new rendering/normalization path exists.
 
+`SemanticTranslationUnit.errors` counts the error-severity diagnostics semantic
+analysis reported; warnings do not count. `Context::error_count()` counts
+error-severity diagnostics from every phase, pending or already drained by a
+reporter, and excludes withdrawn or suppressed ones. Lowering calls
+`SemanticTranslationUnit::lowerable(&Context)`, which holds only when both are
+zero. Because an unmodeled extension can still yield an unanalyzed type without
+a diagnostic, lowering also rejects any type for which `Types::unanalyzed`
+holds.
+
 ## Storage and traversal
 
 The translation-unit arena (`'tu`) retains canonical type nodes, nominal tag

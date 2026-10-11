@@ -49,6 +49,7 @@ impl<'tu> Context<'tu> {
             ignore_tokenizer_errors: false,
             pending_errors: ArenaQueue::new_in(tu),
             suppressed_errors: 0,
+            drained_errors: 0,
             relocated_errors: 0,
             source_files: DedupArena::new(tu),
             presumed_files: ArenaMap::with_hasher_in(FxBuildHasher, tu),

@@ -737,3 +737,50 @@ fn retained_types_report_unanalyzed_array_elements() {
         },
     );
 }
+
+#[test]
+fn lowering_refuses_a_unit_with_a_semantic_error() {
+    with_semantics("int f(void) { return undeclared; }", |context, _, sema| {
+        assert_eq!(sema.errors, 1);
+        assert_eq!(context.error_count(), 1);
+        assert!(!sema.lowerable(context));
+    });
+}
+
+#[test]
+fn lowering_accepts_a_unit_with_only_warnings() {
+    // An incomplete external tentative array is completed with one element
+    // and a warning (C99 §6.9.2p2), and `#warning` is a GNU warning.
+    with_semantics(
+        "#warning check\nint a[];\nint f(void) { return a[0]; }",
+        |context, _, sema| {
+            assert_eq!(context.pending_error_count(), 2, "two warnings are queued");
+            assert_eq!(sema.errors, 0);
+            assert_eq!(context.error_count(), 0);
+            assert!(sema.lowerable(context));
+        },
+    );
+}
+
+#[test]
+fn lowering_accepts_a_clean_unit() {
+    with_semantics("int f(int x) { return x + 1; }", |context, _, sema| {
+        assert_eq!(context.pending_error_count(), 0);
+        assert_eq!(sema.errors, 0);
+        assert!(sema.lowerable(context));
+    });
+}
+
+#[test]
+fn lowering_refuses_a_unit_whose_error_came_from_an_earlier_phase() {
+    with_semantics("int x = ;\nint y;", |context, _, sema| {
+        assert_eq!(sema.errors, 0, "the parse error is not semantic");
+        assert!(context.error_count() > 0);
+        assert!(!sema.lowerable(context));
+        // A reporter that drains the queue does not clear the gate.
+        while context.pop_pending_error().is_some() {}
+        assert_eq!(context.pending_error_count(), 0);
+        assert!(context.error_count() > 0);
+        assert!(!sema.lowerable(context));
+    });
+}

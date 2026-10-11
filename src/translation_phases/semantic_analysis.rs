@@ -224,6 +224,7 @@ pub(crate) fn analyze<'tu>(
         type_names:       analyzer.type_names.leak(),
         parameters:       analyzer.parameter_lists.leak(),
         tag_declarations: analyzer.tag_declarations.leak(),
+        errors:           analyzer.error_diagnostics,
     }
 }
 
@@ -1299,7 +1300,11 @@ struct Analyzer<'a, 'tu, 's> {
     old_parameter_mode:  bool,
     /// Exceptional evaluation yields a variable array bound, not an error.
     runtime_bound:       bool,
+    /// Reported constraint diagnostics, warnings included: local checks
+    /// compare it with an earlier value to learn whether a check failed.
     semantic_errors:     usize,
+    /// Reported diagnostics of error severity only, retained for lowering.
+    error_diagnostics:   usize,
     member_indices:      ArenaMap<'s, (usize, StringCacheId), usize>,
     member_names:        ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
     tag_declarations:    ArenaVec<'tu, (usize, usize)>,

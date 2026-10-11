@@ -5,6 +5,7 @@
 //! §6.7, pp. 97-124; PDF pp. 109-136.
 
 use super::{
+    Context,
     Conversion,
     ExpressionInfo,
     Identifier,
@@ -35,6 +36,9 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) expressions:      &'tu [ExpressionInfo<'tu>],
     pub(crate) conversions:      &'tu [Conversion<'tu>],
     pub(crate) tag_declarations: &'tu [(usize, usize)],
+    /// Error-severity diagnostics semantic analysis reported; warnings and
+    /// diagnostics suppressed inside recovered syntax are not counted.
+    pub(crate) errors:           usize,
 }
 
 /// A resolved declaration occurrence, retained in lexical traversal order.
@@ -118,4 +122,20 @@ pub(crate) enum DefinitionKind {
 pub(crate) struct Definition {
     pub(crate) binding: usize,
     pub(crate) kind:    DefinitionKind,
+}
+
+impl SemanticTranslationUnit<'_> {
+    /// Whether code generation may consume this unit: no phase, this one
+    /// included, has reported an error-severity diagnostic. Warnings do not
+    /// block lowering. Types that analysis gave up on without a diagnostic
+    /// remain possible, so lowering still rejects any type for which
+    /// [`Types::unanalyzed`] holds.
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Lowering gates on it; no lowering exists yet.")
+    )]
+    pub(crate) fn lowerable(&self, context: &Context<'_>) -> bool {
+        self.errors == 0 && context.error_count() == 0
+    }
 }

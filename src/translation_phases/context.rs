@@ -112,6 +112,8 @@ pub(crate) struct Context<'tu> {
     ignore_tokenizer_errors: bool,
     pub(super) pending_errors: ArenaQueue<'tu, TranslationError<'tu>>,
     suppressed_errors: usize,
+    /// Error-severity diagnostics already taken from `pending_errors`.
+    drained_errors: usize,
     /// How many leading pending errors no longer refer to the preprocessor
     /// arena, so compaction relocates each error's provenance only once.
     relocated_errors: usize,

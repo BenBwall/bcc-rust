@@ -7,6 +7,7 @@
 
 use super::{
     Context,
+    ErrorSeverity,
     GetSeverity,
     InitialProcessorError,
     ParserError,
@@ -68,6 +69,7 @@ impl<'tu> Context<'tu> {
             if matches!(&error, TranslationError::Extension(x) if x.suppressed.get()) {
                 self.suppressed_errors -= 1;
             } else {
+                self.drained_errors += usize::from(error.severity() == ErrorSeverity::Error);
                 return Some(error);
             }
         }
@@ -110,6 +112,24 @@ impl<'tu> Context<'tu> {
         // Rechecking already-retained ranges during the next compaction is
         // safe.
         self.relocated_errors = 0;
+    }
+
+    /// Error-severity diagnostics reported in every phase so far, whether
+    /// still pending or already taken by a reporter; warnings are excluded.
+    /// Withdrawn and suppressed diagnostics do not count, so the result can
+    /// fall when a phase withdraws one. Code generation must not start while
+    /// it is nonzero.
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    pub(crate) fn error_count(&self) -> usize {
+        self.drained_errors
+            + self
+                .pending_errors
+                .iter()
+                .filter(|error| {
+                    !matches!(error, TranslationError::Extension(x) if x.suppressed.get())
+                        && error.severity() == ErrorSeverity::Error
+                })
+                .count()
     }
 
     pub(crate) fn pending_error_count(&self) -> usize {

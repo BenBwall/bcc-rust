@@ -51,6 +51,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             old_parameter_mode: false,
             runtime_bound: false,
             semantic_errors: 0,
+            error_diagnostics: 0,
             member_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             member_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             tag_declarations: ArenaVec::new_in(tu),
