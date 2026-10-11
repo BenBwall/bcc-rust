@@ -459,9 +459,10 @@ fn print_after_all_prints_even_when_a_pass_changes_nothing() {
 }
 
 /// Two loops that give every pass work. The first keeps a flag in a slot:
-/// `promote` turns the slot into a parameter, `fold` drops the `+ 0` and `dce`
-/// drops the unused product. The second computes an invariant product twice,
-/// for `gvn` and then `licm`, and its exit chain is for `simplify-cfg`.
+/// `promote` turns the slot into a parameter, `fold` drops the `+ 0`, `sccp`
+/// finds the flag constant and `dce` drops the unused product. The second
+/// computes an invariant product twice, for `gvn` and then `licm`, and its
+/// exit chain is for `simplify-cfg`.
 const EVERY_PASS: &str = "\
 function @f(i32) -> i32 external {
     slot0 = stack_slot 4, align 4

@@ -22,7 +22,7 @@ use crate::ir::{
 
 /// The value of an operation on constants.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Folded {
+pub(in crate::optimizer) enum Folded {
     /// The result's bits, masked to its type.
     Int(u128),
     Poison,
@@ -36,7 +36,7 @@ pub(super) const fn signed(bits: u128, ty: Type) -> i128 {
 
 /// Evaluates an integer binary operation of type `ty`, or returns `None` if
 /// it is undefined behaviour or not an integer binary operation.
-pub(super) fn binary(
+pub(in crate::optimizer) fn binary(
     opcode: Opcode,
     ty: Type,
     flags: InstFlags,
@@ -139,7 +139,7 @@ pub(super) fn binary(
 }
 
 /// Evaluates `icmp` on operands of type `ty`.
-pub(super) fn compare(cond: IntCC, ty: Type, a: u128, b: u128) -> bool {
+pub(in crate::optimizer) fn compare(cond: IntCC, ty: Type, a: u128, b: u128) -> bool {
     let (x, y) = (signed(a, ty), signed(b, ty));
     match cond {
         | IntCC::Eq => a == b,
@@ -157,7 +157,12 @@ pub(super) fn compare(cond: IntCC, ty: Type, a: u128, b: u128) -> bool {
 
 /// Evaluates `zext`, `sext` or `trunc` of `bits` of type `from` to type
 /// `to`, or returns `None` for any other conversion.
-pub(super) fn convert(opcode: Opcode, from: Type, to: Type, bits: u128) -> Option<u128> {
+pub(in crate::optimizer) fn convert(
+    opcode: Opcode,
+    from: Type,
+    to: Type,
+    bits: u128,
+) -> Option<u128> {
     match opcode {
         | Opcode::Zext => Some(bits),
         | Opcode::Sext => Some((signed(bits, from) as u128) & to.mask()),

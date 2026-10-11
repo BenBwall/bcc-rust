@@ -37,7 +37,7 @@
 //! PDF p. 94 (division by zero is undefined); §6.5.7 paragraph 3, p. 84; PDF
 //! p. 96 (a shift by the width or more is undefined in C and poison here).
 
-mod eval;
+pub(super) mod eval;
 
 use eval::Folded;
 

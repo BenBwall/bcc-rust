@@ -14,7 +14,9 @@ mod loops;
 mod options;
 mod pipeline;
 mod promote;
+mod sccp;
 mod simplify_cfg;
+mod ssa_pipeline;
 
 use super::*;
 use crate::ir::{
