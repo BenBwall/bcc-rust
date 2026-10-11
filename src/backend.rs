@@ -12,7 +12,8 @@
 //! - `interpreter.rs` and `interpreter/`: execute a module directly with exact
 //!   poison and undefined-behaviour tracking. It is the reference semantics of
 //!   the IR and the oracle for differential tests. It also accepts pre-ABI
-//!   modules, since it implements `va_arg` itself.
+//!   modules, since it implements `va_arg` itself, and lays out the target's
+//!   `va_list` in post-ABI ones.
 //! - `difftest.rs` and `difftest/` (tests only): random programs that check the
 //!   optimizer and the LLVM back end against the interpreter.
 //!

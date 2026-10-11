@@ -38,6 +38,14 @@ pub(crate) mod translation_phases;
     not(test),
     expect(
         dead_code,
+        reason = "Nothing runs ABI lowering yet; its tests exercise it until the driver does."
+    )
+)]
+mod abi;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
         unused_imports,
         reason = "The driver uses the interpreter's entry point and the LLVM printer and driver; \
                   the re-exports for hosts, traps and tools serve their tests."

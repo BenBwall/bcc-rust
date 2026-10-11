@@ -1220,15 +1220,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// which the callee receives as its parameter object.
     /// C99: §6.9.1 paragraph 10, p. 142; PDF p. 154.
     fn copy_argument(&mut self, item: Item, source: SourceVectors) -> Result<Value, LoweringError> {
-        let from = match item.operand {
-            | Operand::Aggregate(address)
-            | Operand::Place(Place::Memory(address))
-            | Operand::Value(address) => address,
-            | _ =>
-                return Err(LoweringError::missing(
-                    "a structure argument has no address",
-                    source,
-                )),
+        let (Operand::Aggregate(from) | Operand::Place(Place::Memory(from)) | Operand::Value(from)) =
+            item.operand
+        else {
+            return Err(LoweringError::missing(
+                "a structure argument has no address",
+                source,
+            ));
         };
         let layout =
             types::layout(&self.unit.sema.types, item.ty).map_err(|kind| at(kind, source))?;

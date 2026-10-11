@@ -126,7 +126,6 @@ pub(crate) use types::Type;
 pub(crate) use verifier::{
     EntityKind,
     Location,
-    ParamAbiProblem,
     Profile,
     VerifierError,
     VerifierErrorKind,

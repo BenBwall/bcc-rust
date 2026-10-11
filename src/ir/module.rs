@@ -250,6 +250,12 @@ impl<'ir> Module<'ir> {
         self.signatures.get(sig).copied()
     }
 
+    /// How many signatures the module has interned; they are numbered from
+    /// 0.
+    pub(crate) fn signature_count(&self) -> usize {
+        self.signatures.len()
+    }
+
     /// The signature of a function.
     pub(crate) fn function_signature(&self, func: FuncId) -> Signature<'ir> {
         self.signatures[self.functions[func].signature]
