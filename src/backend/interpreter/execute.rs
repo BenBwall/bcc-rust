@@ -210,7 +210,7 @@ impl Machine<'_, '_, '_> {
             },
             | InstData::Return { value } => {
                 let value = value.map(|value| self.value(value));
-                return Ok(self.return_from(value));
+                return self.return_from(value);
             },
             | InstData::Unreachable => return Err(UbKind::Unreachable.into()),
         };

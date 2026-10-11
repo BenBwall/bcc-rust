@@ -38,6 +38,41 @@ function @one(ptr registers(i32, align 4)) external
 ";
 
 #[test]
+fn register_pairs_must_have_the_eightbyte_return_area_layout() {
+    for (first, second) in [
+        ("i64", "i32"),
+        ("i32", "i64"),
+        ("f64", "f32"),
+        ("f32", "f64"),
+    ] {
+        let arena = Bump::new();
+        let text = format!(
+            "abi lowered\nfunction @f(ptr registers({first}, {second}, align 4)) external\n"
+        );
+        let module = parse(&arena, &text);
+        assert!(verify(&module, Profile::PostAbi).is_empty(), "{text}");
+    }
+    for (first, second) in [
+        ("i32", "i32"),
+        ("f32", "f32"),
+        ("i128", "i64"),
+        ("i64", "f80"),
+        ("f128", "f128"),
+    ] {
+        let arena = Bump::new();
+        let text = format!(
+            "abi lowered\nfunction @f(ptr registers({first}, {second}, align 4)) external\n"
+        );
+        let module = parse(&arena, &text);
+        assert_eq!(
+            verify(&module, Profile::PostAbi),
+            ["@f: parameter 0 has a register pair incompatible with the eightbyte return area"],
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn aggregate_parameters_round_trip() {
     assert_round_trip(PRE_ABI);
     assert_round_trip(POST_ABI);

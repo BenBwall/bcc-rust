@@ -164,6 +164,10 @@ fn verify_signature(
                 .any(|ty| matches!(ty, Type::I1 | Type::Ptr))
         {
             Some(ParamAbiProblem::RegisterType)
+        } else if let ParamAbi::Registers(registers) = param.abi
+            && !registers.valid_layout()
+        {
+            Some(ParamAbiProblem::RegisterLayout)
         } else {
             None
         };
@@ -981,6 +985,8 @@ pub(crate) enum ParamAbiProblem {
     ScalarOutside,
     /// A result register is `i1` or `ptr`.
     RegisterType,
+    /// A pair's natural layout does not match two ABI eightbytes.
+    RegisterLayout,
 }
 
 /// What is wrong with an extended parameter or result of a signature.
@@ -1118,6 +1124,8 @@ impl fmt::Display for VerifierErrorKind {
                     | ParamAbiProblem::ScalarOutside =>
                         "has an aggregate scalar beyond the aggregate's size",
                     | ParamAbiProblem::RegisterType => "returns a register of type i1 or ptr",
+                    | ParamAbiProblem::RegisterLayout =>
+                        "has a register pair incompatible with the eightbyte return area",
                 }
             ),
             | Self::Extension { param, problem } => {

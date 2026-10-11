@@ -53,22 +53,24 @@ use crate::{
 /// One activation of a defined function on the call stack.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Frame {
-    pub(super) func:         FuncId,
-    pub(super) block:        Block,
+    pub(super) func:            FuncId,
+    pub(super) block:           Block,
     /// The position in `block` of the next instruction to execute.
-    pub(super) next:         usize,
+    pub(super) next:            usize,
     /// Where this frame's values start in the value stack.
-    pub(super) values:       usize,
+    pub(super) values:          usize,
     /// Where this frame's slot objects start in the slot stack.
-    pub(super) slots:        usize,
+    pub(super) slots:           usize,
     /// Where this frame's variadic arguments start, and how many there are.
-    pub(super) varargs:      usize,
-    pub(super) varargs_len:  usize,
+    pub(super) varargs:         usize,
+    pub(super) varargs_len:     usize,
     /// A number no other activation shares, so a `va_list` cursor can tell
     /// whether its frame is still the one that made it.
-    pub(super) activation:   u64,
+    pub(super) activation:      u64,
     /// The value in the caller that receives this call's result.
-    pub(super) caller_value: Option<Value>,
+    pub(super) caller_value:    Option<Value>,
+    /// Caller destination and private callee area for a register result.
+    pub(super) register_result: Option<(RuntimeValue, Pointer)>,
 }
 
 impl<'m, 'ir> Machine<'m, 'ir, '_> {
@@ -201,8 +203,21 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
                 .allocate(ObjectKind::Stack, u64::from(data.size), data.align)?;
             self.slots.push(slot);
         }
+        let mut register_result = None;
         for (index, &param) in body.block_params(entry).iter().enumerate() {
             let mut arg = self.arguments[index];
+            if let Some(ParamAbi::Registers(registers)) =
+                self.module.function_signature(func).param_abi(index)
+            {
+                let area = self.memory.allocate(
+                    ObjectKind::Stack,
+                    registers.area_bytes(),
+                    registers.align,
+                )?;
+                self.slots.push(area);
+                register_result = Some((arg, area));
+                arg = RuntimeValue::Ptr(area);
+            }
             if let Some(ParamAbi::ByVal(layout)) =
                 self.module.function_signature(func).param_abi(index)
             {
@@ -231,6 +246,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             varargs_len: self.varargs.len() - varargs,
             activation: self.activations,
             caller_value,
+            register_result,
         });
         self.activations += 1;
         Ok(())
@@ -239,7 +255,36 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
     /// Returns `value` from the executing frame: frees its slots, pops it,
     /// and stores the value into the caller, or ends the run if the entry
     /// function returned.
-    pub(super) fn return_from(&mut self, value: Option<RuntimeValue>) -> Option<Termination> {
+    /// C99: §6.8.6.4p3, p. 139; PDF p. 151. Register results transfer only
+    /// their shared IR layout's fields, leaving caller padding untouched.
+    pub(super) fn return_from(
+        &mut self,
+        value: Option<RuntimeValue>,
+    ) -> Result<Option<Termination>, Fault> {
+        let frame = self.frame();
+        if let Some((destination, area)) = frame.register_result
+            && let Some(ParamAbi::Registers(registers)) =
+                self.module.function_signature(frame.func).result_param()
+        {
+            for (offset, ty) in registers.parts() {
+                let align = if offset == 0 {
+                    registers.align
+                } else {
+                    Align::from_bytes(registers.align.bytes().min(offset))
+                        .expect("a power-of-two alignment")
+                };
+                let offset = RuntimeValue::Int(u128::from(offset));
+                let to = self.memory.ptr_add(destination, offset, false);
+                let from = self.memory.ptr_add(RuntimeValue::Ptr(area), offset, false);
+                self.memory.copy(
+                    to,
+                    from,
+                    RuntimeValue::Int(u128::from(ty.bytes())),
+                    align,
+                    false,
+                )?;
+            }
+        }
         let frame = self.frames.pop().expect("a frame is executing");
         for &slot in &self.slots[frame.slots..] {
             self.memory
@@ -249,12 +294,12 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
         self.values.truncate(frame.values);
         self.varargs.truncate(frame.varargs);
         if self.frames.is_empty() {
-            return Some(Termination::Returned(value));
+            return Ok(Some(Termination::Returned(value)));
         }
         if let (Some(result), Some(value)) = (frame.caller_value, value) {
             self.set(result, value);
         }
-        None
+        Ok(None)
     }
 
     /// Takes the edge `call`: assigns its arguments to the target block's

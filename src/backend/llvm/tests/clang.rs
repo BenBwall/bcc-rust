@@ -65,6 +65,60 @@ fn llvm_emits_every_golden_module() {
 }
 
 #[test]
+fn register_pair_return_areas_agree_with_the_interpreter() {
+    let program = "abi lowered
+function @pair(ptr registers(i32, i64, align 4)) internal {
+block0(v0: ptr):
+ v1 = iconst.i32 11
+ store.i32 v1, v0, align 4
+ v2 = iconst.i64 4
+ v3 = ptr_add v0, v2
+ v4 = iconst.i32 22
+ store.i32 v4, v3, align 4
+ v5 = iconst.i64 8
+ v6 = ptr_add v0, v5
+ v7 = iconst.i64 33
+ store.i64 v7, v6, align 4
+ return
+}
+function @main() -> i32 external {
+ slot0 = stack_slot 16, align 8
+block0:
+ v0 = stack_addr slot0
+ v1 = iconst.i64 4
+ v2 = ptr_add v0, v1
+ v3 = iconst.i32 99
+ store.i32 v3, v2, align 4
+ call @pair(v0)
+ v4 = load.i32 v0, align 4
+ v5 = load.i32 v2, align 4
+ v6 = iconst.i64 8
+ v7 = ptr_add v0, v6
+ v8 = load.i64 v7, align 4
+ v9 = iconst.i32 11
+ v10 = icmp.i32 eq v4, v9
+ v11 = iconst.i64 33
+ v12 = icmp.i64 eq v8, v11
+ v13 = and.i1 v10, v12
+ v14 = iconst.i32 1
+ v15 = select.i32 v13, v5, v14
+ return v15
+}
+";
+    let arena = Bump::new();
+    let module = parse_module(&arena, program).unwrap();
+    let mut host = crate::backend::interpreter::DefaultHost::new_in(&arena);
+    let result = crate::backend::interpreter::run_main(&module, &mut host).unwrap();
+    assert_eq!(
+        result.termination,
+        crate::backend::interpreter::Termination::Returned(Some(
+            crate::backend::interpreter::RuntimeValue::Int(99)
+        ))
+    );
+    assert_runs("register-pair-layout", program, 99, "");
+}
+
+#[test]
 fn command_lines_follow_the_options() {
     let Some(toolchain) = toolchain(Target::LinuxGnu) else {
         return;

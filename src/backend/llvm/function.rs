@@ -81,7 +81,7 @@ impl<'m> Emitter<'_, 'm, '_> {
         for (ir_index, &param) in body.block_params(entry).iter().enumerate() {
             let value = if let Some(ParamAbi::Registers(registers)) = signature.param_abi(ir_index)
             {
-                let area = api.alloca(api.array(api.ty(Type::I8), 16));
+                let area = api.alloca(api.array(api.ty(Type::I8), registers.area_bytes()));
                 api.alignment(area, registers.align.bytes().max(8));
                 area
             } else {
@@ -166,6 +166,9 @@ fn result_type<'a>(api: &'a Session<'a>, signature: Signature<'_>) -> Ty<'a> {
 }
 
 fn registers_type<'a>(api: &'a Session<'a>, registers: ResultRegisters) -> Ty<'a> {
+    // The verifier enforces the shared return-area layout, so an unpacked
+    // LLVM structure places the second part at ResultRegisters::SECOND_OFFSET.
+    debug_assert!(registers.valid_layout(), "verified register return layout");
     match registers.second {
         | Some(second) => api.structure(&[api.ty(registers.first), api.ty(second)], false),
         | None if registers.first == Type::I128 => api.vector(api.ty(Type::I64), 2),

@@ -562,17 +562,46 @@ pub(crate) struct ResultRegisters {
 }
 
 impl ResultRegisters {
+    /// Paired results occupy two ABI eightbytes. Natural LLVM structure
+    /// layout must place the second field at this same byte offset.
+    /// C99: §6.8.6.4p3, p. 139; PDF p. 151; the layout is an IR/ABI contract.
+    pub(crate) const SECOND_OFFSET: u32 = 8;
+
+    /// Whether both parts fit eightbytes and their natural layout agrees
+    /// with the return area produced by ABI lowering.
+    pub(crate) fn valid_layout(self) -> bool {
+        self.second.is_none_or(|second| {
+            let first_size = self.first.bytes();
+            let second_size = second.bytes();
+            first_size <= Self::SECOND_OFFSET
+                && second_size <= Self::SECOND_OFFSET
+                && first_size.div_ceil(second_size) * second_size == Self::SECOND_OFFSET
+        })
+    }
+
+    /// Each register's byte offset and type in the return area.
+    pub(crate) fn parts(self) -> impl Iterator<Item = (u64, Type)> {
+        std::iter::once((0, self.first))
+            .chain(self.second.map(|ty| (u64::from(Self::SECOND_OFFSET), ty)))
+    }
+
     /// The registers' types in order.
     pub(crate) fn types(self) -> impl Iterator<Item = Type> {
-        std::iter::once(self.first).chain(self.second)
+        self.parts().map(|(_, ty)| ty)
     }
 
     /// The bytes of the return area the registers cover.
     pub(crate) fn bytes(self) -> u64 {
-        match self.second {
-            | Some(second) => 8 + u64::from(second.bytes()),
-            | None => u64::from(self.first.bytes()),
-        }
+        self.parts()
+            .map(|(offset, ty)| offset + u64::from(ty.bytes()))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Callee storage also covers the aggregate's trailing padding: C code
+    /// may copy the complete object into this area before returning fields.
+    pub(crate) fn area_bytes(self) -> u64 {
+        self.bytes().max(2 * u64::from(Self::SECOND_OFFSET))
     }
 }
 

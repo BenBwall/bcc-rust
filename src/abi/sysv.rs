@@ -150,10 +150,17 @@ fn parts(layout: AggregateLayout<'_>, classes: [Class; 2]) -> Result<Option<Part
             // eight bytes before a high part aligned to less than eight is
             // widened.
             let (low, high) = (part(0), part(1));
-            let low = if low.bytes() < 8 && high.bytes() < 8 {
-                if low.is_float() { Type::F64 } else { Type::I64 }
-            } else {
+            let registers = ResultRegisters {
+                first:  low,
+                second: Some(high),
+                align:  layout.align,
+            };
+            let low = if registers.valid_layout() {
                 low
+            } else if low.is_float() {
+                Type::F64
+            } else {
+                Type::I64
             };
             Some(Parts::two(low, high))
         },
