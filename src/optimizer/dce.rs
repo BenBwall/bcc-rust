@@ -79,7 +79,7 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
             if counts[value.index()] != 0 {
                 continue;
             }
-            match draft.body.value_def(value) {
+            match draft.value_def(value) {
                 | ValueDef::Result(def) => worklist.push(Candidate::Inst(def)),
                 | ValueDef::Param(..) => worklist.push(Candidate::Param(value)),
             }
@@ -132,7 +132,7 @@ fn remove_param<'s>(
     param: Value,
     report: &mut OptimizationReport,
 ) -> Option<ArenaVec<'s, Value>> {
-    let ValueDef::Param(block, _) = draft.body.value_def(param) else {
+    let ValueDef::Param(block, _) = draft.value_def(param) else {
         return None;
     };
     let position = draft.block(block).params.iter().position(|&p| p == param)?;

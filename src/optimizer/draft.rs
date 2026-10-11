@@ -13,7 +13,13 @@
 //!   keeps its result value;
 //! - **removing an instruction** marks it, and `sweep` drops the marked ones;
 //! - **editing control flow** changes terminators, block parameters and `alive`
-//!   flags directly.
+//!   flags directly;
+//! - **moving an instruction** takes its id out of one block's list and puts it
+//!   into another's;
+//! - **adding a block or a block parameter** appends to the draft: added blocks
+//!   are numbered after the body's, and so are added values;
+//! - **weakening flags** records new flags for an instruction, which
+//!   [`Draft::inst`] then reports.
 //!
 //! The original body is never mutated, so ids into it and the pool handles of
 //! instructions that were not touched stay valid for the whole run. [`lower`]
@@ -37,6 +43,7 @@ use crate::{
         Entity,
         Inst,
         InstData,
+        InstFlags,
         Opcode,
         Type,
         Value,
@@ -62,6 +69,12 @@ pub(super) struct Draft<'b, 's> {
     folded:             ArenaVec<'s, Option<Constant>>,
     /// Whether an instruction was removed, by instruction index.
     removed:            ArenaVec<'s, bool>,
+    /// An instruction's record with flags a pass changed, by instruction
+    /// index.
+    edited:             ArenaVec<'s, Option<InstData>>,
+    /// The type and definition of each value a pass added; value
+    /// `body.value_count() + i` is entry `i`.
+    added_values:       ArenaVec<'s, (Type, ValueDef)>,
 }
 
 /// A block of a draft.
@@ -141,6 +154,8 @@ impl<'b, 's> Draft<'b, 's> {
         folded.resize(body.inst_count(), None);
         let mut removed = ArenaVec::with_capacity_in(body.inst_count(), scratch);
         removed.resize(body.inst_count(), false);
+        let mut edited = ArenaVec::with_capacity_in(body.inst_count(), scratch);
+        edited.resize(body.inst_count(), None);
         Self {
             body,
             scratch,
@@ -148,6 +163,8 @@ impl<'b, 's> Draft<'b, 's> {
             replacements,
             folded,
             removed,
+            edited,
+            added_values: ArenaVec::new_in(scratch),
         }
     }
 
@@ -167,8 +184,8 @@ impl<'b, 's> Draft<'b, 's> {
         panic!("the replacements of value {value} form a cycle")
     }
 
-    /// Redirects every use of `from` to `to`. Both must be values of the
-    /// original body, and `to` must dominate the uses of `from`.
+    /// Redirects every use of `from` to `to`. `to` must dominate the uses of
+    /// `from`.
     pub(super) fn replace(&mut self, from: Value, to: Value) {
         let from = self.resolve(from);
         let to = self.resolve(to);
@@ -180,7 +197,7 @@ impl<'b, 's> Draft<'b, 's> {
     /// The constant a value is, if it is the result of an integer constant or
     /// of an instruction folded to one, or poison. Floats are not tracked.
     pub(super) fn constant(&self, value: Value) -> Option<Constant> {
-        match self.body.value_def(self.resolve(value)) {
+        match self.value_def(self.resolve(value)) {
             | ValueDef::Result(inst) => self.inst_constant(inst),
             | ValueDef::Param(..) => None,
         }
@@ -219,12 +236,65 @@ impl<'b, 's> Draft<'b, 's> {
         self.folded[inst.index()] = Some(constant);
     }
 
+    /// The number of values: the body's, then those passes added.
+    pub(super) fn value_count(&self) -> usize {
+        self.replacements.len()
+    }
+
+    pub(super) fn value_type(&self, value: Value) -> Type {
+        match value.index().checked_sub(self.body.value_count()) {
+            | Some(added) => self.added_values[added].0,
+            | None => self.body.value_type(value),
+        }
+    }
+
+    /// Where a value is defined. An added parameter keeps the block and
+    /// position it was added with.
+    pub(super) fn value_def(&self, value: Value) -> ValueDef {
+        match value.index().checked_sub(self.body.value_count()) {
+            | Some(added) => self.added_values[added].1,
+            | None => self.body.value_def(value),
+        }
+    }
+
+    /// Appends a parameter of type `ty` to `block` and returns it. The pass
+    /// must add a matching argument to every edge into the block.
+    pub(super) fn add_param(&mut self, block: Block, ty: Type) -> Value {
+        let value = Value::new(self.replacements.len());
+        let position = u32::try_from(self.block(block).params.len()).expect("too many parameters");
+        self.replacements.push(value);
+        self.added_values
+            .push((ty, ValueDef::Param(block, position)));
+        self.block_mut(block).params.push(value);
+        value
+    }
+
     // Instructions
 
-    /// The instruction's current data, which for a folded instruction is
-    /// still its original record; use [`Draft::inst_constant`] first.
+    /// The instruction's current data: its original record, with the flags
+    /// a pass set. For a folded instruction it is still that record; use
+    /// [`Draft::inst_constant`] first.
     pub(super) fn inst(&self, inst: Inst) -> &InstData {
-        self.body.inst(inst)
+        self.edited[inst.index()]
+            .as_ref()
+            .unwrap_or_else(|| self.body.inst(inst))
+    }
+
+    /// Gives `inst`, a `Binary` instruction, the flags `flags`. Passes only
+    /// weaken flags, which makes the result poison in fewer cases.
+    pub(super) fn set_flags(&mut self, inst: Inst, flags: InstFlags) {
+        let InstData::Binary {
+            opcode, ty, args, ..
+        } = *self.inst(inst)
+        else {
+            panic!("only a binary instruction has flags a pass may change");
+        };
+        self.edited[inst.index()] = Some(InstData::Binary {
+            opcode,
+            ty,
+            flags,
+            args,
+        });
     }
 
     pub(super) fn inst_result(&self, inst: Inst) -> Option<Value> {
@@ -270,6 +340,20 @@ impl<'b, 's> Draft<'b, 's> {
 
     pub(super) fn entry() -> Block {
         Block::new(0)
+    }
+
+    /// Appends an empty block that ends in `unreachable`; lowering lays it
+    /// out after the body's blocks. The pass gives it a terminator and the
+    /// edges into it.
+    pub(super) fn add_block(&mut self) -> Block {
+        let block = Block::new(self.blocks.len());
+        self.blocks.push(DraftBlock {
+            alive:  true,
+            params: ArenaVec::new_in(self.scratch),
+            insts:  ArenaVec::new_in(self.scratch),
+            term:   Term::Unreachable,
+        });
+        block
     }
 
     /// The blocks still part of the function, in layout order.

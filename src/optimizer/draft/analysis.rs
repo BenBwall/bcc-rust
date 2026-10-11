@@ -5,6 +5,7 @@ use super::Draft;
 use crate::{
     ir::{
         Block,
+        ControlFlowGraph,
         Entity,
     },
     util::bump::ArenaVec,
@@ -100,11 +101,23 @@ impl<'s> Draft<'_, 's> {
         Predecessors { starts, rows }
     }
 
+    /// The edges between the live blocks, numbered as in the draft, for
+    /// [`DominatorTree::from_cfg`](crate::ir::DominatorTree::from_cfg). A
+    /// removed block has no edges.
+    pub(in crate::optimizer) fn control_flow_graph(&self) -> ControlFlowGraph<'s> {
+        ControlFlowGraph::from_successors(self.blocks.len(), self.scratch, |block, add| {
+            let data = self.block(block);
+            if data.alive {
+                data.term.edges().for_each(|edge| add(edge.target));
+            }
+        })
+    }
+
     /// How many times each original value is used by the instructions and
     /// terminators of the live blocks, after replacement.
     pub(in crate::optimizer) fn use_counts(&self) -> ArenaVec<'s, u32> {
-        let mut counts = ArenaVec::with_capacity_in(self.body.value_count(), self.scratch);
-        counts.resize(self.body.value_count(), 0_u32);
+        let mut counts = ArenaVec::with_capacity_in(self.value_count(), self.scratch);
+        counts.resize(self.value_count(), 0_u32);
         for block in self.alive_blocks() {
             let data = self.block(block);
             for &inst in &data.insts {

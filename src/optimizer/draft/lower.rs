@@ -44,10 +44,10 @@ impl<'s> Draft<'_, 's> {
 
         let mut numbering = Numbering {
             blocks: ArenaVec::with_capacity_in(self.blocks.len(), self.scratch),
-            values: ArenaVec::with_capacity_in(body.value_count(), self.scratch),
+            values: ArenaVec::with_capacity_in(self.value_count(), self.scratch),
         };
         numbering.blocks.resize(self.blocks.len(), None);
-        numbering.values.resize(body.value_count(), None);
+        numbering.values.resize(self.value_count(), None);
         for block in self.alive_blocks() {
             numbering.blocks[block.index()] = Some(builder.create_block());
         }
@@ -72,7 +72,7 @@ impl<'s> Draft<'_, 's> {
                 builder.define_block_param(
                     new_block,
                     numbering.values[param.index()].expect("reserved above"),
-                    body.value_type(param),
+                    self.value_type(param),
                 );
             }
         }
@@ -99,7 +99,7 @@ impl<'s> Draft<'_, 's> {
         let body = self.body;
         let map = |value: Value| numbering.value(self.resolve(value));
         let result = body.inst_result(inst).map(|result| numbering.value(result));
-        let original = *body.inst(inst);
+        let original = *self.inst(inst);
         let data = if let Some(constant) = self.folded[inst.index()] {
             match constant {
                 | Constant::Int(ty, bits) => constant_record(builder, Opcode::Iconst, ty, bits),
