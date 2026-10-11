@@ -19,7 +19,7 @@ impl Golden {
 }
 
 pub(super) const GOLDENS: &[Golden] = &[
-    ARITHMETIC, LOOP, MEMORY, CALLS, SWITCH, GLOBALS, VARARGS, AGGREGATES,
+    ARITHMETIC, LOOP, MEMORY, CALLS, SWITCH, GLOBALS, VARARGS, AGGREGATES, EXTENSIONS,
 ];
 
 const ARITHMETIC: Golden = Golden {
@@ -531,8 +531,62 @@ block0:
 "#,
 };
 
+/// Narrow integers that ABI lowering extends: `noundef signext` and
+/// `noundef zeroext` on parameters and arguments, `signext` and `zeroext`
+/// before results, as Clang prints them, on definitions, declarations and
+/// both kinds of call.
+const EXTENSIONS: Golden = Golden {
+    name:     "extensions",
+    input:    "\
+abi lowered
+
+function @widen(i8 signext, i16 zeroext, i32) -> i8 signext external
+
+function @truth(i8 zeroext) -> i8 zeroext internal {
+block0(v0: i8):
+    return v0
+}
+
+function @plain(i8, i16) -> i16 external
+
+function @caller(i8) -> i32 external {
+block0(v0: i8):
+    v1 = iconst.i16 300
+    v2 = iconst.i32 7
+    v3 = call @widen(v0, v1, v2)
+    v4 = func_addr @truth
+    v5 = call_indirect v4(v3) : (i8 zeroext) -> i8 zeroext
+    v6 = call @plain(v5, v1)
+    v7 = sext.i32 v6
+    return v7
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+declare signext i8 @widen(i8 noundef signext, i16 noundef zeroext, i32)
+
+define internal zeroext i8 @truth(i8 noundef zeroext %v0) {
+block0:
+  ret i8 %v0
+}
+
+declare i16 @plain(i8, i16)
+
+define dso_local i32 @caller(i8 %v0) {
+block0:
+  %v3 = call signext i8 @widen(i8 noundef signext %v0, i16 noundef zeroext 300, i32 7)
+  %v5 = call zeroext i8 (i8) @truth(i8 noundef zeroext %v3)
+  %v6 = call i16 @plain(i8 %v5, i16 300)
+  %v7 = sext i16 %v6 to i32
+  ret i32 %v7
+}
+"#,
+};
+
 #[test]
-fn pre_abi_aggregates_are_refused() {
+fn pre_abi_aggregates_and_extensions_are_refused() {
     let arena = Bump::new();
     let module = parse_module(
         &arena,
@@ -544,6 +598,17 @@ fn pre_abi_aggregates_are_refused() {
         emit_module(&module, Target::LinuxGnu, &mut out),
         Err(EmitError::NotAbiLowered)
     );
+    for text in [
+        "function @f(i8 signed) external\n",
+        "function @f() -> i16 unsigned external\n",
+    ] {
+        let module = parse_module(&arena, text).unwrap();
+        assert_eq!(
+            emit_module(&module, Target::LinuxGnu, &mut out),
+            Err(EmitError::NotAbiLowered),
+            "{text}"
+        );
+    }
 }
 
 #[test]

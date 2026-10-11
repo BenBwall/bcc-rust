@@ -504,7 +504,9 @@ fn run_through_clang(
     let ir = lower_for(program.source, target)
         .unwrap_or_else(|errors| panic!("{} failed to lower: {errors:?}", program.name));
     let arena = Bump::new();
-    let module = parse_module(&arena, &ir).unwrap();
+    let mut module = parse_module(&arena, &ir).unwrap();
+    // The driver's order: ABI lowering before the back end.
+    crate::abi::lower_abi(&mut module, target, &arena).unwrap();
     let errors = verify_module(&module, Profile::PostAbi, &arena);
     assert!(errors.is_empty(), "{}: {errors:?}", program.name);
     let mut llvm = String::new();

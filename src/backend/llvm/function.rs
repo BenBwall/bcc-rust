@@ -19,6 +19,7 @@ use crate::{
         BlockCall,
         Body,
         Entity,
+        Extension,
         FuncId,
         Inst,
         InstData,
@@ -50,11 +51,12 @@ impl Emitter<'_, '_, '_> {
         let function = module.function(func);
         let signature = module.signature(function.signature);
         let result = result_type(signature);
+        let result_attributes = result_attributes(signature);
         let name = symbol(function.name);
         let Some(body) = &function.body else {
             return writeln!(
                 self.out,
-                "declare {result} {name}{}",
+                "declare {result_attributes}{result} {name}{}",
                 parameter_types(signature, true)
             );
         };
@@ -62,7 +64,10 @@ impl Emitter<'_, '_, '_> {
             | Linkage::External => "dso_local",
             | Linkage::Internal => "internal",
         };
-        write!(self.out, "define {linkage} {result} {name}(")?;
+        write!(
+            self.out,
+            "define {linkage} {result_attributes}{result} {name}("
+        )?;
         let entry = body.entry_block().ok_or(fmt::Error)?;
         let mut separator = "";
         for (index, &param) in body.block_params(entry).iter().enumerate() {
@@ -71,9 +76,10 @@ impl Emitter<'_, '_, '_> {
             }
             write!(
                 self.out,
-                "{separator}{}{} %{param}",
+                "{separator}{}{}{} %{param}",
                 type_name(body.value_type(param)),
-                attributes(signature.param_abi(index))
+                attributes(signature.param_abi(index)),
+                extension_attributes(signature.param_extension(index))
             )?;
             separator = ", ";
         }
@@ -98,8 +104,8 @@ impl Emitter<'_, '_, '_> {
 }
 
 /// `(i32, ptr, ...)`: a signature's parameter types for a declaration, with
-/// their `byval` and `sret` attributes, or for the function type of a call,
-/// without. A return area for registers is not a parameter.
+/// their `byval`, `sret` and extension attributes, or for the function type
+/// of a call, without. A return area for registers is not a parameter.
 fn parameter_types(signature: Signature<'_>, with_attributes: bool) -> impl fmt::Display + '_ {
     fmt::from_fn(move |f| {
         f.write_str("(")?;
@@ -110,7 +116,12 @@ fn parameter_types(signature: Signature<'_>, with_attributes: bool) -> impl fmt:
             }
             write!(f, "{separator}{}", type_name(ty))?;
             if with_attributes {
-                write!(f, "{}", attributes(signature.param_abi(index)))?;
+                write!(
+                    f,
+                    "{}{}",
+                    attributes(signature.param_abi(index)),
+                    extension_attributes(signature.param_extension(index))
+                )?;
             }
             separator = ", ";
         }
@@ -139,6 +150,29 @@ fn result_type(signature: Signature<'_>) -> impl fmt::Display {
         | Some(registers) => f.write_str(type_name(registers.first)),
         | None => f.write_str(result.map_or("void", type_name)),
     })
+}
+
+/// `signext ` or `zeroext ` before a result type that ABI lowering extends,
+/// as Clang prints it, which also tells LLVM that a call's result arrives
+/// extended.
+fn result_attributes(signature: Signature<'_>) -> &'static str {
+    match signature.result_extension {
+        | Some(Extension::Sign) => "signext ",
+        | Some(Extension::Zero) => "zeroext ",
+        | _ => "",
+    }
+}
+
+/// ` noundef signext` or ` noundef zeroext` after the type of a parameter or
+/// argument that ABI lowering extends. Clang marks every such parameter
+/// `noundef` as well, so that LLVM may rely on the extended bits; passing
+/// an indeterminate value is then undefined, as Clang treats it.
+fn extension_attributes(extension: Option<Extension>) -> &'static str {
+    match extension {
+        | Some(Extension::Sign) => " noundef signext",
+        | Some(Extension::Zero) => " noundef zeroext",
+        | _ => "",
+    }
 }
 
 /// Whether parameter `index` is passed: every parameter but a return area
@@ -481,9 +515,10 @@ impl BodyPrinter<'_, '_, '_, '_> {
     /// A call: the result type alone for a direct call to a fixed-arity
     /// function, else the whole function type, which LLVM needs for a
     /// variadic callee and which states an indirect callee's signature.
-    /// Arguments carry the parameters' `byval` and `sret` attributes. A
-    /// result in registers is named `%instN.ret` and stored to the return
-    /// area the IR passes, which is not an LLVM argument.
+    /// Arguments carry the parameters' `byval`, `sret` and extension
+    /// attributes, and the result its extension. A result in registers is named
+    /// `%instN.ret` and stored to the return area the IR passes, which is
+    /// not an LLVM argument.
     fn call(
         &mut self,
         inst: Inst,
@@ -500,7 +535,12 @@ impl BodyPrinter<'_, '_, '_, '_> {
         if registers.is_some() {
             write!(self.out, "%{inst}.ret = ")?;
         }
-        write!(self.out, "call {} ", result_type(signature))?;
+        write!(
+            self.out,
+            "call {}{} ",
+            result_attributes(signature),
+            result_type(signature)
+        )?;
         if function_type {
             write!(self.out, "{} ", parameter_types(signature, false))?;
         }
@@ -514,8 +554,9 @@ impl BodyPrinter<'_, '_, '_, '_> {
             let ty = type_name(values.body.value_type(arg));
             write!(
                 self.out,
-                "{separator}{ty}{} {}",
+                "{separator}{ty}{}{} {}",
                 attributes(abi),
+                extension_attributes(signature.param_extension(index)),
                 values.operand(arg)
             )?;
             separator = ", ";

@@ -28,6 +28,11 @@
 //!   `return` loads the registers from it; a call names its result `%instN.ret`
 //!   and stores it to the area the IR passes. A module that still uses a
 //!   pre-ABI aggregate signature is refused.
+//! - Extended narrow integers print as ABI lowering decided, the way Clang
+//!   prints them: a parameter or argument as `i8 noundef signext` or `i16
+//!   noundef zeroext`, a result as `signext i8` before the function's or the
+//!   call's result type. A module that still records C signedness (`signed`,
+//!   `unsigned`, `bool`) is refused like a pre-ABI aggregate.
 //! - A global's contents are `[N x i8]`, or, when it holds address constants, a
 //!   packed struct `<{ [k x i8], ptr, ... }>` that alternates byte runs with
 //!   the relocated pointers (`getelementptr (i8, ptr @sym, i64 addend)` when
@@ -87,6 +92,7 @@ pub(crate) use target::data_layout;
 
 use crate::{
     ir::{
+        Extension,
         InstData,
         Module,
         SigId,
@@ -142,15 +148,22 @@ pub(crate) fn emit_module<'m>(
 }
 
 /// Whether a function or an indirect call uses a signature that still
-/// passes structures the pre-ABI way. ABI lowering leaves the signatures it
-/// replaced interned, so only those in use count.
+/// passes structures or narrow integers the pre-ABI way. ABI lowering
+/// leaves the signatures it replaced interned, so only those in use count.
 fn uses_pre_abi_signature(module: &Module<'_>) -> bool {
     let pre_abi = |sig: SigId| {
-        module
-            .signature(sig)
+        let signature = module.signature(sig);
+        signature
             .aggregates
             .iter()
             .any(|param| param.abi.is_pre_abi())
+            || signature
+                .extensions
+                .iter()
+                .any(|param| param.extension.is_pre_abi())
+            || signature
+                .result_extension
+                .is_some_and(Extension::is_pre_abi)
     };
     module.functions().any(|(_, function)| {
         pre_abi(function.signature)
@@ -232,9 +245,10 @@ pub(crate) enum EmitError<'m> {
         module:    &'m str,
         requested: &'static str,
     },
-    /// A signature still passes structures or unions in the pre-ABI way,
-    /// which only ABI lowering turns into the target's convention.
-    #[error("the module passes structures by value before ABI lowering")]
+    /// A signature still passes structures, unions or narrow integers in
+    /// the pre-ABI way, which only ABI lowering turns into the target's
+    /// convention.
+    #[error("the module passes structures or narrow integers as before ABI lowering")]
     NotAbiLowered,
     /// Two relocations of a global share bytes; the verifier only checks
     /// that each fits.
