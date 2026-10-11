@@ -116,7 +116,7 @@ impl<'a> LexedFile<'a> {
     /// when the file needs one of them, and releases it when the file is
     /// lexed, so a large file's spliced copy does not stay committed for the
     /// rest of preprocessing.
-    pub(super) fn lex(
+    fn lex(
         context: &mut Context<'_>,
         arena: &'a Bump,
         source_file_index: u32,
