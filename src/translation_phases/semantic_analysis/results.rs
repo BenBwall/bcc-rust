@@ -1,3 +1,9 @@
+//! Retained phase-7 output: types, declaration occurrences, lexical scopes,
+//! definitions, expression results and conversions. Scratch lookup and
+//! traversal state is not retained here. Validation happens in the analyzer.
+//! C99: §6.2.1-§6.2.4, pp. 29-32; PDF pp. 41-44;
+//! §6.7, pp. 97-124; PDF pp. 109-136.
+
 use super::{
     Conversion,
     ExpressionInfo,

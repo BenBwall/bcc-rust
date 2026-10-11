@@ -1,3 +1,8 @@
+//! Named builtin recognition for preprocessing queries in support of
+//! translation phase 7. Operand checking stays with each builtin call family.
+//! These calls are GCC/Clang extensions.
+//! C99: §6.5.2.2, pp. 71-72; PDF pp. 83-84 (extended function calls).
+
 use super::super::{
     atomic_builtin,
     type_generic,

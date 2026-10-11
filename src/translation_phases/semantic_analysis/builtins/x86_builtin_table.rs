@@ -4,6 +4,12 @@
 //! GNU extension: GCC manual, "x86 Built-in Functions", documents these
 //! builtins and their constant operands.
 //! <https://gcc.gnu.org/onlinedocs/gcc/x86-Built-in-Functions.html>
+//!
+//! This table records signatures and immediate-operand limits for translation
+//! phase 7. `x86_builtins.rs` checks those requirements. The table does not
+//! select backend instructions.
+//! C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22;
+//! §6.5.2.2, pp. 71-72; PDF pp. 83-84 (extended function calls).
 
 /// Clang x86 intrinsic signatures and constant immediate operand requirements.
 #[rustfmt::skip]

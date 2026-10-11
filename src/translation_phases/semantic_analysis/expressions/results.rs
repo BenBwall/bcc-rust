@@ -1,3 +1,9 @@
+//! Retained phase-7 value categories, constant classes and conversion sites.
+//! These records describe checked expressions; they do not schedule syntax or
+//! perform backend lowering.
+//! C99: §6.3.2.1, pp. 46-47; PDF pp. 58-59;
+//! §6.6, pp. 95-96; PDF pp. 107-108.
+
 use super::{
     Expression,
     ExpressionInfo,

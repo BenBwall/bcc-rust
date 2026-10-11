@@ -1,3 +1,8 @@
+//! Analyzer initialization and continuation-stack invariants for translation
+//! phase 7. Recovered syntax taints only its scheduled work; declaration and
+//! expression constraints remain in their concern modules.
+//! C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
+
 #[cfg(test)]
 use super::Cell;
 use super::{

@@ -1,11 +1,37 @@
-//! Phase-7 expression typing and conversions, using postorder continuations.
-//! C99: §6.3, pp. 42-50; PDF pp. 54-62; §6.5, pp. 67-94; PDF pp. 79-106.
-//! Statement control flow and return conversion are Stage 3 responsibilities.
+//! Expression typing reduces immutable syntax after its children have been
+//! visited. [`Analyzer::expression_done`] checks the operator, chooses its type
+//! and value category, and retains the result. Contextual conversions are
+//! recorded separately so the original category remains available to later
+//! phases.
+//!
+//! For `1 + 2L`, child visits first retain an `int` literal and a `long`
+//! literal. The addition then applies the usual arithmetic conversions, records
+//! the operand conversions and retains a `long` result. No child is evaluated
+//! by a recursive Rust call.
+//!
+//! Read [`Analyzer::expression_done`] and [`ExpressionInfo`] first, then
+//! [`Analyzer::type_binary`] and [`Analyzer::converted`] for operator typing
+//! and value conversion. [`Conversion`] records a conversion at its syntax
+//! site.
+//!
+//! - Operator typing and conversions: `typing.rs`.
+//! - Retained categories and conversions: `results.rs`.
+//! - Constant addresses and address differences: `address.rs`.
+//!
+//! C99: §6.3, pp. 42-48; PDF pp. 54-60; §6.5, pp. 67-94; PDF pp. 79-106
+//! (translation phase 7, expression typing and conversions).
+//! Statement control flow is checked by the statement analyzer; initializer
+//! subobjects are walked by the initializer analyzer.
 
+// Operator typing and conversions
+mod typing;
+
+// Retained categories and conversions
+mod results;
+
+// Constant addresses
 mod address;
 
-mod results;
-mod typing;
 pub(crate) use address::AddressBase;
 pub(crate) use results::{
     ConstantClass,

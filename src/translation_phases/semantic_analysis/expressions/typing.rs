@@ -1,3 +1,10 @@
+//! Phase-7 operator types, value conversions and expression-result storage.
+//! The entry file reduces expressions after their children; these methods check
+//! individual operators without traversing child syntax recursively. Statement
+//! control flow and initializer subobjects are checked by their own analyzers.
+//! C99: §6.3, pp. 42-48; PDF pp. 54-60;
+//! §6.5, pp. 67-94; PDF pp. 79-106.
+
 use super::{
     Analyzer,
     ArenaList,

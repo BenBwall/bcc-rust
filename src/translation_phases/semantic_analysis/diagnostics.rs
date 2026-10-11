@@ -1,3 +1,10 @@
+//! Phase-7 constraint and extension reporting. Recovered syntax suppresses
+//! dependent diagnostics; extension severity follows the context's policy.
+//! Diagnostic wording and source labels are defined in errors.rs.
+//! C99: §4 paragraph 6, p. 7; PDF p. 19;
+//! §5.1.1.3 paragraph 1, p. 11; PDF p. 23;
+//! §6.6 paragraph 4, p. 95; PDF p. 107.
+
 use super::{
     Analyzer,
     SemanticError,

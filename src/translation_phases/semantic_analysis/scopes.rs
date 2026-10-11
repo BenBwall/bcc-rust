@@ -1,3 +1,10 @@
+//! Phase-7 name installation, lookup and scope restoration. Each installed
+//! entry remembers the binding it shadows; leaving a scope restores those
+//! entries. Ordinary names, tags and GNU local labels have separate keys.
+//! Redeclaration compatibility and linkage checks remain in the declaration
+//! analyzer. C99: §6.2.1 paragraph 4, pp. 29-30; PDF pp. 41-42;
+//! §6.2.3 paragraph 1, p. 31; PDF p. 43.
+
 use super::{
     Analyzer,
     Collection,

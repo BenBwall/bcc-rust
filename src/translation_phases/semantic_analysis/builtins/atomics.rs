@@ -1,6 +1,11 @@
 //! Phase-7 atomic type constraints and type-generic intrinsics.
 //! C11: §6.7.2.4p3 and §6.7.3p3, p. 121; PDF p. 139.
 //! No backend operations are performed.
+//!
+//! These extensions are checked during translation phase 7. Operand types and
+//! constant requirements are validated here; backend instructions are not
+//! emitted. C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22;
+//! §6.5.2.2, pp. 71-72; PDF pp. 83-84 (extended function calls).
 
 use super::{
     Analyzer,

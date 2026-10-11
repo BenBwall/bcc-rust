@@ -1,30 +1,79 @@
-//! Semantic analysis, the second half of translation phase 7.
-//! C99: §5.1.1.2p1, pp. 9-10; PDF pp. 21-22; scopes/linkage §6.2.1-§6.2.4,
-//! pp. 29-32; PDF pp. 41-44; declarations §6.7, pp. 97-124;
-//! PDF pp. 109-136; expressions/initializers §6.3, §6.5-§6.7.8, pp. 42-128;
-//! PDF pp. 54-140; statements/functions §6.8-§6.9.2, pp. 131-143;
-//! PDF pp. 143-155. Backend control-flow and emitted code are not constructed.
+//! Semantic analysis checks the finished syntax tree and retains its types,
+//! bindings, scopes, expression results and definitions. Each external
+//! declaration starts one explicit stack of continuations. The driver pops a
+//! continuation, performs its step and pushes any remaining work. Scratch maps
+//! and stacks are dropped after translation-unit checks; the retained results
+//! stay in the source arena. Semantic lookup is independent of the parser's
+//! typedef lookup.
+//!
+//! For `int x = 1;`, the loop first resolves `int`, constructs the declarator
+//! and installs `x` in file scope. It then visits the initializer's literal,
+//! records its type and checks the conversion to `x`'s type. Translation-unit
+//! completion checks the definition before returning the retained graph.
+//!
+//! Read [`analyze`], [`Analyzer::step`], [`Work`] and [`Analyzer`] first. Then
+//! follow the dispatched method into the file for that concern.
+//! [`SemanticTranslationUnit`] describes what callers retain;
+//! [`SemanticTranslationUnit::inspect`] shows it.
+//!
+//! - Driver storage and names: `state.rs` initializes the analyzer and checks
+//!   stack balance; `collection.rs` builds scratch lists; `scopes.rs` installs,
+//!   finds and restores names; `results.rs` defines the retained output.
+//! - Syntax and constraints: `traversal.rs` schedules child syntax;
+//!   `declarations.rs` constructs types and bindings; `expressions.rs` and
+//!   `expressions/` type expressions and conversions; `initializers.rs` walks
+//!   subobjects; `statements.rs` checks jumps and returns; `functions.rs`
+//!   checks definitions and completes the translation unit.
+//! - Types and values: `types.rs` interns and compares types and computes
+//!   layouts; `integer.rs` evaluates integer constants; `constants.rs` folds
+//!   floating values.
+//! - Language extensions: `generic.rs` selects C11 generic associations;
+//!   `type_generic.rs` checks GNU type selections and math calls; `vectors.rs`
+//!   constructs vector types and checks operators; `builtins.rs` and
+//!   `builtins/` recognize and check header intrinsics, atomics and x86 calls.
+//! - Diagnostics and inspection: `diagnostics.rs` reports constraints and
+//!   extensions; `errors.rs` defines diagnostic kinds and renders them;
+//!   `inspection.rs` formats retained results. `tests.rs` and `tests/` exercise
+//!   these paths.
+//!
+//! C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22 (translation phase 7).
+//! C99: §6.2.1-§6.2.4, pp. 29-32; PDF pp. 41-44 (scopes, linkage and duration).
+//! C99: §6.7-§6.7.7, pp. 97-124; PDF pp. 109-136 (declarations and type names).
+//! C99: §6.3, pp. 42-48; PDF pp. 54-60; §6.5, pp. 67-94; PDF pp. 79-106
+//! (conversions and expressions).
+//! C99: §6.7.8, pp. 125-130; PDF pp. 137-142 (initializers).
+//! C99: §6.8-§6.9.2, pp. 131-143; PDF pp. 143-155 (statements and definitions).
+//! Backend control-flow and emitted code are not constructed.
 
-mod builtins;
+// Driver storage and names
 mod collection;
-mod constants;
-mod declarations;
-mod diagnostics;
-mod errors;
-mod expressions;
-mod functions;
-mod generic;
-mod initializers;
-mod inspection;
-mod integer;
 mod results;
 mod scopes;
 mod state;
+
+// Syntax traversal and constraints
+mod declarations;
+mod expressions;
+mod functions;
+mod initializers;
 mod statements;
 mod traversal;
-mod type_generic;
+
+// Types and constant values
+mod constants;
+mod integer;
 mod types;
+
+// Language extensions and builtin calls
+mod builtins;
+mod generic;
+mod type_generic;
 mod vectors;
+
+// Diagnostics and inspection
+mod diagnostics;
+mod errors;
+mod inspection;
 
 use std::cell::Cell;
 
@@ -1261,6 +1310,7 @@ struct Analyzer<'a, 'tu, 's> {
     enum_ranges:         ArenaMap<'s, usize, (i128, i128)>,
 }
 
+// Tests
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,

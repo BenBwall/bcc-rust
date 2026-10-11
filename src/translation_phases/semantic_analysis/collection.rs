@@ -1,3 +1,8 @@
+//! Scratch cons lists accumulate parameter, member and scope-entry sequences.
+//! The completed list is copied once into its destination arena. This file owns
+//! storage, not the semantic constraints on those elements.
+//! C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22 (translation phase 7).
+
 use super::{
     ArenaVec,
     Bump,

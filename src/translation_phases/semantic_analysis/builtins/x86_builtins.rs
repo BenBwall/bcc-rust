@@ -1,6 +1,11 @@
 //! Data-driven Clang x86 builtin signatures and immediate constraints.
 //! Extensions: GCC x86 Built-in Functions and Clang Language Extensions.
 //! Table generation independently compiles every signature on four targets.
+//!
+//! These extensions are checked during translation phase 7. Operand types and
+//! constant requirements are validated here; backend instructions are not
+//! emitted. C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22;
+//! §6.5.2.2, pp. 71-72; PDF pp. 83-84 (extended function calls).
 
 use super::{
     Analyzer,
