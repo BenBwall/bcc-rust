@@ -21,7 +21,7 @@ use crate::{
                 DirectDeclarator,
                 TypeSpecifiers,
             },
-            modern::{
+            extensions::modern::{
                 ExtendedType,
                 SyntaxOperand,
             },

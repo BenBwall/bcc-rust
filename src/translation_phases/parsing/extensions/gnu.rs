@@ -6,28 +6,30 @@
 //! manuals specify the vendor grammar. Types, constraints, assembly meaning,
 //! builtin evaluation and label resolution belong to later analysis.
 
-use super::super::{
-    Parser,
-    errors::ParserErrorType,
-    frames::{
-        expression::{
-            ExpressionBoundary,
-            ExpressionFrame,
-            ExpressionMode,
+use super::{
+    super::{
+        Parser,
+        errors::ParserErrorType,
+        frames::{
+            expression::{
+                ExpressionBoundary,
+                ExpressionFrame,
+                ExpressionMode,
+            },
+            type_name::TypeNameFrame,
         },
-        type_name::TypeNameFrame,
-    },
-    machine::{
-        ParseAction,
-        ParseFrame,
-        ParseValue,
-        any_expression_value,
+        machine::{
+            ParseAction,
+            ParseFrame,
+            ParseValue,
+            any_expression_value,
+        },
+        syntax::{
+            Expression,
+            Identifier,
+        },
     },
     modern::SyntaxOperand,
-    syntax::{
-        Expression,
-        Identifier,
-    },
 };
 use crate::{
     translation_phases::{

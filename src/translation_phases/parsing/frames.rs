@@ -50,9 +50,11 @@ pub(crate) mod initializer;
 
 use super::{
     declaration_syntax,
-    gnu,
+    extensions::{
+        gnu,
+        modern,
+        msvc,
+    },
     machine,
-    modern,
-    msvc,
     syntax,
 };

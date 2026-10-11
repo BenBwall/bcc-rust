@@ -86,6 +86,12 @@ use crate::{
             Parser,
             declaration_syntax::TypeName,
             errors::ParserErrorType,
+            extensions::modern::{
+                ModernFrame,
+                ModernKind,
+                ModernValue,
+                SyntaxOperand,
+            },
             frame_pool::{
                 FramePools,
                 PoolBox,
@@ -100,12 +106,6 @@ use crate::{
                 any_expression_value,
                 expression_value,
                 unexpected_return,
-            },
-            modern::{
-                ModernFrame,
-                ModernKind,
-                ModernValue,
-                SyntaxOperand,
             },
             recovery::ExpressionTerminator,
             syntax::{

@@ -56,6 +56,11 @@ use crate::translation_phases::{
     parsing::{
         Parser,
         errors::ParserErrorType,
+        extensions::modern::{
+            AttributeSpecifier,
+            ModernKind,
+            ModernValue,
+        },
         machine::{
             ConstantExpressionResult,
             ExpressionResult,
@@ -64,11 +69,6 @@ use crate::translation_phases::{
             ParseFrameKind,
             ParseValue,
             unexpected_return,
-        },
-        modern::{
-            AttributeSpecifier,
-            ModernKind,
-            ModernValue,
         },
         recovery::{
             ExpressionTerminator,

@@ -38,6 +38,12 @@ use crate::{
                 Enumerator,
             },
             errors::ParserErrorType,
+            extensions::modern::{
+                ModernKind,
+                ModernValue,
+                SpecifierExtension,
+                SpecifierExtensionKind,
+            },
             machine::{
                 ConstantExpressionResult,
                 EnumSpecifierResult,
@@ -46,12 +52,6 @@ use crate::{
                 ParseFrameKind,
                 ParseValue,
                 unexpected_return,
-            },
-            modern::{
-                ModernKind,
-                ModernValue,
-                SpecifierExtension,
-                SpecifierExtensionKind,
             },
             recovery::{
                 SynchronizationKind,

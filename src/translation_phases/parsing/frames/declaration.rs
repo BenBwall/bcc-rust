@@ -50,6 +50,11 @@ use crate::{
                 DeclarationPlace,
                 ParserErrorType,
             },
+            extensions::modern::{
+                ExtendedType,
+                ModernKind,
+                ModernValue,
+            },
             machine::{
                 InitializerResult,
                 ParseAction,
@@ -57,11 +62,6 @@ use crate::{
                 ParseFrameKind,
                 ParseValue,
                 unexpected_return,
-            },
-            modern::{
-                ExtendedType,
-                ModernKind,
-                ModernValue,
             },
             recovery::{
                 SynchronizationKind,

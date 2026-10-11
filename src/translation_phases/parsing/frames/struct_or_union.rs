@@ -53,6 +53,12 @@ use crate::{
                 TypeQualifiers,
             },
             errors::ParserErrorType,
+            extensions::modern::{
+                ModernKind,
+                ModernValue,
+                SpecifierExtension,
+                SpecifierExtensionKind,
+            },
             machine::{
                 ConstantExpressionResult,
                 ParseAction,
@@ -60,12 +66,6 @@ use crate::{
                 ParseFrameKind,
                 ParseValue,
                 unexpected_return,
-            },
-            modern::{
-                ModernKind,
-                ModernValue,
-                SpecifierExtension,
-                SpecifierExtensionKind,
             },
             recovery::{
                 SynchronizationKind,

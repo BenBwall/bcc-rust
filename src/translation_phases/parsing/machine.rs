@@ -21,6 +21,16 @@ use super::{
         StructOrUnionSpecifier,
         TypeName,
     },
+    extensions::{
+        gnu::{
+            GnuFrame,
+            GnuValue,
+        },
+        modern::{
+            ModernFrame,
+            ModernValue,
+        },
+    },
     frame_pool::{
         FramePools,
         PoolBox,
@@ -39,14 +49,6 @@ use super::{
         statement::StatementFrame,
         struct_or_union::StructOrUnionSpecifierFrame,
         type_name::TypeNameFrame,
-    },
-    gnu::{
-        GnuFrame,
-        GnuValue,
-    },
-    modern::{
-        ModernFrame,
-        ModernValue,
     },
     recovery::SynchronizationSet,
     syntax::{

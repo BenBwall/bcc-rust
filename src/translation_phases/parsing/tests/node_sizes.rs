@@ -26,29 +26,31 @@ use super::super::{
         StructOrUnionSpecifier,
         TypeName,
     },
-    gnu::{
-        Asm,
-        AsmOperand,
-        AsmQualifiers,
-        Builtin,
-        OffsetMember,
+    extensions::{
+        gnu::{
+            Asm,
+            AsmOperand,
+            AsmQualifiers,
+            Builtin,
+            OffsetMember,
+        },
+        modern::{
+            AttributeSpecifier,
+            ExtendedType,
+            GenericAssociation,
+            GenericSelection,
+            SpecifierExtension,
+            StaticAssertion,
+            SyntaxOperand,
+        },
+        msvc::{
+            MsAsm,
+            Seh,
+        },
     },
     machine::{
         ParseFrame,
         ParseValue,
-    },
-    modern::{
-        AttributeSpecifier,
-        ExtendedType,
-        GenericAssociation,
-        GenericSelection,
-        SpecifierExtension,
-        StaticAssertion,
-        SyntaxOperand,
-    },
-    msvc::{
-        MsAsm,
-        Seh,
     },
     syntax::{
         AttributedStatement,

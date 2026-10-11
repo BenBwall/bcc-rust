@@ -35,20 +35,20 @@ use crate::translation_phases::{
             TypeSpecifiers,
         },
         errors::ParserErrorType,
-        machine::{
-            EnumSpecifierResult,
-            ParseAction,
-            ParseFrame,
-            ParseValue,
-            unexpected_return,
-        },
-        modern::{
+        extensions::modern::{
             ExtendedType,
             ModernKind,
             ModernValue,
             SpecifierExtension,
             SpecifierExtensionKind,
             SyntaxOperand,
+        },
+        machine::{
+            EnumSpecifierResult,
+            ParseAction,
+            ParseFrame,
+            ParseValue,
+            unexpected_return,
         },
         syntax::{
             Identifier,

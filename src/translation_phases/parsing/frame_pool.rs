@@ -32,6 +32,20 @@ use super::{
         StructDeclaration,
         StructDeclarator,
     },
+    extensions::{
+        gnu::{
+            AsmOperand,
+            GnuFrame,
+            OffsetMember,
+        },
+        modern::{
+            GenericAssociation,
+            ModernFrame,
+            ModernKind,
+            SyntaxOperand,
+        },
+        msvc::MsvcFrame,
+    },
     frames::{
         expression::{
             CallState,
@@ -42,19 +56,7 @@ use super::{
         parameter_list::ParameterListFrame,
         struct_or_union::StructOrUnionSpecifierFrame,
     },
-    gnu::{
-        AsmOperand,
-        GnuFrame,
-        OffsetMember,
-    },
     machine::ParseFrame,
-    modern::{
-        GenericAssociation,
-        ModernFrame,
-        ModernKind,
-        SyntaxOperand,
-    },
-    msvc::MsvcFrame,
     syntax::{
         BlockItem,
         Identifier,

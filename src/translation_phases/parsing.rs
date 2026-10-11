@@ -102,7 +102,7 @@ use errors::{
     ParserErrorType,
     ParserResource,
 };
-pub(crate) use extensions::{
+use extensions::{
     gnu,
     modern,
     msvc,
