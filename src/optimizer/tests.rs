@@ -6,6 +6,7 @@
 
 mod dce;
 mod fold;
+mod gvn;
 mod options;
 mod pipeline;
 mod simplify_cfg;

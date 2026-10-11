@@ -14,8 +14,8 @@ fn pass_lists_parse() {
 #[test]
 fn bad_pass_lists_are_rejected() {
     assert_eq!(
-        parse_pass_list("fold,gvn"),
-        Err(PassListError::Unknown("gvn"))
+        parse_pass_list("fold,inline"),
+        Err(PassListError::Unknown("inline"))
     );
     assert_eq!(
         parse_pass_list("fold,,dce"),

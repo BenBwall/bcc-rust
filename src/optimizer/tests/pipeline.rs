@@ -438,8 +438,34 @@ fn print_after_all_prints_even_when_a_pass_changes_nothing() {
 
 #[test]
 fn the_report_counts_rewrites_and_times_passes() {
+    // A dead loop for `fold`, `simplify-cfg` and `dce`, then a live one with
+    // a repeated product for `gvn`.
+    let input = "\
+function @f(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    jump block1(v1)
+block1(v2: i32):
+    v3 = iconst.i1 0
+    brif v3, block2, block3
+block2:
+    v4 = iadd.i32 nsw v2, v0
+    jump block1(v4)
+block3:
+    jump block4(v2)
+block4(v5: i32):
+    v6 = imul.i32 v0, v0
+    v7 = imul.i32 v0, v0
+    v8 = iadd.i32 v6, v7
+    v9 = iadd.i32 v5, v8
+    v10 = icmp.i32 slt v9, v0
+    brif v10, block4(v9), block5
+block5:
+    return v9
+}
+";
     let (_, report) = optimize_text(
-        DEAD_LOOP,
+        input,
         &OptimizerOptions {
             verify_each: true,
             ..OptimizerOptions::default()
