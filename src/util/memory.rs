@@ -20,7 +20,7 @@ pub(crate) mod vm;
 /// Compile checks import the crate-private allocator from its source file.
 ///
 /// ```compile_fail,E0080
-/// # #[path = "util/memory/bump.rs"]
+/// # #[path = "memory/bump.rs"]
 /// # mod bump;
 /// let arena = bump::Bump::new();
 /// arena.alloc(String::from("owned"));
