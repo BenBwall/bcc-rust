@@ -27,6 +27,14 @@
 mod pipeline;
 pub(crate) mod translation_phases;
 
+// Middle end
+#[expect(
+    dead_code,
+    unused_imports,
+    reason = "Nothing lowers to the IR yet, and its printer, parser and verifier come next."
+)]
+pub(crate) mod ir;
+
 // Invocation and language choices
 mod cli;
 pub(crate) mod configuration;
