@@ -113,6 +113,8 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// Globals of static locals and `__func__`, which have no linkage.
     statics:                  ArenaMap<'a, usize, GlobalId>,
     strings:                  ArenaMap<'a, LiteralId, GlobalId>,
+    /// Next candidate for a string literal's internal symbol.
+    next_string_suffix:       u64,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -516,7 +518,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             return Ok(global);
         }
         let bytes = self.string_bytes(id);
-        let name = self.unique_name(".str");
+        let name = self.string_name();
         let global = self.module.declare_global(
             name,
             GlobalDecl {
@@ -553,6 +555,23 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
         bytes.push(0);
         bytes
+    }
+
+    /// Names each literal once, without retaining repeatedly probed suffixes.
+    /// Identical literals may share storage, but different contents must keep
+    /// their own arrays. C99: §6.4.5 paragraph 6, p. 63; PDF p. 75.
+    fn string_name(&mut self) -> &'a str {
+        if self.module.symbol(".str").is_none() {
+            return ".str";
+        }
+        loop {
+            let suffix = self.next_string_suffix;
+            self.next_string_suffix += 1;
+            let name = format_in!(self.tables, ".str.{suffix}");
+            if self.module.symbol(name).is_none() {
+                return name;
+            }
+        }
     }
 
     /// `base`, or `base.N` for the first `N` that no symbol has.
@@ -1019,6 +1038,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             address_taken: address_taken::find(sema, tables),
             statics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             strings: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            next_string_suffix: 1,
         }
     }
 }

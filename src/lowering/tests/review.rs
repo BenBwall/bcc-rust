@@ -7,6 +7,60 @@ use crate::backend::interpreter::{
     run_text,
 };
 
+#[test]
+fn thousands_of_string_symbols_use_linear_arena_space() {
+    use std::fmt::Write as _;
+
+    use crate::ir::{
+        Align,
+        GlobalDecl,
+        Linkage,
+    };
+    let mut source = String::new();
+    for index in 0..4096 {
+        writeln!(source, "char *text{index} = \"literal{index}\";").unwrap();
+    }
+    let tu = Bump::new();
+    let mut context = Context::new(&tu);
+    let syntax = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        tu.alloc_str(&source),
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &syntax);
+    assert!(sema.lowerable(&context));
+    let arena = Bump::new();
+    let tables = Bump::new();
+    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables);
+    // Pre-existing symbols must still be skipped by the suffix counter.
+    for name in [".str", ".str.1", ".str.3"] {
+        _ = unit.module.declare_global(
+            name,
+            GlobalDecl {
+                linkage:  Linkage::Internal,
+                size:     0,
+                align:    Align::BYTE,
+                constant: true,
+            },
+        );
+    }
+    let mut errors = ArenaVec::new_in(&arena);
+    drop(unit.declare_items(&syntax, &mut errors));
+    assert!(errors.is_empty(), "{errors:?}");
+    for suffix in (2..=4098).filter(|&suffix| suffix != 3) {
+        assert!(
+            unit.module.symbol(&format!(".str.{suffix}")).is_some(),
+            "missing unique string symbol {suffix}"
+        );
+    }
+    assert!(
+        tables.used() < 4 * 1024 * 1024,
+        "retained {} table bytes",
+        tables.used()
+    );
+}
+
 fn check(source: &str) {
     for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
         let text = lower_for(source, target).unwrap();
