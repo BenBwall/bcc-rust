@@ -14,7 +14,8 @@
 //! Read [`analyze`], [`Analyzer::step`], [`Work`] and [`Analyzer`] first. Then
 //! follow the dispatched method into the file for that concern.
 //! [`SemanticTranslationUnit`] describes what callers retain;
-//! [`SemanticTranslationUnit::inspect`] shows it.
+//! [`SemanticTranslationUnit::inspect`] shows it. The `pub(crate)` re-exports
+//! below name the retained vocabulary that lowering matches on.
 //!
 //! - Driver storage and names: `state.rs` initializes the analyzer and checks
 //!   stack balance; `collection.rs` builds scratch lists; `scopes.rs` installs,
@@ -85,7 +86,6 @@ pub(crate) use builtins::{
     x86_builtins,
 };
 use collection::Collection;
-// The retained vocabulary a lowering pass matches on.
 pub(crate) use constants::Floating;
 use declarations::compatible_enum_type;
 pub(crate) use errors::{
