@@ -54,32 +54,43 @@ union U { int i; float f; };
 struct Nest { struct I2 in; short s; char c; };
 struct X87 { long double x; };
 struct Q { __int128 q; };
+struct BF { unsigned a : 3, b : 5; int c : 12; };
 ";
 
-/// The bcc side: functions Clang calls, and `bcc_calls_clang`, which calls
-/// Clang's functions and checks what comes back without computing with
-/// floating values, which lowering does not support yet.
+/// The bcc side: functions Clang calls, which compute with the members they
+/// receive, and `bcc_calls_clang`, which calls Clang's functions and checks
+/// what comes back.
 const BCC: &str = "\
 struct I2 b_i2(struct I2 x, int k) { struct I2 r; r.a = x.b + k; r.b = x.a - k; return r; }
 struct L2 b_l2(struct L2 x, struct L2 y) { struct L2 r; r.a = x.a + y.b; r.b = x.b - y.a; return \
                    r; }
-struct LD b_ld(struct LD x, long long k) { x.a += k; return x; }
-struct D2 b_d2(struct D2 x, struct D2 y) { return y; }
-struct D2 b_d2_many(struct D2 a, struct D2 b, struct D2 c, struct D2 d, struct D2 e) { return e; }
-struct F3 b_f3(struct F3 x) { return x; }
-struct F4 b_f4(struct F4 x, struct F4 y) { return y; }
+struct LD b_ld(struct LD x, long long k) { x.a += k; x.d /= 2; return x; }
+struct D2 b_d2(struct D2 x, struct D2 y) { struct D2 r = { x.x + y.y, x.y * y.x }; return r; }
+struct D2 b_d2_many(struct D2 a, struct D2 b, struct D2 c, struct D2 d, struct D2 e) {
+  struct D2 r = { a.x + e.x, b.y + c.x + d.y + e.y };
+  return r;
+}
+struct F3 b_f3(struct F3 x) { struct F3 r = { x.c * 2, x.a + x.b, x.b - x.a }; return r; }
+struct F4 b_f4(struct F4 x, struct F4 y) {
+  struct F4 r = { x.a + y.d, x.b + y.c, x.c + y.b, x.d + y.a };
+  return r;
+}
 struct C3 b_c3(struct C3 x) { struct C3 r; r.c[0] = x.c[2]; r.c[1] = x.c[1]; r.c[2] = x.c[0]; \
                    return r; }
 struct C1 b_c1(struct C1 x) { x.c++; return x; }
 struct S2 b_s2(struct S2 x) { x.s *= 2; return x; }
-struct CD b_cd(struct CD x) { x.c++; return x; }
-struct IF b_if(struct IF x) { x.i++; return x; }
+struct CD b_cd(struct CD x) { x.c++; x.d *= 3; return x; }
+struct IF b_if(struct IF x) { x.i++; x.f += 0.25f; return x; }
 struct P b_p(struct P x) { x.p++; x.n--; return x; }
 struct Big b_big(struct Big x, int k) { for (int i = 0; i < 4; i++) x.v[i] += k; return x; }
-union U b_u(union U x) { return x; }
+union U b_u(union U x) { x.f = -x.f; return x; }
 struct Nest b_nest(struct Nest x) { x.in.a += x.s; x.c++; return x; }
-struct X87 b_x87(int k, struct X87 x) { return x; }
+struct X87 b_x87(int k, struct X87 x) { x.x *= k; return x; }
 struct Q b_q(struct Q x) { x.q += 1; return x; }
+struct BF b_bf(struct BF x) { x.a++; x.b -= 3; x.c = -x.c; return x; }
+double b_dsum(struct D2 a, float f, struct F3 b, double d) {
+  return a.x + a.y + f + b.a + b.b + b.c + d;
+}
 long long b_many(long long a, long long b, long long c, long long d, long long e, struct L2 t, \
                    long long f) {
   return a + b + c + d + e + t.a * 100 + t.b * 1000 + f * 10000;
@@ -117,6 +128,8 @@ struct X87 c_x87(struct X87 x, int k);
 int c_check_x87(struct X87 x);
 struct Q c_q(struct Q x);
 long long c_vsum(int n, ...);
+struct BF c_bf(struct BF x);
+double c_dsum(struct D2 a, float f, struct F3 b, double d);
 
 int bcc_calls_clang(void) {
   struct I2 i2 = { 1, 2 };
@@ -151,6 +164,23 @@ int bcc_calls_clang(void) {
   struct Q q = { 41 };
   if (c_q(q).q != 42) return 16;
   if (c_vsum(7, 1LL, 2LL, 3LL, 4LL, 5LL, 6LL, 7LL) != 28) return 17;
+  if (m.x != 1.25 || m.y != 2.25) return 18;
+  struct D2 md = c_d2(m, m);
+  if (md.x != 3.5 || md.y != 3.5) return 19;
+  struct F3 f3 = c_f3(c_make_f3());
+  if (f3.a != 3 || f3.b != 2 || f3.c != 1) return 20;
+  struct LD ld = c_ld(c_make_ld(), 3);
+  if (ld.a != 15 || ld.d != 1.0) return 21;
+  struct CD cd = c_cd(c_make_cd());
+  if (cd.c != 8 || cd.d != 2.5) return 22;
+  if (c_u(c_make_u()).f != 1.5f) return 23;
+  struct IF iff = c_if(c_make_if());
+  if (iff.i != 6 || iff.f != 1.0f) return 24;
+  if (c_x87(c_make_x87(), 2).x != 1.5L) return 25;
+  struct BF bf = { 1, 2, -3 };
+  struct BF rbf = c_bf(bf);
+  if (rbf.a != 3 || rbf.b != 4 || rbf.c != -1003) return 26;
+  if (c_dsum(md, 0.5f, f3, 0.25) != 13.75) return 27;
   return 0;
 }
 ";
@@ -177,6 +207,8 @@ union U b_u(union U x);
 struct Nest b_nest(struct Nest x);
 struct X87 b_x87(int k, struct X87 x);
 struct Q b_q(struct Q x);
+struct BF b_bf(struct BF x);
+double b_dsum(struct D2 a, float f, struct F3 b, double d);
 long long b_many(long long a, long long b, long long c, long long d, long long e, struct L2 t,
                  long long f);
 int bcc_calls_clang(void);
@@ -217,6 +249,10 @@ struct X87 c_make_x87(void) { struct X87 r = { 0.75L }; return r; }
 struct X87 c_x87(struct X87 x, int k) { x.x *= k; return x; }
 int c_check_x87(struct X87 x) { return x.x == 1.5L; }
 struct Q c_q(struct Q x) { x.q += 1; return x; }
+struct BF c_bf(struct BF x) { x.a += 2; x.b *= 2; x.c -= 1000; return x; }
+double c_dsum(struct D2 a, float f, struct F3 b, double d) {
+  return a.x + a.y + f + b.a + b.b + b.c + d;
+}
 long long c_vsum(int n, ...) {
   va_list list;
   va_start(list, n);
@@ -235,19 +271,19 @@ int main(void) {
   if (rl.a != 41 || rl.b != -28) return 11;
   struct LD ld = { 7, 2.5 };
   struct LD rld = b_ld(ld, 3);
-  if (rld.a != 10 || rld.d != 2.5) return 12;
+  if (rld.a != 10 || rld.d != 1.25) return 12;
   struct D2 d1 = { 1.5, 2.5 }, d2 = { 3.5, 4.5 }, d3 = { 5.5, 6.5 }, d4 = { 7.5, 8.5 },
             d5 = { 9.5, 10.5 };
   struct D2 rd = b_d2(d1, d2);
-  if (rd.x != 3.5 || rd.y != 4.5) return 13;
+  if (rd.x != 6.0 || rd.y != 8.75) return 13;
   rd = b_d2_many(d1, d2, d3, d4, d5);
-  if (rd.x != 9.5 || rd.y != 10.5) return 14;
+  if (rd.x != 11.0 || rd.y != 29.0) return 14;
   struct F3 f3 = { 1, 2, 3 };
   struct F3 rf3 = b_f3(f3);
-  if (rf3.a != 1 || rf3.b != 2 || rf3.c != 3) return 15;
+  if (rf3.a != 6 || rf3.b != 3 || rf3.c != 1) return 15;
   struct F4 f4a = { 1, 2, 3, 4 }, f4b = { 5, 6, 7, 8 };
   struct F4 rf4 = b_f4(f4a, f4b);
-  if (rf4.a != 5 || rf4.b != 6 || rf4.c != 7 || rf4.d != 8) return 16;
+  if (rf4.a != 9 || rf4.b != 9 || rf4.c != 9 || rf4.d != 9) return 16;
   struct C3 c3 = { { 1, 2, 3 } };
   struct C3 rc3 = b_c3(c3);
   if (rc3.c[0] != 3 || rc3.c[1] != 2 || rc3.c[2] != 1) return 17;
@@ -257,10 +293,10 @@ int main(void) {
   if (b_s2(s2).s != 42) return 19;
   struct CD cd = { 1, 2.5 };
   struct CD rcd = b_cd(cd);
-  if (rcd.c != 2 || rcd.d != 2.5) return 20;
+  if (rcd.c != 2 || rcd.d != 7.5) return 20;
   struct IF iff = { 1, 2.5f };
   struct IF rif = b_if(iff);
-  if (rif.i != 2 || rif.f != 2.5f) return 21;
+  if (rif.i != 2 || rif.f != 2.75f) return 21;
   char text[4] = \"abc\";
   struct P p = { text, 3 };
   struct P rp = b_p(p);
@@ -271,16 +307,20 @@ int main(void) {
   union U u;
   u.f = 2.5f;
   union U ru = b_u(u);
-  if (ru.f != 2.5f) return 24;
+  if (ru.f != -2.5f) return 24;
   struct Nest n = { { 1, 2 }, 3, 4 };
   struct Nest rn = b_nest(n);
   if (rn.in.a != 4 || rn.in.b != 2 || rn.s != 3 || rn.c != 5) return 25;
   struct L2 t = { 1, 2 };
   if (b_many(1, 1, 1, 1, 1, t, 3) != 32105) return 26;
   struct X87 x87 = { 2.5L };
-  if (b_x87(1, x87).x != 2.5L) return 27;
+  if (b_x87(3, x87).x != 7.5L) return 27;
   struct Q q = { 41 };
   if (b_q(q).q != 42) return 28;
+  struct BF bf = { 6, 20, 50 };
+  struct BF rbf = b_bf(bf);
+  if (rbf.a != 7 || rbf.b != 17 || rbf.c != -50) return 29;
+  if (b_dsum(d1, 0.5f, f3, 0.25) != 10.75) return 30;
   int status = bcc_calls_clang();
   return status ? 100 + status : 0;
 }

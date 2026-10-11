@@ -32,7 +32,9 @@ use crate::{
     translation_phases::Context,
 };
 
-/// The programs, each with the status its `main` returns.
+/// The programs, from structures of integers through SSE-class ones of
+/// `float` and `double`, mixed eightbytes, unions, bit-fields and
+/// structures too large for registers.
 pub(crate) const PROGRAMS: &[Program] = &[
     Program {
         name:     "pair_in_registers",
@@ -137,6 +139,89 @@ int dot();
 int main(void) { struct p a = { 2, 3 }, b = { 4, 5 }; return dot(a, b); }
 int dot(struct p a, struct p b) { return a.x * b.x + a.y * b.y; }",
         expected: 23,
+    },
+    Program {
+        name:     "doubles_in_sse_registers",
+        source:   "struct vec { double x, y; };
+static struct vec add(struct vec a, struct vec b) { struct vec r = { a.x + b.x, a.y + b.y };                    return r; }
+static struct vec scale(struct vec v, double k) { v.x *= k; v.y *= k; return v; }
+static double dot(struct vec a, struct vec b) { return a.x * b.x + a.y * b.y; }
+int main(void) {
+  struct vec a = { 1.5, 2.0 }, b = { 0.5, -1.0 };
+  struct vec s = scale(add(a, b), 4.0);
+  return (int)dot(s, a) + (int)s.y;
+}",
+        expected: 24,
+    },
+    Program {
+        name:     "floats_packed_in_registers",
+        source:   "struct f3 { float a, b, c; };
+static struct f3 rotate(struct f3 v) { struct f3 r = { v.b, v.c, v.a }; return r; }
+static float weigh(struct f3 v) { return v.a + 10 * v.b + 100 * v.c; }
+int main(void) { struct f3 v = { 1.0f, 2.0f, 3.0f }; return (int)weigh(rotate(v)) -                    (int)weigh(v) + 200; }",
+        expected: 11,
+    },
+    Program {
+        name:     "integer_and_sse_eightbytes",
+        source:   "struct dl { double d; long long n; };
+struct if2 { int i; float f; };
+static struct dl mix(struct dl x, struct if2 y) { x.d += y.f; x.n -= y.i; return x; }
+static struct if2 halve(struct if2 y) { y.i /= 2; y.f /= 2; return y; }
+int main(void) {
+  struct dl x = { 0.25, 100 };
+  struct if2 y = { 30, 7.5f };
+  struct dl r = mix(x, halve(y));
+  return (int)(r.d * 10) + (int)r.n;
+}",
+        expected: 125,
+    },
+    Program {
+        name:     "float_then_double",
+        source:   "struct fd { float f; double d; };
+struct f1 { float f; };
+static struct f1 shrink(struct fd v) { struct f1 r = { v.f + (float)v.d }; return r; }
+int main(void) { struct fd v = { 1.5f, 2.25 }; return (int)(shrink(v).f * 4); }",
+        expected: 15,
+    },
+    Program {
+        name:     "sse_registers_run_out",
+        source:   "struct d2 { double x, y; };
+static double last(struct d2 a, struct d2 b, struct d2 c, struct d2 d, double e, struct d2 f,                    int k) {
+  return a.x + b.y + c.x + d.y + e + f.x * k + f.y;
+}
+int main(void) {
+  struct d2 a = { 1, 2 }, b = { 3, 4 }, c = { 5, 6 }, d = { 7, 8 }, f = { 9, 10 };
+  return (int)(last(a, b, c, d, 0.5, f, 2) * 2);
+}",
+        expected: 93,
+    },
+    Program {
+        name:     "doubles_in_memory",
+        source:   "struct d3 { double x, y, z; };
+static struct d3 cross(struct d3 a, struct d3 b) {
+  struct d3 r = { a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x };
+  return r;
+}
+int main(void) {
+  struct d3 a = { 1, 2, 3 }, b = { 4, 5, 6 };
+  struct d3 c = cross(a, b);
+  return (int)(c.x * 100 + c.y * 10 + c.z) + 400;
+}",
+        expected: 157,
+    },
+    Program {
+        name:     "union_of_float_and_integer",
+        source:   "union fu { float f; unsigned u; };
+static union fu negate(union fu v) { v.u ^= 0x80000000u; return v; }
+int main(void) { union fu v; v.f = 2.5f; v = negate(v); return (int)(v.f * -4); }",
+        expected: 10,
+    },
+    Program {
+        name:     "bit_fields_by_value",
+        source:   "struct flags { unsigned a : 3, b : 5; int c : 12; };
+static struct flags bump(struct flags f) { f.a++; f.b += 2; f.c -= 100; return f; }
+int main(void) { struct flags f = { 6, 20, 50 }; f = bump(f); return f.a + f.b + (f.c + 50); }",
+        expected: 29,
     },
 ];
 

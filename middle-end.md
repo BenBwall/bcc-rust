@@ -466,7 +466,9 @@ any other is passed by reference to the caller's copy and returned through
 parameters and results, which Clang emits on System V, are not produced yet;
 aggregates in the variable part of a call and `va_arg` of aggregates are
 unsupported; packed structures do not reach ABI lowering yet, since the front
-end does not model them.
+end does not model them. A named bit-field in a small aggregate contributes one
+`i8` scalar per byte its bits reach, so its bytes classify as INTEGER, as
+Clang classifies them.
 
 The conformance tests in `src/abi/tests/conformance.rs` link bcc-compiled C with
 Clang-compiled C, exchanging every supported shape in both directions, and run
