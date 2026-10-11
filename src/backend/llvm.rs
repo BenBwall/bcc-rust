@@ -1,5 +1,6 @@
 //! The LLVM back end: prints a post-ABI module as LLVM IR text for the pinned
-//! LLVM 23.1.1.
+//! LLVM 23.1.1, and hands that text to the bundled clang, which verifies it,
+//! optionally optimizes it, generates code and links.
 //!
 //! [`emit_module`] writes the target lines, each global, each function, and
 //! last the declarations of the intrinsics the functions used. The mapping is
@@ -29,13 +30,24 @@
 //! Access tags are not printed yet: the module has no descriptor table to
 //! build `!tbaa` metadata from.
 //!
+//! The driver helpers in `driver.rs` run clang on a `.ll` file. The
+//! comparison arms of `middle-end.md` map onto [`LlvmOptions`] like this:
+//!
+//! | Arm | Middle end | `opt` | `disable_llvm_passes` |
+//! | --- | --- | --- | --- |
+//! | A0 | none | `Some(OptLevel::O0)` | `false` |
+//! | A1 | bcc pipeline | `Some(OptLevel::O2)` | `true` |
+//! | A2 | none | `Some(OptLevel::O2)` | `false` |
+//! | A3 | bcc pipeline | `Some(OptLevel::O2)` | `false` |
+//!
 //! Read [`emit_module`] first, then `function.rs` for bodies and `global.rs`
 //! for initializers.
 //!
 //! - Printing: `function.rs` prints declarations and bodies; `global.rs` prints
 //!   globals and their relocations; `syntax.rs` spells types, names and
 //!   constants; `target.rs` holds each target's data layout.
-//! - `tests.rs` and `tests/` hold golden tests.
+//! - Running clang: `driver.rs` finds the toolchain and builds the command.
+//! - `tests.rs` and `tests/` hold golden, validity and execution tests.
 
 // Printing
 mod function;
@@ -43,9 +55,26 @@ mod global;
 mod syntax;
 mod target;
 
+// Running clang
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "Tooling around the compiler: it reads the environment, builds paths and reads \
+              clang's output once per clang run, outside the arena-allocated compile path."
+)]
+mod driver;
+
 use std::fmt;
 
 use bitflags::bitflags;
+pub(crate) use driver::{
+    ClangError,
+    LlvmOptions,
+    OptLevel,
+    OutputKind,
+    Toolchain,
+    compile_ll,
+};
 pub(crate) use target::data_layout;
 
 use crate::{
@@ -179,6 +208,7 @@ pub(crate) enum EmitError<'m> {
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
+    clippy::disallowed_macros,
     clippy::disallowed_methods,
     reason = "Tests build inputs and expected values with std types; the arena rule covers the \
               compiler, not its tests."

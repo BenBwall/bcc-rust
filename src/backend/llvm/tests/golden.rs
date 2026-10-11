@@ -1,4 +1,5 @@
-//! Golden tests: textual bcc IR in, LLVM IR text out.
+//! Golden tests: textual bcc IR in, LLVM IR text out. Each module also goes
+//! through clang (see `clang.rs`), so every golden text is known to be valid.
 
 use super::*;
 

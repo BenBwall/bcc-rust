@@ -33,6 +33,15 @@ pub(crate) mod translation_phases;
     expect(
         dead_code,
         unused_imports,
+        reason = "Nothing lowers to the IR yet, so no back end runs outside its tests."
+    )
+)]
+mod backend;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        unused_imports,
         reason = "Nothing lowers to the IR yet; its tests exercise it until lowering does."
     )
 )]
@@ -46,14 +55,6 @@ pub(crate) mod ir;
     )
 )]
 mod optimizer;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Nothing lowers to the IR yet, so no back end runs outside its tests."
-    )
-)]
-mod backend;
 
 // Invocation and language choices
 mod cli;
