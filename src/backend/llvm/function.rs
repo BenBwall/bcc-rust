@@ -149,7 +149,7 @@ pub(super) fn signature_type<'a>(
     signature: Signature<'_>,
     arena: &'a Bump,
 ) -> Ty<'a> {
-    let mut types = ArenaVec::new_in(arena);
+    let mut types = ArenaVec::with_capacity_in(signature.params.len(), arena);
     for (index, &ty) in signature.params.iter().enumerate() {
         if passed(signature, index) {
             types.push(api.ty(ty));
@@ -470,7 +470,7 @@ impl<'a, 'm> BodyBuilder<'a, 'm, '_> {
         args: &[Value],
     ) -> Result<Val<'a>, EmitError<'m>> {
         let api = self.emitter.api;
-        let mut arguments = ArenaVec::new_in(self.emitter.arena);
+        let mut arguments = ArenaVec::with_capacity_in(args.len(), self.emitter.arena);
         for (index, &arg) in args.iter().enumerate() {
             if passed(signature, index) {
                 arguments.push(self.value(arg)?);

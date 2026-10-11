@@ -3,6 +3,7 @@
 
 mod clang;
 mod golden;
+mod handles;
 mod pass_suppression;
 
 use super::*;
