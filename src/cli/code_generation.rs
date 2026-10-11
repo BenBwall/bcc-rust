@@ -28,10 +28,7 @@ use clap::{
     ValueEnum,
 };
 
-use super::{
-    diagnostic_reporter::DiagnosticReporter,
-    output::expect_stderr,
-};
+use super::diagnostic_reporter::DiagnosticReporter;
 use crate::{
     backend::{
         interpreter::{
@@ -103,9 +100,9 @@ pub(super) fn generate_code<'tu>(
         RenderColor::for_stderr(),
     );
     let stderr = &mut io::stderr();
-    expect_stderr(reporter.report_pending(context, stderr));
+    drop(reporter.report_pending(context, stderr));
     if !sema.lowerable(context) {
-        expect_stderr(reporter.finish(context, stderr));
+        drop(reporter.finish(context, stderr));
         return FAILURE_STATUS;
     }
     // The module lives in an arena created after semantic analysis; the
@@ -125,16 +122,16 @@ pub(super) fn generate_code<'tu>(
             for error in errors.errors {
                 reporter.report_late(error, error.source, context);
             }
-            expect_stderr(reporter.finish(context, stderr));
+            drop(reporter.finish(context, stderr));
             return FAILURE_STATUS;
         },
         | Err(MiddleEndError::Abi(error)) => {
             reporter.report_late(&error, None, context);
-            expect_stderr(reporter.finish(context, stderr));
+            drop(reporter.finish(context, stderr));
             return FAILURE_STATUS;
         },
     };
-    expect_stderr(reporter.finish(context, stderr));
+    drop(reporter.finish(context, stderr));
     let target = context.configuration.target();
     match (options.emit, &options.output_path) {
         | (Some(Emit::Ir | Emit::IrAbi), _) => print_stdout(format_args!("{module}")),
@@ -332,10 +329,10 @@ fn interpret(module: &Module<'_>, target: Target) -> i32 {
             | Termination::Aborted => ABORT_STATUS,
         },
         | Err(trap) => {
-            eprintln!(
+            report_stderr(format_args!(
                 "error: the interpreter stopped the program: {}",
                 trap.display_in(module)
-            );
+            ));
             TRAP_STATUS
         },
     }
@@ -348,7 +345,7 @@ fn print_llvm(module: &Module<'_>, target: Target) -> i32 {
     match llvm::emit_module(module, target, &mut text) {
         | Ok(()) => print_stdout(format_args!("{text}")),
         | Err(error) => {
-            eprintln!("error: {error}");
+            report_stderr(format_args!("error: {error}"));
             FAILURE_STATUS
         },
     }
@@ -369,7 +366,7 @@ fn stdout_error(error: &io::Error) -> i32 {
     if error.kind() == io::ErrorKind::BrokenPipe {
         return 0;
     }
-    eprintln!("error: failed writing to stdout: {error}");
+    report_stderr(format_args!("error: failed writing to stdout: {error}"));
     FAILURE_STATUS
 }
 
@@ -379,7 +376,10 @@ fn build(module: &Module<'_>, target: Target, output: &Path, options: &CodeGener
     match result {
         | Ok(()) => 0,
         | Err(error) => {
-            eprintln!("error: cannot build `{}`: {error}", output.display());
+            report_stderr(format_args!(
+                "error: cannot build `{}`: {error}",
+                output.display()
+            ));
             FAILURE_STATUS
         },
     }
@@ -393,6 +393,15 @@ fn build(module: &Module<'_>, target: Target, output: &Path, options: &CodeGener
 )]
 fn pass_list(value: &str) -> Result<PassList, String> {
     parse_pass_list(value).map_err(|error| error.to_string())
+}
+
+/// Writes diagnostics best-effort, preserving the status of the compilation
+/// or interpreted program even when the diagnostic handle is unwritable.
+///
+/// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23 (required diagnostics);
+/// handling a failed host write is a CLI policy.
+fn report_stderr(text: fmt::Arguments<'_>) {
+    drop(writeln!(io::stderr().lock(), "{text}"));
 }
 
 /// Writes `--print-after-all` text to stderr.

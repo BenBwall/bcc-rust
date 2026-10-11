@@ -141,10 +141,10 @@ mod tests {
         }
     }
 
-    /// Opens a stdout handle whose writes fail. Rust's standard library
-    /// treats EBADF as a closed stdout and drops the output silently, so on
+    /// Opens a stdio handle whose writes fail. Rust's standard library
+    /// treats EBADF as closed stdio and drops the output silently, so on
     /// Unix a read-only descriptor does not fail; `/dev/full` reports ENOSPC.
-    fn failing_stdout(path: &Path) -> std::fs::File {
+    fn failing_stdio(path: &Path) -> std::fs::File {
         if cfg!(unix) {
             std::fs::File::options()
                 .write(true)
@@ -166,7 +166,7 @@ mod tests {
             "--interpret",
             "--print-default-passes",
         ] {
-            let file = failing_stdout(&path);
+            let file = failing_stdio(&path);
             let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
             _ = command.arg(flag).stdout(file);
             if flag != "--print-default-passes" {
@@ -181,6 +181,75 @@ mod tests {
             );
             assert!(!stderr.contains("panicked"), "{flag}: {stderr}");
         }
+        assert_eq!(std::fs::read(&path).unwrap(), b"unchanged");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn read_only_stderr_preserves_exit_status() {
+        let path = temporary("read-only-stderr.txt");
+        std::fs::write(&path, b"unchanged").unwrap();
+        let missing_output = temporary("missing-parent").join("output.o");
+        let missing_input = temporary("missing-input.c");
+        for (source, flags, status, fail_stdout) in [
+            (
+                "int main(void){int z=0;return 1/z;}",
+                vec!["--interpret"],
+                70,
+                false,
+            ),
+            (
+                "int main(void){return unknown;}",
+                vec!["--interpret"],
+                1,
+                false,
+            ),
+            (
+                "int main(void){int n=2;int a[n];return 0;}",
+                vec!["--emit=ir"],
+                1,
+                false,
+            ),
+            (HELLO, vec!["--interpret"], 1, true),
+            (SUM, vec!["--emit=llvm"], 1, true),
+            (
+                SUM,
+                vec!["-c", "-o", missing_output.to_str().unwrap()],
+                1,
+                false,
+            ),
+            (
+                "int main(void){return 42;}",
+                vec!["--interpret", "--print-after-all"],
+                42,
+                false,
+            ),
+            ("int main(void){return 0;}", vec!["--interpret"], 0, false),
+            (
+                "void abort(void);int main(void){abort();}",
+                vec!["--interpret"],
+                134,
+                false,
+            ),
+        ] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command
+                .args(&flags)
+                .args(["--input", source])
+                .stderr(failing_stdio(&path));
+            if fail_stdout {
+                _ = command.stdout(failing_stdio(&path));
+            }
+            let output = command.output().unwrap();
+            assert_eq!(output.status.code(), Some(status), "{flags:?}: {source}");
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .arg("--interpret")
+            .arg(&missing_input)
+            .stderr(failing_stdio(&path))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "input file error");
         assert_eq!(std::fs::read(&path).unwrap(), b"unchanged");
         std::fs::remove_file(path).unwrap();
     }
