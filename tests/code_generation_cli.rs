@@ -39,6 +39,24 @@ mod tests {
     const SUM: &str = "int main(void) {\n  int s = 0;\n  for (int i = 1; i <= 4; i++)\n    s += \
                        i;\n  return s;\n}\n";
 
+    #[test]
+    fn poison_return_from_main_traps_like_exit() {
+        for ending in ["return x;", "exit(x);"] {
+            let source = format!("void exit(int); int main(void) {{ int x; {ending} }}\n");
+            for flags in [["--interpret", "--opt=none"], ["--interpret", "--opt=bcc"]] {
+                let output = bcc(&source, &flags);
+                assert_eq!(
+                    output.status.code(),
+                    Some(70),
+                    "{source}: {}",
+                    text(&output.stderr)
+                );
+                assert!(text(&output.stderr).contains("undefined behaviour"));
+                assert!(text(&output.stderr).contains("poison"));
+            }
+        }
+    }
+
     const HELLO: &str = "int printf(const char *, ...);\nint main(void) {\n  printf(\"%s %d\\n\", \
                          \"answer\", 42);\n  return 3;\n}\n";
 

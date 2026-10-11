@@ -324,6 +324,14 @@ fn interpret(module: &Module<'_>, target: Target) -> i32 {
                 reason = "`main` returns an `int`, held in the low 32 bits."
             )]
             | Termination::Returned(Some(RuntimeValue::Int(bits))) => bits as u32 as i32,
+            | Termination::Returned(Some(RuntimeValue::Poison)) => {
+                report_stderr(format_args!(
+                    "error: the interpreter stopped the program: undefined behaviour: {} (return \
+                     from main)",
+                    interpreter::UbKind::PoisonInHostCall
+                ));
+                TRAP_STATUS
+            },
             | Termination::Returned(_) => 0,
             | Termination::Exited(status) => status,
             | Termination::Aborted => ABORT_STATUS,
