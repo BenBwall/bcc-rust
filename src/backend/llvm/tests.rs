@@ -3,6 +3,7 @@
 
 mod clang;
 mod golden;
+mod pass_suppression;
 
 use super::*;
 use crate::ir::{
