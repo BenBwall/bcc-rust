@@ -141,8 +141,9 @@ int bcc_calls_clang(void) {
   struct L2 rl = c_l2(a, b);
   if (rl.a != 10 || rl.b != 21) return 2;
   struct D2 m = c_make_d2();
-  if (!c_check_d2(c_d2(m, m))) return 3;
-  if (!c_check_d2(c_d2_many(m, m, m, m, c_d2(m, m)))) return 4;
+  struct D2 n = { 4.25, 8.25 };
+  if (!c_check_d2(c_d2(m, n))) return 3;
+  if (!c_check_d2(c_d2_many(m, m, m, m, c_d2(m, n)))) return 4;
   if (!c_check_f3(c_f3(c_make_f3()))) return 5;
   if (!c_check_ld(c_ld(c_make_ld(), 3))) return 6;
   if (!c_check_cd(c_cd(c_make_cd()))) return 7;
@@ -151,7 +152,7 @@ int bcc_calls_clang(void) {
   if (rc3.c[0] != 2 || rc3.c[1] != 4 || rc3.c[2] != 6) return 8;
   struct Big x = { { 1, 2, 3, 4 } }, y = { { 10, 20, 30, 40 } };
   struct Big rb = c_big(x, y);
-  if (rb.v[0] != 11 || rb.v[3] != 44 || x.v[0] != 1) return 9;
+  if (rb.v[0] != 11 || rb.v[1] != 22 || rb.v[2] != 33 || rb.v[3] != 44 || x.v[0] != 1) return 9;
   struct L2 t = { 1, 2 };
   if (c_many(1, 1, 1, 1, 1, t, 3) != 32105) return 10;
   struct S2 s = { 41 };
@@ -167,8 +168,8 @@ int bcc_calls_clang(void) {
   if (c_q(q).q != 42) return 16;
   if (c_vsum(7, 1LL, 2LL, 3LL, 4LL, 5LL, 6LL, 7LL) != 28) return 17;
   if (m.x != 1.25 || m.y != 2.25) return 18;
-  struct D2 md = c_d2(m, m);
-  if (md.x != 3.5 || md.y != 3.5) return 19;
+  struct D2 md = c_d2(m, n);
+  if (md.x != 9.5 || md.y != 6.5) return 19;
   struct F3 f3 = c_f3(c_make_f3());
   if (f3.a != 3 || f3.b != 2 || f3.c != 1) return 20;
   struct LD ld = c_ld(c_make_ld(), 3);
@@ -182,7 +183,7 @@ int bcc_calls_clang(void) {
   struct BF bf = { 1, 2, -3 };
   struct BF rbf = c_bf(bf);
   if (rbf.a != 3 || rbf.b != 4 || rbf.c != -1003) return 26;
-  if (c_dsum(md, 0.5f, f3, 0.25) != 13.75) return 27;
+  if (c_dsum(md, 0.5f, f3, 0.25) != 22.75) return 27;
   return 0;
 }
 ";
@@ -220,7 +221,7 @@ struct L2 c_l2(struct L2 x, struct L2 y) { struct L2 r = { x.a * y.a, x.b * y.b 
 struct D2 c_make_d2(void) { struct D2 r = { 1.25, 2.25 }; return r; }
 struct D2 c_d2(struct D2 x, struct D2 y) { struct D2 r = { x.x + y.y, x.y + y.x }; return r; }
 struct D2 c_d2_many(struct D2 a, struct D2 b, struct D2 c, struct D2 d, struct D2 e) { return e; }
-int c_check_d2(struct D2 x) { return x.x == 3.5 && x.y == 3.5; }
+int c_check_d2(struct D2 x) { return x.x == 9.5 && x.y == 6.5; }
 struct F3 c_make_f3(void) { struct F3 r = { 1, 2, 3 }; return r; }
 struct F3 c_f3(struct F3 x) { struct F3 r = { x.c, x.b, x.a }; return r; }
 int c_check_f3(struct F3 x) { return x.a == 3 && x.b == 2 && x.c == 1; }
@@ -283,9 +284,9 @@ int main(void) {
   struct F3 f3 = { 1, 2, 3 };
   struct F3 rf3 = b_f3(f3);
   if (rf3.a != 6 || rf3.b != 3 || rf3.c != 1) return 15;
-  struct F4 f4a = { 1, 2, 3, 4 }, f4b = { 5, 6, 7, 8 };
+  struct F4 f4a = { 1, 2, 3, 4 }, f4b = { 5, 7, 11, 13 };
   struct F4 rf4 = b_f4(f4a, f4b);
-  if (rf4.a != 9 || rf4.b != 9 || rf4.c != 9 || rf4.d != 9) return 16;
+  if (rf4.a != 14 || rf4.b != 13 || rf4.c != 10 || rf4.d != 9) return 16;
   struct C3 c3 = { { 1, 2, 3 } };
   struct C3 rc3 = b_c3(c3);
   if (rc3.c[0] != 3 || rc3.c[1] != 2 || rc3.c[2] != 1) return 17;
@@ -305,7 +306,7 @@ int main(void) {
   if (rp.p != text + 1 || rp.n != 2) return 22;
   struct Big big = { { 1, 2, 3, 4 } };
   struct Big rb = b_big(big, 10);
-  if (rb.v[0] != 11 || rb.v[3] != 14 || big.v[0] != 1) return 23;
+  if (rb.v[0] != 11 || rb.v[1] != 12 || rb.v[2] != 13 || rb.v[3] != 14 || big.v[0] != 1) return 23;
   union U u;
   u.f = 2.5f;
   union U ru = b_u(u);
@@ -372,6 +373,79 @@ fn structures_cross_between_bcc_and_clang() {
         lower_abi(&mut module, target, &scratch).unwrap();
         assert_conforms("structures", target, &module, &format!("{TYPES}{CLANG}"));
     }
+}
+
+/// The exchange's actual checks must reject duplicated lanes, even when
+/// executed without a native runner. C99: §6.7.2.1 paragraph 13, p. 103;
+/// PDF p. 115 (structure members keep declaration order).
+#[test]
+fn structure_exchange_checks_reject_duplicated_lanes() {
+    let operation = BCC
+        .split("struct F4 b_f4")
+        .nth(1)
+        .unwrap()
+        .split("\nstruct C3")
+        .next()
+        .unwrap();
+    let check = CLANG
+        .split("  struct F4 f4a")
+        .nth(1)
+        .unwrap()
+        .split("\n  struct C3")
+        .next()
+        .unwrap();
+    for (to, from) in [('a', 'b'), ('b', 'c'), ('c', 'd'), ('d', 'c')] {
+        let mutated = operation.replace("return r;", &format!("r.{to} = r.{from}; return r;"));
+        assert_exchange_status(
+            &format!(
+                "{TYPES}struct F4 b_f4{mutated}\nint main(void) {{\n  struct F4 f4a{check}\n \
+                 return 0; }}"
+            ),
+            16,
+        );
+    }
+    let mut operations = String::new();
+    for prefix in [
+        "struct D2 c_make_d2(",
+        "struct D2 c_d2(",
+        "struct D2 c_d2_many(",
+        "int c_check_d2(",
+    ] {
+        let operation = CLANG.lines().find(|line| line.starts_with(prefix)).unwrap();
+        if prefix == "struct D2 c_d2(" {
+            operations.push_str(&operation.replace("return r;", "r.y = r.x; return r;"));
+        } else {
+            operations.push_str(operation);
+        }
+        operations.push('\n');
+    }
+    let check = BCC
+        .split("  struct D2 m =")
+        .nth(1)
+        .unwrap()
+        .split("\n  if (!c_check_f3")
+        .next()
+        .unwrap();
+    assert_exchange_status(
+        &format!("{TYPES}{operations}\nint main(void) {{\n  struct D2 m ={check}\n return 0; }}"),
+        3,
+    );
+}
+
+fn assert_exchange_status(source: &str, expected: u128) {
+    let tu = Bump::new();
+    let arena = Bump::new();
+    let module = lower_c(&tu, &arena, source, Target::LinuxGnu);
+    let scratch = Bump::new();
+    let mut host = crate::backend::interpreter::DefaultHost::new_in(&scratch);
+    let result = crate::backend::interpreter::run(&module, "main", &[], &mut host);
+    assert!(
+        matches!(result, Ok(crate::backend::interpreter::Outcome {
+        termination: crate::backend::interpreter::Termination::Returned(Some(
+            crate::backend::interpreter::RuntimeValue::Int(value))), ..
+    }) if value == expected),
+        "duplicated lane escaped the exchange check: {result:?}"
+    );
 }
 
 /// The bcc side of the narrow integer exchange: functions Clang calls,
