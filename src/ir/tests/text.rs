@@ -335,3 +335,31 @@ fn parse_errors_carry_structured_kinds() {
         }
     );
 }
+
+#[test]
+fn inline_value_definition_reports_its_position() {
+    let arena = Bump::new();
+    let error = parse_module(
+        &arena,
+        "function @f() -> i32 external {\nblock0: v0 = iconst.i32 0\nreturn v0\n}",
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "2:9: expected a definition at the start of a line, found `v0`"
+    );
+}
+
+#[test]
+fn inline_slot_definition_reports_its_position() {
+    let arena = Bump::new();
+    let error = parse_module(
+        &arena,
+        "function @f() external {\nblock0: slot0 = stack_slot 4, align 4\nreturn\n}",
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "2:9: expected a definition at the start of a line, found `slot0`"
+    );
+}

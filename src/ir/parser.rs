@@ -349,6 +349,8 @@ fn parse_body<'t>(
                 _ = body.cursor.next();
                 break;
             },
+            | TokenKind::Slot(_) | TokenKind::Value(_) if !token.line_start =>
+                return Err(token.expected("a definition at the start of a line")),
             | TokenKind::Slot(_) => body.stack_slot()?,
             | TokenKind::Block(_) => body.block_header()?,
             | TokenKind::Value(_) => {
@@ -377,7 +379,8 @@ impl Definitions {
     /// Scans a body's tokens for definitions, checking that each kind is
     /// numbered from 0 without gaps or repeats. A block is defined by its
     /// header, a value by `vN =` at the start of a line or `vN:` in a block
-    /// header, and a slot by `slotN =`.
+    /// header, and a slot by `slotN =` at the start of a line. Body parsing
+    /// enforces the same line boundary for named instructions and slots.
     fn scan<'t>(cursor: &Cursor<'_, 't>, scratch: &Bump) -> Result<Self, ParseError<'t>> {
         let end = cursor.tokens[cursor.pos..]
             .iter()
