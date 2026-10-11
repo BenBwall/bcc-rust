@@ -32,7 +32,7 @@ use crate::{
             OptLevel,
             OutputKind,
             Toolchain,
-            emit_module,
+            compile_module,
         },
     },
     configuration::CompilerConfiguration,
@@ -323,7 +323,7 @@ fn llvm_arms_match_the_interpreter() {
         eprintln!("skipping: the host is not a supported target");
         return;
     };
-    let toolchain = match Toolchain::bundled(target) {
+    let _toolchain = match Toolchain::bundled(target) {
         | Ok(toolchain) => toolchain,
         | Err(error) => {
             eprintln!("skipping: {error}");
@@ -338,28 +338,13 @@ fn llvm_arms_match_the_interpreter() {
     for name in names {
         let source = program(name).source;
         for arm in ARMS {
-            let (expected, ll) = with_module(
-                source,
-                target,
-                arm.bcc,
-                Profile::PostAbi,
-                |module, target| {
-                    let mut text = String::new();
-                    emit_module(module, target, &mut text)
-                        .unwrap_or_else(|error| panic!("{name} {}: {error}", arm.name));
-                    (interpret(module, target), text)
-                },
-            );
-            let path = directory.join(format!("{name}-{}.ll", arm.name));
-            std::fs::write(&path, ll).unwrap();
-            runs.push((name, arm, expected, path));
+            runs.push((name, arm, source));
         }
     }
     thread::scope(|scope| {
         let handles: Vec<_> = runs
             .iter()
-            .map(|(name, arm, expected, ll)| {
-                let toolchain = &toolchain;
+            .map(|(name, arm, source)| {
                 let directory = &directory;
                 scope.spawn(move || {
                     let executable = directory.join(format!("{name}-{}.exe", arm.name));
@@ -369,16 +354,24 @@ fn llvm_arms_match_the_interpreter() {
                         target,
                         kind: OutputKind::Executable,
                     };
-                    toolchain
-                        .compile_ll(ll, &executable, options)
-                        .unwrap_or_else(|error| panic!("{name} {}: {error}", arm.name));
+                    let expected = with_module(
+                        source,
+                        target,
+                        arm.bcc,
+                        Profile::PostAbi,
+                        |module, target| {
+                            compile_module(module, &executable, options)
+                                .unwrap_or_else(|error| panic!("{name} {}: {error}", arm.name));
+                            interpret(module, target)
+                        },
+                    );
                     (name, arm, expected, run_native(&executable))
                 })
             })
             .collect();
         for handle in handles {
             let (name, arm, expected, actual) = handle.join().unwrap();
-            assert_eq!(&actual, expected, "{name} {}", arm.name);
+            assert_eq!(actual, expected, "{name} {}", arm.name);
             assert_eq!(actual.0, program(name).expected, "{name} {}", arm.name);
         }
     });

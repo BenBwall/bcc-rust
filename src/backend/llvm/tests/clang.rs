@@ -1,6 +1,6 @@
 //! Tests that run the bundled clang: it accepts every golden module, its
 //! data layouts match ours, and small programs compile, link and run under
-//! both the `-O2` and the `-O2 -Xclang -disable-llvm-passes` arm.
+//! both the `-O2` and the O2 code generation without IR passes arm.
 //!
 //! Each clang run costs about 0.4 s, so each test runs its clang processes
 //! side by side, and the test harness runs the tests side by side. Without
@@ -31,7 +31,7 @@ fn toolchain(target: Target) -> Option<Toolchain> {
 }
 
 #[test]
-fn clang_accepts_every_golden_module() {
+fn llvm_emits_every_golden_module() {
     let target = Target::LinuxGnu;
     if toolchain(target).is_none() {
         return;
@@ -47,10 +47,12 @@ fn clang_accepts_every_golden_module() {
         let runs: Vec<_> = GOLDENS
             .iter()
             .map(|golden| {
-                let ll = directory.join(format!("{}.ll", golden.name));
-                std::fs::write(&ll, golden.emit()).unwrap();
                 let object = directory.join(format!("{}.o", golden.name));
-                scope.spawn(move || (golden.name, compile_ll(&ll, &object, options)))
+                scope.spawn(move || {
+                    let arena = Bump::new();
+                    let module = parse_module(&arena, golden.input).unwrap();
+                    (golden.name, compile_module(&module, &object, options))
+                })
             })
             .collect();
         for run in runs {
@@ -74,7 +76,7 @@ fn command_lines_follow_the_options() {
             target: Target::LinuxGnu,
             kind,
         };
-        let command = toolchain.command(Path::new("in.ll"), Path::new("out"), options);
+        let command = toolchain.command(Path::new("in.o"), Path::new("out"), options);
         command
             .get_args()
             .map(|argument| argument.to_str().unwrap().to_string())
@@ -82,19 +84,10 @@ fn command_lines_follow_the_options() {
             .join(" ")
     };
     let target = "--target=x86_64-unknown-linux-gnu";
-    assert_eq!(
-        arguments(None, false, OutputKind::Object),
-        format!("{target} -c -x ir in.ll -o out")
-    );
-    for (level, flag) in [
-        (OptLevel::O0, "-O0"),
-        (OptLevel::O1, "-O1"),
-        (OptLevel::O2, "-O2"),
-        (OptLevel::O3, "-O3"),
-    ] {
+    for level in [OptLevel::O0, OptLevel::O1, OptLevel::O2, OptLevel::O3] {
         assert_eq!(
             arguments(Some(level), true, OutputKind::Executable),
-            format!("{target} {flag} -Xclang -disable-llvm-passes -fuse-ld=lld -x ir in.ll -o out")
+            format!("{target} {} -fuse-ld=lld in.o -o out", level.flag())
         );
     }
 }
@@ -175,8 +168,8 @@ fn host() -> Option<Target> {
     }
 }
 
-/// Compiles `program` for the host under the A2 (`-O2`) and A1 (`-O2
-/// -Xclang -disable-llvm-passes`) arms, runs both executables, and checks
+/// Compiles `program` for the host under the A2 (`-O2`) and A1 (O2 code
+/// generation without IR passes) arms, runs both executables, and checks
 /// the exit status and the standard output (with Windows line ends made
 /// plain).
 fn assert_runs(name: &str, program: &str, status: i32, stdout: &str) {
@@ -184,12 +177,11 @@ fn assert_runs(name: &str, program: &str, status: i32, stdout: &str) {
         eprintln!("skipping: the host is not a supported target");
         return;
     };
-    let Some(toolchain) = toolchain(target) else {
+    let Some(_toolchain) = toolchain(target) else {
         return;
     };
     let directory = TempDir::new("llvm-run");
-    let ll = directory.join(format!("{name}.ll"));
-    std::fs::write(&ll, emit(program, Profile::PostAbi, target)).unwrap();
+
     thread::scope(|scope| {
         let runs: Vec<_> = [false, true]
             .into_iter()
@@ -202,10 +194,11 @@ fn assert_runs(name: &str, program: &str, status: i32, stdout: &str) {
                 };
                 let suffix = if disable_llvm_passes { "a1" } else { "a2" };
                 let executable = directory.join(format!("{name}-{suffix}.exe"));
-                let (toolchain, ll) = (&toolchain, &ll);
+
                 scope.spawn(move || {
-                    toolchain
-                        .compile_ll(ll, &executable, options)
+                    let arena = Bump::new();
+                    let module = parse_module(&arena, program).unwrap();
+                    compile_module(&module, &executable, options)
                         .unwrap_or_else(|error| panic!("{name} {suffix}: {error}"));
                     (suffix, run(&executable))
                 })
@@ -367,4 +360,47 @@ block0:
         42,
         "",
     );
+}
+
+#[test]
+fn objects_and_assembly_are_emitted_in_memory() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let arena = Bump::new();
+        let module = parse_module(
+            &arena,
+            "function @answer() -> i32 external {\nblock0:\n v0 = iconst.i32 42\n return v0\n}\n",
+        )
+        .unwrap();
+        for assembly in [false, true] {
+            let scratch = Bump::new();
+            let api = Session::new(&scratch, target);
+            build_module(&module, target, &api, &scratch).unwrap();
+            let buffer = api
+                .emit(target, Some(OptLevel::O2), true, assembly)
+                .unwrap();
+            if assembly {
+                assert!(
+                    std::str::from_utf8(buffer.bytes())
+                        .unwrap()
+                        .contains("answer")
+                );
+            } else if target == Target::LinuxGnu {
+                assert!(buffer.bytes().starts_with(b"\x7fELF"));
+            } else {
+                assert!(buffer.bytes().starts_with(&[0x64, 0x86]));
+            }
+        }
+    }
+}
+
+#[test]
+fn constant_arithmetic_retains_poison_flags_without_ir_passes() {
+    let text = emit(
+        "function @overflow() -> i8 external {\nblock0:\n v0 = iconst.i8 127\n v1 = iconst.i8 1\n \
+         v2 = iadd.i8 nsw nuw v0, v1\n return v2\n}\n",
+        Profile::PostAbi,
+        Target::LinuxGnu,
+    );
+    assert!(text.contains("add nuw nsw i8 127, 1"), "{text}");
+    assert!(!text.contains("phi"), "{text}");
 }

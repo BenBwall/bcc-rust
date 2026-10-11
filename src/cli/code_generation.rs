@@ -206,11 +206,11 @@ pub(super) struct CodeGeneration {
     /// --opt=bcc).
     #[arg(long, requires = "back_end")]
     pub(super) print_after_all:   bool,
-    /// Select clang's optimization level for -o; none uses clang's default.
+    /// Select the LLVM IR pipeline and code generation level; none means O0.
     #[arg(long, value_enum, default_value = "none", requires = "back_end")]
     pub(super) llvm_opt:          LlvmOpt,
     /// Run no LLVM IR pass, only the code generator at the --llvm-opt
-    /// level (`-Xclang -disable-llvm-passes`).
+    /// level.
     #[arg(long, requires = "back_end")]
     pub(super) llvm_codegen_only: bool,
 }
@@ -235,10 +235,10 @@ pub(super) enum MiddleEnd {
     Bcc,
 }
 
-/// Clang's optimization level, from `--llvm-opt`.
+/// LLVM's optimization level, from `--llvm-opt`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
 pub(super) enum LlvmOpt {
-    /// No `-O` flag: clang's default.
+    /// The default O0 pipeline and code generation.
     None,
     #[value(name = "O0")]
     O0,
@@ -283,7 +283,7 @@ impl CodeGeneration {
         })
     }
 
-    /// How clang compiles the LLVM IR for `target`.
+    /// LLVM IR passes and code generation for `target`.
     fn llvm_options(&self, target: Target) -> LlvmOptions {
         LlvmOptions {
             opt: match self.llvm_opt {
@@ -362,26 +362,9 @@ fn print_stdout(text: fmt::Arguments<'_>) -> i32 {
     0
 }
 
-/// Writes the module's LLVM IR to a temporary file and has the bundled
-/// clang build `output` from it.
-#[expect(
-    clippy::disallowed_types,
-    clippy::disallowed_macros,
-    clippy::disallowed_methods,
-    reason = "Tooling around the compiler: it names one temporary file per clang run, outside the \
-              arena-allocated compile path."
-)]
+/// Emits an object in-process and links an executable when requested.
 fn build(module: &Module<'_>, target: Target, output: &Path, options: &CodeGeneration) -> i32 {
-    let arena = Bump::new();
-    let mut text = ArenaString::new_in(&arena);
-    if let Err(error) = llvm::emit_module(module, target, &mut text) {
-        eprintln!("error: {error}");
-        return FAILURE_STATUS;
-    }
-    let ll: PathBuf = std::env::temp_dir().join(format!("bcc-{}.ll", std::process::id()));
-    let result = std::fs::write(&ll, text.as_bytes())
-        .and_then(|()| llvm::compile_ll(&ll, output, options.llvm_options(target)));
-    drop(std::fs::remove_file(&ll));
+    let result = llvm::compile_module(module, output, options.llvm_options(target));
     match result {
         | Ok(()) => 0,
         | Err(error) => {

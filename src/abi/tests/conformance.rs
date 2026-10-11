@@ -26,6 +26,7 @@ use crate::{
         OptLevel,
         OutputKind,
         Toolchain,
+        compile_module,
         emit_module,
     },
     ir::parse_module,
@@ -361,25 +362,15 @@ void *memset(void *to, int byte, unsigned long n) {
 fn structures_cross_between_bcc_and_clang() {
     for target in [Target::WindowsGnu, Target::LinuxGnu] {
         let source = format!("{TYPES}{BCC}");
-        let ll = |arena: &Bump| -> String {
-            let tu = Bump::new();
-            let mut module = lower_c(&tu, arena, &source, target);
-            let scratch = Bump::new();
-            let mut options = OptimizerOptions::default();
-            options.verify_each = true;
-            _ = optimize(&mut module, &options, &scratch);
-            lower_abi(&mut module, target, &scratch).unwrap();
-            let mut text = String::new();
-            emit_module(&module, target, &mut text).unwrap();
-            text
-        };
         let arena = Bump::new();
-        assert_conforms(
-            "structures",
-            target,
-            &ll(&arena),
-            &format!("{TYPES}{CLANG}"),
-        );
+        let tu = Bump::new();
+        let mut module = lower_c(&tu, &arena, &source, target);
+        let scratch = Bump::new();
+        let mut options = OptimizerOptions::default();
+        options.verify_each = true;
+        _ = optimize(&mut module, &options, &scratch);
+        lower_abi(&mut module, target, &scratch).unwrap();
+        assert_conforms("structures", target, &module, &format!("{TYPES}{CLANG}"));
     }
 }
 
@@ -503,7 +494,7 @@ fn narrow_integers_cross_between_bcc_and_clang() {
         assert_verified(&module, Profile::PostAbi, &module.to_string());
         let mut text = String::new();
         emit_module(&module, target, &mut text).unwrap();
-        assert_conforms("narrow", target, &text, NARROW_CLANG);
+        assert_conforms("narrow", target, &module, NARROW_CLANG);
     }
 }
 
@@ -563,14 +554,14 @@ int main(void) {
         assert_verified(&module, Profile::PostAbi, &module.to_string());
         let mut text = String::new();
         emit_module(&module, target, &mut text).unwrap();
-        assert_conforms("varargs", target, &text, clang);
+        assert_conforms("varargs", target, &module, clang);
     }
 }
 
 /// Builds the bcc LLVM IR `ll` and the Clang C source `c` into one
 /// executable for `target` at `-O0` and `-O2`, runs each, and asserts that
 /// it exits with 0.
-fn assert_conforms(name: &str, target: Target, ll: &str, c: &str) {
+fn assert_conforms(name: &str, target: Target, module: &Module<'_>, c: &str) {
     let Some(runner) = Runner::for_target(target) else {
         return;
     };
@@ -582,8 +573,9 @@ fn assert_conforms(name: &str, target: Target, ll: &str, c: &str) {
         },
     };
     let directory = TempDir::new("abi-conformance");
-    let ll_path = directory.join(format!("{name}.ll"));
-    std::fs::write(&ll_path, ll).unwrap();
+    let object = directory.join(format!("{name}.o"));
+    let mut ll = String::new();
+    emit_module(module, target, &mut ll).unwrap();
     let c_path = directory.join(format!("{name}-clang.c"));
     let c = match runner {
         | Runner::Native => c.to_string(),
@@ -598,7 +590,16 @@ fn assert_conforms(name: &str, target: Target, ll: &str, c: &str) {
             target,
             kind: OutputKind::Executable,
         };
-        let mut command = toolchain.command(&ll_path, &executable, options);
+        compile_module(
+            module,
+            &object,
+            LlvmOptions {
+                kind: OutputKind::Object,
+                ..options
+            },
+        )
+        .unwrap();
+        let mut command = toolchain.command(&object, &executable, options);
         _ = command.args(["-x", "c"]).arg(&c_path);
         if runner == Runner::Wsl {
             _ = command.args([
@@ -736,7 +737,7 @@ int main(void) {
         if target != Target::LinuxGnu {
             assert!(text.contains("<2 x i64> @b_inc(ptr"), "{text}");
         }
-        assert_conforms("wide-scalars", target, &text, clang);
+        assert_conforms("wide-scalars", target, &module, clang);
     }
 }
 
@@ -777,7 +778,7 @@ int main(void) {
         lower_abi(&mut module, target, &Bump::new()).unwrap();
         let mut text = String::new();
         emit_module(&module, target, &mut text).unwrap();
-        assert_conforms("quad", target, &text, &format!("{types}{clang}"));
+        assert_conforms("quad", target, &module, &format!("{types}{clang}"));
     }
 }
 
@@ -797,5 +798,5 @@ fn review_wide_variadic_arguments_cross_from_clang() {
         writeln!(clang, "if (b_wide({count}, {})) return 1;", args.join(", ")).unwrap();
     }
     clang.push_str("return 0; }\n");
-    assert_conforms("wide-varargs", Target::LinuxGnu, &text, &clang);
+    assert_conforms("wide-varargs", Target::LinuxGnu, &module, &clang);
 }

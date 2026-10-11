@@ -1,94 +1,45 @@
-//! The LLVM back end: prints a post-ABI module as LLVM IR text for the pinned
-//! LLVM 23.1.1, and hands that text to the bundled clang, which verifies it,
-//! optionally optimizes it, generates code and links.
+//! LLVM-C back end for the post-ABI IR. `build_module` creates globals,
+//! declarations, blocks and phis, then instructions and phi incoming edges.
+//! `emit_module` prints that in-memory module; `compile_module` verifies it,
+//! runs the selected new-pass-manager pipeline and emits an object in memory.
+//! Only final executable linking starts the bundled clang/LLD driver.
 //!
-//! [`emit_module`] writes the target lines, each global, each function, and
-//! last the declarations of the intrinsics the functions used. The mapping is
-//! mechanical:
-//!
-//! - Each block parameter becomes a `phi` at the start of its block, with one
-//!   incoming entry per edge into the block. LLVM wants an entry for every
-//!   edge, so two edges from one terminator give two identical entries (the IR
-//!   verifier makes their arguments equal). Blocks unreachable from the entry
-//!   block are not printed, so every printed `phi` has an entry.
-//! - Constants (`iconst`, `fconst`, `poison`, `null`) and the addresses of
-//!   stack slots, globals and functions are not instructions in LLVM; they are
-//!   printed in place at each use. Stack slots become `alloca [N x i8]` at the
-//!   top of the entry block.
-//! - `ptr_add` is `getelementptr [inbounds] i8`; `nsw`, `nuw` and `exact` map
-//!   one to one; `copy` calls `llvm.memcpy`, or `llvm.memmove` when it
-//!   `may_overlap`, and `fill` calls `llvm.memset`; the `va_*` operations call
-//!   `llvm.va_start`, `llvm.va_copy` and `llvm.va_end`, and `va_arg` is LLVM's
-//!   `va_arg`.
-//! - Aggregate parameters print as ABI lowering decided: `byval` and `sret`
-//!   become `ptr byval([N x i8]) align A` and `ptr sret([N x i8]) align A`, on
-//!   parameters and call arguments alike. A `registers` return area is not a
-//!   parameter: the function returns the registers (`{ i64, double }` or one
-//!   type), its entry block allocates the area under the parameter's name, and
-//!   `return` loads the registers from it; a call names its result `%instN.ret`
-//!   and stores it to the area the IR passes. A module that still uses a
-//!   pre-ABI aggregate signature is refused.
-//! - Extended narrow integers print as ABI lowering decided, the way Clang
-//!   prints them: a parameter or argument as `i8 noundef signext` or `i16
-//!   noundef zeroext`, a result as `signext i8` before the function's or the
-//!   call's result type. A module that still records C signedness (`signed`,
-//!   `unsigned`, `bool`) is refused like a pre-ABI aggregate.
-//! - A global's contents are `[N x i8]`, or, when it holds address constants, a
-//!   packed struct `<{ [k x i8], ptr, ... }>` that alternates byte runs with
-//!   the relocated pointers (`getelementptr (i8, ptr @sym, i64 addend)` when
-//!   the addend is not zero), so a relocation may sit at any offset.
-//! - Values print as `%v3`, blocks as `%block2` and stack slots as `%slot0`,
-//!   the numbers of the bcc IR text, so the two texts line up.
-//!
-//! Access tags are not printed yet: the module has no descriptor table to
-//! build `!tbaa` metadata from.
-//!
-//! The driver helpers in `driver.rs` run clang on a `.ll` file. The
-//! comparison arms of `middle-end.md` map onto [`LlvmOptions`] like this:
-//!
-//! | Arm | Middle end | `opt` | `disable_llvm_passes` |
-//! | --- | --- | --- | --- |
-//! | A0 | none | `Some(OptLevel::O0)` | `false` |
-//! | A1 | bcc pipeline | `Some(OptLevel::O2)` | `true` |
-//! | A2 | none | `Some(OptLevel::O2)` | `false` |
-//! | A3 | bcc pipeline | `Some(OptLevel::O2)` | `false` |
-//!
-//! Read [`emit_module`] first, then `function.rs` for bodies and `global.rs`
-//! for initializers.
-//!
-//! - Printing: `function.rs` prints declarations and bodies; `global.rs` prints
-//!   globals and their relocations; `syntax.rs` spells types, names and
-//!   constants; `target.rs` holds each target's data layout.
-//! - Running clang: `driver.rs` finds the toolchain and builds the command.
-//! - `tests.rs` and `tests/` hold golden, validity and execution tests.
+//! Read `function.rs` for instruction mapping, `global.rs` for relocations,
+//! `api.rs` for scoped LLVM ownership and `driver.rs` for object/link output.
+//! LLVM allocates its own C++ storage; all Rust compilation scratch is arena
+//! allocated. Owners live on the stack and are never placed in an arena.
 
-// Printing
+// LLVM construction
+mod api;
 mod function;
 mod global;
-mod syntax;
 mod target;
 
-// Running clang
+// Host output/link tooling
 #[expect(
     clippy::disallowed_types,
     clippy::disallowed_methods,
-    reason = "Tooling around the compiler: it reads the environment, builds paths and reads \
-              clang's output once per clang run, outside the arena-allocated compile path."
+    reason = "Host tooling reads environment, builds paths and captures the link driver output."
 )]
 mod driver;
 
 use std::fmt;
 
-use bitflags::bitflags;
+use api::{
+    Session,
+    Val,
+};
+#[cfg(test)]
+pub(crate) use driver::ClangError;
 pub(crate) use driver::{
-    ClangError,
     LlvmOptions,
     OptLevel,
     OutputKind,
     Toolchain,
-    compile_ll,
+    compile_module,
 };
-pub(crate) use target::data_layout;
+#[cfg(test)]
+use target::data_layout;
 
 use crate::{
     ir::{
@@ -98,17 +49,30 @@ use crate::{
         SigId,
     },
     target::Target,
-    util::bump::Bump,
+    util::bump::{
+        ArenaVec,
+        Bump,
+    },
 };
 
-/// Writes `module` as an LLVM IR module for `target`.
-///
-/// The module must pass the IR verifier. If it names a target, that must be
-/// `target`; the printed triple and data layout always come from `target`.
+/// Prints the LLVM-C module, after checking the ABI and target contracts.
 pub(crate) fn emit_module<'m>(
     module: &'m Module<'_>,
     target: Target,
     out: &mut dyn fmt::Write,
+) -> Result<(), EmitError<'m>> {
+    let arena = Bump::new();
+    let api = Session::new(&arena, target);
+    build_module(module, target, &api, &arena)?;
+    out.write_str(api.print().text())?;
+    Ok(())
+}
+
+fn build_module<'m>(
+    module: &'m Module<'_>,
+    target: Target,
+    api: &Session<'_>,
+    arena: &Bump,
 ) -> Result<(), EmitError<'m>> {
     if !module.triple().is_empty() && Target::parse(module.triple()) != Some(target) {
         return Err(EmitError::TargetMismatch {
@@ -119,37 +83,67 @@ pub(crate) fn emit_module<'m>(
     if uses_pre_abi_signature(module) {
         return Err(EmitError::NotAbiLowered);
     }
-    let mut emitter = Emitter {
-        module,
-        out,
-        intrinsics: Intrinsics::empty(),
-    };
-    writeln!(
-        emitter.out,
-        "target datalayout = \"{}\"",
-        data_layout(target)
-    )?;
-    writeln!(emitter.out, "target triple = \"{}\"", target.triple())?;
-    let mut scratch = Bump::new();
-    if module.globals().next().is_some() {
-        emitter.out.write_char('\n')?;
-        for (global, _) in module.globals() {
-            scratch.reset();
-            emitter.global(global, &scratch)?;
+    // The C API's builders require well-typed operands. Validate the arena IR
+    // at this safe boundary before making any construction call into LLVM.
+    // Handwritten scalar test modules may retain a native LLVM va_arg, which
+    // belongs to the pre-ABI profile; aggregate/extension signatures above
+    // must still already be lowered.
+    let errors = crate::ir::verify_module(module, crate::ir::Profile::PostAbi, arena);
+    if !errors.is_empty()
+        && !crate::ir::verify_module(module, crate::ir::Profile::PreAbi, arena).is_empty()
+    {
+        return Err(EmitError::InvalidIr);
+    }
+    let mut functions = ArenaVec::new_in(arena);
+    for (_, function) in module.functions() {
+        let signature = module.signature(function.signature);
+        let value = api.function(
+            api.name(function.name),
+            function::signature_type(api, signature, arena),
+        );
+        function::attributes(api, value, signature, false);
+        if function.body.is_some() && function.linkage == crate::ir::Linkage::Internal {
+            api.internal(value);
         }
+        functions.push(value);
     }
-    for (func, _) in module.functions() {
-        emitter.out.write_char('\n')?;
-        scratch.reset();
-        emitter.function(func, &scratch)?;
+    let mut globals = ArenaVec::new_in(arena);
+    // Declare every global before constructing any relocated initializer.
+    for (_, global) in module.globals() {
+        let ty = global::global_type(api, global, arena)?;
+        let value = api.global(api.name(global.name), ty);
+        api.alignment(value, global.align.bytes());
+        api.constant_global(value, global.constant);
+        if global.init.is_some() && global.linkage == crate::ir::Linkage::Internal {
+            api.internal(value);
+        }
+        globals.push(value);
     }
-    emitter.intrinsic_declarations()?;
+    let emitter = Emitter {
+        module,
+        api,
+        arena,
+        functions: &functions,
+        globals: &globals,
+    };
+    for (id, _) in module.globals() {
+        emitter.global(id)?;
+    }
+    for (id, _) in module.functions() {
+        emitter.function(id)?;
+    }
+    api.verify()?;
     Ok(())
 }
 
-/// Whether a function or an indirect call uses a signature that still
-/// passes structures or narrow integers the pre-ABI way. ABI lowering
-/// leaves the signatures it replaced interned, so only those in use count.
+struct Emitter<'a, 'm, 'ir> {
+    module:    &'m Module<'ir>,
+    api:       &'a Session<'a>,
+    arena:     &'a Bump,
+    functions: &'a [Val<'a>],
+    globals:   &'a [Val<'a>],
+}
+
 fn uses_pre_abi_signature(module: &Module<'_>) -> bool {
     let pre_abi = |sig: SigId| {
         let signature = module.signature(sig);
@@ -177,69 +171,13 @@ fn uses_pre_abi_signature(module: &Module<'_>) -> bool {
     })
 }
 
-/// The printer's state: the module, the output, and the intrinsics used so
-/// far, whose declarations follow the functions.
-struct Emitter<'a, 'm, 'ir> {
-    module:     &'m Module<'ir>,
-    out:        &'a mut dyn fmt::Write,
-    intrinsics: Intrinsics,
-}
-
-bitflags! {
-    /// The LLVM intrinsics a module calls.
-    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-    struct Intrinsics: u8 {
-        const MEMCPY = 1 << 0;
-        const MEMMOVE = 1 << 1;
-        const MEMSET = 1 << 2;
-        const VA_START = 1 << 3;
-        const VA_COPY = 1 << 4;
-        const VA_END = 1 << 5;
-    }
-}
-
-impl Intrinsics {
-    /// Each intrinsic with its declaration, in printing order.
-    const DECLARATIONS: [(Self, &'static str); 6] = [
-        (
-            Self::MEMCPY,
-            "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)",
-        ),
-        (
-            Self::MEMMOVE,
-            "declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1 immarg)",
-        ),
-        (
-            Self::MEMSET,
-            "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)",
-        ),
-        (Self::VA_START, "declare void @llvm.va_start.p0(ptr)"),
-        (Self::VA_COPY, "declare void @llvm.va_copy.p0(ptr, ptr)"),
-        (Self::VA_END, "declare void @llvm.va_end.p0(ptr)"),
-    ];
-}
-
-impl Emitter<'_, '_, '_> {
-    /// Declares every intrinsic the module used, after a blank line.
-    fn intrinsic_declarations(&mut self) -> fmt::Result {
-        if self.intrinsics.is_empty() {
-            return Ok(());
-        }
-        self.out.write_char('\n')?;
-        for (intrinsic, declaration) in Intrinsics::DECLARATIONS {
-            if self.intrinsics.contains(intrinsic) {
-                writeln!(self.out, "{declaration}")?;
-            }
-        }
-        Ok(())
-    }
-}
-
 /// Why a module could not be printed as LLVM IR.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, thiserror::Error)]
+#[derive(PartialEq, Eq, Debug, thiserror::Error)]
 pub(crate) enum EmitError<'m> {
     #[error("the output refused the LLVM IR text")]
     Format(#[from] fmt::Error),
+    #[error("LLVM: {0}")]
+    Llvm(#[from] api::Message),
     #[error("the module targets {module}, but LLVM IR was requested for {requested}")]
     TargetMismatch {
         module:    &'m str,
@@ -250,6 +188,8 @@ pub(crate) enum EmitError<'m> {
     /// convention.
     #[error("the module passes structures or narrow integers as before ABI lowering")]
     NotAbiLowered,
+    #[error("the input module does not verify as bcc IR")]
+    InvalidIr,
     /// Two relocations of a global share bytes; the verifier only checks
     /// that each fits.
     #[error("@{global}: the relocations at offsets {first} and {second} overlap")]

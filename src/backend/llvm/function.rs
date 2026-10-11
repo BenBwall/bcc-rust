@@ -1,16 +1,21 @@
-//! Functions: declarations, and bodies with their phis, allocas and
-//! instructions.
+//! Direct post-ABI instruction construction. Blocks retain layout order;
+//! instructions are built in reverse postorder so dominating values exist.
+use std::fmt::Write as _;
 
-use std::fmt;
+use llvm_sys::{
+    LLVMIntPredicate,
+    LLVMOpcode,
+    LLVMRealPredicate,
+};
 
 use super::{
+    EmitError,
     Emitter,
-    Intrinsics,
-    syntax::{
-        float,
-        int,
-        symbol,
-        type_name,
+    api::{
+        self,
+        Session,
+        Ty,
+        Val,
     },
 };
 use crate::{
@@ -18,569 +23,483 @@ use crate::{
         Block,
         BlockCall,
         Body,
+        ControlFlowGraph,
+        DominatorTree,
         Entity,
         Extension,
+        FloatCC,
         FuncId,
         Inst,
         InstData,
         InstFlags,
-        Linkage,
-        Module,
+        IntCC,
         Opcode,
         ParamAbi,
         ResultRegisters,
         Signature,
         Type,
         Value,
-        ValueDef,
     },
     util::bump::{
+        ArenaString,
         ArenaVec,
         Bump,
     },
 };
 
-impl Emitter<'_, '_, '_> {
-    /// Prints a function: a `declare` line for one without a body, else its
-    /// `define` with every block reachable from the entry block.
-    ///
-    /// A definition is `dso_local` or `internal`, as for globals. A
-    /// declaration is always external, since LLVM has no internal
-    /// declarations.
-    pub(super) fn function(&mut self, func: FuncId, scratch: &Bump) -> fmt::Result {
-        let module = self.module;
-        let function = module.function(func);
-        let signature = module.signature(function.signature);
-        let result = result_type(signature);
-        let result_attributes = result_attributes(signature);
-        let name = symbol(function.name);
+impl<'m> Emitter<'_, 'm, '_> {
+    pub(super) fn function(&self, id: FuncId) -> Result<(), EmitError<'m>> {
+        let function = self.module.function(id);
         let Some(body) = &function.body else {
-            return writeln!(
-                self.out,
-                "declare {result_attributes}{result} {name}{}",
-                parameter_types(signature, true)
-            );
+            return Ok(());
         };
-        let linkage = match function.linkage {
-            | Linkage::External => "dso_local",
-            | Linkage::Internal => "internal",
-        };
-        write!(
-            self.out,
-            "define {linkage} {result_attributes}{result} {name}("
-        )?;
-        let entry = body.entry_block().ok_or(fmt::Error)?;
-        let mut separator = "";
-        for (index, &param) in body.block_params(entry).iter().enumerate() {
-            if !passed(signature, index) {
-                continue;
-            }
-            write!(
-                self.out,
-                "{separator}{}{}{} %{param}",
-                type_name(body.value_type(param)),
-                attributes(signature.param_abi(index)),
-                extension_attributes(signature.param_extension(index))
-            )?;
-            separator = ", ";
-        }
-        if signature.variadic {
-            write!(self.out, "{separator}...")?;
-        }
-        self.out.write_str(") {\n")?;
-        let mut printer = BodyPrinter {
-            out: &mut *self.out,
-            intrinsics: &mut self.intrinsics,
-            values: Values { module, body },
-            edges: IncomingEdges::compute(body, scratch),
-            signature,
-        };
+        let api = self.api;
+        let signature = self.module.signature(function.signature);
+        let entry = body.entry_block().ok_or(std::fmt::Error)?;
+        let edges = IncomingEdges::compute(body, self.arena);
+        let mut blocks = ArenaVec::new_in(self.arena);
+        blocks.resize(body.block_count(), None);
         for block in body.blocks() {
-            if printer.edges.reachable[block.index()] {
-                printer.block(block)?;
+            if edges.reachable[block.index()] {
+                blocks[block.index()] = Some(api.block(
+                    self.functions[id.index()],
+                    api.name(&named(block, self.arena)),
+                ));
             }
         }
-        self.out.write_str("}\n")
-    }
-}
-
-/// `(i32, ptr, ...)`: a signature's parameter types for a declaration, with
-/// their `byval`, `sret` and extension attributes, or for the function type
-/// of a call, without. A return area for registers is not a parameter.
-fn parameter_types(signature: Signature<'_>, with_attributes: bool) -> impl fmt::Display + '_ {
-    fmt::from_fn(move |f| {
-        f.write_str("(")?;
-        let mut separator = "";
-        for (index, &ty) in signature.params.iter().enumerate() {
-            if !passed(signature, index) {
+        let mut values = ArenaVec::new_in(self.arena);
+        values.resize(body.value_count(), None);
+        api.position(blocks[entry.index()].ok_or(std::fmt::Error)?);
+        let mut slots = ArenaVec::new_in(self.arena);
+        for (slot, data) in body.stack_slots() {
+            let value = api.alloca(api.array(api.ty(Type::I8), u64::from(data.size)));
+            api.alignment(value, data.align.bytes());
+            api.set_name(value, &named(slot, self.arena));
+            slots.push(value);
+        }
+        let mut index = 0;
+        for (ir_index, &param) in body.block_params(entry).iter().enumerate() {
+            let value = if let Some(ParamAbi::Registers(registers)) = signature.param_abi(ir_index)
+            {
+                let area = api.alloca(api.array(api.ty(Type::I8), 16));
+                api.alignment(area, registers.align.bytes().max(8));
+                area
+            } else {
+                let param = api.param(self.functions[id.index()], index);
+                index += 1;
+                param
+            };
+            api.set_name(value, &named(param, self.arena));
+            values[param.index()] = Some(value);
+        }
+        for block in body.blocks() {
+            if block == entry || !edges.reachable[block.index()] {
                 continue;
             }
-            write!(f, "{separator}{}", type_name(ty))?;
-            if with_attributes {
-                write!(
-                    f,
-                    "{}{}",
-                    attributes(signature.param_abi(index)),
-                    extension_attributes(signature.param_extension(index))
-                )?;
+            api.position(blocks[block.index()].ok_or(std::fmt::Error)?);
+            for &param in body.block_params(block) {
+                let value = api.phi(api.ty(body.value_type(param)));
+                api.set_name(value, &named(param, self.arena));
+                values[param.index()] = Some(value);
             }
-            separator = ", ";
         }
-        if signature.variadic {
-            write!(f, "{separator}...")?;
+        let cfg = ControlFlowGraph::compute(body, self.arena);
+        let dom = DominatorTree::compute(body, &cfg, self.arena);
+        let mut builder = BodyBuilder {
+            emitter: self,
+            body,
+            signature,
+            blocks: &blocks,
+            slots: &slots,
+            values,
+        };
+        for &block in dom.reverse_post_order() {
+            api.position(blocks[block.index()].ok_or(std::fmt::Error)?);
+            for &inst in body.block_insts(block) {
+                let value = builder.inst(inst)?;
+                if let (Some(result), Some(value)) = (body.inst_result(inst), value) {
+                    // LLVM may constant-fold builder operations. Constants and
+                    // addresses have no SSA name; naming
+                    // globals here would rename their symbols.
+                    if !folds(body.inst(inst)) {
+                        api.set_name(value, &named(result, self.arena));
+                    }
+                    builder.values[result.index()] = Some(value);
+                }
+            }
         }
-        f.write_str(")")
-    })
-}
-
-/// The LLVM result type of a function of `signature`: its result, `void`,
-/// or the registers an aggregate result comes back in, as one type or a
-/// literal structure of two.
-fn result_type(signature: Signature<'_>) -> impl fmt::Display {
-    let registers = match signature.result_param() {
-        | Some(ParamAbi::Registers(registers)) => Some(registers),
-        | _ => None,
-    };
-    let result = signature.result;
-    fmt::from_fn(move |f| match registers {
-        | Some(registers) => write!(f, "{}", registers_type(registers)),
-        | None => f.write_str(result.map_or("void", type_name)),
-    })
-}
-
-/// `signext ` or `zeroext ` before a result type that ABI lowering extends,
-/// as Clang prints it, which also tells LLVM that a call's result arrives
-/// extended.
-fn result_attributes(signature: Signature<'_>) -> &'static str {
-    match signature.result_extension {
-        | Some(Extension::Sign) => "signext ",
-        | Some(Extension::Zero) => "zeroext ",
-        | _ => "",
+        for block in body.blocks() {
+            if block == entry || !edges.reachable[block.index()] {
+                continue;
+            }
+            for (index, &param) in body.block_params(block).iter().enumerate() {
+                let phi = builder.value(param)?;
+                for edge in edges.incoming(block) {
+                    let arg = builder.value(body.block_call(edge.call).1[index])?;
+                    api.incoming(phi, arg, blocks[edge.pred.index()].ok_or(std::fmt::Error)?);
+                }
+            }
+        }
+        Ok(())
     }
 }
 
-/// ` noundef signext` or ` noundef zeroext` after the type of a parameter or
-/// argument that ABI lowering extends. Clang marks every such parameter
-/// `noundef` as well, so that LLVM may rely on the extended bits; passing
-/// an indeterminate value is then undefined, as Clang treats it.
-fn extension_attributes(extension: Option<Extension>) -> &'static str {
-    match extension {
-        | Some(Extension::Sign) => " noundef signext",
-        | Some(Extension::Zero) => " noundef zeroext",
-        | _ => "",
+pub(super) fn signature_type<'a>(
+    api: &'a Session<'a>,
+    signature: Signature<'_>,
+    arena: &'a Bump,
+) -> Ty<'a> {
+    let mut types = ArenaVec::new_in(arena);
+    for (index, &ty) in signature.params.iter().enumerate() {
+        if passed(signature, index) {
+            types.push(api.ty(ty));
+        }
+    }
+    api.signature(result_type(api, signature), &types, signature.variadic)
+}
+
+fn result_type<'a>(api: &'a Session<'a>, signature: Signature<'_>) -> Ty<'a> {
+    match signature.result_param() {
+        | Some(ParamAbi::Registers(registers)) => registers_type(api, registers),
+        | _ => signature.result.map_or_else(|| api.void(), |ty| api.ty(ty)),
     }
 }
 
-/// Whether parameter `index` is passed: every parameter but a return area
-/// for registers.
+fn registers_type<'a>(api: &'a Session<'a>, registers: ResultRegisters) -> Ty<'a> {
+    match registers.second {
+        | Some(second) => api.structure(&[api.ty(registers.first), api.ty(second)], false),
+        | None if registers.first == Type::I128 => api.vector(api.ty(Type::I64), 2),
+        | None => api.ty(registers.first),
+    }
+}
+
 fn passed(signature: Signature<'_>, index: usize) -> bool {
     !matches!(signature.param_abi(index), Some(ParamAbi::Registers(_)))
 }
 
-/// The attributes after a parameter's or argument's type: ` byval([N x
-/// i8]) align A` for an aggregate copied to the stack and ` sret([N x i8])
-/// align A` for a result returned in memory.
-fn attributes(abi: Option<ParamAbi<'_>>) -> impl fmt::Display + '_ {
-    fmt::from_fn(move |f| match abi {
-        | Some(ParamAbi::ByVal(layout)) => write!(
-            f,
-            " byval([{} x i8]) align {}",
-            layout.size,
-            layout.align.bytes()
-        ),
-        | Some(ParamAbi::Sret(layout)) => write!(
-            f,
-            " sret([{} x i8]) align {}",
-            layout.size,
-            layout.align.bytes()
-        ),
-        | _ => Ok(()),
-    })
+pub(super) fn attributes(api: &Session<'_>, value: Val<'_>, signature: Signature<'_>, call: bool) {
+    extension(api, value, 0, signature.result_extension, call);
+    let mut llvm_index = 1;
+    for index in 0..signature.params.len() {
+        if !passed(signature, index) {
+            continue;
+        }
+        match signature.param_abi(index) {
+            | Some(ParamAbi::ByVal(layout) | ParamAbi::Sret(layout)) => {
+                let name = if matches!(signature.param_abi(index), Some(ParamAbi::ByVal(_))) {
+                    "byval"
+                } else {
+                    "sret"
+                };
+                api.attribute(
+                    value,
+                    llvm_index,
+                    name,
+                    0,
+                    Some(api.array(api.ty(Type::I8), layout.size)),
+                    call,
+                );
+                api.attribute(value, llvm_index, "align", layout.align.bytes(), None, call);
+            },
+            | _ => {},
+        }
+        extension(
+            api,
+            value,
+            llvm_index,
+            signature.param_extension(index),
+            call,
+        );
+        llvm_index += 1;
+    }
 }
 
-/// The LLVM type of the registers an aggregate result comes back in.
-fn registers_type(registers: ResultRegisters) -> impl fmt::Display {
-    fmt::from_fn(move |f| match registers.second {
-        | Some(second) => write!(
-            f,
-            "{{ {}, {} }}",
-            type_name(registers.first),
-            type_name(second)
-        ),
-        // Win64 scalar __int128 returns in XMM0 as Clang's <2 x i64>.
-        | None if registers.first == Type::I128 => f.write_str("<2 x i64>"),
-        | None => f.write_str(type_name(registers.first)),
-    })
+fn extension(
+    api: &Session<'_>,
+    value: Val<'_>,
+    index: u32,
+    extension: Option<Extension>,
+    call: bool,
+) {
+    let name = match extension {
+        | Some(Extension::Sign) => "signext",
+        | Some(Extension::Zero) => "zeroext",
+        | _ => return,
+    };
+    api.attribute(value, index, name, 0, None, call);
+    if index != 0 {
+        api.attribute(value, index, "noundef", 0, None, call);
+    }
 }
 
-/// Prints the blocks of one body.
-struct BodyPrinter<'a, 'm, 'ir, 's> {
-    out:        &'a mut dyn fmt::Write,
-    intrinsics: &'a mut Intrinsics,
-    values:     Values<'m, 'ir>,
-    edges:      IncomingEdges<'s>,
-    /// The function's signature, for an aggregate result in registers.
-    signature:  Signature<'ir>,
+struct BodyBuilder<'a, 'm, 'ir> {
+    emitter:   &'a Emitter<'a, 'm, 'ir>,
+    body:      &'m Body<'ir>,
+    signature: Signature<'ir>,
+    blocks:    &'a [Option<api::Block<'a>>],
+    slots:     &'a [Val<'a>],
+    values:    ArenaVec<'a, Option<Val<'a>>>,
 }
 
-impl BodyPrinter<'_, '_, '_, '_> {
-    /// Prints a block: its label, then the entry block's allocas or another
-    /// block's phis, one per parameter, then its instructions. The entry
-    /// block's parameters are the function's.
-    fn block(&mut self, block: Block) -> fmt::Result {
-        let body = self.values.body;
-        writeln!(self.out, "{block}:")?;
-        let entry = Some(block) == body.entry_block();
-        if entry {
-            for (slot, data) in body.stack_slots() {
-                writeln!(
-                    self.out,
-                    "  %{slot} = alloca [{} x i8], align {}",
-                    data.size,
-                    data.align.bytes()
-                )?;
-            }
-            // The return area of a result in registers is the callee's own.
-            if let Some(ParamAbi::Registers(registers)) = self.signature.result_param()
-                && let Some(&area) = body.block_params(block).first()
-            {
-                writeln!(
-                    self.out,
-                    "  %{area} = alloca [16 x i8], align {}",
-                    registers.align.bytes().max(8)
-                )?;
-            }
+impl<'a, 'm> BodyBuilder<'a, 'm, '_> {
+    fn value(&self, value: Value) -> Result<Val<'a>, EmitError<'m>> {
+        if let Some(value) = self.values[value.index()] {
+            return Ok(value);
         }
-        let params = if entry { &[] } else { body.block_params(block) };
-        for (index, &param) in params.iter().enumerate() {
-            write!(
-                self.out,
-                "  %{param} = phi {} ",
-                type_name(body.value_type(param))
-            )?;
-            let mut separator = "";
-            for edge in self.edges.incoming(block) {
-                let arg = body.block_call(edge.call).1[index];
-                write!(
-                    self.out,
-                    "{separator}[ {}, %{} ]",
-                    self.values.operand(arg),
-                    edge.pred
-                )?;
-                separator = ", ";
-            }
-            self.out.write_str("\n")?;
-        }
-        for &inst in body.block_insts(block) {
-            self.inst(inst)?;
-        }
-        Ok(())
+        // Constants need not have been visited, including constants in a block
+        // that is unreachable but used on a reachable phi edge after
+        // transforms.
+        let crate::ir::ValueDef::Result(inst) = self.body.value_def(value) else {
+            return Err(std::fmt::Error.into());
+        };
+        self.constant(self.body.inst(inst))
+            .ok_or_else(|| std::fmt::Error.into())
     }
 
-    /// Prints one instruction on its own line, unless it is a constant or an
-    /// address, which [`Values::operand`] spells at each use instead.
-    fn inst(&mut self, inst: Inst) -> fmt::Result {
-        let values = self.values;
-        let body = values.body;
-        let data = *body.inst(inst);
-        if folds(&data) {
-            return Ok(());
-        }
-        self.out.write_str("  ")?;
-        if let Some(result) = body.inst_result(inst) {
-            write!(self.out, "%{result} = ")?;
-        }
-        let opcode = data.opcode();
-        match data {
-            | InstData::Binary {
+    fn constant(&self, data: &InstData) -> Option<Val<'a>> {
+        let api = self.emitter.api;
+        Some(match *data {
+            | InstData::Const { ty, .. } | InstData::WideConst { ty, .. } =>
+                api.bits(ty, self.body.const_bits(data)?),
+            | InstData::Nullary {
+                opcode: Opcode::Null,
                 ty,
+            } => api.null(api.ty(ty)),
+            | InstData::Nullary { ty, .. } => api.poison(api.ty(ty)),
+            | InstData::StackAddr { slot } => self.slots[slot.index()],
+            | InstData::GlobalAddr { global } => self.emitter.globals[global.index()],
+            | InstData::FuncAddr { func } => self.emitter.functions[func.index()],
+            | _ => return None,
+        })
+    }
+
+    fn destination(&self, call: BlockCall) -> Result<api::Block<'a>, EmitError<'m>> {
+        self.blocks[self.body.block_call(call).0.index()].ok_or_else(|| std::fmt::Error.into())
+    }
+
+    fn inst(&self, inst: Inst) -> Result<Option<Val<'a>>, EmitError<'m>> {
+        let data = self.body.inst(inst);
+        if folds(data) {
+            return Ok(self.constant(data));
+        }
+        let api = self.emitter.api;
+        let opcode = data.opcode();
+        let value = match *data {
+            | InstData::Binary {
                 flags,
                 args: [a, b],
                 ..
-            } => match opcode {
-                | Opcode::PtrAdd => {
-                    let inbounds = if flags.contains(InstFlags::INBOUNDS) {
-                        "inbounds "
-                    } else {
-                        ""
-                    };
-                    write!(
-                        self.out,
-                        "getelementptr {inbounds}i8, {}, {}",
-                        values.typed(a),
-                        values.typed(b)
-                    )
-                },
-                | Opcode::VaCopy => self.intrinsic(
-                    Intrinsics::VA_COPY,
-                    format_args!("@llvm.va_copy.p0({}, {})", values.typed(a), values.typed(b)),
-                ),
-                | _ => write!(
-                    self.out,
-                    "{}{} {} {}, {}",
-                    binary_name(opcode),
-                    binary_flags(flags),
-                    type_name(ty),
-                    values.operand(a),
-                    values.operand(b)
-                ),
+            } => {
+                let (a, b) = (self.value(a)?, self.value(b)?);
+                match opcode {
+                    | Opcode::PtrAdd => api.gep(a, b, flags.contains(InstFlags::INBOUNDS)),
+                    | Opcode::VaCopy =>
+                        self.intrinsic("llvm.va_copy", &[a, b], &[api.ty(Type::Ptr)]),
+                    | _ => {
+                        let value = api.binary(binary_opcode(opcode), a, b);
+                        api.flags(value, flags);
+                        value
+                    },
+                }
             },
-            | InstData::Unary { ty, arg, .. } => match opcode {
-                | Opcode::Fneg | Opcode::Freeze =>
-                    write!(self.out, "{opcode} {}", values.typed(arg)),
-                | Opcode::VaArg =>
-                    write!(self.out, "va_arg {}, {}", values.typed(arg), type_name(ty)),
-                | Opcode::VaStart => self.intrinsic(
-                    Intrinsics::VA_START,
-                    format_args!("@llvm.va_start.p0({})", values.typed(arg)),
-                ),
-                | Opcode::VaEnd => self.intrinsic(
-                    Intrinsics::VA_END,
-                    format_args!("@llvm.va_end.p0({})", values.typed(arg)),
-                ),
-                | _ => write!(
-                    self.out,
-                    "{opcode} {} to {}",
-                    values.typed(arg),
-                    type_name(ty)
-                ),
+            | InstData::Unary { ty, arg, .. } => {
+                let arg = self.value(arg)?;
+                match opcode {
+                    | Opcode::Fneg => api.fneg(arg),
+                    | Opcode::Freeze => api.freeze(arg),
+                    | Opcode::VaArg => api.va_arg(arg, api.ty(ty)),
+                    | Opcode::VaStart =>
+                        self.intrinsic("llvm.va_start", &[arg], &[api.ty(Type::Ptr)]),
+                    | Opcode::VaEnd => self.intrinsic("llvm.va_end", &[arg], &[api.ty(Type::Ptr)]),
+                    | _ => api.cast(cast_opcode(opcode), arg, api.ty(ty)),
+                }
             },
             | InstData::IntCompare {
-                cond,
-                ty,
-                args: [a, b],
-            } => write!(
-                self.out,
-                "icmp {cond} {} {}, {}",
-                type_name(ty),
-                values.operand(a),
-                values.operand(b)
-            ),
+                cond, args: [a, b], ..
+            } => api.icmp(int_condition(cond), self.value(a)?, self.value(b)?),
             | InstData::FloatCompare {
-                cond,
-                ty,
-                args: [a, b],
-            } => write!(
-                self.out,
-                "fcmp {cond} {} {}, {}",
-                type_name(ty),
-                values.operand(a),
-                values.operand(b)
-            ),
+                cond, args: [a, b], ..
+            } => api.fcmp(float_condition(cond), self.value(a)?, self.value(b)?),
             | InstData::Select {
                 args: [cond, a, b], ..
-            } => write!(
-                self.out,
-                "select {}, {}, {}",
-                values.typed(cond),
-                values.typed(a),
-                values.typed(b)
-            ),
+            } => api.select(self.value(cond)?, self.value(a)?, self.value(b)?),
             | InstData::Load {
                 ty,
                 flags,
                 align,
                 addr,
                 ..
-            } => write!(
-                self.out,
-                "load {}{}, {}, align {}",
-                volatile(flags),
-                type_name(ty),
-                values.typed(addr),
-                align.bytes()
-            ),
+            } => {
+                let value = api.load(api.ty(ty), self.value(addr)?);
+                api.alignment(value, align.bytes());
+                api.volatile(value, flags.contains(InstFlags::VOLATILE));
+                value
+            },
             | InstData::Store {
                 flags,
                 align,
                 args: [value, addr],
                 ..
-            } => write!(
-                self.out,
-                "store {}{}, {}, align {}",
-                volatile(flags),
-                values.typed(value),
-                values.typed(addr),
-                align.bytes()
-            ),
+            } => {
+                let value = api.store(self.value(value)?, self.value(addr)?);
+                api.alignment(value, align.bytes());
+                api.volatile(value, flags.contains(InstFlags::VOLATILE));
+                value
+            },
             | InstData::MemoryRange {
                 flags,
                 align,
                 args: [dst, src, size],
                 ..
             } => {
-                let (intrinsic, name) = match opcode {
-                    | Opcode::Fill => (Intrinsics::MEMSET, "memset.p0.i64"),
-                    | _ if flags.contains(InstFlags::MAY_OVERLAP) =>
-                        (Intrinsics::MEMMOVE, "memmove.p0.p0.i64"),
-                    | _ => (Intrinsics::MEMCPY, "memcpy.p0.p0.i64"),
+                let fill = opcode == Opcode::Fill;
+                let name = if fill {
+                    "llvm.memset"
+                } else if flags.contains(InstFlags::MAY_OVERLAP) {
+                    "llvm.memmove"
+                } else {
+                    "llvm.memcpy"
                 };
-                let align = align.bytes();
-                let src = fmt::from_fn(|f| {
-                    if opcode == Opcode::Fill {
-                        write!(f, "{}", values.typed(src))
-                    } else {
-                        write!(f, "ptr align {align} {}", values.operand(src))
-                    }
-                });
-                self.intrinsic(
-                    intrinsic,
-                    format_args!(
-                        "@llvm.{name}(ptr align {align} {}, {src}, {}, i1 {})",
-                        values.operand(dst),
-                        values.typed(size),
-                        flags.contains(InstFlags::VOLATILE)
-                    ),
-                )
+                let ptr = api.ty(Type::Ptr);
+                let overloads = if fill {
+                    &[ptr, api.ty(Type::I64)][..]
+                } else {
+                    &[ptr, ptr, api.ty(Type::I64)][..]
+                };
+                let call = self.intrinsic(
+                    name,
+                    &[
+                        self.value(dst)?,
+                        self.value(src)?,
+                        self.value(size)?,
+                        api.bits(Type::I1, u128::from(flags.contains(InstFlags::VOLATILE))),
+                    ],
+                    overloads,
+                );
+                api.attribute(call, 1, "align", align.bytes(), None, true);
+                if !fill {
+                    api.attribute(call, 2, "align", align.bytes(), None, true);
+                }
+                call
             },
-            | InstData::Call { func, args } => {
-                let function = values.module.function(func);
-                let signature = values.module.signature(function.signature);
+            | InstData::Call { func, args } => self.call(
+                inst,
+                self.emitter.functions[func.index()],
+                self.emitter.module.function_signature(func),
+                self.body.value_list(args),
+            )?,
+            | InstData::CallIndirect { sig, args } => {
+                let (&callee, args) = self
+                    .body
+                    .value_list(args)
+                    .split_first()
+                    .ok_or(std::fmt::Error)?;
                 self.call(
                     inst,
-                    signature,
-                    signature.variadic,
-                    symbol(function.name),
-                    body.value_list(args),
-                )
+                    self.value(callee)?,
+                    self.emitter.module.signature(sig),
+                    args,
+                )?
             },
-            | InstData::CallIndirect { sig, args } => {
-                let signature = values.module.signature(sig);
-                let (&callee, args) = body.value_list(args).split_first().ok_or(fmt::Error)?;
-                self.call(inst, signature, true, values.operand(callee), args)
-            },
-            | InstData::Jump { dest } => write!(self.out, "br label %{}", body.block_call(dest).0),
+            | InstData::Jump { dest } => api.jump(self.destination(dest)?),
             | InstData::Brif {
                 cond,
-                dests: [then, otherwise],
-            } => write!(
-                self.out,
-                "br {}, label %{}, label %{}",
-                values.typed(cond),
-                body.block_call(then).0,
-                body.block_call(otherwise).0
+                dests: [then, other],
+            } => api.branch(
+                self.value(cond)?,
+                self.destination(then)?,
+                self.destination(other)?,
             ),
             | InstData::Switch {
                 value,
                 default,
                 cases,
             } => {
-                let ty = body.value_type(value);
-                writeln!(
-                    self.out,
-                    "switch {}, label %{} [",
-                    values.typed(value),
-                    body.block_call(default).0
-                )?;
-                for (bits, dest) in body.switch_cases(cases) {
-                    writeln!(
-                        self.out,
-                        "    {} {}, label %{}",
-                        type_name(ty),
-                        int(bits, ty),
-                        body.block_call(dest).0
-                    )?;
+                let cases = self.body.switch_cases(cases);
+                let switch = api.switch(
+                    self.value(value)?,
+                    self.destination(default)?,
+                    u32::try_from(cases.len()).map_err(|_| std::fmt::Error)?,
+                );
+                for (bits, dest) in cases {
+                    api.add_case(
+                        switch,
+                        api.bits(self.body.value_type(value), bits),
+                        self.destination(dest)?,
+                    );
                 }
-                self.out.write_str("  ]")
+                switch
             },
-            | InstData::Return { value } => match (value, self.signature.result_param()) {
-                | (Some(value), _) => write!(self.out, "ret {}", values.typed(value)),
-                | (None, Some(ParamAbi::Registers(registers))) => {
-                    let area = body
-                        .entry_block()
-                        .and_then(|entry| body.block_params(entry).first().copied())
-                        .ok_or(fmt::Error)?;
-                    let ty = registers_type(registers);
-                    write!(
-                        self.out,
-                        "%{inst}.ret = load {ty}, ptr %{area}, align {}\n  ret {ty} %{inst}.ret",
-                        registers.align.bytes().max(8)
-                    )
-                },
-                | (None, _) => self.out.write_str("ret void"),
+            | InstData::Return { value: Some(value) } => api.ret(self.value(value)?),
+            | InstData::Return { value: None } => {
+                if let Some(ParamAbi::Registers(registers)) = self.signature.result_param() {
+                    let entry = self.body.entry_block().ok_or(std::fmt::Error)?;
+                    let area = *self
+                        .body
+                        .block_params(entry)
+                        .first()
+                        .ok_or(std::fmt::Error)?;
+                    let value = api.load(registers_type(api, registers), self.value(area)?);
+                    api.alignment(value, registers.align.bytes().max(8));
+                    api.set_name(value, &return_name(inst, self.emitter.arena));
+                    api.ret(value)
+                } else {
+                    api.ret_void()
+                }
             },
-            | InstData::Unreachable => self.out.write_str("unreachable"),
-            | InstData::Const { .. }
-            | InstData::WideConst { .. }
-            | InstData::Nullary { .. }
-            | InstData::StackAddr { .. }
-            | InstData::GlobalAddr { .. }
-            | InstData::FuncAddr { .. } => unreachable!("constants and addresses fold"),
-        }?;
-        self.out.write_str("\n")
-    }
-
-    /// A call: the result type alone for a direct call to a fixed-arity
-    /// function, else the whole function type, which LLVM needs for a
-    /// variadic callee and which states an indirect callee's signature.
-    /// Arguments carry the parameters' `byval`, `sret` and extension
-    /// attributes, and the result its extension. A result in registers is named
-    /// `%instN.ret` and stored to the return area the IR passes, which is
-    /// not an LLVM argument.
-    fn call(
-        &mut self,
-        inst: Inst,
-        signature: Signature<'_>,
-        function_type: bool,
-        callee: impl fmt::Display,
-        args: &[Value],
-    ) -> fmt::Result {
-        let values = self.values;
-        let registers = match signature.result_param() {
-            | Some(ParamAbi::Registers(registers)) => Some(registers),
-            | _ => None,
+            | InstData::Unreachable => api.unreachable(),
+            | _ => return Err(std::fmt::Error.into()),
         };
-        if registers.is_some() {
-            write!(self.out, "%{inst}.ret = ")?;
-        }
-        write!(
-            self.out,
-            "call {}{} ",
-            result_attributes(signature),
-            result_type(signature)
-        )?;
-        if function_type {
-            write!(self.out, "{} ", parameter_types(signature, false))?;
-        }
-        write!(self.out, "{callee}(")?;
-        let mut separator = "";
-        for (index, &arg) in args.iter().enumerate() {
-            if !passed(signature, index) {
-                continue;
-            }
-            let abi = signature.param_abi(index);
-            let ty = type_name(values.body.value_type(arg));
-            write!(
-                self.out,
-                "{separator}{ty}{}{} {}",
-                attributes(abi),
-                extension_attributes(signature.param_extension(index)),
-                values.operand(arg)
-            )?;
-            separator = ", ";
-        }
-        self.out.write_str(")")?;
-        if let (Some(registers), Some(&area)) = (registers, args.first()) {
-            write!(
-                self.out,
-                "\n  store {} %{inst}.ret, {}, align {}",
-                registers_type(registers),
-                values.typed(area),
-                registers.align.bytes()
-            )?;
-        }
-        Ok(())
+        Ok(Some(value))
     }
 
-    /// A call of a `void` intrinsic, which the module then declares.
-    fn intrinsic(&mut self, intrinsic: Intrinsics, call: fmt::Arguments<'_>) -> fmt::Result {
-        *self.intrinsics |= intrinsic;
-        write!(self.out, "call void {call}")
+    fn intrinsic(&self, name: &str, args: &[Val<'_>], overloads: &[Ty<'_>]) -> Val<'a> {
+        let api = self.emitter.api;
+        let (function, ty) = api.intrinsic(name, overloads);
+        api.call(ty, function, args)
+    }
+
+    fn call(
+        &self,
+        inst: Inst,
+        function: Val<'_>,
+        signature: Signature<'_>,
+        args: &[Value],
+    ) -> Result<Val<'a>, EmitError<'m>> {
+        let api = self.emitter.api;
+        let mut arguments = ArenaVec::new_in(self.emitter.arena);
+        for (index, &arg) in args.iter().enumerate() {
+            if passed(signature, index) {
+                arguments.push(self.value(arg)?);
+            }
+        }
+        let call = api.call(
+            signature_type(api, signature, self.emitter.arena),
+            function,
+            &arguments,
+        );
+        attributes(api, call, signature, true);
+        if let Some(ParamAbi::Registers(registers)) = signature.result_param() {
+            api.set_name(call, &return_name(inst, self.emitter.arena));
+            if let Some(&area) = args.first() {
+                let store = api.store(call, self.value(area)?);
+                api.alignment(store, registers.align.bytes());
+            }
+        }
+        Ok(call)
     }
 }
 
-/// Whether an instruction is a constant or an address, which LLVM spells
-/// as an operand rather than computing with an instruction.
+fn named(value: impl std::fmt::Display, arena: &Bump) -> ArenaString<'_> {
+    let mut text = ArenaString::new_in(arena);
+    write!(text, "{value}").expect("arena formatting succeeds");
+    text
+}
+fn return_name(inst: Inst, arena: &Bump) -> ArenaString<'_> {
+    let mut text = named(inst, arena);
+    text.push_str(".ret");
+    text
+}
 fn folds(data: &InstData) -> bool {
     matches!(
         data,
@@ -593,89 +512,79 @@ fn folds(data: &InstData) -> bool {
     )
 }
 
-/// The LLVM name of an integer or floating binary operation.
-fn binary_name(opcode: Opcode) -> &'static str {
-    match opcode {
-        | Opcode::Iadd => "add",
-        | Opcode::Isub => "sub",
-        | Opcode::Imul => "mul",
-        | _ => opcode.name(),
+fn binary_opcode(value: Opcode) -> LLVMOpcode {
+    match value {
+        | Opcode::Iadd => LLVMOpcode::LLVMAdd,
+        | Opcode::Isub => LLVMOpcode::LLVMSub,
+        | Opcode::Imul => LLVMOpcode::LLVMMul,
+        | Opcode::Sdiv => LLVMOpcode::LLVMSDiv,
+        | Opcode::Udiv => LLVMOpcode::LLVMUDiv,
+        | Opcode::Srem => LLVMOpcode::LLVMSRem,
+        | Opcode::Urem => LLVMOpcode::LLVMURem,
+        | Opcode::Shl => LLVMOpcode::LLVMShl,
+        | Opcode::Lshr => LLVMOpcode::LLVMLShr,
+        | Opcode::Ashr => LLVMOpcode::LLVMAShr,
+        | Opcode::And => LLVMOpcode::LLVMAnd,
+        | Opcode::Or => LLVMOpcode::LLVMOr,
+        | Opcode::Xor => LLVMOpcode::LLVMXor,
+        | Opcode::Fadd => LLVMOpcode::LLVMFAdd,
+        | Opcode::Fsub => LLVMOpcode::LLVMFSub,
+        | Opcode::Fmul => LLVMOpcode::LLVMFMul,
+        | Opcode::Fdiv => LLVMOpcode::LLVMFDiv,
+        | Opcode::Frem => LLVMOpcode::LLVMFRem,
+        | _ => unreachable!("verified instruction category"),
     }
 }
 
-/// ` nuw nsw` and ` exact`, in LLVM's order, for the flags a binary
-/// operation carries.
-fn binary_flags(flags: InstFlags) -> impl fmt::Display {
-    fmt::from_fn(move |f| {
-        for (flag, name) in [
-            (InstFlags::NUW, " nuw"),
-            (InstFlags::NSW, " nsw"),
-            (InstFlags::EXACT, " exact"),
-        ] {
-            if flags.contains(flag) {
-                f.write_str(name)?;
-            }
-        }
-        Ok(())
-    })
-}
-
-fn volatile(flags: InstFlags) -> &'static str {
-    if flags.contains(InstFlags::VOLATILE) {
-        "volatile "
-    } else {
-        ""
+fn cast_opcode(value: Opcode) -> LLVMOpcode {
+    match value {
+        | Opcode::Trunc => LLVMOpcode::LLVMTrunc,
+        | Opcode::Zext => LLVMOpcode::LLVMZExt,
+        | Opcode::Sext => LLVMOpcode::LLVMSExt,
+        | Opcode::Fptrunc => LLVMOpcode::LLVMFPTrunc,
+        | Opcode::Fpext => LLVMOpcode::LLVMFPExt,
+        | Opcode::Fptoui => LLVMOpcode::LLVMFPToUI,
+        | Opcode::Fptosi => LLVMOpcode::LLVMFPToSI,
+        | Opcode::Uitofp => LLVMOpcode::LLVMUIToFP,
+        | Opcode::Sitofp => LLVMOpcode::LLVMSIToFP,
+        | Opcode::Ptrtoint => LLVMOpcode::LLVMPtrToInt,
+        | Opcode::Inttoptr => LLVMOpcode::LLVMIntToPtr,
+        | Opcode::Bitcast => LLVMOpcode::LLVMBitCast,
+        | _ => unreachable!("verified instruction category"),
     }
 }
 
-/// How the values of one body are spelled as operands.
-#[derive(Clone, Copy)]
-struct Values<'m, 'ir> {
-    module: &'m Module<'ir>,
-    body:   &'m Body<'ir>,
+fn int_condition(value: IntCC) -> LLVMIntPredicate {
+    match value {
+        | IntCC::Eq => LLVMIntPredicate::LLVMIntEQ,
+        | IntCC::Ne => LLVMIntPredicate::LLVMIntNE,
+        | IntCC::Slt => LLVMIntPredicate::LLVMIntSLT,
+        | IntCC::Sle => LLVMIntPredicate::LLVMIntSLE,
+        | IntCC::Sgt => LLVMIntPredicate::LLVMIntSGT,
+        | IntCC::Sge => LLVMIntPredicate::LLVMIntSGE,
+        | IntCC::Ult => LLVMIntPredicate::LLVMIntULT,
+        | IntCC::Ule => LLVMIntPredicate::LLVMIntULE,
+        | IntCC::Ugt => LLVMIntPredicate::LLVMIntUGT,
+        | IntCC::Uge => LLVMIntPredicate::LLVMIntUGE,
+    }
 }
 
-impl<'m> Values<'m, '_> {
-    /// `%v3`, or the constant or address a folded instruction stands for:
-    /// an integer, a hexadecimal float, `poison`, `null`, `%slot0`, or a
-    /// symbol.
-    fn operand(self, value: Value) -> impl fmt::Display + 'm {
-        let module = self.module;
-        let body = self.body;
-        fmt::from_fn(move |f| {
-            let ValueDef::Result(inst) = body.value_def(value) else {
-                return write!(f, "%{value}");
-            };
-            let data = body.inst(inst);
-            match *data {
-                | InstData::Const { opcode, ty, .. } | InstData::WideConst { opcode, ty, .. } => {
-                    let bits = body.const_bits(data).ok_or(fmt::Error)?;
-                    if opcode == Opcode::Fconst {
-                        write!(f, "{}", float(bits, ty))
-                    } else {
-                        write!(f, "{}", int(bits, ty))
-                    }
-                },
-                | InstData::Nullary { opcode, .. } => f.write_str(if opcode == Opcode::Null {
-                    "null"
-                } else {
-                    "poison"
-                }),
-                | InstData::StackAddr { slot } => write!(f, "%{slot}"),
-                | InstData::GlobalAddr { global } =>
-                    write!(f, "{}", symbol(module.global(global).name)),
-                | InstData::FuncAddr { func } =>
-                    write!(f, "{}", symbol(module.function(func).name)),
-                | _ => write!(f, "%{value}"),
-            }
-        })
-    }
-
-    /// The operand with its type before it, as `i32 %v3`.
-    fn typed(self, value: Value) -> impl fmt::Display + 'm {
-        let ty = type_name(self.body.value_type(value));
-        let operand = self.operand(value);
-        fmt::from_fn(move |f| write!(f, "{ty} {operand}"))
+fn float_condition(value: FloatCC) -> LLVMRealPredicate {
+    match value {
+        | FloatCC::Oeq => LLVMRealPredicate::LLVMRealOEQ,
+        | FloatCC::One => LLVMRealPredicate::LLVMRealONE,
+        | FloatCC::Olt => LLVMRealPredicate::LLVMRealOLT,
+        | FloatCC::Ole => LLVMRealPredicate::LLVMRealOLE,
+        | FloatCC::Ogt => LLVMRealPredicate::LLVMRealOGT,
+        | FloatCC::Oge => LLVMRealPredicate::LLVMRealOGE,
+        | FloatCC::Ord => LLVMRealPredicate::LLVMRealORD,
+        | FloatCC::Ueq => LLVMRealPredicate::LLVMRealUEQ,
+        | FloatCC::Une => LLVMRealPredicate::LLVMRealUNE,
+        | FloatCC::Ult => LLVMRealPredicate::LLVMRealULT,
+        | FloatCC::Ule => LLVMRealPredicate::LLVMRealULE,
+        | FloatCC::Ugt => LLVMRealPredicate::LLVMRealUGT,
+        | FloatCC::Uge => LLVMRealPredicate::LLVMRealUGE,
+        | FloatCC::Uno => LLVMRealPredicate::LLVMRealUNO,
     }
 }
 

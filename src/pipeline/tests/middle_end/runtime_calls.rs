@@ -93,36 +93,30 @@ fn torture_runtime_calls_match_native_arms() {
     let Some(target @ Target::WindowsGnu) = host() else {
         return;
     };
-    let toolchain = Toolchain::bundled(target).expect("the bundled LLVM toolchain");
+    let _toolchain = Toolchain::bundled(target).expect("the bundled LLVM toolchain");
     let directory = TempDir::new("torture-runtime-calls");
     for &(name, source) in PROGRAMS {
         for arm in ARMS {
-            let ll = with_module(
+            let exe = directory.join(format!("{name}-{}.exe", arm.name));
+            with_module(
                 source,
                 target,
                 arm.bcc,
                 Profile::PostAbi,
-                |module, target| {
-                    let mut ll = String::new();
-                    emit_module(module, target, &mut ll).unwrap();
-                    ll
+                |module, _target| {
+                    compile_module(
+                        module,
+                        &exe,
+                        LlvmOptions {
+                            opt: Some(arm.opt),
+                            disable_llvm_passes: arm.disable_llvm_passes,
+                            target,
+                            kind: OutputKind::Executable,
+                        },
+                    )
+                    .unwrap();
                 },
             );
-            let path = directory.join(format!("{name}-{}.ll", arm.name));
-            let exe = directory.join(format!("{name}-{}.exe", arm.name));
-            std::fs::write(&path, ll).unwrap();
-            toolchain
-                .compile_ll(
-                    &path,
-                    &exe,
-                    LlvmOptions {
-                        opt: Some(arm.opt),
-                        disable_llvm_passes: arm.disable_llvm_passes,
-                        target,
-                        kind: OutputKind::Executable,
-                    },
-                )
-                .unwrap();
             assert_eq!(run_native(&exe).0, 0, "{name} {}", arm.name);
         }
     }

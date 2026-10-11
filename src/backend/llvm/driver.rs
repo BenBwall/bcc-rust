@@ -1,21 +1,5 @@
-//! Runs the bundled clang on LLVM IR text: compiles it to an object, or
-//! compiles and links an executable.
-//!
-//! The command is the one `docs/research/llvm-backend-integration.md`
-//! verified on the pinned clang:
-//!
-//! ```text
-//! clang --target=<triple> -O2 [-Xclang -disable-llvm-passes] -c -x ir x.ll -o x.o
-//! clang --target=<triple> [--sysroot=<MinGW>] -fuse-ld=lld -O2 -x ir x.ll -o x.exe
-//! ```
-//!
-//! Linking uses the bundled `lld`, and for Windows GNU the MinGW installation
-//! the build already requires, found the same way: `MINGW_ROOT`, else the
-//! directory above a `gcc.exe` on `PATH` that has the Windows headers.
-//!
-//! This is tooling around the compiler, not part of the arena-allocated
-//! compile path: it reads the environment and builds paths once per clang
-//! run.
+//! Emits objects in-process through LLVM-C, then invokes bundled clang/LLD
+//! only to link. MinGW discovery matches the native build helper.
 
 use std::{
     ffi::OsStr,
@@ -33,28 +17,57 @@ use std::{
 
 use crate::target::Target;
 
-/// Compiles the LLVM IR file `ll_path` to `out_path` with the bundled clang,
-/// as `options` say. A clang that fails returns a [`ClangError`] with its
-/// diagnostics; one that succeeds may still have printed warnings.
-pub(crate) fn compile_ll(ll_path: &Path, out_path: &Path, options: LlvmOptions) -> io::Result<()> {
-    Toolchain::bundled(options.target)?.compile_ll(ll_path, out_path, options)
+/// Builds a verified post-ABI module with LLVM-C and links only when requested.
+pub(crate) fn compile_module(
+    module: &crate::ir::Module<'_>,
+    out_path: &Path,
+    options: LlvmOptions,
+) -> io::Result<()> {
+    let arena = crate::util::bump::Bump::new();
+    let api = super::api::Session::new(&arena, options.target);
+    super::build_module(module, options.target, &api, &arena)
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    let buffer = api
+        .emit(
+            options.target,
+            options.opt,
+            options.disable_llvm_passes,
+            false,
+        )
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    if options.kind == OutputKind::Object {
+        return std::fs::write(out_path, buffer.bytes());
+    }
+    let mut name = out_path.as_os_str().to_os_string();
+    name.push(".bcc.o");
+    let object = TemporaryObject(PathBuf::from(name));
+    std::fs::write(&object.0, buffer.bytes())?;
+    Toolchain::bundled(options.target)?.link_object(&object.0, out_path, options)
 }
 
-/// How to run clang on one `.ll` file. The comparison arms of
-/// `middle-end.md` are settings of `opt` and `disable_llvm_passes`; the
+/// Deletes the temporary object on success and on failure.
+struct TemporaryObject(PathBuf);
+impl Drop for TemporaryObject {
+    fn drop(&mut self) {
+        drop(std::fs::remove_file(&self.0));
+    }
+}
+
+/// LLVM IR passes and target-machine code generation options. The comparison
+/// arms of `middle-end.md` are settings of `opt` and `disable_llvm_passes`; the
 /// module map of `llvm.rs` lists them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct LlvmOptions {
-    /// The `-O` level, or none for clang's default (`-O0`).
+    /// IR pipeline and machine level; none is equivalent to O0.
     pub(crate) opt:                 Option<OptLevel>,
     /// Runs no LLVM IR pass at all, not even the always-inliner, while the
-    /// code generator keeps the `-O` level (`-Xclang -disable-llvm-passes`).
+    /// code generator keeps the selected optimization level.
     pub(crate) disable_llvm_passes: bool,
     pub(crate) target:              Target,
     pub(crate) kind:                OutputKind,
 }
 
-/// A clang optimization level.
+/// An LLVM optimization level.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum OptLevel {
     O0,
@@ -64,7 +77,7 @@ pub(crate) enum OptLevel {
 }
 
 impl OptLevel {
-    const fn flag(self) -> &'static str {
+    pub(super) const fn flag(self) -> &'static str {
         match self {
             | Self::O0 => "-O0",
             | Self::O1 => "-O1",
@@ -133,18 +146,19 @@ impl Toolchain {
     }
 
     /// The clang executable.
+    #[cfg(test)]
     pub(crate) fn clang(&self) -> &Path {
         &self.clang
     }
 
-    /// Compiles `ll_path` to `out_path` as [`compile_ll`] does.
-    pub(crate) fn compile_ll(
+    /// Links an object with the bundled toolchain.
+    pub(crate) fn link_object(
         &self,
-        ll_path: &Path,
+        object: &Path,
         out_path: &Path,
         options: LlvmOptions,
     ) -> io::Result<()> {
-        let output = self.command(ll_path, out_path, options).output()?;
+        let output = self.command(object, out_path, options).output()?;
         if output.status.success() {
             Ok(())
         } else {
@@ -152,30 +166,18 @@ impl Toolchain {
         }
     }
 
-    /// The clang command line for `options`.
-    pub(crate) fn command(&self, ll_path: &Path, out_path: &Path, options: LlvmOptions) -> Command {
+    /// The external link command. No IR parsing or compilation takes place.
+    pub(crate) fn command(&self, object: &Path, out_path: &Path, options: LlvmOptions) -> Command {
         let mut command = Command::new(&self.clang);
         _ = command
             .arg(concat_os("--target=", options.target.triple().as_ref()))
             .args(options.opt.map(OptLevel::flag));
-        if options.disable_llvm_passes {
-            _ = command.args(["-Xclang", "-disable-llvm-passes"]);
-        }
-        match options.kind {
-            | OutputKind::Object => _ = command.arg("-c"),
-            | OutputKind::Executable => {
-                // Linking is the only step that reads the system root, so
-                // an object build leaves both flags out rather than have
-                // clang warn that they are unused.
-                if let Some(sysroot) = &self.sysroot {
-                    _ = command.arg(concat_os("--sysroot=", sysroot.as_os_str()));
-                }
-                _ = command.arg("-fuse-ld=lld");
-            },
+        if let Some(sysroot) = &self.sysroot {
+            _ = command.arg(concat_os("--sysroot=", sysroot.as_os_str()));
         }
         _ = command
-            .args(["-x", "ir"])
-            .arg(ll_path)
+            .arg("-fuse-ld=lld")
+            .arg(object)
             .arg("-o")
             .arg(out_path);
         command

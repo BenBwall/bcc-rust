@@ -22,7 +22,7 @@ use crate::backend::{
         OptLevel,
         OutputKind,
         Toolchain,
-        emit_module,
+        compile_module,
     },
 };
 
@@ -495,8 +495,8 @@ fn host() -> Option<Target> {
 
 /// Compiles the program for the host through LLVM at `-O2` and with LLVM's
 /// passes disabled, runs both, and returns their exit statuses.
-fn run_through_clang(
-    toolchain: &Toolchain,
+fn run_through_llvm(
+    _toolchain: &Toolchain,
     directory: &crate::test_support::TempDir,
     program: &Program,
     target: Target,
@@ -509,10 +509,6 @@ fn run_through_clang(
     crate::abi::lower_abi(&mut module, target, &arena).unwrap();
     let errors = verify_module(&module, Profile::PostAbi, &arena);
     assert!(errors.is_empty(), "{}: {errors:?}", program.name);
-    let mut llvm = String::new();
-    emit_module(&module, target, &mut llvm).unwrap();
-    let ll = directory.join(format!("{}.ll", program.name));
-    std::fs::write(&ll, llvm).unwrap();
     [false, true].map(|disable_llvm_passes| {
         let executable = directory.join(format!("{}-{disable_llvm_passes}.exe", program.name));
         let options = LlvmOptions {
@@ -521,8 +517,7 @@ fn run_through_clang(
             target,
             kind: OutputKind::Executable,
         };
-        toolchain
-            .compile_ll(&ll, &executable, options)
+        compile_module(&module, &executable, options)
             .unwrap_or_else(|error| panic!("{}: {error}", program.name));
         std::process::Command::new(&executable)
             .output()
@@ -534,7 +529,7 @@ fn run_through_clang(
 }
 
 #[test]
-fn numeric_programs_return_their_status_when_compiled_by_clang() {
+fn numeric_programs_return_their_status_when_compiled_by_llvm() {
     let Some(target) = host() else {
         eprintln!("skipping: the host is not a supported target");
         return;
@@ -556,7 +551,7 @@ fn numeric_programs_return_their_status_when_compiled_by_clang() {
                 scope.spawn(move || {
                     (
                         program,
-                        run_through_clang(toolchain, directory, program, target),
+                        run_through_llvm(toolchain, directory, program, target),
                     )
                 })
             })

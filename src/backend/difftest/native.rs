@@ -3,8 +3,8 @@
 //! original program does.
 //!
 //! Two comparison arms run per case: A0 compiles the original module with
-//! `-O0`, and A1 compiles the module the default pipeline produced with `-O2
-//! -Xclang -disable-llvm-passes`, so LLVM's code generator runs but none of
+//! `-O0`, and A1 compiles the module the default pipeline produced with O2 code
+//! generation without IR passes, so LLVM's code generator runs but none of
 //! its IR passes. The status `main` returns is compared unless the
 //! interpreter says it is poison (only its low eight bits off Windows), and
 //! the standard output always is.
@@ -27,6 +27,7 @@ use crate::{
         OptLevel,
         OutputKind,
         Toolchain,
+        compile_module,
         emit_module,
     },
     ir::{
@@ -84,7 +85,7 @@ pub(super) fn check_native(cases: &[Reference]) -> Vec<String> {
 enum Arm {
     /// The original module, `-O0`.
     A0,
-    /// The optimized module, `-O2 -Xclang -disable-llvm-passes`.
+    /// The optimized module, O2 code generation without IR passes.
     A1,
 }
 
@@ -93,7 +94,7 @@ fn check_arm(
     case: &Reference,
     arm: Arm,
     target: Target,
-    toolchain: &Toolchain,
+    _toolchain: &Toolchain,
     directory: &Path,
 ) -> Result<(), String> {
     let text = match arm {
@@ -105,9 +106,9 @@ fn check_arm(
     let llvm =
         emit(&text, target).map_err(|error| format!("seed {:#x} {arm:?}: {error}", case.seed))?;
     let name = format!("case-{:x}-{arm:?}", case.seed);
-    let ll = directory.join(format!("{name}.ll"));
+    let arena = Bump::new();
+    let module = parse_module(&arena, &text).map_err(|error| error.to_string())?;
     let executable = directory.join(format!("{name}.exe"));
-    std::fs::write(&ll, &llvm).expect("the temporary directory is writable");
     let (opt, disable_llvm_passes) = match arm {
         | Arm::A0 => (OptLevel::O0, false),
         | Arm::A1 => (OptLevel::O2, true),
@@ -118,8 +119,7 @@ fn check_arm(
         target,
         kind: OutputKind::Executable,
     };
-    toolchain
-        .compile_ll(&ll, &executable, options)
+    compile_module(&module, &executable, options)
         .map_err(|error| format!("seed {:#x} {arm:?}: {error}\n{text}\n{llvm}", case.seed))?;
     let output = Command::new(&executable)
         .output()

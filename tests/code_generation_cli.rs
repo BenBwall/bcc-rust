@@ -135,7 +135,7 @@ mod tests {
             stdout.contains("target triple = \"x86_64-w64-windows-gnu\""),
             "{stdout}"
         );
-        assert!(stdout.contains("define dso_local i32 @main()"), "{stdout}");
+        assert!(stdout.contains("define i32 @main()"), "{stdout}");
         assert!(stdout.contains("declare i32 @printf(ptr, ...)"), "{stdout}");
     }
 
@@ -173,10 +173,7 @@ mod tests {
         let llvm = bcc(PAIR, &["--emit=llvm"]);
         assert!(llvm.status.success(), "{}", text(&llvm.stderr));
         let llvm = text(&llvm.stdout);
-        assert!(
-            llvm.contains("define dso_local { i64, i64 } @swap(i64 %"),
-            "{llvm}"
-        );
+        assert!(llvm.contains("define { i64, i64 } @swap(i64 %"), "{llvm}");
         let llvm = text(&bcc(PAIR, &["--emit=llvm", "--target=x86_64-w64-windows-gnu"]).stdout);
         assert!(llvm.contains("sret([16 x i8]) align 8"), "{llvm}");
 

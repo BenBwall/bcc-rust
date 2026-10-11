@@ -79,11 +79,11 @@ STANDARD_ARMS = {
     "R": None,  # clang -O2 on the C source
 }
 ARM_DESCRIPTIONS = {
-    "A0": "bcc front end, no optimizer, clang -O0 code generation",
-    "N": "unoptimized bcc IR, clang -O2 code generation with LLVM IR passes disabled",
-    "A1": "bcc optimizer only (fixpoint pipeline), clang -O2 code generation",
-    "A2": "LLVM -O2 only, on the unoptimized bcc IR",
-    "A3": "bcc optimizer, then LLVM -O2",
+    "A0": "bcc front end, no optimizer, LLVM-C default<O0>, O0 code generation",
+    "N": "unoptimized bcc IR, LLVM-C O2 code generation without IR passes",
+    "A1": "bcc optimizer only (fixpoint pipeline), LLVM-C O2 code generation",
+    "A2": "LLVM default<O2> on unoptimized bcc IR, O2 code generation",
+    "A3": "bcc optimizer, then LLVM default<O2>, O2 code generation",
     "R": "clang -O2 from the C source",
 }
 ABLATION_BASELINE = "A1-all"
@@ -644,8 +644,8 @@ def summarize(records, resamples, seed, baseline, metric):
             compile_rows.append(row)
     if compile_rows:
         lines += ["## Compile time", "",
-                  "Whole-process wall time of one build: for the bcc arms the front end, optimizer and the clang "
-                  "invocation on the LLVM IR; for R clang on the source. Median over benchmarks, and geometric mean "
+                  "Whole-process wall time of one build: for the bcc arms the front end, optimizer, in-process LLVM-C object emission and "
+                  "external executable link; for R clang on the source. Median over benchmarks, and geometric mean "
                   f"of the per-benchmark ratio to {baseline}.", "",
                   table(["arm", "median seconds", f"geomean ratio to {baseline}"], compile_rows), ""]
 
