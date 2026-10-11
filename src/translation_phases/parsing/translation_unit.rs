@@ -1,3 +1,14 @@
+//! The retained parser result and fully preprocessed input boundary.
+//!
+//! [`ParsedTranslationUnit`] owns the source-ordered roots while their syntax
+//! borrows the translation-unit arena. Its accessors expose those roots and a
+//! compact Rust debug view. [`PreprocessedTranslationUnit`] owns the token
+//! array that constructors turn into parser input. Machine state and semantic
+//! results belong to their separate modules.
+//!
+//! C99: translation phase 7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
+//! C99: translation-unit, §6.9 paragraph 1, p. 140; PDF p. 152.
+
 use std::fmt::Debug;
 
 use super::{

@@ -1,3 +1,16 @@
+//! Pending token diagnostics indexed by spelling and provenance.
+//!
+//! [`Parser::suppress_token_diagnostic`] advances the occurrence queue when a
+//! frame consumes a token or recovery skips it. GNU extension markers can
+//! suppress their own diagnostics, and MSVC assembly can withdraw C
+//! constant-conversion errors for assembler operands. Occurrences with shared
+//! macro provenance stay separate. The shared context owns diagnostic delivery
+//! and rendering.
+//!
+//! C99: translation phase 7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
+//! C99: diagnostic obligation, §5.1.1.3, p. 11; PDF p. 23. Suppression for GNU
+//! and MSVC syntax is an extension policy.
+
 use std::cell::Cell;
 
 use super::{

@@ -1,3 +1,15 @@
+//! Parser construction over a fully preprocessed translation unit.
+//!
+//! [`Parser::preprocess`] finishes the token array before parser working memory
+//! is created. [`Parser::from_preprocessed`] then borrows the context and
+//! creates the idle machine. Constructors also index pending token diagnostics
+//! and seed the parser-visible builtin typedef names; these are implementation
+//! extensions. Grammar decisions belong to the frames, and semantic analysis
+//! follows parsing.
+//!
+//! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
+//! C99: diagnostics, §5.1.1.3, p. 11; PDF p. 23.
+
 use rustc_hash::FxBuildHasher;
 
 #[cfg(test)]

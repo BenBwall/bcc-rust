@@ -1,3 +1,14 @@
+//! Syntax allocation and propagation of expression recovery status.
+//!
+//! [`Parser::alloc_syntax`] and [`Parser::alloc_syntax_list`] retain immutable
+//! nodes in the translation-unit arena and count them against the parser's
+//! limits. [`Parser::store_expression`] records whether a child already needed
+//! recovery. Allocation does not decide expression types or constant values.
+//!
+//! C99: translation phase 7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
+//! C99: expression grammar, §6.5, pp. 67-94; PDF pp. 79-106. Retaining repaired
+//! syntax serves the diagnostics of §5.1.1.3, p. 11; PDF p. 23.
+
 use super::{
     Parser,
     syntax::{

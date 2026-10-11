@@ -1,3 +1,15 @@
+//! Parser resource ceilings and terminal failure cleanup.
+//!
+//! [`Parser::resource_failure`] emits one resource diagnostic and ends parsing.
+//! [`ParserLimits`] sets ceilings on roots, nodes, frames, and source segments.
+//! The defaults are representation bounds rather than fixed grammar limits.
+//! Memory exhaustion outside these counters is not handled here.
+//!
+//! C99: translation phase 7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
+//! C99: translation limits, §5.2.4.1, pp. 20-21; PDF pp. 32-33; footnote 13,
+//! p. 20; PDF p. 32 asks implementations to avoid fixed limits. Resource
+//! diagnostics use §5.1.1.3, p. 11; PDF p. 23.
+
 use super::{
     ExternalDeclaration,
     Parser,

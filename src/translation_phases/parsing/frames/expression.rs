@@ -1,4 +1,28 @@
-//! Expression frame and its Double-E precedence reducer.
+//! The expression frame builds syntax with a Double-E precedence reducer.
+//! It alternates between expecting an operand and expecting an operator,
+//! keeping both on parse-arena stacks. Grouping, calls, casts, and other
+//! grammar children suspend this frame and return on the parser's shared
+//! control stack. The caller chooses which delimiters end the expression and
+//! keeps ownership of them.
+//!
+//! For `a + b * c;`, the frame stores `a`, then `+`, then `b`. The incoming
+//! `*` binds more tightly than `+`, so it waits for `c`. At the caller's `;`,
+//! the reducer builds `b * c` before `a + (b * c)` and returns the expression
+//! without consuming the semicolon.
+//!
+//! Read [`ExpressionFrame::step`] first, then [`ExpressionPhase`],
+//! [`ExpressionParserState`], and [`ExpressionFrame`] for the suspended state.
+//! Continue with [`ExpressionFrame::reduce_one`] and
+//! [`ExpressionFrame::finish`] for reduction and the return to the parent
+//! frame.
+//!
+//! Files are grouped by role:
+//!
+//! - `expression.rs`: the frame, its state, and syntax reduction.
+//! - The sibling `expression_operators.rs`: operator classification and
+//!   precedence.
+//! - `expression/lookahead.rs`: bounded scans used to recognize recovery
+//!   boundaries.
 //!
 //! Translation phase 7 syntax analysis (§5.1.1.2, p. 10; PDF p. 22) of every
 //! expression production. C99: §6.5, pp. 67-94; PDF pp. 79-106; §A.2.1,
@@ -31,6 +55,7 @@
 
 use std::fmt::Debug;
 
+// Recovery lookahead
 mod lookahead;
 
 pub(in crate::translation_phases::parsing) use lookahead::closer_follows_stray_run;

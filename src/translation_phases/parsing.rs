@@ -1,70 +1,97 @@
-//! Non-recursive C language parser and its arena-backed syntax model.
+//! The syntax parser builds an immutable tree from a preprocessed token array.
+//! [`Parser::drive`] runs one explicit stack of grammar frames. Each frame owns
+//! its delimiters, resumes after its child returns, and asks the loop to
+//! consume input, push a child, reduce a value, or recover. Typedef
+//! classification follows the current scope. Recovery keeps useful syntax and
+//! its source provenance so semantic analysis can inspect repaired declarations
+//! and function definitions. Type checking and the remaining language
+//! constraints belong to that later phase.
 //!
-//! This is the syntax-analysis half of translation phase 7 (§5.1.1.2
-//! paragraph 1, p. 10; PDF p. 22): the converted tokens of one translation
-//! unit are parsed against the phrase-structure grammar of §6.5-§6.9,
-//! pp. 67-144; PDF pp. 79-156, summarized in §A.2, pp. 409-416;
-//! PDF pp. 421-428. Semantic analysis, the other half of phase 7, is not
-//! implemented; constraints are checked here only where the grammar or a
-//! frame needs them.
+//! For `typedef int T; T f(T x) { return x + 1; }`, the loop first pushes an
+//! external-declaration frame. Its declaration children recognize the typedef
+//! and publish `T` before reducing the first root. The next external frame
+//! recognizes `T` as a type, parses the function head, and pushes a
+//! function-definition frame. The compound and statement frames then push an
+//! expression frame for `x + 1`. Child values return up the same stack until
+//! the second root reduces.
 //!
-//! [`Parser`] is a stack machine: [`ParseFrame`] values own resumable grammar
-//! productions, return typed [`ParseValue`] children, and ask the driver to
-//! consume, push, reduce, reprocess, or recover through
-//! [`ParseAction`](machine::ParseAction). Each
-//! delimiter belongs to one frame. Child frames begin on unconsumed lookahead,
-//! and malformed input is synchronized by production-specific sets.
+//! Read these items first:
 //!
-//! Hard syntax diagnostics do not discard useful syntax. If a declaration can
-//! be repaired, the parser yields [`ExternalDeclaration::RecoveredDeclaration`]
-//! with its syntax so later semantic analysis can continue. The distinct
-//! status prevents repaired syntax from being mistaken for fully valid input.
+//! 1. [`Parser::parse_translation_unit`], [`Parser::next_item`], then
+//!    [`Parser::drive`] for the caller seams and action loop; [`Parser`] holds
+//!    the state they run on.
+//! 2. [`ParseFrame`], [`ParseAction`], [`ParseValue`], and [`ParseFrame::step`]
+//!    in `parsing/machine.rs` for frame dispatch and typed child returns.
+//! 3. [`external_declaration::ExternalDeclarationFrame::step`], then
+//!    [`declaration::DeclarationFrame::step`] for the declaration/function
+//!    split.
+//! 4. [`expression::ExpressionFrame::step`] for the Double-E reducer, and
+//!    [`Parser::recover`] for synchronization after malformed input.
+//! 5. [`ParsedTranslationUnit`] and [`ParsedTranslationUnit::inspect`] for the
+//!    retained result and its iterative inspection view.
 //!
-//! Phase 05 closes declarations, function definitions, compound blocks, every
-//! C99 statement family, expressions, type names, initializers, and the scope
-//! transitions needed for typedef-sensitive grammar decisions into a complete
-//! translation-unit interface. All productions use frames held in the parse
-//! arena and retain recovered syntax at their owning grammar boundaries.
+//! Files are grouped by role under `parsing/`:
 //!
-//! Standard references in this module cite WG14/N1256, ISO/IEC 9899:TC3
-//! (C99 with Technical Corrigenda 1, 2, and 3). Each reference gives the
-//! normative clause, the standard's printed page, and the one-based page in
-//! the repository's `standards/c99-n1256.pdf`.
+//! - Machine core: `machine.rs` dispatches frames; `frame_pool.rs` recycles
+//!   their storage; `token_cursor.rs` owns token access; `scope.rs` classifies
+//!   names; `recovery.rs` scans to production-specific boundaries.
+//! - Input and shared operations: `input.rs` creates parsers; `limits.rs`
+//!   handles resource exhaustion; `allocation.rs` allocates syntax;
+//!   `lookahead.rs` resolves declaration/type ambiguity; `errors.rs` reports
+//!   diagnostics; `token_diagnostics.rs` tracks pending diagnostic occurrences.
+//! - Grammar frames: `frames.rs` groups `frames/external_declaration.rs`,
+//!   `declaration.rs`, `declaration_specifiers.rs`, `declarator.rs`,
+//!   `parameter_list.rs`, `struct_or_union.rs`, `enum_specifier.rs`,
+//!   `function_definition.rs`, `compound_statement.rs`, `statement.rs`,
+//!   `expression.rs`, `expression_operators.rs`, `type_name.rs`, and
+//!   `initializer.rs`. `frames/expression/lookahead.rs` scans expression
+//!   recovery boundaries.
+//! - Extensions: `extensions.rs` applies diagnostic policy and groups
+//!   `extensions/modern.rs`, `gnu.rs`, and `msvc.rs`, whose children use the
+//!   same machine as C99 grammar frames.
+//! - Retained syntax and views: `syntax.rs` and `declaration_syntax.rs` define
+//!   nodes; `translation_unit.rs` defines the input and result boundaries;
+//!   `inspection.rs` and `inspection/labels.rs` render the tree;
+//!   `syntax_log.rs` records allocations in test builds. `tests.rs` groups the
+//!   suites in `tests/`.
+//!
+//! References use WG14/N1256, ISO/IEC 9899:TC3 (C99 with Technical Corrigenda
+//! 1-3).
+//!
+//! C99: translation phase 7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
+//!
+//! C99: phrase-structure grammar, §6.5-§6.9, pp. 67-144; PDF pp. 79-156;
+//! summarized in §A.2, pp. 409-416; PDF pp. 421-428.
+//!
+//! C99: translation-unit and external-declaration, §6.9 paragraph 1, p. 140;
+//! PDF p. 152.
+//!
+//! C99: diagnostics, §5.1.1.3, p. 11; PDF p. 23.
 
-mod allocation;
-
-pub(crate) mod declaration_syntax;
-
-mod errors;
-
-mod extensions;
-
+// Machine core
 mod frame_pool;
-
-mod frames;
-
-mod input;
-
-mod inspection;
-
-mod limits;
-
-mod lookahead;
-
 mod machine;
-
 mod recovery;
-
 mod scope;
-
-pub(crate) mod syntax;
-
-mod syntax_log;
-
 mod token_cursor;
 
+// Input and shared operations
+mod allocation;
+mod errors;
+mod input;
+mod limits;
+mod lookahead;
 mod token_diagnostics;
 
+// Grammar and extension frames
+mod extensions;
+mod frames;
+
+// Retained syntax and inspection
+pub(crate) mod declaration_syntax;
+mod inspection;
+pub(crate) mod syntax;
+mod syntax_log;
 mod translation_unit;
 
 #[cfg(test)]
@@ -479,6 +506,7 @@ pub(crate) struct Parser<'c, 'tu, 'p> {
     action_budget: Option<usize>,
 }
 
+// Tests
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,

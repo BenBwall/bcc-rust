@@ -1,3 +1,17 @@
+//! Typedef-sensitive declaration, type-name, and attribute lookahead.
+//!
+//! [`Parser::declaration_starter`] asks whether a token can start specifiers in
+//! the current scope. The following scans distinguish declarations from
+//! expressions and recognize declaration-shaped prefixes without consuming
+//! input. They select grammar frames; they do not resolve types or check
+//! redeclarations.
+//!
+//! C99: translation phase 7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
+//! C99: declaration specifiers, §6.7 paragraph 1, p. 97; PDF p. 109;
+//! typedef-name, §6.7.7 paragraph 1, p. 123; PDF p. 135; points of declaration,
+//! §6.2.1 paragraph 7, p. 30; PDF p. 42. Attributes and vendor keywords are
+//! extensions to these C99 productions.
+
 use super::{
     Parser,
     expression_operators::is_operator,
