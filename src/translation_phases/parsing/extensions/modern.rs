@@ -5,7 +5,7 @@
 //! children are §6.7.6, p. 122; PDF p. 134 and §6.5, pp. 67-94;
 //! PDF pp. 79-106. Evaluation and type constraints belong to later analysis.
 
-use super::{
+use super::super::{
     Parser,
     declaration_syntax::TypeName,
     errors::ParserErrorType,
@@ -45,404 +45,7 @@ use crate::{
     },
 };
 
-/// A grammar operand distinguished before semantic analysis.
-/// C11: §6.5.1.1, p. 78; PDF p. 96. Type operands in `_Generic` are C2y.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) enum SyntaxOperand<'tu> {
-    Expression(&'tu Expression<'tu>),
-    Type(&'tu TypeName<'tu>),
-}
-impl SyntaxOperand<'_> {
-    pub(super) fn source(self) -> SourceVectors {
-        match self {
-            | Self::Expression(x) => x.source_vectors,
-            | Self::Type(x) => x.source_vectors,
-        }
-    }
-}
-
-/// Parameterized and newly introduced ISO type specifiers.
-/// C99: extends the type-specifier seam of §6.7.2, pp. 99-100; PDF pp. 111-112.
-/// C11: atomic type specifiers §6.7.2.4 paragraph 1, p. 121; PDF p. 139.
-/// C23: typeof specifiers §6.7.3.6 paragraph 1, p. 117; PDF p. 130.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) enum ExtendedType<'tu> {
-    Atomic(&'tu TypeName<'tu>),
-    Typeof {
-        operand:     SyntaxOperand<'tu>,
-        unqualified: bool,
-    },
-    BitInt {
-        width:      &'tu Expression<'tu>,
-        signedness: Option<bool>,
-    },
-    Decimal32,
-    Decimal64,
-    Decimal128,
-    Inferred,
-    Int128 {
-        signedness: Option<bool>,
-    },
-    AutoType,
-    /// MSVC fixed-width integer spelling; target layout belongs to analysis.
-    /// MSVC extension: Microsoft Learn, "__int8, __int16, __int32, __int64".
-    /// <https://learn.microsoft.com/en-us/cpp/cpp/int8-int16-int32-int64>
-    MsInteger {
-        width:      u8,
-        signedness: Option<bool>,
-    },
-    Float128 {
-        complex: bool,
-    },
-}
-
-/// Specifier additions collected in reverse source order; immutable links avoid
-/// enlarging common nodes. Inspection visits the links in source order. C99:
-/// extends declaration-specifiers §6.7, p. 97; PDF p. 109. C11: alignment
-/// specifiers §6.7.5 paragraph 1, p. 127; PDF p. 145.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) struct SpecifierExtension<'tu> {
-    pub(crate) kind:           SpecifierExtensionKind<'tu>,
-    pub(crate) next:           Option<&'tu Self>,
-    pub(crate) source_vectors: SourceVectors,
-}
-/// Declaration specifier additions from later ISO revisions and vendor
-/// dialects.
-/// GNU extension: GCC manual, "Attribute Syntax".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
-/// MSVC extension: Microsoft Learn, "declspec".
-/// <https://learn.microsoft.com/en-us/cpp/cpp/declspec>
-/// C11: §6.7.5 paragraph 1, p. 127; PDF p. 145.
-/// C11: §6.7.1 paragraph 1, p. 109; PDF p. 127.
-/// C23: §6.7.2 paragraph 1, pp. 98-99; PDF pp. 111-112.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) enum SpecifierExtensionKind<'tu> {
-    Alignment(SyntaxOperand<'tu>),
-    Attributes(&'tu AttributeSpecifier<'tu>),
-    ThreadLocal,
-    Constexpr,
-    ExtensionMarker,
-    /// MSVC declaration modifier, retaining exact spelling and provenance.
-    /// MSVC extension: Microsoft Learn, "Microsoft-Specific Modifiers".
-    /// <https://learn.microsoft.com/en-us/cpp/cpp/microsoft-specific-modifiers>
-    MsModifier(KeywordTokenType),
-}
-
-/// Shared attribute syntax for ISO, GNU, and MSVC grammar owners.
-/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-/// Balanced tokens retain spelling and provenance without interpreting vendor
-/// arguments.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) struct AttributeSpecifier<'tu> {
-    pub(crate) syntax:         AttributeSyntax,
-    pub(crate) tokens:         ArenaList<'tu, Token>,
-    pub(crate) source_vectors: SourceVectors,
-    pub(crate) recovered:      bool,
-}
-/// ISO, GNU and Microsoft attribute introducer grammars.
-/// GNU extension: GCC manual, "Attribute Syntax".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
-/// MSVC extension: Microsoft Learn, "declspec".
-/// <https://learn.microsoft.com/en-us/cpp/cpp/declspec>
-/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum AttributeSyntax {
-    Standard,
-    Gnu,
-    Msvc,
-}
-
-/// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) struct GenericSelection<'tu> {
-    pub(crate) source_vectors: SourceVectors,
-    pub(crate) recovered:      bool,
-    pub(crate) controlling:    SyntaxOperand<'tu>,
-    pub(crate) associations:   ArenaList<'tu, GenericAssociation<'tu>>,
-}
-/// A type-named or default generic association and its result expression.
-/// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) struct GenericAssociation<'tu> {
-    pub(crate) type_name:  Option<&'tu TypeName<'tu>>,
-    pub(crate) expression: &'tu Expression<'tu>,
-}
-/// C11: §6.7.10 paragraph 1, p. 145; PDF p. 163. C23 permits no message.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) struct StaticAssertion<'tu> {
-    pub(crate) expression:     &'tu Expression<'tu>,
-    pub(crate) message:        Option<Token>,
-    pub(crate) source_vectors: SourceVectors,
-    pub(crate) recovered:      bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) enum ModernValue<'tu> {
-    Operand(SyntaxOperand<'tu>, SourceVectors),
-    Generic(&'tu GenericSelection<'tu>),
-    Assertion(&'tu StaticAssertion<'tu>),
-    Attributes(&'tu AttributeSpecifier<'tu>),
-}
-/// Selects the operand, generic, assertion or attribute grammar owned by a
-/// frame.
-/// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
-/// C11: §6.7.10 paragraph 1, p. 145; PDF p. 163.
-/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ModernKind {
-    Operand { type_only: bool, constant: bool },
-    Generic,
-    Assertion,
-    Attributes,
-}
-/// Resumable positions in the standard attribute token grammar.
-/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-#[derive(Debug, Clone, Copy)]
-enum AttributePosition {
-    Opening,
-    Name,
-    AfterName,
-    SecondColon,
-    PrefixedName,
-    AfterPrefixedName,
-    AfterArguments,
-    Closing,
-}
-/// Resumable grammar positions for ISO additions and GNU attributes.
-/// GNU extension: GCC manual, "Attribute Syntax".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
-/// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
-/// C11: §6.7.10 paragraph 1, p. 145; PDF p. 163.
-/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-#[derive(Debug, Clone, Copy)]
-enum Phase {
-    Start,
-    Open,
-    Operand,
-    AwaitOperand,
-    Separator,
-    Association,
-    AwaitAssociationType,
-    Colon,
-    AssociationExpression,
-    AwaitAssociationExpression,
-    Message,
-    Close,
-    Semicolon,
-    Finish,
-    AttributeTokens,
-    GnuAttributeOpen,
-    GnuAttributeInnerOpen,
-}
-
-/// Delimiter-owning frame for the ISO additions: generic selections, static
-/// assertions, attribute specifiers, and the parenthesized operands of
-/// `_Alignof`, `_Alignas`, `_Atomic`, `_BitInt`, and `typeof`. Its grammar
-/// children run on the shared machine stack.
-/// C11: §6.5.1.1 and §6.7.10, pp. 78, 145; PDF pp. 96, 163.
-#[derive(Debug)]
-pub(super) struct ModernFrame<'tu, 'p> {
-    keyword: Option<KeywordTokenType>,
-    kind: ModernKind,
-    phase: Phase,
-    attribute_position: AttributePosition,
-    attribute_syntax: AttributeSyntax,
-    pub(super) source_vectors: Option<SourceVectors>,
-    operand: Option<SyntaxOperand<'tu>>,
-    association_type: Option<&'tu TypeName<'tu>>,
-    pub(super) associations: ArenaVec<'p, GenericAssociation<'tu>>,
-    pub(super) tokens: ArenaVec<'p, Token>,
-    delimiters: ArenaVec<'p, OperatorTokenType>,
-    message: Option<Token>,
-    starting_errors: usize,
-}
 impl<'tu, 'p> ModernFrame<'tu, 'p> {
-    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
-        pools.modern_associations.lend(&mut self.associations);
-        pools.opaque_tokens.lend(&mut self.tokens);
-        pools.delimiters.lend(&mut self.delimiters);
-    }
-
-    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
-        pools.modern_associations.reclaim(&mut self.associations);
-        pools.opaque_tokens.reclaim(&mut self.tokens);
-        pools.delimiters.reclaim(&mut self.delimiters);
-    }
-
-    pub(super) fn new(arena: &'p Bump, kind: ModernKind, starting_errors: usize) -> Self {
-        Self {
-            kind,
-            keyword: None,
-            phase: Phase::Start,
-            attribute_position: AttributePosition::Opening,
-            attribute_syntax: AttributeSyntax::Standard,
-            source_vectors: None,
-            operand: None,
-            association_type: None,
-            associations: ArenaVec::new_in(arena),
-            tokens: ArenaVec::new_in(arena),
-            delimiters: ArenaVec::new_in(arena),
-            message: None,
-            starting_errors,
-        }
-    }
-
-    /// Starts parsing the parenthesized operand of an extended type or
-    /// alignment specifier.
-    /// C11: §6.7.2.4 paragraph 1, p. 121; PDF p. 139.
-    /// C11: §6.7.5 paragraph 1, p. 127; PDF p. 145.
-    /// C23: §6.7.3.6 paragraph 1, p. 117; PDF p. 130.
-    pub(super) fn operand_after_keyword(
-        arena: &'p Bump,
-        errors: usize,
-        source: SourceVectors,
-    ) -> Self {
-        let mut frame = Self::new(
-            arena,
-            ModernKind::Operand {
-                type_only: true,
-                constant:  false,
-            },
-            errors,
-        );
-        frame.phase = Phase::Open;
-        frame.source_vectors = Some(source);
-        frame
-    }
-
-    fn own(&mut self, parser: &mut Parser<'_, 'tu, 'p>, token: Token) {
-        if self.kind != ModernKind::Attributes {
-            parser.merge_source(&mut self.source_vectors, token);
-        }
-    }
-
-    fn attribute_outer_depth(&self) -> usize {
-        if self.attribute_syntax == AttributeSyntax::Msvc {
-            1
-        } else {
-            2
-        }
-    }
-
-    fn closer_component(&self) -> &'static str {
-        match self.attribute_syntax {
-            | AttributeSyntax::Msvc => "`)` in MSVC declspec specifier",
-            | AttributeSyntax::Gnu => "`))` in GNU attribute specifier",
-            | AttributeSyntax::Standard => "`]]` in attribute specifier",
-        }
-    }
-
-    /// Whether `token` ends the enclosing declaration rather than continuing
-    /// the attribute: a `;` outside standard argument delimiters or in an
-    /// argument that does not close, a `}` outside braces the attribute
-    /// opened, or a `{` that cannot be an argument token. Standard balanced
-    /// tokens allow semicolons, while GNU and MSVC arguments are expressions
-    /// and retain semicolons as recovery boundaries.
-    /// C23: balanced-token §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-    fn caller_owns(&self, parser: &Parser<'_, 'tu, 'p>, token: Token) -> bool {
-        let TokenType::Operator(op) = token.kind else {
-            return false;
-        };
-        match op {
-            | OperatorTokenType::Semicolon if self.attribute_syntax == AttributeSyntax::Standard =>
-                self.delimiters.len() <= self.attribute_outer_depth()
-                    || !self.standard_argument_closes(parser),
-            | OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace => !self
-                .delimiters
-                .contains(&OperatorTokenType::ClosingCurlyBrace),
-            | OperatorTokenType::OpeningCurlyBrace =>
-                self.attribute_syntax != AttributeSyntax::Standard
-                    || self.delimiters.len() <= self.attribute_outer_depth(),
-            | _ => false,
-        }
-    }
-
-    /// Whether the open standard attribute argument closes after the current
-    /// `;`. An unclosed argument leaves the `;` to the enclosing declaration,
-    /// so malformed input cannot swallow the declarations that follow it. The
-    /// scan is bounded; a longer argument is treated as unclosed.
-    /// C23: balanced-token §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-    fn standard_argument_closes(&self, parser: &Parser<'_, 'tu, 'p>) -> bool {
-        const SCAN_LIMIT: usize = 1024;
-        let mut open = &self.delimiters[self.attribute_outer_depth()..];
-        let mut nested = 0_usize;
-        for offset in 0..SCAN_LIMIT {
-            let Some(token) = parser.cursor.lookahead(offset) else {
-                return false;
-            };
-            let TokenType::Operator(op) = token.kind else {
-                continue;
-            };
-            match op {
-                | OperatorTokenType::OpeningParenthesis
-                | OperatorTokenType::OpeningSquareBracket
-                | OperatorTokenType::OpeningCurlyBrace => nested += 1,
-                | OperatorTokenType::ClosingParenthesis
-                | OperatorTokenType::ClosingSquareBracket
-                | OperatorTokenType::ClosingCurlyBrace =>
-                    if nested > 0 {
-                        nested -= 1;
-                    } else if let Some((&closing, rest)) = open.split_last()
-                        && closing == op
-                    {
-                        open = rest;
-                        if open.is_empty() {
-                            return true;
-                        }
-                    } else {
-                        return false;
-                    },
-                | _ => {},
-            }
-        }
-        false
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn expected(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>, position: &'static str) {
-        parser.report(
-            ParserErrorType::ExpectedIsoSyntax(position, token.map(|x| x.kind)),
-            token,
-        );
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn attribute_expected(
-        &self,
-        parser: &mut Parser<'_, 'tu, 'p>,
-        token: Option<Token>,
-        component: &'static str,
-    ) {
-        let error = if self.attribute_syntax == AttributeSyntax::Msvc {
-            ParserErrorType::ExpectedMsSyntax(component, token.map(|x| x.kind))
-        } else if self.attribute_syntax == AttributeSyntax::Gnu {
-            ParserErrorType::ExpectedGnuSyntax(component, token.map(|x| x.kind))
-        } else {
-            ParserErrorType::ExpectedIsoSyntax(component, token.map(|x| x.kind))
-        };
-        parser.report(error, token);
-    }
-
-    fn punctuation(
-        &mut self,
-        parser: &mut Parser<'_, 'tu, 'p>,
-        token: Option<Token>,
-        operator: OperatorTokenType,
-        position: &'static str,
-    ) -> ParseAction<'tu, 'p> {
-        if let Some(token) = token
-            && matches!(token.kind, TokenType::Operator(actual) if actual == operator)
-        {
-            self.own(parser, token);
-            ParseAction::Consume
-        } else {
-            Self::expected(parser, token, position);
-            ParseAction::Reprocess
-        }
-    }
-
     /// Parses later-standard operands, generic associations, assertions and
     /// attributes.
     /// GNU extension: GCC manual, "Attribute Syntax".
@@ -450,7 +53,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
     /// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
     /// C11: §6.7.10 paragraph 1, p. 145; PDF p. 163.
     /// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -927,6 +530,424 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                 };
                 ParseAction::Reduce(ParseValue::Modern(value))
             },
+        }
+    }
+}
+
+/// Resumable grammar positions for ISO additions and GNU attributes.
+/// GNU extension: GCC manual, "Attribute Syntax".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+/// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
+/// C11: §6.7.10 paragraph 1, p. 145; PDF p. 163.
+/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
+#[derive(Debug, Clone, Copy)]
+enum Phase {
+    Start,
+    Open,
+    Operand,
+    AwaitOperand,
+    Separator,
+    Association,
+    AwaitAssociationType,
+    Colon,
+    AssociationExpression,
+    AwaitAssociationExpression,
+    Message,
+    Close,
+    Semicolon,
+    Finish,
+    AttributeTokens,
+    GnuAttributeOpen,
+    GnuAttributeInnerOpen,
+}
+
+/// A grammar operand distinguished before semantic analysis.
+/// C11: §6.5.1.1, p. 78; PDF p. 96. Type operands in `_Generic` are C2y.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum SyntaxOperand<'tu> {
+    Expression(&'tu Expression<'tu>),
+    Type(&'tu TypeName<'tu>),
+}
+
+/// Parameterized and newly introduced ISO type specifiers.
+/// C99: extends the type-specifier seam of §6.7.2, pp. 99-100; PDF pp. 111-112.
+/// C11: atomic type specifiers §6.7.2.4 paragraph 1, p. 121; PDF p. 139.
+/// C23: typeof specifiers §6.7.3.6 paragraph 1, p. 117; PDF p. 130.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum ExtendedType<'tu> {
+    Atomic(&'tu TypeName<'tu>),
+    Typeof {
+        operand:     SyntaxOperand<'tu>,
+        unqualified: bool,
+    },
+    BitInt {
+        width:      &'tu Expression<'tu>,
+        signedness: Option<bool>,
+    },
+    Decimal32,
+    Decimal64,
+    Decimal128,
+    Inferred,
+    Int128 {
+        signedness: Option<bool>,
+    },
+    AutoType,
+    /// MSVC fixed-width integer spelling; target layout belongs to analysis.
+    /// MSVC extension: Microsoft Learn, "__int8, __int16, __int32, __int64".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/int8-int16-int32-int64>
+    MsInteger {
+        width:      u8,
+        signedness: Option<bool>,
+    },
+    Float128 {
+        complex: bool,
+    },
+}
+
+/// Specifier additions collected in reverse source order; immutable links avoid
+/// enlarging common nodes. Inspection visits the links in source order. C99:
+/// extends declaration-specifiers §6.7, p. 97; PDF p. 109. C11: alignment
+/// specifiers §6.7.5 paragraph 1, p. 127; PDF p. 145.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct SpecifierExtension<'tu> {
+    pub(crate) kind:           SpecifierExtensionKind<'tu>,
+    pub(crate) next:           Option<&'tu Self>,
+    pub(crate) source_vectors: SourceVectors,
+}
+
+/// Declaration specifier additions from later ISO revisions and vendor
+/// dialects.
+/// GNU extension: GCC manual, "Attribute Syntax".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+/// MSVC extension: Microsoft Learn, "declspec".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/declspec>
+/// C11: §6.7.5 paragraph 1, p. 127; PDF p. 145.
+/// C11: §6.7.1 paragraph 1, p. 109; PDF p. 127.
+/// C23: §6.7.2 paragraph 1, pp. 98-99; PDF pp. 111-112.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum SpecifierExtensionKind<'tu> {
+    Alignment(SyntaxOperand<'tu>),
+    Attributes(&'tu AttributeSpecifier<'tu>),
+    ThreadLocal,
+    Constexpr,
+    ExtensionMarker,
+    /// MSVC declaration modifier, retaining exact spelling and provenance.
+    /// MSVC extension: Microsoft Learn, "Microsoft-Specific Modifiers".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/microsoft-specific-modifiers>
+    MsModifier(KeywordTokenType),
+}
+
+/// Shared attribute syntax for ISO, GNU, and MSVC grammar owners.
+/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
+/// Balanced tokens retain spelling and provenance without interpreting vendor
+/// arguments.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct AttributeSpecifier<'tu> {
+    pub(crate) syntax:         AttributeSyntax,
+    pub(crate) tokens:         ArenaList<'tu, Token>,
+    pub(crate) source_vectors: SourceVectors,
+    pub(crate) recovered:      bool,
+}
+
+/// ISO, GNU and Microsoft attribute introducer grammars.
+/// GNU extension: GCC manual, "Attribute Syntax".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+/// MSVC extension: Microsoft Learn, "declspec".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/declspec>
+/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum AttributeSyntax {
+    Standard,
+    Gnu,
+    Msvc,
+}
+
+/// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct GenericSelection<'tu> {
+    pub(crate) source_vectors: SourceVectors,
+    pub(crate) recovered:      bool,
+    pub(crate) controlling:    SyntaxOperand<'tu>,
+    pub(crate) associations:   ArenaList<'tu, GenericAssociation<'tu>>,
+}
+
+/// A type-named or default generic association and its result expression.
+/// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct GenericAssociation<'tu> {
+    pub(crate) type_name:  Option<&'tu TypeName<'tu>>,
+    pub(crate) expression: &'tu Expression<'tu>,
+}
+
+/// C11: §6.7.10 paragraph 1, p. 145; PDF p. 163. C23 permits no message.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct StaticAssertion<'tu> {
+    pub(crate) expression:     &'tu Expression<'tu>,
+    pub(crate) message:        Option<Token>,
+    pub(crate) source_vectors: SourceVectors,
+    pub(crate) recovered:      bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(in crate::translation_phases::parsing) enum ModernValue<'tu> {
+    Operand(SyntaxOperand<'tu>, SourceVectors),
+    Generic(&'tu GenericSelection<'tu>),
+    Assertion(&'tu StaticAssertion<'tu>),
+    Attributes(&'tu AttributeSpecifier<'tu>),
+}
+
+/// Selects the operand, generic, assertion or attribute grammar owned by a
+/// frame.
+/// C11: §6.5.1.1 paragraph 1, p. 78; PDF p. 96.
+/// C11: §6.7.10 paragraph 1, p. 145; PDF p. 163.
+/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::translation_phases::parsing) enum ModernKind {
+    Operand { type_only: bool, constant: bool },
+    Generic,
+    Assertion,
+    Attributes,
+}
+
+/// Resumable positions in the standard attribute token grammar.
+/// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
+#[derive(Debug, Clone, Copy)]
+enum AttributePosition {
+    Opening,
+    Name,
+    AfterName,
+    SecondColon,
+    PrefixedName,
+    AfterPrefixedName,
+    AfterArguments,
+    Closing,
+}
+
+/// Delimiter-owning frame for the ISO additions: generic selections, static
+/// assertions, attribute specifiers, and the parenthesized operands of
+/// `_Alignof`, `_Alignas`, `_Atomic`, `_BitInt`, and `typeof`. Its grammar
+/// children run on the shared machine stack.
+/// C11: §6.5.1.1 and §6.7.10, pp. 78, 145; PDF pp. 96, 163.
+#[derive(Debug)]
+pub(in crate::translation_phases::parsing) struct ModernFrame<'tu, 'p> {
+    keyword: Option<KeywordTokenType>,
+    kind: ModernKind,
+    phase: Phase,
+    attribute_position: AttributePosition,
+    attribute_syntax: AttributeSyntax,
+    pub(in crate::translation_phases::parsing) source_vectors: Option<SourceVectors>,
+    operand: Option<SyntaxOperand<'tu>>,
+    association_type: Option<&'tu TypeName<'tu>>,
+    pub(in crate::translation_phases::parsing) associations: ArenaVec<'p, GenericAssociation<'tu>>,
+    pub(in crate::translation_phases::parsing) tokens: ArenaVec<'p, Token>,
+    delimiters: ArenaVec<'p, OperatorTokenType>,
+    message: Option<Token>,
+    starting_errors: usize,
+}
+
+impl SyntaxOperand<'_> {
+    pub(in crate::translation_phases::parsing) fn source(self) -> SourceVectors {
+        match self {
+            | Self::Expression(x) => x.source_vectors,
+            | Self::Type(x) => x.source_vectors,
+        }
+    }
+}
+
+impl<'tu, 'p> ModernFrame<'tu, 'p> {
+    pub(in crate::translation_phases::parsing) fn lend_pooled(
+        &mut self,
+        pools: &mut FramePools<'tu, 'p>,
+    ) {
+        pools.modern_associations.lend(&mut self.associations);
+        pools.opaque_tokens.lend(&mut self.tokens);
+        pools.delimiters.lend(&mut self.delimiters);
+    }
+
+    pub(in crate::translation_phases::parsing) fn reclaim_pooled(
+        &mut self,
+        pools: &mut FramePools<'tu, 'p>,
+    ) {
+        pools.modern_associations.reclaim(&mut self.associations);
+        pools.opaque_tokens.reclaim(&mut self.tokens);
+        pools.delimiters.reclaim(&mut self.delimiters);
+    }
+
+    /// Starts parsing the parenthesized operand of an extended type or
+    /// alignment specifier.
+    /// C11: §6.7.2.4 paragraph 1, p. 121; PDF p. 139.
+    /// C11: §6.7.5 paragraph 1, p. 127; PDF p. 145.
+    /// C23: §6.7.3.6 paragraph 1, p. 117; PDF p. 130.
+    pub(in crate::translation_phases::parsing) fn operand_after_keyword(
+        arena: &'p Bump,
+        errors: usize,
+        source: SourceVectors,
+    ) -> Self {
+        let mut frame = Self::new(
+            arena,
+            ModernKind::Operand {
+                type_only: true,
+                constant:  false,
+            },
+            errors,
+        );
+        frame.phase = Phase::Open;
+        frame.source_vectors = Some(source);
+        frame
+    }
+
+    fn own(&mut self, parser: &mut Parser<'_, 'tu, 'p>, token: Token) {
+        if self.kind != ModernKind::Attributes {
+            parser.merge_source(&mut self.source_vectors, token);
+        }
+    }
+
+    fn attribute_outer_depth(&self) -> usize {
+        if self.attribute_syntax == AttributeSyntax::Msvc {
+            1
+        } else {
+            2
+        }
+    }
+
+    fn closer_component(&self) -> &'static str {
+        match self.attribute_syntax {
+            | AttributeSyntax::Msvc => "`)` in MSVC declspec specifier",
+            | AttributeSyntax::Gnu => "`))` in GNU attribute specifier",
+            | AttributeSyntax::Standard => "`]]` in attribute specifier",
+        }
+    }
+
+    /// Whether `token` ends the enclosing declaration rather than continuing
+    /// the attribute: a `;` outside standard argument delimiters or in an
+    /// argument that does not close, a `}` outside braces the attribute
+    /// opened, or a `{` that cannot be an argument token. Standard balanced
+    /// tokens allow semicolons, while GNU and MSVC arguments are expressions
+    /// and retain semicolons as recovery boundaries.
+    /// C23: balanced-token §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
+    fn caller_owns(&self, parser: &Parser<'_, 'tu, 'p>, token: Token) -> bool {
+        let TokenType::Operator(op) = token.kind else {
+            return false;
+        };
+        match op {
+            | OperatorTokenType::Semicolon if self.attribute_syntax == AttributeSyntax::Standard =>
+                self.delimiters.len() <= self.attribute_outer_depth()
+                    || !self.standard_argument_closes(parser),
+            | OperatorTokenType::Semicolon | OperatorTokenType::ClosingCurlyBrace => !self
+                .delimiters
+                .contains(&OperatorTokenType::ClosingCurlyBrace),
+            | OperatorTokenType::OpeningCurlyBrace =>
+                self.attribute_syntax != AttributeSyntax::Standard
+                    || self.delimiters.len() <= self.attribute_outer_depth(),
+            | _ => false,
+        }
+    }
+
+    /// Whether the open standard attribute argument closes after the current
+    /// `;`. An unclosed argument leaves the `;` to the enclosing declaration,
+    /// so malformed input cannot swallow the declarations that follow it. The
+    /// scan is bounded; a longer argument is treated as unclosed.
+    /// C23: balanced-token §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
+    fn standard_argument_closes(&self, parser: &Parser<'_, 'tu, 'p>) -> bool {
+        const SCAN_LIMIT: usize = 1024;
+        let mut open = &self.delimiters[self.attribute_outer_depth()..];
+        let mut nested = 0_usize;
+        for offset in 0..SCAN_LIMIT {
+            let Some(token) = parser.cursor.lookahead(offset) else {
+                return false;
+            };
+            let TokenType::Operator(op) = token.kind else {
+                continue;
+            };
+            match op {
+                | OperatorTokenType::OpeningParenthesis
+                | OperatorTokenType::OpeningSquareBracket
+                | OperatorTokenType::OpeningCurlyBrace => nested += 1,
+                | OperatorTokenType::ClosingParenthesis
+                | OperatorTokenType::ClosingSquareBracket
+                | OperatorTokenType::ClosingCurlyBrace =>
+                    if nested > 0 {
+                        nested -= 1;
+                    } else if let Some((&closing, rest)) = open.split_last()
+                        && closing == op
+                    {
+                        open = rest;
+                        if open.is_empty() {
+                            return true;
+                        }
+                    } else {
+                        return false;
+                    },
+                | _ => {},
+            }
+        }
+        false
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn expected(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>, position: &'static str) {
+        parser.report(
+            ParserErrorType::ExpectedIsoSyntax(position, token.map(|x| x.kind)),
+            token,
+        );
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn attribute_expected(
+        &self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        component: &'static str,
+    ) {
+        let error = if self.attribute_syntax == AttributeSyntax::Msvc {
+            ParserErrorType::ExpectedMsSyntax(component, token.map(|x| x.kind))
+        } else if self.attribute_syntax == AttributeSyntax::Gnu {
+            ParserErrorType::ExpectedGnuSyntax(component, token.map(|x| x.kind))
+        } else {
+            ParserErrorType::ExpectedIsoSyntax(component, token.map(|x| x.kind))
+        };
+        parser.report(error, token);
+    }
+
+    fn punctuation(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        operator: OperatorTokenType,
+        position: &'static str,
+    ) -> ParseAction<'tu, 'p> {
+        if let Some(token) = token
+            && matches!(token.kind, TokenType::Operator(actual) if actual == operator)
+        {
+            self.own(parser, token);
+            ParseAction::Consume
+        } else {
+            Self::expected(parser, token, position);
+            ParseAction::Reprocess
+        }
+    }
+
+    pub(in crate::translation_phases::parsing) fn new(
+        arena: &'p Bump,
+        kind: ModernKind,
+        starting_errors: usize,
+    ) -> Self {
+        Self {
+            kind,
+            keyword: None,
+            phase: Phase::Start,
+            attribute_position: AttributePosition::Opening,
+            attribute_syntax: AttributeSyntax::Standard,
+            source_vectors: None,
+            operand: None,
+            association_type: None,
+            associations: ArenaVec::new_in(arena),
+            tokens: ArenaVec::new_in(arena),
+            delimiters: ArenaVec::new_in(arena),
+            message: None,
+            starting_errors,
         }
     }
 }

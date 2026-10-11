@@ -30,6 +30,19 @@ use crate::translation_phases::{
     },
 };
 
+impl LanguageExpressionOperator<'_> {
+    pub(in crate::translation_phases::parsing) fn has_precedence_over(
+        self,
+        incoming: Self,
+    ) -> bool {
+        if incoming.is_right_associative() {
+            self.precedence() < incoming.precedence()
+        } else {
+            self.precedence() <= incoming.precedence()
+        }
+    }
+}
+
 /// A pending operator on the expression frame's operator stack.
 ///
 /// `Question` marks a `?` whose middle operand is still being parsed;
@@ -37,7 +50,7 @@ use crate::translation_phases::{
 /// `logical-OR-expression ? expression : conditional-expression`.
 /// C99: §6.5.15 paragraph 1, p. 90; PDF p. 102.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum LanguageExpressionOperator<'tu> {
+pub(in crate::translation_phases::parsing) enum LanguageExpressionOperator<'tu> {
     Binary {
         operator:       BinaryOperator,
         source_vectors: SourceVectors,
@@ -57,7 +70,7 @@ impl LanguageExpressionOperator<'_> {
     /// level 13, between `logical-OR-expression` and
     /// `assignment-expression`.
     /// C99: §6.5.15, p. 90; PDF p. 102.
-    pub(super) fn precedence(self) -> u32 {
+    pub(in crate::translation_phases::parsing) fn precedence(self) -> u32 {
         match self {
             | Self::Binary { operator, .. } => binary_operator_precedence(operator),
             | Self::Question { .. } | Self::Conditional { .. } => 13,
@@ -75,20 +88,15 @@ impl LanguageExpressionOperator<'_> {
             Self::Binary { operator, .. } if is_assignment_operator(operator)
         ) || matches!(self, Self::Question { .. } | Self::Conditional { .. })
     }
-
-    pub(super) fn has_precedence_over(self, incoming: Self) -> bool {
-        if incoming.is_right_associative() {
-            self.precedence() < incoming.precedence()
-        } else {
-            self.precedence() <= incoming.precedence()
-        }
-    }
 }
 
 /// Tests whether an optional token is a particular C punctuator.
 ///
 /// C99: punctuators are §6.4.6, pp. 63-64; PDF pp. 75-76.
-pub(super) fn is_operator(token: Option<Token>, operator: OperatorTokenType) -> bool {
+pub(in crate::translation_phases::parsing) fn is_operator(
+    token: Option<Token>,
+    operator: OperatorTokenType,
+) -> bool {
     token.is_some_and(
         |token| matches!(token.kind, TokenType::Operator(actual) if actual == operator),
     )
@@ -144,7 +152,9 @@ fn binary_operator_precedence(operator: BinaryOperator) -> u32 {
 /// C99: operators of §6.5.5-§6.5.14, pp. 82-89; PDF pp. 94-101;
 /// `assignment-operator` §6.5.16 paragraph 1, p. 91; PDF p. 103; comma
 /// §6.5.17 paragraph 1, p. 94; PDF p. 106.
-pub(super) fn binary_operator(token: TokenType) -> Option<BinaryOperator> {
+pub(in crate::translation_phases::parsing) fn binary_operator(
+    token: TokenType,
+) -> Option<BinaryOperator> {
     let operator = match token {
         | TokenType::Operator(OperatorTokenType::Asterisk) => BinaryOperator::Multiplication,
         | TokenType::Operator(OperatorTokenType::ForwardSlash) => BinaryOperator::Division,
@@ -195,7 +205,9 @@ pub(super) fn binary_operator(token: TokenType) -> Option<BinaryOperator> {
 /// `unary-operator` takes a `cast-expression`.
 ///
 /// C99: §6.5.3 paragraph 1, p. 78; PDF p. 90.
-pub(super) fn prefix_operator(token: TokenType) -> Option<(UnaryOperator, ExpressionMode)> {
+pub(in crate::translation_phases::parsing) fn prefix_operator(
+    token: TokenType,
+) -> Option<(UnaryOperator, ExpressionMode)> {
     let (operator, mode) = match token {
         | TokenType::Keyword(KeywordTokenType::Real) =>
             (UnaryOperator::Real, ExpressionMode::CastExpression),
@@ -229,7 +241,9 @@ pub(super) fn prefix_operator(token: TokenType) -> Option<(UnaryOperator, Expres
 ///
 /// C99: §6.5.1 paragraph 1, p. 69; PDF p. 81; §6.5.3 paragraph 1, p. 78;
 /// PDF p. 90.
-pub(super) fn is_expression_operand_starter(token: TokenType) -> bool {
+pub(in crate::translation_phases::parsing) fn is_expression_operand_starter(
+    token: TokenType,
+) -> bool {
     matches!(
         token,
         TokenType::Identifier
@@ -263,7 +277,7 @@ pub(super) fn is_expression_operand_starter(token: TokenType) -> bool {
 /// `.`, `->`, `++`, or `--`.
 ///
 /// C99: §6.5.2 paragraph 1, p. 69; PDF p. 81.
-pub(super) fn is_postfix_starter(token: TokenType) -> bool {
+pub(in crate::translation_phases::parsing) fn is_postfix_starter(token: TokenType) -> bool {
     matches!(
         token,
         TokenType::Operator(
@@ -284,7 +298,7 @@ pub(super) fn is_postfix_starter(token: TokenType) -> bool {
 ///
 /// C99: §6.7.5 paragraph 1, p. 114; PDF p. 126; §6.7.6 paragraph 1,
 /// p. 122; PDF p. 134.
-pub(super) fn is_array_pointer_marker(
+pub(in crate::translation_phases::parsing) fn is_array_pointer_marker(
     parser: &mut Parser<'_, '_, '_>,
     token: Option<Token>,
 ) -> bool {
@@ -298,7 +312,9 @@ pub(super) fn is_array_pointer_marker(
 /// Returns whether an operator is an `assignment-operator`.
 ///
 /// C99: §6.5.16 paragraph 1, p. 91; PDF p. 103.
-pub(super) fn is_assignment_operator(operator: BinaryOperator) -> bool {
+pub(in crate::translation_phases::parsing) fn is_assignment_operator(
+    operator: BinaryOperator,
+) -> bool {
     matches!(
         operator,
         BinaryOperator::Assignment

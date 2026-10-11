@@ -69,66 +69,13 @@ use crate::{
     },
 };
 
-/// Parses the optional declaration list and the body that follow a
-/// function-definition head.
-///
-/// C99: §6.9.1 paragraph 1, p. 141; PDF p. 153.
-#[derive(Debug)]
-pub(super) struct FunctionDefinitionFrame<'tu, 'p> {
-    phase: FunctionDefinitionPhase,
-    head: &'tu Declaration<'tu>,
-    pub(super) declaration_list: ArenaVec<'p, &'tu Declaration<'tu>>,
-    body: Option<&'tu Statement<'tu>>,
-    pub(super) source_vectors: Option<SourceVectors>,
-    starting_error_count: usize,
-    suppression_entry: Option<usize>,
-    switch_floor_entry: usize,
-    entry_scope_depth: Option<usize>,
-    diagnosed_prototype_declaration_list: bool,
-    /// Whether a declaration-list diagnostic already explained a probable
-    /// missing `;` after a non-function head.
-    suggested_missing_semicolon: bool,
-}
-
-/// State transitions for [`FunctionDefinitionFrame`].
-///
-/// C99: §6.9.1 paragraph 1, p. 141; PDF p. 153.
-#[derive(Debug, Clone, Copy)]
-enum FunctionDefinitionPhase {
-    Start,
-    DeclarationOrBody,
-    AwaitDeclaration,
-    AwaitBody,
-    Finish,
-}
-
 #[expect(
     clippy::missing_assert_message,
     reason = "Frame phases assert the typed driver protocol, whose mismatch already identifies \
               the invariant."
 )]
 impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
-    pub(super) fn new(
-        arena: &'p Bump,
-        head: &'tu Declaration<'tu>,
-        starting_error_count: usize,
-    ) -> Self {
-        Self {
-            phase: FunctionDefinitionPhase::Start,
-            head,
-            declaration_list: ArenaVec::new_in(arena),
-            body: None,
-            source_vectors: None,
-            starting_error_count,
-            suppression_entry: None,
-            switch_floor_entry: 0,
-            entry_scope_depth: None,
-            diagnosed_prototype_declaration_list: false,
-            suggested_missing_semicolon: false,
-        }
-    }
-
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -389,6 +336,62 @@ impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
                 assert!(closed, "function definition owns a label namespace");
                 ParseAction::Reduce(ParseValue::FunctionDefinition(index))
             },
+        }
+    }
+}
+
+/// State transitions for [`FunctionDefinitionFrame`].
+///
+/// C99: §6.9.1 paragraph 1, p. 141; PDF p. 153.
+#[derive(Debug, Clone, Copy)]
+enum FunctionDefinitionPhase {
+    Start,
+    DeclarationOrBody,
+    AwaitDeclaration,
+    AwaitBody,
+    Finish,
+}
+
+/// Parses the optional declaration list and the body that follow a
+/// function-definition head.
+///
+/// C99: §6.9.1 paragraph 1, p. 141; PDF p. 153.
+#[derive(Debug)]
+pub(in crate::translation_phases::parsing) struct FunctionDefinitionFrame<'tu, 'p> {
+    phase: FunctionDefinitionPhase,
+    head: &'tu Declaration<'tu>,
+    pub(in crate::translation_phases::parsing) declaration_list:
+        ArenaVec<'p, &'tu Declaration<'tu>>,
+    body: Option<&'tu Statement<'tu>>,
+    pub(in crate::translation_phases::parsing) source_vectors: Option<SourceVectors>,
+    starting_error_count: usize,
+    suppression_entry: Option<usize>,
+    switch_floor_entry: usize,
+    entry_scope_depth: Option<usize>,
+    diagnosed_prototype_declaration_list: bool,
+    /// Whether a declaration-list diagnostic already explained a probable
+    /// missing `;` after a non-function head.
+    suggested_missing_semicolon: bool,
+}
+
+impl<'tu, 'p> FunctionDefinitionFrame<'tu, 'p> {
+    pub(in crate::translation_phases::parsing) fn new(
+        arena: &'p Bump,
+        head: &'tu Declaration<'tu>,
+        starting_error_count: usize,
+    ) -> Self {
+        Self {
+            phase: FunctionDefinitionPhase::Start,
+            head,
+            declaration_list: ArenaVec::new_in(arena),
+            body: None,
+            source_vectors: None,
+            starting_error_count,
+            suppression_entry: None,
+            switch_floor_entry: 0,
+            entry_scope_depth: None,
+            diagnosed_prototype_declaration_list: false,
+            suggested_missing_semicolon: false,
         }
     }
 }

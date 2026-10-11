@@ -74,103 +74,8 @@ use crate::{
     },
 };
 
-/// Parses an enum specifier, including its optional tag, enumerators, trailing
-/// comma, and optional explicit values.
-///
-/// C99: enumeration specifiers and enumerators are §6.7.2.2,
-/// pp. 105-106; PDF pp. 117-118; tags are §6.7.2.3, pp. 106-107;
-/// PDF pp. 118-119.
-#[derive(Debug)]
-pub(super) struct EnumSpecifierFrame<'tu, 'p> {
-    /// Current tag/enumerator transition.
-    phase: EnumPhase,
-    attribute_resume: EnumPhase,
-    attributes: Option<&'tu SpecifierExtension<'tu>>,
-    enumerator_attributes: Option<&'tu SpecifierExtension<'tu>>,
-    underlying_type: Option<&'tu super::declaration_syntax::TypeName<'tu>>,
-    /// Optional enum tag.
-    name: Option<Identifier>,
-    /// Completed enumerators before arena insertion.
-    pub(super) enumerators: ArenaVec<'p, Enumerator<'tu>>,
-    /// Enumerator name waiting for an optional explicit value.
-    current_enumerator: Option<Identifier>,
-    /// Whether `{` was consumed, distinguishing a reference from a definition.
-    body_started: bool,
-    /// Whether malformed-body recovery stopped before an outer declaration.
-    stopped_before_declaration: bool,
-    /// Hard-error count when `{` was consumed. A body that already reported
-    /// a malformed enumerator does not also report that the list is empty.
-    body_starting_error_count: usize,
-    /// Provenance accumulated across the complete enum specifier.
-    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
-    /// Provenance for the enumerator currently being built.
-    current_enumerator_source: Option<SourceVectors>,
-    /// Whether the enumerator before the current separator position already
-    /// reported an error, so a stray `)` there is not diagnosed again.
-    resuming_after_error: bool,
-}
-
-/// State transitions for an enum tag and enumerator list.
-///
-/// C99: §6.7.2.2 paragraph 1, p. 105; PDF p. 117.
-#[derive(Debug, Clone, Copy)]
-enum EnumPhase {
-    /// Consume the `enum` keyword.
-    Start,
-    AwaitTagAttributes,
-    AwaitEnumeratorAttributes,
-    PushUnderlyingType,
-    AwaitUnderlyingType,
-    /// Parse an optional tag or anonymous opening brace.
-    NameOrBody,
-    /// Decide whether a named tag also has a body.
-    AfterName,
-    /// Parse an enumerator name or the body's closing brace.
-    EnumeratorOrClose,
-    /// Decide whether `=` introduces an explicit value.
-    AfterEnumeratorName,
-    /// Push the constant-expression value.
-    PushEnumeratorValue,
-    /// Receive the enumerator-value child.
-    AwaitEnumeratorValue,
-    /// Require `,` or `}` after one enumerator.
-    AfterEnumerator,
-    /// Store the completed body and return the enum specifier.
-    FinishBody,
-}
-
 impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
-    /// Whether the current `:` opens an enum-type-specifier, whose
-    /// specifier-qualifier-list must follow it. Any other colon belongs to
-    /// the enclosing grammar: a generic association or an unnamed bit-field.
-    /// C23: §6.7.3.3 paragraph 1, p. 109; PDF p. 122.
-    fn underlying_type_follows(parser: &Parser<'_, 'tu, 'p>) -> bool {
-        parser
-            .cursor
-            .following()
-            .is_some_and(|token| parser.type_name_starter(token))
-    }
-
-    pub(super) fn new(arena: &'p Bump) -> Self {
-        Self {
-            phase: EnumPhase::Start,
-            attribute_resume: EnumPhase::NameOrBody,
-            attributes: None,
-            enumerator_attributes: None,
-            underlying_type: None,
-            name: None,
-            enumerators: ArenaVec::new_in(arena),
-            current_enumerator: None,
-            body_started: false,
-            stopped_before_declaration: false,
-            body_starting_error_count: 0,
-            source_vectors: ArenaVec::new_in(arena),
-            current_enumerator_source: None,
-            resuming_after_error: false,
-        }
-    }
-
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -617,6 +522,84 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
             },
         }
     }
+}
+
+/// State transitions for an enum tag and enumerator list.
+///
+/// C99: §6.7.2.2 paragraph 1, p. 105; PDF p. 117.
+#[derive(Debug, Clone, Copy)]
+enum EnumPhase {
+    /// Consume the `enum` keyword.
+    Start,
+    AwaitTagAttributes,
+    AwaitEnumeratorAttributes,
+    PushUnderlyingType,
+    AwaitUnderlyingType,
+    /// Parse an optional tag or anonymous opening brace.
+    NameOrBody,
+    /// Decide whether a named tag also has a body.
+    AfterName,
+    /// Parse an enumerator name or the body's closing brace.
+    EnumeratorOrClose,
+    /// Decide whether `=` introduces an explicit value.
+    AfterEnumeratorName,
+    /// Push the constant-expression value.
+    PushEnumeratorValue,
+    /// Receive the enumerator-value child.
+    AwaitEnumeratorValue,
+    /// Require `,` or `}` after one enumerator.
+    AfterEnumerator,
+    /// Store the completed body and return the enum specifier.
+    FinishBody,
+}
+
+/// Parses an enum specifier, including its optional tag, enumerators, trailing
+/// comma, and optional explicit values.
+///
+/// C99: enumeration specifiers and enumerators are §6.7.2.2,
+/// pp. 105-106; PDF pp. 117-118; tags are §6.7.2.3, pp. 106-107;
+/// PDF pp. 118-119.
+#[derive(Debug)]
+pub(in crate::translation_phases::parsing) struct EnumSpecifierFrame<'tu, 'p> {
+    /// Current tag/enumerator transition.
+    phase: EnumPhase,
+    attribute_resume: EnumPhase,
+    attributes: Option<&'tu SpecifierExtension<'tu>>,
+    enumerator_attributes: Option<&'tu SpecifierExtension<'tu>>,
+    underlying_type: Option<&'tu super::declaration_syntax::TypeName<'tu>>,
+    /// Optional enum tag.
+    name: Option<Identifier>,
+    /// Completed enumerators before arena insertion.
+    pub(in crate::translation_phases::parsing) enumerators: ArenaVec<'p, Enumerator<'tu>>,
+    /// Enumerator name waiting for an optional explicit value.
+    current_enumerator: Option<Identifier>,
+    /// Whether `{` was consumed, distinguishing a reference from a definition.
+    body_started: bool,
+    /// Whether malformed-body recovery stopped before an outer declaration.
+    stopped_before_declaration: bool,
+    /// Hard-error count when `{` was consumed. A body that already reported
+    /// a malformed enumerator does not also report that the list is empty.
+    body_starting_error_count: usize,
+    /// Provenance accumulated across the complete enum specifier.
+    pub(in crate::translation_phases::parsing) source_vectors: ArenaVec<'p, SourceVectors>,
+    /// Provenance for the enumerator currently being built.
+    current_enumerator_source: Option<SourceVectors>,
+    /// Whether the enumerator before the current separator position already
+    /// reported an error, so a stray `)` there is not diagnosed again.
+    resuming_after_error: bool,
+}
+
+impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
+    /// Whether the current `:` opens an enum-type-specifier, whose
+    /// specifier-qualifier-list must follow it. Any other colon belongs to
+    /// the enclosing grammar: a generic association or an unnamed bit-field.
+    /// C23: §6.7.3.3 paragraph 1, p. 109; PDF p. 122.
+    fn underlying_type_follows(parser: &Parser<'_, 'tu, 'p>) -> bool {
+        parser
+            .cursor
+            .following()
+            .is_some_and(|token| parser.type_name_starter(token))
+    }
 
     /// Whether `token`, which cannot start an enumerator, stands alone in
     /// enumerator position: a non-identifier, non-delimiter token followed by
@@ -737,5 +720,24 @@ impl<'tu, 'p> EnumSpecifierFrame<'tu, 'p> {
             index,
             stopped_before_declaration: self.stopped_before_declaration,
         }))
+    }
+
+    pub(in crate::translation_phases::parsing) fn new(arena: &'p Bump) -> Self {
+        Self {
+            phase: EnumPhase::Start,
+            attribute_resume: EnumPhase::NameOrBody,
+            attributes: None,
+            enumerator_attributes: None,
+            underlying_type: None,
+            name: None,
+            enumerators: ArenaVec::new_in(arena),
+            current_enumerator: None,
+            body_started: false,
+            stopped_before_declaration: false,
+            body_starting_error_count: 0,
+            source_vectors: ArenaVec::new_in(arena),
+            current_enumerator_source: None,
+            resuming_after_error: false,
+        }
     }
 }

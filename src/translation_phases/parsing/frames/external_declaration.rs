@@ -46,48 +46,8 @@ use crate::translation_phases::{
     },
 };
 
-/// Root frame that converts one declaration child into a valid or explicitly
-/// recovered external-declaration item.
-///
-/// C99: external-declaration is specified by §6.9, p. 140; PDF p. 152.
-/// Its file-scope position is §6.9 paragraph 4, p. 140; PDF p. 152.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct ExternalDeclarationFrame {
-    /// Current root-frame transition.
-    phase:                     ExternalDeclarationPhase,
-    /// Hard-error count at entry, used to classify the yielded AST and handed
-    /// to a function-definition child.
-    starting_error_count:      usize,
-    /// Pending-diagnostic boundary used to attach root-level recovery context
-    /// to the primary diagnostic for this external declaration.
-    starting_diagnostic_count: usize,
-}
-
-/// Transitions for one external declaration.
-///
-/// C99: §6.9, p. 140; PDF p. 152. The phase split is an implementation detail.
-#[derive(Debug, Clone, Copy)]
-enum ExternalDeclarationPhase {
-    /// Push the declaration child without consuming its first token.
-    Start,
-    AwaitAsm,
-    /// Classify the completed declaration from diagnostics emitted since entry.
-    AwaitDeclaration,
-    /// Receive a function definition selected from the completed declaration
-    /// head.
-    AwaitFunctionDefinition,
-}
-
 impl<'tu, 'p> ExternalDeclarationFrame {
-    pub(super) fn new(starting_error_count: usize, starting_diagnostic_count: usize) -> Self {
-        Self {
-            phase: ExternalDeclarationPhase::Start,
-            starting_error_count,
-            starting_diagnostic_count,
-        }
-    }
-
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -211,6 +171,51 @@ impl<'tu, 'p> ExternalDeclarationFrame {
                     ExternalDeclaration::FunctionDefinition(definition)
                 }))
             },
+        }
+    }
+}
+
+/// Transitions for one external declaration.
+///
+/// C99: §6.9, p. 140; PDF p. 152. The phase split is an implementation detail.
+#[derive(Debug, Clone, Copy)]
+enum ExternalDeclarationPhase {
+    /// Push the declaration child without consuming its first token.
+    Start,
+    AwaitAsm,
+    /// Classify the completed declaration from diagnostics emitted since entry.
+    AwaitDeclaration,
+    /// Receive a function definition selected from the completed declaration
+    /// head.
+    AwaitFunctionDefinition,
+}
+
+/// Root frame that converts one declaration child into a valid or explicitly
+/// recovered external-declaration item.
+///
+/// C99: external-declaration is specified by §6.9, p. 140; PDF p. 152.
+/// Its file-scope position is §6.9 paragraph 4, p. 140; PDF p. 152.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::translation_phases::parsing) struct ExternalDeclarationFrame {
+    /// Current root-frame transition.
+    phase:                     ExternalDeclarationPhase,
+    /// Hard-error count at entry, used to classify the yielded AST and handed
+    /// to a function-definition child.
+    starting_error_count:      usize,
+    /// Pending-diagnostic boundary used to attach root-level recovery context
+    /// to the primary diagnostic for this external declaration.
+    starting_diagnostic_count: usize,
+}
+
+impl ExternalDeclarationFrame {
+    pub(in crate::translation_phases::parsing) fn new(
+        starting_error_count: usize,
+        starting_diagnostic_count: usize,
+    ) -> Self {
+        Self {
+            phase: ExternalDeclarationPhase::Start,
+            starting_error_count,
+            starting_diagnostic_count,
         }
     }
 }

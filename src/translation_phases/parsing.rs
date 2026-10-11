@@ -31,24 +31,89 @@
 //! normative clause, the standard's printed page, and the one-based page in
 //! the repository's `standards/c99-n1256.pdf`.
 
-mod compound_statement;
-mod declaration;
-mod declaration_specifiers;
+mod allocation;
+
 pub(crate) mod declaration_syntax;
-mod declarator;
-mod driver;
-mod enum_specifier;
+
 mod errors;
-mod expression;
-mod expression_operators;
-mod external_declaration;
+
+mod extensions;
+
 mod frame_pool;
-mod function_definition;
-mod gnu;
-mod initializer;
+
+mod frames;
+
+mod input;
+
 mod inspection;
+
+mod limits;
+
+mod lookahead;
+
 mod machine;
-mod modern;
+
+mod recovery;
+
+mod scope;
+
+pub(crate) mod syntax;
+
+mod syntax_log;
+
+mod token_cursor;
+
+mod token_diagnostics;
+
+mod translation_unit;
+
+#[cfg(test)]
+pub(crate) use declaration_syntax::DirectDeclarator;
+pub(crate) use declaration_syntax::TypeSpecifiers;
+pub(crate) use errors::ParserError;
+use errors::{
+    ParserErrorType,
+    ParserResource,
+};
+use expression_operators::is_operator;
+pub(crate) use extensions::{
+    gnu,
+    modern,
+    msvc,
+};
+use external_declaration::ExternalDeclarationFrame;
+use frames::{
+    compound_statement,
+    declaration,
+    declaration_specifiers,
+    declarator,
+    enum_specifier,
+    expression,
+    expression_operators,
+    external_declaration,
+    function_definition,
+    initializer,
+    parameter_list,
+    statement,
+    struct_or_union,
+    type_name,
+};
+pub(crate) use gnu::{
+    Builtin,
+    OffsetMember,
+};
+pub(crate) use inspection::InspectionOptions;
+use limits::ParserLimits;
+#[cfg(test)]
+use machine::FrameTrace;
+#[cfg(test)]
+use machine::FrameTraceEvent;
+use machine::{
+    ParseAction,
+    ParseFrame,
+    ParseFrameKind,
+    ParseValue,
+};
 pub(crate) use modern::{
     AttributeSpecifier,
     ExtendedType,
@@ -57,44 +122,6 @@ pub(crate) use modern::{
     SpecifierExtensionKind,
     StaticAssertion,
     SyntaxOperand,
-};
-mod msvc;
-mod parameter_list;
-mod recovery;
-mod scope;
-mod statement;
-mod struct_or_union;
-pub(crate) mod syntax;
-mod syntax_log;
-#[cfg(test)]
-#[expect(
-    clippy::disallowed_types,
-    clippy::disallowed_macros,
-    clippy::disallowed_methods,
-    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
-              compiler, not its tests."
-)]
-mod tests;
-mod token_cursor;
-mod type_name;
-
-use std::fmt::Debug;
-
-#[cfg(test)]
-pub(crate) use declaration_syntax::DirectDeclarator;
-pub(crate) use declaration_syntax::TypeSpecifiers;
-pub(crate) use errors::ParserError;
-pub(crate) use gnu::{
-    Builtin,
-    OffsetMember,
-};
-pub(crate) use inspection::InspectionOptions;
-#[cfg(test)]
-use machine::FrameTraceEvent;
-use machine::{
-    ParseFrame,
-    ParseFrameKind,
-    ParseValue,
 };
 use recovery::RecoveryState;
 use scope::{
@@ -106,13 +133,16 @@ pub(crate) use syntax::ExternalDeclaration;
 #[cfg(test)]
 use syntax_log::SyntaxLog;
 use token_cursor::TokenCursor;
+pub(crate) use translation_unit::{
+    ParsedTranslationUnit,
+    PreprocessedTranslationUnit,
+};
 
 use crate::{
     translation_phases::{
         Context,
-        GetPosition,
-        GetSourceFileIndex,
-        SourcePosition,
+        preprocessing,
+        preprocessing::OperatorTokenType,
     },
     util::{
         bump::{
@@ -124,13 +154,236 @@ use crate::{
     },
 };
 
-/// Driver actions, recorded only by test builds.
-#[cfg(test)]
-#[expect(
-    clippy::disallowed_types,
-    reason = "A test-only trace, compiled only under `cfg(test)`."
-)]
-type FrameTrace = Vec<FrameTraceEvent>;
+impl<'tu> Parser<'_, 'tu, '_> {
+    /// Parses the complete phase-7 input into one source-ordered translation
+    /// unit whose roots and syntax live in the translation-unit arena.
+    ///
+    /// Roots already observed through [`Self::next_item`] remain part of the
+    /// aggregate result so mixing the streaming adapter with the owning seam
+    /// cannot silently produce a suffix-only translation unit.
+    pub(crate) fn parse_translation_unit(mut self) -> ParsedTranslationUnit<'tu> {
+        while let Some(root) = self.drive() {
+            self.emitted_roots.push(root);
+        }
+        ParsedTranslationUnit {
+            roots: self.emitted_roots,
+        }
+    }
+
+    /// Streaming adapter: drives the machine until one external declaration
+    /// reduces, and returns it.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Tests stream roots; the pipeline parses whole translation units."
+        )
+    )]
+    pub(crate) fn next_item(&mut self) -> Option<ExternalDeclaration<'tu>> {
+        let root = self.drive()?;
+        self.emitted_roots.push(root);
+        Some(root)
+    }
+
+    /// Runs owned frame actions until one external declaration reduces or EOF
+    /// is observed between declarations.
+    ///
+    /// C99: translation-unit is a nonempty sequence of external-declaration
+    /// values under §6.9, p. 140; PDF p. 152.
+    pub(super) fn drive(&mut self) -> Option<ExternalDeclaration<'tu>> {
+        // A resource failure is terminal: the remaining input is neither
+        // fetched nor parsed, so it cannot grow the exhausted storage.
+        if self.resource_limit_reported {
+            return None;
+        }
+        if let Some(token) = self.cursor.upstream.preprocessing_limit_token.take() {
+            return self.resource_failure_at(
+                ParserResource::SourceSegments,
+                self.limits.source_segments,
+                Some(token),
+            );
+        }
+        loop {
+            #[cfg(test)]
+            assert!(
+                self.action_budget
+                    .is_none_or(|budget| self.trace.len() < budget),
+                "parser exhausted its test action budget without terminating"
+            );
+            if matches!(self.returned, Some(ParseValue::ExternalDeclaration(_))) {
+                let Some(ParseValue::ExternalDeclaration(external)) = self.returned.take() else {
+                    unreachable!("the returned value was just checked")
+                };
+                self.has_external_declaration = true;
+                self.external_declaration_count = self
+                    .external_declaration_count
+                    .checked_add(1)
+                    .expect("external declaration count overflows usize");
+                self.scopes.clear_retained_bindings();
+                self.context.discard_completed_macro_locations(
+                    self.cursor.previous.map(|token| token.source_vectors),
+                );
+                return Some(external);
+            }
+            debug_assert!(
+                self.returned.is_none() || !self.frames.is_empty(),
+                "a child value must have a parent frame"
+            );
+
+            if self.frames.is_empty() {
+                // C99 §6.9p1: `translation-unit` needs at least one
+                // `external-declaration`.
+                if self.cursor.current().is_none() {
+                    if !self.has_external_declaration && !self.reported_empty_translation_unit {
+                        self.reported_empty_translation_unit = true;
+                        self.report(ParserErrorType::EmptyTranslationUnit, None);
+                    }
+                    return None;
+                }
+                // C99 §6.9p1 has no empty external declaration. GNU
+                // extension: a `;` between external declarations, such as one
+                // an empty macro leaves behind, declares nothing. As in Clang,
+                // it keeps the translation unit from being empty.
+                if let Some(token) = self.cursor.current()
+                    && is_operator(Some(token), OperatorTokenType::Semicolon)
+                {
+                    self.extension(
+                        crate::configuration::Feature::ExtraSemicolons,
+                        "extra semicolon outside a function",
+                        token,
+                    );
+                    self.has_external_declaration = true;
+                    self.cursor.consume();
+                    continue;
+                }
+                if self.external_declaration_count >= self.limits.external_declarations {
+                    return self.resource_failure(
+                        ParserResource::ExternalDeclarations,
+                        self.limits.external_declarations,
+                    );
+                }
+                self.push_frame(ParseFrame::ExternalDeclaration(
+                    ExternalDeclarationFrame::new(
+                        self.hard_error_count,
+                        self.context.pending_errors.len(),
+                    ),
+                ));
+            }
+
+            if self.frames.len() > self.limits.frame_depth {
+                return self.resource_failure(ParserResource::FrameDepth, self.limits.frame_depth);
+            }
+            // The syntax-node limit was checked after the previous step. Since
+            // then only a consumed token, a pushed frame (new frames retain no
+            // nodes), or a reduction (which releases retained nodes) occurred.
+            debug_assert!(
+                self.syntax_nodes
+                    .checked_add(self.retained_frame_nodes)
+                    .expect("total syntax node count overflows usize")
+                    <= self.limits.syntax_nodes,
+                "syntax-node limit holds between steps"
+            );
+
+            let token = self.cursor.current();
+            let returned = self.returned.take();
+            // Step the active frame in place. Frames never inspect the control
+            // stack, so it is detached while the frame borrows the parser.
+            let mut frames = std::mem::replace(&mut self.frames, ArenaVec::new_in(self.arena));
+            let frame = frames.last_mut().expect("parser frame stack is nonempty");
+            let frame_kind = frame.kind();
+            self.active_frame = frame_kind;
+            let retained_before = frame.retained_node_count();
+            let action = frame.step(self, token, returned);
+            let retained_after = frame.retained_node_count();
+            self.frames = frames;
+            self.retained_frame_nodes = self
+                .retained_frame_nodes
+                .checked_sub(retained_before)
+                .expect("pending syntax count matches the frame stack")
+                .checked_add(retained_after)
+                .expect("retained syntax node count overflows usize");
+            if self.context.source_segment_count() > self.limits.source_segments {
+                return self
+                    .resource_failure(ParserResource::SourceSegments, self.limits.source_segments);
+            }
+
+            #[cfg(test)]
+            self.trace.push(FrameTraceEvent {
+                frame:  frame_kind.label(),
+                action: action.name(),
+                token:  token.map(|token| token.kind),
+                depth:  self.frames.len(),
+            });
+
+            #[cfg(test)]
+            assert_eq!(
+                self.syntax_nodes,
+                self.syntax.node_count(),
+                "the running syntax-node total matches the log"
+            );
+            // A step that crosses a limit keeps the nodes it allocated: the
+            // translation-unit arena cannot take memory back while
+            // references into it may exist. Parsing stops here, so those
+            // nodes are freed with the arena.
+            if self
+                .syntax_nodes
+                .checked_add(self.retained_frame_nodes)
+                .expect("total syntax node count overflows usize")
+                > self.limits.syntax_nodes
+            {
+                return self
+                    .resource_failure(ParserResource::SyntaxNodes, self.limits.syntax_nodes);
+            }
+
+            match action {
+                | ParseAction::Consume =>
+                    if let Some(token) = token {
+                        self.suppress_token_diagnostic(token);
+                        self.cursor.consume();
+                    } else {
+                        self.report(
+                            ParserErrorType::ParserFrameConsumedAtEndOfInput(frame_kind),
+                            None,
+                        );
+                    },
+                | ParseAction::Push(child) => {
+                    self.push_frame(child);
+                },
+                | ParseAction::Reduce(value) => {
+                    let frame = self.pop_frame();
+                    frame.reclaim_pooled(&mut self.pools);
+                    self.returned = Some(value);
+                },
+                | ParseAction::Reprocess => {},
+                | ParseAction::Continue => {
+                    unreachable!("frame dispatch resolves continued transitions")
+                },
+                | ParseAction::Recover(set) => {
+                    debug_assert!(
+                        set.target == frame_kind,
+                        "a recovery set must target the frame that requested it"
+                    );
+
+                    let recovered_source_vectors = {
+                        #[cfg(test)]
+                        {
+                            let depth = self.frames.len();
+                            self.recover(set, depth)
+                        }
+                        #[cfg(not(test))]
+                        {
+                            self.recover(set)
+                        }
+                    };
+                    self.frames
+                        .last_mut()
+                        .expect("the recovering frame remains active")
+                        .merge_recovered_sources(self.context, recovered_source_vectors);
+                },
+            }
+        }
+    }
+}
 
 /// Owns parser input, control frames, the syntax node count, scopes, and
 /// diagnostics.
@@ -201,7 +454,7 @@ pub(crate) struct Parser<'c, 'tu, 'p> {
     /// for the tokens read are suppressed.
     pedantic_suppression: usize,
     /// Token diagnostics indexed once by spelling, provenance and invocation.
-    token_diagnostics: driver::TokenDiagnostics<'tu, 'p>,
+    token_diagnostics: token_diagnostics::TokenDiagnostics<'tu, 'p>,
     /// The number of `switch_scopes` entries that belong to enclosing
     /// function bodies, so a nested function's `case` labels never attach
     /// to an outer `switch`.
@@ -226,139 +479,12 @@ pub(crate) struct Parser<'c, 'tu, 'p> {
     action_budget: Option<usize>,
 }
 
-/// Fully preprocessed parser input. The preprocessor can be dropped before
-/// parser working memory is created.
-///
-/// C99: the output of translation phases 1-6 for one translation unit
-/// (§5.1.1.1, p. 9; PDF p. 21; §5.1.1.2 paragraph 1, pp. 9-10;
-/// PDF pp. 21-22).
-pub(crate) struct PreprocessedTranslationUnit {
-    upstream: token_cursor::Upstream,
-}
-
-/// Catchable ceilings on parser resources.
-///
-/// C99: §5.2.4.1, pp. 20-21; PDF pp. 32-33 sets only minimums, and its
-/// footnote 13, p. 20; PDF p. 32 asks implementations to avoid fixed
-/// translation limits. The defaults are therefore representation bounds,
-/// not grammar limits.
-#[derive(Debug, Clone, Copy)]
-struct ParserLimits {
-    external_declarations: usize,
-    syntax_nodes:          usize,
-    frame_depth:           usize,
-    source_segments:       usize,
-}
-
-impl Default for ParserLimits {
-    fn default() -> Self {
-        Self {
-            // These counters and their backing collections use `usize`.
-            // There is no smaller grammar or representation limit.
-            external_declarations: usize::MAX,
-            syntax_nodes:          usize::MAX,
-            // Scope bindings store their nesting depth in a `u32`.
-            frame_depth:           u32::MAX as usize,
-            // Each source arena checks its own `u32` index space. Their
-            // combined count has no smaller representation limit than usize.
-            source_segments:       usize::MAX,
-        }
-    }
-}
-
-/// One completely parsed translation unit: its source-ordered roots, which
-/// borrow the syntax tree from the translation-unit arena.
-///
-/// The roots themselves stay in the region the parser collected them in,
-/// which the unit owns and releases when it is dropped.
-///
-/// This is the shared boundary for callers, inspection, tests, and the future
-/// semantic-analysis phase. Parser-machine state is deliberately not exposed.
-///
-/// C99: `translation-unit`, §6.9 paragraph 1, p. 140; PDF p. 152.
-#[derive(Debug)]
-pub(crate) struct ParsedTranslationUnit<'tu> {
-    roots: RegionVec<ExternalDeclaration<'tu>>,
-}
-
-impl<'tu> ParsedTranslationUnit<'tu> {
-    pub(crate) fn external_declarations(&self) -> &[ExternalDeclaration<'tu>] {
-        &self.roots
-    }
-
-    /// The whole tree as Rust debug output, for storage debugging. Each root
-    /// prints on one line in compact form even under `{:#?}`: indenting a
-    /// deeply nested tree would make the output grow with the square of its
-    /// depth.
-    pub(crate) fn raw_debug(&self) -> impl Debug + Send + '_ {
-        RawRoots(&self.roots)
-    }
-}
-
-/// [`ParsedTranslationUnit::raw_debug`]'s view.
-struct RawRoots<'a, 'tu>(&'a [ExternalDeclaration<'tu>]);
-
-/// One root in compact debug form, whatever the formatter's flags.
-struct CompactRoot<'a, 'tu>(&'a ExternalDeclaration<'tu>);
-
-impl Debug for RawRoots<'_, '_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ParsedTranslationUnit")
-            .field("roots", &RawList(self.0))
-            .finish()
-    }
-}
-
-/// The roots as a list of compact entries.
-struct RawList<'a, 'tu>(&'a [ExternalDeclaration<'tu>]);
-
-impl Debug for RawList<'_, '_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list()
-            .entries(self.0.iter().map(CompactRoot))
-            .finish()
-    }
-}
-
-impl Debug for CompactRoot<'_, '_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.0)
-    }
-}
-
-impl Parser<'_, '_, '_> {
-    /// Where the preprocessor stopped reading, for end-of-input locations.
-    fn position(&self) -> SourcePosition {
-        self.cursor.upstream.position(self.context)
-    }
-}
-
-impl GetSourceFileIndex for Parser<'_, '_, '_> {
-    fn source_file_index(&self) -> u32 {
-        self.cursor.upstream.source_file_index()
-    }
-}
-
-impl<'tu> Parser<'_, 'tu, '_> {
-    /// Streaming adapter: drives the machine until one external declaration
-    /// reduces, and returns it.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Tests stream roots; the pipeline parses whole translation units."
-        )
-    )]
-    pub(crate) fn next_item(&mut self) -> Option<ExternalDeclaration<'tu>> {
-        let root = self.drive()?;
-        self.emitted_roots.push(root);
-        Some(root)
-    }
-
-    /// The translation context this parser borrows, for tests outside the
-    /// parser.
-    #[cfg(test)]
-    pub(crate) fn context(&mut self) -> &mut Context<'tu> {
-        self.context
-    }
-}
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "Tests build inputs and expected values with std types; the arena rule covers the \
+              compiler, not its tests."
+)]
+mod tests;

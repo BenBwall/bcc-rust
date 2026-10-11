@@ -98,191 +98,6 @@ use crate::translation_phases::{
     },
 };
 
-/// Tokens a malformed statement header may span before recovery stops
-/// looking for its closing parenthesis.
-const HEADER_RECOVERY_LOOKAHEAD: u16 = 256;
-
-/// Statements whose header is `( expression )` followed by one substatement.
-///
-/// C99: `if` and `switch` are §6.8.4, p. 133; PDF p. 145; `while` is
-/// §6.8.5, p. 135; PDF p. 147.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HeaderKind {
-    If,
-    Switch,
-    While,
-}
-
-/// The prefix of a `labeled-statement`: `identifier :`,
-/// `case constant-expression :`, or `default :`.
-///
-/// C99: §6.8.1 paragraph 1, p. 131; PDF p. 143.
-#[derive(Debug, Clone, Copy)]
-enum LabelPrefix<'tu> {
-    Identifier(Identifier),
-    Case(ConstantExpressionSlot<'tu>),
-    Range(ConstantExpressionSlot<'tu>, ConstantExpressionSlot<'tu>),
-    Default,
-}
-
-impl<'tu> LabelPrefix<'tu> {
-    /// The labeled statement this prefix makes of `statement`.
-    fn label(
-        self,
-        parser: &mut Parser<'_, 'tu, '_>,
-        statement: &'tu Statement<'tu>,
-    ) -> StatementType<'tu> {
-        match self {
-            | Self::Identifier(identifier) => StatementType::Label(identifier, statement),
-            | Self::Case(expression) => StatementType::Case(expression, statement),
-            | Self::Default => StatementType::Default(statement),
-            | Self::Range(lower, upper) =>
-                StatementType::CaseRange(parser.alloc_syntax(CaseRange {
-                    lower,
-                    upper,
-                    statement,
-                })),
-        }
-    }
-}
-
-/// The operand-free `jump-statement`s `break ;` and `continue ;`.
-///
-/// C99: §6.8.6 paragraph 1, p. 136; PDF p. 148.
-#[derive(Debug, Clone, Copy)]
-enum SimpleJump {
-    Break,
-    Continue,
-}
-
-/// Resumable positions inside one statement production. The `Header*` and
-/// `If*` phases cover the parenthesized-header statements, `Do*` the `do`
-/// statement, and `For*` the `for` statement of §6.8.5, p. 135; PDF p. 147.
-#[derive(Debug, Clone, Copy)]
-enum StatementPhase<'tu> {
-    Start,
-    AwaitGnu,
-    AwaitMsvc,
-    ComputedGotoExpression,
-    AwaitComputedGoto,
-    ComputedGotoSemicolon(ExpressionSlot<'tu>),
-    AwaitAttributes,
-    AwaitAttributedStatement(&'tu AttributeSpecifier<'tu>),
-    AwaitLabeledDeclaration(LabelPrefix<'tu>),
-    NamedJumpSemicolon(SimpleJump, Identifier),
-    AwaitHeaderDeclaration(HeaderKind),
-    AwaitSelectionExpression(HeaderKind, &'tu super::declaration_syntax::Declaration<'tu>),
-    PushCaseRange(ConstantExpressionSlot<'tu>),
-    AwaitCaseRange(ConstantExpressionSlot<'tu>),
-    AwaitCompound,
-    AwaitExpression,
-    ExpressionSemicolon(ExpressionSlot<'tu>),
-    ReturnStart,
-    AwaitReturnExpression,
-    ReturnSemicolon(Option<ExpressionSlot<'tu>>),
-    SimpleJumpSemicolon(SimpleJump),
-    GotoIdentifier,
-    GotoSemicolon(Identifier),
-    IdentifierLabelColon(Identifier),
-    CaseExpression,
-    AwaitCaseExpression,
-    CaseColon(ConstantExpressionSlot<'tu>),
-    DefaultColon,
-    PushLabeled(LabelPrefix<'tu>),
-    AwaitLabeled(LabelPrefix<'tu>),
-    HeaderOpening(HeaderKind),
-    HeaderExpression(HeaderKind),
-    AwaitHeaderExpression(HeaderKind),
-    HeaderClosing(HeaderKind, ExpressionSlot<'tu>),
-    PushHeaderBody(HeaderKind, ExpressionSlot<'tu>),
-    AwaitHeaderBody(HeaderKind, ExpressionSlot<'tu>),
-    IfAfterThen(ExpressionSlot<'tu>, &'tu Statement<'tu>),
-    PushElse(ExpressionSlot<'tu>, &'tu Statement<'tu>),
-    AwaitElse(ExpressionSlot<'tu>, &'tu Statement<'tu>),
-    DoPushBody,
-    DoAwaitBody,
-    DoWhileKeyword(&'tu Statement<'tu>),
-    DoOpening(&'tu Statement<'tu>),
-    DoExpression(&'tu Statement<'tu>),
-    DoAwaitExpression(&'tu Statement<'tu>),
-    DoClosing(&'tu Statement<'tu>, ExpressionSlot<'tu>),
-    DoSemicolon(&'tu Statement<'tu>, ExpressionSlot<'tu>),
-    ForOpening,
-    ForInitializer,
-    AwaitForInitializerExpression,
-    AwaitForInitializerDeclaration,
-    ForInitializerSemicolon(ExpressionSlot<'tu>),
-    ForCondition(Option<ForInitializer<'tu>>),
-    AwaitForCondition(Option<ForInitializer<'tu>>),
-    ForConditionSemicolon(Option<ForInitializer<'tu>>, ExpressionSlot<'tu>),
-    ForIteration(Option<ForInitializer<'tu>>, Option<ExpressionSlot<'tu>>),
-    AwaitForIteration(Option<ForInitializer<'tu>>, Option<ExpressionSlot<'tu>>),
-    ForClosing(
-        Option<ForInitializer<'tu>>,
-        Option<ExpressionSlot<'tu>>,
-        Option<ExpressionSlot<'tu>>,
-    ),
-    /// Consumes the counted remaining tokens of a malformed `for` header,
-    /// which include an extra `;` clause, before its closing parenthesis.
-    ForSkipHeader(
-        Option<ForInitializer<'tu>>,
-        Option<ExpressionSlot<'tu>>,
-        Option<ExpressionSlot<'tu>>,
-        u16,
-    ),
-    ForPushBody(
-        Option<ForInitializer<'tu>>,
-        Option<ExpressionSlot<'tu>>,
-        Option<ExpressionSlot<'tu>>,
-    ),
-    ForAwaitBody(
-        Option<ForInitializer<'tu>>,
-        Option<ExpressionSlot<'tu>>,
-        Option<ExpressionSlot<'tu>>,
-    ),
-    Recovered,
-    Finish(StatementType<'tu>),
-}
-
-/// Resumable `statement` production.
-///
-/// C99: §6.8 paragraph 1, p. 131; PDF p. 143; §A.2.3, pp. 415-416;
-/// PDF pp. 427-428.
-#[derive(Debug)]
-pub(super) struct StatementFrame<'tu> {
-    phase:                     StatementPhase<'tu>,
-    pub(super) source_vectors: Option<SourceVectors>,
-    starting_error_count:      usize,
-    entry_scope_depth:         Option<usize>,
-    implicit_scope:            Option<ScopeKind>,
-    owns_switch_scope:         bool,
-    leave_else_unconsumed:     bool,
-    /// C23 permits standalone labels among compound block items, not as a
-    /// selection/iteration substatement whose required statement is absent.
-    block_item:                bool,
-}
-
-impl HeaderKind {
-    fn name(self) -> &'static str {
-        match self {
-            | Self::If => "if statement",
-            | Self::Switch => "switch statement",
-            | Self::While => "while statement",
-        }
-    }
-
-    /// The implicit block each substatement forms.
-    ///
-    /// C99: §6.8.4 paragraph 3, p. 133; PDF p. 145; §6.8.5 paragraph 5,
-    /// p. 135; PDF p. 147.
-    fn scope_kind(self) -> ScopeKind {
-        match self {
-            | Self::If | Self::Switch => ScopeKind::ImplicitSelection,
-            | Self::While => ScopeKind::ImplicitIteration,
-        }
-    }
-}
-
 #[expect(
     clippy::missing_assert_message,
     clippy::too_many_lines,
@@ -290,44 +105,7 @@ impl HeaderKind {
               delimiter ownership visible in one frame implementation."
 )]
 impl<'tu, 'p> StatementFrame<'tu> {
-    pub(super) fn new(starting_error_count: usize, implicit_scope: Option<ScopeKind>) -> Self {
-        Self {
-            phase: StatementPhase::Start,
-            source_vectors: None,
-            starting_error_count,
-            entry_scope_depth: None,
-            implicit_scope,
-            owns_switch_scope: false,
-            leave_else_unconsumed: false,
-            block_item: false,
-        }
-    }
-
-    pub(super) fn with_block_item(mut self, block_item: bool) -> Self {
-        self.block_item = block_item;
-        self
-    }
-
-    fn with_else_ownership(
-        starting_error_count: usize,
-        implicit_scope: Option<ScopeKind>,
-        leave_else_unconsumed: bool,
-    ) -> Self {
-        Self {
-            leave_else_unconsumed,
-            ..Self::new(starting_error_count, implicit_scope)
-        }
-    }
-
-    /// The `then` substatement leaves a following `else` to its `if`, so the
-    /// `else` pairs with the lexically nearest `if`.
-    ///
-    /// C99: §6.8.4.1 paragraph 3, p. 134; PDF p. 146.
-    fn for_if_then(starting_error_count: usize, implicit_scope: Option<ScopeKind>) -> Self {
-        Self::with_else_ownership(starting_error_count, implicit_scope, true)
-    }
-
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -1684,6 +1462,201 @@ impl<'tu, 'p> StatementFrame<'tu> {
             },
         }
     }
+}
+
+/// Resumable positions inside one statement production. The `Header*` and
+/// `If*` phases cover the parenthesized-header statements, `Do*` the `do`
+/// statement, and `For*` the `for` statement of §6.8.5, p. 135; PDF p. 147.
+#[derive(Debug, Clone, Copy)]
+enum StatementPhase<'tu> {
+    Start,
+    AwaitGnu,
+    AwaitMsvc,
+    ComputedGotoExpression,
+    AwaitComputedGoto,
+    ComputedGotoSemicolon(ExpressionSlot<'tu>),
+    AwaitAttributes,
+    AwaitAttributedStatement(&'tu AttributeSpecifier<'tu>),
+    AwaitLabeledDeclaration(LabelPrefix<'tu>),
+    NamedJumpSemicolon(SimpleJump, Identifier),
+    AwaitHeaderDeclaration(HeaderKind),
+    AwaitSelectionExpression(HeaderKind, &'tu super::declaration_syntax::Declaration<'tu>),
+    PushCaseRange(ConstantExpressionSlot<'tu>),
+    AwaitCaseRange(ConstantExpressionSlot<'tu>),
+    AwaitCompound,
+    AwaitExpression,
+    ExpressionSemicolon(ExpressionSlot<'tu>),
+    ReturnStart,
+    AwaitReturnExpression,
+    ReturnSemicolon(Option<ExpressionSlot<'tu>>),
+    SimpleJumpSemicolon(SimpleJump),
+    GotoIdentifier,
+    GotoSemicolon(Identifier),
+    IdentifierLabelColon(Identifier),
+    CaseExpression,
+    AwaitCaseExpression,
+    CaseColon(ConstantExpressionSlot<'tu>),
+    DefaultColon,
+    PushLabeled(LabelPrefix<'tu>),
+    AwaitLabeled(LabelPrefix<'tu>),
+    HeaderOpening(HeaderKind),
+    HeaderExpression(HeaderKind),
+    AwaitHeaderExpression(HeaderKind),
+    HeaderClosing(HeaderKind, ExpressionSlot<'tu>),
+    PushHeaderBody(HeaderKind, ExpressionSlot<'tu>),
+    AwaitHeaderBody(HeaderKind, ExpressionSlot<'tu>),
+    IfAfterThen(ExpressionSlot<'tu>, &'tu Statement<'tu>),
+    PushElse(ExpressionSlot<'tu>, &'tu Statement<'tu>),
+    AwaitElse(ExpressionSlot<'tu>, &'tu Statement<'tu>),
+    DoPushBody,
+    DoAwaitBody,
+    DoWhileKeyword(&'tu Statement<'tu>),
+    DoOpening(&'tu Statement<'tu>),
+    DoExpression(&'tu Statement<'tu>),
+    DoAwaitExpression(&'tu Statement<'tu>),
+    DoClosing(&'tu Statement<'tu>, ExpressionSlot<'tu>),
+    DoSemicolon(&'tu Statement<'tu>, ExpressionSlot<'tu>),
+    ForOpening,
+    ForInitializer,
+    AwaitForInitializerExpression,
+    AwaitForInitializerDeclaration,
+    ForInitializerSemicolon(ExpressionSlot<'tu>),
+    ForCondition(Option<ForInitializer<'tu>>),
+    AwaitForCondition(Option<ForInitializer<'tu>>),
+    ForConditionSemicolon(Option<ForInitializer<'tu>>, ExpressionSlot<'tu>),
+    ForIteration(Option<ForInitializer<'tu>>, Option<ExpressionSlot<'tu>>),
+    AwaitForIteration(Option<ForInitializer<'tu>>, Option<ExpressionSlot<'tu>>),
+    ForClosing(
+        Option<ForInitializer<'tu>>,
+        Option<ExpressionSlot<'tu>>,
+        Option<ExpressionSlot<'tu>>,
+    ),
+    /// Consumes the counted remaining tokens of a malformed `for` header,
+    /// which include an extra `;` clause, before its closing parenthesis.
+    ForSkipHeader(
+        Option<ForInitializer<'tu>>,
+        Option<ExpressionSlot<'tu>>,
+        Option<ExpressionSlot<'tu>>,
+        u16,
+    ),
+    ForPushBody(
+        Option<ForInitializer<'tu>>,
+        Option<ExpressionSlot<'tu>>,
+        Option<ExpressionSlot<'tu>>,
+    ),
+    ForAwaitBody(
+        Option<ForInitializer<'tu>>,
+        Option<ExpressionSlot<'tu>>,
+        Option<ExpressionSlot<'tu>>,
+    ),
+    Recovered,
+    Finish(StatementType<'tu>),
+}
+
+/// Tokens a malformed statement header may span before recovery stops
+/// looking for its closing parenthesis.
+const HEADER_RECOVERY_LOOKAHEAD: u16 = 256;
+
+/// Statements whose header is `( expression )` followed by one substatement.
+///
+/// C99: `if` and `switch` are §6.8.4, p. 133; PDF p. 145; `while` is
+/// §6.8.5, p. 135; PDF p. 147.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeaderKind {
+    If,
+    Switch,
+    While,
+}
+
+/// The prefix of a `labeled-statement`: `identifier :`,
+/// `case constant-expression :`, or `default :`.
+///
+/// C99: §6.8.1 paragraph 1, p. 131; PDF p. 143.
+#[derive(Debug, Clone, Copy)]
+enum LabelPrefix<'tu> {
+    Identifier(Identifier),
+    Case(ConstantExpressionSlot<'tu>),
+    Range(ConstantExpressionSlot<'tu>, ConstantExpressionSlot<'tu>),
+    Default,
+}
+
+/// The operand-free `jump-statement`s `break ;` and `continue ;`.
+///
+/// C99: §6.8.6 paragraph 1, p. 136; PDF p. 148.
+#[derive(Debug, Clone, Copy)]
+enum SimpleJump {
+    Break,
+    Continue,
+}
+
+/// Resumable `statement` production.
+///
+/// C99: §6.8 paragraph 1, p. 131; PDF p. 143; §A.2.3, pp. 415-416;
+/// PDF pp. 427-428.
+#[derive(Debug)]
+pub(in crate::translation_phases::parsing) struct StatementFrame<'tu> {
+    phase: StatementPhase<'tu>,
+    pub(in crate::translation_phases::parsing) source_vectors: Option<SourceVectors>,
+    starting_error_count: usize,
+    entry_scope_depth: Option<usize>,
+    implicit_scope: Option<ScopeKind>,
+    owns_switch_scope: bool,
+    leave_else_unconsumed: bool,
+    /// C23 permits standalone labels among compound block items, not as a
+    /// selection/iteration substatement whose required statement is absent.
+    block_item: bool,
+}
+
+impl<'tu> LabelPrefix<'tu> {
+    /// The labeled statement this prefix makes of `statement`.
+    fn label(
+        self,
+        parser: &mut Parser<'_, 'tu, '_>,
+        statement: &'tu Statement<'tu>,
+    ) -> StatementType<'tu> {
+        match self {
+            | Self::Identifier(identifier) => StatementType::Label(identifier, statement),
+            | Self::Case(expression) => StatementType::Case(expression, statement),
+            | Self::Default => StatementType::Default(statement),
+            | Self::Range(lower, upper) =>
+                StatementType::CaseRange(parser.alloc_syntax(CaseRange {
+                    lower,
+                    upper,
+                    statement,
+                })),
+        }
+    }
+}
+
+impl HeaderKind {
+    /// The implicit block each substatement forms.
+    ///
+    /// C99: §6.8.4 paragraph 3, p. 133; PDF p. 145; §6.8.5 paragraph 5,
+    /// p. 135; PDF p. 147.
+    fn scope_kind(self) -> ScopeKind {
+        match self {
+            | Self::If | Self::Switch => ScopeKind::ImplicitSelection,
+            | Self::While => ScopeKind::ImplicitIteration,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            | Self::If => "if statement",
+            | Self::Switch => "switch statement",
+            | Self::While => "while statement",
+        }
+    }
+}
+
+impl<'tu, 'p> StatementFrame<'tu> {
+    /// The `then` substatement leaves a following `else` to its `if`, so the
+    /// `else` pairs with the lexically nearest `if`.
+    ///
+    /// C99: §6.8.4.1 paragraph 3, p. 134; PDF p. 146.
+    fn for_if_then(starting_error_count: usize, implicit_scope: Option<ScopeKind>) -> Self {
+        Self::with_else_ownership(starting_error_count, implicit_scope, true)
+    }
 
     fn enter_construct_scope(parser: &mut Parser<'_, 'tu, 'p>, kind: ScopeKind) {
         parser.scopes.enter_scope(kind);
@@ -1907,6 +1880,41 @@ impl<'tu, 'p> StatementFrame<'tu> {
                 .expect("statement frame recorded its entry depth"),
         );
     }
+
+    pub(in crate::translation_phases::parsing) fn new(
+        starting_error_count: usize,
+        implicit_scope: Option<ScopeKind>,
+    ) -> Self {
+        Self {
+            phase: StatementPhase::Start,
+            source_vectors: None,
+            starting_error_count,
+            entry_scope_depth: None,
+            implicit_scope,
+            owns_switch_scope: false,
+            leave_else_unconsumed: false,
+            block_item: false,
+        }
+    }
+
+    pub(in crate::translation_phases::parsing) fn with_block_item(
+        mut self,
+        block_item: bool,
+    ) -> Self {
+        self.block_item = block_item;
+        self
+    }
+
+    fn with_else_ownership(
+        starting_error_count: usize,
+        implicit_scope: Option<ScopeKind>,
+        leave_else_unconsumed: bool,
+    ) -> Self {
+        Self {
+            leave_else_unconsumed,
+            ..Self::new(starting_error_count, implicit_scope)
+        }
+    }
 }
 
 /// Returns whether a token begins a statement production rather than an
@@ -1916,7 +1924,7 @@ impl<'tu, 'p> StatementFrame<'tu> {
 /// `iteration-statement`, and `jump-statement` in §6.8.1-§6.8.6,
 /// pp. 131-136; PDF pp. 143-148, plus `else` from §6.8.4, p. 133;
 /// PDF p. 145.
-pub(super) fn is_statement_keyword(token: TokenType) -> bool {
+pub(in crate::translation_phases::parsing) fn is_statement_keyword(token: TokenType) -> bool {
     matches!(
         token,
         TokenType::Keyword(

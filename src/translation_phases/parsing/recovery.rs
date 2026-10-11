@@ -9,21 +9,235 @@
 
 use std::fmt::Debug;
 
+#[cfg(test)]
+use super::FrameTraceEvent;
 use super::{
+    Parser,
+    errors::{
+        RecoverySummary,
+        RelatedParserDiagnostic,
+    },
+    expression_operators::is_operator,
     machine::ParseFrameKind,
     statement::is_statement_keyword,
 };
 use crate::{
-    translation_phases::preprocessing::{
-        KeywordTokenType,
-        OperatorTokenType,
-        TokenType,
+    translation_phases::{
+        SourceVectors,
+        TranslationError,
+        preprocessing::{
+            KeywordTokenType,
+            OperatorTokenType,
+            TokenType,
+        },
     },
     util::bump::{
         ArenaVec,
         Bump,
     },
 };
+
+impl Parser<'_, '_, '_> {
+    /// Consumes malformed input until the active synchronization policy says
+    /// its owning frame can safely resume.
+    ///
+    /// C99: continued translation after a required diagnostic is permitted by
+    /// §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23. C99 does not
+    /// specify how an implementation resynchronizes.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn recover(
+        &mut self,
+        set: SynchronizationSet,
+        #[cfg(test)] depth: usize,
+    ) -> Option<SourceVectors> {
+        let mut source_vectors = None;
+        let mut consumed_tokens = 0_usize;
+        self.recovery.begin(set);
+
+        while let Some(token) = self.cursor.current() {
+            let state = self.recovery.active();
+            let recovery_set = state.set;
+            let at_top_level = state.parentheses == 0 && state.brackets == 0 && state.braces == 0;
+            let delimiter_depth = DelimiterDepth {
+                parentheses: state.parentheses,
+                brackets:    state.brackets,
+                braces:      state.braces,
+            };
+            let colon_matches_conditional =
+                matches!(token.kind, TokenType::Operator(OperatorTokenType::Colon))
+                    && state
+                        .questions
+                        .iter()
+                        .rev()
+                        .any(|question| *question == delimiter_depth);
+            let at_unambiguous_owning_delimiter = !colon_matches_conditional
+                && recovery_set.kind.stops_before_despite_unbalanced_child(
+                    token.kind,
+                    state.parentheses,
+                    state.brackets,
+                    state.braces,
+                );
+            let stops_at_initial_declaration = matches!(
+                (recovery_set.kind, recovery_set.target),
+                |(
+                    SynchronizationKind::Declaration
+                    | SynchronizationKind::BlockDeclaration
+                    | SynchronizationKind::OldStyleParameter
+                    | SynchronizationKind::Parameter,
+                    _,
+                )| (
+                    SynchronizationKind::StructMember,
+                    ParseFrameKind::StructOrUnionSpecifier
+                ) | (
+                    SynchronizationKind::EnumeratorValue,
+                    ParseFrameKind::EnumSpecifier
+                )
+            );
+            let stops_at_declaration_after_malformed_prefix = matches!(
+                recovery_set.kind,
+                SynchronizationKind::ArrayBound
+                    | SynchronizationKind::VariadicParameterList
+                    | SynchronizationKind::StructMember
+                    | SynchronizationKind::EnumeratorValue
+                    | SynchronizationKind::StatementExpression(_)
+            );
+            let at_next_declaration = (stops_at_initial_declaration
+                || consumed_tokens > 0 && stops_at_declaration_after_malformed_prefix)
+                && at_top_level
+                && self.declaration_starter(token)
+                && !(matches!(token.kind, TokenType::Identifier)
+                    && matches!(
+                        state.last_token,
+                        Some(TokenType::Operator(
+                            OperatorTokenType::Period | OperatorTokenType::Arrow
+                        ))
+                    ));
+            let at_next_k_and_r_identifier =
+                matches!(recovery_set.kind, SynchronizationKind::KAndRParameter)
+                    && at_top_level
+                    && matches!(token.kind, TokenType::Identifier)
+                    && !self.scopes.is_typedef(token.contents);
+            let at_next_enumerator =
+                matches!(recovery_set.kind, SynchronizationKind::EnumeratorValue)
+                    && at_top_level
+                    && recovery_set.target == ParseFrameKind::EnumSpecifier
+                    && matches!(token.kind, TokenType::Identifier);
+            let has_pending_conditional_at_depth = state.questions.contains(&delimiter_depth);
+            let at_next_identifier_label =
+                (matches!(
+                    recovery_set.kind,
+                    SynchronizationKind::StatementExpression(ExpressionTerminator::Semicolon)
+                ) || matches!(recovery_set.kind, SynchronizationKind::BlockDeclaration)
+                    || matches!(recovery_set.kind, SynchronizationKind::Statement)
+                        && consumed_tokens > 0)
+                    && at_top_level
+                    && !has_pending_conditional_at_depth
+                    && matches!(token.kind, TokenType::Identifier)
+                    && is_operator(self.cursor.following(), OperatorTokenType::Colon);
+            let at_statement_body_brace = (matches!(
+                recovery_set.kind,
+                SynchronizationKind::StatementExpression(
+                    ExpressionTerminator::ClosingParenthesis | ExpressionTerminator::Semicolon
+                )
+            ) || matches!(
+                recovery_set.kind,
+                SynchronizationKind::BlockDeclaration | SynchronizationKind::ForInitializer
+            )) && at_top_level
+                && matches!(
+                    token.kind,
+                    TokenType::Operator(OperatorTokenType::OpeningCurlyBrace)
+                )
+                && (!matches!(
+                    state.last_token,
+                    Some(TokenType::Operator(OperatorTokenType::ClosingParenthesis))
+                ) || !state.last_closed_parenthesis_was_type_name
+                    || state.last_closed_parenthesis_was_sizeof_type_name
+                        && self.cursor.following().is_some_and(|following| {
+                            is_statement_keyword(following.kind)
+                                || !matches!(following.kind, TokenType::Identifier)
+                                    && self.declaration_starter(following)
+                                || matches!(
+                                    following.kind,
+                                    TokenType::Operator(
+                                        OperatorTokenType::Semicolon
+                                            | OperatorTokenType::ClosingCurlyBrace
+                                    )
+                                )
+                        }));
+            let at_next_statement_keyword = matches!(
+                recovery_set.kind,
+                SynchronizationKind::Statement | SynchronizationKind::ForInitializer
+            ) && consumed_tokens > 0
+                && at_top_level
+                && is_statement_keyword(token.kind);
+            if at_unambiguous_owning_delimiter
+                || at_next_declaration
+                || at_next_k_and_r_identifier
+                || at_next_enumerator
+                || at_next_identifier_label
+                || at_statement_body_brace
+                || at_next_statement_keyword
+                || at_top_level
+                    && !colon_matches_conditional
+                    && recovery_set.kind.stops_before(token.kind)
+            {
+                break;
+            }
+
+            let opens_type_name = matches!(
+                token.kind,
+                TokenType::Operator(OperatorTokenType::OpeningParenthesis)
+            ) && self
+                .cursor
+                .following()
+                .is_some_and(|following| self.declaration_starter(following));
+            self.recovery.consume(token.kind, opens_type_name);
+
+            #[cfg(test)]
+            self.trace.push(FrameTraceEvent {
+                frame: set.target.label(),
+                action: "recover-consume",
+                token: Some(token.kind),
+                depth,
+            });
+            self.merge_source(&mut source_vectors, token);
+            self.suppress_token_diagnostic(token);
+            self.cursor.consume();
+            consumed_tokens += 1;
+        }
+        let stopped_token = self.cursor.current();
+        let stopped_at = stopped_token.map(|token| token.kind);
+        let ranges = source_vectors.map(|discarded| self.context.diagnostic_slice(&[discarded]));
+        let related = stopped_token.map(|token| {
+            self.context.diagnostic_slice(&[RelatedParserDiagnostic {
+                message:        "parsing resumes here",
+                source_vectors: token.source_vectors,
+            }])
+        });
+        if let Some(TranslationError::Parsing(error)) = self.context
+            .pending_errors
+            .iter_mut()
+            .rev()
+            .find(|error| matches!(error, TranslationError::Parsing(error) if error.recovery.is_none()))
+        {
+            if let Some(ranges) = ranges {
+                error.ranges = ranges;
+            }
+            if let Some(related) = related {
+                error.related = related;
+            }
+            error.recovery = Some(RecoverySummary {
+                owner: set.target,
+                discarded: source_vectors,
+                discarded_tokens: consumed_tokens,
+                stopped_at,
+            });
+        }
+        self.recovery.finish();
+        source_vectors
+    }
+}
 
 /// A production-specific synchronization policy and the frame allowed to
 /// resume after the scan.
@@ -115,13 +329,6 @@ pub(super) struct DelimiterDepth {
     pub(super) braces:      usize,
 }
 
-impl DelimiterDepth {
-    /// Whether no delimiter is open.
-    pub(super) fn is_top_level(self) -> bool {
-        self.parentheses == 0 && self.brackets == 0 && self.braces == 0
-    }
-}
-
 /// Delimiter depth and policy for one active recovery scan.
 ///
 /// C99: delimiter ownership follows the productions of §6.5-§6.9,
@@ -140,16 +347,14 @@ pub(super) struct ActiveRecovery<'p> {
     pub(super) last_closed_parenthesis_was_sizeof_type_name: bool,
 }
 
-impl<'p> RecoveryState<'p> {
-    /// No active scan; scan stacks will come from `arena`.
-    pub(super) fn new_in(arena: &'p Bump) -> Self {
-        Self {
-            active: None,
-            spare: None,
-            arena,
-        }
+impl DelimiterDepth {
+    /// Whether no delimiter is open.
+    pub(super) fn is_top_level(self) -> bool {
+        self.parentheses == 0 && self.brackets == 0 && self.braces == 0
     }
+}
 
+impl<'p> RecoveryState<'p> {
     /// Starts a scan owned by `set.target` with balanced delimiter depth.
     pub(super) fn begin(&mut self, set: SynchronizationSet) {
         debug_assert!(self.active.is_none(), "recovery scans cannot nest");
@@ -282,6 +487,15 @@ impl<'p> RecoveryState<'p> {
     pub(super) fn abandon(&mut self) {
         if let Some(scan) = self.active.take() {
             self.spare = Some(scan);
+        }
+    }
+
+    /// No active scan; scan stacks will come from `arena`.
+    pub(super) fn new_in(arena: &'p Bump) -> Self {
+        Self {
+            active: None,
+            spare: None,
+            arena,
         }
     }
 }

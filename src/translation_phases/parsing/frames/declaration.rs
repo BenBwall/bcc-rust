@@ -81,138 +81,8 @@ use crate::{
     },
 };
 
-/// Parses a declaration shell around declaration specifiers, comma-separated
-/// declarators, optional initializers, and the terminating semicolon.
-///
-/// C99: declaration, init-declarator-list, and init-declarator are §6.7,
-/// p. 97; PDF p. 109.
-#[derive(Debug)]
-pub(super) struct DeclarationFrame<'tu, 'p> {
-    /// Current declaration transition.
-    phase: DeclarationPhase,
-    /// Specifiers shared by every init-declarator in this declaration.
-    declaration_specifiers: Option<DeclarationSpecifiers<'tu>>,
-    /// Init-declarators parsed so far, stored as one list when the
-    /// declaration reduces.
-    pub(super) init_declarators: ArenaVec<'p, InitDeclarator<'tu>>,
-    /// Provenance accumulated across specifiers, declarators, and separators.
-    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
-    /// The parser's pedantic-suppression depth when this frame first ran,
-    /// restored when a leading `__extension__` goes out of scope.
-    suppression_entry: Option<usize>,
-    leading_extension: Option<SourceVectors>,
-    /// Hard-error count on entry, used to scope recovery to this declaration.
-    starting_error_count: usize,
-    /// Provenance of `=` retained while the initializer child runs.
-    initializer_source: Option<SourceVectors>,
-    /// Grammar context controlling function-definition handoff and `}`
-    /// ownership.
-    context: DeclarationContext,
-    is_function_definition_head: bool,
-}
-
-/// Where a declaration appears, which decides how it may end and what it
-/// may hand off.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DeclarationContext {
-    /// An `external-declaration`: C99 §6.9 paragraph 1, p. 140; PDF p. 152.
-    External,
-    /// A `block-item`: C99 §6.8.2 paragraph 1, p. 132; PDF p. 144.
-    Block,
-    /// The declaration clause of `for`: C99 §6.8.5 paragraph 1, p. 135;
-    /// PDF p. 147. Its storage-class constraint (paragraph 3, p. 135;
-    /// PDF p. 147) is left to semantic analysis.
-    ForInitializer,
-    SelectionHeader,
-    /// One declaration of a function definition's `declaration-list`: C99
-    /// §6.9.1 paragraph 1, p. 141; PDF p. 153.
-    OldStyleParameter,
-}
-
-/// State transitions for [`DeclarationFrame`].
-///
-/// C99: §6.7, p. 97; PDF p. 109. The phases encode that production
-/// iteratively.
-#[derive(Debug, Clone, Copy)]
-enum DeclarationPhase {
-    AwaitAssertion,
-    /// Push declaration specifiers.
-    Start,
-    /// Receive specifiers and decide whether a declarator follows.
-    AwaitSpecifiers,
-    /// Receive one named declarator.
-    AwaitDeclarator,
-    /// Resume at a separator after recovering a missing declarator or a
-    /// rejected continuation, without diagnosing the synchronization token
-    /// again.
-    AfterRecovery,
-    /// Classify the token following a completed declarator.
-    AfterDeclarator,
-    /// Push the initializer child after consuming `=`.
-    PushInitializer,
-    /// Attach the initializer child.
-    AwaitInitializer,
-    /// Push another declarator after consuming `,`.
-    BeforeNextDeclarator,
-    /// Store the declaration and return it.
-    Finish,
-}
-
 impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
-    pub(super) fn new(
-        arena: &'p Bump,
-        context: DeclarationContext,
-        starting_error_count: usize,
-    ) -> Self {
-        Self {
-            phase: DeclarationPhase::Start,
-            declaration_specifiers: None,
-            init_declarators: ArenaVec::new_in(arena),
-            source_vectors: ArenaVec::new_in(arena),
-            starting_error_count,
-            suppression_entry: None,
-            leading_extension: None,
-            initializer_source: None,
-            context,
-            is_function_definition_head: false,
-        }
-    }
-
-    /// Tokens that may still continue this declaration after its latest
-    /// declarator, for the continuation diagnostic.
-    fn continuation(&self) -> DeclarationContinuation {
-        let place = match self.context {
-            | DeclarationContext::External => DeclarationPlace::External,
-            | DeclarationContext::Block => DeclarationPlace::Block,
-            | DeclarationContext::ForInitializer | DeclarationContext::SelectionHeader =>
-                DeclarationPlace::ForInitializer,
-            | DeclarationContext::OldStyleParameter => DeclarationPlace::OldStyleParameter,
-        };
-        DeclarationContinuation {
-            place,
-            initializer: self
-                .init_declarators
-                .last()
-                .is_some_and(|init| init.initializer.is_none()),
-            function_body: place == DeclarationPlace::External
-                && matches!(
-                    self.init_declarators.as_slice(),
-                    [init] if init.initializer.is_none()
-                ),
-        }
-    }
-
-    fn recovery_kind(&self) -> SynchronizationKind {
-        match self.context {
-            | DeclarationContext::Block => SynchronizationKind::BlockDeclaration,
-            | DeclarationContext::ForInitializer | DeclarationContext::SelectionHeader =>
-                SynchronizationKind::ForInitializer,
-            | DeclarationContext::External => SynchronizationKind::Declaration,
-            | DeclarationContext::OldStyleParameter => SynchronizationKind::OldStyleParameter,
-        }
-    }
-
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -692,6 +562,138 @@ impl<'tu, 'p> DeclarationFrame<'tu, 'p> {
                 });
                 ParseAction::Reduce(ParseValue::Declaration(declaration))
             },
+        }
+    }
+}
+
+/// State transitions for [`DeclarationFrame`].
+///
+/// C99: §6.7, p. 97; PDF p. 109. The phases encode that production
+/// iteratively.
+#[derive(Debug, Clone, Copy)]
+enum DeclarationPhase {
+    AwaitAssertion,
+    /// Push declaration specifiers.
+    Start,
+    /// Receive specifiers and decide whether a declarator follows.
+    AwaitSpecifiers,
+    /// Receive one named declarator.
+    AwaitDeclarator,
+    /// Resume at a separator after recovering a missing declarator or a
+    /// rejected continuation, without diagnosing the synchronization token
+    /// again.
+    AfterRecovery,
+    /// Classify the token following a completed declarator.
+    AfterDeclarator,
+    /// Push the initializer child after consuming `=`.
+    PushInitializer,
+    /// Attach the initializer child.
+    AwaitInitializer,
+    /// Push another declarator after consuming `,`.
+    BeforeNextDeclarator,
+    /// Store the declaration and return it.
+    Finish,
+}
+
+/// Parses a declaration shell around declaration specifiers, comma-separated
+/// declarators, optional initializers, and the terminating semicolon.
+///
+/// C99: declaration, init-declarator-list, and init-declarator are §6.7,
+/// p. 97; PDF p. 109.
+#[derive(Debug)]
+pub(in crate::translation_phases::parsing) struct DeclarationFrame<'tu, 'p> {
+    /// Current declaration transition.
+    phase: DeclarationPhase,
+    /// Specifiers shared by every init-declarator in this declaration.
+    declaration_specifiers: Option<DeclarationSpecifiers<'tu>>,
+    /// Init-declarators parsed so far, stored as one list when the
+    /// declaration reduces.
+    pub(in crate::translation_phases::parsing) init_declarators: ArenaVec<'p, InitDeclarator<'tu>>,
+    /// Provenance accumulated across specifiers, declarators, and separators.
+    pub(in crate::translation_phases::parsing) source_vectors: ArenaVec<'p, SourceVectors>,
+    /// The parser's pedantic-suppression depth when this frame first ran,
+    /// restored when a leading `__extension__` goes out of scope.
+    suppression_entry: Option<usize>,
+    leading_extension: Option<SourceVectors>,
+    /// Hard-error count on entry, used to scope recovery to this declaration.
+    starting_error_count: usize,
+    /// Provenance of `=` retained while the initializer child runs.
+    initializer_source: Option<SourceVectors>,
+    /// Grammar context controlling function-definition handoff and `}`
+    /// ownership.
+    context: DeclarationContext,
+    is_function_definition_head: bool,
+}
+
+/// Where a declaration appears, which decides how it may end and what it
+/// may hand off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::translation_phases::parsing) enum DeclarationContext {
+    /// An `external-declaration`: C99 §6.9 paragraph 1, p. 140; PDF p. 152.
+    External,
+    /// A `block-item`: C99 §6.8.2 paragraph 1, p. 132; PDF p. 144.
+    Block,
+    /// The declaration clause of `for`: C99 §6.8.5 paragraph 1, p. 135;
+    /// PDF p. 147. Its storage-class constraint (paragraph 3, p. 135;
+    /// PDF p. 147) is left to semantic analysis.
+    ForInitializer,
+    SelectionHeader,
+    /// One declaration of a function definition's `declaration-list`: C99
+    /// §6.9.1 paragraph 1, p. 141; PDF p. 153.
+    OldStyleParameter,
+}
+
+impl<'p> DeclarationFrame<'_, 'p> {
+    /// Tokens that may still continue this declaration after its latest
+    /// declarator, for the continuation diagnostic.
+    fn continuation(&self) -> DeclarationContinuation {
+        let place = match self.context {
+            | DeclarationContext::External => DeclarationPlace::External,
+            | DeclarationContext::Block => DeclarationPlace::Block,
+            | DeclarationContext::ForInitializer | DeclarationContext::SelectionHeader =>
+                DeclarationPlace::ForInitializer,
+            | DeclarationContext::OldStyleParameter => DeclarationPlace::OldStyleParameter,
+        };
+        DeclarationContinuation {
+            place,
+            initializer: self
+                .init_declarators
+                .last()
+                .is_some_and(|init| init.initializer.is_none()),
+            function_body: place == DeclarationPlace::External
+                && matches!(
+                    self.init_declarators.as_slice(),
+                    [init] if init.initializer.is_none()
+                ),
+        }
+    }
+
+    fn recovery_kind(&self) -> SynchronizationKind {
+        match self.context {
+            | DeclarationContext::Block => SynchronizationKind::BlockDeclaration,
+            | DeclarationContext::ForInitializer | DeclarationContext::SelectionHeader =>
+                SynchronizationKind::ForInitializer,
+            | DeclarationContext::External => SynchronizationKind::Declaration,
+            | DeclarationContext::OldStyleParameter => SynchronizationKind::OldStyleParameter,
+        }
+    }
+
+    pub(in crate::translation_phases::parsing) fn new(
+        arena: &'p Bump,
+        context: DeclarationContext,
+        starting_error_count: usize,
+    ) -> Self {
+        Self {
+            phase: DeclarationPhase::Start,
+            declaration_specifiers: None,
+            init_declarators: ArenaVec::new_in(arena),
+            source_vectors: ArenaVec::new_in(arena),
+            starting_error_count,
+            suppression_entry: None,
+            leading_extension: None,
+            initializer_source: None,
+            context,
+            is_function_definition_head: false,
         }
     }
 }

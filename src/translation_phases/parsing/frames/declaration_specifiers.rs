@@ -61,127 +61,8 @@ use crate::translation_phases::{
     },
 };
 
-/// Grammar context controlling which specifier families are legal.
-///
-/// C99: declaration-specifiers are §6.7, p. 97; PDF p. 109, while
-/// specifier-qualifier-list is §6.7.2.1, p. 101; PDF p. 113. A type name
-/// takes a specifier-qualifier-list too, §6.7.6 paragraph 1, p. 122;
-/// PDF p. 134.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SpecifierMode {
-    /// Full declaration specifiers, including storage and function specifiers.
-    Declaration,
-    /// Struct member specifiers: types and qualifiers followed by named
-    /// declarators or bit-fields.
-    StructMember,
-    /// Type-name specifiers: types and qualifiers followed only by an
-    /// optional abstract declarator.
-    TypeName,
-    CompoundLiteral,
-}
-
-/// Accumulates one declaration-specifier or specifier-qualifier sequence.
-///
-/// C99: §6.7, p. 97; PDF p. 109; §6.7.2.1, p. 101; PDF p. 113.
-#[derive(Debug, Clone, Copy)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "The booleans record independent facts about the specifier sequence."
-)]
-pub(super) struct DeclarationSpecifiersFrame<'tu> {
-    /// Current collection/child-wait transition.
-    phase:                  DeclarationSpecifiersPhase,
-    /// Grammar context limiting legal specifier families.
-    mode:                   SpecifierMode,
-    /// Accumulated normalized specifier result.
-    specifiers:             DeclarationSpecifiers<'tu>,
-    /// Whether at least one legal specifier has been consumed.
-    consumed:               bool,
-    implicit_name_allowed:  bool,
-    /// Whether a storage-class specifier has already appeared.
-    storage_seen:           bool,
-    /// Whether an invalid token occupied the mandatory type-specifier slot.
-    invalid_type_seen:      bool,
-    /// Whether a type specifier conflicted with the ones before it; the
-    /// list is then already diagnosed once.
-    type_conflict_seen:     bool,
-    /// Owning tag keyword retained while its child frame runs.
-    pending_type_specifier: Option<Token>,
-    /// The `_Complex` keyword, retained to diagnose a list that never
-    /// supplies its required real floating type.
-    complex_token:          Option<Token>,
-    /// Provenance accumulated across the complete specifier sequence.
-    source_vectors:         Option<SourceVectors>,
-}
-
-/// Child-wait states used while collecting declaration specifiers.
-///
-/// C99: the child alternatives are the `struct-or-union-specifier` and
-/// `enum-specifier` type specifiers of §6.7.2 paragraph 1, p. 99;
-/// PDF p. 111.
-#[derive(Debug, Clone, Copy)]
-enum DeclarationSpecifiersPhase {
-    /// Consume primitive, storage, qualifier, function, and typedef specifiers.
-    Collect,
-    AwaitModern(KeywordTokenType),
-    AwaitAttributes,
-    /// Receive the struct/union specifier pushed by its keyword.
-    AwaitStructOrUnion,
-    /// Receive the enum specifier pushed by its keyword.
-    AwaitEnum,
-}
-
 impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
-    pub(super) fn new(mode: SpecifierMode) -> Self {
-        Self {
-            phase: DeclarationSpecifiersPhase::Collect,
-            mode,
-            specifiers: DeclarationSpecifiers::new(),
-            consumed: false,
-            implicit_name_allowed: true,
-            storage_seen: false,
-            invalid_type_seen: false,
-            type_conflict_seen: false,
-            pending_type_specifier: None,
-            complex_token: None,
-            source_vectors: None,
-        }
-    }
-
-    /// GCC Additional Floating Types: binary128 accepts _Complex in either
-    /// order.
-    fn step_float128(
-        &mut self,
-        parser: &mut Parser<'_, 'tu, 'p>,
-        token: Token,
-    ) -> Option<ParseAction<'tu, 'p>> {
-        if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Float128)) {
-            let complex = self.specifiers.type_specifiers == TypeSpecifiers::Complex;
-            if !matches!(
-                self.specifiers.type_specifiers,
-                TypeSpecifiers::Empty | TypeSpecifiers::Complex
-            ) {
-                self.specifiers
-                    .type_specifiers
-                    .report_conflict(parser, token.contents, token);
-            }
-            self.specifiers.type_specifiers =
-                TypeSpecifiers::Extended(parser.alloc_syntax(ExtendedType::Float128 { complex }));
-            self.consumed = true;
-            parser.merge_source(&mut self.source_vectors, token);
-            return Some(ParseAction::Consume);
-        }
-        None
-    }
-
-    pub(super) fn parameter() -> Self {
-        Self {
-            implicit_name_allowed: false,
-            ..Self::new(SpecifierMode::Declaration)
-        }
-    }
-
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -742,6 +623,134 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         self.specifiers.source_vectors = self.source_vectors.unwrap_or_default();
         ParseAction::Reduce(ParseValue::DeclarationSpecifiers(self.specifiers))
     }
+}
+
+/// Child-wait states used while collecting declaration specifiers.
+///
+/// C99: the child alternatives are the `struct-or-union-specifier` and
+/// `enum-specifier` type specifiers of §6.7.2 paragraph 1, p. 99;
+/// PDF p. 111.
+#[derive(Debug, Clone, Copy)]
+enum DeclarationSpecifiersPhase {
+    /// Consume primitive, storage, qualifier, function, and typedef specifiers.
+    Collect,
+    AwaitModern(KeywordTokenType),
+    AwaitAttributes,
+    /// Receive the struct/union specifier pushed by its keyword.
+    AwaitStructOrUnion,
+    /// Receive the enum specifier pushed by its keyword.
+    AwaitEnum,
+}
+
+/// Grammar context controlling which specifier families are legal.
+///
+/// C99: declaration-specifiers are §6.7, p. 97; PDF p. 109, while
+/// specifier-qualifier-list is §6.7.2.1, p. 101; PDF p. 113. A type name
+/// takes a specifier-qualifier-list too, §6.7.6 paragraph 1, p. 122;
+/// PDF p. 134.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::translation_phases::parsing) enum SpecifierMode {
+    /// Full declaration specifiers, including storage and function specifiers.
+    Declaration,
+    /// Struct member specifiers: types and qualifiers followed by named
+    /// declarators or bit-fields.
+    StructMember,
+    /// Type-name specifiers: types and qualifiers followed only by an
+    /// optional abstract declarator.
+    TypeName,
+    CompoundLiteral,
+}
+
+/// Accumulates one declaration-specifier or specifier-qualifier sequence.
+///
+/// C99: §6.7, p. 97; PDF p. 109; §6.7.2.1, p. 101; PDF p. 113.
+#[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The booleans record independent facts about the specifier sequence."
+)]
+pub(in crate::translation_phases::parsing) struct DeclarationSpecifiersFrame<'tu> {
+    /// Current collection/child-wait transition.
+    phase:                  DeclarationSpecifiersPhase,
+    /// Grammar context limiting legal specifier families.
+    mode:                   SpecifierMode,
+    /// Accumulated normalized specifier result.
+    specifiers:             DeclarationSpecifiers<'tu>,
+    /// Whether at least one legal specifier has been consumed.
+    consumed:               bool,
+    implicit_name_allowed:  bool,
+    /// Whether a storage-class specifier has already appeared.
+    storage_seen:           bool,
+    /// Whether an invalid token occupied the mandatory type-specifier slot.
+    invalid_type_seen:      bool,
+    /// Whether a type specifier conflicted with the ones before it; the
+    /// list is then already diagnosed once.
+    type_conflict_seen:     bool,
+    /// Owning tag keyword retained while its child frame runs.
+    pending_type_specifier: Option<Token>,
+    /// The `_Complex` keyword, retained to diagnose a list that never
+    /// supplies its required real floating type.
+    complex_token:          Option<Token>,
+    /// Provenance accumulated across the complete specifier sequence.
+    source_vectors:         Option<SourceVectors>,
+}
+
+/// Primitive keyword recognized while accumulating a C type-specifier set.
+///
+/// C99: normative type-specifiers are §6.7.2, pp. 99-100; PDF pp. 111-112.
+/// `_Imaginary` comes from the keyword inventory in §6.4.1, p. 50; PDF p. 62
+/// and is retained here only for the existing extension path. It is reserved
+/// for imaginary types (§6.4.1 paragraph 2, p. 50; PDF p. 62), which only
+/// informative annex G specifies; the frame rejects it.
+#[derive(Debug, Clone, Copy)]
+enum PrimitiveTypeSpecifier {
+    Signed,
+    Unsigned,
+    Int,
+    Short,
+    Long,
+    Char,
+    Float,
+    Double,
+    Void,
+    Bool,
+    Complex,
+    Imaginary,
+}
+
+impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
+    /// GCC Additional Floating Types: binary128 accepts _Complex in either
+    /// order.
+    fn step_float128(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Token,
+    ) -> Option<ParseAction<'tu, 'p>> {
+        if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Float128)) {
+            let complex = self.specifiers.type_specifiers == TypeSpecifiers::Complex;
+            if !matches!(
+                self.specifiers.type_specifiers,
+                TypeSpecifiers::Empty | TypeSpecifiers::Complex
+            ) {
+                self.specifiers
+                    .type_specifiers
+                    .report_conflict(parser, token.contents, token);
+            }
+            self.specifiers.type_specifiers =
+                TypeSpecifiers::Extended(parser.alloc_syntax(ExtendedType::Float128 { complex }));
+            self.consumed = true;
+            parser.merge_source(&mut self.source_vectors, token);
+            return Some(ParseAction::Consume);
+        }
+        None
+    }
+
+    pub(in crate::translation_phases::parsing) fn parameter() -> Self {
+        Self {
+            implicit_name_allowed: false,
+            ..Self::new(SpecifierMode::Declaration)
+        }
+    }
 
     /// MSVC extensions to C99 §6.7.2, pp. 99-100; PDF pp. 111-112 and
     /// §6.7.5, p. 114; PDF p. 126. Width and ABI interpretation are deferred.
@@ -1001,6 +1010,22 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
             },
         }
     }
+
+    pub(in crate::translation_phases::parsing) fn new(mode: SpecifierMode) -> Self {
+        Self {
+            phase: DeclarationSpecifiersPhase::Collect,
+            mode,
+            specifiers: DeclarationSpecifiers::new(),
+            consumed: false,
+            implicit_name_allowed: true,
+            storage_seen: false,
+            invalid_type_seen: false,
+            type_conflict_seen: false,
+            pending_type_specifier: None,
+            complex_token: None,
+            source_vectors: None,
+        }
+    }
 }
 
 /// Classifies one storage-class-specifier keyword.
@@ -1008,7 +1033,9 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
 /// C99: §6.7.1 paragraph 1, p. 98; PDF p. 110. `typedef` is a storage-class
 /// specifier for syntactic convenience only (paragraph 3, p. 98;
 /// PDF p. 110).
-pub(super) fn storage_class(token: TokenType) -> Option<StorageClass> {
+pub(in crate::translation_phases::parsing) fn storage_class(
+    token: TokenType,
+) -> Option<StorageClass> {
     match token {
         | TokenType::Keyword(KeywordTokenType::Auto) => Some(StorageClass::Auto),
         | TokenType::Keyword(KeywordTokenType::Register) => Some(StorageClass::Register),
@@ -1022,7 +1049,9 @@ pub(super) fn storage_class(token: TokenType) -> Option<StorageClass> {
 /// Classifies one type-qualifier keyword.
 ///
 /// C99: §6.7.3 paragraph 1, p. 108; PDF p. 120.
-pub(super) fn type_qualifier(token: TokenType) -> Option<TypeQualifiers> {
+pub(in crate::translation_phases::parsing) fn type_qualifier(
+    token: TokenType,
+) -> Option<TypeQualifiers> {
     match token {
         | TokenType::Keyword(KeywordTokenType::Ptr32) => Some(TypeQualifiers::PTR32),
         | TokenType::Keyword(KeywordTokenType::Ptr64) => Some(TypeQualifiers::PTR64),
@@ -1043,7 +1072,7 @@ pub(super) fn type_qualifier(token: TokenType) -> Option<TypeQualifiers> {
 /// diagnostic, not a constraint.
 #[cold]
 #[inline(never)]
-pub(super) fn report_duplicate_type_qualifier(
+pub(in crate::translation_phases::parsing) fn report_duplicate_type_qualifier(
     parser: &mut Parser<'_, '_, '_>,
     token: Token,
     qualifier: TypeQualifiers,
@@ -1062,29 +1091,6 @@ pub(super) fn report_duplicate_type_qualifier(
         | _ => unreachable!("one type qualifier is handled at a time"),
     };
     parser.report(error_type, Some(token));
-}
-
-/// Primitive keyword recognized while accumulating a C type-specifier set.
-///
-/// C99: normative type-specifiers are §6.7.2, pp. 99-100; PDF pp. 111-112.
-/// `_Imaginary` comes from the keyword inventory in §6.4.1, p. 50; PDF p. 62
-/// and is retained here only for the existing extension path. It is reserved
-/// for imaginary types (§6.4.1 paragraph 2, p. 50; PDF p. 62), which only
-/// informative annex G specifies; the frame rejects it.
-#[derive(Debug, Clone, Copy)]
-enum PrimitiveTypeSpecifier {
-    Signed,
-    Unsigned,
-    Int,
-    Short,
-    Long,
-    Char,
-    Float,
-    Double,
-    Void,
-    Bool,
-    Complex,
-    Imaginary,
 }
 
 /// Classifies a keyword for [`PrimitiveTypeSpecifier`] accumulation.

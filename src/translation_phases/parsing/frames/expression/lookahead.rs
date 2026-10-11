@@ -11,14 +11,6 @@ use crate::translation_phases::preprocessing::{
     TokenType,
 };
 
-/// How far recovery lookahead may scan for the closer of a malformed
-/// delimited expression. Longer runs are left to the closer's owner.
-const STRAY_RUN_LOOKAHEAD: usize = 64;
-
-/// How far recovery lookahead may scan a brace group in operand position
-/// before treating it as a statement block.
-const BRACE_GROUP_LOOKAHEAD: usize = 256;
-
 /// Counts the tokens from the current one up to the next `closer` at
 /// delimiter depth zero, when that closer follows before any token that
 /// cannot occur inside an expression (`;`, a statement keyword, an unmatched
@@ -139,10 +131,6 @@ pub(super) fn brace_group_is_block(parser: &mut Parser<'_, '_, '_>) -> bool {
     true
 }
 
-/// How far recovery lookahead may scan a brace group directly inside a `(`
-/// for its matching `}` and the `)` after it.
-const PARENTHESIZED_BRACE_GROUP_LOOKAHEAD: usize = 4096;
-
 /// Returns whether the brace group starting at the current `{` closes within
 /// reach and is followed directly by `)`, as in `f({ ... })` or
 /// `if ({ ... })`, where the `(` belongs to a call or a statement header
@@ -197,3 +185,15 @@ fn token_after_brace_group(parser: &mut Parser<'_, '_, '_>) -> Option<TokenType>
     }
     None
 }
+
+/// How far recovery lookahead may scan for the closer of a malformed
+/// delimited expression. Longer runs are left to the closer's owner.
+const STRAY_RUN_LOOKAHEAD: usize = 64;
+
+/// How far recovery lookahead may scan a brace group in operand position
+/// before treating it as a statement block.
+const BRACE_GROUP_LOOKAHEAD: usize = 256;
+
+/// How far recovery lookahead may scan a brace group directly inside a `(`
+/// for its matching `}` and the `)` after it.
+const PARENTHESIZED_BRACE_GROUP_LOOKAHEAD: usize = 4096;

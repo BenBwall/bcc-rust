@@ -93,252 +93,8 @@ use crate::{
     },
 };
 
-/// Whether a declarator requires, forbids, or optionally accepts a name.
-///
-/// C99: named declarators are §6.7.5, pp. 114-121; PDF pp. 126-133; abstract
-/// declarators are §6.7.6, p. 122; PDF p. 134.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DeclaratorMode {
-    /// Ordinary declarator requiring an identifier base.
-    Named,
-    /// Abstract declarator used where no identifier may be declared.
-    Abstract,
-    /// Parameter declarator that may be named or abstract.
-    MaybeAbstract,
-}
-
-#[derive(Debug)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "The booleans retain independent C array/declarator grammar facts."
-)]
-/// Iteratively parses named, abstract, or maybe-abstract declarators.
-///
-/// C99: declarator and direct-declarator are §6.7.5, pp. 114-121; PDF
-/// pp. 126-133. Abstract forms are §6.7.6, p. 122; PDF p. 134.
-pub(super) struct DeclaratorFrame<'tu, 'p> {
-    /// Current pointer/base/suffix transition.
-    phase: DeclaratorPhase,
-    attribute_resume: DeclaratorPhase,
-    /// Whether the declarator requires or permits an identifier.
-    mode: DeclaratorMode,
-    /// Pointer levels, outermost first. The last one collects the
-    /// qualifiers and attributes after its `*` while they are parsed.
-    pub(super) pointer_levels: ArenaVec<'p, PointerLevel<'tu>>,
-    /// Direct base and suffixes accumulated before arena insertion.
-    pub(super) direct_declarators: ArenaVec<'p, DirectDeclarator<'tu>>,
-    /// Whether at least one pointer level has been parsed.
-    has_pointer_level: bool,
-    /// Whether an identifier or parenthesized base has been parsed.
-    has_direct_declarator: bool,
-    /// Whether this declarator declares an identifier, directly or through
-    /// a parenthesized nested declarator.
-    named: bool,
-    /// Flag shared along one chain of parenthesized declarators, set when
-    /// the innermost one parses its identifier. A nested declarator's
-    /// identifier is also its parent's, so each `(`-nesting level learns
-    /// whether it is named without walking its children again, keeping deep
-    /// `(*(*(*x)())())()` chains linear. The flag lives in the parse arena
-    /// and returns to the frame pools when the frame that took it pops.
-    chain_named: Option<&'p Cell<bool>>,
-    /// Whether this frame took `chain_named` from the pools, as the
-    /// outermost declarator of its chain.
-    owns_chain_named: bool,
-    /// Qualifiers accumulated for the active array suffix.
-    array_qualifiers: TypeQualifiers,
-    /// Whether array qualifiers occurred before `static`.
-    array_qualifiers_before_static: bool,
-    /// Whether the active array suffix contains `static`.
-    array_is_static: bool,
-    /// Whether the active array suffix uses the `[*]` form.
-    array_is_pointer: bool,
-    /// Parsed assignment-expression bound for the active array suffix.
-    array_assignment_expression: Option<&'tu Expression<'tu>>,
-    /// Provenance accumulated across every declarator component.
-    pub(super) source_vectors: Option<SourceVectors>,
-    /// Opening delimiter of the active parenthesized declarator.
-    nested_open: Option<SourceVectors>,
-    /// Parenthesized declarator waiting for its `)`. It is stored once its
-    /// delimiters are complete, because stored syntax never changes.
-    pub(super) nested: Option<ParenthesizedDeclarator<'tu>>,
-}
-
-/// State transitions for pointer, base, and suffix portions of a declarator.
-///
-/// C99: pointer, array, and function-derived declarator productions are
-/// §6.7.5.1-§6.7.5.3, pp. 115-121; PDF pp. 127-133.
-#[derive(Debug, Clone, Copy)]
-enum DeclaratorPhase {
-    AwaitAttributes,
-    AwaitAsm,
-    AwaitPointerAttributes,
-    /// Decide whether the declarator begins with a pointer or direct base.
-    PointerOrBase,
-    /// Collect qualifiers for the current pointer level.
-    PointerQualifiers,
-    /// Parse the identifier or opening parenthesis of the direct base.
-    Base,
-    /// Push a nested declarator after `(`.
-    PushNested,
-    /// Disambiguate an abstract `(` as grouping or a function suffix.
-    ///
-    /// C99: empty parentheses in a type name are a function declarator, not
-    /// grouping, §6.7.6 footnote 128, p. 122; PDF p. 134; an identifier that
-    /// could be a typedef name or a parameter name is taken as a typedef
-    /// name, §6.7.5.3 paragraph 11, p. 119; PDF p. 131.
-    ClassifyAbstractParenthesis,
-    /// Receive a nested parenthesized declarator.
-    AwaitNested,
-    /// Require the `)` owned by a parenthesized declarator.
-    ExpectNestedClose,
-    /// Consume zero or more array/function suffixes.
-    Suffix,
-    /// Parse array qualifiers, `static`, `*`, or an optional bound.
-    ///
-    /// C99: the four array suffix forms of §6.7.5 paragraph 1, p. 114;
-    /// PDF p. 126, and §6.7.6 paragraph 1, p. 122; PDF p. 134.
-    Array,
-    /// Require the closing bracket of an expression-free array suffix.
-    ArrayExpectClose,
-    /// Receive and close an array-bound expression.
-    AwaitArrayBound,
-    /// Decide whether a function suffix is empty, K&R, or prototype-style.
-    ///
-    /// C99: `( parameter-type-list )` and `( identifier-list? )`, §6.7.5
-    /// paragraph 1, p. 114; PDF p. 126; abstract declarators take only
-    /// `( parameter-type-list? )`, §6.7.6 paragraph 1, p. 122; PDF p. 134.
-    FunctionStart,
-    /// Receive a parameter-list child.
-    AwaitParameterList,
-    /// Store qualifiers/direct parts and return the declarator.
-    Finish,
-}
-
 impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
-    pub(super) fn new(arena: &'p Bump, mode: DeclaratorMode) -> Self {
-        Self {
-            phase: DeclaratorPhase::PointerOrBase,
-            attribute_resume: DeclaratorPhase::PointerOrBase,
-            mode,
-            pointer_levels: ArenaVec::new_in(arena),
-            direct_declarators: ArenaVec::new_in(arena),
-            has_pointer_level: false,
-            has_direct_declarator: false,
-            named: false,
-            chain_named: None,
-            owns_chain_named: false,
-            array_qualifiers: TypeQualifiers::empty(),
-            array_qualifiers_before_static: false,
-            array_is_static: false,
-            array_is_pointer: false,
-            array_assignment_expression: None,
-            source_vectors: None,
-            nested_open: None,
-            nested: None,
-        }
-    }
-
-    /// C23: §6.7.7.4 paragraph 13, p. 130; PDF p. 143 makes every empty
-    /// function declarator a prototype, as if its parameter list were `void`.
-    fn empty_function(parser: &Parser<'_, 'tu, 'p>, legacy: bool) -> DirectDeclarator<'tu> {
-        if legacy && parser.context.configuration.standard() < crate::configuration::CStandard::C23
-        {
-            DirectDeclarator::KAndRStyleFunction {
-                parameters: ArenaList::empty(),
-            }
-        } else {
-            DirectDeclarator::Function {
-                parameter_list: ArenaList::empty(),
-                is_variadic:    false,
-            }
-        }
-    }
-
-    /// GNU declarator labels and shared attribute attachment points.
-    /// C99: vendor extension to §6.7.5, p. 114; PDF p. 126.
-    fn step_extension(
-        &mut self,
-        parser: &mut Parser<'_, 'tu, 'p>,
-        token: Option<Token>,
-        returned: Option<ParseValue<'tu>>,
-    ) -> Option<ParseAction<'tu, 'p>> {
-        if matches!(
-            self.phase,
-            DeclaratorPhase::PointerOrBase
-                | DeclaratorPhase::Base
-                | DeclaratorPhase::PointerQualifiers
-                | DeclaratorPhase::Suffix
-        ) && let Some(token) = token
-            && let TokenType::Keyword(keyword) = token.kind
-            && (super::msvc::calling_convention(keyword)
-                || matches!(
-                    self.phase,
-                    DeclaratorPhase::Suffix
-                        | DeclaratorPhase::Base
-                        | DeclaratorPhase::PointerOrBase
-                ) && super::msvc::type_modifier(keyword))
-        {
-            self.direct_declarators
-                .push(DirectDeclarator::MsModifier(keyword, token.source_vectors));
-            parser.merge_source(&mut self.source_vectors, token);
-            return Some(ParseAction::Consume);
-        }
-        if matches!(
-            self.phase,
-            DeclaratorPhase::PointerOrBase | DeclaratorPhase::Base | DeclaratorPhase::Array
-        ) && parser.attribute_starter(token)
-        {
-            self.attribute_resume = self.phase;
-            self.phase = DeclaratorPhase::AwaitAttributes;
-            return Some(ParseAction::Push(
-                parser.pooled_modern_frame(ModernKind::Attributes),
-            ));
-        }
-        match self.phase {
-            | DeclaratorPhase::AwaitAsm => {
-                let Some(ParseValue::Gnu(super::gnu::GnuValue::Asm(asm))) = returned else {
-                    panic!("asm label child protocol");
-                };
-                self.direct_declarators
-                    .push(DirectDeclarator::AsmLabel(asm));
-                parser
-                    .context
-                    .merge_into(&mut self.source_vectors, asm.source_vectors);
-                self.phase = DeclaratorPhase::Suffix;
-                Some(ParseAction::Continue)
-            },
-            | DeclaratorPhase::AwaitPointerAttributes | DeclaratorPhase::AwaitAttributes => {
-                let Some(ParseValue::Modern(ModernValue::Attributes(attributes))) = returned else {
-                    unexpected_return!("declarator attributes protocol: {returned:?}")
-                };
-                parser
-                    .context
-                    .merge_into(&mut self.source_vectors, attributes.source_vectors);
-                if matches!(self.phase, DeclaratorPhase::AwaitPointerAttributes) {
-                    // C23 §6.7.7.2p1: attributes after a `*` appertain to
-                    // that pointer.
-                    let level = self
-                        .pointer_levels
-                        .last_mut()
-                        .expect("pointer level exists");
-                    level.attributes = Some(parser.alloc_syntax(SpecifierExtension {
-                        kind:           SpecifierExtensionKind::Attributes(attributes),
-                        next:           level.attributes,
-                        source_vectors: attributes.source_vectors,
-                    }));
-                    self.phase = DeclaratorPhase::PointerQualifiers;
-                } else {
-                    self.direct_declarators
-                        .push(DirectDeclarator::Attributes(attributes));
-                    self.phase = self.attribute_resume;
-                }
-                Some(ParseAction::Continue)
-            },
-            | _ => None,
-        }
-    }
-
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -894,6 +650,230 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
             },
         }
     }
+}
+
+/// State transitions for pointer, base, and suffix portions of a declarator.
+///
+/// C99: pointer, array, and function-derived declarator productions are
+/// §6.7.5.1-§6.7.5.3, pp. 115-121; PDF pp. 127-133.
+#[derive(Debug, Clone, Copy)]
+enum DeclaratorPhase {
+    AwaitAttributes,
+    AwaitAsm,
+    AwaitPointerAttributes,
+    /// Decide whether the declarator begins with a pointer or direct base.
+    PointerOrBase,
+    /// Collect qualifiers for the current pointer level.
+    PointerQualifiers,
+    /// Parse the identifier or opening parenthesis of the direct base.
+    Base,
+    /// Push a nested declarator after `(`.
+    PushNested,
+    /// Disambiguate an abstract `(` as grouping or a function suffix.
+    ///
+    /// C99: empty parentheses in a type name are a function declarator, not
+    /// grouping, §6.7.6 footnote 128, p. 122; PDF p. 134; an identifier that
+    /// could be a typedef name or a parameter name is taken as a typedef
+    /// name, §6.7.5.3 paragraph 11, p. 119; PDF p. 131.
+    ClassifyAbstractParenthesis,
+    /// Receive a nested parenthesized declarator.
+    AwaitNested,
+    /// Require the `)` owned by a parenthesized declarator.
+    ExpectNestedClose,
+    /// Consume zero or more array/function suffixes.
+    Suffix,
+    /// Parse array qualifiers, `static`, `*`, or an optional bound.
+    ///
+    /// C99: the four array suffix forms of §6.7.5 paragraph 1, p. 114;
+    /// PDF p. 126, and §6.7.6 paragraph 1, p. 122; PDF p. 134.
+    Array,
+    /// Require the closing bracket of an expression-free array suffix.
+    ArrayExpectClose,
+    /// Receive and close an array-bound expression.
+    AwaitArrayBound,
+    /// Decide whether a function suffix is empty, K&R, or prototype-style.
+    ///
+    /// C99: `( parameter-type-list )` and `( identifier-list? )`, §6.7.5
+    /// paragraph 1, p. 114; PDF p. 126; abstract declarators take only
+    /// `( parameter-type-list? )`, §6.7.6 paragraph 1, p. 122; PDF p. 134.
+    FunctionStart,
+    /// Receive a parameter-list child.
+    AwaitParameterList,
+    /// Store qualifiers/direct parts and return the declarator.
+    Finish,
+}
+
+/// Whether a declarator requires, forbids, or optionally accepts a name.
+///
+/// C99: named declarators are §6.7.5, pp. 114-121; PDF pp. 126-133; abstract
+/// declarators are §6.7.6, p. 122; PDF p. 134.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::translation_phases::parsing) enum DeclaratorMode {
+    /// Ordinary declarator requiring an identifier base.
+    Named,
+    /// Abstract declarator used where no identifier may be declared.
+    Abstract,
+    /// Parameter declarator that may be named or abstract.
+    MaybeAbstract,
+}
+
+#[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The booleans retain independent C array/declarator grammar facts."
+)]
+/// Iteratively parses named, abstract, or maybe-abstract declarators.
+///
+/// C99: declarator and direct-declarator are §6.7.5, pp. 114-121; PDF
+/// pp. 126-133. Abstract forms are §6.7.6, p. 122; PDF p. 134.
+pub(in crate::translation_phases::parsing) struct DeclaratorFrame<'tu, 'p> {
+    /// Current pointer/base/suffix transition.
+    phase: DeclaratorPhase,
+    attribute_resume: DeclaratorPhase,
+    /// Whether the declarator requires or permits an identifier.
+    mode: DeclaratorMode,
+    /// Pointer levels, outermost first. The last one collects the
+    /// qualifiers and attributes after its `*` while they are parsed.
+    pub(in crate::translation_phases::parsing) pointer_levels: ArenaVec<'p, PointerLevel<'tu>>,
+    /// Direct base and suffixes accumulated before arena insertion.
+    pub(in crate::translation_phases::parsing) direct_declarators:
+        ArenaVec<'p, DirectDeclarator<'tu>>,
+    /// Whether at least one pointer level has been parsed.
+    has_pointer_level: bool,
+    /// Whether an identifier or parenthesized base has been parsed.
+    has_direct_declarator: bool,
+    /// Whether this declarator declares an identifier, directly or through
+    /// a parenthesized nested declarator.
+    named: bool,
+    /// Flag shared along one chain of parenthesized declarators, set when
+    /// the innermost one parses its identifier. A nested declarator's
+    /// identifier is also its parent's, so each `(`-nesting level learns
+    /// whether it is named without walking its children again, keeping deep
+    /// `(*(*(*x)())())()` chains linear. The flag lives in the parse arena
+    /// and returns to the frame pools when the frame that took it pops.
+    chain_named: Option<&'p Cell<bool>>,
+    /// Whether this frame took `chain_named` from the pools, as the
+    /// outermost declarator of its chain.
+    owns_chain_named: bool,
+    /// Qualifiers accumulated for the active array suffix.
+    array_qualifiers: TypeQualifiers,
+    /// Whether array qualifiers occurred before `static`.
+    array_qualifiers_before_static: bool,
+    /// Whether the active array suffix contains `static`.
+    array_is_static: bool,
+    /// Whether the active array suffix uses the `[*]` form.
+    array_is_pointer: bool,
+    /// Parsed assignment-expression bound for the active array suffix.
+    array_assignment_expression: Option<&'tu Expression<'tu>>,
+    /// Provenance accumulated across every declarator component.
+    pub(in crate::translation_phases::parsing) source_vectors: Option<SourceVectors>,
+    /// Opening delimiter of the active parenthesized declarator.
+    nested_open: Option<SourceVectors>,
+    /// Parenthesized declarator waiting for its `)`. It is stored once its
+    /// delimiters are complete, because stored syntax never changes.
+    pub(in crate::translation_phases::parsing) nested: Option<ParenthesizedDeclarator<'tu>>,
+}
+
+impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
+    /// C23: §6.7.7.4 paragraph 13, p. 130; PDF p. 143 makes every empty
+    /// function declarator a prototype, as if its parameter list were `void`.
+    fn empty_function(parser: &Parser<'_, 'tu, 'p>, legacy: bool) -> DirectDeclarator<'tu> {
+        if legacy && parser.context.configuration.standard() < crate::configuration::CStandard::C23
+        {
+            DirectDeclarator::KAndRStyleFunction {
+                parameters: ArenaList::empty(),
+            }
+        } else {
+            DirectDeclarator::Function {
+                parameter_list: ArenaList::empty(),
+                is_variadic:    false,
+            }
+        }
+    }
+
+    /// GNU declarator labels and shared attribute attachment points.
+    /// C99: vendor extension to §6.7.5, p. 114; PDF p. 126.
+    fn step_extension(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        returned: Option<ParseValue<'tu>>,
+    ) -> Option<ParseAction<'tu, 'p>> {
+        if matches!(
+            self.phase,
+            DeclaratorPhase::PointerOrBase
+                | DeclaratorPhase::Base
+                | DeclaratorPhase::PointerQualifiers
+                | DeclaratorPhase::Suffix
+        ) && let Some(token) = token
+            && let TokenType::Keyword(keyword) = token.kind
+            && (super::msvc::calling_convention(keyword)
+                || matches!(
+                    self.phase,
+                    DeclaratorPhase::Suffix
+                        | DeclaratorPhase::Base
+                        | DeclaratorPhase::PointerOrBase
+                ) && super::msvc::type_modifier(keyword))
+        {
+            self.direct_declarators
+                .push(DirectDeclarator::MsModifier(keyword, token.source_vectors));
+            parser.merge_source(&mut self.source_vectors, token);
+            return Some(ParseAction::Consume);
+        }
+        if matches!(
+            self.phase,
+            DeclaratorPhase::PointerOrBase | DeclaratorPhase::Base | DeclaratorPhase::Array
+        ) && parser.attribute_starter(token)
+        {
+            self.attribute_resume = self.phase;
+            self.phase = DeclaratorPhase::AwaitAttributes;
+            return Some(ParseAction::Push(
+                parser.pooled_modern_frame(ModernKind::Attributes),
+            ));
+        }
+        match self.phase {
+            | DeclaratorPhase::AwaitAsm => {
+                let Some(ParseValue::Gnu(super::gnu::GnuValue::Asm(asm))) = returned else {
+                    panic!("asm label child protocol");
+                };
+                self.direct_declarators
+                    .push(DirectDeclarator::AsmLabel(asm));
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, asm.source_vectors);
+                self.phase = DeclaratorPhase::Suffix;
+                Some(ParseAction::Continue)
+            },
+            | DeclaratorPhase::AwaitPointerAttributes | DeclaratorPhase::AwaitAttributes => {
+                let Some(ParseValue::Modern(ModernValue::Attributes(attributes))) = returned else {
+                    unexpected_return!("declarator attributes protocol: {returned:?}")
+                };
+                parser
+                    .context
+                    .merge_into(&mut self.source_vectors, attributes.source_vectors);
+                if matches!(self.phase, DeclaratorPhase::AwaitPointerAttributes) {
+                    // C23 §6.7.7.2p1: attributes after a `*` appertain to
+                    // that pointer.
+                    let level = self
+                        .pointer_levels
+                        .last_mut()
+                        .expect("pointer level exists");
+                    level.attributes = Some(parser.alloc_syntax(SpecifierExtension {
+                        kind:           SpecifierExtensionKind::Attributes(attributes),
+                        next:           level.attributes,
+                        source_vectors: attributes.source_vectors,
+                    }));
+                    self.phase = DeclaratorPhase::PointerQualifiers;
+                } else {
+                    self.direct_declarators
+                        .push(DirectDeclarator::Attributes(attributes));
+                    self.phase = self.attribute_resume;
+                }
+                Some(ParseAction::Continue)
+            },
+            | _ => None,
+        }
+    }
 
     fn push_array(&mut self) {
         self.direct_declarators.push(DirectDeclarator::Array {
@@ -977,7 +957,10 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
 
     /// Returns this popped frame's lists and, if it began its chain, the
     /// chain flag. Every nested declarator of the chain has popped by then.
-    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
+    pub(in crate::translation_phases::parsing) fn reclaim_pooled(
+        &mut self,
+        pools: &mut FramePools<'tu, 'p>,
+    ) {
         pools.pointer_levels.reclaim(&mut self.pointer_levels);
         pools
             .direct_declarators
@@ -989,7 +972,34 @@ impl<'tu, 'p> DeclaratorFrame<'tu, 'p> {
             pools.reclaim_chain_flag(chain_named);
         }
     }
+
+    pub(in crate::translation_phases::parsing) fn new(
+        arena: &'p Bump,
+        mode: DeclaratorMode,
+    ) -> Self {
+        Self {
+            phase: DeclaratorPhase::PointerOrBase,
+            attribute_resume: DeclaratorPhase::PointerOrBase,
+            mode,
+            pointer_levels: ArenaVec::new_in(arena),
+            direct_declarators: ArenaVec::new_in(arena),
+            has_pointer_level: false,
+            has_direct_declarator: false,
+            named: false,
+            chain_named: None,
+            owns_chain_named: false,
+            array_qualifiers: TypeQualifiers::empty(),
+            array_qualifiers_before_static: false,
+            array_is_static: false,
+            array_is_pointer: false,
+            array_assignment_expression: None,
+            source_vectors: None,
+            nested_open: None,
+            nested: None,
+        }
+    }
 }
+
 fn check_array_extension<'tu>(parser: &mut Parser<'_, 'tu, '_>, index: &'tu Expression<'tu>) {
     let mut operand = index;
     while let super::syntax::ExpressionType::Parenthesized { expression, .. } = operand.kind {

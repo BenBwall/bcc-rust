@@ -19,50 +19,6 @@ use crate::{
     util::region_vec::RegionVec,
 };
 
-/// The preprocessed translation unit that the parser reads.
-pub(super) struct Upstream {
-    /// Phase-6 output remains available until parsing ends.
-    tokens: RegionVec<Token>,
-    /// Where the preprocessor stopped, used to locate end-of-input
-    /// diagnostics.
-    end: SourcePosition,
-    source_file_index: u32,
-    /// The first output token that exceeded the source-provenance budget.
-    pub(super) preprocessing_limit_token: Option<Token>,
-}
-
-impl Upstream {
-    /// Runs the whole of `preprocessor`, so parsing never interleaves with
-    /// preprocessing.
-    pub(super) fn preprocess_all<'tu>(
-        mut preprocessor: Preprocessor<'tu, '_>,
-        context: &mut Context<'tu>,
-        source_segment_limit: usize,
-    ) -> Self {
-        let mut tokens = RegionVec::new();
-        let preprocessing_limit_token =
-            preprocessor.preprocess_into_arena(context, source_segment_limit, &mut tokens);
-        Self {
-            tokens,
-            end: preprocessor.end_position(),
-            source_file_index: preprocessor.end_source_file_index(),
-            preprocessing_limit_token,
-        }
-    }
-}
-
-impl GetPosition for Upstream {
-    fn position(&self, _context: &Context<'_>) -> SourcePosition {
-        self.end
-    }
-}
-
-impl GetSourceFileIndex for Upstream {
-    fn source_file_index(&self) -> u32 {
-        self.source_file_index
-    }
-}
-
 /// The parser's current-token and arbitrary-lookahead view of the
 /// preprocessed token array.
 ///
@@ -88,7 +44,54 @@ pub(super) struct TokenCursor {
     pub(super) consumed: usize,
 }
 
+impl Upstream {
+    /// Runs the whole of `preprocessor`, so parsing never interleaves with
+    /// preprocessing.
+    pub(super) fn preprocess_all<'tu>(
+        mut preprocessor: Preprocessor<'tu, '_>,
+        context: &mut Context<'tu>,
+        source_segment_limit: usize,
+    ) -> Self {
+        let mut tokens = RegionVec::new();
+        let preprocessing_limit_token =
+            preprocessor.preprocess_into_arena(context, source_segment_limit, &mut tokens);
+        Self {
+            tokens,
+            end: preprocessor.end_position(),
+            source_file_index: preprocessor.end_source_file_index(),
+            preprocessing_limit_token,
+        }
+    }
+}
+
 impl TokenCursor {
+    /// Advances by one token.
+    pub(super) fn consume(&mut self) {
+        debug_assert!(self.at(0).is_some(), "cannot consume parser EOF");
+        self.previous = self.at(0);
+        self.position += 1;
+        self.consumed += 1;
+    }
+}
+
+/// The preprocessed translation unit that the parser reads.
+pub(super) struct Upstream {
+    /// Phase-6 output remains available until parsing ends.
+    tokens: RegionVec<Token>,
+    /// Where the preprocessor stopped, used to locate end-of-input
+    /// diagnostics.
+    end: SourcePosition,
+    source_file_index: u32,
+    /// The first output token that exceeded the source-provenance budget.
+    pub(super) preprocessing_limit_token: Option<Token>,
+}
+
+impl TokenCursor {
+    /// Reports EOF from now on without reading the rest of the input.
+    pub(super) fn abandon(&mut self) {
+        self.end = self.position.min(self.end);
+    }
+
     /// Creates a cursor at the first token of `upstream`.
     pub(super) fn new(upstream: Upstream) -> Self {
         let end = upstream.tokens.len();
@@ -122,17 +125,16 @@ impl TokenCursor {
     pub(super) fn lookahead(&self, index: usize) -> Option<Token> {
         self.at(0).and_then(|_| self.at(index.checked_add(1)?))
     }
+}
 
-    /// Reports EOF from now on without reading the rest of the input.
-    pub(super) fn abandon(&mut self) {
-        self.end = self.position.min(self.end);
+impl GetPosition for Upstream {
+    fn position(&self, _context: &Context<'_>) -> SourcePosition {
+        self.end
     }
+}
 
-    /// Advances by one token.
-    pub(super) fn consume(&mut self) {
-        debug_assert!(self.at(0).is_some(), "cannot consume parser EOF");
-        self.previous = self.at(0);
-        self.position += 1;
-        self.consumed += 1;
+impl GetSourceFileIndex for Upstream {
+    fn source_file_index(&self) -> u32 {
+        self.source_file_index
     }
 }

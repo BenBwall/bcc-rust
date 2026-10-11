@@ -70,164 +70,8 @@ use crate::{
     },
 };
 
-/// Parses either a prototype parameter list or an allowed K&R identifier list
-/// and owns the suffix's closing parenthesis.
-///
-/// C99: parameter-type-list, parameter-list, parameter-declaration, and
-/// identifier-list are §6.7.5, p. 114; PDF p. 126; function declarator rules
-/// are §6.7.5.3, pp. 118-121; PDF pp. 130-133. Only a named declarator may
-/// take an identifier list; abstract ones take `parameter-type-list?`
-/// (§6.7.6 paragraph 1, p. 122; PDF p. 134).
-#[derive(Debug)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "The flags are independent recovery facts of one parameter list, not a hidden state \
-              machine."
-)]
-pub(super) struct ParameterListFrame<'tu, 'p> {
-    /// Current prototype/K&R transition.
-    phase: ParameterListPhase,
-    /// Whether this syntactic position permits a K&R identifier list.
-    allow_k_and_r: bool,
-    /// Prototype parameters accumulated before arena insertion.
-    pub(super) parameters: ArenaVec<'p, ParameterDeclaration<'tu>>,
-    /// K&R identifiers accumulated before arena insertion.
-    pub(super) identifiers: ArenaVec<'p, Identifier>,
-    /// Specifiers retained while an optional parameter declarator runs.
-    pending_specifiers: Option<DeclarationSpecifiers<'tu>>,
-    /// Specifier provenance retained for parameter-source construction.
-    pending_source: Option<SourceVectors>,
-    /// Whether `...` terminated the prototype parameter list.
-    is_variadic: bool,
-    /// Whether variadic recovery may unwind at a later declaration starter.
-    can_unwind_variadic_recovery: bool,
-    /// Provenance accumulated across the entire parenthesized suffix.
-    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
-    /// Scope depth restored by every parameter-list exit.
-    entry_scope_depth: Option<usize>,
-    /// Prototype-scope bindings introduced by parameter declarator names.
-    /// Any further binding came from an enum specifier somewhere in the
-    /// parameter declarations.
-    parameter_name_bindings: usize,
-    /// Whether a prototype parameter inside this identifier list was already
-    /// diagnosed, so a trailing `...` is part of the same mistake.
-    diagnosed_mixed_parameter: bool,
-    /// `__extension__` suppression depth on entry. Every separator and exit
-    /// restores it, so a marker covers only the parameter it begins (GNU
-    /// extension; C99 §5.1.1.3, p. 11; PDF p. 23).
-    suppression_entry: usize,
-}
-
-/// State transitions for prototype and K&R parameter-list forms.
-///
-/// C99: §6.7.5 and §6.7.5.3, pp. 114 and 118-121; PDF pp. 126 and 130-133.
-#[derive(Debug, Clone, Copy)]
-enum ParameterListPhase {
-    /// Enter prototype scope and select K&R versus prototype syntax.
-    ///
-    /// C99: a visible typedef name selects a parameter declaration
-    /// (§6.7.5.3 paragraph 11, p. 119; PDF p. 131).
-    Start,
-    /// Consume one K&R parameter identifier.
-    KAndRIdentifier,
-    /// Receive the specifiers of a prototype parameter that was diagnosed
-    /// inside an identifier list and is parsed only to be skipped whole.
-    KAndRMixedSpecifiers,
-    /// Receive the optional declarator of that skipped prototype parameter.
-    KAndRMixedDeclarator,
-    /// Require `,` or `)` after a K&R identifier.
-    KAndRSeparator,
-    /// Push declaration specifiers for one prototype parameter.
-    PrototypeParameter,
-    /// Receive parameter specifiers and decide whether a declarator follows.
-    AwaitSpecifiers,
-    /// Receive the optional named or abstract parameter declarator.
-    AwaitDeclarator,
-    /// Require `,` or `)` after a prototype parameter.
-    PrototypeSeparator,
-    /// Parse `...` or the next parameter after a comma.
-    ///
-    /// C99: `parameter-list , ...` (§6.7.5 paragraph 1, p. 114; PDF p. 126;
-    /// §6.7.5.3 paragraph 9, p. 119; PDF p. 131).
-    AfterComma,
-    /// Require `)` immediately after `...`.
-    ExpectCloseAfterEllipsis,
-    /// Leave scope and return a K&R function suffix.
-    FinishKAndR,
-    /// Leave scope and return a prototype function suffix.
-    FinishPrototype,
-}
-
 impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
-    pub(super) fn new(arena: &'p Bump, allow_k_and_r: bool) -> Self {
-        Self {
-            phase: ParameterListPhase::Start,
-            allow_k_and_r,
-            parameters: ArenaVec::new_in(arena),
-            identifiers: ArenaVec::new_in(arena),
-            pending_specifiers: None,
-            pending_source: None,
-            is_variadic: false,
-            can_unwind_variadic_recovery: false,
-            source_vectors: ArenaVec::new_in(arena),
-            entry_scope_depth: None,
-            parameter_name_bindings: 0,
-            diagnosed_mixed_parameter: false,
-            suppression_entry: 0,
-        }
-    }
-
-    /// Reports whether a parameter list that starts with a non-typedef
-    /// identifier is really a prototype whose first type name is unknown.
-    ///
-    /// An identifier list contains only identifiers and commas (C99 §6.7.5,
-    /// p. 114; PDF p. 126). An identifier followed by `*` or a
-    /// declaration-specifier keyword, as in `(size_t *p)`, can only start a
-    /// parameter declaration. After two adjacent identifiers, as in
-    /// `(size_t n, int m)`, a bounded scan of the rest of the list looks for
-    /// declaration syntax; without it, `(a b, c)` stays an identifier list with
-    /// an omitted comma.
-    fn unknown_type_name_starts_prototype(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
-        /// Tokens examined after two adjacent identifiers before the list is
-        /// assumed to be an identifier list.
-        const SCAN_LIMIT: usize = 64;
-        let Some(following) = parser.cursor.following() else {
-            return false;
-        };
-        match following.kind {
-            | TokenType::Operator(OperatorTokenType::Asterisk) => true,
-            | TokenType::Identifier => {
-                for index in 1..=SCAN_LIMIT {
-                    let Some(token) = parser.cursor.lookahead(index) else {
-                        return false;
-                    };
-                    if parser.declaration_starter(token)
-                        || matches!(
-                            token.kind,
-                            TokenType::Operator(
-                                OperatorTokenType::Asterisk
-                                    | OperatorTokenType::OpeningSquareBracket
-                                    | OperatorTokenType::Ellipsis
-                            )
-                        )
-                    {
-                        return true;
-                    }
-                    if !matches!(
-                        token.kind,
-                        TokenType::Identifier | TokenType::Operator(OperatorTokenType::Comma)
-                    ) {
-                        return false;
-                    }
-                }
-                false
-            },
-            | TokenType::Keyword(_) => parser.declaration_starter(following),
-            | _ => false,
-        }
-    }
-
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -740,6 +584,167 @@ impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
                     source_vectors:    parser.context.merge_vector_list(&self.source_vectors),
                 }))
             },
+        }
+    }
+}
+
+/// State transitions for prototype and K&R parameter-list forms.
+///
+/// C99: §6.7.5 and §6.7.5.3, pp. 114 and 118-121; PDF pp. 126 and 130-133.
+#[derive(Debug, Clone, Copy)]
+enum ParameterListPhase {
+    /// Enter prototype scope and select K&R versus prototype syntax.
+    ///
+    /// C99: a visible typedef name selects a parameter declaration
+    /// (§6.7.5.3 paragraph 11, p. 119; PDF p. 131).
+    Start,
+    /// Consume one K&R parameter identifier.
+    KAndRIdentifier,
+    /// Receive the specifiers of a prototype parameter that was diagnosed
+    /// inside an identifier list and is parsed only to be skipped whole.
+    KAndRMixedSpecifiers,
+    /// Receive the optional declarator of that skipped prototype parameter.
+    KAndRMixedDeclarator,
+    /// Require `,` or `)` after a K&R identifier.
+    KAndRSeparator,
+    /// Push declaration specifiers for one prototype parameter.
+    PrototypeParameter,
+    /// Receive parameter specifiers and decide whether a declarator follows.
+    AwaitSpecifiers,
+    /// Receive the optional named or abstract parameter declarator.
+    AwaitDeclarator,
+    /// Require `,` or `)` after a prototype parameter.
+    PrototypeSeparator,
+    /// Parse `...` or the next parameter after a comma.
+    ///
+    /// C99: `parameter-list , ...` (§6.7.5 paragraph 1, p. 114; PDF p. 126;
+    /// §6.7.5.3 paragraph 9, p. 119; PDF p. 131).
+    AfterComma,
+    /// Require `)` immediately after `...`.
+    ExpectCloseAfterEllipsis,
+    /// Leave scope and return a K&R function suffix.
+    FinishKAndR,
+    /// Leave scope and return a prototype function suffix.
+    FinishPrototype,
+}
+
+/// Parses either a prototype parameter list or an allowed K&R identifier list
+/// and owns the suffix's closing parenthesis.
+///
+/// C99: parameter-type-list, parameter-list, parameter-declaration, and
+/// identifier-list are §6.7.5, p. 114; PDF p. 126; function declarator rules
+/// are §6.7.5.3, pp. 118-121; PDF pp. 130-133. Only a named declarator may
+/// take an identifier list; abstract ones take `parameter-type-list?`
+/// (§6.7.6 paragraph 1, p. 122; PDF p. 134).
+#[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The flags are independent recovery facts of one parameter list, not a hidden state \
+              machine."
+)]
+pub(in crate::translation_phases::parsing) struct ParameterListFrame<'tu, 'p> {
+    /// Current prototype/K&R transition.
+    phase: ParameterListPhase,
+    /// Whether this syntactic position permits a K&R identifier list.
+    allow_k_and_r: bool,
+    /// Prototype parameters accumulated before arena insertion.
+    pub(in crate::translation_phases::parsing) parameters: ArenaVec<'p, ParameterDeclaration<'tu>>,
+    /// K&R identifiers accumulated before arena insertion.
+    pub(in crate::translation_phases::parsing) identifiers: ArenaVec<'p, Identifier>,
+    /// Specifiers retained while an optional parameter declarator runs.
+    pending_specifiers: Option<DeclarationSpecifiers<'tu>>,
+    /// Specifier provenance retained for parameter-source construction.
+    pending_source: Option<SourceVectors>,
+    /// Whether `...` terminated the prototype parameter list.
+    is_variadic: bool,
+    /// Whether variadic recovery may unwind at a later declaration starter.
+    can_unwind_variadic_recovery: bool,
+    /// Provenance accumulated across the entire parenthesized suffix.
+    pub(in crate::translation_phases::parsing) source_vectors: ArenaVec<'p, SourceVectors>,
+    /// Scope depth restored by every parameter-list exit.
+    entry_scope_depth: Option<usize>,
+    /// Prototype-scope bindings introduced by parameter declarator names.
+    /// Any further binding came from an enum specifier somewhere in the
+    /// parameter declarations.
+    parameter_name_bindings: usize,
+    /// Whether a prototype parameter inside this identifier list was already
+    /// diagnosed, so a trailing `...` is part of the same mistake.
+    diagnosed_mixed_parameter: bool,
+    /// `__extension__` suppression depth on entry. Every separator and exit
+    /// restores it, so a marker covers only the parameter it begins (GNU
+    /// extension; C99 §5.1.1.3, p. 11; PDF p. 23).
+    suppression_entry: usize,
+}
+
+impl<'tu, 'p> ParameterListFrame<'tu, 'p> {
+    /// Reports whether a parameter list that starts with a non-typedef
+    /// identifier is really a prototype whose first type name is unknown.
+    ///
+    /// An identifier list contains only identifiers and commas (C99 §6.7.5,
+    /// p. 114; PDF p. 126). An identifier followed by `*` or a
+    /// declaration-specifier keyword, as in `(size_t *p)`, can only start a
+    /// parameter declaration. After two adjacent identifiers, as in
+    /// `(size_t n, int m)`, a bounded scan of the rest of the list looks for
+    /// declaration syntax; without it, `(a b, c)` stays an identifier list with
+    /// an omitted comma.
+    fn unknown_type_name_starts_prototype(parser: &mut Parser<'_, 'tu, 'p>) -> bool {
+        /// Tokens examined after two adjacent identifiers before the list is
+        /// assumed to be an identifier list.
+        const SCAN_LIMIT: usize = 64;
+        let Some(following) = parser.cursor.following() else {
+            return false;
+        };
+        match following.kind {
+            | TokenType::Operator(OperatorTokenType::Asterisk) => true,
+            | TokenType::Identifier => {
+                for index in 1..=SCAN_LIMIT {
+                    let Some(token) = parser.cursor.lookahead(index) else {
+                        return false;
+                    };
+                    if parser.declaration_starter(token)
+                        || matches!(
+                            token.kind,
+                            TokenType::Operator(
+                                OperatorTokenType::Asterisk
+                                    | OperatorTokenType::OpeningSquareBracket
+                                    | OperatorTokenType::Ellipsis
+                            )
+                        )
+                    {
+                        return true;
+                    }
+                    if !matches!(
+                        token.kind,
+                        TokenType::Identifier | TokenType::Operator(OperatorTokenType::Comma)
+                    ) {
+                        return false;
+                    }
+                }
+                false
+            },
+            | TokenType::Keyword(_) => parser.declaration_starter(following),
+            | _ => false,
+        }
+    }
+
+    pub(in crate::translation_phases::parsing) fn new(
+        arena: &'p Bump,
+        allow_k_and_r: bool,
+    ) -> Self {
+        Self {
+            phase: ParameterListPhase::Start,
+            allow_k_and_r,
+            parameters: ArenaVec::new_in(arena),
+            identifiers: ArenaVec::new_in(arena),
+            pending_specifiers: None,
+            pending_source: None,
+            is_variadic: false,
+            can_unwind_variadic_recovery: false,
+            source_vectors: ArenaVec::new_in(arena),
+            entry_scope_depth: None,
+            parameter_name_bindings: 0,
+            diagnosed_mixed_parameter: false,
+            suppression_entry: 0,
         }
     }
 }

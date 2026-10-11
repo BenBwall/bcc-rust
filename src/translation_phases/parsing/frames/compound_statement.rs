@@ -53,52 +53,13 @@ use crate::{
     },
 };
 
-/// Resumable `compound-statement`: `{ block-item-list(opt) }`, where each
-/// `block-item` is a `declaration` or a `statement`.
-///
-/// C99: §6.8.2, p. 132; PDF p. 144. A function body predeclares `__func__`
-/// as if declared just after its `{` under §6.4.2.2 paragraph 1, p. 52;
-/// PDF p. 64.
-#[derive(Debug)]
-pub(super) struct CompoundStatementFrame<'tu, 'p> {
-    phase:                     CompoundStatementPhase,
-    pub(super) items:          ArenaVec<'p, BlockItem<'tu>>,
-    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
-    starting_error_count:      usize,
-    entry_scope_depth:         Option<usize>,
-    function_body:             bool,
-    has_statement:             bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum CompoundStatementPhase {
-    Start,
-    ItemOrClose,
-    AwaitDeclaration,
-    AwaitFunctionDefinition,
-    AwaitStatement,
-    Finish,
-}
-
 #[expect(
     clippy::missing_assert_message,
     reason = "Frame phases assert the typed driver protocol, whose mismatch already identifies \
               the invariant."
 )]
 impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
-    pub(super) fn new(arena: &'p Bump, starting_error_count: usize, function_body: bool) -> Self {
-        Self {
-            phase: CompoundStatementPhase::Start,
-            items: ArenaVec::new_in(arena),
-            source_vectors: ArenaVec::new_in(arena),
-            starting_error_count,
-            entry_scope_depth: None,
-            function_body,
-            has_statement: false,
-        }
-    }
-
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -255,6 +216,51 @@ impl<'tu, 'p> CompoundStatementFrame<'tu, 'p> {
                 );
                 ParseAction::Reduce(ParseValue::CompoundStatement(index))
             },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CompoundStatementPhase {
+    Start,
+    ItemOrClose,
+    AwaitDeclaration,
+    AwaitFunctionDefinition,
+    AwaitStatement,
+    Finish,
+}
+
+/// Resumable `compound-statement`: `{ block-item-list(opt) }`, where each
+/// `block-item` is a `declaration` or a `statement`.
+///
+/// C99: §6.8.2, p. 132; PDF p. 144. A function body predeclares `__func__`
+/// as if declared just after its `{` under §6.4.2.2 paragraph 1, p. 52;
+/// PDF p. 64.
+#[derive(Debug)]
+pub(in crate::translation_phases::parsing) struct CompoundStatementFrame<'tu, 'p> {
+    phase: CompoundStatementPhase,
+    pub(in crate::translation_phases::parsing) items: ArenaVec<'p, BlockItem<'tu>>,
+    pub(in crate::translation_phases::parsing) source_vectors: ArenaVec<'p, SourceVectors>,
+    starting_error_count: usize,
+    entry_scope_depth: Option<usize>,
+    function_body: bool,
+    has_statement: bool,
+}
+
+impl<'p> CompoundStatementFrame<'_, 'p> {
+    pub(in crate::translation_phases::parsing) fn new(
+        arena: &'p Bump,
+        starting_error_count: usize,
+        function_body: bool,
+    ) -> Self {
+        Self {
+            phase: CompoundStatementPhase::Start,
+            items: ArenaVec::new_in(arena),
+            source_vectors: ArenaVec::new_in(arena),
+            starting_error_count,
+            entry_scope_depth: None,
+            function_body,
+            has_statement: false,
         }
     }
 }

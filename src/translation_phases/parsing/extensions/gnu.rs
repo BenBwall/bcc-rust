@@ -6,7 +6,7 @@
 //! manuals specify the vendor grammar. Types, constraints, assembly meaning,
 //! builtin evaluation and label resolution belong to later analysis.
 
-use super::{
+use super::super::{
     Parser,
     errors::ParserErrorType,
     expression::{
@@ -46,206 +46,7 @@ use crate::{
     },
 };
 
-/// GNU assembly grammar: `asm qualifiers ( template : outputs : inputs :
-/// clobbers : labels )`, or a declarator's `asm ( template )` label. The
-/// template, constraint and clobber string literals keep their provenance;
-/// C operands are parsed syntax children. `sections` counts the colons.
-/// C99: extension to §6.8, p. 131; PDF p. 143 and §6.7.5, p. 114; PDF p. 126.
-/// GNU extension: GCC manual, "Extended Asm".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) struct Asm<'tu> {
-    pub(crate) qualifiers:     AsmQualifiers,
-    /// `None` when the template literal is missing.
-    pub(crate) template:       Option<Token>,
-    pub(crate) operands:       ArenaList<'tu, AsmOperand<'tu>>,
-    pub(crate) clobbers:       ArenaList<'tu, Token>,
-    pub(crate) labels:         ArenaList<'tu, Identifier>,
-    pub(crate) sections:       u8,
-    pub(crate) source_vectors: SourceVectors,
-    pub(crate) recovered:      bool,
-}
-/// The qualifiers written before a GNU assembly statement's `(`.
-/// GNU extension: GCC manual, "Extended Asm".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
-pub(crate) struct AsmQualifiers {
-    pub(crate) volatile: bool,
-    pub(crate) inline:   bool,
-    pub(crate) goto:     bool,
-}
-/// One GNU output/input operand with an optional symbolic name.
-/// GNU extension: GCC manual, "Extended Asm".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) struct AsmOperand<'tu> {
-    pub(crate) name:       Option<Identifier>,
-    pub(crate) constraint: Token,
-    pub(crate) expression: &'tu Expression<'tu>,
-    pub(crate) output:     bool,
-}
-/// Typed GNU builtin operands. Offset member paths use their own namespace.
-/// C99: extension to primary expressions §6.5.1, p. 69; PDF p. 81.
-/// GNU extension: GCC manual, "Other Builtins".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
-/// GNU extension: GCC manual, "Offsetof".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Offsetof.html>
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) struct Builtin<'tu> {
-    pub(crate) keyword:        KeywordTokenType,
-    pub(crate) operands:       ArenaList<'tu, SyntaxOperand<'tu>>,
-    pub(crate) members:        ArenaList<'tu, OffsetMember<'tu>>,
-    pub(crate) source_vectors: SourceVectors,
-    pub(crate) recovered:      bool,
-}
-/// A field or array-index suffix in an offsetof member designator.
-/// GNU extension: GCC manual, "Offsetof".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Offsetof.html>
-/// C99: §7.17 paragraph 3, p. 254; PDF p. 266.
-#[derive(Debug, PartialEq, Clone, Copy)]
-pub(crate) enum OffsetMember<'tu> {
-    Field(Identifier),
-    Index(&'tu Expression<'tu>),
-}
-#[derive(Debug, Clone, Copy)]
-pub(super) enum GnuValue<'tu> {
-    Asm(&'tu Asm<'tu>),
-    Builtin(&'tu Builtin<'tu>),
-    LocalLabels(ArenaList<'tu, Identifier>, SourceVectors),
-}
-/// Selects GNU assembly, builtin operand or local-label grammar.
-/// GNU extension: GCC manual, "Extended Asm".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
-/// GNU extension: GCC manual, "Other Builtins".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
-/// GNU extension: GCC manual, "Local Labels".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum GnuKind {
-    Asm { label: bool },
-    Builtin(KeywordTokenType),
-    LocalLabels,
-}
-/// Resumable positions in GNU assembly, builtin and local-label grammar.
-/// GNU extension: GCC manual, "Extended Asm".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
-/// GNU extension: GCC manual, "Other Builtins".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
-/// GNU extension: GCC manual, "Local Labels".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
-#[derive(Debug, Clone, Copy)]
-enum Phase {
-    Start,
-    Qualifiers,
-    Open,
-    Template,
-    Section,
-    OperandName,
-    OperandNameClose,
-    Constraint,
-    OperandOpen,
-    AwaitAsmExpression,
-    OperandClose,
-    AsmSeparator,
-    BuiltinOperand,
-    AwaitBuiltinOperand,
-    BuiltinSeparator,
-    OffsetField,
-    OffsetSuffix,
-    AwaitOffsetIndex,
-    OffsetIndexClose,
-    LocalName,
-    LocalSeparator,
-    Close,
-    Semicolon,
-    Finish,
-}
-/// GNU delimiter owner; all expression/type children run on the parser stack.
-/// C99: vendor extension to §6.5 and §6.8, pp. 67-139; PDF pp. 79-151.
-/// GNU extension: GCC manual, "Extended Asm".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
-/// GNU extension: GCC manual, "Other Builtins".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
-/// GNU extension: GCC manual, "Local Labels".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
-#[derive(Debug)]
-pub(super) struct GnuFrame<'tu, 'p> {
-    kind:                    GnuKind,
-    phase:                   Phase,
-    source_vectors:          Option<SourceVectors>,
-    starting_errors:         usize,
-    /// Clobber literals of an assembly statement.
-    pub(super) tokens:       ArenaVec<'p, Token>,
-    template:                Option<Token>,
-    pub(super) asm_operands: ArenaVec<'p, AsmOperand<'tu>>,
-    pub(super) operands:     ArenaVec<'p, SyntaxOperand<'tu>>,
-    pub(super) members:      ArenaVec<'p, OffsetMember<'tu>>,
-    pub(super) labels:       ArenaVec<'p, Identifier>,
-    sections:                u8,
-    qualifiers:              AsmQualifiers,
-    requires_operand:        bool,
-    name:                    Option<Identifier>,
-    constraint:              Option<Token>,
-    expression:              Option<&'tu Expression<'tu>>,
-}
 impl<'tu, 'p> GnuFrame<'tu, 'p> {
-    pub(super) fn new(arena: &'p Bump, kind: GnuKind, errors: usize) -> Self {
-        Self {
-            kind,
-            phase: Phase::Start,
-            source_vectors: None,
-            starting_errors: errors,
-            tokens: ArenaVec::new_in(arena),
-            template: None,
-            asm_operands: ArenaVec::new_in(arena),
-            operands: ArenaVec::new_in(arena),
-            members: ArenaVec::new_in(arena),
-            labels: ArenaVec::new_in(arena),
-            sections: 0,
-            qualifiers: AsmQualifiers::default(),
-            requires_operand: false,
-            name: None,
-            constraint: None,
-            expression: None,
-        }
-    }
-
-    pub(super) fn push(parser: &mut Parser<'_, 'tu, 'p>, kind: GnuKind) -> ParseAction<'tu, 'p> {
-        let frame = Self::new(parser.arena, kind, parser.hard_error_count);
-        ParseAction::Push(ParseFrame::Gnu(parser.pools.gnu(frame)))
-    }
-
-    fn own(&mut self, parser: &mut Parser<'_, 'tu, 'p>, token: Token) {
-        parser.merge_source(&mut self.source_vectors, token);
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn expected(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>, position: &'static str) {
-        parser.report(
-            ParserErrorType::ExpectedGnuSyntax(position, token.map(|x| x.kind)),
-            token,
-        );
-    }
-
-    fn punctuation(
-        &mut self,
-        parser: &mut Parser<'_, 'tu, 'p>,
-        token: Option<Token>,
-        op: OperatorTokenType,
-        position: &'static str,
-    ) -> ParseAction<'tu, 'p> {
-        if let Some(token) = token
-            && matches!(token.kind, TokenType::Operator(actual) if actual == op)
-        {
-            self.own(parser, token);
-            ParseAction::Consume
-        } else {
-            Self::expected(parser, token, position);
-            ParseAction::Reprocess
-        }
-    }
-
     /// Parses GNU assembly operands, builtin arguments and local-label
     /// declarations.
     /// GNU extension: GCC manual, "Extended Asm".
@@ -254,7 +55,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
     /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     /// GNU extension: GCC manual, "Local Labels".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -743,6 +544,223 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
                 };
                 ParseAction::Reduce(ParseValue::Gnu(value))
             },
+        }
+    }
+}
+
+/// Resumable positions in GNU assembly, builtin and local-label grammar.
+/// GNU extension: GCC manual, "Extended Asm".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
+/// GNU extension: GCC manual, "Other Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+/// GNU extension: GCC manual, "Local Labels".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
+#[derive(Debug, Clone, Copy)]
+enum Phase {
+    Start,
+    Qualifiers,
+    Open,
+    Template,
+    Section,
+    OperandName,
+    OperandNameClose,
+    Constraint,
+    OperandOpen,
+    AwaitAsmExpression,
+    OperandClose,
+    AsmSeparator,
+    BuiltinOperand,
+    AwaitBuiltinOperand,
+    BuiltinSeparator,
+    OffsetField,
+    OffsetSuffix,
+    AwaitOffsetIndex,
+    OffsetIndexClose,
+    LocalName,
+    LocalSeparator,
+    Close,
+    Semicolon,
+    Finish,
+}
+
+/// GNU assembly grammar: `asm qualifiers ( template : outputs : inputs :
+/// clobbers : labels )`, or a declarator's `asm ( template )` label. The
+/// template, constraint and clobber string literals keep their provenance;
+/// C operands are parsed syntax children. `sections` counts the colons.
+/// C99: extension to §6.8, p. 131; PDF p. 143 and §6.7.5, p. 114; PDF p. 126.
+/// GNU extension: GCC manual, "Extended Asm".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct Asm<'tu> {
+    pub(crate) qualifiers:     AsmQualifiers,
+    /// `None` when the template literal is missing.
+    pub(crate) template:       Option<Token>,
+    pub(crate) operands:       ArenaList<'tu, AsmOperand<'tu>>,
+    pub(crate) clobbers:       ArenaList<'tu, Token>,
+    pub(crate) labels:         ArenaList<'tu, Identifier>,
+    pub(crate) sections:       u8,
+    pub(crate) source_vectors: SourceVectors,
+    pub(crate) recovered:      bool,
+}
+
+/// The qualifiers written before a GNU assembly statement's `(`.
+/// GNU extension: GCC manual, "Extended Asm".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
+pub(crate) struct AsmQualifiers {
+    pub(crate) volatile: bool,
+    pub(crate) inline:   bool,
+    pub(crate) goto:     bool,
+}
+
+/// One GNU output/input operand with an optional symbolic name.
+/// GNU extension: GCC manual, "Extended Asm".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct AsmOperand<'tu> {
+    pub(crate) name:       Option<Identifier>,
+    pub(crate) constraint: Token,
+    pub(crate) expression: &'tu Expression<'tu>,
+    pub(crate) output:     bool,
+}
+
+/// Typed GNU builtin operands. Offset member paths use their own namespace.
+/// C99: extension to primary expressions §6.5.1, p. 69; PDF p. 81.
+/// GNU extension: GCC manual, "Other Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+/// GNU extension: GCC manual, "Offsetof".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Offsetof.html>
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct Builtin<'tu> {
+    pub(crate) keyword:        KeywordTokenType,
+    pub(crate) operands:       ArenaList<'tu, SyntaxOperand<'tu>>,
+    pub(crate) members:        ArenaList<'tu, OffsetMember<'tu>>,
+    pub(crate) source_vectors: SourceVectors,
+    pub(crate) recovered:      bool,
+}
+
+/// A field or array-index suffix in an offsetof member designator.
+/// GNU extension: GCC manual, "Offsetof".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Offsetof.html>
+/// C99: §7.17 paragraph 3, p. 254; PDF p. 266.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum OffsetMember<'tu> {
+    Field(Identifier),
+    Index(&'tu Expression<'tu>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(in crate::translation_phases::parsing) enum GnuValue<'tu> {
+    Asm(&'tu Asm<'tu>),
+    Builtin(&'tu Builtin<'tu>),
+    LocalLabels(ArenaList<'tu, Identifier>, SourceVectors),
+}
+
+/// Selects GNU assembly, builtin operand or local-label grammar.
+/// GNU extension: GCC manual, "Extended Asm".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
+/// GNU extension: GCC manual, "Other Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+/// GNU extension: GCC manual, "Local Labels".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(in crate::translation_phases::parsing) enum GnuKind {
+    Asm { label: bool },
+    Builtin(KeywordTokenType),
+    LocalLabels,
+}
+
+/// GNU delimiter owner; all expression/type children run on the parser stack.
+/// C99: vendor extension to §6.5 and §6.8, pp. 67-139; PDF pp. 79-151.
+/// GNU extension: GCC manual, "Extended Asm".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
+/// GNU extension: GCC manual, "Other Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+/// GNU extension: GCC manual, "Local Labels".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
+#[derive(Debug)]
+pub(in crate::translation_phases::parsing) struct GnuFrame<'tu, 'p> {
+    kind: GnuKind,
+    phase: Phase,
+    source_vectors: Option<SourceVectors>,
+    starting_errors: usize,
+    /// Clobber literals of an assembly statement.
+    pub(in crate::translation_phases::parsing) tokens: ArenaVec<'p, Token>,
+    template: Option<Token>,
+    pub(in crate::translation_phases::parsing) asm_operands: ArenaVec<'p, AsmOperand<'tu>>,
+    pub(in crate::translation_phases::parsing) operands: ArenaVec<'p, SyntaxOperand<'tu>>,
+    pub(in crate::translation_phases::parsing) members: ArenaVec<'p, OffsetMember<'tu>>,
+    pub(in crate::translation_phases::parsing) labels: ArenaVec<'p, Identifier>,
+    sections: u8,
+    qualifiers: AsmQualifiers,
+    requires_operand: bool,
+    name: Option<Identifier>,
+    constraint: Option<Token>,
+    expression: Option<&'tu Expression<'tu>>,
+}
+
+impl<'tu, 'p> GnuFrame<'tu, 'p> {
+    pub(in crate::translation_phases::parsing) fn push(
+        parser: &mut Parser<'_, 'tu, 'p>,
+        kind: GnuKind,
+    ) -> ParseAction<'tu, 'p> {
+        let frame = Self::new(parser.arena, kind, parser.hard_error_count);
+        ParseAction::Push(ParseFrame::Gnu(parser.pools.gnu(frame)))
+    }
+
+    fn own(&mut self, parser: &mut Parser<'_, 'tu, 'p>, token: Token) {
+        parser.merge_source(&mut self.source_vectors, token);
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn expected(parser: &mut Parser<'_, 'tu, 'p>, token: Option<Token>, position: &'static str) {
+        parser.report(
+            ParserErrorType::ExpectedGnuSyntax(position, token.map(|x| x.kind)),
+            token,
+        );
+    }
+
+    fn punctuation(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        op: OperatorTokenType,
+        position: &'static str,
+    ) -> ParseAction<'tu, 'p> {
+        if let Some(token) = token
+            && matches!(token.kind, TokenType::Operator(actual) if actual == op)
+        {
+            self.own(parser, token);
+            ParseAction::Consume
+        } else {
+            Self::expected(parser, token, position);
+            ParseAction::Reprocess
+        }
+    }
+
+    pub(in crate::translation_phases::parsing) fn new(
+        arena: &'p Bump,
+        kind: GnuKind,
+        errors: usize,
+    ) -> Self {
+        Self {
+            kind,
+            phase: Phase::Start,
+            source_vectors: None,
+            starting_errors: errors,
+            tokens: ArenaVec::new_in(arena),
+            template: None,
+            asm_operands: ArenaVec::new_in(arena),
+            operands: ArenaVec::new_in(arena),
+            members: ArenaVec::new_in(arena),
+            labels: ArenaVec::new_in(arena),
+            sections: 0,
+            qualifiers: AsmQualifiers::default(),
+            requires_operand: false,
+            name: None,
+            constraint: None,
+            expression: None,
         }
     }
 }

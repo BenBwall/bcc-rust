@@ -39,48 +39,12 @@ use crate::translation_phases::preprocessing::{
     TokenType,
 };
 
-/// Parses one type name.
-///
-/// C99: §6.7.6 paragraph 1, p. 122; PDF p. 134.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct TypeNameFrame<'tu> {
-    phase:                  TypeNamePhase<'tu>,
-    declaration_specifiers: Option<DeclarationSpecifiers<'tu>>,
-    starting_error_count:   usize,
-    compound_literal:       bool,
-}
-
-/// State transitions for [`TypeNameFrame`].
-///
-/// C99: §6.7.6 paragraph 1, p. 122; PDF p. 134.
-#[derive(Debug, Clone, Copy)]
-enum TypeNamePhase<'tu> {
-    Start,
-    AwaitSpecifiers,
-    AwaitDeclarator,
-    Finish(Option<Declarator<'tu>>),
-}
-
 impl<'tu, 'p> TypeNameFrame<'tu> {
-    pub(super) fn new(starting_error_count: usize) -> Self {
-        Self {
-            phase: TypeNamePhase::Start,
-            declaration_specifiers: None,
-            starting_error_count,
-            compound_literal: false,
-        }
-    }
-
-    pub(super) fn with_storage(mut self) -> Self {
-        self.compound_literal = true;
-        self
-    }
-
     #[expect(
         clippy::missing_assert_message,
         reason = "Frame-state debug assertions are local transition invariants."
     )]
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -146,6 +110,44 @@ impl<'tu, 'p> TypeNameFrame<'tu> {
                 ParseAction::Reduce(ParseValue::TypeName(type_name))
             },
         }
+    }
+}
+
+/// State transitions for [`TypeNameFrame`].
+///
+/// C99: §6.7.6 paragraph 1, p. 122; PDF p. 134.
+#[derive(Debug, Clone, Copy)]
+enum TypeNamePhase<'tu> {
+    Start,
+    AwaitSpecifiers,
+    AwaitDeclarator,
+    Finish(Option<Declarator<'tu>>),
+}
+
+/// Parses one type name.
+///
+/// C99: §6.7.6 paragraph 1, p. 122; PDF p. 134.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::translation_phases::parsing) struct TypeNameFrame<'tu> {
+    phase:                  TypeNamePhase<'tu>,
+    declaration_specifiers: Option<DeclarationSpecifiers<'tu>>,
+    starting_error_count:   usize,
+    compound_literal:       bool,
+}
+
+impl TypeNameFrame<'_> {
+    pub(in crate::translation_phases::parsing) fn new(starting_error_count: usize) -> Self {
+        Self {
+            phase: TypeNamePhase::Start,
+            declaration_specifiers: None,
+            starting_error_count,
+            compound_literal: false,
+        }
+    }
+
+    pub(in crate::translation_phases::parsing) fn with_storage(mut self) -> Self {
+        self.compound_literal = true;
+        self
     }
 }
 

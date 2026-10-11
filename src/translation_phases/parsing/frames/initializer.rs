@@ -73,290 +73,12 @@ use crate::{
     },
 };
 
-/// Parses one `initializer`: an `assignment-expression` or a braced
-/// `initializer-list` with an optional trailing comma.
-///
-/// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137.
-#[derive(Debug)]
-pub(super) struct InitializerFrame<'tu, 'p> {
-    phase: InitializerPhase<'tu>,
-    pub(super) elements: ArenaVec<'p, InitializerElement<'tu>>,
-    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
-    opening_brace_source_vectors: Option<SourceVectors>,
-    closing_brace_source_vectors: Option<SourceVectors>,
-    /// Designation under construction, boxed because scalar initializers and
-    /// undesignated elements never use it. The pools lend a box when the
-    /// frame is pushed and take it back, reset, when the frame pops.
-    pub(super) designation: Option<PoolBox<'p, DesignationState<'tu, 'p>>>,
-    starting_error_count: usize,
-    range_lower: Option<ConstantExpression<'tu>>,
-    /// Whether `)` belongs to an enclosing expression or `for` header.
-    closing_parenthesis_is_caller_boundary: bool,
-    /// Whether `]` belongs to an enclosing expression.
-    closing_square_bracket_is_caller_boundary: bool,
-}
-
-/// Designators and provenance of the designation preceding one initializer
-/// element.
-///
-/// C99: `designation` and `designator-list`, §6.7.8 paragraph 1, p. 125;
-/// PDF p. 137.
-#[derive(Debug)]
-pub(super) struct DesignationState<'tu, 'p> {
-    pub(super) current_designators:    ArenaVec<'p, Designator<'tu>>,
-    current_designation:               Option<&'tu Designation<'tu>>,
-    designation_source_vectors:        Option<SourceVectors>,
-    designation_equals_source_vectors: Option<SourceVectors>,
-    current_designator_source:         Option<SourceVectors>,
-    current_designation_recovered:     bool,
-    synchronized_designator:           Option<SynchronizedDesignator<'tu>>,
-}
-
-/// Recovery state for an array designator whose `]` was not where expected.
-///
-/// C99: the designator form is `[ constant-expression ]`, §6.7.8
-/// paragraph 1, p. 125; PDF p. 137.
-#[derive(Debug, Clone, Copy)]
-struct SynchronizedDesignator<'tu> {
-    expression:              ConstantExpression<'tu>,
-    source_vectors:          SourceVectors,
-    depth:                   DelimiterDepth,
-    /// Whether lookahead found this designator's `]` later, so a top-level
-    /// `,` or `=` before it is an invalid operator inside the brackets
-    /// rather than the point where the `]` went missing.
-    closing_bracket_follows: bool,
-}
-
-impl<'p> DesignationState<'_, 'p> {
-    pub(super) fn new_in(arena: &'p Bump) -> Self {
-        Self {
-            current_designators:               ArenaVec::new_in(arena),
-            current_designation:               None,
-            designation_source_vectors:        None,
-            designation_equals_source_vectors: None,
-            current_designator_source:         None,
-            current_designation_recovered:     false,
-            synchronized_designator:           None,
-        }
-    }
-
-    /// Clears the state for the next element while keeping list capacity.
-    fn reset(&mut self) {
-        self.current_designators.clear();
-        self.current_designation = None;
-        self.designation_source_vectors = None;
-        self.designation_equals_source_vectors = None;
-        self.current_designator_source = None;
-        self.current_designation_recovered = false;
-    }
-}
-
-/// State transitions for [`InitializerFrame`].
-///
-/// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137.
-#[derive(Debug, Clone, Copy)]
-enum InitializerPhase<'tu> {
-    Start,
-    PushScalar,
-    AwaitScalar,
-    ElementOrClose,
-    Designation,
-    FieldDesignator,
-    OldFieldColon,
-    PushArrayDesignator,
-    AwaitArrayDesignator,
-    CloseArrayDesignator(ConstantExpression<'tu>, bool),
-    SynchronizeArrayDesignator,
-    DesignationEquals,
-    PushElement,
-    AwaitElement,
-    /// Skip a malformed element that a declaration or statement keyword
-    /// starts while this list's own `}` still follows: the delimiter nesting
-    /// inside the skipped tokens and their provenance.
-    SkipMalformedElement(u32, Option<SourceVectors>),
-    Separator,
-    FinishList,
-}
-
-/// How a token that cannot continue an initializer list relates to it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ListBoundary {
-    /// The token belongs to the list.
-    None,
-    /// The token belongs to the caller or to a following declaration or
-    /// statement, so the list's `}` is missing.
-    MissingClose,
-    /// The token looks like a declaration or statement, but this list's
-    /// `}` follows before any `;`, so it starts one malformed element.
-    MalformedElement,
-}
-
 impl<'tu, 'p> InitializerFrame<'tu, 'p> {
-    pub(super) fn new(
-        arena: &'p Bump,
-        starting_error_count: usize,
-        closing_parenthesis_is_caller_boundary: bool,
-        closing_square_bracket_is_caller_boundary: bool,
-    ) -> Self {
-        Self {
-            phase: InitializerPhase::Start,
-            elements: ArenaVec::new_in(arena),
-            source_vectors: ArenaVec::new_in(arena),
-            opening_brace_source_vectors: None,
-            closing_brace_source_vectors: None,
-            designation: None,
-            starting_error_count,
-            range_lower: None,
-            closing_parenthesis_is_caller_boundary,
-            closing_square_bracket_is_caller_boundary,
-        }
-    }
-
-    /// Continues an array designator into a GNU range when `...` follows its
-    /// first constant expression, as in `[1 ... 3]`.
-    /// C99: extension to §6.7.8, p. 125; PDF p. 137.
-    fn continue_range(
-        &mut self,
-        parser: &mut Parser<'_, 'tu, 'p>,
-        token: Option<Token>,
-        index: ConstantExpression<'tu>,
-    ) -> Option<ParseAction<'tu, 'p>> {
-        if let Some(token) = token
-            && matches!(token.kind, TokenType::Operator(OperatorTokenType::Ellipsis))
-        {
-            if self.range_lower.is_some() {
-                parser.report(
-                    ParserErrorType::ExpectedGnuSyntax(
-                        "one range per designator",
-                        Some(token.kind),
-                    ),
-                    Some(token),
-                );
-            } else {
-                self.range_lower = Some(index);
-            }
-            parser.extension(
-                crate::configuration::Feature::GnuDesignators,
-                "array range designator",
-                token,
-            );
-            self.merge_designation_source(parser.context, index.expression().source_vectors);
-            self.merge_designation_source(parser.context, token.source_vectors);
-            let opening = self
-                .designation_state()
-                .current_designator_source
-                .unwrap_or_default();
-            let lower = parser
-                .context
-                .merge_vectors(opening, index.expression().source_vectors);
-            self.designation_state().current_designator_source =
-                Some(parser.context.merge_vectors(lower, token.source_vectors));
-            self.phase = InitializerPhase::PushArrayDesignator;
-            return Some(ParseAction::Consume);
-        }
-        None
-    }
-
-    fn finish_old_field(
-        &mut self,
-        parser: &mut Parser<'_, 'tu, 'p>,
-        token: Option<Token>,
-    ) -> ParseAction<'tu, 'p> {
-        if let Some(token) = token {
-            self.merge_designation_source(parser.context, token.source_vectors);
-            let designator = self
-                .designation_state()
-                .current_designators
-                .last_mut()
-                .expect("old field has a designator");
-            designator.source_vectors = parser
-                .context
-                .merge_vectors(designator.source_vectors, token.source_vectors);
-        }
-        self.finish_designation(parser);
-        self.phase = InitializerPhase::PushElement;
-        ParseAction::Consume
-    }
-
-    fn step_designation(
-        &mut self,
-        parser: &mut Parser<'_, 'tu, 'p>,
-        token: Option<Token>,
-    ) -> ParseAction<'tu, 'p> {
-        if let Some(token) = token
-            && matches!(token.kind, TokenType::Identifier)
-            && parser
-                .cursor
-                .following()
-                .is_some_and(|x| matches!(x.kind, TokenType::Operator(OperatorTokenType::Colon)))
-        {
-            parser.extension(
-                crate::configuration::Feature::GnuDesignators,
-                "old-style field designator",
-                token,
-            );
-            self.merge_designation_source(parser.context, token.source_vectors);
-            self.designation_state()
-                .current_designators
-                .push(Designator {
-                    kind: DesignatorType::GnuField(Identifier::from_token(token)),
-                    operator_source_vectors: token.source_vectors,
-                    closing_bracket_source_vectors: None,
-                    source_vectors: token.source_vectors,
-                    recovered: false,
-                });
-            self.phase = InitializerPhase::OldFieldColon;
-            return ParseAction::Consume;
-        }
-        if let Some(designator) = token
-            && matches!(
-                designator.kind,
-                TokenType::Operator(OperatorTokenType::Period)
-            )
-        {
-            parser.extension(
-                crate::configuration::Feature::DesignatedInitializers,
-                "designated initializer",
-                designator,
-            );
-            self.merge_designation_source(parser.context, designator.source_vectors);
-            self.designation_state().current_designator_source = Some(designator.source_vectors);
-            self.phase = InitializerPhase::FieldDesignator;
-            return ParseAction::Consume;
-        }
-        if let Some(designator) = token
-            && matches!(
-                designator.kind,
-                TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
-            )
-        {
-            parser.extension(
-                crate::configuration::Feature::DesignatedInitializers,
-                "designated initializer",
-                designator,
-            );
-            self.merge_designation_source(parser.context, designator.source_vectors);
-            self.designation_state().current_designator_source = Some(designator.source_vectors);
-            self.phase = InitializerPhase::PushArrayDesignator;
-            return ParseAction::Consume;
-        }
-        self.phase = if self
-            .designation
-            .as_ref()
-            .is_none_or(|designation| designation.current_designators.is_empty())
-        {
-            InitializerPhase::PushElement
-        } else {
-            InitializerPhase::DesignationEquals
-        };
-        ParseAction::Reprocess
-    }
-
     #[expect(
         clippy::missing_assert_message,
         reason = "Frame-state debug assertions are local transition invariants."
     )]
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -880,6 +602,267 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             },
         }
     }
+}
+
+/// Designators and provenance of the designation preceding one initializer
+/// element.
+///
+/// C99: `designation` and `designator-list`, §6.7.8 paragraph 1, p. 125;
+/// PDF p. 137.
+#[derive(Debug)]
+pub(in crate::translation_phases::parsing) struct DesignationState<'tu, 'p> {
+    pub(in crate::translation_phases::parsing) current_designators: ArenaVec<'p, Designator<'tu>>,
+    current_designation: Option<&'tu Designation<'tu>>,
+    designation_source_vectors: Option<SourceVectors>,
+    designation_equals_source_vectors: Option<SourceVectors>,
+    current_designator_source: Option<SourceVectors>,
+    current_designation_recovered: bool,
+    synchronized_designator: Option<SynchronizedDesignator<'tu>>,
+}
+
+/// State transitions for [`InitializerFrame`].
+///
+/// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137.
+#[derive(Debug, Clone, Copy)]
+enum InitializerPhase<'tu> {
+    Start,
+    PushScalar,
+    AwaitScalar,
+    ElementOrClose,
+    Designation,
+    FieldDesignator,
+    OldFieldColon,
+    PushArrayDesignator,
+    AwaitArrayDesignator,
+    CloseArrayDesignator(ConstantExpression<'tu>, bool),
+    SynchronizeArrayDesignator,
+    DesignationEquals,
+    PushElement,
+    AwaitElement,
+    /// Skip a malformed element that a declaration or statement keyword
+    /// starts while this list's own `}` still follows: the delimiter nesting
+    /// inside the skipped tokens and their provenance.
+    SkipMalformedElement(u32, Option<SourceVectors>),
+    Separator,
+    FinishList,
+}
+
+/// Parses one `initializer`: an `assignment-expression` or a braced
+/// `initializer-list` with an optional trailing comma.
+///
+/// C99: §6.7.8 paragraph 1, p. 125; PDF p. 137.
+#[derive(Debug)]
+pub(in crate::translation_phases::parsing) struct InitializerFrame<'tu, 'p> {
+    phase: InitializerPhase<'tu>,
+    pub(in crate::translation_phases::parsing) elements: ArenaVec<'p, InitializerElement<'tu>>,
+    pub(in crate::translation_phases::parsing) source_vectors: ArenaVec<'p, SourceVectors>,
+    opening_brace_source_vectors: Option<SourceVectors>,
+    closing_brace_source_vectors: Option<SourceVectors>,
+    /// Designation under construction, boxed because scalar initializers and
+    /// undesignated elements never use it. The pools lend a box when the
+    /// frame is pushed and take it back, reset, when the frame pops.
+    pub(in crate::translation_phases::parsing) designation:
+        Option<PoolBox<'p, DesignationState<'tu, 'p>>>,
+    starting_error_count: usize,
+    range_lower: Option<ConstantExpression<'tu>>,
+    /// Whether `)` belongs to an enclosing expression or `for` header.
+    closing_parenthesis_is_caller_boundary: bool,
+    /// Whether `]` belongs to an enclosing expression.
+    closing_square_bracket_is_caller_boundary: bool,
+}
+
+/// Recovery state for an array designator whose `]` was not where expected.
+///
+/// C99: the designator form is `[ constant-expression ]`, §6.7.8
+/// paragraph 1, p. 125; PDF p. 137.
+#[derive(Debug, Clone, Copy)]
+struct SynchronizedDesignator<'tu> {
+    expression:              ConstantExpression<'tu>,
+    source_vectors:          SourceVectors,
+    depth:                   DelimiterDepth,
+    /// Whether lookahead found this designator's `]` later, so a top-level
+    /// `,` or `=` before it is an invalid operator inside the brackets
+    /// rather than the point where the `]` went missing.
+    closing_bracket_follows: bool,
+}
+
+/// How a token that cannot continue an initializer list relates to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListBoundary {
+    /// The token belongs to the list.
+    None,
+    /// The token belongs to the caller or to a following declaration or
+    /// statement, so the list's `}` is missing.
+    MissingClose,
+    /// The token looks like a declaration or statement, but this list's
+    /// `}` follows before any `;`, so it starts one malformed element.
+    MalformedElement,
+}
+
+impl<'p> DesignationState<'_, 'p> {
+    /// Clears the state for the next element while keeping list capacity.
+    fn reset(&mut self) {
+        self.current_designators.clear();
+        self.current_designation = None;
+        self.designation_source_vectors = None;
+        self.designation_equals_source_vectors = None;
+        self.current_designator_source = None;
+        self.current_designation_recovered = false;
+    }
+
+    pub(in crate::translation_phases::parsing) fn new_in(arena: &'p Bump) -> Self {
+        Self {
+            current_designators:               ArenaVec::new_in(arena),
+            current_designation:               None,
+            designation_source_vectors:        None,
+            designation_equals_source_vectors: None,
+            current_designator_source:         None,
+            current_designation_recovered:     false,
+            synchronized_designator:           None,
+        }
+    }
+}
+
+impl<'tu, 'p> InitializerFrame<'tu, 'p> {
+    /// Continues an array designator into a GNU range when `...` follows its
+    /// first constant expression, as in `[1 ... 3]`.
+    /// C99: extension to §6.7.8, p. 125; PDF p. 137.
+    fn continue_range(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        index: ConstantExpression<'tu>,
+    ) -> Option<ParseAction<'tu, 'p>> {
+        if let Some(token) = token
+            && matches!(token.kind, TokenType::Operator(OperatorTokenType::Ellipsis))
+        {
+            if self.range_lower.is_some() {
+                parser.report(
+                    ParserErrorType::ExpectedGnuSyntax(
+                        "one range per designator",
+                        Some(token.kind),
+                    ),
+                    Some(token),
+                );
+            } else {
+                self.range_lower = Some(index);
+            }
+            parser.extension(
+                crate::configuration::Feature::GnuDesignators,
+                "array range designator",
+                token,
+            );
+            self.merge_designation_source(parser.context, index.expression().source_vectors);
+            self.merge_designation_source(parser.context, token.source_vectors);
+            let opening = self
+                .designation_state()
+                .current_designator_source
+                .unwrap_or_default();
+            let lower = parser
+                .context
+                .merge_vectors(opening, index.expression().source_vectors);
+            self.designation_state().current_designator_source =
+                Some(parser.context.merge_vectors(lower, token.source_vectors));
+            self.phase = InitializerPhase::PushArrayDesignator;
+            return Some(ParseAction::Consume);
+        }
+        None
+    }
+
+    fn finish_old_field(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+    ) -> ParseAction<'tu, 'p> {
+        if let Some(token) = token {
+            self.merge_designation_source(parser.context, token.source_vectors);
+            let designator = self
+                .designation_state()
+                .current_designators
+                .last_mut()
+                .expect("old field has a designator");
+            designator.source_vectors = parser
+                .context
+                .merge_vectors(designator.source_vectors, token.source_vectors);
+        }
+        self.finish_designation(parser);
+        self.phase = InitializerPhase::PushElement;
+        ParseAction::Consume
+    }
+
+    fn step_designation(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+    ) -> ParseAction<'tu, 'p> {
+        if let Some(token) = token
+            && matches!(token.kind, TokenType::Identifier)
+            && parser
+                .cursor
+                .following()
+                .is_some_and(|x| matches!(x.kind, TokenType::Operator(OperatorTokenType::Colon)))
+        {
+            parser.extension(
+                crate::configuration::Feature::GnuDesignators,
+                "old-style field designator",
+                token,
+            );
+            self.merge_designation_source(parser.context, token.source_vectors);
+            self.designation_state()
+                .current_designators
+                .push(Designator {
+                    kind: DesignatorType::GnuField(Identifier::from_token(token)),
+                    operator_source_vectors: token.source_vectors,
+                    closing_bracket_source_vectors: None,
+                    source_vectors: token.source_vectors,
+                    recovered: false,
+                });
+            self.phase = InitializerPhase::OldFieldColon;
+            return ParseAction::Consume;
+        }
+        if let Some(designator) = token
+            && matches!(
+                designator.kind,
+                TokenType::Operator(OperatorTokenType::Period)
+            )
+        {
+            parser.extension(
+                crate::configuration::Feature::DesignatedInitializers,
+                "designated initializer",
+                designator,
+            );
+            self.merge_designation_source(parser.context, designator.source_vectors);
+            self.designation_state().current_designator_source = Some(designator.source_vectors);
+            self.phase = InitializerPhase::FieldDesignator;
+            return ParseAction::Consume;
+        }
+        if let Some(designator) = token
+            && matches!(
+                designator.kind,
+                TokenType::Operator(OperatorTokenType::OpeningSquareBracket)
+            )
+        {
+            parser.extension(
+                crate::configuration::Feature::DesignatedInitializers,
+                "designated initializer",
+                designator,
+            );
+            self.merge_designation_source(parser.context, designator.source_vectors);
+            self.designation_state().current_designator_source = Some(designator.source_vectors);
+            self.phase = InitializerPhase::PushArrayDesignator;
+            return ParseAction::Consume;
+        }
+        self.phase = if self
+            .designation
+            .as_ref()
+            .is_none_or(|designation| designation.current_designators.is_empty())
+        {
+            InitializerPhase::PushElement
+        } else {
+            InitializerPhase::DesignationEquals
+        };
+        ParseAction::Reprocess
+    }
 
     /// Appends one element, with any designation that preceded it.
     fn push_element(&mut self, context: &mut Context<'_>, index: &'tu Initializer<'tu>) {
@@ -917,7 +900,10 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
     }
 
     /// Returns this popped frame's lists and designation state to the pools.
-    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
+    pub(in crate::translation_phases::parsing) fn reclaim_pooled(
+        &mut self,
+        pools: &mut FramePools<'tu, 'p>,
+    ) {
         pools.initializers.reclaim(&mut self.elements);
         pools.source_vectors.reclaim(&mut self.source_vectors);
         if let Some(mut designation) = self.designation.take() {
@@ -1282,5 +1268,25 @@ impl<'tu, 'p> InitializerFrame<'tu, 'p> {
             source_vectors,
             recovered: parser.hard_error_count > self.starting_error_count,
         })
+    }
+
+    pub(in crate::translation_phases::parsing) fn new(
+        arena: &'p Bump,
+        starting_error_count: usize,
+        closing_parenthesis_is_caller_boundary: bool,
+        closing_square_bracket_is_caller_boundary: bool,
+    ) -> Self {
+        Self {
+            phase: InitializerPhase::Start,
+            elements: ArenaVec::new_in(arena),
+            source_vectors: ArenaVec::new_in(arena),
+            opening_brace_source_vectors: None,
+            closing_brace_source_vectors: None,
+            designation: None,
+            starting_error_count,
+            range_lower: None,
+            closing_parenthesis_is_caller_boundary,
+            closing_square_bracket_is_caller_boundary,
+        }
     }
 }

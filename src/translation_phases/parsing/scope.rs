@@ -31,6 +31,126 @@ use crate::util::{
     string_cache::StringCacheId,
 };
 
+/// File, function, prototype, block, and implicit statement scopes used for
+/// typedef-sensitive grammar choices.
+///
+/// Nested bindings form one stack in the parse arena. Closing a scope pops
+/// its bindings and forgets the names that no open scope still binds, so
+/// nested-scope storage is bounded by the bindings open at once, not by every
+/// name the translation unit ever binds in a block.
+///
+/// File scope keeps only what the grammar asks of it: whether a name is a
+/// typedef. That is one bit per interned name, in its own region, so the
+/// parse arena does not grow with the number of file-scope declarations.
+///
+/// C99: identifier scopes are §6.2.1, pp. 29-30; PDF pp. 41-42; distinct
+/// namespaces are §6.2.3, p. 31; PDF p. 43. Function-prototype scope ends at
+/// the function declarator under §6.2.1 paragraph 4, p. 30; PDF p. 42.
+pub(super) struct ScopeStack<'p> {
+    /// The file-scope names whose latest declaration is a typedef, indexed
+    /// by string-cache ID. A file-scope ordinary declaration of the name
+    /// removes it.
+    file_typedefs:            RegionBitSet,
+    /// Nested scopes, with the innermost scope last.
+    pub(super) nested_scopes: ArenaVec<'p, Scope>,
+    /// Bindings of every open nested scope in the order they were made, so a
+    /// scope's bindings follow those of the scopes enclosing it.
+    bindings:                 ArenaVec<'p, Binding>,
+    /// The innermost nested binding of each name that has one, as an index
+    /// into `bindings`, so a lookup costs one probe however many scopes are
+    /// open.
+    innermost:                ArenaMap<'p, StringCacheId, usize>,
+    /// Records of prototype scopes whose bindings outlive the scope for a
+    /// possible function definition (C99 §6.2.1p4).
+    retained_prototypes:      ArenaVec<'p, RetainedPrototype>,
+    /// Bindings referenced by `retained_prototypes`.
+    retained_names:           ArenaVec<'p, (StringCacheId, NameClass)>,
+    #[cfg(test)]
+    pub(super) trace:         ScopeTrace,
+    /// Hash-map probes made by name lookups, for complexity regression tests.
+    #[cfg(test)]
+    pub(super) lookup_probes: std::cell::Cell<usize>,
+}
+
+impl ScopeStack<'_> {
+    /// Publishes a binding in the innermost active scope.
+    pub(super) fn publish(&mut self, name: StringCacheId, class: NameClass) {
+        if self.nested_scopes.is_empty() {
+            self.publish_at_file_scope(name, class);
+        } else {
+            _ = self.publish_nested(name, class);
+        }
+    }
+
+    /// Publishes a binding in the innermost nested scope and reports whether
+    /// the name was not yet bound in that scope.
+    ///
+    /// Only prototype scopes ask this. File scope keeps one typedef bit per
+    /// name and cannot tell, so outside every nested scope the name is
+    /// published at file scope and reported as not new.
+    pub(super) fn publish_reporting_new(&mut self, name: StringCacheId, class: NameClass) -> bool {
+        debug_assert!(
+            !self.nested_scopes.is_empty(),
+            "only nested scopes report new bindings"
+        );
+        if self.nested_scopes.is_empty() {
+            self.publish_at_file_scope(name, class);
+            return false;
+        }
+        self.publish_nested(name, class)
+    }
+
+    /// Tests the innermost visible ordinary-name binding for typedef status.
+    ///
+    /// C99: an inner declaration hides an outer one of the same name space
+    /// (§6.2.1 paragraph 4, p. 30; PDF p. 42).
+    pub(super) fn is_typedef(&self, name: StringCacheId) -> bool {
+        if !self.nested_scopes.is_empty() {
+            #[cfg(test)]
+            self.lookup_probes.set(self.lookup_probes.get() + 1);
+            if let Some(&index) = self.innermost.get(&name) {
+                return self.bindings[index].class == NameClass::Typedef;
+            }
+        }
+        #[cfg(test)]
+        self.lookup_probes.set(self.lookup_probes.get() + 1);
+        self.file_typedefs.contains(file_scope_index(name))
+    }
+
+    /// Opens a nested scope with an explicit grammar lifetime.
+    pub(super) fn enter_scope(&mut self, kind: ScopeKind) {
+        #[cfg(test)]
+        self.trace.push(ScopeTraceEvent { kind, enter: true });
+        self.nested_scopes.push(Scope {
+            kind,
+            start: self.bindings.len(),
+        });
+    }
+
+    /// Restores exactly the depth recorded by the owning frame.
+    pub(super) fn restore_depth(&mut self, depth: usize) {
+        debug_assert!(
+            depth <= self.nested_scopes.len(),
+            "a frame cannot restore below the scope depth at which it started"
+        );
+        while self.nested_scopes.len() > depth {
+            let Scope { kind, start } = self.nested_scopes.pop().expect("scope depth was checked");
+            while self.bindings.len() > start {
+                let binding = self.bindings.pop().expect("binding count was checked");
+                if binding.outer == NO_OUTER_BINDING {
+                    _ = self.innermost.remove(&binding.name);
+                } else {
+                    _ = self.innermost.insert(binding.name, binding.outer);
+                }
+            }
+            #[cfg(test)]
+            self.trace.push(ScopeTraceEvent { kind, enter: false });
+            #[cfg(not(test))]
+            let _ = kind;
+        }
+    }
+}
+
 /// Parser-visible classification in C's ordinary-identifier namespace.
 ///
 /// C99: scopes and namespaces are §6.2.1-§6.2.3, pp. 29-31; PDF pp. 41-43.
@@ -101,47 +221,6 @@ struct RetainedPrototype {
     end:   usize,
 }
 
-/// File, function, prototype, block, and implicit statement scopes used for
-/// typedef-sensitive grammar choices.
-///
-/// Nested bindings form one stack in the parse arena. Closing a scope pops
-/// its bindings and forgets the names that no open scope still binds, so
-/// nested-scope storage is bounded by the bindings open at once, not by every
-/// name the translation unit ever binds in a block.
-///
-/// File scope keeps only what the grammar asks of it: whether a name is a
-/// typedef. That is one bit per interned name, in its own region, so the
-/// parse arena does not grow with the number of file-scope declarations.
-///
-/// C99: identifier scopes are §6.2.1, pp. 29-30; PDF pp. 41-42; distinct
-/// namespaces are §6.2.3, p. 31; PDF p. 43. Function-prototype scope ends at
-/// the function declarator under §6.2.1 paragraph 4, p. 30; PDF p. 42.
-pub(super) struct ScopeStack<'p> {
-    /// The file-scope names whose latest declaration is a typedef, indexed
-    /// by string-cache ID. A file-scope ordinary declaration of the name
-    /// removes it.
-    file_typedefs:            RegionBitSet,
-    /// Nested scopes, with the innermost scope last.
-    pub(super) nested_scopes: ArenaVec<'p, Scope>,
-    /// Bindings of every open nested scope in the order they were made, so a
-    /// scope's bindings follow those of the scopes enclosing it.
-    bindings:                 ArenaVec<'p, Binding>,
-    /// The innermost nested binding of each name that has one, as an index
-    /// into `bindings`, so a lookup costs one probe however many scopes are
-    /// open.
-    innermost:                ArenaMap<'p, StringCacheId, usize>,
-    /// Records of prototype scopes whose bindings outlive the scope for a
-    /// possible function definition (C99 §6.2.1p4).
-    retained_prototypes:      ArenaVec<'p, RetainedPrototype>,
-    /// Bindings referenced by `retained_prototypes`.
-    retained_names:           ArenaVec<'p, (StringCacheId, NameClass)>,
-    #[cfg(test)]
-    pub(super) trace:         ScopeTrace,
-    /// Hash-map probes made by name lookups, for complexity regression tests.
-    #[cfg(test)]
-    pub(super) lookup_probes: std::cell::Cell<usize>,
-}
-
 /// Scope entries and exits, recorded only by test builds.
 #[cfg(test)]
 #[expect(
@@ -157,54 +236,43 @@ pub(super) struct ScopeTraceEvent {
     pub(super) enter: bool,
 }
 
+/// Labels defined and referenced in one function body.
+///
+/// C99: label names have function scope (§6.2.1 paragraph 3, p. 29;
+/// PDF p. 41) and their own name space (§6.2.3 paragraph 1, p. 31;
+/// PDF p. 43). The sets only record names; uniqueness (§6.8.1 paragraph 3,
+/// p. 132; PDF p. 144) and `goto` targets (§6.8.6.1 paragraph 1, p. 137;
+/// PDF p. 149) are not diagnosed from them.
+#[derive(Debug)]
+pub(super) struct LabelScope<'p> {
+    pub(super) definitions: ArenaSet<'p, StringCacheId>,
+    pub(super) references:  ArenaSet<'p, StringCacheId>,
+}
+
+/// Function-local label namespaces, innermost last. A closed namespace keeps
+/// its emptied sets for the next function body, so label bookkeeping reuses
+/// the same parse-arena storage for the whole translation unit.
+pub(super) struct LabelScopes<'p> {
+    open:  ArenaVec<'p, LabelScope<'p>>,
+    spare: ArenaVec<'p, LabelScope<'p>>,
+    arena: &'p Bump,
+}
+
+/// State of one enclosing `switch` body.
+///
+/// C99: a `switch` has at most one `default` label (§6.8.4.2 paragraph 3,
+/// p. 134; PDF p. 146), diagnosed by the statement frame.
+#[derive(Debug, Default)]
+pub(super) struct SwitchScope {
+    pub(super) has_default: bool,
+}
+
 impl<'p> ScopeStack<'p> {
-    /// An empty stack whose storage comes from the parse arena.
-    pub(super) fn new_in(arena: &'p Bump) -> Self {
-        Self {
-            file_typedefs:              RegionBitSet::new(),
-            nested_scopes:              ArenaVec::new_in(arena),
-            bindings:                   ArenaVec::new_in(arena),
-            innermost:                  ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            retained_prototypes:        ArenaVec::new_in(arena),
-            retained_names:             ArenaVec::new_in(arena),
-            #[cfg(test)]
-            trace:                      ScopeTrace::new(),
-            #[cfg(test)]
-            lookup_probes:              std::cell::Cell::new(0),
-        }
-    }
-
-    /// Tests the innermost visible ordinary-name binding for typedef status.
-    ///
-    /// C99: an inner declaration hides an outer one of the same name space
-    /// (§6.2.1 paragraph 4, p. 30; PDF p. 42).
-    pub(super) fn is_typedef(&self, name: StringCacheId) -> bool {
-        if !self.nested_scopes.is_empty() {
-            #[cfg(test)]
-            self.lookup_probes.set(self.lookup_probes.get() + 1);
-            if let Some(&index) = self.innermost.get(&name) {
-                return self.bindings[index].class == NameClass::Typedef;
-            }
-        }
-        #[cfg(test)]
-        self.lookup_probes.set(self.lookup_probes.get() + 1);
-        self.file_typedefs.contains(file_scope_index(name))
-    }
-
     /// Whether the latest file-scope declaration of `name` is a typedef,
     /// whatever nested scopes are open.
     #[cfg(test)]
     pub(super) fn is_file_scope_typedef(&self, name: StringCacheId) -> bool {
         self.file_typedefs.contains(file_scope_index(name))
-    }
-
-    /// Publishes a binding in the innermost active scope.
-    pub(super) fn publish(&mut self, name: StringCacheId, class: NameClass) {
-        if self.nested_scopes.is_empty() {
-            self.publish_at_file_scope(name, class);
-        } else {
-            _ = self.publish_nested(name, class);
-        }
     }
 
     fn publish_at_file_scope(&mut self, name: StringCacheId, class: NameClass) {
@@ -213,24 +281,6 @@ impl<'p> ScopeStack<'p> {
             | NameClass::Typedef => self.file_typedefs.insert(index),
             | NameClass::Ordinary => self.file_typedefs.remove(index),
         }
-    }
-
-    /// Publishes a binding in the innermost nested scope and reports whether
-    /// the name was not yet bound in that scope.
-    ///
-    /// Only prototype scopes ask this. File scope keeps one typedef bit per
-    /// name and cannot tell, so outside every nested scope the name is
-    /// published at file scope and reported as not new.
-    pub(super) fn publish_reporting_new(&mut self, name: StringCacheId, class: NameClass) -> bool {
-        debug_assert!(
-            !self.nested_scopes.is_empty(),
-            "only nested scopes report new bindings"
-        );
-        if self.nested_scopes.is_empty() {
-            self.publish_at_file_scope(name, class);
-            return false;
-        }
-        self.publish_nested(name, class)
     }
 
     fn publish_nested(&mut self, name: StringCacheId, class: NameClass) -> bool {
@@ -265,39 +315,6 @@ impl<'p> ScopeStack<'p> {
         self.nested_scopes
             .last()
             .map_or(0, |scope| self.bindings.len() - scope.start)
-    }
-
-    /// Opens a nested scope with an explicit grammar lifetime.
-    pub(super) fn enter_scope(&mut self, kind: ScopeKind) {
-        #[cfg(test)]
-        self.trace.push(ScopeTraceEvent { kind, enter: true });
-        self.nested_scopes.push(Scope {
-            kind,
-            start: self.bindings.len(),
-        });
-    }
-
-    /// Restores exactly the depth recorded by the owning frame.
-    pub(super) fn restore_depth(&mut self, depth: usize) {
-        debug_assert!(
-            depth <= self.nested_scopes.len(),
-            "a frame cannot restore below the scope depth at which it started"
-        );
-        while self.nested_scopes.len() > depth {
-            let Scope { kind, start } = self.nested_scopes.pop().expect("scope depth was checked");
-            while self.bindings.len() > start {
-                let binding = self.bindings.pop().expect("binding count was checked");
-                if binding.outer == NO_OUTER_BINDING {
-                    _ = self.innermost.remove(&binding.name);
-                } else {
-                    _ = self.innermost.insert(binding.name, binding.outer);
-                }
-            }
-            #[cfg(test)]
-            self.trace.push(ScopeTraceEvent { kind, enter: false });
-            #[cfg(not(test))]
-            let _ = kind;
-        }
     }
 
     /// Keeps the innermost scope's bindings under `key` after the scope
@@ -349,6 +366,22 @@ impl<'p> ScopeStack<'p> {
         self.retained_names.clear();
         self.retained_prototypes.clear();
     }
+
+    /// An empty stack whose storage comes from the parse arena.
+    pub(super) fn new_in(arena: &'p Bump) -> Self {
+        Self {
+            file_typedefs:              RegionBitSet::new(),
+            nested_scopes:              ArenaVec::new_in(arena),
+            bindings:                   ArenaVec::new_in(arena),
+            innermost:                  ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            retained_prototypes:        ArenaVec::new_in(arena),
+            retained_names:             ArenaVec::new_in(arena),
+            #[cfg(test)]
+            trace:                      ScopeTrace::new(),
+            #[cfg(test)]
+            lookup_probes:              std::cell::Cell::new(0),
+        }
+    }
 }
 
 /// The bit that holds `name`'s file-scope typedef status.
@@ -357,37 +390,7 @@ fn file_scope_index(name: StringCacheId) -> usize {
     name.to_u32() as usize
 }
 
-/// Labels defined and referenced in one function body.
-///
-/// C99: label names have function scope (§6.2.1 paragraph 3, p. 29;
-/// PDF p. 41) and their own name space (§6.2.3 paragraph 1, p. 31;
-/// PDF p. 43). The sets only record names; uniqueness (§6.8.1 paragraph 3,
-/// p. 132; PDF p. 144) and `goto` targets (§6.8.6.1 paragraph 1, p. 137;
-/// PDF p. 149) are not diagnosed from them.
-#[derive(Debug)]
-pub(super) struct LabelScope<'p> {
-    pub(super) definitions: ArenaSet<'p, StringCacheId>,
-    pub(super) references:  ArenaSet<'p, StringCacheId>,
-}
-
-/// Function-local label namespaces, innermost last. A closed namespace keeps
-/// its emptied sets for the next function body, so label bookkeeping reuses
-/// the same parse-arena storage for the whole translation unit.
-pub(super) struct LabelScopes<'p> {
-    open:  ArenaVec<'p, LabelScope<'p>>,
-    spare: ArenaVec<'p, LabelScope<'p>>,
-    arena: &'p Bump,
-}
-
 impl<'p> LabelScopes<'p> {
-    pub(super) fn new_in(arena: &'p Bump) -> Self {
-        Self {
-            open: ArenaVec::new_in(arena),
-            spare: ArenaVec::new_in(arena),
-            arena,
-        }
-    }
-
     /// Opens an empty label namespace.
     pub(super) fn enter(&mut self) {
         let scope = self.spare.pop().unwrap_or_else(|| LabelScope {
@@ -417,19 +420,18 @@ impl<'p> LabelScopes<'p> {
         self.open.last_mut()
     }
 
+    pub(super) fn new_in(arena: &'p Bump) -> Self {
+        Self {
+            open: ArenaVec::new_in(arena),
+            spare: ArenaVec::new_in(arena),
+            arena,
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
         self.open.is_empty()
     }
-}
-
-/// State of one enclosing `switch` body.
-///
-/// C99: a `switch` has at most one `default` label (§6.8.4.2 paragraph 3,
-/// p. 134; PDF p. 146), diagnosed by the statement frame.
-#[derive(Debug, Default)]
-pub(super) struct SwitchScope {
-    pub(super) has_default: bool,
 }
 
 /// Identifies a parameter list by where its slice lives in the

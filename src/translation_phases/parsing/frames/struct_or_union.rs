@@ -84,108 +84,8 @@ use crate::{
     },
 };
 
-/// Parses a struct-or-union specifier, including its optional tag and member
-/// declaration list.
-///
-/// C99: structure and union specifiers, member declarations, and bit-fields
-/// are §6.7.2.1, pp. 101-104; PDF pp. 113-116.
-#[derive(Debug)]
-pub(super) struct StructOrUnionSpecifierFrame<'tu, 'p> {
-    /// Current tag/member transition.
-    phase: StructOrUnionPhase,
-    attribute_resume: StructOrUnionPhase,
-    attributes: Option<&'tu SpecifierExtension<'tu>>,
-    /// Keyword-selected aggregate kind.
-    kind: Option<StructOrUnion>,
-    /// Optional tag identifier.
-    identifier: Option<Identifier>,
-    /// Completed member declarations before arena insertion.
-    pub(super) declarations: ArenaVec<'p, StructDeclaration<'tu>>,
-    /// Declarators belonging to the member declaration in progress.
-    pub(super) member_declarators: ArenaVec<'p, StructDeclarator<'tu>>,
-    /// Specifiers shared by the member declarators in progress.
-    member_specifiers: Option<DeclarationSpecifiers<'tu>>,
-    /// Named declarator waiting for an optional bit-field width.
-    member_declarator: Option<Declarator<'tu>>,
-    /// Whether `{` was consumed, distinguishing a reference from a definition.
-    body_started: bool,
-    /// Whether member synchronization just ran after a reported malformed
-    /// struct-declarator terminator, so stopping before `}` or a following
-    /// declaration finishes the member without a second diagnostic.
-    resuming_after_member_recovery: bool,
-    /// Whether the bit-field width before the current separator position
-    /// already reported an error, so a stray `)` there is not diagnosed
-    /// again.
-    width_recovered: bool,
-    /// Provenance accumulated across the complete tag specifier.
-    pub(super) source_vectors: ArenaVec<'p, SourceVectors>,
-    /// Provenance accumulated for the member declaration in progress.
-    member_source: Option<SourceVectors>,
-    /// Provenance for the member declarator/bit-field currently being built.
-    current_member_declarator_source: Option<SourceVectors>,
-    /// `__extension__` suppression depth when the specifier began. Each
-    /// member restores it, so a marker before one member covers only that
-    /// member (GNU extension; C99 §5.1.1.3, p. 11; PDF p. 23).
-    suppression_entry: usize,
-}
-
-/// State transitions for a struct/union tag and member body.
-///
-/// C99: §6.7.2.1, pp. 101-104; PDF pp. 113-116.
-#[derive(Debug, Clone, Copy)]
-enum StructOrUnionPhase {
-    /// Consume and classify the `struct` or `union` keyword.
-    Start,
-    AwaitTagAttributes,
-    AwaitMemberAttributes,
-    AwaitAssertion,
-    /// Parse an optional tag or anonymous opening brace.
-    NameOrBody,
-    /// Decide whether a named tag also has a body.
-    AfterName,
-    /// Parse `}` or begin another member declaration.
-    MemberStart,
-    /// Receive member specifiers and select named/unnamed declarator syntax.
-    AwaitMemberSpecifiers,
-    /// Push a member declarator unless an unnamed bit-field starts with `:`.
-    PushMemberDeclarator,
-    /// Receive the optional member declarator.
-    AwaitMemberDeclarator,
-    /// Decide whether a bit-field width follows the member declarator.
-    AfterMemberDeclarator,
-    /// Push the constant-expression bit-field width.
-    PushBitFieldWidth,
-    /// Receive the bit-field width child.
-    AwaitBitFieldWidth,
-    /// Require `,` or `;` after one struct declarator.
-    AfterStructDeclarator,
-    /// Store the completed body and return the tag specifier.
-    FinishBody,
-}
-
 impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
-    pub(super) fn new(arena: &'p Bump) -> Self {
-        Self {
-            phase: StructOrUnionPhase::Start,
-            attribute_resume: StructOrUnionPhase::NameOrBody,
-            attributes: None,
-            kind: None,
-            identifier: None,
-            declarations: ArenaVec::new_in(arena),
-            member_declarators: ArenaVec::new_in(arena),
-            member_specifiers: None,
-            member_declarator: None,
-            body_started: false,
-            resuming_after_member_recovery: false,
-            width_recovered: false,
-            source_vectors: ArenaVec::new_in(arena),
-            member_source: None,
-            current_member_declarator_source: None,
-            suppression_entry: 0,
-        }
-    }
-
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -671,7 +571,89 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
             },
         }
     }
+}
 
+/// State transitions for a struct/union tag and member body.
+///
+/// C99: §6.7.2.1, pp. 101-104; PDF pp. 113-116.
+#[derive(Debug, Clone, Copy)]
+enum StructOrUnionPhase {
+    /// Consume and classify the `struct` or `union` keyword.
+    Start,
+    AwaitTagAttributes,
+    AwaitMemberAttributes,
+    AwaitAssertion,
+    /// Parse an optional tag or anonymous opening brace.
+    NameOrBody,
+    /// Decide whether a named tag also has a body.
+    AfterName,
+    /// Parse `}` or begin another member declaration.
+    MemberStart,
+    /// Receive member specifiers and select named/unnamed declarator syntax.
+    AwaitMemberSpecifiers,
+    /// Push a member declarator unless an unnamed bit-field starts with `:`.
+    PushMemberDeclarator,
+    /// Receive the optional member declarator.
+    AwaitMemberDeclarator,
+    /// Decide whether a bit-field width follows the member declarator.
+    AfterMemberDeclarator,
+    /// Push the constant-expression bit-field width.
+    PushBitFieldWidth,
+    /// Receive the bit-field width child.
+    AwaitBitFieldWidth,
+    /// Require `,` or `;` after one struct declarator.
+    AfterStructDeclarator,
+    /// Store the completed body and return the tag specifier.
+    FinishBody,
+}
+
+/// Parses a struct-or-union specifier, including its optional tag and member
+/// declaration list.
+///
+/// C99: structure and union specifiers, member declarations, and bit-fields
+/// are §6.7.2.1, pp. 101-104; PDF pp. 113-116.
+#[derive(Debug)]
+pub(in crate::translation_phases::parsing) struct StructOrUnionSpecifierFrame<'tu, 'p> {
+    /// Current tag/member transition.
+    phase: StructOrUnionPhase,
+    attribute_resume: StructOrUnionPhase,
+    attributes: Option<&'tu SpecifierExtension<'tu>>,
+    /// Keyword-selected aggregate kind.
+    kind: Option<StructOrUnion>,
+    /// Optional tag identifier.
+    identifier: Option<Identifier>,
+    /// Completed member declarations before arena insertion.
+    pub(in crate::translation_phases::parsing) declarations: ArenaVec<'p, StructDeclaration<'tu>>,
+    /// Declarators belonging to the member declaration in progress.
+    pub(in crate::translation_phases::parsing) member_declarators:
+        ArenaVec<'p, StructDeclarator<'tu>>,
+    /// Specifiers shared by the member declarators in progress.
+    member_specifiers: Option<DeclarationSpecifiers<'tu>>,
+    /// Named declarator waiting for an optional bit-field width.
+    member_declarator: Option<Declarator<'tu>>,
+    /// Whether `{` was consumed, distinguishing a reference from a definition.
+    body_started: bool,
+    /// Whether member synchronization just ran after a reported malformed
+    /// struct-declarator terminator, so stopping before `}` or a following
+    /// declaration finishes the member without a second diagnostic.
+    resuming_after_member_recovery: bool,
+    /// Whether the bit-field width before the current separator position
+    /// already reported an error, so a stray `)` there is not diagnosed
+    /// again.
+    width_recovered: bool,
+    /// Provenance accumulated across the complete tag specifier.
+    pub(in crate::translation_phases::parsing) source_vectors: ArenaVec<'p, SourceVectors>,
+    /// Provenance accumulated for the member declaration in progress.
+    member_source: Option<SourceVectors>,
+    /// Provenance for the member declarator/bit-field currently being built.
+    current_member_declarator_source: Option<SourceVectors>,
+    /// `__extension__` suppression depth when the specifier began. Each
+    /// member restores it, so a marker before one member covers only that
+    /// member (GNU extension; C99 §5.1.1.3, p. 11; PDF p. 23).
+    suppression_entry: usize,
+}
+
+impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
     /// Whether the body's `}` follows a stray `)` after a member declarator,
     /// with only member declarations in between.
     ///
@@ -815,5 +797,26 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
             source_vectors,
         });
         ParseAction::Reduce(ParseValue::StructOrUnionSpecifier(index))
+    }
+
+    pub(in crate::translation_phases::parsing) fn new(arena: &'p Bump) -> Self {
+        Self {
+            phase: StructOrUnionPhase::Start,
+            attribute_resume: StructOrUnionPhase::NameOrBody,
+            attributes: None,
+            kind: None,
+            identifier: None,
+            declarations: ArenaVec::new_in(arena),
+            member_declarators: ArenaVec::new_in(arena),
+            member_specifiers: None,
+            member_declarator: None,
+            body_started: false,
+            resuming_after_member_recovery: false,
+            width_recovered: false,
+            source_vectors: ArenaVec::new_in(arena),
+            member_source: None,
+            current_member_declarator_source: None,
+            suppression_entry: 0,
+        }
     }
 }

@@ -33,7 +33,7 @@ use std::fmt::Debug;
 
 mod lookahead;
 
-pub(super) use lookahead::closer_follows_stray_run;
+pub(in crate::translation_phases::parsing) use lookahead::closer_follows_stray_run;
 use lookahead::{
     brace_group_closes_before_parenthesis,
     brace_group_continues_expression,
@@ -105,280 +105,14 @@ use crate::{
     },
 };
 
-/// The expression nonterminal a frame parses, which bounds the operators it
-/// may absorb.
-///
-/// C99: `Expression` is `expression` (§6.5.17 paragraph 1, p. 94;
-/// PDF p. 106); `AssignmentExpression` is `assignment-expression` (§6.5.16
-/// paragraph 1, p. 91; PDF p. 103); `ConstantExpression` is
-/// `constant-expression`, syntactically a `conditional-expression` (§6.6
-/// paragraph 1, p. 95; PDF p. 107); `CastExpression` is `cast-expression`
-/// (§6.5.4 paragraph 1, p. 81; PDF p. 93); `UnaryExpression` is
-/// `unary-expression` (§6.5.3 paragraph 1, p. 78; PDF p. 90).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ExpressionMode {
-    Expression,
-    AssignmentExpression,
-    ConstantExpression,
-    CastExpression,
-    UnaryExpression,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExpressionParserState {
-    Operand,
-    Operator,
-}
-
-/// The enclosing production that owns the token ending this expression.
-///
-/// C99: `Statement` covers the expressions of §6.8.1-§6.8.6, pp. 131-136;
-/// PDF pp. 143-148; `Argument` is `argument-expression-list` (§6.5.2,
-/// p. 70; PDF p. 82); `Initializer` and `Designator` are `initializer` and
-/// `designator` (§6.7.8 paragraph 1, p. 125; PDF p. 137); `ArrayBound` is an
-/// array declarator's size (§6.7.5 paragraph 1, p. 114; PDF p. 126);
-/// `StructMember` is a bit-field width (§6.7.2.1 paragraph 1, p. 101;
-/// PDF p. 113); `Enumerator` is an enumerator value (§6.7.2.2 paragraph 1,
-/// p. 105; PDF p. 117).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ExpressionBoundary {
-    Statement(ExpressionTerminator),
-    ClosingParenthesis,
-    ClosingSquareBracket,
-    Argument,
-    Initializer,
-    ArrayBound,
-    StructMember,
-    Enumerator,
-    Designator,
-}
-
-/// One parsed operand and the grammar categories it still belongs to: a
-/// `unary-expression` may be an assignment's left operand (§6.5.16
-/// paragraph 1, p. 91; PDF p. 103), and only a `postfix-expression` takes a
-/// postfix suffix (§6.5.2 paragraph 1, p. 69; PDF p. 81).
-#[derive(Debug, Clone, Copy)]
-pub(super) struct ExpressionOperand<'tu> {
-    expression:         &'tu Expression<'tu>,
-    unary_expression:   bool,
-    postfix_expression: bool,
-}
-
-/// Resumable expression production: an operand/operator stack pair
-/// reduced by precedence, with child frames for delimited operands.
-///
-/// C99: §6.5, pp. 67-94; PDF pp. 79-106; precedence and associativity
-/// follow §6.5 paragraph 3 and footnote 74, p. 67; PDF p. 79.
-#[derive(Debug)]
-pub(super) struct ExpressionFrame<'tu, 'p> {
-    mode:                  ExpressionMode,
-    boundary:              ExpressionBoundary,
-    recovery_boundary:     ExpressionBoundary,
-    phase:                 ExpressionPhase<'tu>,
-    operators:             ArenaVec<'p, LanguageExpressionOperator<'tu>>,
-    operands:              ArenaVec<'p, ExpressionOperand<'tu>>,
-    state:                 ExpressionParserState,
-    starting_error_count:  usize,
-    /// Postfix call under construction, boxed because most expression frames
-    /// never parse a call. The box comes from and returns to the frame pools.
-    pub(super) call:       Option<PoolBox<'p, CallState<'tu, 'p>>>,
-    pending_sizeof_prefix: Option<SourceVectors>,
-    /// The top operand is an error operand that replaced a stray token
-    /// already diagnosed, so the tokens after it need no second report.
-    stray_error_operand:   bool,
-}
-
-/// Arguments and provenance of the postfix call an expression frame is
-/// building.
-///
-/// C99: `postfix-expression ( argument-expression-list(opt) )`, §6.5.2,
-/// pp. 69-70; PDF pp. 81-82; function calls §6.5.2.2, p. 71; PDF p. 83.
-#[derive(Debug)]
-pub(super) struct CallState<'tu, 'p> {
-    pub(super) arguments: ArenaVec<'p, &'tu Expression<'tu>>,
-    source_vectors:       ArenaVec<'p, SourceVectors>,
-    operator_sources:     ArenaVec<'p, SourceVectors>,
-}
-
-impl<'p> CallState<'_, 'p> {
-    pub(super) fn new_in(arena: &'p Bump) -> Self {
-        Self {
-            arguments:        ArenaVec::new_in(arena),
-            source_vectors:   ArenaVec::new_in(arena),
-            operator_sources: ArenaVec::new_in(arena),
-        }
-    }
-}
-
-/// Resumable positions inside one expression. `*Grouped` is
-/// `( expression )` (§6.5.1); `*Subscript`, `Call*`, and `ExpectMember` are
-/// postfix suffixes (§6.5.2); `*Prefix` and `Sizeof*` are unary operators
-/// (§6.5.3); `*TypeName`, `*CompoundLiteral`, and `*CastOperand` follow a
-/// parenthesized `type-name` (§6.5.2.5, §6.5.3, §6.5.4); `*Conditional*`
-/// is `? :` (§6.5.15).
-#[derive(Debug, Clone, Copy)]
-enum ExpressionPhase<'tu> {
-    Parse,
-    AwaitModern(KeywordTokenType, SourceVectors),
-    AwaitGnu,
-    LabelAddress(SourceVectors),
-    AwaitStatementExpression(SourceVectors),
-    CloseStatementExpression(SourceVectors, &'tu super::syntax::Statement<'tu>),
-    CountofStart(SourceVectors),
-    AwaitCountofExpression(SourceVectors),
-    /// GNU extension: like `sizeof`, C99 §6.5.3p1, p. 78; PDF p. 90.
-    AlignofStart(SourceVectors),
-    AwaitAlignofExpression(SourceVectors),
-    Finish,
-    RecoverUnexpectedBrace(u32, SourceVectors),
-    PushGrouped(SourceVectors),
-    AwaitGrouped(SourceVectors),
-    CloseGrouped(SourceVectors, &'tu Expression<'tu>),
-    PushSubscript(&'tu Expression<'tu>, SourceVectors),
-    AwaitSubscript(&'tu Expression<'tu>, SourceVectors),
-    CloseSubscript(&'tu Expression<'tu>, SourceVectors, &'tu Expression<'tu>),
-    CallStart(&'tu Expression<'tu>, SourceVectors),
-    PushCallArgument(&'tu Expression<'tu>),
-    AwaitCallArgument(&'tu Expression<'tu>),
-    CallSeparator(&'tu Expression<'tu>),
-    ExpectMember(&'tu Expression<'tu>, bool, SourceVectors),
-    PushPrefix(UnaryOperator, SourceVectors, ExpressionMode),
-    AwaitPrefix(UnaryOperator, SourceVectors),
-    SizeofStart(SourceVectors),
-    PushSizeofExpression(SourceVectors),
-    AwaitSizeofExpression(SourceVectors),
-    PushTypeName(SourceVectors, TypeNameUse),
-    AwaitTypeName(SourceVectors, TypeNameUse),
-    CloseTypeName(SourceVectors, TypeNameUse, &'tu TypeName<'tu>),
-    PushCompoundLiteral(&'tu TypeName<'tu>, SourceVectors, TypeNameUse),
-    AwaitCompoundLiteral(&'tu TypeName<'tu>, SourceVectors, TypeNameUse),
-    PushCastOperand(&'tu TypeName<'tu>, SourceVectors),
-    AwaitCastOperand(&'tu TypeName<'tu>, SourceVectors),
-    PushConditionalMiddle,
-    AwaitConditionalMiddle,
-    ExpectConditionalColon(&'tu Expression<'tu>),
-    PushConditionalElse,
-    AwaitConditionalElse,
-    /// Discards this many already-diagnosed tokens before the closer that
-    /// ends a malformed delimited expression, then finishes.
-    SkipStray(usize),
-}
-
-/// What a parenthesized `type-name` in operand position introduces.
-///
-/// C99: `Cast` is `( type-name ) cast-expression` (§6.5.4 paragraph 1,
-/// p. 81; PDF p. 93) or a compound literal; `Sizeof` is
-/// `sizeof ( type-name )` (§6.5.3 paragraph 1, p. 78; PDF p. 90) or
-/// `sizeof` applied to a compound literal; `UnaryCompoundLiteral` is the
-/// `unary-expression` operand of `++`, `--`, or `sizeof`, which cannot be a
-/// cast and so must be a compound literal (§6.5.2 paragraph 1, p. 69;
-/// PDF p. 81).
-#[derive(Debug, Clone, Copy)]
-enum TypeNameUse {
-    Cast,
-    Sizeof(SourceVectors),
-    UnaryCompoundLiteral,
-}
-
 impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
-    pub(super) fn new(
-        arena: &'p Bump,
-        mode: ExpressionMode,
-        boundary: ExpressionBoundary,
-        starting_error_count: usize,
-    ) -> Self {
-        Self::with_recovery_boundary(arena, mode, boundary, boundary, starting_error_count)
-    }
-
-    fn nested(
-        &self,
-        arena: &'p Bump,
-        mode: ExpressionMode,
-        boundary: ExpressionBoundary,
-        starting_error_count: usize,
-    ) -> Self {
-        Self::with_recovery_boundary(
-            arena,
-            mode,
-            boundary,
-            self.recovery_boundary,
-            starting_error_count,
-        )
-    }
-
-    pub(super) fn with_recovery_boundary(
-        arena: &'p Bump,
-        mode: ExpressionMode,
-        boundary: ExpressionBoundary,
-        recovery_boundary: ExpressionBoundary,
-        starting_error_count: usize,
-    ) -> Self {
-        Self {
-            mode,
-            boundary,
-            recovery_boundary,
-            phase: ExpressionPhase::Parse,
-            operators: ArenaVec::new_in(arena),
-            operands: ArenaVec::new_in(arena),
-            state: ExpressionParserState::Operand,
-            starting_error_count,
-            call: None,
-            pending_sizeof_prefix: None,
-            stray_error_operand: false,
-        }
-    }
-
-    /// Gives the operator and operand stacks spare allocations.
-    pub(super) fn lend_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
-        pools.operators.lend(&mut self.operators);
-        pools.operands.lend(&mut self.operands);
-    }
-
-    /// Returns the operator and operand stacks' allocations to the pools.
-    pub(super) fn reclaim_pooled(&mut self, pools: &mut FramePools<'tu, 'p>) {
-        pools.operators.reclaim(&mut self.operators);
-        pools.operands.reclaim(&mut self.operands);
-        if let Some(mut call) = self.call.take() {
-            call.arguments.clear();
-            call.source_vectors.clear();
-            call.operator_sources.clear();
-            pools.calls.reclaim(call);
-        }
-    }
-
-    fn closing_parenthesis_is_boundary(&self) -> bool {
-        [self.boundary, self.recovery_boundary]
-            .into_iter()
-            .any(|boundary| {
-                matches!(
-                    boundary,
-                    ExpressionBoundary::ClosingParenthesis
-                        | ExpressionBoundary::Argument
-                        | ExpressionBoundary::Statement(ExpressionTerminator::ClosingParenthesis)
-                )
-            })
-    }
-
-    fn closing_square_bracket_is_boundary(&self) -> bool {
-        [self.boundary, self.recovery_boundary]
-            .into_iter()
-            .any(|boundary| {
-                matches!(
-                    boundary,
-                    ExpressionBoundary::ClosingSquareBracket
-                        | ExpressionBoundary::ArrayBound
-                        | ExpressionBoundary::Designator
-                )
-            })
-    }
-
     #[expect(
         clippy::missing_assert_message,
         clippy::too_many_lines,
         reason = "The explicit expression frame keeps the C precedence grammar and transition \
                   invariants in one non-recursive state machine."
     )]
-    pub(super) fn step(
+    pub(in crate::translation_phases::parsing) fn step(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Option<Token>,
@@ -1769,6 +1503,249 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
             self.finish(parser)
         }
     }
+}
+
+/// Resumable positions inside one expression. `*Grouped` is
+/// `( expression )` (§6.5.1); `*Subscript`, `Call*`, and `ExpectMember` are
+/// postfix suffixes (§6.5.2); `*Prefix` and `Sizeof*` are unary operators
+/// (§6.5.3); `*TypeName`, `*CompoundLiteral`, and `*CastOperand` follow a
+/// parenthesized `type-name` (§6.5.2.5, §6.5.3, §6.5.4); `*Conditional*`
+/// is `? :` (§6.5.15).
+#[derive(Debug, Clone, Copy)]
+enum ExpressionPhase<'tu> {
+    Parse,
+    AwaitModern(KeywordTokenType, SourceVectors),
+    AwaitGnu,
+    LabelAddress(SourceVectors),
+    AwaitStatementExpression(SourceVectors),
+    CloseStatementExpression(SourceVectors, &'tu super::syntax::Statement<'tu>),
+    CountofStart(SourceVectors),
+    AwaitCountofExpression(SourceVectors),
+    /// GNU extension: like `sizeof`, C99 §6.5.3p1, p. 78; PDF p. 90.
+    AlignofStart(SourceVectors),
+    AwaitAlignofExpression(SourceVectors),
+    Finish,
+    RecoverUnexpectedBrace(u32, SourceVectors),
+    PushGrouped(SourceVectors),
+    AwaitGrouped(SourceVectors),
+    CloseGrouped(SourceVectors, &'tu Expression<'tu>),
+    PushSubscript(&'tu Expression<'tu>, SourceVectors),
+    AwaitSubscript(&'tu Expression<'tu>, SourceVectors),
+    CloseSubscript(&'tu Expression<'tu>, SourceVectors, &'tu Expression<'tu>),
+    CallStart(&'tu Expression<'tu>, SourceVectors),
+    PushCallArgument(&'tu Expression<'tu>),
+    AwaitCallArgument(&'tu Expression<'tu>),
+    CallSeparator(&'tu Expression<'tu>),
+    ExpectMember(&'tu Expression<'tu>, bool, SourceVectors),
+    PushPrefix(UnaryOperator, SourceVectors, ExpressionMode),
+    AwaitPrefix(UnaryOperator, SourceVectors),
+    SizeofStart(SourceVectors),
+    PushSizeofExpression(SourceVectors),
+    AwaitSizeofExpression(SourceVectors),
+    PushTypeName(SourceVectors, TypeNameUse),
+    AwaitTypeName(SourceVectors, TypeNameUse),
+    CloseTypeName(SourceVectors, TypeNameUse, &'tu TypeName<'tu>),
+    PushCompoundLiteral(&'tu TypeName<'tu>, SourceVectors, TypeNameUse),
+    AwaitCompoundLiteral(&'tu TypeName<'tu>, SourceVectors, TypeNameUse),
+    PushCastOperand(&'tu TypeName<'tu>, SourceVectors),
+    AwaitCastOperand(&'tu TypeName<'tu>, SourceVectors),
+    PushConditionalMiddle,
+    AwaitConditionalMiddle,
+    ExpectConditionalColon(&'tu Expression<'tu>),
+    PushConditionalElse,
+    AwaitConditionalElse,
+    /// Discards this many already-diagnosed tokens before the closer that
+    /// ends a malformed delimited expression, then finishes.
+    SkipStray(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpressionParserState {
+    Operand,
+    Operator,
+}
+
+/// Arguments and provenance of the postfix call an expression frame is
+/// building.
+///
+/// C99: `postfix-expression ( argument-expression-list(opt) )`, §6.5.2,
+/// pp. 69-70; PDF pp. 81-82; function calls §6.5.2.2, p. 71; PDF p. 83.
+#[derive(Debug)]
+pub(in crate::translation_phases::parsing) struct CallState<'tu, 'p> {
+    pub(in crate::translation_phases::parsing) arguments: ArenaVec<'p, &'tu Expression<'tu>>,
+    source_vectors: ArenaVec<'p, SourceVectors>,
+    operator_sources: ArenaVec<'p, SourceVectors>,
+}
+
+/// The expression nonterminal a frame parses, which bounds the operators it
+/// may absorb.
+///
+/// C99: `Expression` is `expression` (§6.5.17 paragraph 1, p. 94;
+/// PDF p. 106); `AssignmentExpression` is `assignment-expression` (§6.5.16
+/// paragraph 1, p. 91; PDF p. 103); `ConstantExpression` is
+/// `constant-expression`, syntactically a `conditional-expression` (§6.6
+/// paragraph 1, p. 95; PDF p. 107); `CastExpression` is `cast-expression`
+/// (§6.5.4 paragraph 1, p. 81; PDF p. 93); `UnaryExpression` is
+/// `unary-expression` (§6.5.3 paragraph 1, p. 78; PDF p. 90).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::translation_phases::parsing) enum ExpressionMode {
+    Expression,
+    AssignmentExpression,
+    ConstantExpression,
+    CastExpression,
+    UnaryExpression,
+}
+
+/// The enclosing production that owns the token ending this expression.
+///
+/// C99: `Statement` covers the expressions of §6.8.1-§6.8.6, pp. 131-136;
+/// PDF pp. 143-148; `Argument` is `argument-expression-list` (§6.5.2,
+/// p. 70; PDF p. 82); `Initializer` and `Designator` are `initializer` and
+/// `designator` (§6.7.8 paragraph 1, p. 125; PDF p. 137); `ArrayBound` is an
+/// array declarator's size (§6.7.5 paragraph 1, p. 114; PDF p. 126);
+/// `StructMember` is a bit-field width (§6.7.2.1 paragraph 1, p. 101;
+/// PDF p. 113); `Enumerator` is an enumerator value (§6.7.2.2 paragraph 1,
+/// p. 105; PDF p. 117).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::translation_phases::parsing) enum ExpressionBoundary {
+    Statement(ExpressionTerminator),
+    ClosingParenthesis,
+    ClosingSquareBracket,
+    Argument,
+    Initializer,
+    ArrayBound,
+    StructMember,
+    Enumerator,
+    Designator,
+}
+
+/// One parsed operand and the grammar categories it still belongs to: a
+/// `unary-expression` may be an assignment's left operand (§6.5.16
+/// paragraph 1, p. 91; PDF p. 103), and only a `postfix-expression` takes a
+/// postfix suffix (§6.5.2 paragraph 1, p. 69; PDF p. 81).
+#[derive(Debug, Clone, Copy)]
+pub(in crate::translation_phases::parsing) struct ExpressionOperand<'tu> {
+    expression:         &'tu Expression<'tu>,
+    unary_expression:   bool,
+    postfix_expression: bool,
+}
+
+/// Resumable expression production: an operand/operator stack pair
+/// reduced by precedence, with child frames for delimited operands.
+///
+/// C99: §6.5, pp. 67-94; PDF pp. 79-106; precedence and associativity
+/// follow §6.5 paragraph 3 and footnote 74, p. 67; PDF p. 79.
+#[derive(Debug)]
+pub(in crate::translation_phases::parsing) struct ExpressionFrame<'tu, 'p> {
+    mode: ExpressionMode,
+    boundary: ExpressionBoundary,
+    recovery_boundary: ExpressionBoundary,
+    phase: ExpressionPhase<'tu>,
+    operators: ArenaVec<'p, LanguageExpressionOperator<'tu>>,
+    operands: ArenaVec<'p, ExpressionOperand<'tu>>,
+    state: ExpressionParserState,
+    starting_error_count: usize,
+    /// Postfix call under construction, boxed because most expression frames
+    /// never parse a call. The box comes from and returns to the frame pools.
+    pub(in crate::translation_phases::parsing) call: Option<PoolBox<'p, CallState<'tu, 'p>>>,
+    pending_sizeof_prefix: Option<SourceVectors>,
+    /// The top operand is an error operand that replaced a stray token
+    /// already diagnosed, so the tokens after it need no second report.
+    stray_error_operand: bool,
+}
+
+/// What a parenthesized `type-name` in operand position introduces.
+///
+/// C99: `Cast` is `( type-name ) cast-expression` (§6.5.4 paragraph 1,
+/// p. 81; PDF p. 93) or a compound literal; `Sizeof` is
+/// `sizeof ( type-name )` (§6.5.3 paragraph 1, p. 78; PDF p. 90) or
+/// `sizeof` applied to a compound literal; `UnaryCompoundLiteral` is the
+/// `unary-expression` operand of `++`, `--`, or `sizeof`, which cannot be a
+/// cast and so must be a compound literal (§6.5.2 paragraph 1, p. 69;
+/// PDF p. 81).
+#[derive(Debug, Clone, Copy)]
+enum TypeNameUse {
+    Cast,
+    Sizeof(SourceVectors),
+    UnaryCompoundLiteral,
+}
+
+impl<'p> CallState<'_, 'p> {
+    pub(in crate::translation_phases::parsing) fn new_in(arena: &'p Bump) -> Self {
+        Self {
+            arguments:        ArenaVec::new_in(arena),
+            source_vectors:   ArenaVec::new_in(arena),
+            operator_sources: ArenaVec::new_in(arena),
+        }
+    }
+}
+
+impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
+    fn nested(
+        &self,
+        arena: &'p Bump,
+        mode: ExpressionMode,
+        boundary: ExpressionBoundary,
+        starting_error_count: usize,
+    ) -> Self {
+        Self::with_recovery_boundary(
+            arena,
+            mode,
+            boundary,
+            self.recovery_boundary,
+            starting_error_count,
+        )
+    }
+
+    /// Gives the operator and operand stacks spare allocations.
+    pub(in crate::translation_phases::parsing) fn lend_pooled(
+        &mut self,
+        pools: &mut FramePools<'tu, 'p>,
+    ) {
+        pools.operators.lend(&mut self.operators);
+        pools.operands.lend(&mut self.operands);
+    }
+
+    /// Returns the operator and operand stacks' allocations to the pools.
+    pub(in crate::translation_phases::parsing) fn reclaim_pooled(
+        &mut self,
+        pools: &mut FramePools<'tu, 'p>,
+    ) {
+        pools.operators.reclaim(&mut self.operators);
+        pools.operands.reclaim(&mut self.operands);
+        if let Some(mut call) = self.call.take() {
+            call.arguments.clear();
+            call.source_vectors.clear();
+            call.operator_sources.clear();
+            pools.calls.reclaim(call);
+        }
+    }
+
+    fn closing_parenthesis_is_boundary(&self) -> bool {
+        [self.boundary, self.recovery_boundary]
+            .into_iter()
+            .any(|boundary| {
+                matches!(
+                    boundary,
+                    ExpressionBoundary::ClosingParenthesis
+                        | ExpressionBoundary::Argument
+                        | ExpressionBoundary::Statement(ExpressionTerminator::ClosingParenthesis)
+                )
+            })
+    }
+
+    fn closing_square_bracket_is_boundary(&self) -> bool {
+        [self.boundary, self.recovery_boundary]
+            .into_iter()
+            .any(|boundary| {
+                matches!(
+                    boundary,
+                    ExpressionBoundary::ClosingSquareBracket
+                        | ExpressionBoundary::ArrayBound
+                        | ExpressionBoundary::Designator
+                )
+            })
+    }
 
     /// The closer that ends this expression's own delimiters, when the
     /// boundary is a delimiter whose owner reports it missing.
@@ -2278,7 +2255,7 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 && Self::is_strong_grammar_boundary_for(parser, token, self.recovery_boundary)
     }
 
-    pub(super) fn is_strong_grammar_boundary_for(
+    pub(in crate::translation_phases::parsing) fn is_strong_grammar_boundary_for(
         parser: &mut Parser<'_, 'tu, 'p>,
         token: Token,
         boundary: ExpressionBoundary,
@@ -2417,6 +2394,37 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 expression,
                 recovered,
             }))
+        }
+    }
+
+    pub(in crate::translation_phases::parsing) fn new(
+        arena: &'p Bump,
+        mode: ExpressionMode,
+        boundary: ExpressionBoundary,
+        starting_error_count: usize,
+    ) -> Self {
+        Self::with_recovery_boundary(arena, mode, boundary, boundary, starting_error_count)
+    }
+
+    pub(in crate::translation_phases::parsing) fn with_recovery_boundary(
+        arena: &'p Bump,
+        mode: ExpressionMode,
+        boundary: ExpressionBoundary,
+        recovery_boundary: ExpressionBoundary,
+        starting_error_count: usize,
+    ) -> Self {
+        Self {
+            mode,
+            boundary,
+            recovery_boundary,
+            phase: ExpressionPhase::Parse,
+            operators: ArenaVec::new_in(arena),
+            operands: ArenaVec::new_in(arena),
+            state: ExpressionParserState::Operand,
+            starting_error_count,
+            call: None,
+            pending_sizeof_prefix: None,
+            stray_error_operand: false,
         }
     }
 }
