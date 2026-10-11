@@ -435,15 +435,44 @@ counter for bisecting a miscompile (`--opt-bisect-limit`), per-pass timing, and
 Planned passes, in pipeline order: stack-slot promotion (for slots that become
 promotable after other passes), CFG simplification, sparse conditional constant
 propagation, scoped-hash value numbering over the dominator tree, dead code
-elimination, loop-invariant code motion, and inlining. **Prototype:** seven
+elimination, loop-invariant code motion, and inlining. **Prototype:** eight
 passes, run by default in this order and repeated until a round changes
 nothing: stack-slot promotion (`promote`), constant folding (`fold`), CFG
 simplification (`simplify-cfg`), sparse conditional constant propagation
-(`sccp`), value numbering over the dominator tree (`gvn`), loop-invariant code
+(`sccp`), dominating-condition integer facts (`known-bits`), value numbering
+over the dominator tree (`gvn`), loop-invariant code
 motion (`licm`) and dead code elimination (`dce`). Promotion runs first so the
 other passes see SSA values, value numbering before code motion so one copy of
 a repeated invariant moves, and dead code elimination last so it sweeps what
 the others leave. Inlining is not implemented.
+
+The editable draft supports inserting general non-terminators at a position,
+rewriting their records without changing result identity, moving them across
+blocks, and owning new call operand lists. Operand reads use the current
+records and the replacement map; lowering densely renumbers the live results,
+blocks and instructions.
+
+`simplify-cfg` forms selects for diamond and triangle joins whose arm blocks
+have a single incoming edge and at most four cheap computation units per arm.
+Constants and addresses cost zero. It refuses loads, stores, calls, division,
+remainder and other potentially trapping or expensive instructions. Moved
+instructions lose `nsw`, `nuw`, `exact` and `inbounds`, because the original
+path's facts no longer guard them. Each differing join argument consumes one
+rewrite; a partial bisect run retains the branch and the unconverted arguments.
+A select of integer one and zero becomes a zero extension.
+
+`known-bits` follows `sccp` and walks the dominator tree with explicit enter/leave
+frames. Scoped known-zero masks and signed ordering facts come from unambiguous
+branch edges, with rollback on leaving a subtree; multi-entry block parameters
+remain unknown. Masks propagate through constants, bitwise operations, zero
+extension, truncation, logical shifts and selects. An ordered `nsw` subtraction
+is nonnegative. Positive power-of-two signed division becomes `ashr exact` when
+the low bits are zero, or `lshr` when the dividend is nonnegative; nonnegative
+signed remainder becomes a mask. Unsigned power-of-two division and remainder
+become a logical shift and a mask for any dividend. Each rewrite consumes one
+`allow()` call. Later pipeline rounds let these cheap shifts enable select
+formation, including the Collatz parity diamond. Inlining and load CSE remain
+roadmap work, so the full projected benchmark improvement is not expected yet.
 
 ## ABI lowering
 
@@ -504,6 +533,7 @@ The conformance tests in `src/abi/tests/conformance.rs` link bcc-compiled C with
 Clang-compiled C, exchanging every supported shape and the narrow integers in
 both directions, and run the result at `-O0` and `-O2`: natively for Windows
 GNU and under WSL, as a freestanding static executable, for System V.
+||||||| parent of 9c9ce0d9 (docs(optimizer): Explain select formation and integer fact rewrites)
 
 ## From the IR to machine code
 
