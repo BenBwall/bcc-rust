@@ -33,8 +33,15 @@
 //! Only pure instructions have a key: arithmetic, division included,
 //! comparisons, conversions, `fneg`, `select`, constants, `poison`, `null`,
 //! the address-of instructions and `ptr_add`. A division with a dominating
-//! twin cannot trap where the twin did not. Loads, stores, calls, the `va_*`
-//! operations and `freeze` have none. LLVM's `freeze` returns "an arbitrary,
+//! twin cannot trap where the twin did not. Non-volatile loads use a separate
+//! address-and-type table in `memory.rs`: each fact records the memory
+//! generation at its load or store, and intervening writes must all be proven
+//! disjoint. Calls, volatile accesses, range operations and `va_*` are full
+//! barriers. Memory facts cross only a dominator-tree edge whose child has
+//! exactly one CFG predecessor, the parent; joins and loop headers start a
+//! fresh generation. Leaving a subtree rolls back both tables and generations.
+//! Stores, calls, the `va_*` operations and `freeze` have no pure key.
+//! LLVM's `freeze` returns "an arbitrary,
 //! but fixed, value" for poison, and different `freeze` instructions of one
 //! poison may return different values (LLVM Language Reference, `freeze`).
 //! Merging two of them would pick equal values, one of the allowed outcomes,
@@ -59,6 +66,10 @@ use super::{
     draft::{
         Constant,
         Draft,
+    },
+    memory::{
+        MemoryFacts,
+        MemoryScope,
     },
     report::OptimizationReport,
 };
@@ -95,6 +106,7 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
     // The keys added since each open scope began, newest last.
     let mut added: ArenaVec<'_, Key> = ArenaVec::new_in(scratch);
     let mut stack = ArenaVec::new_in(scratch);
+    let mut memory = MemoryFacts::new(draft);
     if let Some(&entry) = tree.reverse_post_order().first() {
         stack.push(Visit::Enter(entry));
     }
@@ -102,16 +114,24 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
     while let Some(visit) = stack.pop() {
         match visit {
             | Visit::Enter(block) => {
-                stack.push(Visit::Leave(added.len()));
+                let scope = memory.scope();
+                if let Some(parent) = tree.idom(block)
+                    && cfg.predecessors(block) != [parent]
+                {
+                    memory.barrier();
+                }
+                stack.push(Visit::Leave(added.len(), scope));
                 for &child in children.of(block).iter().rev() {
                     stack.push(Visit::Enter(child));
                 }
-                changed |= number_block(draft, block, &mut table, &mut added, report);
+                changed |= number_block(draft, block, &mut table, &mut added, &mut memory, report);
             },
-            | Visit::Leave(mark) =>
+            | Visit::Leave(mark, scope) => {
+                memory.restore(scope);
                 for key in added.drain(mark..) {
                     _ = table.remove(&key);
-                },
+                }
+            },
         }
     }
     if changed {
@@ -122,20 +142,26 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
 
 /// A step of the walk over the dominator tree.
 #[derive(Clone, Copy, Debug)]
+#[expect(
+    variant_size_differences,
+    reason = "Leave stores two arena scope marks; boxing would allocate per block."
+)]
 enum Visit {
     /// Number a block's instructions, then visit its children.
     Enter(Block),
-    /// Close a scope: drop the keys added after the first `usize`.
-    Leave(usize),
+    /// Close the pure-key and memory scopes.
+    Leave(usize, MemoryScope),
 }
 
-/// Replaces each instruction of `block` that has a twin in `table`, and adds
-/// the others. Returns whether it replaced any.
+/// Numbers pure computations and memory accesses in program order, so a
+/// forwarded load's result is resolved by the following pure instructions.
+/// Returns whether it replaced anything.
 fn number_block(
     draft: &mut Draft<'_, '_>,
     block: Block,
     table: &mut ArenaMap<'_, Key, Inst>,
     added: &mut ArenaVec<'_, Key>,
+    memory: &mut MemoryFacts<'_>,
     report: &mut OptimizationReport,
 ) -> bool {
     let mut changed = false;
@@ -144,6 +170,7 @@ fn number_block(
         if draft.is_removed(inst) {
             continue;
         }
+        changed |= memory.number(draft, inst, report);
         let Some(key) = key(draft, inst) else {
             continue;
         };

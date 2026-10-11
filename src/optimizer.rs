@@ -54,14 +54,16 @@
 //!   computes reachability, ordering, predecessors, use counts and the
 //!   control-flow graph; `draft/lower.rs` writes the body back.
 //! - Analyses over the IR's dominator tree of that graph: `loops.rs` finds
-//!   natural loops and their nesting, `frontiers.rs` dominance frontiers.
+//!   natural loops and their nesting, `frontiers.rs` dominance frontiers;
+//!   `memory.rs` tracks scoped memory generations and conservative aliases.
 //! - Passes: `fold.rs` (with `fold/eval.rs`, exact integer evaluation),
 //!   `dce.rs`, `simplify_cfg.rs` (with `simplify_cfg/select.rs`, bounded select
 //!   formation), `inline.rs` (module call graph and direct-call expansion),
 //!   `promote.rs` (stack-slot promotion), `sccp.rs` (sparse conditional
 //!   constant propagation), `known_bits.rs` (integer facts from dominating
 //!   conditions and division rewrites), `gvn.rs` (value numbering over the
-//!   dominator tree) and `licm.rs` (loop-invariant code motion).
+//!   dominator tree, including load reuse and store forwarding) and `licm.rs`
+//!   (loop-invariant code motion).
 //! - `tests.rs` and `tests/` exercise each pass on textual IR, the pipeline as
 //!   a whole, and run programs in the interpreter before and after
 //!   optimization.
@@ -85,6 +87,7 @@ mod draft;
 // Analyses
 mod frontiers;
 mod loops;
+mod memory;
 
 // Passes
 mod dce;

@@ -14,6 +14,7 @@ mod inline;
 mod known_bits;
 mod licm;
 mod loops;
+mod memory;
 mod options;
 mod pipeline;
 mod promote;

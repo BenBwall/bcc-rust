@@ -258,3 +258,141 @@ block0(v0: i32, v1: i32):
 ";
     assert_equivalent(text, "f", &[&[2_147_483_647, 1], &[-1, 4], &[3, 4]]);
 }
+
+#[test]
+fn bytecode_style_dispatch_reuses_loads_without_crossing_the_back_edge() {
+    // Dispatch repeatedly reads the opcode, then writes the next opcode.
+    // The header must reload on each iteration, while the if-chain can reuse
+    // that iteration's first load.
+    let text = "\
+function @f(i32, i32) -> i32 external {
+    slot0 = stack_slot 4, align 4
+block0(v0: i32, v1: i32):
+    v2 = stack_addr slot0
+    v3 = iconst.i32 0
+    v4 = iconst.i32 1
+    v5 = iconst.i32 2
+    v6 = iconst.i32 3
+    v7 = and.i32 v1, v6
+    store.i32 v7, v2, align 4
+    jump block1(v3, v3)
+block1(v8: i32, v9: i32):
+    v10 = icmp.i32 slt v8, v0
+    brif v10, block2, block7
+block2:
+    v11 = load.i32 v2, align 4
+    v12 = icmp.i32 eq v11, v3
+    brif v12, block6(v4), block3
+block3:
+    v13 = load.i32 v2, align 4
+    v14 = icmp.i32 eq v13, v4
+    brif v14, block6(v5), block4
+block4:
+    v15 = load.i32 v2, align 4
+    v16 = icmp.i32 eq v15, v5
+    brif v16, block6(v6), block5
+block5:
+    v17 = load.i32 v2, align 4
+    v18 = iadd.i32 v17, v4
+    jump block6(v18)
+block6(v19: i32):
+    v20 = iadd.i32 v9, v19
+    v21 = iadd.i32 v11, v4
+    v22 = and.i32 v21, v6
+    store.i32 v22, v2, align 4
+    v23 = iadd.i32 v8, v4
+    jump block1(v23, v20)
+block7:
+    return v9
+}
+";
+    let (optimized, _) = optimize_text(text, &only(&[Pass::Gvn]));
+    assert_eq!(optimized.matches("load.i32").count(), 1);
+    assert_equivalent(
+        text,
+        "f",
+        &[&[0, 0], &[1, 3], &[20, 0], &[31, 2], &[100, -1]],
+    );
+}
+
+#[test]
+fn sorts_style_merge_diamond_reuses_comparison_loads() {
+    // Each iteration selects the smaller of two runs' heads into a temporary
+    // slot and increments that head. Arm loads are redundant with the
+    // comparison; stores in the join must prevent reuse on the next trip.
+    let text = "\
+function @f(i32, i32, i32) -> i32 external {
+    slot0 = stack_slot 4, align 4
+    slot1 = stack_slot 4, align 4
+    slot2 = stack_slot 4, align 4
+block0(v0: i32, v1: i32, v2: i32):
+    v3 = stack_addr slot0
+    v4 = stack_addr slot1
+    v5 = stack_addr slot2
+    store.i32 v1, v3, align 4
+    store.i32 v2, v4, align 4
+    v6 = iconst.i32 0
+    v7 = iconst.i32 1
+    jump block1(v6, v6)
+block1(v8: i32, v9: i32):
+    v10 = icmp.i32 slt v8, v0
+    brif v10, block2, block6
+block2:
+    v11 = load.i32 v3, align 4
+    v12 = load.i32 v4, align 4
+    v13 = icmp.i32 slt v12, v11
+    brif v13, block3, block4
+block3:
+    v14 = load.i32 v4, align 4
+    v15 = iadd.i32 v14, v7
+    jump block5(v14, v11, v15)
+block4:
+    v16 = load.i32 v3, align 4
+    v17 = iadd.i32 v16, v7
+    jump block5(v16, v17, v12)
+block5(v18: i32, v19: i32, v20: i32):
+    store.i32 v18, v5, align 4
+    v21 = load.i32 v5, align 4
+    store.i32 v19, v3, align 4
+    store.i32 v20, v4, align 4
+    v22 = iadd.i32 v9, v21
+    v23 = iadd.i32 v8, v7
+    jump block1(v23, v22)
+block6:
+    return v9
+}
+";
+    let (optimized, _) = optimize_text(text, &only(&[Pass::Gvn]));
+    assert_eq!(optimized.matches("load.i32").count(), 2);
+    assert_equivalent(
+        text,
+        "f",
+        &[&[0, 1, 2], &[1, 5, -2], &[20, 1, 7], &[31, 2, 2]],
+    );
+}
+
+#[test]
+fn a_store_through_an_escaped_slot_alias_changes_the_following_load() {
+    let text = "\
+function @f(i32, i32) -> i32 external {
+    slot0 = stack_slot 4, align 4
+    slot1 = stack_slot 4, align 4
+block0(v0: i32, v1: i32):
+    v2 = stack_addr slot0
+    v3 = stack_addr slot1
+    store.i32 v1, v2, align 4
+    store.i32 v0, v3, align 4
+    v4 = iconst.i32 0
+    v5 = icmp.i32 eq v0, v4
+    v6 = select.ptr v5, v2, v3
+    v7 = load.i32 v2, align 4
+    v8 = iadd.i32 v7, v1
+    store.i32 v8, v6, align 4
+    v9 = load.i32 v2, align 4
+    return v9
+}
+";
+    let (optimized, _) = optimize_text(text, &only(&[Pass::Gvn]));
+    assert_eq!(optimized.matches("load.i32").count(), 1);
+    assert_equivalent(text, "f", &[&[0, 5], &[1, 5], &[0, -7], &[-1, 99]]);
+}

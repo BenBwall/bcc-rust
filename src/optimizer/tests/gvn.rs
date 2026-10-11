@@ -193,14 +193,14 @@ block2:
 }
 
 #[test]
-fn loads_calls_and_freezes_are_never_merged() {
+fn volatile_loads_calls_and_freezes_are_never_merged() {
     let input = "\
 function @g(i32) -> i32 external
 
 function @f(ptr, i32) -> i32 external {
 block0(v0: ptr, v1: i32):
-    v2 = load.i32 v0, align 4
-    v3 = load.i32 v0, align 4
+    v2 = load.i32 volatile v0, align 4
+    v3 = load.i32 volatile v0, align 4
     v4 = call @g(v1)
     v5 = call @g(v1)
     v6 = freeze.i32 v1
