@@ -23,7 +23,9 @@ widths, and the names anonymous members contribute, at the tag's last
 declaration; enums show their compatible type), then ordinary binding
 occurrences in lexical order with C-like abstract type spelling, linkage,
 object duration, parameter `static` minimums and available size/alignment.
-Resolved type names, typed expressions and contextual conversions follow.
+Resolved type names, typed expressions and contextual conversions follow;
+conversions are listed by expression ordinal, each expression's in the order
+they were applied.
 Expression ordinals follow deterministic child-before-parent traversal; no host
 address is printed, and source locations are not yet shown. `--tokens`,
 `--syntax-tree` and `--raw-syntax` stop
@@ -316,10 +318,11 @@ records. Each record borrows its immutable syntax expression and retains its typ
 value category, resolved binding where applicable, bit-field width, address
 eligibility, integer/floating constant value and constant-expression class.
 The analyzer's scratch map from syntax identity to vector index gives expected
-O(1) operand lookup. The retained vector is preferable to a retained hash map:
-it gives deterministic inspection and a compact backend iteration surface without
-preserving host-address hashing or scratch capacity. A backend needing random
-lookup can build an arena index from the retained expression references.
+O(1) operand lookup. When analysis ends, the map is copied at its final size
+into the translation-unit arena, so lowering looks a node up with
+`SemanticTranslationUnit::expression_index` or `expression_info` in expected
+O(1). The vector keeps deterministic order for inspection and iteration; the
+map is used only for lookup, so host addresses never reach output.
 
 Value categories distinguish lvalues, their modifiable subset, function
 designators and rvalues (§6.3.2.1p1, printed p. 46, PDF p. 58). Const aggregate
@@ -348,6 +351,10 @@ variable length.
 `conversions` retains the syntax expression, destination type and conversion
 kind: lvalue conversion, array/function decay, arithmetic conversion, assignment
 conversion or default argument promotion (§6.3, pp. 42-49, PDF pp. 54-61).
+A stable counting sort at the end of analysis groups the records by expression
+ordinal, so `conversions_of(index)` and `expression_conversions(node)` return
+one contiguous run in application order. Records whose operand has no retained
+result, which only recovered syntax produces, follow the last run.
 These are contextual operations, separate from the expression's original category;
 sizeof and unary address operands therefore keep their unconverted identities.
 Compound assignments also retain their arithmetic/pointer operation type before

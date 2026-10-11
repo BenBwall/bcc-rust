@@ -5,8 +5,10 @@
 //! §6.7, pp. 97-124; PDF pp. 109-136.
 
 use super::{
+    ArenaMap,
     Context,
     Conversion,
+    Expression,
     ExpressionInfo,
     Identifier,
     Integer,
@@ -20,8 +22,8 @@ use super::{
 /// Durable semantic output. Working maps/stacks are gone when this is returned.
 #[derive(Debug)]
 pub(crate) struct SemanticTranslationUnit<'tu> {
-    pub(crate) types:            Types<'tu>,
-    pub(crate) bindings:         &'tu [Binding],
+    pub(crate) types:              Types<'tu>,
+    pub(crate) bindings:           &'tu [Binding],
     #[cfg_attr(
         not(test),
         expect(
@@ -29,16 +31,27 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
             reason = "Finalized definitions are retained for backend lowering."
         )
     )]
-    pub(crate) definitions:      &'tu [Definition],
-    pub(crate) scopes:           &'tu [Scope],
-    pub(crate) type_names:       &'tu [(SourceVectors, TypeId)],
-    pub(crate) parameters:       &'tu [(SourceVectors, &'tu [Parameter])],
-    pub(crate) expressions:      &'tu [ExpressionInfo<'tu>],
-    pub(crate) conversions:      &'tu [Conversion<'tu>],
-    pub(crate) tag_declarations: &'tu [(usize, usize)],
+    pub(crate) definitions:        &'tu [Definition],
+    pub(crate) scopes:             &'tu [Scope],
+    pub(crate) type_names:         &'tu [(SourceVectors, TypeId)],
+    pub(crate) parameters:         &'tu [(SourceVectors, &'tu [Parameter])],
+    /// Typed results in child-before-parent order; an expression's ordinal
+    /// is its index here.
+    pub(crate) expressions:        &'tu [ExpressionInfo<'tu>],
+    /// Syntax identity (the node's address) to its ordinal in
+    /// `expressions`; see [`Self::expression_index`].
+    pub(super) expression_indices: ArenaMap<'tu, usize, usize>,
+    /// Conversion records grouped by expression ordinal, each run in the
+    /// order its conversions were applied; see [`Self::conversions_of`].
+    pub(crate) conversions:        &'tu [Conversion<'tu>],
+    /// `conversions[conversion_starts[i]..conversion_starts[i + 1]]` is the
+    /// run of expression `i`. Records for an operand without a retained
+    /// result follow the last run.
+    pub(super) conversion_starts:  &'tu [usize],
+    pub(crate) tag_declarations:   &'tu [(usize, usize)],
     /// Error-severity diagnostics semantic analysis reported; warnings and
     /// diagnostics suppressed inside recovered syntax are not counted.
-    pub(crate) errors:           usize,
+    pub(crate) errors:             usize,
 }
 
 /// A resolved declaration occurrence, retained in lexical traversal order.
@@ -124,7 +137,61 @@ pub(crate) struct Definition {
     pub(crate) kind:    DefinitionKind,
 }
 
-impl SemanticTranslationUnit<'_> {
+impl<'tu> SemanticTranslationUnit<'tu> {
+    /// The ordinal of an expression's record, in expected O(1). Parentheses
+    /// have their own record, a copy of the inner one; an expression that
+    /// analysis never typed, such as one inside unmodeled syntax, has none.
+    /// C99: §6.5p1, p. 67; PDF p. 79.
+    pub(crate) fn expression_index(&self, expression: &Expression<'tu>) -> Option<usize> {
+        self.expression_indices
+            .get(&std::ptr::from_ref(expression).addr())
+            .copied()
+    }
+
+    /// The typed record of `expression`, in expected O(1).
+    /// C99: §6.3.2.1p1-4, p. 46; PDF p. 58.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Lowering looks expressions up; no lowering exists yet."
+        )
+    )]
+    pub(crate) fn expression_info(
+        &self,
+        expression: &Expression<'tu>,
+    ) -> Option<&'tu ExpressionInfo<'tu>> {
+        self.expression_index(expression)
+            .map(|index| &self.expressions[index])
+    }
+
+    /// The conversions applied to expression `index`, in application order:
+    /// a decay or lvalue conversion first, then any arithmetic, assignment
+    /// or default-argument conversion. Each record attaches to the operand
+    /// node its parent sees, so a parenthesized operand's run belongs to the
+    /// parentheses.
+    /// C99: §6.3, pp. 42-48; PDF pp. 54-60.
+    pub(crate) fn conversions_of(&self, index: usize) -> &'tu [Conversion<'tu>] {
+        &self.conversions[self.conversion_starts[index]..self.conversion_starts[index + 1]]
+    }
+
+    /// The conversions applied to `expression`, empty when it has no record.
+    /// C99: §6.3, pp. 42-48; PDF pp. 54-60.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Lowering looks expressions up; no lowering exists yet."
+        )
+    )]
+    pub(crate) fn expression_conversions(
+        &self,
+        expression: &Expression<'tu>,
+    ) -> &'tu [Conversion<'tu>] {
+        self.expression_index(expression)
+            .map_or(&[], |index| self.conversions_of(index))
+    }
+
     /// Whether code generation may consume this unit: no phase, this one
     /// included, has reported an error-severity diagnostic. Warnings do not
     /// block lowering. Types that analysis gave up on without a diagnostic

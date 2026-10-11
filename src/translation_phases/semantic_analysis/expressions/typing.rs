@@ -8,6 +8,7 @@
 use super::{
     Analyzer,
     ArenaList,
+    ArenaMap,
     ArenaVec,
     BinaryOperator,
     BindingKind,
@@ -23,6 +24,7 @@ use super::{
     ExpressionSlot,
     ExpressionType,
     FloatTokenType,
+    FxBuildHasher,
     Identifier,
     Integer,
     Linkage,
@@ -922,6 +924,53 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             )
     }
 
+    /// Copies the identity map into the translation-unit arena at its final
+    /// size and groups the conversion records by expression with a stable
+    /// counting sort, so each expression owns one contiguous run in the
+    /// order its conversions were applied. Records whose operand has no
+    /// retained result, which only recovered syntax produces, follow every
+    /// run.
+    /// C99: §6.3, pp. 42-48; PDF pp. 54-60 (conversions applied in order).
+    pub(in crate::translation_phases::semantic_analysis) fn retain_expression_index(
+        &self,
+    ) -> ExpressionIndex<'tu> {
+        let tu = self.context.tu_arena();
+        let count = self.expressions.len();
+        let mut expressions =
+            ArenaMap::with_capacity_and_hasher_in(self.expression_indices.len(), FxBuildHasher, tu);
+        expressions.extend(self.expression_indices.iter().map(|(&k, &v)| (k, v)));
+        let owner = |conversion: &Conversion<'tu>| {
+            self.expression_indices
+                .get(&std::ptr::from_ref(conversion.expression).addr())
+                .copied()
+                .unwrap_or(count)
+        };
+        // Bucket `count` holds the records without a retained owner.
+        let mut next = ArenaVec::new_in(self.scratch);
+        next.resize(count + 2, 0_usize);
+        for conversion in &self.conversions {
+            next[owner(conversion) + 1] += 1;
+        }
+        for bucket in 1..next.len() {
+            next[bucket] += next[bucket - 1];
+        }
+        let conversion_starts = tu.alloc_slice_copy(&next[..=count]);
+        let mut order = ArenaVec::new_in(self.scratch);
+        order.resize(self.conversions.len(), 0_usize);
+        for (record, conversion) in self.conversions.iter().enumerate() {
+            let slot = &mut next[owner(conversion)];
+            order[*slot] = record;
+            *slot += 1;
+        }
+        let conversions =
+            tu.alloc_slice_fill_iter(order.iter().map(|&record| self.conversions[record]));
+        ExpressionIndex {
+            expressions,
+            conversions,
+            conversion_starts,
+        }
+    }
+
     pub(in crate::translation_phases::semantic_analysis) fn expression_result(
         e: &'tu Expression<'tu>,
         ty: TypeId,
@@ -1578,4 +1627,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         Self::expression_result(e, self.types.unknown())
     }
+}
+
+/// The retained lookup from expression syntax to its record and its run of
+/// conversion records.
+pub(in crate::translation_phases::semantic_analysis) struct ExpressionIndex<'tu> {
+    pub(in crate::translation_phases::semantic_analysis) expressions: ArenaMap<'tu, usize, usize>,
+    pub(in crate::translation_phases::semantic_analysis) conversions: &'tu [Conversion<'tu>],
+    pub(in crate::translation_phases::semantic_analysis) conversion_starts: &'tu [usize],
 }

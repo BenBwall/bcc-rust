@@ -30,16 +30,16 @@ convert expression 3 kind=lvalue type=int
 convert expression 3 kind=arithmetic type=int
 convert expression 4 kind=arithmetic type=int
 convert expression 5 kind=assignment type=int
-convert expression 7 kind=lvalue type="const int *"
 convert expression 6 kind=lvalue type=int
-convert expression 9 kind=lvalue type=int
 convert expression 6 kind=arithmetic type=int
+convert expression 7 kind=lvalue type="const int *"
+convert expression 9 kind=lvalue type=int
 convert expression 9 kind=arithmetic type=int
 convert expression 10 kind=assignment type=int
 convert expression 11 kind=lvalue type=int
 convert expression 12 kind=lvalue type=int
 convert expression 12 kind=arithmetic type="unsigned long"
-convert expression 14 kind=arithmetic type="unsigned long"
 convert expression 12 kind=arithmetic type="unsigned long"
+convert expression 14 kind=arithmetic type="unsigned long"
 convert expression 14 kind=arithmetic type="unsigned long"
 convert expression 15 kind=assignment type=int

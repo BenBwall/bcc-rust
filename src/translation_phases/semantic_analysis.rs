@@ -214,17 +214,20 @@ pub(crate) fn analyze<'tu>(
     }
     analyzer.assert_balanced();
     analyzer.finish_translation_unit();
+    let index = analyzer.retain_expression_index();
     SemanticTranslationUnit {
-        expressions:      analyzer.expressions.leak(),
-        conversions:      analyzer.conversions.leak(),
-        types:            analyzer.types.finish(),
-        bindings:         analyzer.bindings.leak(),
-        definitions:      analyzer.definitions.leak(),
-        scopes:           analyzer.scopes.leak(),
-        type_names:       analyzer.type_names.leak(),
-        parameters:       analyzer.parameter_lists.leak(),
-        tag_declarations: analyzer.tag_declarations.leak(),
-        errors:           analyzer.error_diagnostics,
+        expressions:        analyzer.expressions.leak(),
+        expression_indices: index.expressions,
+        conversions:        index.conversions,
+        conversion_starts:  index.conversion_starts,
+        types:              analyzer.types.finish(),
+        bindings:           analyzer.bindings.leak(),
+        definitions:        analyzer.definitions.leak(),
+        scopes:             analyzer.scopes.leak(),
+        type_names:         analyzer.type_names.leak(),
+        parameters:         analyzer.parameter_lists.leak(),
+        tag_declarations:   analyzer.tag_declarations.leak(),
+        errors:             analyzer.error_diagnostics,
     }
 }
 
@@ -1312,7 +1315,9 @@ struct Analyzer<'a, 'tu, 's> {
     integer_models:      ArenaMap<'s, usize, Option<(u32, bool)>>,
     expressions:         ArenaVec<'tu, ExpressionInfo<'tu>>,
     expression_indices:  ArenaMap<'s, usize, usize>,
-    conversions:         ArenaVec<'tu, Conversion<'tu>>,
+    /// Conversion records in the order they were applied, grouped by
+    /// expression when analysis ends.
+    conversions:         ArenaVec<'s, Conversion<'tu>>,
     const_members:       ArenaMap<'s, usize, bool>,
     register_bindings:   ArenaMap<'s, usize, bool>,
     ice_operands:        ArenaMap<'s, (usize, bool), bool>,

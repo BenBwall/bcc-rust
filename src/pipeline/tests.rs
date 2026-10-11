@@ -784,3 +784,188 @@ fn lowering_refuses_a_unit_whose_error_came_from_an_earlier_phase() {
         assert!(!sema.lowerable(context));
     });
 }
+
+/// The expression that `return` statement `index` of the first function
+/// definition returns.
+fn returned_expression<'tu>(
+    unit: &ParsedTranslationUnit<'tu>,
+    index: usize,
+) -> &'tu crate::translation_phases::parsing::syntax::Expression<'tu> {
+    use crate::translation_phases::parsing::syntax::{
+        BlockItem,
+        ExpressionSlot,
+        StatementType,
+    };
+    let f = unit
+        .external_declarations()
+        .iter()
+        .find_map(|root| match root {
+            | ExternalDeclaration::FunctionDefinition(f) => Some(f),
+            | _ => None,
+        })
+        .expect("the unit defines a function");
+    let StatementType::Compound { items } = f.body.kind else {
+        panic!("a function body is a compound statement");
+    };
+    let returns = items.iter().filter_map(|item| match item {
+        | BlockItem::Statement(s) => match s.kind {
+            | StatementType::Return(Some(ExpressionSlot::Parsed(e))) => Some(e),
+            | _ => None,
+        },
+        | _ => None,
+    });
+    returns
+        .into_iter()
+        .nth(index)
+        .expect("the return statement exists")
+}
+
+#[test]
+fn lowering_finds_an_expression_record_and_its_conversions_from_syntax() {
+    use crate::translation_phases::{
+        parsing::syntax::{
+            BinaryOperator,
+            ExpressionType,
+        },
+        semantic_analysis::{
+            ConversionKind,
+            Scalar,
+            TypeKind,
+            ValueCategory,
+        },
+    };
+    with_semantics(
+        "int f(char c, int *p) { return c + p[1]; }",
+        |context, unit, sema| {
+            assert!(sema.lowerable(context));
+            let scalar = |ty| match sema.types.kind(ty) {
+                | TypeKind::Scalar(scalar) => Some(scalar),
+                | _ => None,
+            };
+            let sum = returned_expression(unit, 0);
+            let ExpressionType::Binary {
+                operator: BinaryOperator::Addition,
+                left_expression: c,
+                right_expression: element,
+            } = sum.kind
+            else {
+                panic!("the function returns a sum");
+            };
+            let ExpressionType::Binary {
+                operator: BinaryOperator::Subscript,
+                left_expression: p,
+                right_expression: one,
+            } = element.kind
+            else {
+                panic!("the right operand is a subscript");
+            };
+            let conversions = |e| {
+                sema.expression_conversions(e)
+                    .iter()
+                    .map(|c| (c.kind, scalar(c.ty)))
+                    .collect::<Vec<_>>()
+            };
+
+            let info = sema.expression_info(c).expect("c is typed");
+            assert!(std::ptr::eq(info.expression, c));
+            assert_eq!(scalar(info.ty), Some(Scalar::Char));
+            assert_eq!(info.category, ValueCategory::ModifiableLvalue);
+            assert_eq!(
+                conversions(c),
+                [
+                    (ConversionKind::Lvalue, Some(Scalar::Char)),
+                    (ConversionKind::Arithmetic, Some(Scalar::Int)),
+                ]
+            );
+
+            let p_info = sema.expression_info(p).expect("p is typed");
+            assert!(matches!(sema.types.kind(p_info.ty), TypeKind::Pointer(_)));
+            let p_conversions = sema.expression_conversions(p);
+            assert_eq!(p_conversions.len(), 1);
+            assert_eq!(p_conversions[0].kind, ConversionKind::Lvalue);
+            assert_eq!(p_conversions[0].ty, p_info.ty);
+
+            assert_eq!(
+                scalar(sema.expression_info(one).expect("1 is typed").ty),
+                Some(Scalar::Int)
+            );
+            assert!(conversions(one).is_empty(), "an index is not converted");
+
+            let element_info = sema.expression_info(element).expect("p[1] is typed");
+            assert_eq!(scalar(element_info.ty), Some(Scalar::Int));
+            assert_eq!(element_info.category, ValueCategory::ModifiableLvalue);
+            assert_eq!(
+                conversions(element),
+                [
+                    (ConversionKind::Lvalue, Some(Scalar::Int)),
+                    (ConversionKind::Arithmetic, Some(Scalar::Int)),
+                ]
+            );
+
+            let sum_index = sema.expression_index(sum).expect("the sum is typed");
+            assert_eq!(sema.expressions[sum_index].category, ValueCategory::Rvalue);
+            assert_eq!(
+                conversions(sum),
+                [(ConversionKind::Assignment, Some(Scalar::Int))],
+                "the return converts the sum to the result type"
+            );
+            assert!(
+                sema.expression_index(c).unwrap() < sum_index,
+                "operands precede their parent"
+            );
+        },
+    );
+}
+
+#[test]
+fn conversion_runs_cover_every_record_and_belong_to_their_expression() {
+    use crate::translation_phases::{
+        parsing::syntax::ExpressionType,
+        semantic_analysis::ConversionKind,
+    };
+    with_semantics(
+        "struct S { int a[2]; } s; double g(float, ...);\nlong f(short x, struct S *q) { long r = \
+         (x) + 1L; r += q->a[0];\ng(x, x, 1.0f, s.a); return r ? r : !x; }",
+        |context, unit, sema| {
+            assert!(sema.lowerable(context));
+            let mut covered = 0;
+            for (index, info) in sema.expressions.iter().enumerate() {
+                assert_eq!(sema.expression_index(info.expression), Some(index));
+                for conversion in sema.conversions_of(index) {
+                    assert!(std::ptr::eq(conversion.expression, info.expression));
+                }
+                covered += sema.conversions_of(index).len();
+            }
+            assert_eq!(covered, sema.conversions.len(), "every record has an owner");
+            // A parenthesized operand's run belongs to the parentheses.
+            let parenthesized = sema
+                .expressions
+                .iter()
+                .find_map(|info| match info.expression.kind {
+                    | ExpressionType::Parenthesized { expression } => Some((info, expression)),
+                    | _ => None,
+                })
+                .expect("(x) is typed");
+            assert_eq!(
+                sema.expression_conversions(parenthesized.0.expression)
+                    .iter()
+                    .map(|c| c.kind)
+                    .collect::<Vec<_>>(),
+                [ConversionKind::Lvalue, ConversionKind::Arithmetic]
+            );
+            assert!(sema.expression_conversions(parenthesized.1).is_empty());
+            let returned = returned_expression(unit, 0);
+            assert!(matches!(returned.kind, ExpressionType::Conditional(_)));
+            assert_eq!(
+                sema.expression_conversions(returned)
+                    .iter()
+                    .map(|c| c.kind)
+                    .collect::<Vec<_>>(),
+                [ConversionKind::Assignment]
+            );
+            let kinds = sema.conversions.iter().map(|c| c.kind).collect::<Vec<_>>();
+            assert!(kinds.contains(&ConversionKind::DefaultArgument));
+            assert!(kinds.contains(&ConversionKind::ArrayDecay));
+        },
+    );
+}
