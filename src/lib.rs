@@ -28,10 +28,13 @@ mod pipeline;
 pub(crate) mod translation_phases;
 
 // Middle end
-#[expect(
-    dead_code,
-    unused_imports,
-    reason = "Nothing lowers to the IR yet, and its verifier comes next."
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        unused_imports,
+        reason = "Nothing lowers to the IR yet; its tests exercise it until lowering does."
+    )
 )]
 pub(crate) mod ir;
 

@@ -48,6 +48,7 @@ fn builder_reproduces_the_plan_examples() {
     let mut module = Module::new(&arena);
     build_plan_examples(&mut module);
     pretty_assertions::assert_eq!(module.to_string(), text::PLAN_EXAMPLES);
+    assert_eq!(verify(&module, Profile::PreAbi), Vec::<String>::new());
 }
 
 #[test]
@@ -174,6 +175,7 @@ block3(v10: i64):
 }
 ";
     pretty_assertions::assert_eq!(module.to_string(), expected);
+    assert_eq!(verify(&module, Profile::PostAbi), Vec::<String>::new());
     assert_round_trip(expected);
 }
 
@@ -221,6 +223,11 @@ fn builder_records_definitions_and_constants() {
     assert_eq!(body.value_type(is_nan), Type::I1);
     assert_eq!(body.inst(inst).controlling_type(), Some(Type::F128));
     builder.finish();
+    assert_eq!(verify(&module, Profile::PreAbi), Vec::<String>::new());
+    assert_eq!(
+        verify(&module, Profile::PostAbi),
+        ["@widen, inst4: va_arg is not allowed in the PostAbi profile"]
+    );
     assert_round_trip(&module.to_string());
 }
 

@@ -11,7 +11,9 @@
 //! poison semantics without `undef`.
 //!
 //! A [`FunctionBuilder`] appends instructions, [`Module`]'s `Display` prints
-//! the textual form, and [`parse_module`] reads it back.
+//! the textual form, [`parse_module`] reads it back, [`verify_module`] checks
+//! the invariants passes rely on, and [`DominatorTree`] computes dominance
+//! over a [`ControlFlowGraph`].
 //!
 //! For `int add(int a, int b) { return a + b; }`, lowering declares `@add`
 //! with the signature `(i32, i32) -> i32`, creates the entry block with
@@ -27,8 +29,8 @@
 //! ```
 //!
 //! Read [`Module`], [`Function`], [`Body`] and [`InstData`] first, then
-//! [`FunctionBuilder`] to see how bodies grow, and `printer.rs` for the
-//! textual form.
+//! [`FunctionBuilder`] to see how bodies grow, and `verifier.rs` for the rules
+//! every body keeps.
 //!
 //! - Representation: `entities.rs` defines the `u32` entities and their dense
 //!   tables; `types.rs` the value types; `instructions.rs` the opcodes, the
@@ -37,6 +39,9 @@
 //! - Construction: `builder.rs` builds a body one instruction at a time.
 //! - Textual form: `printer.rs` writes it; `parser.rs` reads it, with
 //!   `parser/lexer.rs` splitting it into tokens.
+//! - Analysis and checking: `cfg.rs` computes predecessors and successors;
+//!   `dominators.rs` reverse post-order and the dominator tree; `verifier.rs`
+//!   checks a module and reports structured errors.
 //! - `tests.rs` and `tests/` exercise each of these.
 //!
 //! The IR is not a C translation phase. Where one of its rules exists because
@@ -57,7 +62,14 @@ mod builder;
 mod parser;
 mod printer;
 
+// Analysis and checking
+mod cfg;
+mod dominators;
+mod verifier;
+
 pub(crate) use builder::FunctionBuilder;
+pub(crate) use cfg::ControlFlowGraph;
+pub(crate) use dominators::DominatorTree;
 pub(crate) use entities::{
     AccessTag,
     Block,
@@ -105,6 +117,15 @@ pub(crate) use parser::{
     parse_module,
 };
 pub(crate) use types::Type;
+pub(crate) use verifier::{
+    EntityKind,
+    Location,
+    Profile,
+    VerifierError,
+    VerifierErrorKind,
+    verify_function,
+    verify_module,
+};
 
 use crate::util::bump::{
     ArenaMap,

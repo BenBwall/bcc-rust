@@ -108,13 +108,15 @@ block4:
 ";
 
 #[test]
-fn plan_examples_round_trip() {
+fn plan_examples_round_trip_and_verify() {
     assert_round_trip(PLAN_EXAMPLES);
+    assert_eq!(verify_text(PLAN_EXAMPLES), Vec::<String>::new());
 }
 
 #[test]
-fn every_form_round_trips() {
+fn every_form_round_trips_and_verifies() {
     assert_round_trip(EVERY_FORM);
+    assert_eq!(verify_text(EVERY_FORM), Vec::<String>::new());
 }
 
 #[test]
@@ -203,6 +205,7 @@ block2:
 }
 ";
     assert_round_trip(text);
+    assert_eq!(verify_text(text), Vec::<String>::new());
 }
 
 #[test]

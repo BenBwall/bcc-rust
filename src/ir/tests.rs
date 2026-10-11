@@ -1,8 +1,10 @@
-//! Tests for the IR: building, printing and parsing the textual form, and
-//! the instruction record's size.
+//! Tests for the IR: building, printing and parsing the textual form,
+//! verification, dominance, and the instruction record's size.
 
 mod builder;
+mod dominators;
 mod text;
+mod verifier;
 
 use super::*;
 
@@ -16,6 +18,22 @@ fn assert_round_trip(text: &str) {
     let arena = Bump::new();
     let module = parse(&arena, text);
     pretty_assertions::assert_eq!(module.to_string(), text);
+}
+
+/// The verifier's messages for `module`.
+fn verify(module: &Module<'_>, profile: Profile) -> Vec<String> {
+    let scratch = Bump::new();
+    verify_module(module, profile, &scratch)
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+/// The pre-ABI verifier's messages for the module `text` parses to.
+fn verify_text(text: &str) -> Vec<String> {
+    let arena = Bump::new();
+    let module = parse(&arena, text);
+    verify(&module, Profile::PreAbi)
 }
 
 #[cfg(target_pointer_width = "64")]
