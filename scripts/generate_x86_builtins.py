@@ -129,7 +129,7 @@ def main():
     for idx,(name,_,_,codes,immediates) in enumerate(specs):
         constraints=", ".join("("+", ".join(f"{v:_}" for v in (j,*ranges.get((idx,j),(-2147483648,2147483647,0))))+")" for j in immediates)
         table.append(f'    ("{name}", "{",".join(codes)}", &[{constraints}]),')
-    (ROOT/"src/translation_phases/semantic_analysis/builtins/x86_builtin_table.rs").write_text(HEADER+"pub(super) const BUILTINS: &[(&str, &str, &[Immediate])] = &[\n"+"\n".join(table)+"\n];\n"+FOOTER)
+    (ROOT/"src/translation_phases/semantic_analysis/builtins/x86_builtin_table.rs").write_text(HEADER+"pub(super) const BUILTINS: &[(&str, &str, &[Immediate])] = &[\n"+"\n".join(table)+"\n];\n"+FOOTER, encoding="utf-8")
     print(f"Verified {len(specs)} signatures on all four targets; {sum(bool(s[4]) for s in specs)} have constant operands.")
 
 if __name__ == "__main__": main()
