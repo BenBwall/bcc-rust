@@ -432,25 +432,48 @@ The command line exposes `--passes=<list>` for ablation, a global transformation
 counter for bisecting a miscompile (`--opt-bisect-limit`), per-pass timing, and
 `--print-after-all`.
 
-Planned passes, in pipeline order: stack-slot promotion (for slots that become
-promotable after other passes), CFG simplification, sparse conditional constant
-propagation, scoped-hash value numbering over the dominator tree, dead code
-elimination, loop-invariant code motion, and inlining. **Prototype:** eight
-passes, run by default in this order and repeated until a round changes
-nothing: stack-slot promotion (`promote`), constant folding (`fold`), CFG
-simplification (`simplify-cfg`), sparse conditional constant propagation
-(`sccp`), dominating-condition integer facts (`known-bits`), value numbering
-over the dominator tree (`gvn`), loop-invariant code
-motion (`licm`) and dead code elimination (`dce`). Promotion runs first so the
-other passes see SSA values, value numbering before code motion so one copy of
-a repeated invariant moves, and dead code elimination last so it sweeps what
-the others leave. Inlining is not implemented.
+**Prototype:** nine passes: direct-call inlining (`inline`), stack-slot promotion
+(`promote`), constant folding (`fold`), CFG simplification (`simplify-cfg`), sparse
+conditional constant propagation (`sccp`), dominating-condition integer facts
+(`known-bits`), dominator-scoped value numbering (`gvn`), loop-invariant code motion
+(`licm`) and dead code elimination (`dce`). When inline is enabled, an explicit-stack
+Tarjan walk of the module's original direct-call graph orders callees before
+callers and marks recursive SCCs. Each function runs inline once, then the other
+passes repeat to a fixpoint (at most eight rounds). Callees therefore finish
+cleanup before callers copy them, and newly copied slots are promoted in the
+caller. This avoids spending the caller's growth budget again each cleanup round.
+An explicit `--passes` list runs in its given order once per function, including
+any repeated inline entries; without inline, functions keep declaration order.
+
+Inlining eagerly expands small leaves (at most 30 instructions) and accepts other
+defined internal or external callees of at most 100 instructions, including
+terminators, after their cleanup. The caller can grow by its original instruction
+count or 256 instructions, whichever is larger, with an absolute cap of 2,000.
+Every site consumes exactly one `allow()` rewrite, including all block splits,
+return joins and copied definitions. Recursive callees, variadic callees and
+`va_start` bodies are refused. The IR has no returns-twice attribute yet; textual
+IR's recognized `setjmp`, `_setjmp`, `sigsetjmp`, `__sigsetjmp` and `vfork` symbols,
+their direct wrappers and bodies taking their addresses are refused too. Lowering
+already rejects those builtins. General indirect returns-twice metadata remains
+outside the IR's supported contract.
+
+Call expansion splits the caller at the call, maps entry parameters directly to
+arguments, copies every other parameter, instruction, constant and stack slot,
+and redirects each return to a continuation parameter (no parameter for void).
+Address-taken slots remain independent per call site. Global and function symbols,
+access tags and signatures retain their module ids; indirect calls retain owned,
+remapped operand lists. Inline runs only in the pre-ABI pipeline. Aggregate-by-value
+signatures are currently rejected by lowering; the pre-ABI design represents them
+as pointers to caller-owned copies, and expansion preserves those pointers without
+inventing ABI copies. Definitions are retained even if their direct calls vanish,
+so address references and exported symbols remain intact.
 
 The editable draft supports inserting general non-terminators at a position,
 rewriting their records without changing result identity, moving them across
 blocks, and owning new call operand lists. Operand reads use the current
 records and the replacement map; lowering densely renumbers the live results,
-blocks and instructions.
+blocks and instructions. Added stack slots and foreign wide constants also live
+in the draft arena and are densely copied on rebuild.
 
 `simplify-cfg` forms selects for diamond and triangle joins whose arm blocks
 have a single incoming edge and at most four cheap computation units per arm.
@@ -471,7 +494,7 @@ the low bits are zero, or `lshr` when the dividend is nonnegative; nonnegative
 signed remainder becomes a mask. Unsigned power-of-two division and remainder
 become a logical shift and a mask for any dividend. Each rewrite consumes one
 `allow()` call. Later pipeline rounds let these cheap shifts enable select
-formation, including the Collatz parity diamond. Inlining and load CSE remain
+formation, including the Collatz parity diamond. Load CSE remains
 roadmap work, so the full projected benchmark improvement is not expected yet.
 
 ## ABI lowering
@@ -674,15 +697,16 @@ triple to produce a runnable program; `main` is called without arguments.
 | 7 | SCCP, GVN, LICM, inlining, slot promotion; comparison harness | first optimizer-vs-LLVM report |
 | 8 | Native back end exploration | — |
 
-Stage 7 status: promotion, SCCP, GVN and LICM exist (the prototype pipeline
-above); inlining does not. The comparison harness exists:
+Stage 7 status: promotion, SCCP, GVN, LICM and bottom-up inlining exist
+(the prototype pipeline above). The comparison harness exists:
 `scripts/compare_optimizers.py` runs arms A0-A3, N and R, with `--passes` ablation,
 over the ten self-checking programs in `benches/c` and writes JSON Lines plus a
 summary of per-benchmark medians, ratios to A2, a separate A1/N comparison,
 and their geometric means with a bootstrap interval (README, "Optimizer
-comparison harness"). What remains for
-the exit criterion is inlining, a run on native Linux with CPU isolation, a
-larger corpus (Embench, Polybench) and the report itself.
+comparison harness"). What remains for the exit criterion is a run on native
+Linux with CPU isolation, a larger corpus (Embench, Polybench) and the report
+itself. Windows inliner measurements and validation are recorded in
+`docs/research/inline-measurements.md`.
 
 ## Open questions
 
