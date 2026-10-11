@@ -13,6 +13,8 @@
 //!   poison and undefined-behaviour tracking. It is the reference semantics of
 //!   the IR and the oracle for differential tests. It also accepts pre-ABI
 //!   modules, since it implements `va_arg` itself.
+//! - `difftest.rs` and `difftest/` (tests only): random programs that check the
+//!   optimizer and the LLVM back end against the interpreter.
 //!
 //! The back ends are not C translation phases; where one implements a rule of
 //! C, such as a host function from the standard library, the item that does
@@ -23,3 +25,14 @@ pub(crate) mod llvm;
 
 // Reference execution
 pub(crate) mod interpreter;
+
+// Differential tests
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    clippy::disallowed_methods,
+    reason = "The differential tests build programs and reports with std types; the arena rule \
+              covers the compiler, not its tests."
+)]
+mod difftest;
