@@ -1,7 +1,7 @@
 //! Ordered quote, angled, system, resource, and trailing search directories
 //! are borrowed for one compilation.
 
-use super::Path;
+use std::path::Path;
 
 /// The places a header is searched for, in Clang's order (C99 §6.10.2p2-3
 /// leave them implementation-defined):

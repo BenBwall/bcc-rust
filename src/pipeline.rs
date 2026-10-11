@@ -37,21 +37,12 @@ use crate::{
     headers::HeaderSearch,
     translation_phases::{
         Context,
-        TranslationError,
         parsing::{
             ParsedTranslationUnit,
             Parser,
-            PreprocessedTranslationUnit,
-        },
-        preprocessing::{
-            Preprocessor,
-            Token,
         },
     },
-    util::{
-        bump::Bump,
-        region_vec::RegionVec,
-    },
+    util::bump::Bump,
 };
 
 /// Completes preprocessing before constructing the parser. The parser-facing

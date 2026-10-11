@@ -31,7 +31,6 @@ mod features;
 // Construction and accessors
 mod options;
 
-use features::MSVC_COMPATIBILITY;
 pub(crate) use features::{
     Feature,
     FeatureOrigin,
@@ -61,7 +60,8 @@ pub(crate) struct CompilerConfiguration {
     target: crate::target::Target,
     standard: CStandard,
     gnu: bool,
-    /// One bit per `MsvcFeature`, plus [`MSVC_COMPATIBILITY`].
+    /// One bit per `MsvcFeature`, plus
+    /// [`MSVC_COMPATIBILITY`](features::MSVC_COMPATIBILITY).
     msvc: u16,
     extension_policy: ExtensionPolicy,
     accepted: u128,

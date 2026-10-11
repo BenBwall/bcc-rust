@@ -30,37 +30,24 @@ mod range;
 mod ffi;
 mod representation;
 
-use std::{
-    ffi::c_char,
-    fmt::{
-        Debug,
-        Display,
-        Formatter,
-    },
-};
+use std::ffi::c_char;
 
 pub(crate) use conversion::{
     string_to_binary64_long_double,
     string_to_double,
     string_to_float,
 };
-use range::{
-    FloatClass,
-    consumed_whole_spelling,
-    range_error,
-};
 pub(crate) use range::{
     FloatRangeError,
     ParseFloatError,
 };
-#[cfg(test)]
-use representation::LONG_DOUBLE_BYTES;
+use range::{
+    consumed_whole_spelling,
+    range_error,
+};
 pub(crate) use representation::LongDouble;
 
-use crate::{
-    translation_phases::preprocessing::FloatTokenType,
-    util::packed::Packed,
-};
+use crate::translation_phases::preprocessing::FloatTokenType;
 
 /// Converts a NUL-terminated `long double` constant spelling (with its `L`
 /// suffix) to the host `long double`.

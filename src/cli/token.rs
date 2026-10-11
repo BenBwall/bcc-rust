@@ -3,15 +3,21 @@
 
 use std::fmt::Write as _;
 
-use super::{
-    ArenaString,
-    Bump,
-    CharacterTokenType,
-    Context,
-    IntegerTokenType,
-    StringTokenType,
-    Token,
-    TokenType,
+use crate::{
+    translation_phases::{
+        Context,
+        preprocessing::{
+            CharacterTokenType,
+            IntegerTokenType,
+            StringTokenType,
+            Token,
+            TokenType,
+        },
+    },
+    util::bump::{
+        ArenaString,
+        Bump,
+    },
 };
 
 /// One line per token: its location, kind, source spelling, and for

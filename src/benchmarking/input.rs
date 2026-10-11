@@ -1,13 +1,15 @@
 //! Generates and caches benchmark source inputs and constructs contexts
 //! with deterministic date and time macros.
 
-use std::fmt::Write;
+use std::{
+    fmt::Write,
+    sync::OnceLock,
+};
 
-use super::{
-    Bump,
-    CompilerConfiguration,
-    Context,
-    OnceLock,
+use crate::{
+    configuration::CompilerConfiguration,
+    translation_phases::Context,
+    util::bump::Bump,
 };
 
 /// A generated benchmark translation unit.

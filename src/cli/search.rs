@@ -1,17 +1,17 @@
 //! Combines explicit include directories, environment paths, and resource
 //! header settings into the ordered header search.
 
+use std::env::{
+    split_paths,
+    var_os,
+};
 #[expect(
     clippy::disallowed_types,
     reason = "clap parses path arguments into `PathBuf`s; the compiler borrows them as `&Path`."
 )]
 use std::path::PathBuf;
 
-use super::{
-    Args,
-    split_paths,
-    var_os,
-};
+use clap::Args;
 
 impl CliHeaderSearch {
     /// Groups the directories in search order. GCC searches `CPATH` like

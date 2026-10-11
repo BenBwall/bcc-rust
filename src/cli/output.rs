@@ -1,25 +1,40 @@
 //! Runs compilation for the selected view, reports diagnostics, and prints
 //! tokens, syntax, or semantic information.
 
-use std::fmt::Write as _;
+use std::{
+    fmt::Write as _,
+    io::{
+        self,
+        Write,
+    },
+    path::Path,
+};
+
+use clap::Args;
 
 use super::{
-    ArenaString,
-    Args,
-    Bump,
-    Context,
-    DiagnosticReporter,
-    HeaderSearch,
-    InspectionOptions,
-    ParsedTranslationUnit,
-    Path,
-    RenderColor,
-    Write,
     describe_token,
-    io,
-    parse_translation_unit,
-    preprocess_with_diagnostics,
-    with_preprocessor,
+    diagnostic_reporter::DiagnosticReporter,
+};
+use crate::{
+    diagnostics::ColorChoice as RenderColor,
+    headers::HeaderSearch,
+    pipeline::{
+        parse_translation_unit,
+        preprocess_with_diagnostics,
+        with_preprocessor,
+    },
+    translation_phases::{
+        Context,
+        parsing::{
+            InspectionOptions,
+            ParsedTranslationUnit,
+        },
+    },
+    util::bump::{
+        ArenaString,
+        Bump,
+    },
 };
 
 pub(super) fn print_parser_output<'tu>(

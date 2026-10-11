@@ -1,11 +1,12 @@
 //! Classifies conversion results and detects incomplete spellings, overflow,
 //! and underflow without losing the literal spelling.
 
-use super::{
-    Debug,
-    FloatTokenType,
-    c_char,
+use std::{
+    ffi::c_char,
+    fmt::Debug,
 };
+
+use crate::translation_phases::preprocessing::FloatTokenType;
 
 /// Classifies overflow and underflow after host conversion.
 /// C99: §7.20.1.3p10, p. 310; PDF p. 322.

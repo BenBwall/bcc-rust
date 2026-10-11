@@ -2,15 +2,21 @@
 //! messages after their compilation context has gone away.
 
 use super::{
-    ArenaVec,
-    Bump,
     Diagnostic,
-    ErrorSeverity,
-    SourceVector,
-    SourceVectors,
     model::{
         Label,
         LabelSource,
+    },
+};
+use crate::{
+    translation_phases::{
+        ErrorSeverity,
+        SourceVector,
+        SourceVectors,
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 

@@ -1,12 +1,13 @@
 //! Parses caller-provided source or files and summarizes the resulting
 //! syntax roots, tokens, and errors.
 
+use std::path::Path;
+
 use super::{
-    Bump,
     ParseBenchmarkSummary,
-    Path,
-    benchmark_context,
+    input::benchmark_context,
 };
+use crate::util::bump::Bump;
 
 /// Runs translation phases 1 through 7 over `source`, copied into the
 /// translation-unit arena as the CLI's `--input` is, and summarizes the

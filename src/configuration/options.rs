@@ -7,8 +7,8 @@ use super::{
     ExtensionPolicy,
     Feature,
     FeatureOrigin,
-    MSVC_COMPATIBILITY,
     MsvcFeature,
+    features::MSVC_COMPATIBILITY,
 };
 
 impl CompilerConfiguration {

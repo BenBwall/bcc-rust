@@ -1,17 +1,26 @@
 //! Separates preprocessing from repeated parsing while keeping each arena
 //! alive for the work that borrows it.
 
+use std::path::Path;
+
 use super::{
     BenchmarkInput,
-    Bump,
-    Context,
     ParseBenchmarkSummary,
-    Parser,
-    Path,
-    PreprocessedTranslationUnit,
-    benchmark_context,
-    parse_with_arena,
-    with_preprocessor,
+    input::benchmark_context,
+};
+use crate::{
+    pipeline::{
+        parse_with_arena,
+        with_preprocessor,
+    },
+    translation_phases::{
+        Context,
+        parsing::{
+            Parser,
+            PreprocessedTranslationUnit,
+        },
+    },
+    util::bump::Bump,
 };
 
 /// Runs translation phases 1 through 6, then passes a prepared parser to a

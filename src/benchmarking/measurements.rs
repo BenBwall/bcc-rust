@@ -1,13 +1,16 @@
 //! Measures arena high-water marks and process virtual-memory accounting
 //! across lexing, preprocessing, and parsing.
 
+use std::path::Path;
+
 use super::{
     BenchmarkInput,
-    Bump,
-    Path,
-    benchmark_context,
+    input::benchmark_context,
     with_prepared_parse,
-    with_preprocessor,
+};
+use crate::{
+    pipeline::with_preprocessor,
+    util::bump::Bump,
 };
 
 /// Preprocesses and parses `input` to report its arena high-water marks, then

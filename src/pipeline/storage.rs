@@ -1,18 +1,27 @@
 //! Scopes preprocessing and parser work arenas to their phases and retains
 //! output token ranges before temporary provenance is compacted.
 
-use super::{
-    Bump,
-    Context,
-    HeaderSearch,
-    ParsedTranslationUnit,
-    Parser,
-    Path,
-    PreprocessedTranslationUnit,
-    Preprocessor,
-    RegionVec,
-    Token,
-    TranslationError,
+use std::path::Path;
+
+use crate::{
+    headers::HeaderSearch,
+    translation_phases::{
+        Context,
+        TranslationError,
+        parsing::{
+            ParsedTranslationUnit,
+            Parser,
+            PreprocessedTranslationUnit,
+        },
+        preprocessing::{
+            Preprocessor,
+            Token,
+        },
+    },
+    util::{
+        bump::Bump,
+        region_vec::RegionVec,
+    },
 };
 
 /// Runs translation phases 4 through 6 over the whole translation unit and

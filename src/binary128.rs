@@ -18,11 +18,6 @@
 // Exact arithmetic
 mod arithmetic;
 
-use std::{
-    cmp::Ordering,
-    fmt,
-};
-
 use arithmetic::{
     Natural,
     error,
@@ -34,12 +29,8 @@ use crate::{
         FloatRangeError,
         ParseFloatError,
     },
-    translation_phases::preprocessing::FloatTokenType,
     util::{
-        bump::{
-            ArenaVec,
-            Bump,
-        },
+        bump::Bump,
         packed::Packed,
     },
 };

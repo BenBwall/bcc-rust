@@ -6,7 +6,15 @@
     reason = "clap parses path arguments into `PathBuf`s; the compiler borrows them as `&Path`."
 )]
 use std::path::PathBuf;
+use std::{
+    ffi::OsStr,
+    ops::RangeInclusive,
+};
 
+use chrono::{
+    DateTime,
+    Utc,
+};
 use clap::{
     Arg,
     Args,
@@ -18,17 +26,15 @@ use clap::{
     parser::ValueSource,
 };
 
-use super::{
-    Cli,
-    CompilerConfiguration,
-    Context,
-    DateTime,
-    ExtensionPolicy,
-    LanguageMode,
-    MsvcFeature,
-    OsStr,
-    RangeInclusive,
-    Utc,
+use super::Cli;
+use crate::{
+    configuration::{
+        CompilerConfiguration,
+        ExtensionPolicy,
+        LanguageMode,
+        MsvcFeature,
+    },
+    translation_phases::Context,
 };
 
 /// Normalize GCC's single-dash long options before clap. Values and tokens

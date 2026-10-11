@@ -1,13 +1,18 @@
 //! Native long-double bytes support arithmetic, comparison, hexadecimal
 //! formatting, and classification through the C bridge.
 
+use std::{
+    ffi::c_char,
+    fmt::{
+        Debug,
+        Display,
+        Formatter,
+    },
+};
+
 use super::{
-    Debug,
-    Display,
-    FloatClass,
-    Formatter,
-    c_char,
     ffi,
+    range::FloatClass,
 };
 
 /// A host `long double` stored as its object representation with any

@@ -1,21 +1,28 @@
 //! Public compilation entry points report the time spent reading,
 //! preprocessing, and parsing files to a caller-provided callback.
 
+use std::{
+    io::{
+        self,
+        Write,
+    },
+    path::Path,
+};
+
 use clap::Parser;
 
 use super::{
-    Bump,
     Cli,
-    CompilerConfiguration,
-    Context,
-    DiagnosticReporter,
-    HeaderSearch,
-    Path,
-    RenderColor,
-    Write,
-    io,
-    normalize_language_arguments,
-    parse_translation_unit,
+    arguments::normalize_language_arguments,
+    diagnostic_reporter::DiagnosticReporter,
+};
+use crate::{
+    configuration::CompilerConfiguration,
+    diagnostics::ColorChoice as RenderColor,
+    headers::HeaderSearch,
+    pipeline::parse_translation_unit,
+    translation_phases::Context,
+    util::bump::Bump,
 };
 
 /// Measures compilation with CLI language and startup preprocessing arguments.

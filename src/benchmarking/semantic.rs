@@ -1,12 +1,13 @@
 //! Runs semantic analysis and summarizes results for benchmark inputs.
 
+use std::path::Path;
+
 use super::{
     BenchmarkInput,
-    Bump,
     ParseBenchmarkSummary,
-    Path,
-    benchmark_context,
+    input::benchmark_context,
 };
+use crate::util::bump::Bump;
 
 /// Runs the full pipeline including declaration semantic analysis.
 #[doc(hidden)]

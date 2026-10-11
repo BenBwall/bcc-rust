@@ -1,16 +1,25 @@
 //! Arena-backed natural-number arithmetic supports exact binary128
 //! conversion. Exponent parsing and carrier display accompany that arithmetic.
 
-use super::{
-    ArenaVec,
-    Binary128,
-    Bump,
-    FloatRangeError,
-    FloatTokenType,
-    Ordering,
-    Packed,
-    ParseFloatError,
+use std::{
+    cmp::Ordering,
     fmt,
+};
+
+use super::Binary128;
+use crate::{
+    float_parsing::{
+        FloatRangeError,
+        ParseFloatError,
+    },
+    translation_phases::preprocessing::FloatTokenType,
+    util::{
+        bump::{
+            ArenaVec,
+            Bump,
+        },
+        packed::Packed,
+    },
 };
 
 /// Nonnegative little-endian base-2^32 integer; storage belongs to scratch.

@@ -1,24 +1,34 @@
 //! Renders annotated source lines, gutters, labels, notes, and help using
 //! per-diagnostic scratch storage.
 
-use std::fmt::Write as _;
+use std::fmt::{
+    self,
+    Display,
+    Write as _,
+};
 
-use owo_colors::OwoColorize;
+use owo_colors::{
+    OwoColorize,
+    Style,
+};
 
 #[cfg(test)]
 use super::OwnedDiagnostic;
 use super::{
-    ArenaString,
-    ArenaVec,
-    Bump,
     ColorChoice,
-    Context,
     Diagnostic,
-    Display,
-    ErrorSeverity,
     Renderer,
-    Style,
-    fmt,
+};
+use crate::{
+    translation_phases::{
+        Context,
+        ErrorSeverity,
+    },
+    util::bump::{
+        ArenaString,
+        ArenaVec,
+        Bump,
+    },
 };
 
 impl Renderer {

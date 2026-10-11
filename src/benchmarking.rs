@@ -28,13 +28,9 @@ mod semantic;
 // Memory measurements
 mod measurements;
 
-use std::{
-    path::Path,
-    sync::OnceLock,
-};
+use std::path::Path;
 
 pub use input::BenchmarkInput;
-use input::benchmark_context;
 use inspection::summarize_parse;
 pub use inspection::{
     parse_file,
@@ -60,23 +56,7 @@ pub use semantic::{
     sema_source,
 };
 
-use crate::{
-    configuration::CompilerConfiguration,
-    pipeline::{
-        parse_with_arena,
-        with_preprocessor,
-    },
-    translation_phases::{
-        Context,
-        TranslationPhase,
-        parsing::{
-            Parser,
-            PreprocessedTranslationUnit,
-        },
-        preprocessor_tokenizer::TokenSource,
-    },
-    util::bump::Bump,
-};
+use crate::util::bump::Bump;
 
 /// Runs translation phases 1 through 7 and summarizes the parse.
 #[doc(hidden)]

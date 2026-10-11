@@ -36,19 +36,7 @@ mod measured;
 
 #[cfg(test)]
 use std::fmt::Write as _;
-use std::{
-    env::{
-        split_paths,
-        var_os,
-    },
-    ffi::OsStr,
-    io::{
-        self,
-        Write,
-    },
-    ops::RangeInclusive,
-    path::Path,
-};
+use std::path::Path;
 
 use arguments::{
     CliInput,
@@ -59,16 +47,10 @@ use arguments::{
     normalize_language_arguments,
     preprocessing_option,
 };
-use chrono::{
-    DateTime,
-    Utc,
-};
 use clap::{
-    Args,
     ColorChoice,
     Parser,
 };
-use diagnostic_reporter::DiagnosticReporter;
 pub use errors::MainError;
 pub use measured::{
     CompileStep,
@@ -80,47 +62,14 @@ use output::{
     print_parser_output,
     print_preprocessor_output,
 };
-#[cfg(test)]
-use output::{
-    TokenOutput,
-    print_preprocessor_output_in,
-};
 use search::CliHeaderSearch;
-use thiserror::Error;
 pub(crate) use token::describe_token;
 
 use crate::{
-    configuration::{
-        CompilerConfiguration,
-        ExtensionPolicy,
-        LanguageMode,
-        MsvcFeature,
-    },
-    diagnostics::ColorChoice as RenderColor,
+    configuration::LanguageMode,
     headers::HeaderSearch,
-    pipeline::{
-        parse_translation_unit,
-        preprocess_with_diagnostics,
-        with_preprocessor,
-    },
-    translation_phases::{
-        Context,
-        parsing::{
-            InspectionOptions,
-            ParsedTranslationUnit,
-        },
-        preprocessing::{
-            CharacterTokenType,
-            IntegerTokenType,
-            StringTokenType,
-            Token,
-            TokenType,
-        },
-    },
-    util::bump::{
-        ArenaString,
-        Bump,
-    },
+    translation_phases::Context,
+    util::bump::Bump,
 };
 
 #[doc(hidden)]

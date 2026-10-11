@@ -1,8 +1,8 @@
 //! Passes a finished parsed translation unit to semantic analysis.
 
-use super::{
+use crate::translation_phases::{
     Context,
-    ParsedTranslationUnit,
+    parsing::ParsedTranslationUnit,
 };
 
 /// The semantic half of phase 7 starts after syntax parsing has completed.
