@@ -1,3 +1,8 @@
+//! Context storage and provenance fixtures.
+//!
+//! C99: phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
+//! Diagnostic locations: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+
 use super::{
     Context,
     SegmentedVec,

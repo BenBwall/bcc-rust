@@ -1,3 +1,6 @@
+//! Normalizes GCC-style options before clap parses them, then builds the
+//! compiler configuration and startup preprocessing operations.
+
 #[expect(
     clippy::disallowed_types,
     reason = "clap parses path arguments into `PathBuf`s; the compiler borrows them as `&Path`."

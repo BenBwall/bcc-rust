@@ -1,3 +1,11 @@
+//! Retains and merges source ranges across phase storage lifetimes.
+//! Preprocessing ranges can be compacted after token ranges and diagnostic
+//! ranges have moved to retained storage.
+//!
+//! C99: provenance for phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
+//! PDF pp. 21-22. Diagnostic locations: §5.1.1.3 paragraph 1, p. 11;
+//! PDF p. 23. This module preserves locations rather than checking grammar.
+
 use super::{
     ArenaQueue,
     Bump,

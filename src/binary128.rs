@@ -1,8 +1,21 @@
-//! Exact phase-7 binary128 literal conversion, independent of host floats.
-//! GCC Additional Floating Types: `q`/`Q` denotes IEEE binary128.
-//! C99: floating grammar §6.4.4.2, pp. 57-58; PDF pp. 69-70.
-//! Decimal conversion uses arena integers and rounds once, ties to even.
+//! Binary128 conversion reads decimal or hexadecimal floating spellings,
+//! builds an exact integer significand, and rounds it into the IEEE binary128
+//! carrier. Arena-backed integer limbs hold intermediate values.
+//!
+//! For `0x1p+0Q`, conversion reads significand 1 and exponent 0. The exact
+//! ratio 1/1 becomes the binary128 encoding of 1 without rounding loss.
+//!
+//! Read [`parse`], [`Binary128`], and [`arithmetic::Natural`], then
+//! the integer operations in `arithmetic.rs`.
+//!
+//! Files by role:
+//! - Integer arithmetic, exponent parsing, and display: `arithmetic.rs`.
+//! - Conversion fixtures: `tests.rs`.
+//!
+//! C99: floating constants, §6.4.4.2 paragraphs 1-7, pp. 57-58;
+//! PDF pp. 69-70. Binary128 is a GNU floating-type extension.
 
+// Exact arithmetic
 mod arithmetic;
 
 use std::{
@@ -188,5 +201,6 @@ pub(crate) fn parse(text: &str, arena: &Bump) -> Result<Binary128, ParseFloatErr
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Binary128(pub(crate) Packed<u128>);
 
+// Tests
 #[cfg(test)]
 mod tests;

@@ -1,24 +1,47 @@
-//! BCC C compiler
+//! BCC translates C source into a syntax tree and semantic information. Each
+//! source file is lexed once, preprocessing finishes before parsing starts, and
+//! semantic analysis consumes the finished tree. The command-line program
+//! selects the input, language mode, target, and output view.
 //!
-//! It connects translation phases 1-7 (§5.1.1.2, pp. 9-10; PDF pp. 21-22);
-//! Declaration semantic analysis follows parsing; full expression/statement
-//! semantics and code generation remain later work.
+//! Start with `translation_phases` (`translation_phases.rs`) for the phase map,
+//! then `pipeline::parse_translation_unit` for the batch driver and
+//! `pipeline::analyze_translation_unit` for semantic analysis. Read [`run`]
+//! to follow a command-line compilation.
+//!
+//! Files by role:
+//! - Compiler driver: `pipeline.rs`, `translation_phases.rs`, and their
+//!   directories.
+//! - Invocation: `main.rs`, `cli.rs`, `configuration.rs`, and their
+//!   directories.
+//! - Representations: `target.rs`, `headers.rs`, `float_parsing.rs`,
+//!   `binary128.rs`.
+//! - Storage and reporting: `util.rs`, `diagnostics.rs`, and their directories.
+//! - Measurements and fixtures: `benchmarking.rs`, `test_support.rs`.
+//!
+//! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
+//! PDF pp. 21-22. Code generation and linking are outside this front end.
+
 #![cfg_attr(feature = "portable-simd", feature(portable_simd))]
 
-// Only the benchmarking binary emits coz progress points.
-#[cfg(all(unix, feature = "benchmarking-internals"))]
-use coz as _;
+// Compiler phases and driver
+mod pipeline;
+pub(crate) mod translation_phases;
 
-#[cfg(feature = "benchmarking-internals")]
-mod benchmarking;
-mod binary128;
+// Invocation and language choices
 mod cli;
 pub(crate) mod configuration;
+mod headers;
+mod target;
+
+// Values and storage
+mod binary128;
 pub(crate) mod diagnostics;
 pub(crate) mod float_parsing;
-mod headers;
-mod pipeline;
-mod target;
+pub(crate) mod util;
+
+// Measurements and test support
+#[cfg(feature = "benchmarking-internals")]
+mod benchmarking;
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -28,9 +51,8 @@ mod target;
               compiler, not its tests."
 )]
 mod test_support;
-pub(crate) mod translation_phases;
-pub(crate) mod util;
 
+// Only the benchmarking binary emits coz progress points.
 #[cfg(feature = "benchmarking-internals")]
 pub use benchmarking::{
     ArenaUsage,
@@ -57,6 +79,8 @@ pub use cli::{
     compile_file_with_arguments_measured,
     run,
 };
+#[cfg(all(unix, feature = "benchmarking-internals"))]
+use coz as _;
 
 #[cfg(test)]
 #[doc(hidden)]

@@ -1,3 +1,10 @@
+//! Diagnostics from lexing, preprocessing, parsing, semantic analysis, and
+//! extension policy share one error enum. Each variant delegates severity,
+//! source ranges, and rendering to its phase error.
+//!
+//! C99: required diagnostics, §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+//! This module carries errors; each phase enforces its own rules.
+
 use super::{
     Bump,
     Context,

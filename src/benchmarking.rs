@@ -1,16 +1,32 @@
-//! Entry points for the Criterion and coz benchmarks.
+//! Benchmark entry points run selected compiler stages on generated or
+//! caller-provided input. They count tokens and syntax or semantic results and
+//! measure arena use. Prepared parsing holds preprocessing results separately
+//! so a benchmark can time parsing without preprocessing again.
+//!
+//! For `parse_source("int x;")`, the driver copies source into the context,
+//! parses the declaration, and summarizes syntax roots, tokens, and errors.
+//!
+//! Read [`parse`], [`ParseBenchmarkSummary`], and [`BenchmarkInput`], then
+//! [`with_prepared_parse`] for parser-only measurements.
+//!
+//! Files by role:
+//! - Input generation: `input.rs`.
+//! - Lexing and preprocessing: `preprocessing.rs`.
+//! - Parsing: `inspection.rs`, `prepared.rs`.
+//! - Semantic analysis: `semantic.rs`.
+//! - Arena measurements: `measurements.rs`.
 
+// Inputs
 mod input;
 
+// Compiler stages
+mod inspection;
+mod prepared;
 mod preprocessing;
-
-mod measurements;
-
 mod semantic;
 
-mod inspection;
-
-mod prepared;
+// Memory measurements
+mod measurements;
 
 use std::{
     path::Path,

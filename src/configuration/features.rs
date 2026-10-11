@@ -1,3 +1,6 @@
+//! The feature vocabulary assigns each syntax or library capability its
+//! language origin. Configuration uses that origin to compute feature sets.
+
 use super::{
     CStandard,
     MsvcFeature,

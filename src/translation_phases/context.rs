@@ -1,26 +1,45 @@
-//! Translation context shared by every phase: configuration, provenance
-//! arenas, interned strings, source files, and pending diagnostics.
+//! [`Context`] holds the configuration, source files, interned strings,
+//! literal values, source ranges, and pending diagnostics for one translation
+//! unit. Its stores outlive the phases that use them. Token locations are
+//! copied from temporary preprocessing storage before that storage is
+//! compacted.
 //!
-//! It connects translation phases 1-7 (§5.1.1.2, pp. 9-10; PDF pp. 21-22)
-//! and holds the diagnostics they report (§5.1.1.3p1, p. 11; PDF p. 23).
+//! For a macro that expands to `2`, the lexer records its definition's source
+//! range. Preprocessing also records the invocation site. Retaining the output
+//! token's range keeps both locations available to later diagnostics.
+//!
+//! Read [`Context`], [`Context::with_configuration`], and
+//! [`Context::retain_token_source`]. Then follow [`Context::read_source_file`]
+//! and [`Context::parser_error`] for source loading and diagnostic reporting.
+//!
+//! Files by role:
+//! - Setup: `construction.rs`.
+//! - Source storage: `source_files.rs`, `source_text.rs`.
+//! - Provenance: `source_vectors.rs`, `expansion_sites.rs`, `merge_anchors.rs`.
+//! - Segmented storage: `segmented_vec.rs`.
+//! - Phase results: `diagnostics.rs`, `literals.rs`.
+//! - Context fixtures: `tests.rs`.
+//!
+//! C99: shared storage for translation phases 1-7, §5.1.1.2 paragraph 1,
+//! pp. 9-10; PDF pp. 21-22. Diagnostics: §5.1.1.3 paragraph 1, p. 11;
+//! PDF p. 23. Each phase remains responsible for its language rules.
 
+// Context construction
 mod construction;
 
-mod diagnostics;
-
-mod expansion_sites;
-
-mod literals;
-
-mod merge_anchors;
-
-mod segmented_vec;
-
+// Source files
 mod source_files;
-
 mod source_text;
 
+// Provenance storage
+mod expansion_sites;
+mod merge_anchors;
+mod segmented_vec;
 mod source_vectors;
+
+// Literals and diagnostics
+mod diagnostics;
+mod literals;
 
 use std::{
     cell::OnceCell,
@@ -116,6 +135,7 @@ pub(crate) struct Context<'tu> {
     source_texts: ArenaVec<'tu, Option<SourceText<'tu>>>,
 }
 
+// Tests
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,

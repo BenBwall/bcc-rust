@@ -1,3 +1,6 @@
+//! Diagnostic builders collect labelled source ranges, notes, and help in
+//! arena storage. Phase errors implement the shared rendering interface.
+
 use super::{
     ArenaVec,
     Bump,

@@ -1,3 +1,6 @@
+//! Renders annotated source lines, gutters, labels, notes, and help using
+//! per-diagnostic scratch storage.
+
 use std::fmt::Write as _;
 
 use owo_colors::OwoColorize;

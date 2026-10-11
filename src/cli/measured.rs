@@ -1,3 +1,6 @@
+//! Public compilation entry points report the time spent reading,
+//! preprocessing, and parsing files to a caller-provided callback.
+
 use clap::Parser;
 
 use super::{

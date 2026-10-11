@@ -1,3 +1,10 @@
+//! Sparse endpoints associate expanded token ranges with macro invocation
+//! sites. Completed endpoints can be discarded as preprocessing advances.
+//!
+//! C99: phase-4 provenance, §5.1.1.2 paragraph 1, p. 10; PDF p. 22.
+//! Diagnostic locations: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+//! Macro expansion itself belongs to preprocessing.
+
 use super::{
     Bump,
     SegmentedVec,

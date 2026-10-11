@@ -1,3 +1,10 @@
+//! Token sources expose the next item and their source position through
+//! shared traits. Readers can restore a position and source-file identity
+//! without changing the phase implementation.
+//!
+//! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
+//! PDF pp. 21-22. These interfaces describe source traversal, not grammar.
+
 use super::{
     Context,
     SourcePosition,

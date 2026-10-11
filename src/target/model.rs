@@ -1,3 +1,6 @@
+//! Scalar types and target layouts describe C representations independently
+//! of the host Rust data model.
+
 /// Scalar layout and implementation-defined ABI choices. The System V base
 /// is shared by the Linux targets. C99: representations §6.2.5, pp. 33-37; PDF
 /// pp. 45-49.

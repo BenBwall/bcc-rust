@@ -1,3 +1,6 @@
+//! Classifies conversion results and detects incomplete spellings, overflow,
+//! and underflow without losing the literal spelling.
+
 use super::{
     Debug,
     FloatTokenType,

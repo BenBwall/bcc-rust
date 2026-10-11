@@ -1,3 +1,6 @@
+//! Language revisions, dialect selection, extension policy, Microsoft
+//! feature switches, and borrowed preprocessing options.
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) struct LanguageMode {
     pub(crate) standard: CStandard,

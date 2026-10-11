@@ -1,3 +1,10 @@
+//! Creates translation-unit storage and initializes the reserved keyword
+//! identities. Diagnostic text and slices borrow the same arena.
+//!
+//! C99: shared storage for phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
+//! PDF pp. 21-22. Diagnostic support: §5.1.1.3 paragraph 1, p. 11;
+//! PDF p. 23. Language rules belong to the individual phases.
+
 use super::{
     ArenaMap,
     ArenaQueue,

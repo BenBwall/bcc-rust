@@ -1,3 +1,10 @@
+//! Queues phase errors and keeps their source ranges valid until reporting.
+//! Tokenizer errors can be withdrawn when include handling has interpreted
+//! the same source as a quoted header name.
+//!
+//! C99: required diagnostics, §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+//! Error creation remains the responsibility of each translation phase.
+
 use super::{
     Context,
     GetSeverity,

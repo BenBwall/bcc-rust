@@ -1,3 +1,6 @@
+//! Generates and caches benchmark source inputs and constructs contexts
+//! with deterministic date and time macros.
+
 use std::fmt::Write;
 
 use super::{

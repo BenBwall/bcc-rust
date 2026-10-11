@@ -1,3 +1,10 @@
+//! Tracks parser anchors while source ranges are merged, so redundant
+//! anchors are omitted without losing the start location of a source range.
+//!
+//! C99: phase-7 provenance, §5.1.1.2 paragraph 1, p. 10; PDF p. 22.
+//! Diagnostic locations: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+//! Syntax and semantic constraints remain in their phases.
+
 use super::{
     Context,
     SourceVectors,

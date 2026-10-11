@@ -1,34 +1,39 @@
-//! User-facing diagnostics: a small builder for messages with labelled source
-//! ranges, notes, and help, plus a renderer that prints them as annotated
-//! source snippets in the style of `rustc`:
+//! Diagnostics combine fixed wording with labelled C source ranges, notes,
+//! and help. [`Renderer::render_text`] prints those ranges as annotated source
+//! snippets and reuses its scratch arena between diagnostics. Internal arena
+//! indices and interned-string handles do not appear in the output.
 //!
-//! ```text
-//! error: expected `;` after the declarator, found string literal `"abc"`
-//!  --> example.c:1:7
-//!   |
-//! 1 | int x "abc";
-//!   |       ^^^^^ expected `,`, `=`, `;`, or a function body
-//!   |
-//!   = note: C99 §6.7: a declaration ends with `;`
-//! ```
+//! For `int x "abc";`, a parser diagnostic labels the unexpected string.
+//! The renderer looks up its source line, prints a caret under that range,
+//! and appends the diagnostic's notes and help.
 //!
-//! Everything printed comes from the C source and fixed wording; no internal
-//! representation (arena indices, interned-string handles, Rust `Debug`
-//! output) may appear in a diagnostic.
-//! C99: required diagnostics for syntax and constraint violations §5.1.1.3p1,
-//! p. 11; PDF p. 23. This renderer carries locations from translation phases
-//! 1-7 (§5.1.1.2, pp. 9-10; PDF pp. 21-22).
+//! Read [`Renderer::render_text`], [`Renderer`], and
+//! [`Renderer::render_in_scratch`], then [`Explanation::at`]
+//! and [`ToDiagnostic::diagnostic_in`].
+//!
+//! Files by role:
+//! - Diagnostic construction: `model.rs`.
+//! - Rendering and color: `render.rs`, `color.rs`.
+//! - Arena text and spelling: `formatting.rs`.
+//! - Test views and fixtures: `owned.rs`, `tests.rs`.
+//!
+//! C99: required diagnostics, §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+//! Source locations span phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
+//! PDF pp. 21-22.
 
-mod color;
-
-mod formatting;
-
+// Diagnostic construction
 mod model;
 
+// Rendering
+mod color;
+mod render;
+
+// Text formatting
+mod formatting;
+
+// Test views
 #[cfg(test)]
 mod owned;
-
-mod render;
 
 use std::fmt::{
     self,
@@ -93,6 +98,7 @@ pub(crate) struct Renderer {
     scratch: Bump,
 }
 
+// Tests
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,

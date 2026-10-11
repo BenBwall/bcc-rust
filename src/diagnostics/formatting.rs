@@ -1,3 +1,6 @@
+//! Formats arena text, counts, nearby spellings, and escaped C literals for
+//! diagnostic messages and inspection output.
+
 use std::fmt::Write as _;
 
 use super::{

@@ -1,3 +1,6 @@
+//! Native long-double bytes support arithmetic, comparison, hexadecimal
+//! formatting, and classification through the C bridge.
+
 use super::{
     Debug,
     Display,

@@ -1,3 +1,6 @@
+//! Combines explicit include directories, environment paths, and resource
+//! header settings into the ordered header search.
+
 #[expect(
     clippy::disallowed_types,
     reason = "clap parses path arguments into `PathBuf`s; the compiler borrows them as `&Path`."

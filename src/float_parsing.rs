@@ -1,15 +1,33 @@
-//! Translation-time floating-constant conversion in phase 7.
+//! Floating-constant conversion checks that the host conversion routines
+//! consume the complete spelling and reports overflow or underflow. Native
+//! `long double` values keep their initialized object representation, including
+//! zeroed padding, for later arithmetic and comparison.
 //!
-//! C99: §5.1.1.2p7, p. 10; PDF p. 22; `floating-constant` §6.4.4.2p1-7,
-//! pp. 57-58; PDF pp. 69-70. Conversion uses the host `strtof`, `strtod`, and
-//! `strtold` interfaces (§7.20.1.3p1-10, pp. 308-310; PDF pp. 320-322).
+//! For `1.5L`, supplied with a NUL terminator, host conversion reads 1.5.
+//! The suffix check accepts `L`, and the finite nonzero result needs no range
+//! diagnostic.
+//!
+//! Read [`string_to_long_double`], [`string_to_double`], and
+//! [`range::range_error`], then [`LongDouble`].
+//!
+//! Files by role:
+//! - Other floating carriers: `conversion.rs`.
+//! - Native long-double representation: `representation.rs`.
+//! - Classification and conversion errors: `range.rs`.
+//! - Generated native bindings: `ffi.rs`.
+//! - Conversion fixtures: `tests.rs`.
+//!
+//! C99: phase 7, §5.1.1.2 paragraph 1, p. 10; PDF p. 22.
+//! Floating constants: §6.4.4.2 paragraphs 1-7, pp. 57-58;
+//! PDF pp. 69-70. Host conversion interfaces: §7.20.1.3 paragraphs 1-10,
+//! pp. 308-310; PDF pp. 320-322.
 
-mod ffi;
-
+// Conversion
 mod conversion;
-
 mod range;
 
+// Native representations
+mod ffi;
 mod representation;
 
 use std::{
@@ -75,6 +93,7 @@ pub(crate) fn string_to_long_double(s: &str) -> Result<LongDouble, ParseFloatErr
     }
 }
 
+// Tests
 #[cfg(test)]
 #[expect(
     clippy::disallowed_macros,

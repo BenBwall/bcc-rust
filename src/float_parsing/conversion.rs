@@ -1,3 +1,6 @@
+//! Converts float and double spellings and adapts binary64 results to the
+//! long-double carrier used by Microsoft targets.
+
 use super::{
     FloatTokenType,
     LongDouble,

@@ -1,3 +1,6 @@
+//! Runs compilation for the selected view, reports diagnostics, and prints
+//! tokens, syntax, or semantic information.
+
 use std::fmt::Write as _;
 
 use super::{

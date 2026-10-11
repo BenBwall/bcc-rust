@@ -1,3 +1,6 @@
+//! Errors that leave the command-line driver retain owned argument or
+//! input-path information after compilation arenas have been released.
+
 #[expect(
     clippy::disallowed_types,
     reason = "clap parses path arguments into `PathBuf`s; the compiler borrows them as `&Path`."

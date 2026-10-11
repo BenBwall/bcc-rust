@@ -1,3 +1,6 @@
+//! Owned diagnostic views let tests inspect and compare arena-backed
+//! messages after their compilation context has gone away.
+
 use super::{
     ArenaVec,
     Bump,

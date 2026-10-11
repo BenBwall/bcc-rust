@@ -1,3 +1,6 @@
+//! Arena-backed natural-number arithmetic supports exact binary128
+//! conversion. Exponent parsing and carrier display accompany that arithmetic.
+
 use super::{
     ArenaVec,
     Binary128,

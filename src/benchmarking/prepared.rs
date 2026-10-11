@@ -1,3 +1,6 @@
+//! Separates preprocessing from repeated parsing while keeping each arena
+//! alive for the work that borrows it.
+
 use super::{
     BenchmarkInput,
     Bump,

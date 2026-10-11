@@ -1,3 +1,10 @@
+//! An arena vector grows by adding segments without relocating elements.
+//! Discarding a prefix advances its start; clearing keeps segments for reuse.
+//! The context uses it for sparse macro-location endpoints.
+//!
+//! C99: provenance support for phases 1-7, §5.1.1.2 paragraph 1,
+//! pp. 9-10; PDF pp. 21-22. This storage implements no language constraint.
+
 use super::{
     ArenaVec,
     Bump,

@@ -1,12 +1,28 @@
-//! Runs the translation phases over one translation unit in order: each
-//! source file is lexed completely when it is opened, the whole unit is
-//! preprocessed, and only then is it parsed.
+//! The batch driver lexes each source file when it is opened, preprocesses
+//! the whole translation unit, and then parses the collected tokens. The
+//! preprocessing and parser work arenas end with their stages; the resulting
+//! syntax tree and retained diagnostics stay in the translation-unit context.
 //!
-//! C99: translation phases 1-7, §5.1.1.2, pp. 9-10; PDF pp. 21-22.
+//! For `int x = 1;`, preprocessing produces the complete token array before
+//! the parser constructs the declaration. [`analyze_translation_unit`] then
+//! resolves its type and initializer from the finished tree.
+//!
+//! Read [`parse_translation_unit`], [`with_preprocessor`], and
+//! [`parse_with_arena`], then [`analyze_translation_unit`].
+//!
+//! Files by role:
+//! - Phase storage and token collection: `storage.rs`.
+//! - Semantic handoff: `analysis.rs`.
+//! - End-to-end fixtures: `tests.rs`.
+//!
+//! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
+//! PDF pp. 21-22.
 
-mod analysis;
-
+// Phase storage
 mod storage;
+
+// Semantic analysis
+mod analysis;
 
 use std::path::Path;
 
@@ -57,6 +73,7 @@ pub(crate) fn parse_translation_unit<'tu>(
     parse_with_arena(preprocessed, context, &parse)
 }
 
+// Tests
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,

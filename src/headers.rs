@@ -1,7 +1,17 @@
-//! Embedded resource directory and the header search configuration.
-//! C99: §4p6, p. 7; PDF p. 19; implementation-defined include lookup
-//! §6.10.2p2-3, pp. 149-150; PDF pp. 161-162.
+//! Resource header lookup maps a requested filename to embedded C header
+//! text. The pipeline appends the built-in resource directory to the configured
+//! header search, so ordinary include handling can use these headers.
+//!
+//! Read [`text`], [`HeaderSearch`], and [`DIRECTORY`].
+//!
+//! Files by role:
+//! - Search configuration: `headers/search.rs`.
+//! - Embedded resource text: the C headers under `headers/`.
+//!
+//! C99: §4 paragraph 6, p. 7; PDF p. 19. Implementation-defined include
+//! lookup: §6.10.2 paragraphs 2-3, pp. 149-150; PDF pp. 161-162.
 
+// Header search
 mod search;
 
 use std::path::Path;

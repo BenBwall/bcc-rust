@@ -1,3 +1,5 @@
+//! Benchmark entry points count lexer and preprocessor output tokens.
+
 use super::{
     BenchmarkInput,
     Bump,

@@ -1,3 +1,5 @@
+//! Runs semantic analysis and summarizes results for benchmark inputs.
+
 use super::{
     BenchmarkInput,
     Bump,

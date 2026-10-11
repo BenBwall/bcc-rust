@@ -1,3 +1,6 @@
+//! Scopes preprocessing and parser work arenas to their phases and retains
+//! output token ranges before temporary provenance is compacted.
+
 use super::{
     Bump,
     Context,

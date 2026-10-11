@@ -1,3 +1,6 @@
+//! Generated bindings for the native floating-conversion and arithmetic
+//! bridge. The build script supplies the included file.
+
 #![allow(
     non_upper_case_globals,
     non_camel_case_types,

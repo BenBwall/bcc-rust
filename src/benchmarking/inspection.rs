@@ -1,3 +1,6 @@
+//! Parses caller-provided source or files and summarizes the resulting
+//! syntax roots, tokens, and errors.
+
 use super::{
     Bump,
     ParseBenchmarkSummary,

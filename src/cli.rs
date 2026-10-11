@@ -1,19 +1,38 @@
-//! Command-line interface: argument parsing, token and syntax-tree output,
-//! and diagnostic reporting.
+//! The command-line interface parses options, loads the input, and builds a
+//! translation context with the selected language mode and target. [`run`]
+//! chooses token output or parsing and semantic analysis, then prints the
+//! requested view and diagnostics.
+//!
+//! For `bcc-rust --input "int x;" --syntax-tree`, arguments select an inline
+//! source and syntax output. The driver preprocesses and parses that source,
+//! reports diagnostics, and prints the declaration tree.
+//!
+//! Read [`run`], then [`Cli`], [`Cli::configuration`], and
+//! [`output::print_parser_output`]. Token output starts at
+//! [`output::print_preprocessor_output`].
+//!
+//! Files by role:
+//! - Invocation: `arguments.rs`, `search.rs`, `errors.rs`.
+//! - Output: `output.rs`, `token.rs`, `diagnostic_reporter.rs`.
+//! - Measurement entry points: `measured.rs`.
+//! - CLI fixtures: `tests.rs`.
+//!
+//! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
+//! PDF pp. 21-22. Required diagnostics: §5.1.1.3 paragraph 1, p. 11;
+//! PDF p. 23.
 
+// Arguments and input
 mod arguments;
-
-mod diagnostic_reporter;
-
 mod errors;
+mod search;
 
-mod measured;
-
+// Output and diagnostic reporting
+mod diagnostic_reporter;
 mod output;
-
 mod token;
 
-mod search;
+// Measurements
+mod measured;
 
 #[cfg(test)]
 use std::fmt::Write as _;
@@ -197,5 +216,6 @@ struct Cli {
     source_date_epoch: Option<SourceDateEpoch>,
 }
 
+// Tests
 #[cfg(test)]
 mod tests;

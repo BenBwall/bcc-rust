@@ -1,3 +1,6 @@
+//! Measures arena high-water marks and process virtual-memory accounting
+//! across lexing, preprocessing, and parsing.
+
 use super::{
     BenchmarkInput,
     Bump,

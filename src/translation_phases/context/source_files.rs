@@ -1,3 +1,11 @@
+//! Loads and interns source files, configures header searches, and keeps
+//! original text and lazy line indices for diagnostics. Presumed filenames
+//! refer back to the physical source bytes.
+//!
+//! C99: phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
+//! Diagnostic locations: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+//! Directive interpretation remains in preprocessing.
+
 use super::{
     ArenaSet,
     ArenaString,

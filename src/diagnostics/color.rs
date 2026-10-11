@@ -1,3 +1,5 @@
+//! Chooses terminal color behavior from environment settings.
+
 /// How rendered text is decorated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ColorChoice {

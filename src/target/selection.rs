@@ -1,3 +1,5 @@
+//! Parses target triples and exposes names and ABI-specific choices.
+
 use super::Target;
 
 impl Target {

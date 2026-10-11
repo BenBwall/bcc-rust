@@ -1,3 +1,5 @@
+//! Passes a finished parsed translation unit to semantic analysis.
+
 use super::{
     Context,
     ParsedTranslationUnit,

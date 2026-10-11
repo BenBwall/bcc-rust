@@ -1,3 +1,6 @@
+//! Constructs configurations, applies independent options, and recomputes
+//! accepted and native feature sets after language choices change.
+
 use super::{
     CStandard,
     CompilerConfiguration,

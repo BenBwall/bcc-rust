@@ -1,13 +1,32 @@
-//! Target scalar representations shared by token conversion and semantic
-//! analysis. C99: implementation-defined data model §6.2.5, pp. 33-37; PDF pp.
-//! 45-49. The default is x86-64 System V LP64, independent of the compiler host
-//! ABI.
+//! [`Target::layout`] selects the scalar representations and ABI rules of
+//! the requested C target, independently of the Rust host. Linux targets use
+//! the System V LP64 model. Windows targets adjust that model for their type
+//! widths, record layout, and variadic conventions.
+//!
+//! Selecting `x86_64-pc-windows-msvc` makes `long` four bytes and uses binary64
+//! for `long double`. Selecting a Linux target keeps the LP64 representation.
+//!
+//! Read [`Target::layout`], [`Target`], and [`TargetLayout`], then
+//! [`TargetLayout::integer`] and [`Target::predefined_macros`].
+//!
+//! Files by role:
+//! - Target names and queries: `selection.rs`.
+//! - Scalar types and layout tables: `model.rs`.
+//! - Frozen macro lookup: `predefined.rs`; its `.h` tables stay beside it.
+//!
+//! C99: implementation-defined representations, §6.2.5, pp. 33-37;
+//! PDF pp. 45-49. Record layout: §6.7.2.1 paragraphs 10-11, p. 102;
+//! PDF p. 114. Enumeration representation: §6.7.2.2 paragraph 4, p. 105;
+//! PDF p. 117.
 
+// Representations
 mod model;
 
-mod predefined;
-
+// Target selection
 mod selection;
+
+// Predefined macros
+mod predefined;
 
 pub(crate) use model::{
     Layout,

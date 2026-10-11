@@ -1,13 +1,34 @@
-//! Language modes and extension settings for translation phases 1-7.
+//! [`CompilerConfiguration`] records the target, C revision, extension
+//! policy, and independent Microsoft feature flags. Configuration changes
+//! recompute which features are accepted and which belong to the selected
+//! language mode. Phases query these sets instead of repeating dialect checks.
 //!
-//! C99: §5.1.1.2, pp. 9-10; PDF pp. 21-22. Extensions follow §4p6,
-//! p. 7; PDF p. 19. Availability describes the target contract, not the
-//! implementation status; see language-standards.md.
+//! For strict C99, `inline` is native. Enabling GNU extensions also accepts
+//! GNU syntax, while [`CompilerConfiguration::is_native`] still distinguishes
+//! it from the ISO language.
+//!
+//! Read [`CompilerConfiguration::accepts`] and
+//! [`CompilerConfiguration::is_native`], then [`CompilerConfiguration`],
+//! [`Feature::origin`], and [`CompilerConfiguration::new`].
+//!
+//! Files by role:
+//! - Language choices: `language.rs`.
+//! - Feature vocabulary and origin: `features.rs`.
+//! - Construction, option changes, and accessors: `options.rs`.
+//! - Feature-policy fixtures: `tests.rs`.
+//!
+//! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
+//! PDF pp. 21-22. Extensions: §4 paragraph 6, p. 7; PDF p. 19.
+//! Feature availability describes the target contract; implementation status
+//! is recorded in language-standards.md.
 
-mod features;
-
+// Language choices
 mod language;
 
+// Feature policy
+mod features;
+
+// Construction and accessors
 mod options;
 
 use features::MSVC_COMPATIBILITY;
@@ -50,5 +71,6 @@ pub(crate) struct CompilerConfiguration {
     hosted: bool,
 }
 
+// Tests
 #[cfg(test)]
 mod tests;

@@ -1,3 +1,5 @@
+//! Reference-counted values used only by unit tests.
+
 use std::{
     borrow::Borrow,
     cell::Cell,
