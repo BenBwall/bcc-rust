@@ -136,15 +136,10 @@ fn replacing_volatile_string_initializer_clears_suffix_observably() {
                   a[0][2]; }";
     check(source);
     for text in access_texts(source) {
-        let fills: Vec<_> = text
-            .lines()
-            .filter(|line| line.trim_start().starts_with("fill "))
-            .collect();
         // Whole-object zeroing plus the replacement string's implicit tail.
-        assert!(fills.len() >= 2, "{text}");
-        for line in fills {
-            assert!(line.contains("volatile"), "{line}\n{text}");
-        }
+        assert_volatile_accesses(&text, "fill ", 2);
+        // Both explicit string initializations remain observable.
+        assert_volatile_accesses(&text, "copy ", 2);
     }
 }
 
@@ -232,27 +227,36 @@ fn volatile_scalar_initialization_is_an_observable_store() {
 
 #[test]
 fn volatile_aggregate_initialization_preserves_all_destination_accesses() {
-    let text = lowered(
+    for text in access_texts(
         "struct S { unsigned x:3; int a[2]; char s[3]; }; void f(void) { volatile struct S x = \
          {1, {2}, \"hi\"}; volatile struct S y = x; }",
-    );
-    for line in text.lines().filter(|line| {
-        line.contains("store.")
-            || line.trim_start().starts_with("copy ")
-            || line.trim_start().starts_with("fill ")
-    }) {
-        assert!(line.contains("volatile"), "{line}\n{text}");
+    ) {
+        // Bit-field and array-element stores; string, source-read and
+        // destination copies; zeroing x, its array member and y.
+        assert_volatile_accesses(&text, "store.", 2);
+        assert_volatile_accesses(&text, "copy ", 3);
+        assert_volatile_accesses(&text, "fill ", 3);
     }
 }
 
 #[test]
 fn volatile_members_and_compound_literals_keep_initialization_qualifiers() {
-    let text = lowered(
+    for text in access_texts(
         "struct S { volatile int x; volatile unsigned b:3; }; void f(void) { struct S s = {1, 2}; \
          (volatile struct S){3, 4}; }",
-    );
-    for line in text.lines().filter(|line| line.contains("store.")) {
-        assert!(line.contains("volatile"), "{line}\n{text}");
+    ) {
+        assert_volatile_accesses(&text, "store.", 4);
+        assert_volatile_accesses(&text, "copy ", 1);
+        // The unqualified object's whole-object fill is not volatile;
+        // the compound literal's whole-object fill must be observable.
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.trim_start().starts_with("fill "))
+                .count(),
+            2,
+            "{text}"
+        );
+        assert_volatile_accesses(&text, "fill volatile ", 1);
     }
 }
 
@@ -281,12 +285,21 @@ fn volatile_array_initialization_keeps_range_accesses() {
     for text in access_texts(
         "void f(void) { volatile char s[3] = \"hi\"; volatile int a[2][2] = {{1}, {2}}; }",
     ) {
-        for line in text.lines().filter(|line| {
-            line.contains("store.")
-                || line.trim_start().starts_with("copy ")
-                || line.trim_start().starts_with("fill ")
-        }) {
-            assert!(line.contains("volatile"), "{line}\n{text}");
-        }
+        assert_volatile_accesses(&text, "store.", 2);
+        assert_volatile_accesses(&text, "copy ", 1);
+        assert_volatile_accesses(&text, "fill ", 4);
+    }
+}
+
+/// Count the required accesses before checking their flags, so deleting an
+/// initialization cannot make the regression pass vacuously.
+fn assert_volatile_accesses(text: &str, prefix: &str, expected: usize) {
+    let accesses: Vec<_> = text
+        .lines()
+        .filter(|line| line.trim_start().starts_with(prefix))
+        .collect();
+    assert_eq!(accesses.len(), expected, "{prefix}:\n{text}");
+    for line in accesses {
+        assert!(line.contains("volatile"), "{line}\n{text}");
     }
 }
