@@ -16,6 +16,8 @@ use std::{
     thread,
 };
 
+mod runtime_calls;
+
 use crate::{
     abi::tests::programs::PROGRAMS as BY_VALUE_PROGRAMS,
     backend::{

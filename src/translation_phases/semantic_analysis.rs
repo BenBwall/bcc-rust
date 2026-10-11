@@ -81,6 +81,7 @@ use std::cell::Cell;
 
 pub(crate) use builtins::{
     implemented_builtin,
+    library_builtin_name,
     named_builtin,
 };
 use collection::Collection;

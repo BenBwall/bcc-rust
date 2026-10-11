@@ -1430,7 +1430,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // Unmodeled GNU compiler intrinsics do not have the C89 implicit
             // int signature. Preserve an opaque result rather than rejecting
             // valid pointer/aggregate returns based on an invented int type.
-            let ty = if let Some(ty) = self.x86_builtin_type(name) {
+            let ty = if let Some(ty) = self
+                .library_builtin_type(name)
+                .or_else(|| self.x86_builtin_type(name))
+            {
                 ty
             } else {
                 let result = self.types.unknown();

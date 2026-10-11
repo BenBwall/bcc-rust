@@ -272,12 +272,13 @@ fn implicit_declarations_call_unprototyped_functions() {
     .expect("C89 declares called names implicitly");
     assert!(
         ir.contains(
-            "function @putchar() -> i32 external
+            "function @putchar(...) -> i32 external
 "
         ),
         "{ir}"
     );
-    assert!(ir.contains("call_indirect"), "{ir}");
+    assert!(ir.contains("call @putchar"), "{ir}");
+    assert!(ir.contains("call @exit2"), "{ir}");
 }
 
 #[test]

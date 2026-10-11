@@ -65,6 +65,7 @@ use crate::{
             ExpressionInfo,
             TypeId,
             TypeKind,
+            library_builtin_name,
             named_builtin,
         },
     },
@@ -1147,12 +1148,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 source,
             ));
         };
-        let fixed = if prototype {
+        let open_external = direct.is_some_and(|binding| self.unit.unprototyped_external(binding));
+        let fixed = if open_external {
+            0
+        } else if prototype {
             parameters.len().min(items.len())
         } else {
             items.len()
         };
-        let variadic = prototype && variadic;
+        let variadic = open_external || (prototype && variadic);
         for item in &items[fixed..] {
             if self.repr(item.ty, source)? == Repr::Aggregate {
                 return Err(LoweringError::unsupported(
@@ -1300,7 +1304,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     }
                     // A typed compiler builtin is an operation, not a symbol
                     // to call.
-                    if text.starts_with("__builtin_") || named_builtin(text) {
+                    if (text.starts_with("__builtin_") || named_builtin(text))
+                        && library_builtin_name(text).is_none()
+                    {
                         return Err(LoweringError::unsupported(
                             Construct::Builtin,
                             callee.source_vectors,

@@ -163,7 +163,19 @@ impl Machine<'_, '_, '_> {
                     .expect("call_indirect names its callee");
                 let func = self.memory.function_at(self.value(callee))?;
                 let expected = self.module.signature(sig);
-                if self.module.function_signature(func) != expected {
+                let actual = self.module.function_signature(func);
+                // A declared host function with an open external signature
+                // represents a C declaration without a prototype. Its call
+                // site supplies the default-promoted parameter types, also
+                // through function pointers. Defined functions retain exact
+                // signature checks. C99: §6.5.2.2 paragraph 6, pp. 71-72;
+                // PDF pp. 83-84.
+                let open_host = self.module.function(func).body.is_none()
+                    && actual.variadic
+                    && actual.params.is_empty()
+                    && actual.result == expected.result
+                    && actual.result_extension == expected.result_extension;
+                if actual != expected && !open_host {
                     return Err(UbKind::SignatureMismatch.into());
                 }
                 return self.call(body, func, args, result, host);

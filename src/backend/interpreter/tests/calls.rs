@@ -38,6 +38,32 @@ block0:
 }
 
 #[test]
+fn open_host_calls_accept_promoted_parameters_but_check_the_result() {
+    let text = "function @putchar(...) -> i32 external
+function @main() -> i32 external {
+block0:
+    v0 = func_addr @putchar
+    v1 = iconst.i32 65
+    v2 = call_indirect v0(v1) : (i32) -> i32
+    return v2
+}
+";
+    let run = run_text(text, "main");
+    assert_eq!(run.output, "A");
+    assert_eq!(
+        run.result.unwrap().termination,
+        Termination::Returned(Some(int(65)))
+    );
+    let invalid = text
+        .replace(
+            "call_indirect v0(v1) : (i32) -> i32",
+            "call_indirect v0(v1) : (i32) -> i64",
+        )
+        .replace("return v2", "return v1");
+    assert_eq!(undefined(&invalid, "main"), UbKind::SignatureMismatch);
+}
+
+#[test]
 fn bad_indirect_calls_are_undefined() {
     let call = |callee: &str, signature: &str| {
         let text = format!(

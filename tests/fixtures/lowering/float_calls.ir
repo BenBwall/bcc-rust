@@ -24,20 +24,19 @@ block0(v0: f32, v1: f80, v2: i8):
     v9 = fpext.f64 v0
     v10 = fconst.f32 0x3F800000
     v11 = fpext.f64 v10
-    v12 = func_addr @old
-    v13 = call_indirect v12(v9, v11) : (f64, f64) -> i32
-    v14 = fpext.f64 v0
-    v15 = call @sqrt(v14)
-    v16 = call @scale(v0, v15)
-    v17 = fpext.f80 v16
-    v18 = fadd.f80 v17, v1
-    v19 = fptrunc.f64 v18
-    return v19
+    v12 = call @old(v9, v11)
+    v13 = fpext.f64 v0
+    v14 = call @sqrt(v13)
+    v15 = call @scale(v0, v14)
+    v16 = fpext.f80 v15
+    v17 = fadd.f80 v16, v1
+    v18 = fptrunc.f64 v17
+    return v18
 }
 
 function @printf(ptr, ...) -> i32 external
 
-function @old() -> i32 external
+function @old(...) -> i32 external
 
 function @sqrt(f64) -> f64 external
 

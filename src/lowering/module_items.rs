@@ -77,6 +77,7 @@ use crate::{
             SemanticTranslationUnit,
             TypeId,
             TypeKind,
+            library_builtin_name,
         },
     },
     util::{
@@ -100,6 +101,9 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// binding without a search.
     declarators:              ArenaMap<'a, (StringCacheId, SourceVectors), usize>,
     definitions:              ArenaMap<'a, usize, DefinitionKind>,
+    /// Definitions share their linked name across separate semantic bindings.
+    /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42.
+    defined_functions:        ArenaSet<'a, StringCacheId>,
     /// Bindings whose address is taken, which therefore live in memory.
     pub(super) address_taken: ArenaSet<'a, usize>,
     /// Globals of static locals and `__func__`, which have no linkage.
@@ -189,7 +193,15 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     pub(super) fn function(&mut self, binding: usize) -> Result<FuncId, LoweringErrorKind> {
         let data = self.sema.bindings[binding];
         let name = self.context.string_cache.at(data.name.name);
+        let runtime = library_builtin_name(name);
+        let name = runtime.unwrap_or(name);
         if let Some(Symbol::Function(func)) = self.module.symbol(name) {
+            // An internal C function can use a library spelling without
+            // being that library function. Do not redirect a builtin alias
+            // to that unrelated definition (C99 §7.1.3p1; GNU extension).
+            if runtime.is_some() && self.module.function(func).linkage == IrLinkage::Internal {
+                return Err(LoweringErrorKind::Unsupported(Construct::Builtin));
+            }
             return Ok(func);
         }
         if self.module.symbol(name).is_some() {
@@ -197,8 +209,36 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 "a function and an object share a name",
             ));
         }
-        let signature = self.signature(data.ty)?;
+        let signature = if self.unprototyped_external(binding) {
+            // C99 §6.5.2.2p6: a declaration without a prototype accepts
+            // default-promoted arguments. LLVM represents this open external
+            // interface with a variadic declaration, not a zero-argument one.
+            let TypeKind::Function { result, .. } = self.sema.types.kind(data.ty) else {
+                return Err(LoweringErrorKind::MissingFact(
+                    "an external binding has no function type",
+                ));
+            };
+            let signature = self.signature_of([], result, true, self.tables)?;
+            self.module.intern(signature)
+        } else {
+            self.signature(data.ty)?
+        };
         Ok(self.module.declare_function(name, signature, linkage(data)))
+    }
+
+    /// An external declaration without a prototype or a known definition.
+    /// Known old-style definitions keep their actual parameter signature.
+    /// C99: §6.5.2.2 paragraph 6, pp. 71-72; PDF pp. 83-84.
+    pub(super) fn unprototyped_external(&self, binding: usize) -> bool {
+        matches!(
+            self.sema.types.kind(self.sema.bindings[binding].ty),
+            TypeKind::Function {
+                prototype: false,
+                ..
+            }
+        ) && !self
+            .defined_functions
+            .contains(&self.sema.bindings[binding].name.name)
     }
 
     /// The IR signature of a C function type: one parameter per declared
@@ -902,6 +942,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         for definition in sema.definitions {
             _ = definitions.insert(definition.binding, definition.kind);
         }
+        let mut defined_functions = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables);
+        for function in sema.functions {
+            if let Some(binding) = function.binding {
+                _ = defined_functions.insert(sema.bindings[binding].name.name);
+            }
+        }
         Self {
             context,
             sema,
@@ -909,6 +955,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             tables,
             declarators,
             definitions,
+            defined_functions,
             address_taken: address_taken::find(sema, tables),
             statics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             strings: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
