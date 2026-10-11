@@ -4,7 +4,10 @@
 use std::{
     ffi::OsStr,
     fmt,
-    io,
+    io::{
+        self,
+        Write as _,
+    },
     path::{
         Path,
         PathBuf,
@@ -12,6 +15,10 @@ use std::{
     process::{
         Command,
         Output,
+    },
+    sync::atomic::{
+        AtomicU64,
+        Ordering,
     },
 };
 
@@ -38,15 +45,51 @@ pub(crate) fn compile_module(
     if options.kind == OutputKind::Object {
         return std::fs::write(out_path, buffer.bytes());
     }
-    let mut name = out_path.as_os_str().to_os_string();
-    name.push(".bcc.o");
-    let object = TemporaryObject(PathBuf::from(name));
-    std::fs::write(&object.0, buffer.bytes())?;
+    let (object, mut file) = TemporaryObject::create(out_path, &arena)?;
+    file.write_all(buffer.bytes())?;
+    drop(file);
     Toolchain::bundled(options.target)?.link_object(&object.0, out_path, options)
 }
 
 /// Deletes the temporary object on success and on failure.
 struct TemporaryObject(PathBuf);
+
+impl TemporaryObject {
+    /// Exclusively creates an object beside the output. Only an object this
+    /// invocation created acquires a cleanup guard; collisions are retried.
+    fn create(
+        out_path: &Path,
+        arena: &crate::util::bump::Bump,
+    ) -> io::Result<(Self, std::fs::File)> {
+        use std::fmt::Write as _;
+
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let mut suffix = crate::util::bump::ArenaString::new_in(arena);
+        loop {
+            suffix.clear();
+            write!(
+                suffix,
+                ".bcc-{}-{}.o",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            )
+            .map_err(io::Error::other)?;
+            let mut name = out_path.as_os_str().to_os_string();
+            name.push(suffix.as_str());
+            let path = PathBuf::from(name);
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                | Ok(file) => return Ok((Self(path), file)),
+                | Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {},
+                | Err(error) => return Err(error),
+            }
+        }
+    }
+}
+
 impl Drop for TemporaryObject {
     fn drop(&mut self) {
         drop(std::fs::remove_file(&self.0));
