@@ -1,0 +1,10 @@
+# Commits that only move code. `git blame` skips them when configured with
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# and GitHub's blame view reads this file automatically.
+
+# Top-down source layout (CONTRIBUTING.md#source-layout)
+abadc11025035cc927a76b871a386abf477d7ab8
+283dce3b7c66b83687967c60e89b57f2f3b55e02
+55b91664860933f712e901871e2a33dbc415f043
+646ce4be1878917a3f08b0754f2fc73b1354c2fc
+1b8c6f3bf51448e03bdef3dcf9d244480b93b9cf
