@@ -133,12 +133,15 @@ pub(super) enum Pipeline {
     Single(Pass),
 }
 
-pub(super) const PIPELINES: [Pipeline; 4] = [
-    Pipeline::Default,
-    Pipeline::Single(Pass::Fold),
-    Pipeline::Single(Pass::SimplifyCfg),
-    Pipeline::Single(Pass::Dce),
-];
+pub(super) const PIPELINES: [Pipeline; Pass::COUNT + 1] = {
+    let mut pipelines = [Pipeline::Default; Pass::COUNT + 1];
+    let mut index = 0;
+    while index < Pass::COUNT {
+        pipelines[index + 1] = Pipeline::Single(Pass::ALL[index]);
+        index += 1;
+    }
+    pipelines
+};
 
 /// A program optimized with at most `limit` rewrites, and what it did.
 #[derive(Debug)]
