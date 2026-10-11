@@ -32,11 +32,12 @@
 //!   need memory.
 //! - Function bodies: `work.rs` defines tasks and operands; `statements.rs`
 //!   lowers statements and declarations; `expressions.rs` operators, calls and
-//!   conversions; `places.rs` lvalues, loads and stores; `initializers.rs`
+//!   conversions, including the floating ones; `places.rs` lvalues, loads and
+//!   stores; `bit_fields.rs` bit-field reads and writes; `initializers.rs`
 //!   walks braced initializers.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
-//!   to IR types.
+//!   to IR types; `floats.rs` turns folded floating constants into IR bits.
 //! - Errors: `errors.rs`. Tests: `tests.rs` and `tests/`.
 //!
 //! C99: §5.1.2.3, pp. 13-15; PDF pp. 25-27 (program execution: lowering
@@ -50,6 +51,7 @@ mod address_taken;
 mod module_items;
 
 // Function bodies
+mod bit_fields;
 mod expressions;
 mod initializers;
 mod places;
@@ -58,6 +60,7 @@ mod work;
 
 // Construction
 mod emit;
+mod floats;
 mod ssa;
 mod types;
 
@@ -236,7 +239,12 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.end_switch(statement, exit);
                 Ok(())
             },
-            | Task::Initialize { object, offset, ty } => self.initialize(object, offset, ty),
+            | Task::Initialize {
+                object,
+                offset,
+                ty,
+                bit_field,
+            } => self.initialize(object, offset, ty, bit_field),
             | Task::InitializeString {
                 object,
                 offset,

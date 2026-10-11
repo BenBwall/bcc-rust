@@ -1,8 +1,12 @@
 //! Lowering tests: golden IR for each construct family (`golden.rs`),
-//! programs whose lowering must verify (`programs.rs`), and the constructs
+//! programs whose lowering must verify (`programs.rs`), floating-point and
+//! bit-field programs run in the interpreter and clang (`numeric_programs.rs`),
+//! the constant conversions (`floats.rs`), and the constructs
 //! lowering refuses (`refusals.rs`).
 
+mod floats;
 mod golden;
+mod numeric_programs;
 pub(crate) mod programs;
 mod refusals;
 

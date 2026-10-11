@@ -30,12 +30,8 @@ fn a_unit_with_errors_is_refused_whole() {
 fn unsupported_constructs_name_themselves() {
     let cases = [
         (
-            "double f(double x) { return x * 2; }",
-            "floating-point arithmetic",
-        ),
-        (
-            "struct s { int a : 3; }; int f(struct s *p) { return p->a; }",
-            "bit-fields",
+            "__float128 f(__float128 x) { return x; }",
+            "binary128 floating-point types",
         ),
         (
             "int f(int n) { int a[n]; a[0] = 1; return a[0]; }",
@@ -77,9 +73,9 @@ fn unsupported_constructs_name_themselves() {
 #[test]
 fn every_failing_function_is_reported() {
     let errors = lower(
-        "double f(double x) { return x; }
+        "__float128 f(__float128 x) { return x; }
 int ok(int a) { return a; }
-struct s { int b : 2; }; int g(struct s *p) { return p->b; }",
+int g(int n) { int a[n]; return a[0]; }",
     )
     .expect_err("two functions are unsupported");
     assert_eq!(errors.len(), 2, "{errors:?}");

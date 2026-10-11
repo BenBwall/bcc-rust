@@ -31,6 +31,7 @@ use super::{
         repr,
     },
     work::{
+        BitFieldBits,
         Item,
         Object,
         Operand,
@@ -86,6 +87,8 @@ pub(super) enum Leaf<'tu> {
         offset:     u64,
         ty:         TypeId,
         expression: &'tu Expression<'tu>,
+        /// For a bit-field, where its bits are from `offset`.
+        bit_field:  Option<BitFieldBits>,
     },
     /// A character array of `size` bytes initialized by a string literal
     /// (§6.7.8p14).
@@ -128,6 +131,7 @@ pub(super) fn leaves<'tu, 's>(
             offset: 0,
             ty,
             expression,
+            bit_field: None,
         });
         return Ok(leaves);
     }
@@ -180,12 +184,6 @@ pub(super) fn leaves<'tu, 's>(
         };
         match element.initializer.kind {
             | InitializerType::InitializerList(inner) => {
-                if subobject.bit_field {
-                    return Err(LoweringError::unsupported(
-                        Construct::BitField,
-                        element.source_vectors,
-                    ));
-                }
                 consume(&mut frames);
                 if walker.scalar(subobject.ty, element.source_vectors)? {
                     let expression = braced_scalar(element.initializer)?;
@@ -193,6 +191,7 @@ pub(super) fn leaves<'tu, 's>(
                         offset,
                         ty: subobject.ty,
                         expression,
+                        bit_field: subobject.bit_field,
                     });
                 } else {
                     frames.push(Frame {
@@ -205,12 +204,9 @@ pub(super) fn leaves<'tu, 's>(
             },
             | InitializerType::AssignmentExpression(expression) =>
                 match walker.leaf(subobject.ty, offset, expression)? {
-                    | Some(leaf) => {
-                        if subobject.bit_field {
-                            return Err(LoweringError::unsupported(
-                                Construct::BitField,
-                                element.source_vectors,
-                            ));
+                    | Some(mut leaf) => {
+                        if let Leaf::Scalar { bit_field, .. } = &mut leaf {
+                            *bit_field = subobject.bit_field;
                         }
                         consume(&mut frames);
                         leaves.push(leaf);
@@ -275,7 +271,8 @@ struct Subobject {
     ty:        TypeId,
     /// Its offset from the start of the aggregate.
     offset:    u64,
-    bit_field: bool,
+    /// Where a bit-field member's bits are from `offset`.
+    bit_field: Option<BitFieldBits>,
     /// The aggregate's next position after it.
     next:      usize,
 }
@@ -300,6 +297,7 @@ impl<'tu> Walker<'_, 'tu> {
                 offset,
                 ty,
                 expression,
+                bit_field: None,
             }));
         }
         let types = &self.sema.types;
@@ -357,7 +355,7 @@ impl<'tu> Walker<'_, 'tu> {
                 Ok(Some(Subobject {
                     ty:        element,
                     offset:    next as u64 * size,
-                    bit_field: false,
+                    bit_field: None,
                     next:      next + 1,
                 }))
             },
@@ -378,7 +376,10 @@ impl<'tu> Walker<'_, 'tu> {
                 Ok(Some(Subobject {
                     ty:        member.ty,
                     offset:    member.offset,
-                    bit_field: member.width.is_some(),
+                    bit_field: member.width.map(|width| BitFieldBits {
+                        bit_offset: member.bit_offset,
+                        width,
+                    }),
                     next:      if tag.kind == TagKind::Union {
                         members.len()
                     } else {
@@ -497,14 +498,28 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     offset,
                     ty,
                     expression,
-                }
+                    bit_field,
+                } => {
+                    tasks.push(Task::Evaluate(expression));
+                    tasks.push(Task::Initialize {
+                        object,
+                        offset,
+                        ty,
+                        bit_field,
+                    });
+                },
                 | Leaf::Copy {
                     offset,
                     ty,
                     expression,
                 } => {
                     tasks.push(Task::Evaluate(expression));
-                    tasks.push(Task::Initialize { object, offset, ty });
+                    tasks.push(Task::Initialize {
+                        object,
+                        offset,
+                        ty,
+                        bit_field: None,
+                    });
                 },
                 | Leaf::String {
                     offset,
@@ -530,6 +545,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         object: Object,
         offset: u64,
         ty: TypeId,
+        bit_field: Option<BitFieldBits>,
     ) -> Result<(), LoweringError> {
         let item = self.pop();
         let (slot, source) = match object {
@@ -547,9 +563,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Object::Slot(slot) => (slot, SourceVectors::empty()),
         };
         let base = self.inst(InstData::StackAddr { slot }, Type::Ptr);
-        let address = self.offset_address(base, offset);
+        let place = if let Some(bits) = bit_field {
+            let bit_field = self.bit_field(ty, offset, bits, source)?;
+            Place::BitField(self.offset_address(base, offset), bit_field)
+        } else {
+            Place::Memory(self.offset_address(base, offset))
+        };
         let place = Item {
-            operand: Operand::Place(Place::Memory(address)),
+            operand: Operand::Place(place),
             ty:      ty.unqualified(),
         };
         _ = self.write(place, item, source)?;

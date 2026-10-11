@@ -104,6 +104,8 @@ pub(super) enum Op<'s> {
     /// Any instruction whose operands fit in its record.
     Inst(InstData),
     Iconst(Type, i128),
+    /// A floating constant given by its bits (see `floats.rs`).
+    Fconst(Type, u128),
     Call(FuncId, &'s [Value]),
     CallIndirect(SigId, Value, &'s [Value]),
 }

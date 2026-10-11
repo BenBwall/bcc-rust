@@ -324,3 +324,182 @@ fn the_target_sets_type_widths_and_the_data_layout() {
     assert!(windows.contains("e-m:w-"), "{windows}");
     assert!(windows.contains("function @f(i32) -> i32"), "{windows}");
 }
+
+#[test]
+fn floating_arithmetic_uses_the_float_instructions() {
+    golden(
+        "float_arithmetic",
+        "double mix(double a, float b, int i) { return a * b + i - a / 2.0; }
+float narrow(double d) { return (float)d + 1.5f; }
+double negate(double d) { return -d + +d; }
+double constants(void) { return 1.0 / 3.0 + 2 * 0.5; }
+long double wide(long double x, double y) { return x * y - 1; }",
+    );
+}
+
+#[test]
+fn floating_conversions_follow_the_operand_types() {
+    golden(
+        "float_conversions",
+        "int truncate(double d) { return (int)d; }
+unsigned long to_unsigned(float f) { return (unsigned long)f; }
+char to_char(double d) { return (char)d; }
+double from_signed(int i, long l) { return i + (double)l; }
+double from_unsigned(unsigned u, unsigned long ul) { return u + (double)ul; }
+float to_float(long l, _Bool b) { return l + b; }
+double widen(float f) { return f; }
+_Bool truth(double d) { return d; }
+double from_constant(void) { return 7; }",
+    );
+}
+
+#[test]
+fn floating_comparisons_are_ordered_except_not_equal() {
+    golden(
+        "float_comparisons",
+        "int compare(double a, double b) {
+  return (a < b) + (a <= b) + (a > b) + (a >= b) + (a == b) + (a != b);
+}
+int mixed(int i, float f) { return i < f; }
+int not(double d) { return !d; }
+int condition(double d) { if (d) return 1; while (d > 1.5) d /= 2; return d ? 2 : 3; }
+int logical(double a, int b) { return a && b || !a; }",
+    );
+}
+
+#[test]
+fn floating_updates_add_and_subtract_one() {
+    golden(
+        "float_increments",
+        "double f(double d, float x, int i) {
+  d++;
+  --x;
+  d += 1;
+  i += 1.5;
+  x *= i;
+  i /= 0.5f;
+  return d + x + i;
+}",
+    );
+}
+
+#[test]
+fn floating_values_pass_through_calls_and_variadic_promotion() {
+    golden(
+        "float_calls",
+        "int printf(const char *, ...);
+double sqrt(double);
+float scale(float, double);
+int old();
+double f(float x, long double ld, char c) {
+  printf(\"%f %f %d\\n\", x, 2.5f, c);
+  old(x, 1.0f);
+  return scale(x, sqrt(x)) + ld;
+}",
+    );
+}
+
+#[test]
+fn floating_objects_initialize_in_memory() {
+    golden(
+        "float_objects",
+        "double table[3] = { 1.5, 2, -0.25 };
+float single = 3.14159f;
+long double wide = 1.0L / 3;
+int truncated = 2.75;
+_Bool flag = 0.5;
+struct s { float f; double d; } s = { 1, 2.5f };
+double read(void) {
+  double local[2] = { 1, 2.5 };
+  float f = 0.1f;
+  struct s t = { f, local[1] };
+  return local[0] + f + t.d;
+}",
+    );
+}
+
+#[test]
+fn bit_fields_load_shift_mask_and_store_their_unit() {
+    golden(
+        "bit_fields",
+        "struct flags {
+  unsigned a : 3;
+  int b : 5;
+  unsigned c : 12;
+  int d : 4;
+  _Bool e : 1;
+  long long wide : 40;
+};
+unsigned read_a(struct flags *f) { return f->a; }
+int read_b(struct flags *f) { return f->b; }
+int read_d(struct flags *f) { return f->d + f->e; }
+long long read_wide(struct flags *f) { return f->wide; }
+int write(struct flags *f, int v) {
+  f->a = v;
+  f->b = v;
+  f->e = v;
+  f->wide = v;
+  return f->b = 100;
+}",
+    );
+}
+
+#[test]
+fn bit_field_updates_read_modify_write() {
+    golden(
+        "bit_field_updates",
+        "struct counters { unsigned lo : 4; int mid : 6; unsigned hi : 22; };
+int f(struct counters *c, int n) {
+  c->lo += n;
+  c->mid -= 3;
+  c->hi++;
+  --c->lo;
+  c->mid <<= 1;
+  return c->lo++ + --c->mid;
+}",
+    );
+}
+
+#[test]
+fn bit_field_initializers_merge_into_the_object() {
+    golden(
+        "bit_field_initializers",
+        "struct pack { unsigned a : 4, b : 4; int c : 7; char d; unsigned e : 1; };
+struct pack global = { 3, 15, -2, 'x', 1 };
+struct pack named = { .c = 5, .a = 9 };
+int f(int x) {
+  struct pack local = { x, 2, -1, 'y', 1 };
+  struct pack other = { .e = x, .a = 1 };
+  return local.a + other.e;
+}",
+    );
+}
+
+#[test]
+fn volatile_bit_fields_access_the_unit_with_volatile_operations() {
+    golden(
+        "bit_field_volatile",
+        "struct reg { unsigned enable : 1; unsigned mode : 3; unsigned count : 12; };
+unsigned f(volatile struct reg *r) {
+  r->mode = 5;
+  r->count += 1;
+  return r->enable;
+}",
+    );
+}
+
+#[test]
+fn msvc_bit_fields_use_semantic_analysis_offsets() {
+    let source = "struct m { char a : 3; int b : 9; char c : 2; short d : 4; };
+int f(struct m *p) { p->b = 300; p->d = -2; return p->a + p->b + p->c + p->d; }";
+    let ir = lower_for(source, Target::WindowsMsvc).expect("bit-fields lower on MSVC");
+    let mut text = String::new();
+    for line in source.lines() {
+        text.push_str("; ");
+        text.push_str(line);
+        text.push('\n');
+    }
+    text.push('\n');
+    text.push_str(&ir);
+    assert_snapshot("tests/fixtures/lowering/bit_fields_msvc.ir", &text);
+}

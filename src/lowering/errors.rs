@@ -52,11 +52,10 @@ pub(crate) enum LoweringErrorKind {
 /// A construct outside the prototype subset of `middle-end.md`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Construct {
-    FloatingPoint,
+    Float128,
     ComplexArithmetic,
     Atomic,
     Vector,
-    BitField,
     VariableLengthArray,
     AggregateArgument,
     AggregateResult,
@@ -114,11 +113,10 @@ impl Construct {
     /// The construct as the diagnostic names it.
     pub(crate) const fn description(self) -> &'static str {
         match self {
-            | Self::FloatingPoint => "floating-point arithmetic",
+            | Self::Float128 => "binary128 floating-point types",
             | Self::ComplexArithmetic => "complex arithmetic",
             | Self::Atomic => "atomic types",
             | Self::Vector => "vector types",
-            | Self::BitField => "bit-fields",
             | Self::VariableLengthArray => "variable length arrays",
             | Self::AggregateArgument => "structures and unions passed by value",
             | Self::AggregateResult => "structures and unions returned by value",

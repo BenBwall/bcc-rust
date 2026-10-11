@@ -41,6 +41,12 @@ pub(super) enum Repr {
     /// `_Bool`: an `i8` holding 0 or 1.
     /// C99: §6.2.5 paragraph 2, p. 33; PDF p. 45.
     Bool,
+    /// A real floating type: `f32`, `f64`, or the x87 `f80` that `long
+    /// double` is on the x86 GNU targets (it is `f64` on MSVC).
+    /// C99: §6.2.5 paragraphs 10-11, p. 34; PDF p. 46.
+    Float {
+        ty: Type,
+    },
     Pointer,
     /// An array, structure or union: an object in memory, never a value.
     Aggregate,
@@ -81,8 +87,16 @@ fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorK
     match scalar {
         | Scalar::Void => Ok(Repr::Void),
         | Scalar::Bool => Ok(Repr::Bool),
-        | Scalar::Float | Scalar::Double | Scalar::LongDouble | Scalar::Float128 =>
-            Err(LoweringErrorKind::Unsupported(Construct::FloatingPoint)),
+        | Scalar::Float => Ok(Repr::Float { ty: Type::F32 }),
+        | Scalar::Double => Ok(Repr::Float { ty: Type::F64 }),
+        | Scalar::LongDouble => Ok(Repr::Float {
+            ty: if types.target.long_double_is_double() {
+                Type::F64
+            } else {
+                Type::F80
+            },
+        }),
+        | Scalar::Float128 => Err(LoweringErrorKind::Unsupported(Construct::Float128)),
         | Scalar::ComplexFloat
         | Scalar::ComplexDouble
         | Scalar::ComplexLongDouble
@@ -119,18 +133,21 @@ impl Repr {
     /// The IR type of a value of this representation, if it has values.
     pub(super) const fn value_type(self) -> Option<Type> {
         match self {
-            | Self::Int { ty, .. } => Some(ty),
+            | Self::Int { ty, .. } | Self::Float { ty } => Some(ty),
             | Self::Bool => Some(Type::I8),
             | Self::Pointer => Some(Type::Ptr),
             | Self::Void | Self::Aggregate | Self::Function => None,
         }
     }
 
-    /// Whether it is an integer, `_Bool` or pointer: a C scalar type that
-    /// lowering supports.
+    /// Whether it is an integer, `_Bool`, floating or pointer type: a C
+    /// scalar type that lowering supports.
     /// C99: §6.2.5 paragraph 21, p. 36; PDF p. 48.
     pub(super) const fn is_scalar(self) -> bool {
-        matches!(self, Self::Int { .. } | Self::Bool | Self::Pointer)
+        matches!(
+            self,
+            Self::Int { .. } | Self::Bool | Self::Float { .. } | Self::Pointer
+        )
     }
 
     pub(super) const fn signed(self) -> bool {

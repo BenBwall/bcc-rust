@@ -13,6 +13,7 @@ use super::{
     LoweringError,
     LoweringErrorKind,
     address_taken,
+    floats,
     initializers::{
         self,
         Leaf,
@@ -22,6 +23,7 @@ use super::{
         Repr,
         repr,
     },
+    work::BitFieldBits,
 };
 use crate::{
     diagnostics::format_in,
@@ -496,7 +498,14 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     offset,
                     ty,
                     expression,
-                } => self.static_scalar(&mut bytes, &mut relocations, offset, ty, expression)?,
+                    bit_field,
+                } => self.static_scalar(
+                    &mut bytes,
+                    &mut relocations,
+                    (offset, bit_field),
+                    ty,
+                    expression,
+                )?,
                 | Leaf::String {
                     offset,
                     size,
@@ -525,13 +534,16 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         Ok((bytes, relocations))
     }
 
-    /// Writes one scalar leaf: an integer constant converted to the leaf's
-    /// type, or an address constant as a relocation.
+    /// Writes one scalar leaf: an integer or floating constant converted to
+    /// the leaf's type, or an address constant as a relocation. A bit-field
+    /// leaf merges the low bits of its value into the bytes it occupies.
+    /// C99: §6.7.8 paragraph 4, p. 125; PDF p. 137; §6.6 paragraphs 7-9,
+    /// pp. 95-96; PDF pp. 107-108; §6.3.1.4, pp. 43-44; PDF pp. 55-56.
     fn static_scalar(
         &mut self,
         bytes: &mut [u8],
         relocations: &mut ArenaVec<'_, Relocation>,
-        offset: u64,
+        (offset, bit_field): (u64, Option<BitFieldBits>),
         ty: TypeId,
         expression: &'tu Expression<'tu>,
     ) -> Result<(), LoweringError> {
@@ -546,24 +558,58 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             .map_err(|kind| at(kind, source))?
             .size;
         let (start, size) = (index(offset, expression)?, index(size, expression)?);
-        if let Some(value) = info.integer
-            && !matches!(
+        let integer = info.integer.filter(|_| {
+            !matches!(
                 self.sema.types.kind(info.ty),
                 TypeKind::Pointer(_) | TypeKind::Array(..)
             )
+        });
+        if let Repr::Float { ty: float } = representation {
+            let bits = match (info.floating, integer) {
+                | (Some(folded), _) => floats::constant_bits(&folded.real, float),
+                | (None, Some(value)) => floats::from_integer(value.value, float),
+                | (None, None) => None,
+            }
+            .ok_or_else(unsupported)?;
+            let target = bytes.get_mut(start..start + size).ok_or_else(unsupported)?;
+            for (byte, bits) in target.iter_mut().zip(floats::bytes(bits, size)) {
+                *byte = bits;
+            }
+            return Ok(());
+        }
+        let value = if let Some(value) = integer {
+            Some(value.value)
+        } else if let Some(folded) = info.floating
+            && matches!(representation, Repr::Int { .. } | Repr::Bool)
         {
+            // A floating constant truncates toward zero (§6.3.1.4p1); `_Bool`
+            // compares with zero (§6.3.1.2p1).
+            if representation == Repr::Bool {
+                Some(i128::from(!folded.real.is_zero()))
+            } else {
+                Some(floats::to_integer(&folded.real).ok_or_else(unsupported)?)
+            }
+        } else {
+            None
+        };
+        if let Some(value) = value {
             let value = match representation {
-                | Repr::Bool => i128::from(value.value != 0),
+                | Repr::Bool => i128::from(value != 0),
                 | Repr::Int { .. } | Repr::Pointer => {
                     let bits = u32::try_from(size * 8).map_err(|_| unsupported())?;
-                    value.cast(bits, representation.signed()).value
+                    Integer::int(value)
+                        .cast(bits, representation.signed())
+                        .value
                 },
                 | _ => return Err(unsupported()),
             };
+            if let Some(field) = bit_field {
+                return merge_bit_field(bytes, start, field, value).ok_or_else(unsupported);
+            }
             bytes[start..start + size].copy_from_slice(&value.to_le_bytes()[..size]);
             return Ok(());
         }
-        if representation != Repr::Pointer {
+        if representation != Repr::Pointer || bit_field.is_some() {
             return Err(unsupported());
         }
         let (symbol, addend) = self.address_constant(expression)?;
@@ -698,6 +744,21 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             }
         }
     }
+}
+
+/// Stores the low `field.width` bits of `value` at bit `field.bit_offset` of
+/// the little-endian bytes from `start`, keeping the other bits. `None` if the
+/// field lies outside `bytes`.
+fn merge_bit_field(bytes: &mut [u8], start: usize, field: BitFieldBits, value: i128) -> Option<()> {
+    let span = usize::try_from((field.bit_offset + field.width).div_ceil(8)).ok()?;
+    let target = bytes.get_mut(start..start + span)?;
+    let mut word = [0_u8; 16];
+    word.get_mut(..span)?.copy_from_slice(target);
+    let mut word = u128::from_le_bytes(word);
+    let mask = (u128::MAX >> (128 - field.width)) << field.bit_offset;
+    word = (word & !mask) | ((value as u128) << field.bit_offset & mask);
+    target.copy_from_slice(&word.to_le_bytes()[..span]);
+    Some(())
 }
 
 /// A byte position in an object being initialized, which a static object

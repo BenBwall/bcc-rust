@@ -1,0 +1,56 @@
+; struct reg { unsigned enable : 1; unsigned mode : 3; unsigned count : 12; };
+; unsigned f(volatile struct reg *r) {
+;   r->mode = 5;
+;   r->count += 1;
+;   return r->enable;
+; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @f(ptr) -> i32 external {
+block0(v0: ptr):
+    v1 = iconst.i32 5
+    v2 = iconst.i8 5
+    v3 = iconst.i8 7
+    v4 = and.i8 v2, v3
+    v5 = iconst.i8 1
+    v6 = shl.i8 v4, v5
+    v7 = load.i8 volatile v0, align 1
+    v8 = freeze.i8 v7
+    v9 = iconst.i8 -15
+    v10 = and.i8 v8, v9
+    v11 = or.i8 v10, v6
+    store.i8 volatile v11, v0, align 1
+    v12 = zext.i32 v4
+    v13 = load.i16 volatile v0, align 2
+    v14 = iconst.i16 4
+    v15 = lshr.i16 v13, v14
+    v16 = zext.i32 v15
+    v17 = iconst.i32 1
+    v18 = iadd.i32 nsw v16, v17
+    v19 = trunc.i16 v18
+    v20 = iconst.i16 4095
+    v21 = and.i16 v19, v20
+    v22 = iconst.i16 4
+    v23 = shl.i16 v21, v22
+    v24 = trunc.i8 v23
+    v25 = load.i8 volatile v0, align 1
+    v26 = freeze.i8 v25
+    v27 = iconst.i8 15
+    v28 = and.i8 v26, v27
+    v29 = or.i8 v28, v24
+    store.i8 volatile v29, v0, align 1
+    v30 = iconst.i16 8
+    v31 = lshr.i16 v23, v30
+    v32 = trunc.i8 v31
+    v33 = iconst.i64 1
+    v34 = ptr_add inbounds v0, v33
+    store.i8 volatile v32, v34, align 1
+    v35 = zext.i32 v21
+    v36 = load.i8 volatile v0, align 1
+    v37 = iconst.i8 1
+    v38 = and.i8 v36, v37
+    v39 = zext.i32 v38
+    return v39
+}

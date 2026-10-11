@@ -29,6 +29,7 @@ use super::{
 };
 use crate::{
     ir::{
+        FloatCC,
         InstData,
         InstFlags,
         IntCC,
@@ -136,6 +137,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
         let operand = match (place, self.repr(ty, source)?) {
+            | (Place::BitField(address, field), _) => {
+                let result = self.value_type(ty, source)?;
+                Operand::Value(self.load_bit_field(address, field, types::is_volatile(ty), result))
+            },
             | (Place::Memory(address), Repr::Aggregate) => Operand::Aggregate(address),
             | (Place::Variable(var), _) => Operand::Value(self.draft.use_var(var)),
             | (Place::Memory(address), representation) => {
@@ -204,6 +209,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let value = self.value(value, source)?;
                 self.draft.def_var(var, value);
                 Operand::Value(value)
+            },
+            | (Place::BitField(address, field), _) => {
+                let value = self.value(value, source)?;
+                let result = self.value_type(ty, source)?;
+                let volatile = types::is_volatile(ty);
+                Operand::Value(self.store_bit_field(address, field, volatile, value, result))
             },
             | (Place::Memory(address), _) => {
                 let value = self.value(value, source)?;
@@ -359,6 +370,25 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let ty = self.draft.value_type(a);
         self.inst(
             InstData::IntCompare {
+                cond,
+                ty,
+                args: [a, b],
+            },
+            Type::I1,
+        )
+    }
+
+    /// A floating constant of type `ty` given by its bits.
+    pub(super) fn fconst(&mut self, ty: Type, bits: u128) -> Value {
+        self.draft
+            .push(Op::Fconst(ty, bits), Some(ty))
+            .expect("a constant has a result")
+    }
+
+    pub(super) fn fcmp(&mut self, cond: FloatCC, a: Value, b: Value) -> Value {
+        let ty = self.draft.value_type(a);
+        self.inst(
+            InstData::FloatCompare {
                 cond,
                 ty,
                 args: [a, b],

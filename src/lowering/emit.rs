@@ -99,6 +99,7 @@ pub(super) fn emit<'s>(
                     builder.inst_result(inst)
                 },
                 | Op::Iconst(ty, constant) => Some(builder.iconst(ty, constant)),
+                | Op::Fconst(ty, bits) => Some(builder.fconst(ty, bits)),
                 | Op::Call(callee, args) => {
                     let args = map_list(args, &values, &map, scratch)?;
                     let inst = builder.call(callee, &args);
@@ -191,7 +192,7 @@ fn used_poison<'s>(draft: &Draft<'s>, order: &[Block]) -> ArenaVec<'s, bool> {
                         Ok(value)
                     });
                 },
-                | Op::Iconst(..) => {},
+                | Op::Iconst(..) | Op::Fconst(..) => {},
                 | Op::Call(_, args) =>
                     for &arg in args {
                         mark(arg);

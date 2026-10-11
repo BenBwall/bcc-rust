@@ -210,8 +210,11 @@ functions) are marked `returns_twice`; the optimizer must not keep values in
 registers across them.
 
 Bit-fields are lowered in lowering, not in the IR: loads and stores of the
-containing storage unit with shifts and masks, from sema's bit offsets and
-widths.
+bytes that hold the field with shifts and masks, from sema's byte offset, bit
+offset and width. A read loads exactly the field's bytes, a write loads (and
+`freeze`s) only the bytes it covers in part, and a `volatile` field is accessed
+with volatile loads and stores. The accesses stay inside the field's own bytes
+because a load of bytes never written is poison as a whole.
 
 ### Module
 
@@ -344,6 +347,15 @@ slots with member access and subscripts, direct calls, string literals,
 `if`/`while`/`do`/`for`/`break`/`continue`/`return`, and file-scope functions.
 It rejects anything else with a "not yet supported by lowering" diagnostic
 rather than producing wrong code.
+
+Floating point and bit-fields are lowered as well. `float`, `double` and
+`long double` become `f32`, `f64` and, on the x86 GNU targets, `f80` (`long
+double` is `f64` on MSVC); arithmetic is `fadd`/`fsub`/`fmul`/`fdiv`/`fneg`,
+comparisons are ordered `fcmp`s except `!=`, which is `une`, and conversions are
+`sitofp`/`uitofp`/`fptosi`/`fptoui`/`fpext`/`fptrunc` (a value converts to
+`_Bool` by comparing with zero). Floating constants and static initializers use
+sema's folded values, rounded to the destination format. `__float128` and
+`_Complex` types are still rejected.
 
 ## The optimizer
 

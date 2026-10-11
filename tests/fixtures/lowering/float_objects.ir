@@ -1,0 +1,68 @@
+; double table[3] = { 1.5, 2, -0.25 };
+; float single = 3.14159f;
+; long double wide = 1.0L / 3;
+; int truncated = 2.75;
+; _Bool flag = 0.5;
+; struct s { float f; double d; } s = { 1, 2.5f };
+; double read(void) {
+;   double local[2] = { 1, 2.5 };
+;   float f = 0.1f;
+;   struct s t = { f, local[1] };
+;   return local[0] + f + t.d;
+; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+global @table external size 24, align 8 = bytes "000000000000f83f0000000000000040000000000000d0bf"
+global @single external size 4, align 4 = bytes "d00f4940"
+global @wide external size 16, align 16 = bytes "abaaaaaaaaaaaaaafd3f000000000000"
+global @truncated external size 4, align 4 = bytes "02000000"
+global @flag external size 1, align 1 = bytes "01"
+global @s external size 16, align 8 = bytes "0000803f000000000000000000000440"
+
+function @read() -> f64 external {
+    slot0 = stack_slot 16, align 8
+    slot1 = stack_slot 16, align 8
+block0:
+    v0 = stack_addr slot0
+    v1 = iconst.i8 0
+    v2 = iconst.i64 16
+    fill v0, v1, v2, align 8
+    v3 = iconst.i32 1
+    v4 = fconst.f64 0x3FF0000000000000
+    v5 = stack_addr slot0
+    store.f64 v4, v5, align 8
+    v6 = fconst.f64 0x4004000000000000
+    v7 = stack_addr slot0
+    v8 = iconst.i64 8
+    v9 = ptr_add inbounds v7, v8
+    store.f64 v6, v9, align 8
+    v10 = fconst.f32 0x3DCCCCCD
+    v11 = stack_addr slot1
+    v12 = iconst.i8 0
+    v13 = iconst.i64 16
+    fill v11, v12, v13, align 8
+    v14 = stack_addr slot1
+    store.f32 v10, v14, align 4
+    v15 = stack_addr slot0
+    v16 = iconst.i32 1
+    v17 = iconst.i64 8
+    v18 = ptr_add inbounds v15, v17
+    v19 = load.f64 v18, align 8
+    v20 = stack_addr slot1
+    v21 = iconst.i64 8
+    v22 = ptr_add inbounds v20, v21
+    store.f64 v19, v22, align 8
+    v23 = stack_addr slot0
+    v24 = iconst.i32 0
+    v25 = load.f64 v23, align 8
+    v26 = fpext.f64 v10
+    v27 = fadd.f64 v25, v26
+    v28 = stack_addr slot1
+    v29 = iconst.i64 8
+    v30 = ptr_add inbounds v28, v29
+    v31 = load.f64 v30, align 8
+    v32 = fadd.f64 v27, v31
+    return v32
+}

@@ -8,6 +8,7 @@
 use super::ssa::Var;
 use crate::{
     ir::{
+        Align,
         Block,
         FuncId,
         StackSlot,
@@ -65,9 +66,10 @@ pub(super) enum Task<'tu> {
     /// Store the initializer value on top of the stack into an object being
     /// initialized, at `offset` bytes from its start.
     Initialize {
-        object: Object,
-        offset: u64,
-        ty:     TypeId,
+        object:    Object,
+        offset:    u64,
+        ty:        TypeId,
+        bit_field: Option<BitFieldBits>,
     },
     /// Copy a string literal into a character array being initialized.
     InitializeString {
@@ -175,7 +177,33 @@ pub(super) enum Operand {
 pub(super) enum Place {
     Variable(Var),
     Memory(Value),
+    /// A bit-field: the address of its storage unit and where in the unit
+    /// the field is.
+    BitField(Value, BitField),
     Function(FuncId),
+}
+
+/// The bits a bit-field member occupies, as semantic analysis laid them out:
+/// a bit offset from the member's byte offset, and a width.
+/// C99: §6.7.2.1 paragraphs 3-4 and 10, pp. 101-102; PDF pp. 113-114.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct BitFieldBits {
+    pub(super) bit_offset: u32,
+    pub(super) width:      u32,
+}
+
+/// Where a bit-field is from its place's address: the bytes its bits touch.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct BitField {
+    /// The number of bytes the field touches.
+    pub(super) span:   u32,
+    /// The field's lowest bit within the first byte.
+    pub(super) shift:  u32,
+    pub(super) width:  u32,
+    /// Whether the field is read with sign extension.
+    pub(super) signed: bool,
+    /// The alignment of the place's address.
+    pub(super) align:  Align,
 }
 
 /// An automatic object an initializer fills: a declared one, or the

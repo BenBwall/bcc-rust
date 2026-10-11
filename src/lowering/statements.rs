@@ -604,6 +604,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         object,
                         offset: 0,
                         ty: data.ty,
+                        bit_field: None,
                     });
                 },
                 | _ => {
@@ -688,7 +689,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             let converted =
                 lowerer.convert_value(argument, declared.unqualified(), parameter_source)?;
             lowerer.operands.push(converted);
-            lowerer.initialize(Object::Local(parameter), 0, declared)?;
+            lowerer.initialize(Object::Local(parameter), 0, declared, None)?;
         }
         lowerer.tasks.push(Task::Statement(record.syntax.body));
         Ok(lowerer)

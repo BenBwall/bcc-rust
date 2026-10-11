@@ -1,0 +1,156 @@
+; struct flags {
+;   unsigned a : 3;
+;   int b : 5;
+;   unsigned c : 12;
+;   int d : 4;
+;   _Bool e : 1;
+;   long long wide : 40;
+; };
+; unsigned read_a(struct flags *f) { return f->a; }
+; int read_b(struct flags *f) { return f->b; }
+; int read_d(struct flags *f) { return f->d + f->e; }
+; long long read_wide(struct flags *f) { return f->wide; }
+; int write(struct flags *f, int v) {
+;   f->a = v;
+;   f->b = v;
+;   f->e = v;
+;   f->wide = v;
+;   return f->b = 100;
+; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @read_a(ptr) -> i32 external {
+block0(v0: ptr):
+    v1 = load.i8 v0, align 1
+    v2 = iconst.i8 7
+    v3 = and.i8 v1, v2
+    v4 = zext.i32 v3
+    return v4
+}
+
+function @read_b(ptr) -> i32 external {
+block0(v0: ptr):
+    v1 = load.i8 v0, align 1
+    v2 = iconst.i8 3
+    v3 = ashr.i8 v1, v2
+    v4 = sext.i32 v3
+    return v4
+}
+
+function @read_d(ptr) -> i32 external {
+block0(v0: ptr):
+    v1 = iconst.i64 2
+    v2 = ptr_add inbounds v0, v1
+    v3 = load.i8 v2, align 1
+    v4 = iconst.i8 4
+    v5 = ashr.i8 v3, v4
+    v6 = sext.i32 v5
+    v7 = iconst.i64 3
+    v8 = ptr_add inbounds v0, v7
+    v9 = load.i8 v8, align 1
+    v10 = iconst.i8 1
+    v11 = and.i8 v9, v10
+    v12 = zext.i32 v11
+    v13 = iadd.i32 nsw v6, v12
+    return v13
+}
+
+function @read_wide(ptr) -> i64 external {
+block0(v0: ptr):
+    v1 = iconst.i64 8
+    v2 = ptr_add inbounds v0, v1
+    v3 = load.i32 v2, align 4
+    v4 = zext.i64 v3
+    v5 = iconst.i64 4
+    v6 = ptr_add inbounds v2, v5
+    v7 = load.i8 v6, align 1
+    v8 = zext.i64 v7
+    v9 = iconst.i64 32
+    v10 = shl.i64 v8, v9
+    v11 = or.i64 v4, v10
+    v12 = iconst.i64 24
+    v13 = shl.i64 v11, v12
+    v14 = iconst.i64 24
+    v15 = ashr.i64 v13, v14
+    return v15
+}
+
+function @write(ptr, i32) -> i32 external {
+block0(v0: ptr, v1: i32):
+    v2 = trunc.i8 v1
+    v3 = iconst.i8 7
+    v4 = and.i8 v2, v3
+    v5 = load.i8 v0, align 1
+    v6 = freeze.i8 v5
+    v7 = iconst.i8 -8
+    v8 = and.i8 v6, v7
+    v9 = or.i8 v8, v4
+    store.i8 v9, v0, align 1
+    v10 = zext.i32 v4
+    v11 = trunc.i8 v1
+    v12 = iconst.i8 31
+    v13 = and.i8 v11, v12
+    v14 = iconst.i8 3
+    v15 = shl.i8 v13, v14
+    v16 = load.i8 v0, align 1
+    v17 = freeze.i8 v16
+    v18 = iconst.i8 7
+    v19 = and.i8 v17, v18
+    v20 = or.i8 v19, v15
+    store.i8 v20, v0, align 1
+    v21 = iconst.i8 3
+    v22 = shl.i8 v13, v21
+    v23 = iconst.i8 3
+    v24 = ashr.i8 v22, v23
+    v25 = sext.i32 v24
+    v26 = iconst.i64 3
+    v27 = ptr_add inbounds v0, v26
+    v28 = iconst.i32 0
+    v29 = icmp.i32 ne v1, v28
+    v30 = zext.i8 v29
+    v31 = iconst.i8 1
+    v32 = and.i8 v30, v31
+    v33 = load.i8 v27, align 1
+    v34 = freeze.i8 v33
+    v35 = iconst.i8 -2
+    v36 = and.i8 v34, v35
+    v37 = or.i8 v36, v32
+    store.i8 v37, v27, align 1
+    v38 = iconst.i64 8
+    v39 = ptr_add inbounds v0, v38
+    v40 = sext.i64 v1
+    v41 = iconst.i64 1099511627775
+    v42 = and.i64 v40, v41
+    v43 = trunc.i32 v42
+    store.i32 v43, v39, align 4
+    v44 = iconst.i64 32
+    v45 = lshr.i64 v42, v44
+    v46 = trunc.i8 v45
+    v47 = iconst.i64 4
+    v48 = ptr_add inbounds v39, v47
+    store.i8 v46, v48, align 1
+    v49 = iconst.i64 24
+    v50 = shl.i64 v42, v49
+    v51 = iconst.i64 24
+    v52 = ashr.i64 v50, v51
+    v53 = iconst.i32 100
+    v54 = iconst.i8 100
+    v55 = iconst.i8 31
+    v56 = and.i8 v54, v55
+    v57 = iconst.i8 3
+    v58 = shl.i8 v56, v57
+    v59 = load.i8 v0, align 1
+    v60 = freeze.i8 v59
+    v61 = iconst.i8 7
+    v62 = and.i8 v60, v61
+    v63 = or.i8 v62, v58
+    store.i8 v63, v0, align 1
+    v64 = iconst.i8 3
+    v65 = shl.i8 v56, v64
+    v66 = iconst.i8 3
+    v67 = ashr.i8 v65, v66
+    v68 = sext.i32 v67
+    return v68
+}

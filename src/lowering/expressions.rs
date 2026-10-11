@@ -7,7 +7,8 @@
 //! [`FunctionLowerer::convert_recorded`] applies in order: an lvalue
 //! conversion reads the place, a decay takes its address, and an
 //! arithmetic, assignment or default-argument conversion changes the
-//! value's type. An integer constant expression is folded to its value.
+//! value's type. An integer constant expression is folded to its value, and a
+//! floating constant to its bits.
 //! `&&`, `||` and `?:` become blocks with a merge parameter; a condition
 //! branches directly on comparisons and logical operators.
 //!
@@ -17,6 +18,7 @@ use super::{
     Construct,
     FunctionLowerer,
     LoweringError,
+    floats,
     module_items::at,
     ssa::{
         Op,
@@ -28,6 +30,7 @@ use super::{
         repr,
     },
     work::{
+        BitFieldBits,
         Item,
         Operand,
         Place,
@@ -37,6 +40,7 @@ use super::{
 use crate::{
     ir::{
         Block,
+        FloatCC,
         InstData,
         InstFlags,
         IntCC,
@@ -94,6 +98,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 value.value
             };
             let value = self.iconst(ty, value);
+            self.push_item(Operand::Value(value), info.ty);
+            return Ok(());
+        }
+        // A folded floating constant has exact bits (§6.6 paragraph 8).
+        if let Some(folded) = info.floating
+            && let Ok(Repr::Float { ty }) = repr(&self.unit.sema.types, info.ty)
+        {
+            let bits = floats::constant_bits(&folded.real, ty)
+                .ok_or_else(|| LoweringError::missing("a floating constant has no bits", source))?;
+            let value = self.fconst(ty, bits);
             self.push_item(Operand::Value(value), info.ty);
             return Ok(());
         }
@@ -324,9 +338,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let field = self.unit.sema.selected_field(expression).ok_or_else(|| {
                     LoweringError::missing("a member access has no field", source)
                 })?;
-                if field.width.is_some() || info.bit_field.is_some() {
-                    return Err(LoweringError::unsupported(Construct::BitField, source));
-                }
                 let (base, rvalue) = match base.operand {
                     | Operand::Place(Place::Memory(address)) | Operand::Value(address) =>
                         (address, false),
@@ -337,19 +348,23 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                             source,
                         )),
                 };
-                let address = self.offset_address(base, field.offset);
+                let place = if let Some(width) = field.width {
+                    let bits = BitFieldBits {
+                        bit_offset: field.bit_offset,
+                        width,
+                    };
+                    let bit_field = self.bit_field(field.ty, field.offset, bits, source)?;
+                    Place::BitField(self.offset_address(base, field.offset), bit_field)
+                } else {
+                    Place::Memory(self.offset_address(base, field.offset))
+                };
                 if rvalue {
                     // A member of a structure rvalue is not an lvalue
                     // (§6.5.2.3p3), so it is read at once.
-                    let item = self.read(
-                        Place::Memory(address),
-                        info.ty,
-                        info.ty.unqualified(),
-                        source,
-                    )?;
+                    let item = self.read(place, info.ty, info.ty.unqualified(), source)?;
                     self.operands.push(item);
                 } else {
-                    self.push_item(Operand::Place(Place::Memory(address)), info.ty);
+                    self.push_item(Operand::Place(place), info.ty);
                 }
             },
             | E::Cast { .. } => {
@@ -425,8 +440,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// Converts a value to type `to` as by assignment (§6.3.1.2-§6.3.1.4,
     /// §6.3.2.3): integers are sign- or zero-extended from their own
     /// signedness or truncated, `_Bool` compares with zero, and integers and
-    /// pointers convert to each other through `i64`.
-    /// C99: §6.3.1.2-§6.3.1.3, p. 43; PDF p. 55; §6.3.2.3, pp. 47-48;
+    /// pointers convert to each other through `i64`, and floating types convert
+    /// to integers by truncation and among themselves by widening or rounding.
+    /// C99: §6.3.1.2-§6.3.1.5, pp. 43-44; PDF pp. 55-56; §6.3.2.3, pp. 47-48;
     /// PDF pp. 59-60.
     pub(super) fn convert_value(
         &mut self,
@@ -448,18 +464,38 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | (Operand::Truth(truth), Repr::Int { ty, .. }) =>
                 Operand::Value(self.extend(truth, false, ty)),
-            | (Operand::Value(value), Repr::Int { ty, .. }) => {
+            | (Operand::Value(value), Repr::Int { ty, signed }) => {
                 let from = repr(types, item.ty).map_err(|kind| at(kind, source))?;
                 Operand::Value(match from {
                     | Repr::Pointer => self.convert(Opcode::Ptrtoint, ty, value),
+                    // A floating value truncates toward zero (§6.3.1.4p1).
+                    | Repr::Float { .. } => {
+                        let opcode = if signed {
+                            Opcode::Fptosi
+                        } else {
+                            Opcode::Fptoui
+                        };
+                        self.convert(opcode, ty, value)
+                    },
                     | _ => self.extend(value, from.signed(), ty),
                 })
+            },
+            | (Operand::Truth(truth), Repr::Float { ty }) =>
+                Operand::Value(self.convert(Opcode::Uitofp, ty, truth)),
+            | (Operand::Value(value), Repr::Float { ty }) => {
+                let from = repr(types, item.ty).map_err(|kind| at(kind, source))?;
+                Operand::Value(self.float_from(value, from, ty, source)?)
             },
             | (Operand::Truth(_) | Operand::Value(_), Repr::Pointer) => {
                 let from = repr(types, item.ty).map_err(|kind| at(kind, source))?;
                 let value = self.value(item, source)?;
                 Operand::Value(match from {
                     | Repr::Pointer => value,
+                    | Repr::Float { .. } =>
+                        return Err(LoweringError::missing(
+                            "a floating value converts to a pointer",
+                            source,
+                        )),
                     | _ => self.int_to_pointer(value, from.signed()),
                 })
             },
@@ -470,6 +506,49 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 )),
         };
         Ok(Item { operand, ty: to })
+    }
+
+    /// A value of representation `from` converted to the floating type `to`:
+    /// an integer converts exactly where it can and otherwise rounds to
+    /// nearest (`sitofp`, `uitofp`), and a floating type widens (`fpext`) or
+    /// narrows (`fptrunc`). An integer constant folds.
+    /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56; §6.3.1.5 paragraph
+    /// 1, p. 44; PDF p. 56.
+    fn float_from(
+        &mut self,
+        value: Value,
+        from: Repr,
+        to: Type,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        Ok(match from {
+            | Repr::Float { ty } if ty == to => value,
+            | Repr::Float { ty } if ty.bits() < to.bits() => self.convert(Opcode::Fpext, to, value),
+            | Repr::Float { .. } => self.convert(Opcode::Fptrunc, to, value),
+            | Repr::Int { .. } | Repr::Bool => {
+                let signed = from.signed();
+                let ty = self.draft.value_type(value);
+                if let Some(constant) = self.draft.constant(value)
+                    && (signed || ty != Type::I128)
+                {
+                    let exact = self.cast_constant(constant, ty, signed, Type::I128);
+                    if let Some(bits) = floats::from_integer(exact, to) {
+                        return Ok(self.fconst(to, bits));
+                    }
+                }
+                let opcode = if signed {
+                    Opcode::Sitofp
+                } else {
+                    Opcode::Uitofp
+                };
+                self.convert(opcode, to, value)
+            },
+            | _ =>
+                return Err(LoweringError::missing(
+                    "a conversion to a floating type has no lowering",
+                    source,
+                )),
+        })
     }
 
     /// The IR value of a scalar operand, materializing a comparison's `i1`
@@ -504,6 +583,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | _ => return Err(LoweringError::missing("a condition has no value", source)),
         };
         let ty = self.draft.value_type(value);
+        if ty.is_float() {
+            // A NaN is nonzero: `une` is true when either operand is unordered.
+            // C99: §6.3.1.2 paragraph 1, p. 43; PDF p. 55.
+            let zero = self.fconst(ty, 0);
+            return Ok(self.fcmp(FloatCC::Une, value, zero));
+        }
         if let Some(constant) = self.draft.constant(value) {
             let nonzero = (constant as u128) & ty.mask() != 0;
             return Ok(self.iconst(Type::I1, i128::from(nonzero)));
@@ -720,6 +805,19 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let left_pointer = self.is_pointer(left.ty);
         let right_pointer = self.is_pointer(right.ty);
         if let Some(cc) = comparison(operator) {
+            if matches!(self.repr(left.ty, source)?, Repr::Float { .. }) {
+                // C99 Annex F: `!=` is true for a NaN operand; the rest are
+                // ordered and false.
+                // C99: §6.5.8 paragraph 6, p. 86; PDF p. 98; §F.3 paragraph 1,
+                // pp. 445-447; PDF pp. 457-459.
+                let a = self.value(left, source)?;
+                let b = self.value(right, source)?;
+                let truth = self.fcmp(float_comparison(cc), a, b);
+                return Ok(Item {
+                    operand: Operand::Truth(truth),
+                    ty,
+                });
+            }
             let (a, b, signed) = if left_pointer || right_pointer {
                 (
                     self.pointer_operand(left, source)?,
@@ -781,6 +879,24 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let signed = representation.signed();
         let a = self.value(left, source)?;
         let mut b = self.value(right, source)?;
+        if matches!(representation, Repr::Float { .. }) {
+            let opcode = match operator {
+                | B::Multiplication => Opcode::Fmul,
+                | B::Addition => Opcode::Fadd,
+                | B::Subtraction => Opcode::Fsub,
+                | B::Division => Opcode::Fdiv,
+                | _ =>
+                    return Err(LoweringError::missing(
+                        "a floating operator has no lowering",
+                        source,
+                    )),
+            };
+            let value = self.binary_inst(opcode, InstFlags::empty(), a, b);
+            return Ok(Item {
+                operand: Operand::Value(value),
+                ty,
+            });
+        }
         let wrap = if signed {
             InstFlags::NSW
         } else {
@@ -852,6 +968,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | U::Minus => {
                 let value = self.value(operand, source)?;
                 let ty = self.draft.value_type(value);
+                if ty.is_float() {
+                    let negated = self.convert(Opcode::Fneg, ty, value);
+                    self.push_item(Operand::Value(negated), info.ty);
+                    return Ok(());
+                }
                 let zero = self.iconst(ty, 0);
                 let flags = if self.repr(info.ty, source)?.signed() {
                     InstFlags::NSW
@@ -867,6 +988,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 Operand::Value(self.binary_inst(Opcode::Xor, InstFlags::empty(), value, ones))
             },
             | U::LogicalNot => match operand.operand {
+                | Operand::Value(value) if self.draft.value_type(value).is_float() => {
+                    let ty = self.draft.value_type(value);
+                    let zero = self.fconst(ty, 0);
+                    Operand::Truth(self.fcmp(FloatCC::Oeq, value, zero))
+                },
                 | Operand::Value(value) if self.draft.constant(value).is_none() => {
                     let ty = self.draft.value_type(value);
                     let zero = if ty == Type::Ptr {
@@ -932,6 +1058,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     },
                 );
                 Operand::Value(self.ptr_add(value, offset))
+            },
+            | Repr::Float { ty } => {
+                let bits = floats::from_integer(1, ty)
+                    .ok_or_else(|| LoweringError::missing("a floating type has no one", source))?;
+                let one = self.fconst(ty, bits);
+                let opcode = if increment {
+                    Opcode::Fadd
+                } else {
+                    Opcode::Fsub
+                };
+                Operand::Value(self.binary_inst(opcode, InstFlags::empty(), value, one))
             },
             | Repr::Int { ty, signed } => {
                 let one = self.iconst(ty, 1);
@@ -1206,6 +1343,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Repr::Void => &[],
             | Repr::Aggregate | Repr::Pointer => &[Type::Ptr],
             | Repr::Bool => &[Type::I8],
+            | Repr::Float { ty } => match ty {
+                | Type::F32 => &[Type::F32],
+                | Type::F64 => &[Type::F64],
+                | _ => &[Type::F80],
+            },
             | Repr::Int { ty, .. } => match ty {
                 | Type::I8 => &[Type::I8],
                 | Type::I16 => &[Type::I16],
@@ -1245,6 +1387,19 @@ fn comparison(operator: BinaryOperator) -> Option<IntCC> {
         | BinaryOperator::NotEqual => IntCC::Ne,
         | _ => return None,
     })
+}
+
+/// The IR comparison of a floating relational or equality operator, given
+/// as its signed integer form: ordered, except `!=`.
+fn float_comparison(cc: IntCC) -> FloatCC {
+    match cc {
+        | IntCC::Slt => FloatCC::Olt,
+        | IntCC::Sgt => FloatCC::Ogt,
+        | IntCC::Sle => FloatCC::Ole,
+        | IntCC::Sge => FloatCC::Oge,
+        | IntCC::Eq => FloatCC::Oeq,
+        | _ => FloatCC::Une,
+    }
 }
 
 fn unsigned(cc: IntCC) -> IntCC {
