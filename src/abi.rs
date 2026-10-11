@@ -85,7 +85,8 @@ use crate::{
 
 /// Lowers every signature, call, parameter and `va_arg` of a verified
 /// pre-ABI `module` for `target`, leaving a post-ABI module that the back
-/// ends accept. `scratch` holds the plans and per-function working data.
+/// ends accept. `scratch` holds module plans; a separate arena holds
+/// rewrite and verification work and is reset after each function.
 ///
 /// An unsupported case (a `va_arg` of a type the target's expansion does not
 /// handle, or an aggregate the classification cannot place) is reported
@@ -94,6 +95,19 @@ pub(crate) fn lower_abi<'ir>(
     module: &mut Module<'ir>,
     target: Target,
     scratch: &Bump,
+) -> Result<(), AbiError<'ir>> {
+    let mut function_scratch = Bump::new();
+    lower_abi_with_function_scratch(module, target, scratch, &mut function_scratch)
+}
+
+/// Lowers with independently owned function scratch. Callee parameter
+/// objects follow C99 §6.9.1p10, p. 142; PDF p. 154; scratch reclamation is
+/// an implementation choice.
+fn lower_abi_with_function_scratch<'ir>(
+    module: &mut Module<'ir>,
+    target: Target,
+    scratch: &Bump,
+    function_scratch: &mut Bump,
 ) -> Result<(), AbiError<'ir>> {
     for (_, function) in module.functions() {
         let Some(body) = &function.body else {
@@ -134,7 +148,15 @@ pub(crate) fn lower_abi<'ir>(
         module.function_mut(func).signature = plans[old.index()].lowered;
     }
     for &func in &functions {
-        rewrite::rewrite_body(module, func, target, &plans, &old_signatures, scratch);
+        rewrite::rewrite_body(
+            module,
+            func,
+            target,
+            &plans,
+            &old_signatures,
+            function_scratch,
+        );
+        function_scratch.reset();
     }
     module.set_profile(Profile::PostAbi);
     Ok(())

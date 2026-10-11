@@ -17,6 +17,42 @@ use crate::{
     test_support::assert_snapshot,
 };
 
+#[test]
+fn function_rewrite_and_verification_scratch_is_reclaimed() {
+    let usage = |count| {
+        let mut text = String::new();
+        for i in 0..count {
+            writeln!(
+                text,
+                "function @f{i}(i32) -> i32 external {{\nblock0(v0: i32):\n v1 = iconst.i32 1\n \
+                 v2 = iadd.i32 v0, v1\n return v2\n}}"
+            )
+            .unwrap();
+        }
+        let arena = Bump::new();
+        let scratch = Bump::new();
+        let mut function_scratch = Bump::new();
+        let mut module = parse_module(&arena, &text).unwrap();
+        lower_abi_with_function_scratch(
+            &mut module,
+            Target::LinuxGnu,
+            &scratch,
+            &mut function_scratch,
+        )
+        .unwrap();
+        assert_verified(&module, Profile::PostAbi, &text);
+        assert_eq!(function_scratch.used(), 0);
+        (scratch.high_water(), function_scratch.high_water())
+    };
+    let one = usage(1);
+    let many = usage(1000);
+    // Only module plans and the dense function/signature lists may grow.
+    // Rewriting and debug verification must reuse their function arena.
+    assert!(many.0 < one.0 + 64 * 1000, "{one:?} -> {many:?} bytes");
+    assert!(one.1 > 0, "function scratch is exercised");
+    assert_eq!(one.1, many.1, "per-function high water is bounded");
+}
+
 /// Lowers `text` for System V and Win64, compares each with the snapshot
 /// `name`, and checks that `@main` returns `expected` before and after.
 #[track_caller]
