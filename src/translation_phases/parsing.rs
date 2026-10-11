@@ -22,11 +22,11 @@
 //!    the state they run on.
 //! 2. [`ParseFrame`], [`ParseAction`], [`ParseValue`], and [`ParseFrame::step`]
 //!    in `parsing/machine.rs` for frame dispatch and typed child returns.
-//! 3. [`external_declaration::ExternalDeclarationFrame::step`], then
-//!    [`declaration::DeclarationFrame::step`] for the declaration/function
-//!    split.
-//! 4. [`expression::ExpressionFrame::step`] for the Double-E reducer, and
-//!    [`Parser::recover`] for synchronization after malformed input.
+//! 3. [`frames::external_declaration::ExternalDeclarationFrame::step`], then
+//!    [`frames::declaration::DeclarationFrame::step`] for the
+//!    declaration/function split.
+//! 4. [`frames::expression::ExpressionFrame::step`] for the Double-E reducer,
+//!    and [`Parser::recover`] for synchronization after malformed input.
 //! 5. [`ParsedTranslationUnit`] and [`ParsedTranslationUnit::inspect`] for the
 //!    retained result and its iterative inspection view.
 //!
@@ -102,28 +102,10 @@ use errors::{
     ParserErrorType,
     ParserResource,
 };
-use expression_operators::is_operator;
 pub(crate) use extensions::{
     gnu,
     modern,
     msvc,
-};
-use external_declaration::ExternalDeclarationFrame;
-use frames::{
-    compound_statement,
-    declaration,
-    declaration_specifiers,
-    declarator,
-    enum_specifier,
-    expression,
-    expression_operators,
-    external_declaration,
-    function_definition,
-    initializer,
-    parameter_list,
-    statement,
-    struct_or_union,
-    type_name,
 };
 pub(crate) use gnu::{
     Builtin,
@@ -165,6 +147,10 @@ pub(crate) use translation_unit::{
     PreprocessedTranslationUnit,
 };
 
+use self::frames::{
+    expression_operators::is_operator,
+    external_declaration::ExternalDeclarationFrame,
+};
 use crate::{
     translation_phases::{
         Context,

@@ -11,17 +11,17 @@
 
 use std::fmt::Debug;
 
-use super::{
-    Parser,
-    expression::ExpressionMode,
-    syntax::{
-        BinaryOperator,
-        Expression,
-        UnaryOperator,
-    },
-};
+use super::expression::ExpressionMode;
 use crate::translation_phases::{
     SourceVectors,
+    parsing::{
+        Parser,
+        syntax::{
+            BinaryOperator,
+            Expression,
+            UnaryOperator,
+        },
+    },
     preprocessing::{
         KeywordTokenType,
         OperatorTokenType,

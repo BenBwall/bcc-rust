@@ -17,19 +17,27 @@ use std::{
 use chrono::Local;
 
 use super::super::{
-    Bump,
-    Context,
     Expander,
     PreprocessorError,
     PreprocessorErrorType,
-    PreprocessorToken,
-    PreprocessorTokenType,
-    StringCacheId,
-    TranslationPhase,
 };
 use crate::{
-    translation_phases::preprocessor_tokenizer::TokenSource,
-    util::bump::ArenaString,
+    translation_phases::{
+        Context,
+        TranslationPhase,
+        preprocessor_tokenizer::{
+            PreprocessorToken,
+            PreprocessorTokenType,
+            TokenSource,
+        },
+    },
+    util::{
+        bump::{
+            ArenaString,
+            Bump,
+        },
+        string_cache::StringCacheId,
+    },
 };
 
 impl Expander<'_, '_, '_, '_> {

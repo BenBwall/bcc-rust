@@ -5,23 +5,32 @@
 //! This storage boundary preserves input cursors; it does not change
 //! replacement rules.
 
-use super::super::{
-    ArenaVec,
-    Bump,
-    Context,
-    Debug,
-    Expander,
+use std::fmt::Debug;
+
+use super::{
+    super::{
+        Expander,
+        Preprocessor,
+        Token,
+        expression::PreprocessorExpressionParser,
+    },
     FileFrame,
     OutputPurpose,
-    Preprocessor,
-    PreprocessorExpressionParser,
     PreprocessorState,
     QueryExpansion,
-    Token,
-    TokenSource,
     TokenizerFrame,
     TokenizerFrameType,
-    TranslationError,
+};
+use crate::{
+    translation_phases::{
+        Context,
+        TranslationError,
+        preprocessor_tokenizer::TokenSource,
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
+    },
 };
 
 impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {

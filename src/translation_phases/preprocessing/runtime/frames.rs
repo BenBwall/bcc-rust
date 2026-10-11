@@ -6,19 +6,27 @@
 //! rescanning, §6.10.3.4 paragraph 1, p. 155; PDF p. 167.
 //! Directive handlers and replacement operators decide which frames to push.
 
-use std::mem::take;
+use std::{
+    fmt::Debug,
+    mem::take,
+};
 
 use super::super::{
-    Debug,
     Expander,
-    FunctionLikeMacroArgument,
-    MacroArguments,
-    MacroDefinition,
     PreprocessorError,
     PreprocessorErrorType,
-    SourceVector,
-    StringCacheId,
-    TokenSource,
+    macro_expansion::{
+        FunctionLikeMacroArgument,
+        MacroArguments,
+        MacroDefinition,
+    },
+};
+use crate::{
+    translation_phases::{
+        SourceVector,
+        preprocessor_tokenizer::TokenSource,
+    },
+    util::string_cache::StringCacheId,
 };
 
 impl<'x> Expander<'_, '_, '_, 'x> {

@@ -4,7 +4,7 @@
 //! C99: source locations for required diagnostics, §5.1.1.3 paragraph 1,
 //! p. 11; PDF p. 23. This record does not interpret C source.
 
-use super::OnceCell;
+use std::cell::OnceCell;
 
 /// Source text and its lazily built physical-line index share one identity.
 /// Replacing the text replaces the index, while rendering another diagnostic

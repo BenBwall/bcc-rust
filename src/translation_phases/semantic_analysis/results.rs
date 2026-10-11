@@ -5,15 +5,21 @@
 //! §6.7, pp. 97-124; PDF pp. 109-136.
 
 use super::{
-    Conversion,
-    ExpressionInfo,
-    Identifier,
-    Integer,
-    Parameter,
-    SourceVectors,
-    TypeId,
-    Types,
+    expressions::{
+        Conversion,
+        ExpressionInfo,
+    },
     functions,
+    integer::Integer,
+    types::{
+        Parameter,
+        TypeId,
+        Types,
+    },
+};
+use crate::translation_phases::{
+    SourceVectors,
+    parsing::syntax::Identifier,
 };
 
 /// Durable semantic output. Working maps/stacks are gone when this is returned.

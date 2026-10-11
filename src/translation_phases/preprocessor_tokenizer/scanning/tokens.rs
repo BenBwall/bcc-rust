@@ -11,13 +11,15 @@ use super::{
     super::{
         Lexer,
         PreprocessorTokenType,
-        SourcePosition,
-        SourceVector,
     },
     Lexed,
 };
 use crate::{
     configuration::Feature,
+    translation_phases::{
+        SourcePosition,
+        SourceVector,
+    },
     util::byte_scan,
 };
 

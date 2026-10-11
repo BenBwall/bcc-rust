@@ -13,12 +13,12 @@ use std::{
 
 use super::{
     Expander,
-    QueryExpansion,
     errors::{
         PreprocessorError,
         PreprocessorErrorType,
     },
     runtime::{
+        QueryExpansion,
         TokenizerFrame,
         TokenizerFrameType,
     },

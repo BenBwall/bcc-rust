@@ -4,25 +4,40 @@
 //! p. 155; PDF p. 167. Lookahead commits only when it recognizes a call;
 //! parameter substitution belongs to the argument reader.
 
+use std::cell::OnceCell;
+
 use super::{
-    ArenaVec,
-    Expander,
-    Feature,
     FunctionLikeMacroArgument,
-    GetPosition,
     MacroArguments,
-    OnceCell,
-    PreprocessorError,
-    PreprocessorErrorType,
-    PreprocessorToken,
-    PreprocessorTokenType,
-    SetPosition,
-    StringCacheId,
-    TokenSource,
-    TokenizerFrame,
-    TokenizerFrameType,
-    TranslationPhase,
     find_argument,
+};
+use crate::{
+    configuration::Feature,
+    translation_phases::{
+        GetPosition,
+        SetPosition,
+        TranslationPhase,
+        preprocessing::{
+            Expander,
+            errors::{
+                PreprocessorError,
+                PreprocessorErrorType,
+            },
+            runtime::{
+                TokenizerFrame,
+                TokenizerFrameType,
+            },
+        },
+        preprocessor_tokenizer::{
+            PreprocessorToken,
+            PreprocessorTokenType,
+            TokenSource,
+        },
+    },
+    util::{
+        bump::ArenaVec,
+        string_cache::StringCacheId,
+    },
 };
 
 impl<'x> Expander<'_, '_, '_, 'x> {

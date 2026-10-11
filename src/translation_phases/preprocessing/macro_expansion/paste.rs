@@ -5,22 +5,37 @@
 //! rescanning, §6.10.3.4 paragraph 1, p. 155; PDF p. 167.
 //! The resulting preprocessing token is converted to a parser token later.
 
+use std::ops::RangeBounds;
+
 use super::{
-    ArenaString,
-    ArenaVec,
-    Expander,
-    Feature,
     HashHash,
     MacroArguments,
-    PreprocessorError,
-    PreprocessorErrorType,
-    PreprocessorToken,
-    PreprocessorTokenType,
-    RangeBounds,
-    TokenSource,
-    TokenizerFrame,
-    TokenizerFrameType,
     find_argument,
+};
+use crate::{
+    configuration::Feature,
+    translation_phases::{
+        preprocessing::{
+            Expander,
+            errors::{
+                PreprocessorError,
+                PreprocessorErrorType,
+            },
+            runtime::{
+                TokenizerFrame,
+                TokenizerFrameType,
+            },
+        },
+        preprocessor_tokenizer::{
+            PreprocessorToken,
+            PreprocessorTokenType,
+            TokenSource,
+        },
+    },
+    util::bump::{
+        ArenaString,
+        ArenaVec,
+    },
 };
 
 impl<'x> Expander<'_, '_, '_, 'x> {

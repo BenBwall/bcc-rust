@@ -5,20 +5,29 @@
 //! PDF pp. 21-22. Diagnostic support: §5.1.1.3 paragraph 1, p. 11;
 //! PDF p. 23. Language rules belong to the individual phases.
 
+use rustc_hash::FxBuildHasher;
+
 use super::{
-    ArenaMap,
-    ArenaQueue,
-    ArenaVec,
-    Bump,
-    CompilerConfiguration,
     Context,
-    DedupArena,
-    ExpansionSites,
-    FxBuildHasher,
-    KeywordTokenType,
-    RegionVec,
-    SourceVectorStack,
-    StringCache,
+    expansion_sites::ExpansionSites,
+};
+use crate::{
+    configuration::CompilerConfiguration,
+    translation_phases::{
+        preprocessing::KeywordTokenType,
+        provenance::SourceVectorStack,
+    },
+    util::{
+        bump::{
+            ArenaMap,
+            ArenaQueue,
+            ArenaVec,
+            Bump,
+        },
+        dedup_arena::DedupArena,
+        region_vec::RegionVec,
+        string_cache::StringCache,
+    },
 };
 
 impl<'tu> Context<'tu> {

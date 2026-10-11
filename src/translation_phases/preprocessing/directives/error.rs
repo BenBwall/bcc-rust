@@ -3,14 +3,22 @@
 //! C99: translation phase 4; error directive, §6.10.5 paragraph 1, p. 159;
 //! PDF p. 171. This handler reports the directive, without analyzing C syntax.
 
-use super::{
-    ArenaString,
-    Expander,
-    PreprocessorError,
-    PreprocessorErrorType,
-    PreprocessorToken,
-    PreprocessorTokenType,
-    TranslationPhase,
+use crate::{
+    translation_phases::{
+        TranslationPhase,
+        preprocessing::{
+            Expander,
+            errors::{
+                PreprocessorError,
+                PreprocessorErrorType,
+            },
+        },
+        preprocessor_tokenizer::{
+            PreprocessorToken,
+            PreprocessorTokenType,
+        },
+    },
+    util::bump::ArenaString,
 };
 
 impl Expander<'_, '_, '_, '_> {

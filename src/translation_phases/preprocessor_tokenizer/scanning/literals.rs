@@ -13,12 +13,12 @@ use super::{
         Lexer,
         PreprocessorTokenType,
         PreprocessorTokenizerErrorType,
-        SourcePosition,
     },
     Lexed,
 };
 use crate::{
     configuration::Feature,
+    translation_phases::SourcePosition,
     util::byte_scan,
 };
 

@@ -8,11 +8,11 @@ use std::fmt::Write as _;
 
 use super::super::{
     Expander,
-    MacroDeprecation,
     errors::{
         PreprocessorError,
         PreprocessorErrorType,
     },
+    runtime::MacroDeprecation,
     token::{
         StringTokenType,
         TokenType,
@@ -22,7 +22,7 @@ use crate::{
     translation_phases::{
         Context,
         SourceVectors,
-        StrExt,
+        interface::StrExt,
         preprocessor_tokenizer::{
             PreprocessorToken,
             PreprocessorTokenType,

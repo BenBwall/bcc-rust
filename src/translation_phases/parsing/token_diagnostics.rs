@@ -14,8 +14,8 @@
 use std::cell::Cell;
 
 use super::{
-    ParseFrameKind,
     Parser,
+    machine::ParseFrameKind,
 };
 use crate::{
     translation_phases::{

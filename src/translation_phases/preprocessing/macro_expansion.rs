@@ -49,18 +49,7 @@ mod variadic;
 mod paste;
 mod stringification;
 
-use std::{
-    cell::OnceCell,
-    fmt::Debug,
-    mem::{
-        replace,
-        take,
-    },
-    ops::{
-        ControlFlow,
-        RangeBounds,
-    },
-};
+use std::fmt::Debug;
 
 pub(super) use arguments::find_argument;
 pub(crate) use arguments::{
@@ -71,37 +60,16 @@ pub(crate) use definitions::MacroDefinition;
 
 use super::{
     Expander,
-    errors::{
-        PreprocessorError,
-        PreprocessorErrorType,
-    },
     runtime::{
         TokenizerFrame,
         TokenizerFrameType,
-        spell_string_literal,
     },
 };
-use crate::{
-    configuration::Feature,
-    translation_phases::{
-        Context,
-        GetPosition,
-        SetPosition,
-        SourceVectors,
-        TranslationPhase,
-        preprocessor_tokenizer::{
-            PreprocessorToken,
-            PreprocessorTokenType,
-            TokenSource,
-        },
-    },
-    util::{
-        bump::{
-            ArenaString,
-            ArenaVec,
-            Bump,
-        },
-        string_cache::StringCacheId,
+use crate::translation_phases::{
+    TranslationPhase,
+    preprocessor_tokenizer::{
+        PreprocessorToken,
+        PreprocessorTokenType,
     },
 };
 

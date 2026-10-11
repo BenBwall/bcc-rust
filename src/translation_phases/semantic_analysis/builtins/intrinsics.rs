@@ -2,29 +2,34 @@
 //! C99: §7.15, pp. 249-252; PDF pp. 261-264; §7.17p3, p. 254;
 //! PDF p. 266. Traversal remains on the semantic work stack.
 
-use super::{
-    Analyzer,
-    ArrayBound,
-    Cell,
-    ConstantClass,
-    Expression,
-    ExpressionInfo,
-    Integer,
-    Scalar,
-    SemanticErrorKind,
-    SyntaxOperand,
-    Tag,
-    TagKind,
-    TypeId,
-    TypeKind,
-    modeled,
-};
+use std::cell::Cell;
+
+use super::modeled;
 use crate::translation_phases::{
     parsing::{
         Builtin,
         OffsetMember,
+        SyntaxOperand,
+        syntax::Expression,
     },
     preprocessing::KeywordTokenType,
+    semantic_analysis::{
+        Analyzer,
+        SemanticErrorKind,
+        expressions::{
+            ConstantClass,
+            ExpressionInfo,
+        },
+        integer::Integer,
+        types::{
+            ArrayBound,
+            Scalar,
+            Tag,
+            TagKind,
+            TypeId,
+            TypeKind,
+        },
+    },
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

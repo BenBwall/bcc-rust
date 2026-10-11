@@ -3,32 +3,47 @@
 //! live in arenas; brace elision and designators never recurse on the host
 //! stack.
 
+use rustc_hash::FxBuildHasher;
+
 use super::{
     super::parsing::declaration_syntax::BracedInitializerList,
     Analyzer,
-    ArenaMap,
-    ArenaVec,
-    ArrayBound,
     BindingKind,
-    ConstantClass,
-    DesignatorType,
     Duration,
-    Expression,
-    ExpressionType,
-    FxBuildHasher,
-    Initializer,
-    InitializerType,
-    Integer,
     Linkage,
-    Member,
-    Scalar,
     ScopeKind,
     SemanticErrorKind,
-    TagKind,
-    TypeId,
-    TypeKind,
-    TypeQualifiers,
-    expressions::ConversionKind,
+    expressions::{
+        ConstantClass,
+        ConversionKind,
+    },
+    integer::Integer,
+    types::{
+        ArrayBound,
+        Member,
+        Scalar,
+        TagKind,
+        TypeId,
+        TypeKind,
+    },
+};
+use crate::{
+    translation_phases::parsing::{
+        declaration_syntax::{
+            DesignatorType,
+            Initializer,
+            InitializerType,
+            TypeQualifiers,
+        },
+        syntax::{
+            Expression,
+            ExpressionType,
+        },
+    },
+    util::bump::{
+        ArenaMap,
+        ArenaVec,
+    },
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

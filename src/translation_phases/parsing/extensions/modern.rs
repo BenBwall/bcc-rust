@@ -9,12 +9,15 @@ use super::super::{
     Parser,
     declaration_syntax::TypeName,
     errors::ParserErrorType,
-    expression::{
-        ExpressionBoundary,
-        ExpressionFrame,
-        ExpressionMode,
-    },
     frame_pool::FramePools,
+    frames::{
+        expression::{
+            ExpressionBoundary,
+            ExpressionFrame,
+            ExpressionMode,
+        },
+        type_name::TypeNameFrame,
+    },
     machine::{
         ParseAction,
         ParseFrame,
@@ -23,7 +26,6 @@ use super::super::{
         unexpected_return,
     },
     syntax::Expression,
-    type_name::TypeNameFrame,
 };
 use crate::{
     configuration::Feature,

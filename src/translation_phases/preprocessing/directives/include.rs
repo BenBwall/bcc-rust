@@ -6,32 +6,51 @@
 //! Opened files return to the shared preprocessing reader for macro
 //! replacement.
 
-use super::{
-    ArenaString,
-    ArenaVec,
-    Bump,
-    Component,
-    Context,
-    ControlFlow,
-    ErrorSeverity,
-    Expander,
-    ExtensionPolicy,
-    Feature,
-    LogicalCharacter,
-    OsStr,
-    Path,
-    PreprocessorError,
-    PreprocessorErrorType,
-    PreprocessorToken,
-    PreprocessorTokenType,
-    SourcePosition,
-    SourceVectors,
-    TokenizerFrame,
-    TokenizerFrameType,
-    TranslationError,
-    TranslationPhase,
-    logical_characters,
-    position_after,
+use std::{
+    ffi::OsStr,
+    ops::ControlFlow,
+    path::{
+        Component,
+        Path,
+    },
+};
+
+use crate::{
+    configuration::{
+        ExtensionPolicy,
+        Feature,
+    },
+    translation_phases::{
+        Context,
+        ErrorSeverity,
+        SourcePosition,
+        SourceVectors,
+        TranslationError,
+        TranslationPhase,
+        preprocessing::{
+            Expander,
+            errors::{
+                PreprocessorError,
+                PreprocessorErrorType,
+            },
+            runtime::{
+                TokenizerFrame,
+                TokenizerFrameType,
+            },
+        },
+        preprocessor_tokenizer::{
+            LogicalCharacter,
+            PreprocessorToken,
+            PreprocessorTokenType,
+            logical_characters,
+            position_after,
+        },
+    },
+    util::bump::{
+        ArenaString,
+        ArenaVec,
+        Bump,
+    },
 };
 
 impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {

@@ -11,12 +11,10 @@
 
 use super::{
     super::{
-        Context,
         Lexer,
         LexingFile,
         PreprocessorTokenType,
         PreprocessorTokenizerErrorType,
-        SourcePosition,
         positions::PositionTracker,
         splicing::Remap,
         storage::{
@@ -28,6 +26,10 @@ use super::{
 };
 use crate::{
     configuration::Feature,
+    translation_phases::{
+        Context,
+        SourcePosition,
+    },
     util::{
         bump::{
             ArenaVec,

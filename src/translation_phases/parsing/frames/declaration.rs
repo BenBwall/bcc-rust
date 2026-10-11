@@ -21,53 +21,55 @@
 use std::fmt::Debug;
 
 use super::{
-    Parser,
     declaration_specifiers::{
         DeclarationSpecifiersFrame,
         SpecifierMode,
-    },
-    declaration_syntax::{
-        Declaration,
-        DeclarationSpecifiers,
-        DirectDeclarator,
-        InitDeclarator,
-        TypeSpecifiers,
     },
     declarator::{
         DeclaratorFrame,
         DeclaratorMode,
     },
-    errors::{
-        DeclarationContinuation,
-        DeclarationPlace,
-        ParserErrorType,
-    },
     expression_operators::is_operator,
     initializer::InitializerFrame,
-    machine::{
-        InitializerResult,
-        ParseAction,
-        ParseFrame,
-        ParseFrameKind,
-        ParseValue,
-        unexpected_return,
-    },
-    modern::{
-        ExtendedType,
-        ModernKind,
-        ModernValue,
-    },
-    recovery::{
-        SynchronizationKind,
-        SynchronizationSet,
-    },
-    scope::NameClass,
     statement::is_statement_keyword,
-    syntax::StorageClass,
 };
 use crate::{
     translation_phases::{
         SourceVectors,
+        parsing::{
+            Parser,
+            declaration_syntax::{
+                Declaration,
+                DeclarationSpecifiers,
+                DirectDeclarator,
+                InitDeclarator,
+                TypeSpecifiers,
+            },
+            errors::{
+                DeclarationContinuation,
+                DeclarationPlace,
+                ParserErrorType,
+            },
+            machine::{
+                InitializerResult,
+                ParseAction,
+                ParseFrame,
+                ParseFrameKind,
+                ParseValue,
+                unexpected_return,
+            },
+            modern::{
+                ExtendedType,
+                ModernKind,
+                ModernValue,
+            },
+            recovery::{
+                SynchronizationKind,
+                SynchronizationSet,
+            },
+            scope::NameClass,
+            syntax::StorageClass,
+        },
         preprocessing::{
             KeywordTokenType,
             OperatorTokenType,

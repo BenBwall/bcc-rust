@@ -49,11 +49,6 @@ mod errors;
 mod extension;
 mod interface;
 
-use std::{
-    fmt::Debug,
-    hash::Hash,
-};
-
 pub(crate) use context::Context;
 pub(crate) use errors::{
     ErrorSeverity,
@@ -64,7 +59,6 @@ pub(crate) use extension::{
     DiagnosticPolicy,
     policy_severity,
 };
-use interface::StrExt;
 pub(crate) use interface::{
     GetPosition,
     GetSourceFileIndex,
@@ -77,19 +71,4 @@ pub(crate) use provenance::{
     SourcePosition,
     SourceVector,
     SourceVectors,
-};
-use thiserror::Error;
-
-use self::{
-    initial_processing::InitialProcessorError,
-    parsing::ParserError,
-    preprocessing::PreprocessorError,
-    preprocessor_tokenizer::PreprocessorTokenizerError,
-};
-use crate::{
-    diagnostics::{
-        Diagnostic,
-        ToDiagnostic,
-    },
-    util::bump::Bump,
 };

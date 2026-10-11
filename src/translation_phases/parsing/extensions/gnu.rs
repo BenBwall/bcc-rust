@@ -9,10 +9,13 @@
 use super::super::{
     Parser,
     errors::ParserErrorType,
-    expression::{
-        ExpressionBoundary,
-        ExpressionFrame,
-        ExpressionMode,
+    frames::{
+        expression::{
+            ExpressionBoundary,
+            ExpressionFrame,
+            ExpressionMode,
+        },
+        type_name::TypeNameFrame,
     },
     machine::{
         ParseAction,
@@ -25,7 +28,6 @@ use super::super::{
         Expression,
         Identifier,
     },
-    type_name::TypeNameFrame,
 };
 use crate::{
     translation_phases::{

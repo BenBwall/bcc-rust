@@ -10,26 +10,34 @@
 use std::fmt::Write as _;
 
 use super::{
-    ArenaVec,
-    ArrayBound,
     BindingKind,
-    Bump,
-    Context,
     Duration,
     Linkage,
     ScopeKind,
     SemanticTranslationUnit,
-    TagKind,
-    TypeId,
-    TypeKind,
-    TypeQualifiers,
     expressions::{
         ConstantClass,
         ConversionKind,
         ValueCategory,
     },
+    types::{
+        ArrayBound,
+        TagKind,
+        TypeId,
+        TypeKind,
+    },
 };
-use crate::util::bump::ArenaString;
+use crate::{
+    translation_phases::{
+        Context,
+        parsing::declaration_syntax::TypeQualifiers,
+    },
+    util::bump::{
+        ArenaString,
+        ArenaVec,
+        Bump,
+    },
+};
 
 impl<'tu> SemanticTranslationUnit<'tu> {
     pub(crate) fn inspect<'d>(&self, context: &Context<'tu>, arena: &'d Bump) -> &'d str {

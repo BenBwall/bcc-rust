@@ -4,18 +4,22 @@
 
 use super::{
     Analyzer,
-    BinaryOperator,
     BindingKind,
+    Work,
+    scopes::Namespace,
+    types::{
+        Scalar,
+        TagKind,
+        TypeId,
+        TypeKind,
+    },
+};
+use crate::translation_phases::parsing::syntax::{
+    BinaryOperator,
     Constant,
     Expression,
     ExpressionType,
-    Namespace,
-    Scalar,
-    TagKind,
-    TypeId,
-    TypeKind,
     UnaryOperator,
-    Work,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

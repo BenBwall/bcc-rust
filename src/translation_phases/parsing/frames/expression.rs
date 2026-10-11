@@ -66,9 +66,6 @@ use lookahead::{
 };
 
 use super::{
-    Parser,
-    declaration_syntax::TypeName,
-    errors::ParserErrorType,
     expression_operators::{
         LanguageExpressionOperator,
         binary_operator,
@@ -77,46 +74,51 @@ use super::{
         is_postfix_starter,
         prefix_operator,
     },
-    frame_pool::{
-        FramePools,
-        PoolBox,
-    },
     initializer::InitializerFrame,
-    machine::{
-        ConstantExpressionResult,
-        ExpressionResult,
-        InitializerResult,
-        ParseAction,
-        ParseFrame,
-        ParseValue,
-        any_expression_value,
-        expression_value,
-        unexpected_return,
-    },
-    modern::{
-        ModernFrame,
-        ModernKind,
-        ModernValue,
-        SyntaxOperand,
-    },
-    recovery::ExpressionTerminator,
     statement::is_statement_keyword,
-    syntax::{
-        BinaryOperator,
-        ConditionalExpression,
-        Constant,
-        ConstantExpression,
-        Expression,
-        ExpressionType,
-        Identifier,
-        UnaryOperator,
-    },
     type_name::TypeNameFrame,
 };
 use crate::{
     translation_phases::{
         GetPosition,
         SourceVectors,
+        parsing::{
+            Parser,
+            declaration_syntax::TypeName,
+            errors::ParserErrorType,
+            frame_pool::{
+                FramePools,
+                PoolBox,
+            },
+            machine::{
+                ConstantExpressionResult,
+                ExpressionResult,
+                InitializerResult,
+                ParseAction,
+                ParseFrame,
+                ParseValue,
+                any_expression_value,
+                expression_value,
+                unexpected_return,
+            },
+            modern::{
+                ModernFrame,
+                ModernKind,
+                ModernValue,
+                SyntaxOperand,
+            },
+            recovery::ExpressionTerminator,
+            syntax::{
+                BinaryOperator,
+                ConditionalExpression,
+                Constant,
+                ConstantExpression,
+                Expression,
+                ExpressionType,
+                Identifier,
+                UnaryOperator,
+            },
+        },
         preprocessing::{
             KeywordTokenType,
             OperatorTokenType,

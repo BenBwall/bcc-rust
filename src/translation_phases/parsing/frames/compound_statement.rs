@@ -14,33 +14,35 @@
 use std::fmt::Debug;
 
 use super::{
-    Parser,
     declaration::{
         DeclarationContext,
         DeclarationFrame,
     },
-    errors::ParserErrorType,
     expression_operators::is_operator,
-    machine::{
-        ParseAction,
-        ParseFrame,
-        ParseValue,
-        unexpected_return,
-    },
-    scope::{
-        NameClass,
-        ScopeKind,
-    },
     statement::StatementFrame,
-    syntax::{
-        BlockItem,
-        Statement,
-        StatementType,
-    },
 };
 use crate::{
     translation_phases::{
         SourceVectors,
+        parsing::{
+            Parser,
+            errors::ParserErrorType,
+            machine::{
+                ParseAction,
+                ParseFrame,
+                ParseValue,
+                unexpected_return,
+            },
+            scope::{
+                NameClass,
+                ScopeKind,
+            },
+            syntax::{
+                BlockItem,
+                Statement,
+                StatementType,
+            },
+        },
         preprocessing::{
             OperatorTokenType,
             Token,

@@ -3,10 +3,11 @@
 //! storage, not the semantic constraints on those elements.
 //! C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22 (translation phase 7).
 
-use super::{
+use std::cell::Cell;
+
+use crate::util::bump::{
     ArenaVec,
     Bump,
-    Cell,
 };
 
 /// A scratch cons list builds nested parameter/member lists in linear space.

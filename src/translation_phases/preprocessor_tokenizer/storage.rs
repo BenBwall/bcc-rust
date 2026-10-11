@@ -11,18 +11,20 @@
 use std::cell::Cell;
 
 use super::{
-    Context,
     Lexer,
     LexingFile,
     PreprocessorTokenType,
     PreprocessorTokenizerError,
     PreprocessorTokenizerErrorType,
-    SourcePosition,
-    SourceVector,
 };
 use crate::{
     configuration::Feature,
-    translation_phases::provenance::source_offset,
+    translation_phases::{
+        Context,
+        SourcePosition,
+        SourceVector,
+        provenance::source_offset,
+    },
     util::{
         bump::Bump,
         string_cache::StringCacheId,

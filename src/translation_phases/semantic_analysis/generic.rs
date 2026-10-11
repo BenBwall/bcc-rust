@@ -3,14 +3,18 @@
 
 use super::{
     Analyzer,
-    ArenaVec,
-    Expression,
-    ExpressionInfo,
     SemanticErrorKind,
-    SyntaxOperand,
-    TypeKind,
+    expressions::ExpressionInfo,
+    types::TypeKind,
 };
-use crate::translation_phases::parsing::GenericSelection;
+use crate::{
+    translation_phases::parsing::{
+        GenericSelection,
+        SyntaxOperand,
+        syntax::Expression,
+    },
+    util::bump::ArenaVec,
+};
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Checks generic associations and preserves the selected expression.

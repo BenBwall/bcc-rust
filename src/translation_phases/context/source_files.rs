@@ -6,21 +6,33 @@
 //! Diagnostic locations: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
 //! Directive interpretation remains in preprocessing.
 
+use std::{
+    cell::OnceCell,
+    ffi::OsStr,
+    path::Path,
+};
+
+use rustc_hash::FxBuildHasher;
+
 use super::{
-    ArenaSet,
-    ArenaString,
-    ArenaVec,
-    Bump,
     Context,
-    ErrorSeverity,
-    FxBuildHasher,
-    HeaderSearch,
-    OnceCell,
-    OsStr,
-    Path,
-    SourceText,
-    SourceVector,
-    SourceVectors,
+    source_text::SourceText,
+};
+use crate::{
+    headers::HeaderSearch,
+    translation_phases::{
+        ErrorSeverity,
+        provenance::{
+            SourceVector,
+            SourceVectors,
+        },
+    },
+    util::bump::{
+        ArenaSet,
+        ArenaString,
+        ArenaVec,
+        Bump,
+    },
 };
 
 impl<'tu> Context<'tu> {

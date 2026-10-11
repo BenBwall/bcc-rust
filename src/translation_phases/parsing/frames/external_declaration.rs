@@ -17,29 +17,31 @@
 use std::fmt::Debug;
 
 use super::{
-    Parser,
     declaration::{
         DeclarationContext,
         DeclarationFrame,
     },
-    errors::{
-        RecoverySummary,
-        RelatedParserDiagnostic,
-    },
     expression_operators::is_operator,
     function_definition::FunctionDefinitionFrame,
-    machine::{
-        ParseAction,
-        ParseFrame,
-        ParseFrameKind,
-        ParseValue,
-        unexpected_return,
-    },
-    syntax::ExternalDeclaration,
 };
 use crate::translation_phases::{
     ErrorSeverity,
     TranslationError,
+    parsing::{
+        Parser,
+        errors::{
+            RecoverySummary,
+            RelatedParserDiagnostic,
+        },
+        machine::{
+            ParseAction,
+            ParseFrame,
+            ParseFrameKind,
+            ParseValue,
+            unexpected_return,
+        },
+        syntax::ExternalDeclaration,
+    },
     preprocessing::{
         OperatorTokenType,
         Token,

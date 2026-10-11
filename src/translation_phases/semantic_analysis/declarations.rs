@@ -3,45 +3,56 @@
 //! pp. 97-124; PDF pp. 109-136. Initializer constraints use initializers.rs;
 //! function-definition constraints use functions.rs.
 
+use std::cell::Cell;
+
 use super::{
     Analyzer,
-    ArenaVec,
-    ArrayBound,
     Binding,
     BindingKind,
-    CStandard,
-    Cell,
-    Collection,
-    DeclarationSpecifiers,
-    Declarator,
-    DirectDeclarator,
     Duration,
-    Identifier,
-    Integer,
-    Layout,
     Linkage,
-    Member,
-    Namespace,
-    Parameter,
-    Scalar,
     ScopeKind,
     SemanticErrorKind,
-    SourceVectors,
-    SpecifierExtensionKind,
-    StorageClass,
-    StructOrUnion,
-    Tag,
-    TagKind,
-    TypeId,
-    TypeKind,
-    TypeQualifiers,
-    TypeSpecifiers,
     Work,
-    align_up,
+    collection::Collection,
+    integer::Integer,
+    scopes::Namespace,
     types::{
+        ArrayBound,
         Field,
         FieldPath,
+        Layout,
+        Member,
+        Parameter,
+        Scalar,
+        Tag,
+        TagKind,
+        TypeId,
+        TypeKind,
+        align_up,
     },
+};
+use crate::{
+    configuration::CStandard,
+    translation_phases::{
+        SourceVectors,
+        parsing::{
+            SpecifierExtensionKind,
+            declaration_syntax::{
+                DeclarationSpecifiers,
+                Declarator,
+                DirectDeclarator,
+                StructOrUnion,
+                TypeQualifiers,
+                TypeSpecifiers,
+            },
+            syntax::{
+                Identifier,
+                StorageClass,
+            },
+        },
+    },
+    util::bump::ArenaVec,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

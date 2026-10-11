@@ -3,16 +3,27 @@
 //! C99: translation phase 4; line control, §6.10.4, p. 158; PDF p. 170.
 //! Physical file identity remains available to include handling.
 
-use super::{
-    ControlFlow,
-    Expander,
-    Path,
-    PreprocessorError,
-    PreprocessorErrorType,
-    PreprocessorToken,
-    PreprocessorTokenType,
-    StringTokenType,
-    TokenType,
+use std::{
+    ops::ControlFlow,
+    path::Path,
+};
+
+use crate::translation_phases::{
+    preprocessing::{
+        Expander,
+        errors::{
+            PreprocessorError,
+            PreprocessorErrorType,
+        },
+        token::{
+            StringTokenType,
+            TokenType,
+        },
+    },
+    preprocessor_tokenizer::{
+        PreprocessorToken,
+        PreprocessorTokenType,
+    },
 };
 
 impl Expander<'_, '_, '_, '_> {

@@ -4,22 +4,30 @@
 //! C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
 
 #[cfg(test)]
-use super::Cell;
+use std::cell::Cell;
+
+use rustc_hash::FxBuildHasher;
+
 use super::{
     Analyzer,
-    ArenaMap,
-    ArenaVec,
-    Bump,
-    Collection,
-    Context,
-    FxBuildHasher,
     Scope,
     ScopeKind,
-    TypeId,
-    TypeInterner,
     Work,
+    collection::Collection,
     functions,
     statements,
+    types::{
+        TypeId,
+        TypeInterner,
+    },
+};
+use crate::{
+    translation_phases::Context,
+    util::bump::{
+        ArenaMap,
+        ArenaVec,
+        Bump,
+    },
 };
 
 impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {

@@ -5,7 +5,9 @@
 
 use super::{
     Context,
-    SegmentedVec,
+    segmented_vec::SegmentedVec,
+};
+use crate::translation_phases::provenance::{
     SourceArena,
     SourceVector,
 };

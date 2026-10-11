@@ -2,37 +2,54 @@
 //! C99: §6.9-§6.9.2, pp. 140-143; PDF pp. 152-155; inline definitions
 //! §6.7.4p3, p. 112; PDF p. 124. This validates bodies without lowering them.
 
+use rustc_hash::FxBuildHasher;
+
 use super::{
     Analyzer,
-    ArenaMap,
-    ArenaVec,
-    ArrayBound,
     BindingKind,
-    Bump,
-    CStandard,
-    Declaration,
-    DeclarationSpecifiers,
-    Declarator,
-    DirectDeclarator,
     Duration,
-    Expression,
-    FunctionDefinition,
-    FxBuildHasher,
-    Identifier,
     Linkage,
-    Namespace,
-    Parameter,
-    Scalar,
     ScopeKind,
     SemanticErrorKind,
-    SourceVectors,
-    StorageClass,
-    StringCacheId,
-    TypeId,
-    TypeKind,
-    TypeQualifiers,
-    TypeSpecifiers,
     Work,
+    scopes::Namespace,
+    types::{
+        ArrayBound,
+        Parameter,
+        Scalar,
+        TypeId,
+        TypeKind,
+    },
+};
+use crate::{
+    configuration::CStandard,
+    translation_phases::{
+        SourceVectors,
+        parsing::{
+            declaration_syntax::{
+                Declaration,
+                DeclarationSpecifiers,
+                Declarator,
+                DirectDeclarator,
+                TypeQualifiers,
+                TypeSpecifiers,
+            },
+            syntax::{
+                Expression,
+                FunctionDefinition,
+                Identifier,
+                StorageClass,
+            },
+        },
+    },
+    util::{
+        bump::{
+            ArenaMap,
+            ArenaVec,
+            Bump,
+        },
+        string_cache::StringCacheId,
+    },
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

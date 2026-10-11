@@ -90,7 +90,6 @@ use super::{
     Context,
     SourcePosition,
     SourceVector,
-    SourceVectors,
     initial_processing::terminal_splice_length,
     provenance::source_offset,
 };

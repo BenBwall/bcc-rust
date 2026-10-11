@@ -5,10 +5,10 @@
 //! Diagnostic locations: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
 //! Macro expansion itself belongs to preprocessing.
 
-use super::{
-    Bump,
-    SegmentedVec,
-    SourceVector,
+use super::segmented_vec::SegmentedVec;
+use crate::{
+    translation_phases::provenance::SourceVector,
+    util::bump::Bump,
 };
 
 /// Endpoints are normally appended in source-arena order. Keep sparse keys

@@ -22,37 +22,39 @@
 use std::fmt::Debug;
 
 use super::{
-    Parser,
-    declaration_syntax::{
-        DeclarationSpecifiers,
-        TypeQualifiers,
-        TypeSpecifiers,
-    },
     enum_specifier::EnumSpecifierFrame,
-    errors::ParserErrorType,
-    machine::{
-        EnumSpecifierResult,
-        ParseAction,
-        ParseFrame,
-        ParseValue,
-        unexpected_return,
-    },
-    modern::{
-        ExtendedType,
-        ModernKind,
-        ModernValue,
-        SpecifierExtension,
-        SpecifierExtensionKind,
-        SyntaxOperand,
-    },
     struct_or_union::StructOrUnionSpecifierFrame,
-    syntax::{
-        Identifier,
-        StorageClass,
-    },
 };
 use crate::translation_phases::{
     SourceVectors,
+    parsing::{
+        Parser,
+        declaration_syntax::{
+            DeclarationSpecifiers,
+            TypeQualifiers,
+            TypeSpecifiers,
+        },
+        errors::ParserErrorType,
+        machine::{
+            EnumSpecifierResult,
+            ParseAction,
+            ParseFrame,
+            ParseValue,
+            unexpected_return,
+        },
+        modern::{
+            ExtendedType,
+            ModernKind,
+            ModernValue,
+            SpecifierExtension,
+            SpecifierExtensionKind,
+            SyntaxOperand,
+        },
+        syntax::{
+            Identifier,
+            StorageClass,
+        },
+    },
     preprocessing::{
         KeywordTokenType,
         OperatorTokenType,

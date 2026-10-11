@@ -22,42 +22,44 @@
 use std::fmt::Debug;
 
 use super::{
-    Parser,
     declaration_specifiers::DeclarationSpecifiersFrame,
-    declaration_syntax::{
-        DeclarationSpecifiers,
-        Declarator,
-        DirectDeclarator,
-        ParameterDeclaration,
-    },
     declarator::{
         DeclaratorFrame,
         DeclaratorMode,
     },
-    errors::ParserErrorType,
     expression_operators::is_operator,
-    machine::{
-        ParameterListResult,
-        ParseAction,
-        ParseFrame,
-        ParseFrameKind,
-        ParseValue,
-        unexpected_return,
-    },
-    recovery::{
-        SynchronizationKind,
-        SynchronizationSet,
-    },
-    scope::{
-        NameClass,
-        ScopeKind,
-        list_key,
-    },
-    syntax::Identifier,
 };
 use crate::{
     translation_phases::{
         SourceVectors,
+        parsing::{
+            Parser,
+            declaration_syntax::{
+                DeclarationSpecifiers,
+                Declarator,
+                DirectDeclarator,
+                ParameterDeclaration,
+            },
+            errors::ParserErrorType,
+            machine::{
+                ParameterListResult,
+                ParseAction,
+                ParseFrame,
+                ParseFrameKind,
+                ParseValue,
+                unexpected_return,
+            },
+            recovery::{
+                SynchronizationKind,
+                SynchronizationSet,
+            },
+            scope::{
+                NameClass,
+                ScopeKind,
+                list_key,
+            },
+            syntax::Identifier,
+        },
         preprocessing::{
             OperatorTokenType,
             Token,

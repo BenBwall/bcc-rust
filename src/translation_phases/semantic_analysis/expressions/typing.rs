@@ -6,37 +6,53 @@
 //! §6.5, pp. 67-94; PDF pp. 79-106.
 
 use super::{
-    Analyzer,
-    ArenaList,
-    ArenaVec,
-    BinaryOperator,
-    BindingKind,
-    ConditionalExpression,
-    Constant,
     ConstantClass,
     ConstantFolding,
     Conversion,
     ConversionKind,
-    Duration,
-    Expression,
     ExpressionInfo,
-    ExpressionSlot,
-    ExpressionType,
-    FloatTokenType,
-    Identifier,
-    Integer,
-    Linkage,
-    LiteralUnit,
-    Namespace,
-    Scalar,
-    SemanticErrorKind,
-    StringTokenType,
-    TagKind,
-    TypeId,
-    TypeKind,
-    TypeQualifiers,
-    UnaryOperator,
     ValueCategory,
+};
+use crate::{
+    translation_phases::{
+        parsing::{
+            declaration_syntax::TypeQualifiers,
+            syntax::{
+                BinaryOperator,
+                ConditionalExpression,
+                Constant,
+                Expression,
+                ExpressionSlot,
+                ExpressionType,
+                Identifier,
+                UnaryOperator,
+            },
+        },
+        preprocessing::{
+            FloatTokenType,
+            LiteralUnit,
+            StringTokenType,
+        },
+        semantic_analysis::{
+            Analyzer,
+            BindingKind,
+            Duration,
+            Linkage,
+            SemanticErrorKind,
+            integer::Integer,
+            scopes::Namespace,
+            types::{
+                Scalar,
+                TagKind,
+                TypeId,
+                TypeKind,
+            },
+        },
+    },
+    util::{
+        arena_list::ArenaList,
+        bump::ArenaVec,
+    },
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

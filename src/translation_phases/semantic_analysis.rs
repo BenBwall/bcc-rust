@@ -75,9 +75,9 @@ mod diagnostics;
 mod errors;
 mod inspection;
 
+#[cfg(test)]
 use std::cell::Cell;
 
-use builtins::atomics;
 pub(crate) use builtins::{
     atomics::modeled as atomic_builtin,
     implemented_builtin,
@@ -112,17 +112,12 @@ use scopes::{
 };
 use types::{
     ArrayBound,
-    Layout,
     Member,
     Parameter,
     Scalar,
-    Tag,
-    TagKind,
     TypeId,
     TypeInterner,
     TypeKind,
-    Types,
-    align_up,
 };
 
 use super::{
@@ -130,7 +125,6 @@ use super::{
     DiagnosticPolicy,
     ErrorSeverity,
     SourceVectors,
-    TranslationError,
     parsing::{
         AttributeSpecifier,
         ExtendedType,
@@ -150,7 +144,6 @@ use super::{
             ParameterDeclaration,
             StructDeclaration,
             StructDeclarator,
-            StructOrUnion,
             TypeName,
             TypeQualifiers,
             TypeSpecifiers,
@@ -164,11 +157,9 @@ use super::{
             ExpressionSlot,
             ExpressionType,
             ExternalDeclaration,
-            ForInitializer,
             FunctionDefinition,
             Identifier,
             Statement,
-            StatementType,
             StorageClass,
             UnaryOperator,
         },

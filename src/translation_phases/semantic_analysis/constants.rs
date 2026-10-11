@@ -5,16 +5,20 @@
 
 use super::{
     Analyzer,
-    BinaryOperator,
-    ExpressionInfo,
-    Integer,
-    Scalar,
-    TypeId,
-    TypeKind,
+    expressions::ExpressionInfo,
+    integer::Integer,
+    types::{
+        Scalar,
+        TypeId,
+        TypeKind,
+    },
 };
-use crate::float_parsing::{
-    LongDouble,
-    string_to_long_double,
+use crate::{
+    float_parsing::{
+        LongDouble,
+        string_to_long_double,
+    },
+    translation_phases::parsing::syntax::BinaryOperator,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

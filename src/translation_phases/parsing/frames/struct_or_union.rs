@@ -22,55 +22,57 @@
 use std::fmt::Debug;
 
 use super::{
-    Parser,
     declaration_specifiers::{
         DeclarationSpecifiersFrame,
         SpecifierMode,
-    },
-    declaration_syntax::{
-        DeclarationSpecifiers,
-        Declarator,
-        StructDeclaration,
-        StructDeclarator,
-        StructOrUnion,
-        StructOrUnionSpecifier,
-        TypeQualifiers,
     },
     declarator::{
         DeclaratorFrame,
         DeclaratorMode,
     },
-    errors::ParserErrorType,
     expression::{
         ExpressionBoundary,
         ExpressionFrame,
         ExpressionMode,
     },
     expression_operators::is_operator,
-    machine::{
-        ConstantExpressionResult,
-        ParseAction,
-        ParseFrame,
-        ParseFrameKind,
-        ParseValue,
-        unexpected_return,
-    },
-    modern::{
-        ModernKind,
-        ModernValue,
-        SpecifierExtension,
-        SpecifierExtensionKind,
-    },
-    recovery::{
-        SynchronizationKind,
-        SynchronizationSet,
-    },
     statement::is_statement_keyword,
-    syntax::Identifier,
 };
 use crate::{
     translation_phases::{
         SourceVectors,
+        parsing::{
+            Parser,
+            declaration_syntax::{
+                DeclarationSpecifiers,
+                Declarator,
+                StructDeclaration,
+                StructDeclarator,
+                StructOrUnion,
+                StructOrUnionSpecifier,
+                TypeQualifiers,
+            },
+            errors::ParserErrorType,
+            machine::{
+                ConstantExpressionResult,
+                ParseAction,
+                ParseFrame,
+                ParseFrameKind,
+                ParseValue,
+                unexpected_return,
+            },
+            modern::{
+                ModernKind,
+                ModernValue,
+                SpecifierExtension,
+                SpecifierExtensionKind,
+            },
+            recovery::{
+                SynchronizationKind,
+                SynchronizationSet,
+            },
+            syntax::Identifier,
+        },
         preprocessing::{
             KeywordTokenType,
             OperatorTokenType,

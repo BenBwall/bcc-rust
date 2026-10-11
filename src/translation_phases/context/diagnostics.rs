@@ -5,15 +5,15 @@
 //! C99: required diagnostics, §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
 //! Error creation remains the responsibility of each translation phase.
 
-use super::{
-    Context,
+use super::Context;
+use crate::translation_phases::{
     GetSeverity,
-    InitialProcessorError,
-    ParserError,
-    PreprocessorError,
-    PreprocessorTokenizerError,
-    SourceVector,
     TranslationError,
+    initial_processing::InitialProcessorError,
+    parsing::ParserError,
+    preprocessing::PreprocessorError,
+    preprocessor_tokenizer::PreprocessorTokenizerError,
+    provenance::SourceVector,
 };
 
 impl<'tu> Context<'tu> {

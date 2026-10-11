@@ -13,18 +13,22 @@
 use rustc_hash::FxBuildHasher;
 
 #[cfg(test)]
-use super::FrameTrace;
+use super::machine::FrameTrace;
 use super::{
-    LabelScopes,
-    ParseFrameKind,
     Parser,
-    ParserLimits,
     PreprocessedTranslationUnit,
-    RecoveryState,
-    ScopeStack,
-    TokenCursor,
     frame_pool::FramePools,
-    token_cursor::Upstream,
+    limits::ParserLimits,
+    machine::ParseFrameKind,
+    recovery::RecoveryState,
+    scope::{
+        LabelScopes,
+        ScopeStack,
+    },
+    token_cursor::{
+        TokenCursor,
+        Upstream,
+    },
     token_diagnostics::{
         TokenDiagnostic,
         TokenDiagnostics,

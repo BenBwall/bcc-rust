@@ -7,14 +7,16 @@
 
 use super::super::{
     Parser,
-    compound_statement::CompoundStatementFrame,
     errors::ParserErrorType,
-    expression::{
-        ExpressionBoundary,
-        ExpressionFrame,
-        ExpressionMode,
-    },
     frame_pool::FramePools,
+    frames::{
+        compound_statement::CompoundStatementFrame,
+        expression::{
+            ExpressionBoundary,
+            ExpressionFrame,
+            ExpressionMode,
+        },
+    },
     machine::{
         ParseAction,
         ParseFrame,

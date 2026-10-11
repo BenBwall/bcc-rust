@@ -7,16 +7,26 @@
 //! PDF p. 23. This module preserves locations rather than checking grammar.
 
 use super::{
-    ArenaQueue,
-    Bump,
     Context,
-    GetPosition,
-    MergeAnchors,
-    RegionVec,
-    SourceArena,
-    SourcePosition,
-    SourceVector,
-    SourceVectors,
+    merge_anchors::MergeAnchors,
+};
+use crate::{
+    translation_phases::{
+        GetPosition,
+        provenance::{
+            SourceArena,
+            SourcePosition,
+            SourceVector,
+            SourceVectors,
+        },
+    },
+    util::{
+        bump::{
+            ArenaQueue,
+            Bump,
+        },
+        region_vec::RegionVec,
+    },
 };
 
 impl Context<'_> {

@@ -5,22 +5,30 @@
 //! C99: required diagnostics, §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
 //! This module carries errors; each phase enforces its own rules.
 
+use std::{
+    fmt::Debug,
+    hash::Hash,
+};
+
+use thiserror::Error;
+
 use super::{
-    Bump,
     Context,
-    Debug,
-    Diagnostic,
-    Error,
     GetSourceVectors,
-    Hash,
-    InitialProcessorError,
-    ParserError,
-    PreprocessorError,
-    PreprocessorTokenizerError,
     SourceVectors,
-    ToDiagnostic,
     extension,
+    initial_processing::InitialProcessorError,
+    parsing::ParserError,
+    preprocessing::PreprocessorError,
+    preprocessor_tokenizer::PreprocessorTokenizerError,
     semantic_analysis,
+};
+use crate::{
+    diagnostics::{
+        Diagnostic,
+        ToDiagnostic,
+    },
+    util::bump::Bump,
 };
 
 /// Diagnostics emitted while translating one preprocessing translation unit.

@@ -4,6 +4,7 @@
 //! predefined macros, §6.10.8 paragraph 1, p. 160; PDF p. 172.
 //! The constructed reader leaves C syntax and semantics to later phases.
 
+use std::path::Path;
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -11,30 +12,38 @@
 )]
 use std::path::PathBuf;
 
-#[cfg(test)]
-use super::super::SharedVec;
-use super::super::{
-    ArenaMap,
-    ArenaSet,
-    ArenaVec,
-    Bump,
-    Context,
+use rustc_hash::FxBuildHasher;
+
+use super::{
+    super::{
+        Preprocessor,
+        command_line,
+        expression::PreprocessorExpressionParser,
+        language_features,
+        macro_expansion::MacroDefinition,
+        token_conversion::LiteralScratch,
+    },
     FileFrame,
-    FxBuildHasher,
-    GetPosition,
-    HeaderSearch,
-    LexedFiles,
-    LiteralScratch,
-    MacroDefinition,
     OutputPurpose,
-    Path,
-    Preprocessor,
-    PreprocessorExpressionParser,
     PreprocessorState,
     Resting,
-    SourcePosition,
-    command_line,
-    language_features,
+};
+#[cfg(test)]
+use crate::util::shared::SharedVec;
+use crate::{
+    headers::HeaderSearch,
+    translation_phases::{
+        Context,
+        GetPosition,
+        SourcePosition,
+        preprocessor_tokenizer::LexedFiles,
+    },
+    util::bump::{
+        ArenaMap,
+        ArenaSet,
+        ArenaVec,
+        Bump,
+    },
 };
 
 impl<'tu, 'pp> Preprocessor<'tu, 'pp> {

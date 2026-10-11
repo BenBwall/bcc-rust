@@ -7,11 +7,13 @@
 
 use super::{
     Analyzer,
-    Collection,
-    Identifier,
     Scope,
     ScopeKind,
-    StringCacheId,
+    collection::Collection,
+};
+use crate::{
+    translation_phases::parsing::syntax::Identifier,
+    util::string_cache::StringCacheId,
 };
 
 impl Analyzer<'_, '_, '_> {

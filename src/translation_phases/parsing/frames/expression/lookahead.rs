@@ -2,13 +2,13 @@
 //!
 //! Recovery serves C99: §5.1.1.3, p. 11; PDF p. 23.
 
-use super::super::{
-    Parser,
-    statement::is_statement_keyword,
-};
-use crate::translation_phases::preprocessing::{
-    OperatorTokenType,
-    TokenType,
+use super::super::statement::is_statement_keyword;
+use crate::translation_phases::{
+    parsing::Parser,
+    preprocessing::{
+        OperatorTokenType,
+        TokenType,
+    },
 };
 
 /// Counts the tokens from the current one up to the next `closer` at
@@ -19,7 +19,7 @@ use crate::translation_phases::preprocessing::{
 ///
 /// `stop_at_declarations` also rejects a run that reaches a declaration
 /// starter, matching the stops of
-/// [`SynchronizationKind::StatementExpression`](super::super::recovery::SynchronizationKind)
+/// [`SynchronizationKind::StatementExpression`](crate::translation_phases::parsing::recovery::SynchronizationKind)
 /// so that a recovery scan reaches the same closer.
 ///
 /// C99: recovery serves §5.1.1.3, p. 11; PDF p. 23. An expression never

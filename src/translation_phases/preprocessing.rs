@@ -63,12 +63,9 @@ mod errors;
 
 use std::{
     cell::OnceCell,
-    fmt::Debug,
     ops::ControlFlow,
-    path::Path,
 };
 
-use conditional::ConditionalGroup;
 pub(crate) use errors::{
     PreprocessorError,
     PreprocessorErrorType,
@@ -81,8 +78,6 @@ use macro_expansion::{
     MacroDefinition,
 };
 use runtime::{
-    FileFrame,
-    MacroDeprecation,
     OutputPurpose,
     PreprocessorState,
     QueryExpansion,
@@ -91,7 +86,6 @@ use runtime::{
     TokenizerFrame,
     TokenizerFrameType,
 };
-use rustc_hash::FxBuildHasher;
 pub(crate) use token::{
     CharacterTokenType,
     FloatTokenType,
@@ -104,24 +98,17 @@ pub(crate) use token::{
     Token,
     TokenType,
 };
-use token_conversion::LiteralScratch;
 
-#[cfg(test)]
-use crate::util::shared::SharedVec;
 use crate::{
-    headers::HeaderSearch,
     translation_phases::{
         Context,
-        GetPosition,
         GetSourceFileIndex,
         SetPosition,
-        SetSourceFileIndex,
         SourcePosition,
         SourceVector,
         TranslationError,
         TranslationPhase,
         preprocessor_tokenizer::{
-            LexedFiles,
             PreprocessorToken,
             PreprocessorTokenType,
             TokenSource,
@@ -129,13 +116,10 @@ use crate::{
     },
     util::{
         bump::{
-            ArenaMap,
-            ArenaSet,
             ArenaVec,
             Bump,
         },
         region_vec::RegionVec,
-        string_cache::StringCacheId,
     },
 };
 

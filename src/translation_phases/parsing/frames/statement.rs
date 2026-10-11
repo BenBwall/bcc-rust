@@ -35,13 +35,11 @@
 use std::fmt::Debug;
 
 use super::{
-    Parser,
     compound_statement::CompoundStatementFrame,
     declaration::{
         DeclarationContext,
         DeclarationFrame,
     },
-    errors::ParserErrorType,
     expression::{
         ExpressionBoundary,
         ExpressionFrame,
@@ -51,45 +49,49 @@ use super::{
         is_operator,
         is_postfix_starter,
     },
-    machine::{
-        ConstantExpressionResult,
-        ExpressionResult,
-        ParseAction,
-        ParseFrame,
-        ParseFrameKind,
-        ParseValue,
-        unexpected_return,
-    },
-    modern::{
-        AttributeSpecifier,
-        ModernKind,
-        ModernValue,
-    },
-    recovery::{
-        ExpressionTerminator,
-        SynchronizationKind,
-        SynchronizationSet,
-    },
-    scope::{
-        ScopeKind,
-        SwitchScope,
-    },
-    syntax::{
-        AttributedStatement,
-        CaseRange,
-        ConstantExpressionSlot,
-        ExpressionSlot,
-        ForInitializer,
-        ForStatement,
-        Identifier,
-        SelectionHeader,
-        Statement,
-        StatementType,
-    },
 };
 use crate::translation_phases::{
     Context,
     SourceVectors,
+    parsing::{
+        Parser,
+        errors::ParserErrorType,
+        machine::{
+            ConstantExpressionResult,
+            ExpressionResult,
+            ParseAction,
+            ParseFrame,
+            ParseFrameKind,
+            ParseValue,
+            unexpected_return,
+        },
+        modern::{
+            AttributeSpecifier,
+            ModernKind,
+            ModernValue,
+        },
+        recovery::{
+            ExpressionTerminator,
+            SynchronizationKind,
+            SynchronizationSet,
+        },
+        scope::{
+            ScopeKind,
+            SwitchScope,
+        },
+        syntax::{
+            AttributedStatement,
+            CaseRange,
+            ConstantExpressionSlot,
+            ExpressionSlot,
+            ForInitializer,
+            ForStatement,
+            Identifier,
+            SelectionHeader,
+            Statement,
+            StatementType,
+        },
+    },
     preprocessing::{
         KeywordTokenType,
         OperatorTokenType,

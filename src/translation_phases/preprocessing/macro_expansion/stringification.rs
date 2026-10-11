@@ -3,22 +3,39 @@
 //! C99: translation phase 4; stringification, §6.10.3.2, p. 153; PDF p. 165.
 //! Pasting and subsequent rescanning belong to their separate readers.
 
-use super::{
-    ArenaString,
-    Bump,
-    Context,
-    ControlFlow,
-    Expander,
-    PreprocessorError,
-    PreprocessorErrorType,
-    PreprocessorToken,
-    PreprocessorTokenType,
-    StringCacheId,
-    TokenizerFrame,
-    TokenizerFrameType,
-    find_argument,
-    spell_string_literal,
-    take,
+use std::{
+    mem::take,
+    ops::ControlFlow,
+};
+
+use super::find_argument;
+use crate::{
+    translation_phases::{
+        Context,
+        preprocessing::{
+            Expander,
+            errors::{
+                PreprocessorError,
+                PreprocessorErrorType,
+            },
+            runtime::{
+                TokenizerFrame,
+                TokenizerFrameType,
+                spell_string_literal,
+            },
+        },
+        preprocessor_tokenizer::{
+            PreprocessorToken,
+            PreprocessorTokenType,
+        },
+    },
+    util::{
+        bump::{
+            ArenaString,
+            Bump,
+        },
+        string_cache::StringCacheId,
+    },
 };
 
 impl Expander<'_, '_, '_, '_> {

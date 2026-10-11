@@ -2,33 +2,48 @@
 //! C99: §6.8.1-§6.8.6.4, pp. 131-139; PDF pp. 143-151. All walking and
 //! jump validation are iterative; this does not construct a backend CFG.
 
+use rustc_hash::FxBuildHasher;
+
 use super::{
     super::parsing::syntax::ConstantExpressionSlot,
     Analyzer,
-    ArenaList,
-    ArenaMap,
-    ArenaVec,
     BindingKind,
-    Bump,
-    CStandard,
-    Collection,
-    Declaration,
-    Expression,
-    ExpressionSlot,
-    FxBuildHasher,
-    Identifier,
-    Namespace,
-    Scalar,
     ScopeKind,
     SemanticErrorKind,
-    SourceVectors,
-    Statement,
-    StorageClass,
-    StringCacheId,
-    TypeId,
-    TypeKind,
     Work,
+    collection::Collection,
     expressions::ConversionKind,
+    scopes::Namespace,
+    types::{
+        Scalar,
+        TypeId,
+        TypeKind,
+    },
+};
+use crate::{
+    configuration::CStandard,
+    translation_phases::{
+        SourceVectors,
+        parsing::{
+            declaration_syntax::Declaration,
+            syntax::{
+                Expression,
+                ExpressionSlot,
+                Identifier,
+                Statement,
+                StorageClass,
+            },
+        },
+    },
+    util::{
+        arena_list::ArenaList,
+        bump::{
+            ArenaMap,
+            ArenaVec,
+            Bump,
+        },
+        string_cache::StringCacheId,
+    },
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

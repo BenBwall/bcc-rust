@@ -7,14 +7,14 @@
 //! C99: §5.1.1.2 paragraph 1 (phases 1-2), pp. 9-10; PDF pp. 21-22;
 //! trigraph replacement §5.2.1.1 paragraph 1, p. 18; PDF p. 30.
 
-use super::{
-    SourcePosition,
-    splicing::{
-        Remap,
-        RemapKind,
-    },
+use super::splicing::{
+    Remap,
+    RemapKind,
 };
-use crate::util::byte_scan;
+use crate::{
+    translation_phases::SourcePosition,
+    util::byte_scan,
+};
 
 impl PositionTracker<'_> {
     /// Advances to spliced offset `to` and returns the position there. A splice

@@ -10,16 +10,18 @@
 use std::fmt::Debug;
 
 #[cfg(test)]
-use super::FrameTraceEvent;
+use super::machine::FrameTraceEvent;
 use super::{
     Parser,
     errors::{
         RecoverySummary,
         RelatedParserDiagnostic,
     },
-    expression_operators::is_operator,
+    frames::{
+        expression_operators::is_operator,
+        statement::is_statement_keyword,
+    },
     machine::ParseFrameKind,
-    statement::is_statement_keyword,
 };
 use crate::{
     translation_phases::{

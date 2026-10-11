@@ -4,18 +4,24 @@
 use super::{
     super::{
         Analyzer,
-        BinaryOperator,
-        Expression,
-        ExpressionType,
-        Integer,
-        TypeId,
-        TypeKind,
-        UnaryOperator,
+        integer::Integer,
+        types::{
+            TypeId,
+            TypeKind,
+        },
     },
     ConstantClass,
     ExpressionInfo,
 };
-use crate::translation_phases::preprocessing::StringTokenType;
+use crate::translation_phases::{
+    parsing::syntax::{
+        BinaryOperator,
+        Expression,
+        ExpressionType,
+        UnaryOperator,
+    },
+    preprocessing::StringTokenType,
+};
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Splits an address into its base object and byte offset, following

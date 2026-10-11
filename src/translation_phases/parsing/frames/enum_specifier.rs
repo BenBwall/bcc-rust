@@ -20,47 +20,49 @@
 use std::fmt::Debug;
 
 use super::{
-    Parser,
-    declaration_syntax::{
-        EnumSpecifier,
-        Enumerator,
-    },
-    errors::ParserErrorType,
     expression::{
         ExpressionBoundary,
         ExpressionFrame,
         ExpressionMode,
     },
     expression_operators::is_operator,
-    machine::{
-        ConstantExpressionResult,
-        EnumSpecifierResult,
-        ParseAction,
-        ParseFrame,
-        ParseFrameKind,
-        ParseValue,
-        unexpected_return,
-    },
-    modern::{
-        ModernKind,
-        ModernValue,
-        SpecifierExtension,
-        SpecifierExtensionKind,
-    },
-    recovery::{
-        SynchronizationKind,
-        SynchronizationSet,
-    },
-    scope::NameClass,
     statement::is_statement_keyword,
-    syntax::{
-        ConstantExpression,
-        Identifier,
-    },
 };
 use crate::{
     translation_phases::{
         SourceVectors,
+        parsing::{
+            Parser,
+            declaration_syntax::{
+                EnumSpecifier,
+                Enumerator,
+            },
+            errors::ParserErrorType,
+            machine::{
+                ConstantExpressionResult,
+                EnumSpecifierResult,
+                ParseAction,
+                ParseFrame,
+                ParseFrameKind,
+                ParseValue,
+                unexpected_return,
+            },
+            modern::{
+                ModernKind,
+                ModernValue,
+                SpecifierExtension,
+                SpecifierExtensionKind,
+            },
+            recovery::{
+                SynchronizationKind,
+                SynchronizationSet,
+            },
+            scope::NameClass,
+            syntax::{
+                ConstantExpression,
+                Identifier,
+            },
+        },
         preprocessing::{
             KeywordTokenType,
             OperatorTokenType,

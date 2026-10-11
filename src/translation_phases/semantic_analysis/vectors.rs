@@ -4,20 +4,28 @@
 
 use super::{
     Analyzer,
-    ArenaVec,
-    AttributeSpecifier,
-    BinaryOperator,
-    Expression,
-    ExpressionInfo,
-    Scalar,
     SemanticErrorKind,
-    TypeId,
-    TypeKind,
-    TypeQualifiers,
     expressions::{
         ConversionKind,
+        ExpressionInfo,
         ValueCategory,
     },
+    types::{
+        Scalar,
+        TypeId,
+        TypeKind,
+    },
+};
+use crate::{
+    translation_phases::parsing::{
+        AttributeSpecifier,
+        declaration_syntax::TypeQualifiers,
+        syntax::{
+            BinaryOperator,
+            Expression,
+        },
+    },
+    util::bump::ArenaVec,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

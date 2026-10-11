@@ -7,17 +7,25 @@
 //! emitted. C99: §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22;
 //! §6.5.2.2, pp. 71-72; PDF pp. 83-84 (extended function calls).
 
-use super::{
-    Analyzer,
-    ArenaVec,
-    Expression,
-    ExpressionInfo,
-    Scalar,
-    SemanticErrorKind,
-    TypeId,
-    TypeKind,
-    TypeQualifiers,
-    x86_builtin_table::BUILTINS,
+use super::x86_builtin_table::BUILTINS;
+use crate::{
+    translation_phases::{
+        parsing::{
+            declaration_syntax::TypeQualifiers,
+            syntax::Expression,
+        },
+        semantic_analysis::{
+            Analyzer,
+            SemanticErrorKind,
+            expressions::ExpressionInfo,
+            types::{
+                Scalar,
+                TypeId,
+                TypeKind,
+            },
+        },
+    },
+    util::bump::ArenaVec,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

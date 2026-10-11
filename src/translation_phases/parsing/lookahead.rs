@@ -14,7 +14,7 @@
 
 use super::{
     Parser,
-    expression_operators::is_operator,
+    frames::expression_operators::is_operator,
     syntax::Identifier,
 };
 use crate::translation_phases::preprocessing::{

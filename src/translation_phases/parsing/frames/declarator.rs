@@ -25,20 +25,10 @@ use std::{
 };
 
 use super::{
-    Parser,
     declaration_specifiers::{
         report_duplicate_type_qualifier,
         type_qualifier,
     },
-    declaration_syntax::{
-        Declarator,
-        DirectDeclarator,
-        ParenthesizedDeclarator,
-        PointerDeclarator,
-        PointerLevel,
-        TypeQualifiers,
-    },
-    errors::ParserErrorType,
     expression::{
         ExpressionBoundary,
         ExpressionFrame,
@@ -48,35 +38,47 @@ use super::{
         is_array_pointer_marker,
         is_operator,
     },
-    frame_pool::FramePools,
-    machine::{
-        ExpressionResult,
-        ParameterListResult,
-        ParseAction,
-        ParseFrame,
-        ParseFrameKind,
-        ParseValue,
-        unexpected_return,
-    },
-    modern::{
-        ModernKind,
-        ModernValue,
-        SpecifierExtension,
-        SpecifierExtensionKind,
-    },
     parameter_list::ParameterListFrame,
-    recovery::{
-        SynchronizationKind,
-        SynchronizationSet,
-    },
-    syntax::{
-        Expression,
-        Identifier,
-    },
 };
 use crate::{
     translation_phases::{
         SourceVectors,
+        parsing::{
+            Parser,
+            declaration_syntax::{
+                Declarator,
+                DirectDeclarator,
+                ParenthesizedDeclarator,
+                PointerDeclarator,
+                PointerLevel,
+                TypeQualifiers,
+            },
+            errors::ParserErrorType,
+            frame_pool::FramePools,
+            machine::{
+                ExpressionResult,
+                ParameterListResult,
+                ParseAction,
+                ParseFrame,
+                ParseFrameKind,
+                ParseValue,
+                unexpected_return,
+            },
+            modern::{
+                ModernKind,
+                ModernValue,
+                SpecifierExtension,
+                SpecifierExtensionKind,
+            },
+            recovery::{
+                SynchronizationKind,
+                SynchronizationSet,
+            },
+            syntax::{
+                Expression,
+                Identifier,
+            },
+        },
         preprocessing::{
             KeywordTokenType,
             OperatorTokenType,

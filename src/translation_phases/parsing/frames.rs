@@ -48,4 +48,11 @@ pub(crate) mod expression;
 pub(crate) mod expression_operators;
 pub(crate) mod initializer;
 
-pub(super) use super::*;
+use super::{
+    declaration_syntax,
+    gnu,
+    machine,
+    modern,
+    msvc,
+    syntax,
+};

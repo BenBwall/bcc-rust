@@ -4,18 +4,20 @@
 //! 167; predefined file and line macros, §6.10.8 paragraph 1, p. 160; PDF p.
 //! 172. Locations preserve provenance for other handlers and diagnostics.
 
-use super::super::{
-    Expander,
+use super::{
+    super::Expander,
+    TokenizerFrameType,
+};
+use crate::translation_phases::{
     GetPosition,
     GetSourceFileIndex,
-    PreprocessorToken,
     SetPosition,
     SetSourceFileIndex,
     SourcePosition,
     SourceVector,
-    TokenizerFrameType,
+    SourceVectors,
+    preprocessor_tokenizer::PreprocessorToken,
 };
-use crate::translation_phases::SourceVectors;
 
 impl Expander<'_, '_, '_, '_> {
     pub(in crate::translation_phases::preprocessing) fn invocation_location(

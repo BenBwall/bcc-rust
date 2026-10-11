@@ -2,7 +2,14 @@
 
 use std::path::Path;
 
-use super::*;
+use super::{
+    types::{
+        Layout,
+        TagKind,
+    },
+    *,
+};
+use crate::translation_phases::TranslationError;
 
 mod atomics;
 mod float128;

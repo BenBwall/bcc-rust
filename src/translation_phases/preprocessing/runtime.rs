@@ -67,16 +67,22 @@ pub(super) use frames::{
 pub(super) use lifecycle::Resting;
 
 use super::{
-    ArenaMap,
-    ArenaSet,
-    ArenaVec,
-    Bump,
-    ConditionalGroup,
-    LexedFiles,
-    LiteralScratch,
-    MacroDefinition,
-    StringCacheId,
+    conditional::ConditionalGroup,
     language_features,
+    macro_expansion::MacroDefinition,
+    token_conversion::LiteralScratch,
+};
+use crate::{
+    translation_phases::preprocessor_tokenizer::LexedFiles,
+    util::{
+        bump::{
+            ArenaMap,
+            ArenaSet,
+            ArenaVec,
+            Bump,
+        },
+        string_cache::StringCacheId,
+    },
 };
 
 /// State kept from the start of preprocessing to its end.

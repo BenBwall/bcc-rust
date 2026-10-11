@@ -4,10 +4,11 @@
 //! PDF pp. 163-165; macro definition lifetime, §6.10.3.5 paragraph 1, p. 155;
 //! PDF p. 167. Replacement execution belongs to the macro reader.
 
-use super::{
-    Debug,
-    StringCacheId,
-    TokenSource,
+use std::fmt::Debug;
+
+use crate::{
+    translation_phases::preprocessor_tokenizer::TokenSource,
+    util::string_cache::StringCacheId,
 };
 
 /// A macro name's current definition. It lasts until `#undef` names it or

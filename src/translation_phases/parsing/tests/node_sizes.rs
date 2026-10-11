@@ -5,8 +5,6 @@
 //! deliberate one.
 
 use super::super::{
-    ParseFrame,
-    ParseValue,
     declaration_syntax::{
         Declaration,
         DeclarationSpecifiers,
@@ -34,6 +32,10 @@ use super::super::{
         AsmQualifiers,
         Builtin,
         OffsetMember,
+    },
+    machine::{
+        ParseFrame,
+        ParseValue,
     },
     modern::{
         AttributeSpecifier,

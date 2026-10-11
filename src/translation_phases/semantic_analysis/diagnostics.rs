@@ -9,9 +9,13 @@ use super::{
     Analyzer,
     SemanticError,
     SemanticErrorKind,
-    SourceVectors,
-    StringCacheId,
-    TranslationError,
+};
+use crate::{
+    translation_phases::{
+        SourceVectors,
+        TranslationError,
+    },
+    util::string_cache::StringCacheId,
 };
 
 impl Analyzer<'_, '_, '_> {

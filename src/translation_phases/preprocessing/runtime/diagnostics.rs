@@ -5,19 +5,26 @@
 //! §6.10.3.4 paragraph 1, p. 155; PDF p. 167.
 //! Deprecation is a Clang extension and does not alter macro replacement.
 
-use super::super::{
-    ArenaVec,
-    Debug,
-    Expander,
-    PreprocessorError,
-    PreprocessorErrorType,
-    PreprocessorToken,
-    SourceVector,
-    TokenizerFrameType,
-    errors::{
-        DeprecatedMacroDiagnostic,
-        MacroExpansionNote,
+use std::fmt::Debug;
+
+use super::{
+    super::{
+        Expander,
+        PreprocessorError,
+        PreprocessorErrorType,
+        errors::{
+            DeprecatedMacroDiagnostic,
+            MacroExpansionNote,
+        },
     },
+    TokenizerFrameType,
+};
+use crate::{
+    translation_phases::{
+        SourceVector,
+        preprocessor_tokenizer::PreprocessorToken,
+    },
+    util::bump::ArenaVec,
 };
 
 impl Expander<'_, '_, '_, '_> {

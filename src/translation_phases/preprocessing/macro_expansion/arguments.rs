@@ -6,21 +6,34 @@
 //! PDF p. 165. Stringification and pasting consume the resulting operand
 //! frames.
 
-use super::{
-    ArenaVec,
-    Context,
-    Debug,
-    Expander,
-    OnceCell,
-    PreprocessorToken,
-    PreprocessorTokenType,
-    SourceVectors,
-    StringCacheId,
-    TokenSource,
-    TokenizerFrame,
-    TokenizerFrameType,
-    TranslationPhase,
-    replace,
+use std::{
+    cell::OnceCell,
+    fmt::Debug,
+    mem::replace,
+};
+
+use crate::{
+    translation_phases::{
+        Context,
+        SourceVectors,
+        TranslationPhase,
+        preprocessing::{
+            Expander,
+            runtime::{
+                TokenizerFrame,
+                TokenizerFrameType,
+            },
+        },
+        preprocessor_tokenizer::{
+            PreprocessorToken,
+            PreprocessorTokenType,
+            TokenSource,
+        },
+    },
+    util::{
+        bump::ArenaVec,
+        string_cache::StringCacheId,
+    },
 };
 
 #[expect(
