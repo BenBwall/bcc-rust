@@ -33,23 +33,36 @@ impl<'s> ControlFlowGraph<'s> {
     /// Computes the edges of `body` in `scratch`. A block without a
     /// terminator has no successors.
     pub(crate) fn compute(body: &Body<'_>, scratch: &'s Bump) -> Self {
-        let blocks = body.block_count();
+        Self::from_successors(body.block_count(), scratch, |block, add| {
+            if let Some(terminator) = body.terminator(block) {
+                body.visit_destinations(terminator, |call| add(body.block_call(call).0));
+            }
+        })
+    }
+
+    /// Computes the edges of a graph of `blocks` blocks, numbered from 0,
+    /// whose edges `successors_of` lists: called with each block, it calls
+    /// its second argument with each target. Repeated targets and targets out
+    /// of range are dropped. A pass whose working copy of a function is not a
+    /// [`Body`] builds its graph this way.
+    pub(crate) fn from_successors(
+        blocks: usize,
+        scratch: &'s Bump,
+        mut successors_of: impl FnMut(Block, &mut dyn FnMut(Block)),
+    ) -> Self {
         let mut successor_starts = ArenaVec::with_capacity_in(blocks + 1, scratch);
         let mut successors = ArenaVec::new_in(scratch);
         let mut predecessor_counts = ArenaVec::with_capacity_in(blocks + 1, scratch);
         predecessor_counts.resize(blocks + 1, 0_u32);
-        for block in body.blocks() {
+        for block in (0..blocks).map(Block::new) {
             successor_starts.push(offset(successors.len()));
             let first = successors.len();
-            if let Some(terminator) = body.terminator(block) {
-                body.visit_destinations(terminator, |call| {
-                    let (target, _) = body.block_call(call);
-                    if !successors[first..].contains(&target) && target.index() < blocks {
-                        successors.push(target);
-                        predecessor_counts[target.index() + 1] += 1;
-                    }
-                });
-            }
+            successors_of(block, &mut |target| {
+                if !successors[first..].contains(&target) && target.index() < blocks {
+                    successors.push(target);
+                    predecessor_counts[target.index() + 1] += 1;
+                }
+            });
         }
         successor_starts.push(offset(successors.len()));
 
@@ -63,7 +76,7 @@ impl<'s> ControlFlowGraph<'s> {
         cursors.extend_from_slice(&predecessor_starts[..blocks]);
         let mut predecessors = ArenaVec::with_capacity_in(successors.len(), scratch);
         predecessors.resize(successors.len(), Block::new(0));
-        for block in body.blocks() {
+        for block in (0..blocks).map(Block::new) {
             let row = successor_starts[block.index()] as usize
                 ..successor_starts[block.index() + 1] as usize;
             for &target in &successors[row] {

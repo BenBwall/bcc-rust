@@ -40,8 +40,20 @@ impl<'s> DominatorTree<'s> {
     /// Computes the tree of `body` in `scratch`. The entry is block 0; a
     /// body without blocks has an empty tree.
     pub(crate) fn compute(body: &Body<'_>, cfg: &ControlFlowGraph<'_>, scratch: &'s Bump) -> Self {
-        let reverse_post_order = reverse_post_order(body, cfg, scratch);
-        let blocks = body.block_count();
+        debug_assert_eq!(
+            body.block_count(),
+            cfg.block_count(),
+            "the graph is of another body"
+        );
+        Self::from_cfg(cfg, scratch)
+    }
+
+    /// Computes the tree of the graph `cfg` alone, whose entry is block 0.
+    /// A pass whose working copy of a function is not a [`Body`] uses this
+    /// with [`ControlFlowGraph::from_successors`].
+    pub(crate) fn from_cfg(cfg: &ControlFlowGraph<'_>, scratch: &'s Bump) -> Self {
+        let reverse_post_order = reverse_post_order(cfg, scratch);
+        let blocks = cfg.block_count();
         let mut rpo_numbers = ArenaVec::with_capacity_in(blocks, scratch);
         rpo_numbers.resize(blocks, UNREACHABLE);
         for (number, &block) in reverse_post_order.iter().enumerate() {
@@ -135,17 +147,14 @@ fn intersect(idoms: &[Block], rpo_numbers: &[u32], mut a: Block, mut b: Block) -
 
 /// The blocks reachable from block 0 in reverse post-order, by a depth-first
 /// search whose stack holds each open block with its next successor index.
-fn reverse_post_order<'s>(
-    body: &Body<'_>,
-    cfg: &ControlFlowGraph<'_>,
-    scratch: &'s Bump,
-) -> ArenaVec<'s, Block> {
+fn reverse_post_order<'s>(cfg: &ControlFlowGraph<'_>, scratch: &'s Bump) -> ArenaVec<'s, Block> {
     let mut order = ArenaVec::new_in(scratch);
-    let Some(entry) = body.entry_block() else {
+    if cfg.block_count() == 0 {
         return order;
-    };
-    let mut visited = ArenaVec::with_capacity_in(body.block_count(), scratch);
-    visited.resize(body.block_count(), false);
+    }
+    let entry = Block::new(0);
+    let mut visited = ArenaVec::with_capacity_in(cfg.block_count(), scratch);
+    visited.resize(cfg.block_count(), false);
     let mut stack: ArenaVec<'_, (Block, usize)> = ArenaVec::new_in(scratch);
     visited[entry.index()] = true;
     stack.push((entry, 0));
