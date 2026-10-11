@@ -268,6 +268,15 @@ attributes. Calls to functions that may return twice (`setjmp` and attributed
 functions) are marked `returns_twice`; the optimizer must not keep values in
 registers across them.
 
+The optimizer's current alias check uses object identity and byte ranges, not
+access tags: distinct stack slots and distinct globals are disjoint, as are
+non-overlapping constant `ptr_add` ranges from the same base. A slot whose
+address never escapes cannot alias an opaque pointer. Escape analysis follows
+pointer offsets and conservatively treats stored, call, returned,
+integer-converted and unsupported uses (including block arguments) as escapes.
+Variable or overflowing offsets retain object identity but give no range proof.
+All remaining pairs may alias.
+
 Bit-fields are lowered in lowering, not in the IR: loads and stores of the
 bytes that hold the field with shifts and masks, from sema's byte offset, bit
 offset and width. A read loads exactly the field's bytes, a write loads (and
@@ -494,8 +503,23 @@ the low bits are zero, or `lshr` when the dividend is nonnegative; nonnegative
 signed remainder becomes a mask. Unsigned power-of-two division and remainder
 become a logical shift and a mask for any dividend. Each rewrite consumes one
 `allow()` call. Later pipeline rounds let these cheap shifts enable select
-formation, including the Collatz parity diamond. Load CSE remains
-roadmap work, so the full projected benchmark improvement is not expected yet.
+formation, including the Collatz parity diamond.
+
+`gvn` also eliminates redundant non-volatile loads and forwards non-volatile
+stores to loads with the same resolved address and exact type. `memory.rs`
+keeps a scoped table of available values and an EarlyCSE-style memory
+generation, the length of a write log on the current dominator path. A fact
+from an earlier generation survives only when the alias check proves every
+intervening store disjoint. Calls (direct and indirect), volatile accesses,
+`copy`, `fill` and every `va_*` operation advance the generation with a full
+barrier. Each eliminated load consumes one `allow()` rewrite; stores stay.
+Facts cross a dominator-tree edge only when the child has exactly one CFG
+predecessor, the parent. A join or loop header starts a fresh generation,
+even when its paths happen to preserve memory. Scope rollback restores both
+overwritten facts and generations before visiting siblings. No loop-carried
+load elimination, load motion or type-based aliasing is attempted. Later
+pipeline rounds let removed arm loads enable select formation in sorts-style
+diamonds.
 
 ## ABI lowering
 
