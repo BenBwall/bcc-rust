@@ -57,12 +57,12 @@ impl PreparedParse<'_, '_, '_> {
 /// benchmark can time phase 7 alone.
 #[doc(hidden)]
 pub struct PreparedParse<'a, 'tu, 'parse> {
-    pub(super) context:      &'a mut Context<'tu>,
-    pub(super) preprocessed: PreprocessedTranslationUnit,
-    pub(super) parse:        &'parse Bump,
+    context:          &'a mut Context<'tu>,
+    preprocessed:     PreprocessedTranslationUnit,
+    pub(super) parse: &'parse Bump,
 }
 
-pub(super) fn prepare_parse_in_context(
+fn prepare_parse_in_context(
     context: &mut Context<'_>,
     input: BenchmarkInput,
 ) -> PreprocessedTranslationUnit {

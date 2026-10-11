@@ -16,14 +16,14 @@ use crate::util::bump::{
 /// start, and clearing keeps the segments for reuse, as a `Vec` keeps its
 /// capacity.
 pub(super) struct SegmentedVec<'a, T> {
-    pub(super) arena:    &'a Bump,
-    pub(super) segments: ArenaVec<'a, ArenaVec<'a, T>>,
+    arena:    &'a Bump,
+    segments: ArenaVec<'a, ArenaVec<'a, T>>,
     /// The position of the first element.
-    pub(super) start:    usize,
+    start:    usize,
     /// The position after the last element.
-    pub(super) end:      usize,
+    end:      usize,
     /// The segment that holds the last element, or 0 when empty.
-    pub(super) tail:     usize,
+    tail:     usize,
 }
 
 impl<'a, T: Clone> SegmentedVec<'a, T> {
@@ -87,7 +87,7 @@ impl<'a, T: Clone> SegmentedVec<'a, T> {
     }
 
     /// The elements in order, one slice per segment.
-    pub(super) fn slices(&self) -> impl Iterator<Item = &[T]> {
+    fn slices(&self) -> impl Iterator<Item = &[T]> {
         let (first, offset) = Self::locate(self.start);
         let segments = if self.is_empty() {
             &[][..]
@@ -115,7 +115,7 @@ impl<'a, T: Clone> SegmentedVec<'a, T> {
     }
 
     /// The segment holding `position`, and the offset there.
-    pub(super) fn locate(position: usize) -> (usize, usize) {
+    fn locate(position: usize) -> (usize, usize) {
         let blocks = position / Self::FIRST_SEGMENT + 1;
         let segment = blocks.ilog2() as usize;
         (
@@ -181,7 +181,7 @@ impl<'a, T: Clone> SegmentedVec<'a, T> {
         })
     }
 
-    pub(super) fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+    fn get_mut(&mut self, index: usize) -> Option<&mut T> {
         (index < self.len()).then(|| {
             let (segment, offset) = Self::locate(self.start + index);
             &mut self.segments[segment][offset]
@@ -191,7 +191,7 @@ impl<'a, T: Clone> SegmentedVec<'a, T> {
 
 impl<T: Clone> SegmentedVec<'_, T> {
     /// The length of the first segment.
-    pub(super) const FIRST_SEGMENT: usize = 16;
+    const FIRST_SEGMENT: usize = 16;
 }
 
 impl<T: Clone> std::ops::Index<usize> for SegmentedVec<'_, T> {

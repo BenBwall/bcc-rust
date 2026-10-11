@@ -229,10 +229,7 @@ impl Lexer<'_, '_, '_, '_> {
 }
 
 impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn char_at(
-        &self,
-        offset: usize,
-    ) -> char {
+    pub(super) fn char_at(&self, offset: usize) -> char {
         self.text[offset..]
             .chars()
             .next()

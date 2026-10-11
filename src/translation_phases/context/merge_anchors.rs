@@ -15,9 +15,9 @@ use crate::translation_phases::provenance::SourceVectors;
 #[derive(Clone, Copy)]
 pub(super) struct MergeAnchors {
     /// Whether any range is an anchor; otherwise every nonempty range stays.
-    pub(super) any:        bool,
-    pub(super) first_real: Option<SourceVectors>,
-    pub(super) real_seen:  bool,
+    any:        bool,
+    first_real: Option<SourceVectors>,
+    real_seen:  bool,
 }
 
 impl MergeAnchors {

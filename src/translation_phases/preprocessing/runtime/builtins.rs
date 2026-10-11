@@ -216,8 +216,8 @@ impl Expander<'_, '_, '_, '_> {
 /// for the translation unit (§6.10.8 paragraph 3, p. 161; PDF p. 173).
 #[derive(Debug)]
 pub(in crate::translation_phases::preprocessing) struct TranslationTimestamp<'pp> {
-    pub(in crate::translation_phases::preprocessing) date: ArenaString<'pp>,
-    pub(in crate::translation_phases::preprocessing) time: ArenaString<'pp>,
+    date: ArenaString<'pp>,
+    time: ArenaString<'pp>,
 }
 
 /// Spells `value` as a narrow C string literal whose evaluated contents are

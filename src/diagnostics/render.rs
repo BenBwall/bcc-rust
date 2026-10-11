@@ -148,7 +148,7 @@ impl Renderer {
         out.into_str()
     }
 
-    pub(super) fn render_file_lines(
+    fn render_file_lines(
         &self,
         out: &mut ArenaString<'_>,
         marks: &[Mark<'_>],
@@ -288,7 +288,7 @@ impl Renderer {
         }
     }
 
-    pub(super) fn write_source_line(
+    fn write_source_line(
         &self,
         out: &mut ArenaString<'_>,
         line: usize,
@@ -308,7 +308,7 @@ impl Renderer {
         );
     }
 
-    pub(super) fn marks<'a, 'scratch>(
+    fn marks<'a, 'scratch>(
         diagnostic: &'a Diagnostic<'_>,
         context: &Context<'_>,
         scratch: &'scratch Bump,
@@ -355,7 +355,7 @@ impl Renderer {
 
     /// Returns the 1-based physical line containing `offset` and the byte
     /// range of that line, excluding its terminator.
-    pub(super) fn locate(starts: &[usize], text: &str, offset: usize) -> (usize, usize, usize) {
+    fn locate(starts: &[usize], text: &str, offset: usize) -> (usize, usize, usize) {
         let line = starts.partition_point(|&start| start <= offset);
         let start = starts[line - 1];
         let end = starts
@@ -370,7 +370,7 @@ impl Renderer {
         (line, start, end)
     }
 
-    pub(super) fn paint<'a>(&self, text: &'a str, style: Style) -> Painted<'a> {
+    fn paint<'a>(&self, text: &'a str, style: Style) -> Painted<'a> {
         Painted {
             text,
             style,
@@ -378,18 +378,18 @@ impl Renderer {
         }
     }
 
-    pub(super) fn paint_into(&self, out: &mut ArenaString<'_>, text: &str, style: Style) {
+    fn paint_into(&self, out: &mut ArenaString<'_>, text: &str, style: Style) {
         let _ = write!(out, "{}", self.paint(text, style));
     }
 
-    pub(super) fn severity_style(severity: ErrorSeverity) -> Style {
+    fn severity_style(severity: ErrorSeverity) -> Style {
         match severity {
             | ErrorSeverity::Error => Style::new().bright_red().bold(),
             | ErrorSeverity::Warning => Style::new().bright_yellow().bold(),
         }
     }
 
-    pub(super) fn gutter_style() -> Style {
+    fn gutter_style() -> Style {
         Style::new().bright_blue().bold()
     }
 
@@ -418,31 +418,28 @@ impl Renderer {
 
 /// One underline on one physical source line.
 #[derive(Debug, Clone)]
-pub(super) struct Mark<'a> {
-    pub(super) file:    u32,
-    pub(super) line:    usize,
+struct Mark<'a> {
+    file:    u32,
+    line:    usize,
     /// Byte range within the file, clipped to the line.
-    pub(super) start:   usize,
-    pub(super) end:     usize,
-    pub(super) primary: bool,
-    pub(super) label:   Option<&'a str>,
+    start:   usize,
+    end:     usize,
+    primary: bool,
+    label:   Option<&'a str>,
     /// Where the mark was made among the diagnostic's marks.
-    pub(super) order:   usize,
+    order:   usize,
 }
 
-pub(super) struct Painted<'a> {
-    pub(super) text:  &'a str,
-    pub(super) style: Style,
-    pub(super) color: ColorChoice,
+struct Painted<'a> {
+    text:  &'a str,
+    style: Style,
+    color: ColorChoice,
 }
 
 /// Expands tabs and shows other control characters as their one-column
 /// Unicode control pictures, so a snippet never emits raw control bytes
 /// and carets stay aligned.
-pub(super) fn visible_source<'scratch>(
-    text: &str,
-    scratch: &'scratch Bump,
-) -> ArenaString<'scratch> {
+fn visible_source<'scratch>(text: &str, scratch: &'scratch Bump) -> ArenaString<'scratch> {
     let mut visible = ArenaString::new_in(scratch);
     for c in text.chars() {
         if c == '\t' {
@@ -460,14 +457,14 @@ pub(super) fn visible_source<'scratch>(
     visible
 }
 
-pub(super) fn display_width(text: &str) -> usize {
+fn display_width(text: &str) -> usize {
     text.chars()
         .map(|c| if c == '\t' { TAB_WIDTH } else { 1 })
         .sum()
 }
 
 /// Width a tab occupies when a source line is echoed.
-pub(super) const TAB_WIDTH: usize = 4;
+const TAB_WIDTH: usize = 4;
 
 impl Display for Painted<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -26,7 +26,7 @@ pub fn sema_source(source: &str) -> ParseBenchmarkSummary {
     summarize_semantic(&tu, source)
 }
 
-pub(super) fn summarize_semantic<'tu>(tu: &'tu Bump, source: &'tu str) -> ParseBenchmarkSummary {
+fn summarize_semantic<'tu>(tu: &'tu Bump, source: &'tu str) -> ParseBenchmarkSummary {
     let mut context = benchmark_context(tu);
     let unit = crate::pipeline::parse_translation_unit(
         &mut context,

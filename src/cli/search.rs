@@ -75,31 +75,31 @@ pub(super) struct SearchDirectories {
 pub(super) struct CliHeaderSearch {
     /// Add directory to the search path for `"…"` includes only.
     #[clap(short = 'q', long = "iquote", value_name = "DIR")]
-    pub(super) quote_include:  Vec<PathBuf>,
+    quote_include:  Vec<PathBuf>,
     /// Add directory to the include search path.
     #[clap(short = 'I', long = "include-directory", value_name = "DIR")]
-    pub(super) include:        Vec<PathBuf>,
+    include:        Vec<PathBuf>,
     /// Add directory to the system include search path, before the built-in
     /// headers.
     #[clap(short = 's', long = "isystem", value_name = "DIR")]
-    pub(super) system_include: Vec<PathBuf>,
+    system_include: Vec<PathBuf>,
     /// Add directory to the end of the search path, after the built-in
     /// headers and the C library's directories.
     #[clap(long = "idirafter", value_name = "DIR")]
-    pub(super) after_include:  Vec<PathBuf>,
+    after_include:  Vec<PathBuf>,
     /// Use `DIR/usr/local/include` and `DIR/usr/include` as the C library's
     /// include directories.
     #[clap(long, value_name = "DIR")]
-    pub(super) sysroot:        Option<PathBuf>,
+    sysroot:        Option<PathBuf>,
     /// Do not search the built-in headers or the C library's directories.
     #[clap(long)]
-    pub(super) nostdinc:       bool,
+    nostdinc:       bool,
     /// Do not search the C library's directories.
     #[clap(long)]
-    pub(super) nostdlibinc:    bool,
+    nostdlibinc:    bool,
     /// Do not search the built-in headers.
     #[clap(long)]
-    pub(super) nobuiltininc:   bool,
+    nobuiltininc:   bool,
 }
 
 /// Returns the directories of a GCC-style search-path variable.
@@ -113,7 +113,7 @@ pub(super) struct CliHeaderSearch {
     reason = "Startup reads CPATH-style variables beside clap's arguments; `run` borrows the \
               paths as `&Path`."
 )]
-pub(super) fn include_path_from_env(env_var: &str) -> Vec<PathBuf> {
+fn include_path_from_env(env_var: &str) -> Vec<PathBuf> {
     match var_os(env_var) {
         | Some(value) if !value.is_empty() => split_paths(&value)
             .map(|path| {

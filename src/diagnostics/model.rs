@@ -84,7 +84,7 @@ impl<'d> Diagnostic<'d> {
 /// The location-independent part of a diagnostic: what went wrong, a short
 /// label for the primary range, and any notes and help, all in one arena.
 pub(crate) struct Explanation<'d> {
-    pub(super) arena:   &'d Bump,
+    arena:              &'d Bump,
     pub(crate) message: &'d str,
     pub(crate) label:   Option<&'d str>,
     pub(crate) notes:   ArenaVec<'d, &'d str>,

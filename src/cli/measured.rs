@@ -72,7 +72,7 @@ pub fn compile_file_measured(
     compile_file_configured_measured(path, CompilerConfiguration::default(), out, measure, |_| {})
 }
 
-pub(super) fn compile_file_configured_measured(
+fn compile_file_configured_measured(
     path: &Path,
     configuration: CompilerConfiguration,
     out: &mut dyn Write,

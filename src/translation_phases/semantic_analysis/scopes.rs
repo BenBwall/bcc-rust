@@ -77,7 +77,7 @@ pub(super) struct Entry {
     pub(super) namespace: Namespace,
     pub(super) scope:     usize,
     pub(super) binding:   usize,
-    pub(super) previous:  Option<usize>,
+    previous:             Option<usize>,
 }
 
 /// Separate identifier namespaces for ordinary names, tags and GNU local

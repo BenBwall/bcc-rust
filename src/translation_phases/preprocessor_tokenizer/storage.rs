@@ -85,40 +85,40 @@ impl<'arena> LexingFile<'arena, '_> {
 /// C99: preprocessing-token formation §5.1.1.2p3, p. 10; PDF p. 22; lexical
 /// categories §6.4p1-3, p. 49; PDF p. 61.
 pub(super) struct LexedFile<'a> {
-    pub(super) source_file_index:     u32,
+    pub(super) source_file_index: u32,
     /// The file's index in the preprocessor's registry of opened files, if
     /// it was opened there rather than for temporary use.
-    pub(super) registration:          Option<u32>,
-    pub(super) entries:               &'a [Entry],
+    pub(super) registration: Option<u32>,
+    entries: &'a [Entry],
     /// Entry indices where the high byte of the source line changes.
-    pub(super) line_high_starts:      &'a [(u32, u8)],
+    line_high_starts: &'a [(u32, u8)],
     /// Where the last entry ends.
-    pub(super) end_of_tokens:         SourcePosition,
+    end_of_tokens: SourcePosition,
     /// Where reading past the last entry stands: past any trailing splices.
-    pub(super) eof:                   SourcePosition,
+    eof: SourcePosition,
     /// Sorted by entry.
-    pub(super) diagnostics:           &'a [(u32, LexDiagnostic)],
+    diagnostics: &'a [(u32, LexDiagnostic)],
     /// Whether each extension diagnostic, by its index in `diagnostics`, was
     /// reported. Its spelling is written once, so however often phase 4
     /// reads the token (in a macro body, an argument prescan, or after a
     /// lookahead rewinds), the diagnostic is reported once; reading it in a
     /// skipped group, with tokenizer diagnostics ignored, does not count.
-    pub(super) extensions_reported:   &'a [Cell<bool>],
+    extensions_reported: &'a [Cell<bool>],
     /// Exact character spans for Other tokens, sorted by entry. Normal token
     /// spans still use the adjacent entry boundaries above.
-    pub(super) other_locations:       &'a [(u32, SourceVector)],
+    other_locations: &'a [(u32, SourceVector)],
     /// The entry for a missing final newline read at the start of a token.
-    pub(super) final_newline_entry:   Option<usize>,
+    final_newline_entry: Option<usize>,
     /// Entries whose lexing read the supplied final newline while looking
     /// ahead. Sorted, and empty unless the final newline is missing.
-    pub(super) final_newline_readers: &'a [u32],
-    pub(super) lacks_final_newline:   bool,
+    final_newline_readers: &'a [u32],
+    lacks_final_newline: bool,
     /// The splice that escapes the source's final newline, with its line
     /// given before any `#line` renumbering.
-    pub(super) escaped_final_newline: Option<SourceVector>,
+    escaped_final_newline: Option<SourceVector>,
     /// Entries whose lexing read the end of input. Sorted, and empty unless
     /// the final newline is escaped.
-    pub(super) end_readers:           &'a [u32],
+    end_readers: &'a [u32],
 }
 
 /// One lexed entry: a preprocessing token, or whitespace or a comment

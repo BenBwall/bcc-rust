@@ -70,6 +70,6 @@ impl Lexer<'_, '_, '_, '_> {
 /// A token's kind and spelling once its end is known.
 #[derive(Clone, Copy)]
 pub(super) struct Lexed {
-    pub(super) kind:     Option<PreprocessorTokenType>,
-    pub(super) contents: StringCacheId,
+    kind:     Option<PreprocessorTokenType>,
+    contents: StringCacheId,
 }

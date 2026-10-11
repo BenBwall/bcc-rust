@@ -44,9 +44,9 @@ pub(crate) struct OwnedExplanation {
 pub(crate) struct OwnedDiagnostic {
     pub(crate) severity: ErrorSeverity,
     pub(crate) message:  String,
-    pub(super) labels:   Vec<(OwnedLabelSource, Option<String>, bool)>,
-    pub(super) notes:    Vec<String>,
-    pub(super) help:     Vec<String>,
+    labels:              Vec<(OwnedLabelSource, Option<String>, bool)>,
+    notes:               Vec<String>,
+    help:                Vec<String>,
 }
 
 #[cfg(test)]
@@ -55,7 +55,7 @@ pub(crate) struct OwnedDiagnostic {
     reason = "Test-only owned copies, compiled only under `cfg(test)`."
 )]
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum OwnedLabelSource {
+enum OwnedLabelSource {
     Range(SourceVectors),
     Segments(Vec<SourceVector>),
 }

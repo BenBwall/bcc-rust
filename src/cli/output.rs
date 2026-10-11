@@ -183,7 +183,7 @@ pub(super) struct TokenOutput<'a> {
     reason = "std's thread builder takes the name as a `String`; spawning the deep-stack thread \
               allocates in std anyway."
 )]
-pub(super) fn print_raw_syntax(unit: &ParsedTranslationUnit<'_>) {
+fn print_raw_syntax(unit: &ParsedTranslationUnit<'_>) {
     let raw = unit.raw_debug();
     std::thread::scope(|scope| {
         std::thread::Builder::new()
@@ -209,16 +209,16 @@ pub(super) fn print_raw_syntax(unit: &ParsedTranslationUnit<'_>) {
 pub(super) struct ParserOutput {
     /// Print resolved declarations, types, linkage and storage duration.
     #[clap(long, conflicts_with_all = ["tokens", "syntax_tree", "raw_syntax"])]
-    pub(super) semantic_types:   bool,
+    semantic_types:   bool,
     /// Print a deterministic, source-oriented C syntax tree.
     #[clap(long, conflicts_with = "tokens")]
-    pub(super) syntax_tree:      bool,
+    syntax_tree:      bool,
     /// Include line and column locations in `--syntax-tree` output.
     #[clap(long, requires = "syntax_tree")]
-    pub(super) syntax_locations: bool,
+    syntax_locations: bool,
     /// Print the raw syntax tree, in Rust debug form, for storage debugging.
     #[clap(long, conflicts_with = "tokens")]
-    pub(super) raw_syntax:       bool,
+    raw_syntax:       bool,
 }
 
 #[derive(Args)]
@@ -231,7 +231,7 @@ pub(super) struct CliOutput {
 }
 
 /// Fails like `eprint!` when stderr cannot be written.
-pub(super) fn expect_stderr(result: io::Result<()>) {
+fn expect_stderr(result: io::Result<()>) {
     if let Err(error) = result {
         panic!("failed printing to stderr: {error}");
     }
@@ -241,4 +241,4 @@ pub(super) fn expect_stderr(result: io::Result<()>) {
 /// recurses once per nesting level of the tree, which the iterative parser
 /// accepts far deeper than the main thread's stack allows. The stack is
 /// reserved, not committed, so unused depth costs only address space.
-pub(super) const RAW_SYNTAX_STACK_BYTES: usize = 1 << 30;
+const RAW_SYNTAX_STACK_BYTES: usize = 1 << 30;

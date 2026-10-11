@@ -12,7 +12,7 @@ use super::{
 };
 
 impl CompilerConfiguration {
-    pub(super) const fn derive_features(mut self) -> Self {
+    const fn derive_features(mut self) -> Self {
         self.accepted = 0;
         self.native = 0;
         let mut index = 0;

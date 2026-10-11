@@ -153,18 +153,16 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
 /// What the preprocessor keeps while no macro expansion is active.
 #[derive(Debug)]
 pub(in crate::translation_phases::preprocessing) struct Resting<'tu, 'pp> {
-    pub(in crate::translation_phases::preprocessing) state:                 PreprocessorState<'pp>,
+    pub(super) state: PreprocessorState<'pp>,
     /// The innermost source file's cursor.
-    pub(in crate::translation_phases::preprocessing) tokenizer:             TokenSource<'pp>,
-    pub(in crate::translation_phases::preprocessing) current_is_newline:    bool,
-    pub(in crate::translation_phases::preprocessing) last_was_newline:      bool,
-    pub(in crate::translation_phases::preprocessing) output_purpose:        OutputPurpose,
-    pub(in crate::translation_phases::preprocessing) expression_parser:
-        PreprocessorExpressionParser<'pp>,
-    pub(in crate::translation_phases::preprocessing) pending_parser_token:  Option<Token>,
-    pub(in crate::translation_phases::preprocessing) pending_parser_errors:
-        ArenaVec<'pp, TranslationError<'tu>>,
-    pub(in crate::translation_phases::preprocessing) source_segment_limit:  usize,
+    pub(super) tokenizer: TokenSource<'pp>,
+    pub(super) current_is_newline: bool,
+    pub(super) last_was_newline: bool,
+    pub(super) output_purpose: OutputPurpose,
+    pub(super) expression_parser: PreprocessorExpressionParser<'pp>,
+    pub(super) pending_parser_token: Option<Token>,
+    pub(super) pending_parser_errors: ArenaVec<'pp, TranslationError<'tu>>,
+    pub(in crate::translation_phases::preprocessing) source_segment_limit: usize,
 }
 
 impl Debug for PreprocessorState<'_> {

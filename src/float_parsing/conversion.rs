@@ -25,7 +25,7 @@ pub(crate) fn string_to_double(s: &str) -> Result<f64, ParseFloatError> {
     parse_double(s, 0)
 }
 
-pub(super) fn parse_double(s: &str, suffix_bytes: usize) -> Result<f64, ParseFloatError> {
+fn parse_double(s: &str, suffix_bytes: usize) -> Result<f64, ParseFloatError> {
     assert!(
         s.ends_with('\0'),
         "string_to_double: string must end with null byte. Was: {s:?}"

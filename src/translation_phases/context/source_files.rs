@@ -232,7 +232,7 @@ impl<'tu> Context<'tu> {
             .map(move |(offset, directory)| (start + offset, directory))
     }
 
-    pub(super) fn alloc_path(tu: &'tu Bump, path: &Path) -> &'tu Path {
+    fn alloc_path(tu: &'tu Bump, path: &Path) -> &'tu Path {
         let bytes = tu.alloc_slice_copy(path.as_os_str().as_encoded_bytes());
         // SAFETY: These are the complete encoded bytes of an OsStr from this
         // process and target, copied without splitting or changing them.

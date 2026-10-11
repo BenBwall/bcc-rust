@@ -24,7 +24,7 @@ pub(crate) struct LongDouble {
 
 pub(super) const LONG_DOUBLE_BYTES: usize = ffi::LONG_DOUBLE_BYTES as _;
 
-pub(super) const LONG_DOUBLE_HEX_CAPACITY: usize = ffi::LONG_DOUBLE_HEX_CAPACITY as _;
+const LONG_DOUBLE_HEX_CAPACITY: usize = ffi::LONG_DOUBLE_HEX_CAPACITY as _;
 
 impl LongDouble {
     /// C99: §6.6p4, p. 95; PDF p. 107; §6.3.1.8, pp. 44-45;
@@ -67,7 +67,7 @@ impl LongDouble {
         }
     }
 
-    pub(super) fn to_ffi(self) -> ffi::long_double_t {
+    fn to_ffi(self) -> ffi::long_double_t {
         ffi::long_double_t { bytes: self.value }
     }
 

@@ -244,7 +244,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
 /// defined names of §6.10.8 paragraph 2, p. 161; PDF p. 173, is defined.
 /// `_Pragma` is an operator (§6.10.9, p. 161; PDF p. 173), not a macro; it
 /// is registered here so that rescanning recognizes it.
-pub(in crate::translation_phases::preprocessing) const PREDEFINED_MACRO_NAMES: [&str; 10] = [
+const PREDEFINED_MACRO_NAMES: [&str; 10] = [
     "__LINE__",
     "__FILE__",
     "__DATE__",

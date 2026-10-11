@@ -96,7 +96,7 @@ impl<'a> Natural<'a> {
         })
     }
 
-    pub(super) fn trim(&mut self) {
+    fn trim(&mut self) {
         while self.0.last() == Some(&0) {
             _ = self.0.pop();
         }
