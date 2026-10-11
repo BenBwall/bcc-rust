@@ -580,7 +580,6 @@ The conformance tests in `src/abi/tests/conformance.rs` link bcc-compiled C with
 Clang-compiled C, exchanging every supported shape and the narrow integers in
 both directions, and run the result at `-O0` and `-O2`: natively for Windows
 GNU and under WSL, as a freestanding static executable, for System V.
-||||||| parent of 9c9ce0d9 (docs(optimizer): Explain select formation and integer fact rewrites)
 
 ## From the IR to machine code
 
