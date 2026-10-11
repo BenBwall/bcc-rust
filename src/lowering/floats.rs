@@ -74,9 +74,18 @@ pub(super) fn constant_bits(value: &LongDouble, ty: Type) -> Option<u128> {
 /// The bits of the integer `value` as a constant of the floating type `ty`,
 /// rounded to nearest even; `None` for a type that is not `f32`, `f64` or
 /// `f80`.
+/// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56.
 pub(super) fn from_integer(value: i128, ty: Type) -> Option<u128> {
-    let sign = value < 0;
-    let magnitude = value.unsigned_abs();
+    from_magnitude(value < 0, value.unsigned_abs(), ty)
+}
+
+/// Converts an unsigned magnitude without interpreting its high bit as a sign.
+/// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56.
+pub(super) fn from_unsigned(value: u128, ty: Type) -> Option<u128> {
+    from_magnitude(false, value, ty)
+}
+
+fn from_magnitude(sign: bool, magnitude: u128, ty: Type) -> Option<u128> {
     let (mantissa_bits, exponent_bits) = match ty {
         | Type::F32 => (23, 8),
         | Type::F64 => (52, 11),
@@ -90,7 +99,7 @@ pub(super) fn from_integer(value: i128, ty: Type) -> Option<u128> {
     Some(format.signed(sign, format.round(magnitude, 0)))
 }
 
-/// The x87 bits of a magnitude (at most 2^127), rounding the significand to
+/// The x87 bits of an unsigned 128-bit magnitude, rounding the significand to
 /// 64 bits.
 #[expect(
     clippy::cast_possible_truncation,

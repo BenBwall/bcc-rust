@@ -597,6 +597,17 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         let mut relocations = ArenaVec::new_in(tables);
         for leaf in leaves {
             match leaf {
+                | Leaf::Zero { offset, size } => {
+                    let start =
+                        usize::try_from(offset).expect("an initializer offset fits the object");
+                    let end =
+                        usize::try_from(offset + size).expect("an initializer fits the object");
+                    bytes[start..end].fill(0);
+                    // C99 §6.7.8p19: replacement also discards old addresses.
+                    relocations.retain(|relocation: &Relocation| {
+                        relocation.offset + 8 <= offset || relocation.offset >= offset + size
+                    });
+                },
                 | Leaf::Scalar {
                     offset,
                     ty,
@@ -625,6 +636,10 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     let string = self.string_bytes(id);
                     let (start, size) = (index(offset, literal)?, index(size, literal)?);
                     let count = string.len().min(size);
+                    bytes[start..start + size].fill(0);
+                    relocations.retain(|relocation| {
+                        relocation.offset + 8 <= offset || relocation.offset >= offset + size as u64
+                    });
                     bytes[start..start + count].copy_from_slice(&string[..count]);
                 },
                 | Leaf::Copy { expression, .. } =>
@@ -640,6 +655,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
     /// Writes one scalar leaf: an integer or floating constant converted to
     /// the leaf's type, or an address constant as a relocation. A bit-field
     /// leaf merges the low bits of its value into the bytes it occupies.
+    /// Later writes discard overlapping relocations (§6.7.8 paragraph 19,
+    /// p. 127; PDF p. 139).
     /// C99: §6.7.8 paragraph 4, p. 125; PDF p. 137; §6.6 paragraphs 7-9,
     /// pp. 95-96; PDF pp. 107-108; §6.3.1.4, pp. 43-44; PDF pp. 55-56.
     fn static_scalar(
@@ -660,7 +677,15 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         let size = types::layout(&self.sema.types, ty)
             .map_err(|kind| at(kind, source))?
             .size;
+        let written = bit_field.map_or(size, |field| {
+            u64::from((field.bit_offset + field.width).div_ceil(8))
+        });
         let (start, size) = (index(offset, expression)?, index(size, expression)?);
+        // C99 §6.7.8p19: a later write replaces overlapping addresses,
+        // including a scalar member that overwrites only part of a pointer.
+        relocations.retain(|relocation| {
+            relocation.offset + 8 <= offset || relocation.offset >= offset + written
+        });
         let integer = info.integer.filter(|_| {
             !matches!(
                 self.sema.types.kind(info.ty),
@@ -670,7 +695,12 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         if let Repr::Float { ty: float } = representation {
             let bits = match (info.floating, integer) {
                 | (Some(folded), _) => floats::constant_bits(&folded.real, float),
-                | (None, Some(value)) => floats::from_integer(value.value, float),
+                | (None, Some(value)) =>
+                    if value.signed {
+                        floats::from_integer(value.value, float)
+                    } else {
+                        floats::from_unsigned(u128::from_le_bytes(value.value.to_le_bytes()), float)
+                    },
                 | (None, None) => None,
             }
             .ok_or_else(unsupported)?;
@@ -716,6 +746,10 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             return Err(unsupported());
         }
         let (symbol, addend) = self.address_constant(expression)?;
+        // Symbolic bytes replace any older scalar representation too;
+        // that representation must not reappear if a later write drops the
+        // relocation.
+        bytes[start..start + size].fill(0);
         relocations.push(Relocation {
             offset,
             symbol,

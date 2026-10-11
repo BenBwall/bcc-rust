@@ -84,50 +84,58 @@ block0(v0: ptr):
     v13 = iconst.i8 0
     v14 = iconst.i64 40
     fill v12, v13, v14, align 4
-    v15 = iconst.i32 3
-    v16 = stack_addr slot5
-    store.i32 v15, v16, align 4
-    v17 = stack_addr slot6
-    v18 = iconst.i8 0
-    v19 = iconst.i64 3
-    fill v17, v18, v19, align 1
-    v20 = iconst.i32 1
-    v21 = iconst.i8 1
-    v22 = stack_addr slot6
-    store.i8 v21, v22, align 1
-    v23 = iconst.i32 2
-    v24 = iconst.i8 2
-    v25 = stack_addr slot6
-    v26 = iconst.i64 1
-    v27 = ptr_add inbounds v25, v26
-    store.i8 v24, v27, align 1
-    v28 = iconst.i32 3
-    v29 = iconst.i8 3
-    v30 = stack_addr slot6
-    v31 = iconst.i64 2
-    v32 = ptr_add inbounds v30, v31
-    store.i8 v29, v32, align 1
-    v33 = stack_addr slot0
-    v34 = load.i64 v33, align 8
-    v35 = stack_addr slot6
-    v36 = stack_addr slot5
-    v37 = stack_addr slot7
-    v38 = iconst.i64 3
-    copy v37, v35, v38, align 1
-    v39 = stack_addr slot8
-    v40 = iconst.i64 40
-    copy v39, v36, v40, align 4
-    v41 = call @first(v37, v39)
-    v42 = sext.i64 v41
-    v43 = iadd.i64 nsw v34, v42
-    v44 = stack_addr slot9
-    v45 = stack_addr slot10
-    v46 = iconst.i64 16
-    copy v45, v0, v46, align 8
-    call @bump(v44, v45)
-    v47 = load.i64 v44, align 8
-    v48 = iadd.i64 nsw v43, v47
-    return v48
+    v15 = stack_addr slot5
+    v16 = iconst.i8 0
+    v17 = iconst.i64 40
+    fill v15, v16, v17, align 1
+    v18 = iconst.i32 3
+    v19 = stack_addr slot5
+    store.i32 v18, v19, align 4
+    v20 = stack_addr slot6
+    v21 = iconst.i8 0
+    v22 = iconst.i64 3
+    fill v20, v21, v22, align 1
+    v23 = stack_addr slot6
+    v24 = iconst.i8 0
+    v25 = iconst.i64 3
+    fill v23, v24, v25, align 1
+    v26 = iconst.i32 1
+    v27 = iconst.i8 1
+    v28 = stack_addr slot6
+    store.i8 v27, v28, align 1
+    v29 = iconst.i32 2
+    v30 = iconst.i8 2
+    v31 = stack_addr slot6
+    v32 = iconst.i64 1
+    v33 = ptr_add inbounds v31, v32
+    store.i8 v30, v33, align 1
+    v34 = iconst.i32 3
+    v35 = iconst.i8 3
+    v36 = stack_addr slot6
+    v37 = iconst.i64 2
+    v38 = ptr_add inbounds v36, v37
+    store.i8 v35, v38, align 1
+    v39 = stack_addr slot0
+    v40 = load.i64 v39, align 8
+    v41 = stack_addr slot6
+    v42 = stack_addr slot5
+    v43 = stack_addr slot7
+    v44 = iconst.i64 3
+    copy v43, v41, v44, align 1
+    v45 = stack_addr slot8
+    v46 = iconst.i64 40
+    copy v45, v42, v46, align 4
+    v47 = call @first(v43, v45)
+    v48 = sext.i64 v47
+    v49 = iadd.i64 nsw v40, v48
+    v50 = stack_addr slot9
+    v51 = stack_addr slot10
+    v52 = iconst.i64 16
+    copy v51, v0, v52, align 8
+    call @bump(v50, v51)
+    v53 = load.i64 v50, align 8
+    v54 = iadd.i64 nsw v49, v53
+    return v54
 }
 
 function @pass(ptr result(size 4, align 4, [0: f32, 0: i32, 0: i8, 1: i8, 2: i8]), ptr aggregate(size 4, align 4, [0: f32, 0: i32, 0: i8, 1: i8, 2: i8])) external {

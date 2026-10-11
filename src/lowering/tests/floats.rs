@@ -13,6 +13,7 @@
 use super::super::floats::{
     constant_bits,
     from_integer,
+    from_unsigned,
     to_integer,
 };
 use crate::{
@@ -202,4 +203,20 @@ fn floating_constants_truncate_toward_zero_as_integers() {
     assert_eq!(to_integer(&LongDouble::from_double(f64::NAN)), None);
     assert_eq!(to_integer(&LongDouble::from_double(f64::INFINITY)), None);
     assert_eq!(to_integer(&LongDouble::from_double(1e300)), None);
+}
+
+#[test]
+fn unsigned_128_magnitudes_convert_without_a_sign_bit() {
+    assert_eq!(
+        from_unsigned(1_u128 << 127, Type::F64),
+        Some(0x47E0_0000_0000_0000)
+    );
+    assert_eq!(
+        from_unsigned(1_u128 << 127, Type::F80),
+        Some(0x407E_8000_0000_0000_0000)
+    );
+    assert_eq!(
+        from_unsigned(u128::from(u64::MAX), Type::F80),
+        Some(0x403E_FFFF_FFFF_FFFF_FFFF)
+    );
 }

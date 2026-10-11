@@ -71,6 +71,12 @@ pub(super) enum Task<'tu> {
         ty:        TypeId,
         bit_field: Option<BitFieldBits>,
     },
+    /// Zero a complete braced subobject before its explicit members.
+    InitializeZero {
+        object: Object,
+        offset: u64,
+        size:   u64,
+    },
     /// Copy a string literal into a character array being initialized.
     InitializeString {
         object:  Object,

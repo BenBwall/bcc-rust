@@ -81,6 +81,8 @@ use crate::{
 /// start.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Leaf<'tu> {
+    /// Implicit zero initialization of a complete braced subobject.
+    Zero { offset: u64, size: u64 },
     /// A scalar subobject and the expression whose converted value it
     /// gets.
     Scalar {
@@ -106,7 +108,8 @@ pub(super) enum Leaf<'tu> {
     },
 }
 
-/// The leaves of `initializer` for an object of type `ty`, in source order.
+/// The stores of `initializer` for an object of type `ty`, in source order.
+/// C99: §6.7.8 paragraphs 17-19, pp. 126-127; PDF pp. 138-139.
 pub(super) fn leaves<'tu, 's>(
     sema: &SemanticTranslationUnit<'tu>,
     ty: TypeId,
@@ -185,6 +188,7 @@ pub(super) fn leaves<'tu, 's>(
         match element.initializer.kind {
             | InitializerType::InitializerList(inner) => {
                 consume(&mut frames);
+                designated = None;
                 if walker.scalar(subobject.ty, element.source_vectors)? {
                     let expression = braced_scalar(element.initializer)?;
                     leaves.push(Leaf::Scalar {
@@ -194,6 +198,12 @@ pub(super) fn leaves<'tu, 's>(
                         bit_field: subobject.bit_field,
                     });
                 } else {
+                    // C99 §6.7.8p19: a later complete initializer replaces
+                    // implicit members as well as explicitly written ones.
+                    let size = types::layout(&sema.types, subobject.ty)
+                        .map_err(|kind| at(kind, element.source_vectors))?
+                        .size;
+                    leaves.push(Leaf::Zero { offset, size });
                     frames.push(Frame {
                         ty: subobject.ty,
                         offset,
@@ -209,6 +219,7 @@ pub(super) fn leaves<'tu, 's>(
                             *bit_field = subobject.bit_field;
                         }
                         consume(&mut frames);
+                        designated = None;
                         leaves.push(leaf);
                     },
                     | None => {
@@ -494,6 +505,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let mut tasks = ArenaVec::with_capacity_in(2 * leaves.len(), self.scratch);
         for leaf in leaves {
             match leaf {
+                | Leaf::Zero { offset, size } => tasks.push(Task::InitializeZero {
+                    object,
+                    offset,
+                    size,
+                }),
                 | Leaf::Scalar {
                     offset,
                     ty,
@@ -535,6 +551,44 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
         // The first leaf runs first.
         self.tasks.extend(tasks.iter().rev().copied());
+        Ok(())
+    }
+
+    /// Replaces the implicit members of a braced subobject with zeroes.
+    /// C99: §6.7.8 paragraph 19, p. 127; PDF p. 139.
+    pub(super) fn initialize_zero(
+        &mut self,
+        object: Object,
+        offset: u64,
+        size: u64,
+    ) -> Result<(), LoweringError> {
+        let base = match object {
+            | Object::Slot(slot) => self.inst(InstData::StackAddr { slot }, Type::Ptr),
+            | Object::Local(binding) => match self.local(
+                binding,
+                self.unit.sema.bindings[binding].name.source_vectors,
+            )? {
+                | Local::Slot(slot) => self.inst(InstData::StackAddr { slot }, Type::Ptr),
+                | Local::Address(address) => address,
+                | Local::Variable(_) =>
+                    return Err(LoweringError::missing(
+                        "an aggregate has no address",
+                        SourceVectors::empty(),
+                    )),
+            },
+        };
+        let address = self.offset_address(base, offset);
+        let zero = self.iconst(Type::I8, 0);
+        let size = self.iconst(Type::I64, i128::from(size));
+        _ = self.draft.push(
+            Op::Inst(InstData::MemoryRange {
+                opcode: Opcode::Fill,
+                flags:  InstFlags::empty(),
+                align:  Align::BYTE,
+                args:   [address, zero, size],
+            }),
+            None,
+        );
         Ok(())
     }
 

@@ -249,6 +249,11 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 ty,
                 bit_field,
             } => self.initialize(object, offset, ty, bit_field),
+            | Task::InitializeZero {
+                object,
+                offset,
+                size,
+            } => self.initialize_zero(object, offset, size),
             | Task::InitializeString {
                 object,
                 offset,
