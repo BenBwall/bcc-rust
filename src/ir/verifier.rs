@@ -734,6 +734,11 @@ impl InstChecker<'_, '_, '_, '_, '_> {
             let params = body.block_params(target);
             if params.len() == args.len() {
                 for (index, (&arg, &param)) in args.iter().zip(params).enumerate() {
+                    // Definitions already reported an invalid destination
+                    // parameter; its type cannot inform this edge check.
+                    if param.index() >= body.value_count() {
+                        continue;
+                    }
                     let expected = body.value_type(param);
                     if let Some(found) = self.value_type(arg)
                         && found != expected

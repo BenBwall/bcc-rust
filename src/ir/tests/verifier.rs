@@ -137,6 +137,34 @@ fn edge_errors() {
 }
 
 #[test]
+fn invalid_destination_parameters_are_rejected_without_panicking() {
+    for terminator in 0..3 {
+        let errors = build_and_verify(|builder, input| {
+            let target = builder.create_block();
+            _ = builder.append_block_param(target, Type::I32);
+            builder.body.blocks[target].params[0] = Value::new(99);
+            match terminator {
+                | 0 => builder.jump(target, &[input]),
+                | 1 => {
+                    let condition = builder.iconst(Type::I1, 1);
+                    builder.brif(condition, (target, &[input]), (target, &[input]));
+                },
+                | _ => builder.switch(input, (target, &[input]), &[(0, target, &[input])]),
+            }
+            builder.switch_to_block(target);
+            builder.ret(Some(input));
+        });
+        assert_eq!(
+            errors,
+            [
+                "@f: v1 is not defined where the value table says",
+                "@f, block1: value 99 does not exist",
+            ]
+        );
+    }
+}
+
+#[test]
 fn call_errors() {
     assert_rejects(&[
         (
