@@ -4,7 +4,8 @@
 //! so a benchmark can time parsing without preprocessing again.
 //!
 //! For `parse_source("int x;")`, the driver copies source into the context,
-//! parses the declaration, and summarizes syntax roots, tokens, and errors.
+//! parses the declaration, and counts the external declarations and
+//! diagnostics.
 //!
 //! Read [`parse`], [`ParseBenchmarkSummary`], and [`BenchmarkInput`], then
 //! [`with_prepared_parse`] for parser-only measurements.

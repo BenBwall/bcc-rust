@@ -1,6 +1,8 @@
 //! Resource header lookup maps a requested filename to embedded C header
-//! text. The pipeline appends the built-in resource directory to the configured
-//! header search, so ordinary include handling can use these headers.
+//! text. When resource headers are enabled,
+//! [`Context::set_header_search`](crate::translation_phases::Context::set_header_search)
+//! places the built-in directory after the system directories and before the
+//! `-idirafter` ones, so ordinary include handling can use these headers.
 //!
 //! Read [`text`], [`HeaderSearch`], and [`DIRECTORY`].
 //!
