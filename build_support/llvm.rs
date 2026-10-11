@@ -309,7 +309,7 @@ pub(super) fn link_libraries(version: &str, tools: &std::path::Path) {
         // library directory, which the linker does not search by default.
         let path = ["g++", "gcc"]
             .into_iter()
-            .filter_map(|compiler| {
+            .find_map(|compiler| {
                 let result = Command::new(compiler)
                     .arg("-print-file-name=libstdc++.a")
                     .output()
@@ -317,7 +317,6 @@ pub(super) fn link_libraries(version: &str, tools: &std::path::Path) {
                 let path = PathBuf::from(String::from_utf8(result.stdout).ok()?.trim());
                 path.is_file().then_some(path)
             })
-            .next()
             .expect("the static C++ runtime libstdc++.a is needed to link LLVM; install g++");
         println!(
             "cargo:rustc-link-search=native={}",
