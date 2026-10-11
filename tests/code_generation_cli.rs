@@ -51,6 +51,22 @@ mod tests {
     }
 
     #[test]
+    fn print_default_passes_lists_a_pipeline_that_passes_accepts() {
+        let run = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .arg("--print-default-passes")
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{}", text(&run.stderr));
+        let list = text(&run.stdout);
+        let list = list.trim_end();
+        assert!(!list.is_empty() && !list.contains('\n'), "{list:?}");
+        // The list is in `--passes` syntax, so the optimizer accepts it.
+        let passes = format!("--passes={list}");
+        let optimized = bcc(SUM, &["--emit=ir", &passes]);
+        assert!(optimized.status.success(), "{}", text(&optimized.stderr));
+    }
+
+    #[test]
     fn emit_ir_prints_the_module_and_the_optimizer_rewrites_it() {
         let lowered = bcc(SUM, &["--emit=ir"]);
         assert!(lowered.status.success(), "{}", text(&lowered.stderr));

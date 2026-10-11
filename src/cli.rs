@@ -75,6 +75,7 @@ use clap::{
 use code_generation::{
     CodeGeneration,
     generate_code,
+    print_default_passes,
 };
 use diagnostic_reporter::DiagnosticReporter;
 pub use errors::MainError;
@@ -137,7 +138,13 @@ use crate::{
 /// and `--interpret` with the program's status.
 #[doc(hidden)]
 pub fn run() -> Result<i32, MainError> {
-    let args = Cli::try_parse_from(normalize_language_arguments(std::env::args_os()))?;
+    let arguments = normalize_language_arguments(std::env::args_os());
+    // Clap would demand an input for this flag, so it is answered before
+    // parsing; the declaration below only documents it in `--help`.
+    if arguments.len() == 2 && arguments[1] == "--print-default-passes" {
+        return Ok(print_default_passes());
+    }
+    let args = Cli::try_parse_from(arguments)?;
     let tu = Bump::new();
     let (input_string, source_filename): (&str, &Path) =
         match (&args.input.input, &args.input.input_file) {
@@ -201,6 +208,10 @@ struct Cli {
     /// Select the C target ABI (independent of the compiler host).
     #[arg(long, default_value = "x86_64-unknown-linux-gnu", value_parser = TargetParser)]
     target: crate::target::Target,
+    /// Print the default bcc pass list, such as `promote,fold,...`, for
+    /// `--passes` ablation scripts, and exit.
+    #[arg(long = "print-default-passes", exclusive = true)]
+    _print_default_passes: bool,
     #[command(flatten)]
     input: CliInput,
     /// Select ISO C or a GNU dialect (also accepts GCC -std=VALUE).

@@ -48,6 +48,8 @@ target is `x86_64-unknown-linux-gnu`). `--opt=bcc` runs the bcc optimizer
 (off by default); `--passes=fold,dce,...` runs a pass list once,
 `--opt-bisect-limit=N` stops after N rewrites, and `--print-after-all` prints
 each function to stderr after every pass, each implying `--opt=bcc`.
+`bcc-rust --print-default-passes` prints the default pass list in `--passes`
+syntax (it needs no input file), so scripts need not keep a copy.
 `--llvm-opt=none|O0|O1|O2|O3` selects clang's level and `--llvm-codegen-only`
 adds `-Xclang -disable-llvm-passes`, so `--opt=bcc --llvm-opt=O2
 --llvm-codegen-only` is comparison arm A1 of

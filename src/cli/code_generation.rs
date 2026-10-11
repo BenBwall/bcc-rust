@@ -51,6 +51,7 @@ use crate::{
     ir::Module,
     optimizer::{
         OptimizerOptions,
+        Pass,
         PassList,
         parse_pass_list,
     },
@@ -121,6 +122,23 @@ pub(super) fn generate_code<'tu>(
         | (None, Some(path)) => build(&module, target, path, options),
         | (None, None) => interpret(&module, target),
     }
+}
+
+/// Prints the default pipeline in `--passes` syntax and returns the exit
+/// status.
+pub(super) fn print_default_passes() -> i32 {
+    let mut stdout = io::stdout().lock();
+    let mut separator = "";
+    for pass in Pass::ALL {
+        if let Err(error) = write!(stdout, "{separator}{pass}") {
+            panic!("failed printing to stdout: {error}");
+        }
+        separator = ",";
+    }
+    if let Err(error) = writeln!(stdout).and_then(|()| stdout.flush()) {
+        panic!("failed printing to stdout: {error}");
+    }
+    0
 }
 
 /// The code generation options. A back end runs only when `--emit`,

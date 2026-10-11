@@ -461,6 +461,7 @@ bcc-rust x.c -o x.exe [-c]          build an executable (or an object) through c
     [--print-after-all]             each function after every pass, to stderr
     [--llvm-opt=none|O0|O1|O2|O3]   clang's -O level; none passes no flag
     [--llvm-codegen-only]           add -Xclang -disable-llvm-passes
+bcc-rust --print-default-passes     print the default pass list and exit
 ```
 
 The back-end modes exclude one another and the inspection views
