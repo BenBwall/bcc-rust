@@ -575,12 +575,9 @@ fn finalized_definitions_retain_synthesized_objects() {
             assert_eq!(context.pending_error_count(), 1);
             let kinds: Vec<_> = s.definitions.iter().map(|d| d.kind).collect();
             assert_eq!(kinds.len(), 3);
-            assert_eq!(kinds[0], functions::DefinitionKind::Tentative);
-            assert_eq!(kinds[1], functions::DefinitionKind::Function);
-            assert!(matches!(
-                kinds[2],
-                functions::DefinitionKind::FunctionName(_)
-            ));
+            assert_eq!(kinds[0], DefinitionKind::Tentative);
+            assert_eq!(kinds[1], DefinitionKind::Function);
+            assert!(matches!(kinds[2], DefinitionKind::FunctionName(_)));
         },
     );
 }

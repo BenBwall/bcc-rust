@@ -14,7 +14,9 @@ use super::{
     ArrayBound,
     BindingKind,
     Bump,
+    ConstantClass,
     Context,
+    ConversionKind,
     Duration,
     Linkage,
     ScopeKind,
@@ -23,11 +25,7 @@ use super::{
     TypeId,
     TypeKind,
     TypeQualifiers,
-    expressions::{
-        ConstantClass,
-        ConversionKind,
-        ValueCategory,
-    },
+    ValueCategory,
 };
 use crate::util::bump::ArenaString;
 
@@ -281,7 +279,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         );
         if let TypeKind::Function {
             prototype: true, ..
-        } = self.types.nodes[binding.ty.index]
+        } = self.types.kind(binding.ty)
             && binding.kind == BindingKind::Function
         {
             out.push_str(" prototype");
@@ -359,7 +357,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                     let mut right = ArenaVec::new_in(arena);
                     let mut pointer = false;
                     let base = loop {
-                        match self.types.nodes[ty.index] {
+                        match self.types.kind(ty) {
                             | TypeKind::Pointer(next) => {
                                 let words = qualifiers(ty.qualifiers);
                                 if !words.is_empty() {

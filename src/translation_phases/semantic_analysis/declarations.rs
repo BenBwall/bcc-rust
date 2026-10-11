@@ -16,6 +16,8 @@ use super::{
     Declarator,
     DirectDeclarator,
     Duration,
+    Field,
+    FieldPath,
     Identifier,
     Integer,
     Layout,
@@ -38,10 +40,6 @@ use super::{
     TypeSpecifiers,
     Work,
     align_up,
-    types::{
-        Field,
-        FieldPath,
-    },
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

@@ -13,6 +13,8 @@ use super::{
     Declaration,
     DeclarationSpecifiers,
     Declarator,
+    Definition,
+    DefinitionKind,
     DirectDeclarator,
     Duration,
     Expression,
@@ -1047,28 +1049,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .iter()
             .any(|direct| matches!(direct, DirectDeclarator::Attributes(a) if attribute_has(a)))
     }
-}
-
-/// Finalized definitions, separate from declaration occurrences. The implicit
-/// function-name object retains its string contents for future lowering.
-/// C99: §6.9.1-§6.9.2, pp. 141-143; PDF pp. 153-155; §6.4.2.2p1,
-/// p. 52; PDF p. 64.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DefinitionKind {
-    Object,
-    Function,
-    Inline,
-    Tentative,
-    FunctionName(StringCacheId),
-}
-
-/// A completed object or function definition and its declaration binding.
-/// C99: §6.9 paragraph 5, p. 140; PDF p. 152.
-/// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Definition {
-    pub(crate) binding: usize,
-    pub(crate) kind:    DefinitionKind,
 }
 
 /// The active function definition, result type and adjusted parameters.

@@ -85,20 +85,26 @@ pub(crate) use builtins::{
     x86_builtins,
 };
 use collection::Collection;
+// The retained vocabulary a lowering pass matches on.
+pub(crate) use constants::Floating;
 use declarations::compatible_enum_type;
 pub(crate) use errors::{
     SemanticError,
     SemanticErrorKind,
 };
-use expressions::{
+pub(crate) use expressions::{
     ConstantClass,
     Conversion,
+    ConversionKind,
     ExpressionInfo,
+    ValueCategory,
 };
-use integer::Integer;
+pub(crate) use integer::Integer;
 pub(crate) use results::{
     Binding,
     BindingKind,
+    Definition,
+    DefinitionKind,
     Duration,
     Linkage,
     Scope,
@@ -110,8 +116,10 @@ use scopes::{
     Entry,
     Namespace,
 };
-use types::{
+pub(crate) use types::{
     ArrayBound,
+    Field,
+    FieldPath,
     Layout,
     Member,
     Parameter,
@@ -119,9 +127,11 @@ use types::{
     Tag,
     TagKind,
     TypeId,
-    TypeInterner,
     TypeKind,
     Types,
+};
+use types::{
+    TypeInterner,
     align_up,
 };
 
@@ -1271,7 +1281,7 @@ struct Analyzer<'a, 'tu, 's> {
     scratch:             &'s Bump,
     types:               TypeInterner<'tu, 's>,
     bindings:            ArenaVec<'tu, Binding>,
-    definitions:         ArenaVec<'tu, functions::Definition>,
+    definitions:         ArenaVec<'tu, Definition>,
     scopes:              ArenaVec<'tu, Scope>,
     type_names:          ArenaVec<'tu, (SourceVectors, TypeId)>,
     parameter_lists:     ArenaVec<'tu, (SourceVectors, &'tu [Parameter])>,

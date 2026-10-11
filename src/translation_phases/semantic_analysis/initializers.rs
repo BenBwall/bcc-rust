@@ -11,6 +11,7 @@ use super::{
     ArrayBound,
     BindingKind,
     ConstantClass,
+    ConversionKind,
     DesignatorType,
     Duration,
     Expression,
@@ -28,7 +29,6 @@ use super::{
     TypeId,
     TypeKind,
     TypeQualifiers,
-    expressions::ConversionKind,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

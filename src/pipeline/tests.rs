@@ -629,3 +629,111 @@ fn parse_arena_use_does_not_grow_with_distinct_file_scope_names() {
     assert!(once > 0, "declarations use the parse arena");
     assert_eq!(twice, once, "file-scope names grow the parse arena");
 }
+
+/// Runs phases 1-7 on `source` and hands the result to a caller outside the
+/// semantic analyzer, as lowering will be.
+fn with_semantics<R>(
+    source: &str,
+    inspect: impl for<'tu> FnOnce(
+        &mut Context<'tu>,
+        &ParsedTranslationUnit<'tu>,
+        &crate::translation_phases::semantic_analysis::SemanticTranslationUnit<'tu>,
+    ) -> R,
+) -> R {
+    let tu = Bump::new();
+    let source = tu.alloc_str(&format!("{source}\n"));
+    let mut context = Context::new(&tu);
+    let unit = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        source,
+        HeaderSearch::default(),
+    );
+    let semantics = analyze_translation_unit(&mut context, &unit);
+    inspect(&mut context, &unit, &semantics)
+}
+
+#[test]
+fn lowering_names_the_retained_semantic_vocabulary() {
+    use crate::translation_phases::semantic_analysis::{
+        ArrayBound,
+        Binding,
+        BindingKind,
+        Duration,
+        Field,
+        Layout,
+        Linkage,
+        Scalar,
+        Tag,
+        TagKind,
+        TypeId,
+        TypeKind,
+    };
+    with_semantics(
+        "struct S { int a; _Atomic long b; } s; int g[3]; unsigned char *p;",
+        |context, _, sema| {
+            assert_eq!(context.pending_error_count(), 0);
+            let binding = |name: &str| -> Binding {
+                *sema
+                    .bindings
+                    .iter()
+                    .find(|b| context.string_cache.at(b.name.name) == name)
+                    .expect("binding is retained")
+            };
+            let s = binding("s");
+            assert_eq!(s.kind, BindingKind::Object);
+            assert_eq!(s.linkage, Linkage::External);
+            assert_eq!(s.duration, Duration::Static);
+            let tag: &Tag<'_> = sema.types.tag(s.ty).expect("s has a structure type");
+            assert_eq!(tag.kind, TagKind::Struct);
+            let fields: &[Field<'_>] = tag.fields.get();
+            assert_eq!(fields.len(), 2);
+            assert_eq!(fields[1].offset, 8);
+            let atomic: TypeId = fields[1].ty;
+            assert!(matches!(sema.types.kind(atomic), TypeKind::Atomic(_)));
+            assert_eq!(
+                sema.types.kind(sema.types.non_atomic(atomic)),
+                TypeKind::Scalar(Scalar::Long)
+            );
+            assert_eq!(
+                sema.types.layout(s.ty),
+                Some(Layout {
+                    size:  16,
+                    align: 8,
+                })
+            );
+            let g = binding("g");
+            assert!(matches!(
+                sema.types.kind(g.ty),
+                TypeKind::Array(_, ArrayBound::Constant(3))
+            ));
+            assert!(!sema.types.unanalyzed(g.ty));
+            let TypeKind::Pointer(target) = sema.types.kind(binding("p").ty) else {
+                panic!("p is a pointer");
+            };
+            assert_eq!(
+                sema.types.kind(target),
+                TypeKind::Scalar(Scalar::UnsignedChar)
+            );
+            assert!(sema.types.tag(target).is_none());
+        },
+    );
+}
+
+#[test]
+fn retained_types_report_unanalyzed_array_elements() {
+    use crate::translation_phases::semantic_analysis::TypeKind;
+    // GNU `__typeof__` of an unmodeled builtin call has no modeled type.
+    with_semantics(
+        "__typeof__(__builtin_expect(1, 1)) a[2];",
+        |context, _, sema| {
+            let a = sema
+                .bindings
+                .iter()
+                .find(|b| context.string_cache.at(b.name.name) == "a")
+                .expect("a is bound");
+            assert!(matches!(sema.types.kind(a.ty), TypeKind::Array(..)));
+            assert!(sema.types.unanalyzed(a.ty));
+        },
+    );
+}

@@ -12,6 +12,7 @@ use super::{
     Bump,
     CStandard,
     Collection,
+    ConversionKind,
     Declaration,
     Expression,
     ExpressionSlot,
@@ -28,7 +29,6 @@ use super::{
     TypeId,
     TypeKind,
     Work,
-    expressions::ConversionKind,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

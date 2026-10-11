@@ -46,6 +46,14 @@ occurrences, semantic scope identities, resolved type names, and parameter
 metadata (including array `static` minimums), tag declaration occurrences, typed
 expression results and conversion records. A backend can retain this graph
 without retaining a semantic analyzer. The syntax tree remains separately available.
+`semantic_analysis` re-exports the retained vocabulary to the crate: the type
+graph (`Types`, `TypeId`, `TypeKind`, `Tag`, `TagKind`, `Member`, `Field`,
+`FieldPath`, `Parameter`, `ArrayBound`, `Layout`, `Scalar`), expression records
+(`ExpressionInfo`, `ValueCategory`, `Conversion`, `ConversionKind`,
+`ConstantClass`, `Integer`, `Floating`) and declarations (`Binding`,
+`BindingKind`, `Linkage`, `Duration`, `Scope`, `ScopeKind`, `Definition`,
+`DefinitionKind`). The retained `Types` answers `kind`, `tag`, `layout`,
+`non_atomic` and `unanalyzed` without the working interner.
 
 The semantic working arena (`'s`) owns continuations, value stacks, interning
 lookup, visible-binding lookup, linkage lookup and scope restoration lists. It

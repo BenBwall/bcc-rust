@@ -7,6 +7,7 @@ use super::{
     ArenaVec,
     AttributeSpecifier,
     BinaryOperator,
+    ConversionKind,
     Expression,
     ExpressionInfo,
     Scalar,
@@ -14,10 +15,7 @@ use super::{
     TypeId,
     TypeKind,
     TypeQualifiers,
-    expressions::{
-        ConversionKind,
-        ValueCategory,
-    },
+    ValueCategory,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

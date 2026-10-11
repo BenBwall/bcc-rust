@@ -61,6 +61,7 @@ use super::{
     Expression,
     ExpressionSlot,
     ExpressionType,
+    Floating,
     Identifier,
     Integer,
     Linkage,
@@ -73,7 +74,6 @@ use super::{
     TypeQualifiers,
     UnaryOperator,
     atomics,
-    constants::Floating,
 };
 use crate::float_parsing::LongDouble;
 
