@@ -23,11 +23,7 @@ use std::{
 
 use allocator_api2::alloc::Allocator;
 
-use super::bump::Bump;
-
-/// The length word every empty list points to, so empty lists allocate
-/// nothing.
-static EMPTY_LENGTH: usize = 0;
+use crate::util::bump::Bump;
 
 /// An immutable list of `T` in an arena, referred to by one pointer.
 ///
@@ -46,20 +42,6 @@ pub(crate) struct ArenaList<'a, T> {
 }
 
 impl<'a, T> ArenaList<'a, T> {
-    /// A list with no elements. It points at a shared static length.
-    pub(crate) fn empty() -> Self {
-        const {
-            assert!(
-                align_of::<T>() <= align_of::<usize>(),
-                "list elements follow a usize length"
-            );
-        }
-        Self {
-            header:   NonNull::from(&EMPTY_LENGTH),
-            elements: PhantomData,
-        }
-    }
-
     /// Copies `values` into one new block in `arena`: the length, then the
     /// elements. An empty `values` allocates nothing.
     pub(crate) fn copy_from_slice(arena: &'a Bump, values: &[T]) -> Self
@@ -122,7 +104,25 @@ impl<'a, T> ArenaList<'a, T> {
         // aligned for `T`, which is all a slice of no elements needs.
         unsafe { slice::from_raw_parts(elements.as_ptr(), len) }
     }
+
+    /// A list with no elements. It points at a shared static length.
+    pub(crate) fn empty() -> Self {
+        const {
+            assert!(
+                align_of::<T>() <= align_of::<usize>(),
+                "list elements follow a usize length"
+            );
+        }
+        Self {
+            header:   NonNull::from(&EMPTY_LENGTH),
+            elements: PhantomData,
+        }
+    }
 }
+
+/// The length word every empty list points to, so empty lists allocate
+/// nothing.
+static EMPTY_LENGTH: usize = 0;
 
 impl<T> Clone for ArenaList<'_, T> {
     fn clone(&self) -> Self {
@@ -136,6 +136,7 @@ impl<T> Copy for ArenaList<'_, T> {}
 // `&'a [T]`, which is `Send` and `Sync` when `T` is `Sync`. The length word is
 // never written after construction.
 unsafe impl<T: Sync> Send for ArenaList<'_, T> {}
+
 // SAFETY: as for `Send` above.
 unsafe impl<T: Sync> Sync for ArenaList<'_, T> {}
 

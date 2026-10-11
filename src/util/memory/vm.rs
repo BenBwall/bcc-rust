@@ -23,6 +23,139 @@ use std::{
     ptr::NonNull,
 };
 
+/// A fixed reservation whose writable prefix grows in page-aligned steps.
+/// The untouched tail remains inaccessible on native platforms.
+pub(crate) struct GrowingRegion {
+    region:     Region,
+    committed:  usize,
+    /// Whether commits cover whole huge pages.
+    huge_pages: bool,
+    /// Under Miri, the base as seen through the committed prefix only, so an
+    /// access past it is reported as undefined behavior, as the inaccessible
+    /// pages would fault natively.
+    #[cfg(miri)]
+    view:       NonNull<u8>,
+}
+
+impl GrowingRegion {
+    /// Commits at least the first `needed` bytes, plus at most one commit
+    /// step beyond them, so commit follows what callers write rather than
+    /// what they might write. On a huge-page region the step ends on the next
+    /// huge-page boundary, less than one huge page beyond `needed`. If the
+    /// step cannot be committed, only the pages `needed` reaches are tried
+    /// before reporting failure.
+    pub(crate) fn ensure_committed(&mut self, needed: usize) -> io::Result<()> {
+        let page = self.region.page;
+        let target = next_commit(
+            self.committed,
+            needed,
+            self.region.reserved(),
+            page,
+            self.huge_pages,
+        )
+        .ok_or_else(|| io::Error::new(io::ErrorKind::OutOfMemory, "region exhausted"))?;
+        if target == self.committed {
+            return Ok(());
+        }
+        let target = match self.region.commit(self.committed, target - self.committed) {
+            | Ok(()) => target,
+            | Err(error) => {
+                // `needed` lies inside the page-multiple reservation, so its
+                // rounded end does too.
+                let minimal = round_up(needed, page).filter(|&minimal| minimal < target);
+                let Some(minimal) = minimal else {
+                    return Err(error);
+                };
+                self.region
+                    .commit(self.committed, minimal - self.committed)?;
+                minimal
+            },
+        };
+        #[cfg(any(test, feature = "benchmarking-internals"))]
+        accounting::update(|usage| usage.committed += target - self.committed);
+        self.committed = target;
+        #[cfg(miri)]
+        {
+            self.view = committed_view(self.region.as_ptr(), self.committed);
+        }
+        Ok(())
+    }
+
+    /// Reserves `bytes`. On Linux, a region of at least one huge page asks
+    /// for transparent huge pages and commits whole ones; if the kernel
+    /// refuses the advice, the region commits ordinary pages instead.
+    pub(crate) fn reserve(bytes: usize) -> io::Result<Self> {
+        let region = Region::reserve(bytes)?;
+        #[cfg(all(target_os = "linux", not(miri)))]
+        let huge_pages = region.advise_huge_pages();
+        #[cfg(not(all(target_os = "linux", not(miri))))]
+        let huge_pages = false;
+        Ok(Self::with_huge_pages(region, huge_pages))
+    }
+
+    fn with_huge_pages(region: Region, huge_pages: bool) -> Self {
+        Self {
+            #[cfg(miri)]
+            view: committed_view(region.as_ptr(), 0),
+            region,
+            committed: 0,
+            huge_pages,
+        }
+    }
+
+    /// A region whose commits cover whole huge pages, or not, on every
+    /// platform and without asking the OS for huge pages, so tests can pin
+    /// either commit pattern (under Miri too) wherever they run.
+    #[cfg(test)]
+    pub(crate) fn reserve_with_huge_pages(bytes: usize, huge_pages: bool) -> io::Result<Self> {
+        Ok(Self::with_huge_pages(Region::reserve(bytes)?, huge_pages))
+    }
+
+    /// The bytes committed from the region's start.
+    pub(crate) fn committed(&self) -> usize {
+        self.committed
+    }
+
+    /// The region's base. Memory is reachable through it only up to the
+    /// committed prefix at the time of the call, so derive pointers into newly
+    /// committed memory after [`Self::ensure_committed`] succeeds.
+    /// Dropping this region invalidates all allocations and raw pointers;
+    /// using any of them afterwards is the caller's bug.
+    pub(crate) fn as_ptr(&self) -> NonNull<u8> {
+        #[cfg(miri)]
+        return self.view;
+        #[cfg(not(miri))]
+        self.region.as_ptr()
+    }
+}
+
+/// Pure commit-charge bookkeeping, also exercised under Miri without OS calls.
+/// With `huge_pages`, the target is rounded up to a whole huge page.
+fn next_commit(
+    committed: usize,
+    needed: usize,
+    reserved: usize,
+    page: usize,
+    huge_pages: bool,
+) -> Option<usize> {
+    if needed > reserved {
+        return None;
+    }
+    if needed <= committed {
+        return Some(committed);
+    }
+    let step = committed
+        .clamp(FIRST_COMMIT_STEP, MAX_COMMIT_STEP)
+        .min(reserved - committed);
+    let mut target = committed.checked_add(step)?.max(needed);
+    if huge_pages {
+        // `needed` fits the reservation, so capping the rounded end at the
+        // reservation still covers it.
+        target = round_up(target, HUGE_PAGE)?.min(reserved);
+    }
+    round_up(target, page).filter(|&rounded| rounded <= reserved)
+}
+
 /// One OS reservation, released when dropped. Release invalidates every
 /// allocation and raw pointer into it; raw pointers carry no borrow, and
 /// using them after release is the caller's bug.
@@ -35,6 +168,34 @@ pub(crate) struct Region {
 }
 
 impl Region {
+    /// Make a reserved page range writable. It is the caller's responsibility
+    /// to commit before creating any Rust reference into the range.
+    pub(crate) fn commit(&self, offset: usize, bytes: usize) -> io::Result<()> {
+        let range = self.checked_range(offset, bytes)?;
+        #[cfg(test)]
+        faults::commit(bytes)?;
+        os_commit(range, bytes)
+    }
+
+    /// Return physical storage and revoke access to a committed page range.
+    /// A successful decommit discards its contents; recommit provides zeros.
+    ///
+    /// # Safety
+    ///
+    /// No Rust reference, slice, or live allocation may overlap this range.
+    /// All raw pointers into it are invalidated on success and must not be
+    /// used again, even after recommit; derive new pointers from the region.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "No arena returns committed pages before release yet."
+        )
+    )]
+    pub(crate) unsafe fn decommit(&self, offset: usize, bytes: usize) -> io::Result<()> {
+        os_decommit(self.checked_range(offset, bytes)?, bytes)
+    }
+
     pub(crate) fn reserve(bytes: usize) -> io::Result<Self> {
         let page = page_size()?;
         let reserved = round_up(bytes, page)
@@ -56,15 +217,6 @@ impl Region {
             layout: std::alloc::Layout::from_size_align(reserved, page)
                 .expect("valid mock region layout"),
         })
-    }
-
-    /// The reservation's base. Commit before accessing a range, and end all
-    /// references and allocations in it before decommit. Decommit invalidates
-    /// pointers into that range, and dropping the region invalidates every
-    /// allocation and raw pointer obtained from it. Raw pointers carry no
-    /// borrow; using one after invalidation is the caller's bug.
-    pub(crate) fn as_ptr(&self) -> NonNull<u8> {
-        self.base
     }
 
     pub(crate) fn reserved(&self) -> usize {
@@ -114,166 +266,13 @@ impl Region {
         Ok(self.base.as_ptr().wrapping_add(offset))
     }
 
-    /// Make a reserved page range writable. It is the caller's responsibility
-    /// to commit before creating any Rust reference into the range.
-    pub(crate) fn commit(&self, offset: usize, bytes: usize) -> io::Result<()> {
-        let range = self.checked_range(offset, bytes)?;
-        #[cfg(test)]
-        faults::commit(bytes)?;
-        os_commit(range, bytes)
-    }
-
-    /// Return physical storage and revoke access to a committed page range.
-    /// A successful decommit discards its contents; recommit provides zeros.
-    ///
-    /// # Safety
-    ///
-    /// No Rust reference, slice, or live allocation may overlap this range.
-    /// All raw pointers into it are invalidated on success and must not be
-    /// used again, even after recommit; derive new pointers from the region.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "No arena returns committed pages before release yet."
-        )
-    )]
-    pub(crate) unsafe fn decommit(&self, offset: usize, bytes: usize) -> io::Result<()> {
-        os_decommit(self.checked_range(offset, bytes)?, bytes)
-    }
-}
-
-impl Drop for Region {
-    fn drop(&mut self) {
-        #[cfg(any(test, feature = "benchmarking-internals"))]
-        accounting::update(|usage| {
-            usage.regions -= 1;
-            usage.reserved -= self.reserved;
-        });
-        // SAFETY: this is the original reservation base and size, released
-        // exactly once. Owners end all references and allocations before
-        // release. Every raw pointer obtained from it is now invalidated;
-        // callers must not use those pointers again, regardless of whether
-        // they still exist (raw pointers carry no borrow).
-        unsafe {
-            #[cfg(not(miri))]
-            os_release(self.base, self.reserved);
-            #[cfg(miri)]
-            std::alloc::dealloc(self.base.as_ptr(), self.layout);
-        }
-    }
-}
-
-/// A fixed reservation whose writable prefix grows in page-aligned steps.
-/// The untouched tail remains inaccessible on native platforms.
-pub(crate) struct GrowingRegion {
-    region:     Region,
-    committed:  usize,
-    /// Whether commits cover whole huge pages.
-    huge_pages: bool,
-    /// Under Miri, the base as seen through the committed prefix only, so an
-    /// access past it is reported as undefined behavior, as the inaccessible
-    /// pages would fault natively.
-    #[cfg(miri)]
-    view:       NonNull<u8>,
-}
-
-impl GrowingRegion {
-    /// Reserves `bytes`. On Linux, a region of at least one huge page asks
-    /// for transparent huge pages and commits whole ones; if the kernel
-    /// refuses the advice, the region commits ordinary pages instead.
-    pub(crate) fn reserve(bytes: usize) -> io::Result<Self> {
-        let region = Region::reserve(bytes)?;
-        #[cfg(all(target_os = "linux", not(miri)))]
-        let huge_pages = region.advise_huge_pages();
-        #[cfg(not(all(target_os = "linux", not(miri))))]
-        let huge_pages = false;
-        Ok(Self::with_huge_pages(region, huge_pages))
-    }
-
-    fn with_huge_pages(region: Region, huge_pages: bool) -> Self {
-        Self {
-            #[cfg(miri)]
-            view: committed_view(region.as_ptr(), 0),
-            region,
-            committed: 0,
-            huge_pages,
-        }
-    }
-
-    /// A region whose commits cover whole huge pages, or not, on every
-    /// platform and without asking the OS for huge pages, so tests can pin
-    /// either commit pattern (under Miri too) wherever they run.
-    #[cfg(test)]
-    pub(crate) fn reserve_with_huge_pages(bytes: usize, huge_pages: bool) -> io::Result<Self> {
-        Ok(Self::with_huge_pages(Region::reserve(bytes)?, huge_pages))
-    }
-
-    /// The region's base. Memory is reachable through it only up to the
-    /// committed prefix at the time of the call, so derive pointers into newly
-    /// committed memory after [`Self::ensure_committed`] succeeds.
-    /// Dropping this region invalidates all allocations and raw pointers;
-    /// using any of them afterwards is the caller's bug.
+    /// The reservation's base. Commit before accessing a range, and end all
+    /// references and allocations in it before decommit. Decommit invalidates
+    /// pointers into that range, and dropping the region invalidates every
+    /// allocation and raw pointer obtained from it. Raw pointers carry no
+    /// borrow; using one after invalidation is the caller's bug.
     pub(crate) fn as_ptr(&self) -> NonNull<u8> {
-        #[cfg(miri)]
-        return self.view;
-        #[cfg(not(miri))]
-        self.region.as_ptr()
-    }
-
-    /// The bytes committed from the region's start.
-    pub(crate) fn committed(&self) -> usize {
-        self.committed
-    }
-
-    /// Commits at least the first `needed` bytes, plus at most one commit
-    /// step beyond them, so commit follows what callers write rather than
-    /// what they might write. On a huge-page region the step ends on the next
-    /// huge-page boundary, less than one huge page beyond `needed`. If the
-    /// step cannot be committed, only the pages `needed` reaches are tried
-    /// before reporting failure.
-    pub(crate) fn ensure_committed(&mut self, needed: usize) -> io::Result<()> {
-        let page = self.region.page;
-        let target = next_commit(
-            self.committed,
-            needed,
-            self.region.reserved(),
-            page,
-            self.huge_pages,
-        )
-        .ok_or_else(|| io::Error::new(io::ErrorKind::OutOfMemory, "region exhausted"))?;
-        if target == self.committed {
-            return Ok(());
-        }
-        let target = match self.region.commit(self.committed, target - self.committed) {
-            | Ok(()) => target,
-            | Err(error) => {
-                // `needed` lies inside the page-multiple reservation, so its
-                // rounded end does too.
-                let minimal = round_up(needed, page).filter(|&minimal| minimal < target);
-                let Some(minimal) = minimal else {
-                    return Err(error);
-                };
-                self.region
-                    .commit(self.committed, minimal - self.committed)?;
-                minimal
-            },
-        };
-        #[cfg(any(test, feature = "benchmarking-internals"))]
-        accounting::update(|usage| usage.committed += target - self.committed);
-        self.committed = target;
-        #[cfg(miri)]
-        {
-            self.view = committed_view(self.region.as_ptr(), self.committed);
-        }
-        Ok(())
-    }
-}
-
-#[cfg(any(test, feature = "benchmarking-internals"))]
-impl Drop for GrowingRegion {
-    fn drop(&mut self) {
-        accounting::update(|usage| usage.committed -= self.committed);
+        self.base
     }
 }
 
@@ -304,6 +303,7 @@ fn committed_view(base: NonNull<u8>, committed: usize) -> NonNull<u8> {
 /// reservation as one real allocation, so it gets a small one.
 #[cfg(not(miri))]
 pub(crate) const REGION_BYTES: usize = 100 * 1024 * 1024 * 1024;
+
 #[cfg(miri)]
 pub(crate) const REGION_BYTES: usize = 16 * 1024 * 1024;
 
@@ -336,35 +336,9 @@ pub(crate) const HUGE_PAGE: usize = 2 * 1024 * 1024;
 /// one huge page.
 #[cfg(all(test, target_os = "linux", not(miri)))]
 pub(crate) const MAX_COMMIT_AHEAD: usize = HUGE_PAGE;
+
 #[cfg(all(test, not(all(target_os = "linux", not(miri)))))]
 pub(crate) const MAX_COMMIT_AHEAD: usize = MAX_COMMIT_STEP;
-
-/// Pure commit-charge bookkeeping, also exercised under Miri without OS calls.
-/// With `huge_pages`, the target is rounded up to a whole huge page.
-fn next_commit(
-    committed: usize,
-    needed: usize,
-    reserved: usize,
-    page: usize,
-    huge_pages: bool,
-) -> Option<usize> {
-    if needed > reserved {
-        return None;
-    }
-    if needed <= committed {
-        return Some(committed);
-    }
-    let step = committed
-        .clamp(FIRST_COMMIT_STEP, MAX_COMMIT_STEP)
-        .min(reserved - committed);
-    let mut target = committed.checked_add(step)?.max(needed);
-    if huge_pages {
-        // `needed` fits the reservation, so capping the rounded end at the
-        // reservation still covers it.
-        target = round_up(target, HUGE_PAGE)?.min(reserved);
-    }
-    round_up(target, page).filter(|&rounded| rounded <= reserved)
-}
 
 /// Per-thread totals of live regions, for tests and benchmarks. Regions are
 /// neither `Send` nor `Sync`, so each one is counted on the thread that owns
@@ -832,6 +806,34 @@ unsafe fn os_release(base: NonNull<u8>, bytes: usize) {
     // its ends, which the caller no longer uses; it is unmapped once.
     let released = unsafe { libc::munmap(base.as_ptr().cast(), bytes) };
     debug_assert_eq!(released, 0, "munmap failed");
+}
+
+impl Drop for Region {
+    fn drop(&mut self) {
+        #[cfg(any(test, feature = "benchmarking-internals"))]
+        accounting::update(|usage| {
+            usage.regions -= 1;
+            usage.reserved -= self.reserved;
+        });
+        // SAFETY: this is the original reservation base and size, released
+        // exactly once. Owners end all references and allocations before
+        // release. Every raw pointer obtained from it is now invalidated;
+        // callers must not use those pointers again, regardless of whether
+        // they still exist (raw pointers carry no borrow).
+        unsafe {
+            #[cfg(not(miri))]
+            os_release(self.base, self.reserved);
+            #[cfg(miri)]
+            std::alloc::dealloc(self.base.as_ptr(), self.layout);
+        }
+    }
+}
+
+#[cfg(any(test, feature = "benchmarking-internals"))]
+impl Drop for GrowingRegion {
+    fn drop(&mut self) {
+        accounting::update(|usage| usage.committed -= self.committed);
+    }
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ use hashbrown::{
 };
 use rustc_hash::FxBuildHasher;
 
-use super::{
+use crate::util::{
     bump::Bump,
     region_vec::RegionVec,
 };
@@ -28,128 +28,7 @@ pub(crate) struct StringCache<'tu> {
     dedup: HashTable<StringCacheId, &'tu Bump>,
 }
 
-impl fmt::Debug for StringCache<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("StringCache")
-            .field("ends", &self.ends)
-            .field("data", &self.data_str())
-            .field("dedup", &self.dedup)
-            .finish()
-    }
-}
-
-impl PartialEq<StringCache<'_>> for StringCache<'_> {
-    fn eq(&self, other: &StringCache<'_>) -> bool {
-        self.ends == other.ends && self.data_str() == other.data_str()
-    }
-}
-
-impl Eq for StringCache<'_> {}
-
-impl Clone for StringCache<'_> {
-    fn clone(&self) -> Self {
-        let mut cloned = Self::new(self.arena);
-        for index in 1..self.ends.len() {
-            _ = cloned.intern(
-                self.get(u32::try_from(index).expect("string cache index overflow"))
-                    .expect("string cache index"),
-            );
-        }
-        cloned
-    }
-}
-
-impl Display for StringCache<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        writeln!(f, "StringCache:")?;
-        for index in 1..self.ends.len() {
-            let i = u32::try_from(index).expect("string cache index overflow");
-            writeln!(f, "\t{i}: {}", self.at(i))?;
-        }
-        Ok(())
-    }
-}
-
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct StringCacheId {
-    id: NonZeroU32,
-}
-
-impl Display for StringCacheId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.id)
-    }
-}
-
-impl From<u32> for StringCacheId {
-    fn from(id: u32) -> Self {
-        Self::from_u32(id)
-    }
-}
-
-impl From<StringCacheId> for u32 {
-    fn from(id: StringCacheId) -> Self {
-        StringCacheId::to_u32(id)
-    }
-}
-
-impl StringCacheId {
-    pub(crate) const fn from_u32(id: u32) -> Self {
-        Self {
-            id: match NonZeroU32::new(id) {
-                | Some(id) => id,
-                | None => panic!("StringCacheId: ID cannot be zero."),
-            },
-        }
-    }
-
-    pub(crate) const fn to_u32(self) -> u32 {
-        self.id.get()
-    }
-}
-
 impl<'tu> StringCache<'tu> {
-    fn data_str(&self) -> &str {
-        Self::bytes_str(&self.data)
-    }
-
-    fn bytes_str(data: &[u8]) -> &str {
-        // SAFETY: `data` is private; `intern_impl` and `intern_concat` append
-        // complete UTF-8 strings and truncate only at string boundaries, so
-        // its bytes are valid UTF-8 at every call site.
-        unsafe { std::str::from_utf8_unchecked(data) }
-    }
-
-    /// Creates a new empty `StringCache`.
-    pub(crate) fn new(arena: &'tu Bump) -> Self {
-        let mut ends = RegionVec::new();
-        ends.push(0);
-        Self {
-            arena,
-            ends,
-            data: RegionVec::new(),
-            dedup: HashTable::new_in(arena),
-        }
-    }
-
-    /// Checks both packed widths before appending bytes or an end offset.
-    fn checked_insert(data_len: usize, additional: usize, ends_len: usize) -> (u32, StringCacheId) {
-        let end = data_len
-            .checked_add(additional)
-            .expect("StringCache byte length overflows usize");
-        let end = u32::try_from(end).expect("StringCache byte length exceeds u32::MAX");
-        let id = u32::try_from(ends_len).expect("StringCache ID exceeds u32::MAX");
-        (end, StringCacheId::from_u32(id))
-    }
-
-    fn intern_impl(data: &mut RegionVec<u8>, ends: &mut RegionVec<u32>, s: &str) -> StringCacheId {
-        let (end, id) = Self::checked_insert(data.len(), s.len(), ends.len());
-        data.extend_from_slice(s.as_bytes());
-        ends.push(end);
-        id
-    }
-
     /// Interns the given string and returns an ID representing its position in
     /// the string cache.
     pub(crate) fn intern(&mut self, s: impl AsRef<str>) -> StringCacheId {
@@ -218,6 +97,62 @@ impl<'tu> StringCache<'tu> {
         }
     }
 
+    fn intern_impl(data: &mut RegionVec<u8>, ends: &mut RegionVec<u32>, s: &str) -> StringCacheId {
+        let (end, id) = Self::checked_insert(data.len(), s.len(), ends.len());
+        data.extend_from_slice(s.as_bytes());
+        ends.push(end);
+        id
+    }
+
+    /// Checks both packed widths before appending bytes or an end offset.
+    fn checked_insert(data_len: usize, additional: usize, ends_len: usize) -> (u32, StringCacheId) {
+        let end = data_len
+            .checked_add(additional)
+            .expect("StringCache byte length overflows usize");
+        let end = u32::try_from(end).expect("StringCache byte length exceeds u32::MAX");
+        let id = u32::try_from(ends_len).expect("StringCache ID exceeds u32::MAX");
+        (end, StringCacheId::from_u32(id))
+    }
+
+    fn data_str(&self) -> &str {
+        Self::bytes_str(&self.data)
+    }
+
+    fn bytes_str(data: &[u8]) -> &str {
+        // SAFETY: `data` is private; `intern_impl` and `intern_concat` append
+        // complete UTF-8 strings and truncate only at string boundaries, so
+        // its bytes are valid UTF-8 at every call site.
+        unsafe { std::str::from_utf8_unchecked(data) }
+    }
+
+    fn at_impl<'a>(data: &'a str, ends: &[u32], id: StringCacheId) -> &'a str {
+        Self::get_impl(data, ends, id)
+            .unwrap_or_else(|| panic!("Compiler bug: StringCacheId is out of bounds: {id:#?}"))
+    }
+
+    pub(crate) fn at(&self, id: impl Into<StringCacheId>) -> &str {
+        Self::at_impl(self.data_str(), &self.ends, id.into())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear(&mut self) {
+        self.ends.truncate(1);
+        self.data.clear();
+        self.dedup.clear();
+    }
+
+    /// Creates a new empty `StringCache`.
+    pub(crate) fn new(arena: &'tu Bump) -> Self {
+        let mut ends = RegionVec::new();
+        ends.push(0);
+        Self {
+            arena,
+            ends,
+            data: RegionVec::new(),
+            dedup: HashTable::new_in(arena),
+        }
+    }
+
     /// The id of `s` if it has been interned, for tests that look names up.
     #[cfg(test)]
     pub(crate) fn get_id_from_string(&self, s: impl AsRef<str>) -> Option<StringCacheId> {
@@ -248,23 +183,89 @@ impl<'tu> StringCache<'tu> {
         let slice = &data[start as usize..end as usize];
         Some(slice)
     }
+}
 
-    fn at_impl<'a>(data: &'a str, ends: &[u32], id: StringCacheId) -> &'a str {
-        Self::get_impl(data, ends, id)
-            .unwrap_or_else(|| panic!("Compiler bug: StringCacheId is out of bounds: {id:#?}"))
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct StringCacheId {
+    id: NonZeroU32,
+}
+
+impl StringCacheId {
+    pub(crate) const fn from_u32(id: u32) -> Self {
+        Self {
+            id: match NonZeroU32::new(id) {
+                | Some(id) => id,
+                | None => panic!("StringCacheId: ID cannot be zero."),
+            },
+        }
     }
 
-    pub(crate) fn at(&self, id: impl Into<StringCacheId>) -> &str {
-        Self::at_impl(self.data_str(), &self.ends, id.into())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn clear(&mut self) {
-        self.ends.truncate(1);
-        self.data.clear();
-        self.dedup.clear();
+    pub(crate) const fn to_u32(self) -> u32 {
+        self.id.get()
     }
 }
+
+impl fmt::Debug for StringCache<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StringCache")
+            .field("ends", &self.ends)
+            .field("data", &self.data_str())
+            .field("dedup", &self.dedup)
+            .finish()
+    }
+}
+
+impl PartialEq<StringCache<'_>> for StringCache<'_> {
+    fn eq(&self, other: &StringCache<'_>) -> bool {
+        self.ends == other.ends && self.data_str() == other.data_str()
+    }
+}
+
+impl Eq for StringCache<'_> {}
+
+impl Clone for StringCache<'_> {
+    fn clone(&self) -> Self {
+        let mut cloned = Self::new(self.arena);
+        for index in 1..self.ends.len() {
+            _ = cloned.intern(
+                self.get(u32::try_from(index).expect("string cache index overflow"))
+                    .expect("string cache index"),
+            );
+        }
+        cloned
+    }
+}
+
+impl Display for StringCache<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(f, "StringCache:")?;
+        for index in 1..self.ends.len() {
+            let i = u32::try_from(index).expect("string cache index overflow");
+            writeln!(f, "\t{i}: {}", self.at(i))?;
+        }
+        Ok(())
+    }
+}
+
+impl Display for StringCacheId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.id)
+    }
+}
+
+impl From<u32> for StringCacheId {
+    fn from(id: u32) -> Self {
+        Self::from_u32(id)
+    }
+}
+
+impl From<StringCacheId> for u32 {
+    fn from(id: StringCacheId) -> Self {
+        StringCacheId::to_u32(id)
+    }
+}
+
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,

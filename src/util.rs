@@ -1,24 +1,22 @@
-/// Compile checks import the crate-private allocator from its source file.
-///
-/// ```compile_fail,E0080
-/// # #[path = "util/bump.rs"]
-/// # mod bump;
-/// let arena = bump::Bump::new();
-/// arena.alloc(String::from("owned"));
-/// ```
-pub(crate) mod arena_list;
-pub(crate) mod bump;
-pub(crate) mod byte_scan;
-pub(crate) mod dedup_arena;
-pub(crate) mod packed;
-pub(crate) mod region_bit_set;
-pub(crate) mod region_vec;
+mod memory;
+
+mod collections;
+
 #[cfg(test)]
-#[expect(
-    clippy::disallowed_types,
-    reason = "A test-only reference-counted heap container; non-test builds do not compile it."
-)]
-pub(crate) mod shared;
-pub(crate) mod string_cache;
-pub(crate) mod vector_slice;
-pub(crate) mod vm;
+pub(crate) use collections::shared;
+pub(crate) use collections::{
+    dedup_arena,
+    region_bit_set,
+    region_vec,
+    string_cache,
+    vector_slice,
+};
+pub(crate) use memory::{
+    arena_list,
+    bump,
+    vm,
+};
+
+pub(crate) mod byte_scan;
+
+pub(crate) mod packed;

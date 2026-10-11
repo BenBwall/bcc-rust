@@ -1,9 +1,47 @@
 //! Entry points for the Criterion and coz benchmarks.
 
+mod input;
+
+mod preprocessing;
+
+mod measurements;
+
+mod semantic;
+
+mod inspection;
+
+mod prepared;
+
 use std::{
-    fmt::Write,
     path::Path,
     sync::OnceLock,
+};
+
+pub use input::BenchmarkInput;
+use input::benchmark_context;
+use inspection::summarize_parse;
+pub use inspection::{
+    parse_file,
+    parse_file_with_library,
+    parse_msvc_source,
+    parse_source,
+};
+pub use measurements::{
+    ArenaUsage,
+    arena_usage,
+};
+pub use prepared::{
+    PreparedParse,
+    with_prepared_parse,
+};
+pub use preprocessing::{
+    lex,
+    preprocess,
+    preprocess_one_million,
+};
+pub use semantic::{
+    sema,
+    sema_source,
 };
 
 use crate::{
@@ -24,322 +62,6 @@ use crate::{
     util::bump::Bump,
 };
 
-/// A translation context whose `__DATE__` and `__TIME__` spell the Unix
-/// epoch, so a benchmark never reads the clock and its result does not
-/// depend on when it runs.
-fn benchmark_context(tu: &Bump) -> Context<'_> {
-    Context::with_configuration(
-        tu,
-        CompilerConfiguration::default().with_source_date_epoch(Some(0)),
-    )
-}
-
-#[doc(hidden)]
-#[must_use]
-pub fn preprocess_one_million() -> usize {
-    preprocess(BenchmarkInput::OneMillionLines)
-}
-
-/// A generated benchmark translation unit.
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BenchmarkInput {
-    /// One million `int iN = N;` lines.
-    OneMillionLines,
-    /// Typedef-heavy declarations, aggregates, and function bodies.
-    ParserMix,
-    /// Function-like macros, token pasting, stringification, and
-    /// conditional groups expanding into ordinary C.
-    MacroMix,
-    /// Function bodies of deeply nested expressions: every precedence level,
-    /// casts, calls, subscripts, member access, and compound literals.
-    ExpressionHeavy,
-    /// File-scope declarations with nested declarators, prototypes, K&R
-    /// definitions, aggregates, bit-fields, and designated initializers.
-    DeclarationHeavy,
-    /// Isolated string literals, stressing phase-6 lookahead without
-    /// concatenation.
-    SingleStrings,
-    /// Empty function-like macro invocations.
-    EmptyMacros,
-    /// Reused parameters and nested argument prescans.
-    NestedArguments,
-}
-
-impl BenchmarkInput {
-    /// Inputs measured for every translation phase.
-    pub const ALL: [Self; 3] = [Self::OneMillionLines, Self::ParserMix, Self::MacroMix];
-    /// Parser production stress inputs.
-    pub const PARSER_STRESS: [Self; 2] = [Self::ExpressionHeavy, Self::DeclarationHeavy];
-    /// Extra inputs that isolate preprocessing allocation costs.
-    pub const PREPROCESSOR_STRESS: [Self; 3] = [
-        Self::SingleStrings,
-        Self::EmptyMacros,
-        Self::NestedArguments,
-    ];
-
-    #[must_use]
-    pub fn name(self) -> &'static str {
-        match self {
-            | Self::OneMillionLines => "one million lines",
-            | Self::ParserMix => "mixed C99 workload",
-            | Self::MacroMix => "macro-heavy workload",
-            | Self::ExpressionHeavy => "expression-heavy workload",
-            | Self::DeclarationHeavy => "declaration-heavy workload",
-            | Self::SingleStrings => "single string literals",
-            | Self::EmptyMacros => "empty macro calls",
-            | Self::NestedArguments => "nested reused arguments",
-        }
-    }
-
-    /// # Panics
-    ///
-    /// Never for the generated inputs, whose sizes fit in `u64`.
-    #[must_use]
-    pub fn bytes(self) -> u64 {
-        u64::try_from(self.source().len()).expect("benchmark input length must fit in u64")
-    }
-
-    /// # Panics
-    ///
-    /// Never for the generated inputs, whose line counts fit in `u64`.
-    #[must_use]
-    pub fn lines(self) -> u64 {
-        u64::try_from(self.source().lines().count()).expect("benchmark line count must fit in u64")
-    }
-
-    #[expect(
-        clippy::large_include_file,
-        reason = "The generated benchmark inputs are intentionally large."
-    )]
-    #[expect(
-        clippy::disallowed_types,
-        clippy::disallowed_macros,
-        reason = "Builds a benchmark input once, outside any measured interval, and keeps it for \
-                  the process."
-    )]
-    fn source(self) -> &'static str {
-        match self {
-            | Self::OneMillionLines =>
-                include_str!(concat!(env!("OUT_DIR"), "/one-million-lines.c")),
-            | Self::ParserMix => include_str!(concat!(env!("OUT_DIR"), "/parser-mix.c")),
-            | Self::MacroMix => include_str!(concat!(env!("OUT_DIR"), "/macro-mix.c")),
-            | Self::SingleStrings => {
-                static SOURCE: OnceLock<String> = OnceLock::new();
-                SOURCE.get_or_init(|| "\"text\";\n".repeat(20_000))
-            },
-            | Self::EmptyMacros => {
-                static SOURCE: OnceLock<String> = OnceLock::new();
-                SOURCE.get_or_init(|| format!("#define EMPTY()\n{}", "EMPTY() ;\n".repeat(20_000)))
-            },
-            | Self::NestedArguments => {
-                static SOURCE: OnceLock<String> = OnceLock::new();
-                SOURCE.get_or_init(|| {
-                    format!(
-                        "#define ID(x) x\n#define TWICE(x) x + x\n{}",
-                        "TWICE(ID(7));\n".repeat(20_000)
-                    )
-                })
-            },
-            | Self::ExpressionHeavy => {
-                static SOURCE: OnceLock<String> = OnceLock::new();
-                SOURCE.get_or_init(|| expression_heavy_source(4_000))
-            },
-            | Self::DeclarationHeavy => {
-                static SOURCE: OnceLock<String> = OnceLock::new();
-                SOURCE.get_or_init(|| declaration_heavy_source(6_000))
-            },
-        }
-    }
-}
-
-/// `count` functions whose statements nest expressions of every precedence
-/// level.
-#[expect(
-    clippy::disallowed_types,
-    reason = "Builds a benchmark input once, outside any measured interval, and keeps it for the \
-              process."
-)]
-fn expression_heavy_source(count: usize) -> String {
-    let mut source = String::from(
-        "typedef struct point { int x, y; } point;
-         int table[64];
-         int combine(int a, int b, int c) { return a + b * c; }
-",
-    );
-    for index in 0..count {
-        let _ = write!(
-            source,
-            "int expressions{index}(int a, int b, int c, point *p)
-             {{
-                 int r = (a + b * c - (a << 2) / (b | 1)) % 7 ^ ~c & (a >= b || b != c);
-                 r += a ? b ? c : -a : (int)sizeof(point) + (int)sizeof r;
-                 r = combine(table[(a + {index}) & 63], p->x * p[0].y, combine(a, b, c))              << (r > 3 && r < 9);
-                 r = ((point){{ .x = a, .y = b }}).x + (r *= 2, r -= c, r);
-                 p->y = !r ? -(a - (b - (c - (a - (b - c))))) : ++r + r-- * (unsigned char)a;
-                 return (((r + a) * (b + c)) / ((a - b) | 1)) + table[r & 63];
-             }}
-"
-        );
-    }
-    source
-}
-
-/// `count` groups of file-scope declarations with nested declarators,
-/// aggregates, and initializers.
-#[expect(
-    clippy::disallowed_types,
-    reason = "Builds a benchmark input once, outside any measured interval, and keeps it for the \
-              process."
-)]
-fn declaration_heavy_source(count: usize) -> String {
-    let mut source = String::new();
-    for index in 0..count {
-        let _ = write!(
-            source,
-            "typedef unsigned long size{index};
-             typedef int (*handler{index})(int, char *restrict, ...);
-             struct node{index} {{ size{index} length : 12; unsigned flags : 4;              struct node{index} *next, *(*links[2])(void); union {{ int i; float f; }} u; }};
-             enum state{index} {{ IDLE{index}, BUSY{index} = 4, DONE{index}, }};
-             static const int (*const lookup{index}[4])(size{index} *, const char *) = {{ 0 }};
-             extern void (*signal{index}(int, void (*)(int)))(int);
-             struct node{index} root{index} = {{ .length = {index} % 4096, .flags = 3,              .next = 0, .u = {{ .f = 1.5f }} }};
-             int matrix{index}[2][3] = {{ [1] = {{ 1, 2 }}, [0][2] = 7 }};
-             char *names{index}[] = {{ \"a\", \"b\" \"c\", 0 }};
-             int old_style{index}(a, b, c) int a; char *b; double c; {{ return a; }}
-             handler{index} callbacks{index}[3], (*selected{index})(int, char *restrict, ...);
-"
-        );
-    }
-    source
-}
-
-/// Runs translation phases 1 through 3 only and returns the number of
-/// preprocessing tokens.
-#[doc(hidden)]
-#[must_use]
-pub fn lex(input: BenchmarkInput) -> usize {
-    let tu = Bump::new();
-    let mut context = benchmark_context(&tu);
-    let file = context.intern_source_file(Path::new("<input>"));
-    let pp = Bump::new();
-    let mut tokens = TokenSource::new(&mut context, &pp, file, input.source());
-    let mut count = 0;
-    while tokens.next_item(&mut context).is_some() {
-        count += 1;
-        // Lexing alone never compacts provenance, so keep the arena from
-        // dominating the measurement.
-        context.source_vectors.0.clear();
-    }
-    count
-}
-
-/// Runs translation phases 1 through 6 over the whole translation unit and
-/// returns the number of parser-facing tokens. Their provenance is kept, as
-/// the parser reading them would need.
-#[doc(hidden)]
-#[must_use]
-pub fn preprocess(input: BenchmarkInput) -> usize {
-    let tu = Bump::new();
-    let mut context = benchmark_context(&tu);
-    with_preprocessor(
-        &mut context,
-        Path::new("<input>"),
-        input.source(),
-        crate::headers::HeaderSearch::default(),
-        |mut preprocessor, context, _pp| {
-            let mut tokens = crate::util::region_vec::RegionVec::new();
-            let _ = preprocessor.preprocess_into_arena(context, usize::MAX, &mut tokens);
-            tokens.len()
-        },
-    )
-}
-
-/// What the arenas of one compilation held, measured in-process.
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ArenaUsage {
-    /// The preprocessing arena's high-water mark over phases 4 to 6 (the
-    /// plan's `'pp` peak), lexed files included.
-    pub preprocessor_high_water: usize,
-    /// The expansion arena's high-water mark; it is reset between
-    /// top-level expansions.
-    pub expansion_high_water:    usize,
-    /// The parse arena's high-water mark over phase 7 (the plan's `'parse`
-    /// peak): frames, their pools, scopes, and recovery state.
-    pub parse_high_water:        usize,
-    /// The translation-unit arena's high-water mark after phase 7: source
-    /// text, diagnostics, and everything else that lives as long as the unit.
-    pub tu_high_water:           usize,
-    /// The most virtual-memory regions live at once over phases 1 to 7.
-    pub peak_regions:            usize,
-    /// The most address space those regions reserved at once.
-    pub peak_reserved:           usize,
-    /// The most bytes committed across all regions at once.
-    pub peak_committed:          usize,
-}
-
-/// Preprocesses and parses `input` to report its arena high-water marks, then
-/// compiles it through phase 7 to report its peak regions and commit.
-#[doc(hidden)]
-#[must_use]
-pub fn arena_usage(input: BenchmarkInput) -> ArenaUsage {
-    use crate::util::vm::accounting;
-    let (preprocessor_high_water, expansion_high_water) = {
-        let tu = Bump::new();
-        let mut context = benchmark_context(&tu);
-        with_preprocessor(
-            &mut context,
-            Path::new("<input>"),
-            input.source(),
-            crate::headers::HeaderSearch::default(),
-            |mut preprocessor, context, pp| {
-                let mut tokens = crate::util::region_vec::RegionVec::new();
-                let _ = preprocessor.preprocess_into_arena(context, usize::MAX, &mut tokens);
-                (pp.high_water(), preprocessor.expansion_high_water())
-            },
-        )
-    };
-    let parse_high_water = with_prepared_parse(input, |prepared| {
-        let parse = prepared.parse;
-        _ = prepared.parse();
-        parse.high_water()
-    });
-    let before = accounting::live();
-    accounting::reset_peak();
-    let tu_high_water = {
-        let tu = Bump::new();
-        let mut context = benchmark_context(&tu);
-        let unit = crate::pipeline::parse_translation_unit(
-            &mut context,
-            Path::new("<input>"),
-            input.source(),
-            crate::headers::HeaderSearch::default(),
-        );
-        _ = unit.external_declarations().len();
-        tu.high_water()
-    };
-    let peak = accounting::peak();
-    ArenaUsage {
-        preprocessor_high_water,
-        expansion_high_water,
-        parse_high_water,
-        tu_high_water,
-        peak_regions: peak.regions - before.regions,
-        peak_reserved: peak.reserved - before.reserved,
-        peak_committed: peak.committed - before.committed,
-    }
-}
-
-/// Summary of one benchmarked parse, returned so the work cannot be elided
-/// and so benchmark setup can reject inputs that produce diagnostics.
-#[doc(hidden)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ParseBenchmarkSummary {
-    pub external_declarations: usize,
-    pub diagnostics:           usize,
-}
-
 /// Runs translation phases 1 through 7 and summarizes the parse.
 #[doc(hidden)]
 #[must_use]
@@ -353,185 +75,11 @@ pub fn parse(input: BenchmarkInput) -> ParseBenchmarkSummary {
     )
 }
 
-/// Runs the full pipeline including declaration semantic analysis.
+/// Summary of one benchmarked parse, returned so the work cannot be elided
+/// and so benchmark setup can reject inputs that produce diagnostics.
 #[doc(hidden)]
-#[must_use]
-pub fn sema(input: BenchmarkInput) -> ParseBenchmarkSummary {
-    let tu = Bump::new();
-    summarize_semantic(&tu, input.source())
-}
-
-/// Runs declaration semantic analysis over an arena copy of source.
-#[doc(hidden)]
-#[must_use]
-pub fn sema_source(source: &str) -> ParseBenchmarkSummary {
-    let tu = Bump::new();
-    let source = tu.alloc_str(source);
-    summarize_semantic(&tu, source)
-}
-
-fn summarize_semantic<'tu>(tu: &'tu Bump, source: &'tu str) -> ParseBenchmarkSummary {
-    let mut context = benchmark_context(tu);
-    let unit = crate::pipeline::parse_translation_unit(
-        &mut context,
-        Path::new("<input>"),
-        source,
-        crate::headers::HeaderSearch::default(),
-    );
-    let _semantic = crate::pipeline::analyze_translation_unit(&mut context, &unit);
-    ParseBenchmarkSummary {
-        external_declarations: unit.external_declarations().len(),
-        diagnostics:           context.pending_error_count(),
-    }
-}
-
-/// Runs translation phases 1 through 7 over `source`, copied into the
-/// translation-unit arena as the CLI's `--input` is, and summarizes the
-/// parse.
-#[doc(hidden)]
-#[must_use]
-pub fn parse_source(source: &str) -> ParseBenchmarkSummary {
-    let tu = Bump::new();
-    let source = tu.alloc_str(source);
-    summarize_parse(
-        &tu,
-        Path::new("<input>"),
-        source,
-        crate::headers::HeaderSearch::default(),
-    )
-}
-
-/// Runs phases 1 through 7 with all MSVC groups enabled, for allocation tests.
-#[doc(hidden)]
-#[must_use]
-pub fn parse_msvc_source(source: &str) -> ParseBenchmarkSummary {
-    let tu = Bump::new();
-    let source = tu.alloc_str(source);
-    let mut context = benchmark_context(&tu);
-    context.configuration = context.configuration.with_msvc_extensions(true);
-    let unit = crate::pipeline::parse_translation_unit(
-        &mut context,
-        Path::new("<input>"),
-        source,
-        crate::headers::HeaderSearch::default(),
-    );
-    ParseBenchmarkSummary {
-        external_declarations: unit.external_declarations().len(),
-        diagnostics:           context.pending_error_count(),
-    }
-}
-
-/// Reads `path` and runs translation phases 1 through 7 over it as the CLI
-/// does, with no include directories, and summarizes the parse.
-///
-/// # Errors
-///
-/// When `path` cannot be read.
-#[doc(hidden)]
-pub fn parse_file(path: &Path) -> std::io::Result<ParseBenchmarkSummary> {
-    let tu = Bump::new();
-    let source = tu.read_to_str_lossy(path)?;
-    Ok(summarize_parse(
-        &tu,
-        path,
-        source,
-        crate::headers::HeaderSearch::default(),
-    ))
-}
-
-/// Like [`parse_file`], with `library` as the C library's include directory
-/// after the resource directory, so the resource headers chain to it.
-///
-/// # Errors
-///
-/// When `path` cannot be read.
-#[doc(hidden)]
-pub fn parse_file_with_library(
-    path: &Path,
-    library: &Path,
-) -> std::io::Result<ParseBenchmarkSummary> {
-    let tu = Bump::new();
-    let source = tu.read_to_str_lossy(path)?;
-    let after = [library];
-    Ok(summarize_parse(
-        &tu,
-        path,
-        source,
-        crate::headers::HeaderSearch {
-            after: &after,
-            ..crate::headers::HeaderSearch::default()
-        },
-    ))
-}
-
-fn summarize_parse<'tu>(
-    tu: &'tu Bump,
-    path: &Path,
-    source: &'tu str,
-    search: crate::headers::HeaderSearch<'_>,
-) -> ParseBenchmarkSummary {
-    let mut context = benchmark_context(tu);
-    let unit = crate::pipeline::parse_translation_unit(&mut context, path, source, search);
-    ParseBenchmarkSummary {
-        external_declarations: unit.external_declarations().len(),
-        diagnostics:           context.pending_error_count(),
-    }
-}
-
-/// A translation unit preprocessed through phase 6 and ready to parse, so a
-/// benchmark can time phase 7 alone.
-#[doc(hidden)]
-pub struct PreparedParse<'a, 'tu, 'parse> {
-    context:      &'a mut Context<'tu>,
-    preprocessed: PreprocessedTranslationUnit,
-    parse:        &'parse Bump,
-}
-
-impl std::fmt::Debug for PreparedParse<'_, '_, '_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PreparedParse").finish_non_exhaustive()
-    }
-}
-
-/// Runs translation phases 1 through 6, then passes a prepared parser to a
-/// callback while its translation context remains alive.
-#[doc(hidden)]
-pub fn with_prepared_parse<R>(
-    input: BenchmarkInput,
-    inspect: impl FnOnce(PreparedParse<'_, '_, '_>) -> R,
-) -> R {
-    let tu = Bump::new();
-    let mut context = benchmark_context(&tu);
-    let preprocessed = prepare_parse_in_context(&mut context, input);
-    let parse = Bump::new();
-    inspect(PreparedParse {
-        context: &mut context,
-        preprocessed,
-        parse: &parse,
-    })
-}
-
-fn prepare_parse_in_context(
-    context: &mut Context<'_>,
-    input: BenchmarkInput,
-) -> PreprocessedTranslationUnit {
-    with_preprocessor(
-        context,
-        Path::new("<input>"),
-        input.source(),
-        crate::headers::HeaderSearch::default(),
-        |preprocessor, context, _pp| Parser::preprocess(preprocessor, context),
-    )
-}
-
-impl PreparedParse<'_, '_, '_> {
-    /// Runs translation phase 7 and summarizes the parse.
-    #[must_use]
-    pub fn parse(self) -> ParseBenchmarkSummary {
-        let unit = parse_with_arena(self.preprocessed, self.context, self.parse);
-        ParseBenchmarkSummary {
-            external_declarations: unit.external_declarations().len(),
-            diagnostics:           self.context.pending_error_count(),
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParseBenchmarkSummary {
+    pub external_declarations: usize,
+    pub diagnostics:           usize,
 }

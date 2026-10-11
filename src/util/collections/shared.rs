@@ -26,6 +26,50 @@ where
     contents:  NonNull<T>,
 }
 
+impl<T> Shared<T> {
+    pub(crate) fn new(t: T) -> Self {
+        Self::from_boxed(Box::new(t))
+    }
+}
+
+impl<T> Shared<T>
+where
+    T: ?Sized,
+{
+    pub(crate) fn from_boxed(t: Box<T>) -> Self {
+        Self {
+            ref_count: NonNull::from(Box::leak(Box::new(Cell::new(1)))),
+            contents:  NonNull::from(Box::leak(t)),
+        }
+    }
+
+    /// The caller of this function must maintain the invariant that the ref
+    /// count accurately reflects how many references there are to the contents.
+    /// It is private to this module, which keeps that invariant, rather than
+    /// `unsafe`.
+    fn ref_cnt(&self) -> &Cell<usize> {
+        // SAFETY: self.ref_count points to the Cell<usize> leaked by
+        // from_boxed, which is freed only after the last reference drops.
+        unsafe { self.ref_count.as_ref() }
+    }
+}
+
+impl SharedString {
+    pub(crate) fn from_string(s: String) -> Self {
+        Self::from_boxed(s.into_boxed_str())
+    }
+}
+
+impl<T> SharedVec<T> {
+    pub(crate) fn from_vec(v: Vec<T>) -> Self {
+        Self::from_boxed(v.into_boxed_slice())
+    }
+}
+
+pub(crate) type SharedString = Shared<str>;
+
+pub(crate) type SharedVec<T> = Shared<[T]>;
+
 impl<T> Drop for Shared<T>
 where
     T: ?Sized,
@@ -121,46 +165,6 @@ where
     }
 }
 
-impl<T> Shared<T> {
-    pub(crate) fn new(t: T) -> Self {
-        Self::from_boxed(Box::new(t))
-    }
-}
-
-impl<T> Shared<T>
-where
-    T: ?Sized,
-{
-    pub(crate) fn from_boxed(t: Box<T>) -> Self {
-        Self {
-            ref_count: NonNull::from(Box::leak(Box::new(Cell::new(1)))),
-            contents:  NonNull::from(Box::leak(t)),
-        }
-    }
-
-    /// The caller of this function must maintain the invariant that the ref
-    /// count accurately reflects how many references there are to the contents.
-    /// It is private to this module, which keeps that invariant, rather than
-    /// `unsafe`.
-    fn ref_cnt(&self) -> &Cell<usize> {
-        // SAFETY: self.ref_count points to the Cell<usize> leaked by
-        // from_boxed, which is freed only after the last reference drops.
-        unsafe { self.ref_count.as_ref() }
-    }
-}
-
-impl SharedString {
-    pub(crate) fn from_string(s: String) -> Self {
-        Self::from_boxed(s.into_boxed_str())
-    }
-}
-
-impl<T> SharedVec<T> {
-    pub(crate) fn from_vec(v: Vec<T>) -> Self {
-        Self::from_boxed(v.into_boxed_slice())
-    }
-}
-
 impl<T> Deref for Shared<T>
 where
     T: ?Sized,
@@ -234,7 +238,5 @@ impl<T> RefUnwindSafe for Shared<T> where T: RefUnwindSafe + ?Sized {}
 
 /// Shared is always Unpin because it is a pointer type.
 impl<T> Unpin for Shared<T> where T: ?Sized {}
-impl<T> UnwindSafe for Shared<T> where T: UnwindSafe + ?Sized {}
 
-pub(crate) type SharedString = Shared<str>;
-pub(crate) type SharedVec<T> = Shared<[T]>;
+impl<T> UnwindSafe for Shared<T> where T: UnwindSafe + ?Sized {}

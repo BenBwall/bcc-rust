@@ -40,31 +40,10 @@ use allocator_api2::{
 };
 use rustc_hash::FxBuildHasher;
 
-use super::vm::{
+use crate::util::vm::{
     GrowingRegion,
     REGION_BYTES,
 };
-
-#[derive(Clone, Copy)]
-struct Last {
-    ptr:   NonNull<u8>,
-    start: usize,
-    size:  usize,
-}
-
-struct Inner {
-    /// Reserved by the first allocation that needs memory.
-    region:     Option<GrowingRegion>,
-    /// Every live block lies below this offset.
-    used:       usize,
-    last:       Option<Last>,
-    /// The largest `used` since the arena was created.
-    high_water: usize,
-    /// Where the open [`TailVec`] starts, if one is open. It owns everything
-    /// from there to the end of the reservation, so nothing else may
-    /// allocate until it closes.
-    tail:       Option<usize>,
-}
 
 /// An arena whose allocations remain at fixed addresses until it is reset or
 /// dropped.
@@ -72,55 +51,7 @@ pub(crate) struct Bump {
     inner: RefCell<Inner>,
 }
 
-impl Default for Bump {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Bump {
-    /// An empty arena. It holds no region until something is allocated.
-    pub(crate) const fn new() -> Self {
-        Self {
-            inner: RefCell::new(Inner {
-                region:     None,
-                used:       0,
-                last:       None,
-                high_water: 0,
-                tail:       None,
-            }),
-        }
-    }
-
-    /// The most bytes this arena has held at once, including alignment
-    /// padding and blocks a reset later reclaimed.
-    #[cfg_attr(
-        not(any(test, feature = "benchmarking-internals")),
-        expect(
-            dead_code,
-            reason = "Only tests and measurements read the high-water mark."
-        )
-    )]
-    pub(crate) fn high_water(&self) -> usize {
-        self.inner.borrow().high_water
-    }
-
-    /// The bytes now allocated, including alignment padding.
-    #[cfg(test)]
-    pub(crate) fn used(&self) -> usize {
-        self.inner.borrow().used
-    }
-
-    /// The bytes committed in this arena's region.
-    #[cfg(test)]
-    pub(crate) fn committed(&self) -> usize {
-        self.inner
-            .borrow()
-            .region
-            .as_ref()
-            .map_or(0, GrowingRegion::committed)
-    }
-
     /// Store a value that needs no destructor.
     #[expect(
         clippy::mut_from_ref,
@@ -241,6 +172,35 @@ impl Bump {
         Ok(unsafe { std::str::from_utf8_unchecked(bytes) })
     }
 
+    /// The most bytes this arena has held at once, including alignment
+    /// padding and blocks a reset later reclaimed.
+    #[cfg_attr(
+        not(any(test, feature = "benchmarking-internals")),
+        expect(
+            dead_code,
+            reason = "Only tests and measurements read the high-water mark."
+        )
+    )]
+    pub(crate) fn high_water(&self) -> usize {
+        self.inner.borrow().high_water
+    }
+
+    /// The bytes now allocated, including alignment padding.
+    #[cfg(test)]
+    pub(crate) fn used(&self) -> usize {
+        self.inner.borrow().used
+    }
+
+    /// The bytes committed in this arena's region.
+    #[cfg(test)]
+    pub(crate) fn committed(&self) -> usize {
+        self.inner
+            .borrow()
+            .region
+            .as_ref()
+            .map_or(0, GrowingRegion::committed)
+    }
+
     pub(crate) fn alloc_slice_fill_iter<T>(&self, values: impl IntoIterator<Item = T>) -> &mut [T] {
         const {
             assert!(
@@ -296,54 +256,36 @@ impl Bump {
         inner.used = 0;
         inner.last = None;
     }
+
+    /// An empty arena. It holds no region until something is allocated.
+    pub(crate) const fn new() -> Self {
+        Self {
+            inner: RefCell::new(Inner {
+                region:     None,
+                used:       0,
+                last:       None,
+                high_water: 0,
+                tail:       None,
+            }),
+        }
+    }
 }
 
-fn out_of_arena_memory() -> std::io::Error {
-    std::io::Error::new(
-        std::io::ErrorKind::OutOfMemory,
-        "the compiler's arena memory is exhausted",
-    )
-}
-
-fn oversized_source() -> std::io::Error {
-    std::io::Error::new(
-        std::io::ErrorKind::InvalidData,
-        "source file exceeds u32::MAX bytes",
-    )
-}
-
-fn aligned_start(base: usize, used: usize, align: usize) -> Option<usize> {
-    base.checked_add(used)?
-        .checked_add(align - 1)
-        .map(|address| (address & !(align - 1)) - base)
+struct Inner {
+    /// Reserved by the first allocation that needs memory.
+    region:     Option<GrowingRegion>,
+    /// Every live block lies below this offset.
+    used:       usize,
+    last:       Option<Last>,
+    /// The largest `used` since the arena was created.
+    high_water: usize,
+    /// Where the open [`TailVec`] starts, if one is open. It owns everything
+    /// from there to the end of the reservation, so nothing else may
+    /// allocate until it closes.
+    tail:       Option<usize>,
 }
 
 impl Inner {
-    /// The region, reserved now if this is the first allocation needing one.
-    fn region(&mut self) -> Result<&mut GrowingRegion, AllocError> {
-        match &mut self.region {
-            | Some(region) => Ok(region),
-            | region @ None =>
-                Ok(region.insert(GrowingRegion::reserve(REGION_BYTES).map_err(|_| AllocError)?)),
-        }
-    }
-
-    /// A pointer to `start`, which must be below the committed prefix.
-    fn pointer_at(region: &GrowingRegion, start: usize) -> NonNull<u8> {
-        // SAFETY: callers commit through the end of the block at `start`
-        // before asking, so the offset lies inside the reservation. The base
-        // is taken after that commit, so it reaches the whole block.
-        let address = unsafe { region.as_ptr().as_ptr().add(start) };
-        // SAFETY: adding an in-bounds offset to a non-null pointer remains
-        // non-null.
-        unsafe { NonNull::new_unchecked(address) }
-    }
-
-    fn set_used(&mut self, used: usize) {
-        self.used = used;
-        self.high_water = self.high_water.max(used);
-    }
-
     fn allocate(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         if layout.size() == 0 {
             // A dangling pointer aligned for the layout, as `NonNull::dangling`
@@ -375,6 +317,312 @@ impl Inner {
             size: layout.size(),
         });
         Ok(NonNull::slice_from_raw_parts(ptr, layout.size()))
+    }
+
+    /// The region, reserved now if this is the first allocation needing one.
+    fn region(&mut self) -> Result<&mut GrowingRegion, AllocError> {
+        match &mut self.region {
+            | Some(region) => Ok(region),
+            | region @ None =>
+                Ok(region.insert(GrowingRegion::reserve(REGION_BYTES).map_err(|_| AllocError)?)),
+        }
+    }
+
+    /// A pointer to `start`, which must be below the committed prefix.
+    fn pointer_at(region: &GrowingRegion, start: usize) -> NonNull<u8> {
+        // SAFETY: callers commit through the end of the block at `start`
+        // before asking, so the offset lies inside the reservation. The base
+        // is taken after that commit, so it reaches the whole block.
+        let address = unsafe { region.as_ptr().as_ptr().add(start) };
+        // SAFETY: adding an in-bounds offset to a non-null pointer remains
+        // non-null.
+        unsafe { NonNull::new_unchecked(address) }
+    }
+
+    fn set_used(&mut self, used: usize) {
+        self.used = used;
+        self.high_water = self.high_water.max(used);
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Last {
+    ptr:   NonNull<u8>,
+    start: usize,
+    size:  usize,
+}
+
+/// A vector at the end of an arena that commits as it is written; see
+/// [`Bump::tail_vec`].
+pub(crate) struct TailVec<'a, T: Copy> {
+    arena:        &'a Bump,
+    /// The first element's offset in the arena's region.
+    start:        usize,
+    /// The first element, derived after the latest commit so it reaches
+    /// every committed element. Dangling until the first commit.
+    ptr:          NonNull<T>,
+    len:          usize,
+    /// How many elements fit in committed memory.
+    committed:    usize,
+    /// The arena's `used` before the vector opened, restored if it is
+    /// dropped unfinished.
+    restore:      usize,
+    /// The latest block before the tail opened, restored with `used`.
+    restore_last: Option<Last>,
+    elements:     PhantomData<&'a mut [T]>,
+}
+
+impl<'a, T: Copy> TailVec<'a, T> {
+    pub(crate) fn push(&mut self, value: T) {
+        if self.try_push(value).is_err() {
+            handle_alloc_error(Layout::new::<T>());
+        }
+    }
+
+    /// Closes the tail, keeping exactly the written elements in the arena
+    /// and returning the rest of the reservation to it.
+    /// Raw pointers into the returned elements remain valid until arena reset
+    /// or release; pointers into the reclaimed tail must not be used again.
+    pub(crate) fn into_slice(self) -> &'a mut [T] {
+        let this = ManuallyDrop::new(self);
+        let mut inner = this.arena.inner.borrow_mut();
+        inner.tail = None;
+        if this.len == 0 {
+            inner.used = this.restore;
+            inner.last = this.restore_last;
+            return &mut [];
+        }
+        inner.set_used(this.start + this.len * size_of::<T>());
+        drop(inner);
+        // SAFETY: the first `len` elements were written into committed memory
+        // that `ptr` reaches. They now lie below the arena's `used`, so later
+        // allocations never overlap them, and they stay put until reset or
+        // drop, which need the exclusive access this `'a` borrow excludes.
+        unsafe { std::slice::from_raw_parts_mut(this.ptr.as_ptr(), this.len) }
+    }
+
+    pub(crate) const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Appends `value`, committing another step of pages first if the
+    /// committed ones are full.
+    pub(crate) fn try_push(&mut self, value: T) -> Result<(), AllocError> {
+        if self.len == self.committed {
+            self.commit_for(self.len.checked_add(1).ok_or(AllocError)?)?;
+        }
+        // SAFETY: `len < committed`, so the slot lies inside the committed
+        // memory `ptr` was derived to reach, and it lies inside this vector.
+        let slot = unsafe { self.ptr.as_ptr().add(self.len) };
+        // SAFETY: the slot is committed, aligned (`start` was aligned for
+        // `T`), and owned by this vector alone while the tail is open.
+        unsafe {
+            slot.write(value);
+        }
+        self.len += 1;
+        Ok(())
+    }
+
+    /// Appends `values`, committing the pages they reach first.
+    pub(crate) fn try_extend_from_slice(&mut self, values: &[T]) -> Result<(), AllocError> {
+        let len = self.len.checked_add(values.len()).ok_or(AllocError)?;
+        if len > self.committed {
+            self.commit_for(len)?;
+        }
+        if values.is_empty() {
+            return Ok(());
+        }
+        // SAFETY: `len <= committed`, so the slots from `self.len` lie inside
+        // the committed memory `ptr` was derived to reach.
+        let slots = unsafe { self.ptr.as_ptr().add(self.len) };
+        // SAFETY: the slots are committed, aligned, unused, owned by this
+        // vector alone, and cannot overlap `values`, which a shared borrow
+        // keeps outside this vector's unwritten part.
+        unsafe {
+            ptr::copy_nonoverlapping(values.as_ptr(), slots, values.len());
+        }
+        self.len = len;
+        Ok(())
+    }
+
+    #[cold]
+    fn commit_for(&mut self, elements: usize) -> Result<(), AllocError> {
+        let mut inner = self.arena.inner.borrow_mut();
+        if self.committed == 0 {
+            let base = inner.region()?.as_ptr().as_ptr() as usize;
+            self.start = aligned_start(base, self.restore, align_of::<T>()).ok_or(AllocError)?;
+            inner.tail = Some(self.start);
+        }
+        let end = elements
+            .checked_mul(size_of::<T>())
+            .and_then(|bytes| bytes.checked_add(self.start))
+            .ok_or(AllocError)?;
+        let region = inner.region()?;
+        region.ensure_committed(end).map_err(|_| AllocError)?;
+        self.committed = (region.committed() - self.start) / size_of::<T>();
+        self.ptr = Inner::pointer_at(region, self.start).cast();
+        Ok(())
+    }
+}
+
+pub(crate) type ArenaVec<'a, T> = AllocVec<T, &'a Bump>;
+
+pub(crate) type ArenaMap<'a, K, V> = hashbrown::HashMap<K, V, FxBuildHasher, &'a Bump>;
+
+pub(crate) type ArenaSet<'a, T> = hashbrown::HashSet<T, FxBuildHasher, &'a Bump>;
+
+/// A UTF-8 string allocated in an arena.
+pub(crate) struct ArenaString<'a> {
+    bytes: ArenaVec<'a, u8>,
+}
+
+impl<'a> ArenaString<'a> {
+    pub(crate) fn push_str(&mut self, value: &str) {
+        self.bytes.extend_from_slice(value.as_bytes());
+    }
+
+    pub(crate) fn push(&mut self, value: char) {
+        let mut buf = [0; 4];
+        self.push_str(value.encode_utf8(&mut buf));
+    }
+
+    /// Finishes the string, leaving its text in the arena.
+    pub(crate) fn into_str(self) -> &'a str {
+        let bytes = self.bytes.leak();
+        // SAFETY: mutation only appends whole UTF-8 strings or clears, so the
+        // bytes are always valid UTF-8.
+        unsafe { std::str::from_utf8_unchecked(bytes) }
+    }
+
+    /// Removes the contents, keeping the capacity for reuse.
+    pub(crate) fn clear(&mut self) {
+        self.bytes.clear();
+    }
+
+    pub(crate) fn new_in(arena: &'a Bump) -> Self {
+        Self {
+            bytes: ArenaVec::new_in(arena),
+        }
+    }
+
+    /// An empty string with room for `capacity` bytes.
+    pub(crate) fn with_capacity_in(capacity: usize, arena: &'a Bump) -> Self {
+        Self {
+            bytes: ArenaVec::with_capacity_in(capacity, arena),
+        }
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        // SAFETY: mutation only appends whole UTF-8 strings or clears, so the
+        // bytes are always valid UTF-8.
+        unsafe { std::str::from_utf8_unchecked(&self.bytes) }
+    }
+}
+
+/// A FIFO queue with cheap front removal and arena-backed storage.
+pub(crate) struct ArenaQueue<'a, T> {
+    data: ArenaVec<'a, Option<T>>,
+    read: usize,
+}
+
+impl<'a, T> ArenaQueue<'a, T> {
+    pub(crate) fn push_back(&mut self, value: T) {
+        self.data.push(Some(value));
+    }
+
+    pub(crate) fn pop_front(&mut self) -> Option<T> {
+        if self.read == self.data.len() {
+            return None;
+        }
+        let value = self.data[self.read].take();
+        self.read += 1;
+        if self.read == self.data.len() {
+            self.data.clear();
+            self.read = 0;
+        }
+        value
+    }
+
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {
+        drop(self.data.drain(..self.read));
+        self.read = 0;
+        self.data
+            .retain(|item| keep(item.as_ref().expect("unread queue item")));
+    }
+
+    /// Removes and yields the items after the first `keep`, in order.
+    pub(crate) fn split_off(&mut self, keep: usize) -> impl Iterator<Item = T> + '_ {
+        let start = self.data.len().min(self.read + keep);
+        self.data
+            .drain(start..)
+            .map(|item| item.expect("unread queue item"))
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.data.len() - self.read
+    }
+
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
+        self.data[self.read..]
+            .iter()
+            .map(|item| item.as_ref().expect("unread queue item"))
+    }
+
+    pub(crate) fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> {
+        self.iter_mut_from(0)
+    }
+
+    /// Starts at an unread suffix without walking already-processed entries.
+    pub(crate) fn iter_mut_from(&mut self, skip: usize) -> impl DoubleEndedIterator<Item = &mut T> {
+        let start = self.read + skip.min(self.len());
+        self.data[start..]
+            .iter_mut()
+            .map(|item| item.as_mut().expect("unread queue item"))
+    }
+
+    pub(crate) fn back(&self) -> Option<&T> {
+        self.data[self.read..].last().and_then(Option::as_ref)
+    }
+
+    pub(crate) fn back_mut(&mut self) -> Option<&mut T> {
+        self.data[self.read..].last_mut().and_then(Option::as_mut)
+    }
+
+    pub(crate) fn new_in(arena: &'a Bump) -> Self {
+        Self {
+            data: ArenaVec::new_in(arena),
+            read: 0,
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+fn out_of_arena_memory() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::OutOfMemory,
+        "the compiler's arena memory is exhausted",
+    )
+}
+
+fn oversized_source() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "source file exceeds u32::MAX bytes",
+    )
+}
+
+fn aligned_start(base: usize, used: usize, align: usize) -> Option<usize> {
+    base.checked_add(used)?
+        .checked_add(align - 1)
+        .map(|address| (address & !(align - 1)) - base)
+}
+
+impl Default for Bump {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -524,119 +772,6 @@ unsafe impl Allocator for Bump {
     }
 }
 
-/// A vector at the end of an arena that commits as it is written; see
-/// [`Bump::tail_vec`].
-pub(crate) struct TailVec<'a, T: Copy> {
-    arena:        &'a Bump,
-    /// The first element's offset in the arena's region.
-    start:        usize,
-    /// The first element, derived after the latest commit so it reaches
-    /// every committed element. Dangling until the first commit.
-    ptr:          NonNull<T>,
-    len:          usize,
-    /// How many elements fit in committed memory.
-    committed:    usize,
-    /// The arena's `used` before the vector opened, restored if it is
-    /// dropped unfinished.
-    restore:      usize,
-    /// The latest block before the tail opened, restored with `used`.
-    restore_last: Option<Last>,
-    elements:     PhantomData<&'a mut [T]>,
-}
-
-impl<'a, T: Copy> TailVec<'a, T> {
-    pub(crate) const fn len(&self) -> usize {
-        self.len
-    }
-
-    pub(crate) fn push(&mut self, value: T) {
-        if self.try_push(value).is_err() {
-            handle_alloc_error(Layout::new::<T>());
-        }
-    }
-
-    /// Appends `value`, committing another step of pages first if the
-    /// committed ones are full.
-    pub(crate) fn try_push(&mut self, value: T) -> Result<(), AllocError> {
-        if self.len == self.committed {
-            self.commit_for(self.len.checked_add(1).ok_or(AllocError)?)?;
-        }
-        // SAFETY: `len < committed`, so the slot lies inside the committed
-        // memory `ptr` was derived to reach, and it lies inside this vector.
-        let slot = unsafe { self.ptr.as_ptr().add(self.len) };
-        // SAFETY: the slot is committed, aligned (`start` was aligned for
-        // `T`), and owned by this vector alone while the tail is open.
-        unsafe {
-            slot.write(value);
-        }
-        self.len += 1;
-        Ok(())
-    }
-
-    /// Appends `values`, committing the pages they reach first.
-    pub(crate) fn try_extend_from_slice(&mut self, values: &[T]) -> Result<(), AllocError> {
-        let len = self.len.checked_add(values.len()).ok_or(AllocError)?;
-        if len > self.committed {
-            self.commit_for(len)?;
-        }
-        if values.is_empty() {
-            return Ok(());
-        }
-        // SAFETY: `len <= committed`, so the slots from `self.len` lie inside
-        // the committed memory `ptr` was derived to reach.
-        let slots = unsafe { self.ptr.as_ptr().add(self.len) };
-        // SAFETY: the slots are committed, aligned, unused, owned by this
-        // vector alone, and cannot overlap `values`, which a shared borrow
-        // keeps outside this vector's unwritten part.
-        unsafe {
-            ptr::copy_nonoverlapping(values.as_ptr(), slots, values.len());
-        }
-        self.len = len;
-        Ok(())
-    }
-
-    #[cold]
-    fn commit_for(&mut self, elements: usize) -> Result<(), AllocError> {
-        let mut inner = self.arena.inner.borrow_mut();
-        if self.committed == 0 {
-            let base = inner.region()?.as_ptr().as_ptr() as usize;
-            self.start = aligned_start(base, self.restore, align_of::<T>()).ok_or(AllocError)?;
-            inner.tail = Some(self.start);
-        }
-        let end = elements
-            .checked_mul(size_of::<T>())
-            .and_then(|bytes| bytes.checked_add(self.start))
-            .ok_or(AllocError)?;
-        let region = inner.region()?;
-        region.ensure_committed(end).map_err(|_| AllocError)?;
-        self.committed = (region.committed() - self.start) / size_of::<T>();
-        self.ptr = Inner::pointer_at(region, self.start).cast();
-        Ok(())
-    }
-
-    /// Closes the tail, keeping exactly the written elements in the arena
-    /// and returning the rest of the reservation to it.
-    /// Raw pointers into the returned elements remain valid until arena reset
-    /// or release; pointers into the reclaimed tail must not be used again.
-    pub(crate) fn into_slice(self) -> &'a mut [T] {
-        let this = ManuallyDrop::new(self);
-        let mut inner = this.arena.inner.borrow_mut();
-        inner.tail = None;
-        if this.len == 0 {
-            inner.used = this.restore;
-            inner.last = this.restore_last;
-            return &mut [];
-        }
-        inner.set_used(this.start + this.len * size_of::<T>());
-        drop(inner);
-        // SAFETY: the first `len` elements were written into committed memory
-        // that `ptr` reaches. They now lie below the arena's `used`, so later
-        // allocations never overlap them, and they stay put until reset or
-        // drop, which need the exclusive access this `'a` borrow excludes.
-        unsafe { std::slice::from_raw_parts_mut(this.ptr.as_ptr(), this.len) }
-    }
-}
-
 impl<T: Copy> Drop for TailVec<'_, T> {
     /// Closes the tail without keeping anything; the elements need no drop.
     /// Every raw pointer into this tail is invalidated. Raw pointers carry no
@@ -652,58 +787,6 @@ impl<T: Copy> Drop for TailVec<'_, T> {
     }
 }
 
-pub(crate) type ArenaVec<'a, T> = AllocVec<T, &'a Bump>;
-pub(crate) type ArenaMap<'a, K, V> = hashbrown::HashMap<K, V, FxBuildHasher, &'a Bump>;
-pub(crate) type ArenaSet<'a, T> = hashbrown::HashSet<T, FxBuildHasher, &'a Bump>;
-
-/// A UTF-8 string allocated in an arena.
-pub(crate) struct ArenaString<'a> {
-    bytes: ArenaVec<'a, u8>,
-}
-
-impl<'a> ArenaString<'a> {
-    pub(crate) fn new_in(arena: &'a Bump) -> Self {
-        Self {
-            bytes: ArenaVec::new_in(arena),
-        }
-    }
-
-    /// An empty string with room for `capacity` bytes.
-    pub(crate) fn with_capacity_in(capacity: usize, arena: &'a Bump) -> Self {
-        Self {
-            bytes: ArenaVec::with_capacity_in(capacity, arena),
-        }
-    }
-
-    pub(crate) fn push_str(&mut self, value: &str) {
-        self.bytes.extend_from_slice(value.as_bytes());
-    }
-
-    /// Removes the contents, keeping the capacity for reuse.
-    pub(crate) fn clear(&mut self) {
-        self.bytes.clear();
-    }
-
-    pub(crate) fn push(&mut self, value: char) {
-        let mut buf = [0; 4];
-        self.push_str(value.encode_utf8(&mut buf));
-    }
-
-    pub(crate) fn as_str(&self) -> &str {
-        // SAFETY: mutation only appends whole UTF-8 strings or clears, so the
-        // bytes are always valid UTF-8.
-        unsafe { std::str::from_utf8_unchecked(&self.bytes) }
-    }
-
-    /// Finishes the string, leaving its text in the arena.
-    pub(crate) fn into_str(self) -> &'a str {
-        let bytes = self.bytes.leak();
-        // SAFETY: mutation only appends whole UTF-8 strings or clears, so the
-        // bytes are always valid UTF-8.
-        unsafe { std::str::from_utf8_unchecked(bytes) }
-    }
-}
-
 impl Deref for ArenaString<'_> {
     type Target = str;
 
@@ -711,16 +794,19 @@ impl Deref for ArenaString<'_> {
         self.as_str()
     }
 }
+
 impl fmt::Display for ArenaString<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
+
 impl fmt::Debug for ArenaString<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self.as_str(), f)
     }
 }
+
 impl fmt::Write for ArenaString<'_> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.push_str(s);
@@ -730,87 +816,6 @@ impl fmt::Write for ArenaString<'_> {
     fn write_char(&mut self, c: char) -> fmt::Result {
         self.push(c);
         Ok(())
-    }
-}
-
-/// A FIFO queue with cheap front removal and arena-backed storage.
-pub(crate) struct ArenaQueue<'a, T> {
-    data: ArenaVec<'a, Option<T>>,
-    read: usize,
-}
-
-impl<'a, T> ArenaQueue<'a, T> {
-    pub(crate) fn new_in(arena: &'a Bump) -> Self {
-        Self {
-            data: ArenaVec::new_in(arena),
-            read: 0,
-        }
-    }
-
-    pub(crate) fn push_back(&mut self, value: T) {
-        self.data.push(Some(value));
-    }
-
-    pub(crate) fn pop_front(&mut self) -> Option<T> {
-        if self.read == self.data.len() {
-            return None;
-        }
-        let value = self.data[self.read].take();
-        self.read += 1;
-        if self.read == self.data.len() {
-            self.data.clear();
-            self.read = 0;
-        }
-        value
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.data.len() - self.read
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
-        self.data[self.read..]
-            .iter()
-            .map(|item| item.as_ref().expect("unread queue item"))
-    }
-
-    pub(crate) fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut T> {
-        self.iter_mut_from(0)
-    }
-
-    /// Starts at an unread suffix without walking already-processed entries.
-    pub(crate) fn iter_mut_from(&mut self, skip: usize) -> impl DoubleEndedIterator<Item = &mut T> {
-        let start = self.read + skip.min(self.len());
-        self.data[start..]
-            .iter_mut()
-            .map(|item| item.as_mut().expect("unread queue item"))
-    }
-
-    pub(crate) fn back(&self) -> Option<&T> {
-        self.data[self.read..].last().and_then(Option::as_ref)
-    }
-
-    pub(crate) fn back_mut(&mut self) -> Option<&mut T> {
-        self.data[self.read..].last_mut().and_then(Option::as_mut)
-    }
-
-    /// Removes and yields the items after the first `keep`, in order.
-    pub(crate) fn split_off(&mut self, keep: usize) -> impl Iterator<Item = T> + '_ {
-        let start = self.data.len().min(self.read + keep);
-        self.data
-            .drain(start..)
-            .map(|item| item.expect("unread queue item"))
-    }
-
-    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&T) -> bool) {
-        drop(self.data.drain(..self.read));
-        self.read = 0;
-        self.data
-            .retain(|item| keep(item.as_ref().expect("unread queue item")));
     }
 }
 

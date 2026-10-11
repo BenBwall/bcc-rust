@@ -5,14 +5,6 @@
 //! semantics and code generation remain later work.
 #![cfg_attr(feature = "portable-simd", feature(portable_simd))]
 
-#[cfg(test)]
-#[doc(hidden)]
-mod shut_up_clippy_about_unused_dev_dependencies {
-    use criterion as _;
-    use pretty_assertions as _;
-    use proptest as _;
-    use rstest as _;
-}
 // Only the benchmarking binary emits coz progress points.
 #[cfg(all(unix, feature = "benchmarking-internals"))]
 use coz as _;
@@ -65,3 +57,12 @@ pub use cli::{
     compile_file_with_arguments_measured,
     run,
 };
+
+#[cfg(test)]
+#[doc(hidden)]
+mod shut_up_clippy_about_unused_dev_dependencies {
+    use criterion as _;
+    use pretty_assertions as _;
+    use proptest as _;
+    use rstest as _;
+}

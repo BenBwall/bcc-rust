@@ -15,7 +15,7 @@ use hashbrown::{
     hash_table::Entry,
 };
 
-use super::bump::{
+use crate::util::bump::{
     ArenaVec,
     Bump,
 };
@@ -27,34 +27,6 @@ pub(crate) struct DedupArena<'a, T, H> {
 }
 
 impl<'a, T, H> DedupArena<'a, T, H> {
-    pub(crate) fn with_hasher(hasher: H, arena: &'a Bump) -> Self {
-        Self {
-            indices: HashTable::new_in(arena),
-            data: ArenaVec::new_in(arena),
-            hasher,
-        }
-    }
-
-    pub(crate) fn new(arena: &'a Bump) -> Self
-    where
-        H: Default,
-    {
-        Self::with_hasher(H::default(), arena)
-    }
-
-    /// The index the next value appended to `data` gets.
-    fn next_index(data: &[T]) -> u32 {
-        u32::try_from(data.len()).expect("DedupArena index exceeds u32::MAX")
-    }
-
-    /// Appends a value that interning never returns, giving it an identity
-    /// distinct from every equal value. Indexed values stay unique.
-    pub(crate) fn push_unindexed(&mut self, value: T) -> u32 {
-        let index = Self::next_index(&self.data);
-        self.data.push(value);
-        index
-    }
-
     /// Only materialize a value in the arena after checking for an existing
     /// equal value. This matters when the value's storage cannot be reclaimed.
     pub(crate) fn intern_by<Q>(&mut self, lookup: &Q, make: impl FnOnce() -> T) -> u32
@@ -80,6 +52,34 @@ impl<'a, T, H> DedupArena<'a, T, H> {
                 index
             },
         }
+    }
+
+    /// Appends a value that interning never returns, giving it an identity
+    /// distinct from every equal value. Indexed values stay unique.
+    pub(crate) fn push_unindexed(&mut self, value: T) -> u32 {
+        let index = Self::next_index(&self.data);
+        self.data.push(value);
+        index
+    }
+
+    /// The index the next value appended to `data` gets.
+    fn next_index(data: &[T]) -> u32 {
+        u32::try_from(data.len()).expect("DedupArena index exceeds u32::MAX")
+    }
+
+    pub(crate) fn with_hasher(hasher: H, arena: &'a Bump) -> Self {
+        Self {
+            indices: HashTable::new_in(arena),
+            data: ArenaVec::new_in(arena),
+            hasher,
+        }
+    }
+
+    pub(crate) fn new(arena: &'a Bump) -> Self
+    where
+        H: Default,
+    {
+        Self::with_hasher(H::default(), arena)
     }
 }
 

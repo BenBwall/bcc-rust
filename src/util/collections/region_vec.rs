@@ -30,7 +30,7 @@ use std::{
 
 use allocator_api2::alloc::AllocError;
 
-use super::vm::{
+use crate::util::vm::{
     GrowingRegion,
     REGION_BYTES,
 };
@@ -48,43 +48,7 @@ pub(crate) struct RegionVec<T> {
     elements:  PhantomData<T>,
 }
 
-impl<T> Default for RegionVec<T> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<T> RegionVec<T> {
-    /// An empty vector. It reserves its region when first written.
-    pub(crate) const fn new() -> Self {
-        const {
-            assert!(size_of::<T>() != 0, "region vectors hold sized elements");
-            // Regions start page-aligned, and pages are at least 4 KiB.
-            assert!(align_of::<T>() <= 4096, "elements fit a page's alignment");
-        }
-        Self {
-            region:    None,
-            ptr:       NonNull::dangling(),
-            len:       0,
-            committed: 0,
-            elements:  PhantomData,
-        }
-    }
-
-    pub(crate) fn as_slice(&self) -> &[T] {
-        // SAFETY: the first `len` elements are initialized in committed
-        // memory that `ptr` reaches, which the region keeps for as long as
-        // `self` is borrowed; with none, `ptr` is dangling but aligned, which
-        // an empty slice allows.
-        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
-    }
-
-    pub(crate) fn as_mut_slice(&mut self) -> &mut [T] {
-        // SAFETY: as in `as_slice`, and `&mut self` makes the access
-        // exclusive.
-        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
-    }
-
     pub(crate) fn push(&mut self, value: T) {
         self.assert_region_capacity(1);
         if self.try_push(value).is_err() {
@@ -191,6 +155,36 @@ impl<T> RegionVec<T> {
     pub(crate) fn clear(&mut self) {
         self.truncate(0);
     }
+
+    /// An empty vector. It reserves its region when first written.
+    pub(crate) const fn new() -> Self {
+        const {
+            assert!(size_of::<T>() != 0, "region vectors hold sized elements");
+            // Regions start page-aligned, and pages are at least 4 KiB.
+            assert!(align_of::<T>() <= 4096, "elements fit a page's alignment");
+        }
+        Self {
+            region:    None,
+            ptr:       NonNull::dangling(),
+            len:       0,
+            committed: 0,
+            elements:  PhantomData,
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[T] {
+        // SAFETY: the first `len` elements are initialized in committed
+        // memory that `ptr` reaches, which the region keeps for as long as
+        // `self` is borrowed; with none, `ptr` is dangling but aligned, which
+        // an empty slice allows.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
+
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [T] {
+        // SAFETY: as in `as_slice`, and `&mut self` makes the access
+        // exclusive.
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+    }
 }
 
 impl<T: Clone> RegionVec<T> {
@@ -219,6 +213,25 @@ impl<T: Clone> RegionVec<T> {
                 self.push_committed(value);
             }
         }
+    }
+}
+
+/// The elements of a [`RegionVec`], by value. The region is released when
+/// the iterator is dropped.
+pub(crate) struct IntoIter<T> {
+    ptr:      NonNull<T>,
+    /// Elements before `next` were moved out; those from `next` to `end` are
+    /// still owned here.
+    next:     usize,
+    end:      usize,
+    /// Keeps the elements' memory reserved and committed.
+    _region:  Option<GrowingRegion>,
+    elements: PhantomData<T>,
+}
+
+impl<T> Default for RegionVec<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -285,19 +298,6 @@ impl<T> IntoIterator for RegionVec<T> {
             elements: PhantomData,
         }
     }
-}
-
-/// The elements of a [`RegionVec`], by value. The region is released when
-/// the iterator is dropped.
-pub(crate) struct IntoIter<T> {
-    ptr:      NonNull<T>,
-    /// Elements before `next` were moved out; those from `next` to `end` are
-    /// still owned here.
-    next:     usize,
-    end:      usize,
-    /// Keeps the elements' memory reserved and committed.
-    _region:  Option<GrowingRegion>,
-    elements: PhantomData<T>,
 }
 
 impl<T> Iterator for IntoIter<T> {

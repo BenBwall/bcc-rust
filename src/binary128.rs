@@ -3,9 +3,17 @@
 //! C99: floating grammar §6.4.4.2, pp. 57-58; PDF pp. 69-70.
 //! Decimal conversion uses arena integers and rounds once, ties to even.
 
+mod arithmetic;
+
 use std::{
     cmp::Ordering,
     fmt,
+};
+
+use arithmetic::{
+    Natural,
+    error,
+    exponent,
 };
 
 use crate::{
@@ -22,156 +30,6 @@ use crate::{
         packed::Packed,
     },
 };
-
-/// IEEE binary128 bits at token alignment. Arithmetic is deliberately not
-/// approximated through the host's binary64 or x87 long double.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Binary128(pub(crate) Packed<u128>);
-
-impl fmt::Display for Binary128 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let bits = self.0.get();
-        let exponent = (bits >> 112) & 0x7FFF;
-        let fraction = bits & ((1_u128 << 112) - 1);
-        if exponent == 0x7FFF {
-            return f.write_str("inf");
-        }
-        if exponent == 0 && fraction == 0 {
-            return f.write_str("0x0p+0");
-        }
-        let power = if exponent == 0 {
-            -16382
-        } else {
-            exponent as i32 - 16383
-        };
-        write!(f, "0x{}.{fraction:028x}p{power:+}", u8::from(exponent != 0))
-    }
-}
-
-/// Nonnegative little-endian base-2^32 integer; storage belongs to scratch.
-struct Natural<'a>(ArenaVec<'a, u32>);
-
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "Base-2^32 limb stores discard high bits; arena extents fit usize on the required \
-              64-bit host."
-)]
-impl<'a> Natural<'a> {
-    fn new(arena: &'a Bump, value: u32) -> Self {
-        let mut words = ArenaVec::new_in(arena);
-        if value != 0 {
-            words.push(value);
-        }
-        Self(words)
-    }
-
-    fn trim(&mut self) {
-        while self.0.last() == Some(&0) {
-            _ = self.0.pop();
-        }
-    }
-
-    fn mul_add(&mut self, multiplier: u32, addend: u32) {
-        let mut carry = u64::from(addend);
-        for word in &mut self.0 {
-            let value = u64::from(*word) * u64::from(multiplier) + carry;
-            *word = value as u32;
-            carry = value >> 32;
-        }
-        if carry != 0 {
-            self.0.push(carry as u32);
-        }
-    }
-
-    fn bits(&self) -> i64 {
-        self.0.last().map_or(0, |word| {
-            (self.0.len() as i64 - 1) * 32 + i64::from(32 - word.leading_zeros())
-        })
-    }
-
-    fn shift(&mut self, count: i64) {
-        if self.0.is_empty() || count == 0 {
-            return;
-        }
-        let words = (count / 32) as usize;
-        let bits = (count % 32) as u32;
-        let old = self.0.len();
-        self.0.resize(old + words + 1, 0);
-        self.0.copy_within(..old, words);
-        self.0[..words].fill(0);
-        let mut carry = 0_u64;
-        for word in &mut self.0[words..] {
-            let value = (u64::from(*word) << bits) | carry;
-            *word = value as u32;
-            carry = value >> 32;
-        }
-        self.trim();
-    }
-
-    fn halve(&mut self) {
-        let mut carry = 0;
-        for word in self.0.iter_mut().rev() {
-            let next = *word << 31;
-            *word = (*word >> 1) | carry;
-            carry = next;
-        }
-        self.trim();
-    }
-
-    fn compare(&self, other: &Self) -> Ordering {
-        self.0
-            .len()
-            .cmp(&other.0.len())
-            .then_with(|| self.0.iter().rev().cmp(other.0.iter().rev()))
-    }
-
-    fn subtract(&mut self, other: &Self) {
-        let mut borrow = 0_u64;
-        for (index, word) in self.0.iter_mut().enumerate() {
-            let sub = u64::from(other.0.get(index).copied().unwrap_or(0)) + borrow;
-            let value = u64::from(*word);
-            *word = value.wrapping_sub(sub) as u32;
-            borrow = u64::from(value < sub);
-        }
-        self.trim();
-    }
-
-    fn copy(&self, arena: &'a Bump) -> Self {
-        let mut words = ArenaVec::new_in(arena);
-        words.extend_from_slice(&self.0);
-        Self(words)
-    }
-}
-
-fn error(range: Option<FloatRangeError>) -> ParseFloatError {
-    let bits = if matches!(range, Some(FloatRangeError::Overflow)) {
-        0x7FFF_u128 << 112
-    } else {
-        0
-    };
-    let value = FloatTokenType::Float128(Binary128(Packed::new(bits)));
-    range.map_or(ParseFloatError::Invalid(value), |range| {
-        ParseFloatError::OutOfRange(value, range)
-    })
-}
-
-fn exponent(text: &str) -> Option<i64> {
-    let (negative, digits) = if let Some(rest) = text.strip_prefix('-') {
-        (true, rest)
-    } else {
-        (false, text.strip_prefix('+').unwrap_or(text))
-    };
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    let mut result = 0_i64;
-    for digit in digits.bytes() {
-        result = result
-            .saturating_mul(10)
-            .saturating_add(i64::from(digit - b'0'));
-    }
-    Some(if negative { -result } else { result })
-}
 
 /// Parses a suffixed spelling, retaining all significand digits before one
 /// IEEE round-to-nearest-even conversion. Nonzero rounded-to-zero and infinity
@@ -325,68 +183,10 @@ pub(crate) fn parse(text: &str, arena: &Bump) -> Result<Binary128, ParseFloatErr
     )))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// IEEE binary128 bits at token alignment. Arithmetic is deliberately not
+/// approximated through the host's binary64 or x87 long double.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Binary128(pub(crate) Packed<u128>);
 
-    #[test]
-    fn exact_binary128_rounding_and_range() {
-        let arena = Bump::new();
-        for (text, bits) in [
-            ("1.0q", 0x3FFF_0000_0000_0000_0000_0000_0000_0000),
-            ("0.1Q", 0x3FFB_9999_9999_9999_9999_9999_9999_999A),
-            (
-                "0x1.0000000000000000000000000001p0q",
-                0x3FFF_0000_0000_0000_0000_0000_0000_0001,
-            ),
-            (
-                "0x1.00000000000000000000000000008p0q",
-                0x3FFF_0000_0000_0000_0000_0000_0000_0000,
-            ),
-            (
-                "0x1.00000000000000000000000000018p0q",
-                0x3FFF_0000_0000_0000_0000_0000_0000_0002,
-            ),
-            ("0x1p-16494q", 1),
-            ("0x1.8p-16495q", 1),
-            (
-                "0x1.ffffffffffffffffffffffffffffp16383q",
-                0x7FFE_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF,
-            ),
-            ("0e999999999999999999999999q", 0),
-        ] {
-            assert_eq!(
-                parse(text, &arena)
-                    .unwrap_or_else(|error| panic!("{text}: {error:?}"))
-                    .0
-                    .get(),
-                bits,
-                "{text}"
-            );
-        }
-        for text in ["0x1p16384q", "1e5000q"] {
-            assert!(
-                matches!(
-                    parse(text, &arena),
-                    Err(ParseFloatError::OutOfRange(_, FloatRangeError::Overflow))
-                ),
-                "{text}"
-            );
-        }
-        for text in ["0x1p-16495q", "1e-5000q"] {
-            assert!(
-                matches!(
-                    parse(text, &arena),
-                    Err(ParseFloatError::OutOfRange(_, FloatRangeError::Underflow))
-                ),
-                "{text}"
-            );
-        }
-        for text in ["1q", "0x1q", ".q", "1..0q", "1.0f128", "1.0qe1", "1e+q"] {
-            assert!(
-                matches!(parse(text, &arena), Err(ParseFloatError::Invalid(_))),
-                "{text}"
-            );
-        }
-    }
-}
+#[cfg(test)]
+mod tests;

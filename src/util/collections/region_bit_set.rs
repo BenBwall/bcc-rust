@@ -6,14 +6,10 @@
 //! reading or removing a member past them is answered without touching
 //! memory, because every such member is absent.
 
-use super::{
+use crate::util::{
     region_vec::RegionVec,
     vm::REGION_BYTES,
 };
-
-type Word = u64;
-
-const WORD_BITS: usize = Word::BITS as usize;
 
 /// A dense bit set indexed by `usize`. See the module docs.
 #[derive(Debug, Default)]
@@ -22,23 +18,6 @@ pub(crate) struct RegionBitSet {
 }
 
 impl RegionBitSet {
-    /// An empty set. It reserves its region when the first member is
-    /// inserted.
-    pub(crate) const fn new() -> Self {
-        Self {
-            words: RegionVec::new(),
-        }
-    }
-
-    const fn position(index: usize) -> (usize, Word) {
-        (index / WORD_BITS, 1 << (index % WORD_BITS))
-    }
-
-    pub(crate) fn contains(&self, index: usize) -> bool {
-        let (word, bit) = Self::position(index);
-        self.words.get(word).is_some_and(|&value| value & bit != 0)
-    }
-
     /// Adds `index`, first extending the words to reach it.
     pub(crate) fn insert(&mut self, index: usize) {
         let (word, bit) = Self::position(index);
@@ -63,7 +42,28 @@ impl RegionBitSet {
             *value &= !bit;
         }
     }
+
+    pub(crate) fn contains(&self, index: usize) -> bool {
+        let (word, bit) = Self::position(index);
+        self.words.get(word).is_some_and(|&value| value & bit != 0)
+    }
+
+    const fn position(index: usize) -> (usize, Word) {
+        (index / WORD_BITS, 1 << (index % WORD_BITS))
+    }
+
+    /// An empty set. It reserves its region when the first member is
+    /// inserted.
+    pub(crate) const fn new() -> Self {
+        Self {
+            words: RegionVec::new(),
+        }
+    }
 }
+
+type Word = u64;
+
+const WORD_BITS: usize = Word::BITS as usize;
 
 #[cfg(test)]
 mod tests {

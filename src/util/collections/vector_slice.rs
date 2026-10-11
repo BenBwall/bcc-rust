@@ -20,6 +20,52 @@ pub(crate) struct VectorSlice<T> {
     _marker:        PhantomData<AtomicPtr<T>>,
 }
 
+impl<T> VectorSlice<T> {
+    pub(crate) fn with_arena_tag(start_index: u32, end_index: u32, arena_tag: u32) -> Self {
+        let length = end_index
+            .checked_sub(start_index)
+            .expect("a slice cannot end before it starts");
+        assert!(length <= Self::MAX_LENGTH, "source range length overflow");
+        assert!(arena_tag < 4, "source arena tag overflow");
+        Self {
+            start_plus_one: start_index
+                .checked_add(1)
+                .and_then(NonZeroU32::new)
+                .expect("a slice cannot start at index u32::MAX"),
+            tagged_length:  length | (arena_tag << Self::LENGTH_BITS),
+            _marker:        PhantomData,
+        }
+    }
+
+    pub(crate) fn start_index(self) -> u32 {
+        self.start_plus_one.get() - 1
+    }
+
+    pub(crate) fn length(self) -> u32 {
+        self.tagged_length & Self::MAX_LENGTH
+    }
+
+    pub(crate) fn arena_tag(self) -> u32 {
+        self.tagged_length >> Self::LENGTH_BITS
+    }
+
+    /// # Panics
+    ///
+    /// If `start_index` is `u32::MAX` or the range is longer than 30 bits.
+    pub(crate) fn new(start_index: u32, end_index: u32) -> Self {
+        Self::with_arena_tag(start_index, end_index, 0)
+    }
+
+    pub(crate) fn empty() -> Self {
+        Self::default()
+    }
+}
+
+impl<T> VectorSlice<T> {
+    const LENGTH_BITS: u32 = 30;
+    pub(crate) const MAX_LENGTH: u32 = (1 << Self::LENGTH_BITS) - 1;
+}
+
 // The niche that `start_plus_one` provides: syntax nodes hold many optional
 // source vectors, and each must stay as small as a plain one.
 const _: () = assert!(
@@ -28,6 +74,7 @@ const _: () = assert!(
 );
 
 impl<T> Copy for VectorSlice<T> {}
+
 impl<T> Clone for VectorSlice<T> {
     fn clone(&self) -> Self {
         *self
@@ -58,50 +105,6 @@ impl<T> PartialEq for VectorSlice<T> {
 }
 
 impl<T> Eq for VectorSlice<T> {}
-
-impl<T> VectorSlice<T> {
-    const LENGTH_BITS: u32 = 30;
-    pub(crate) const MAX_LENGTH: u32 = (1 << Self::LENGTH_BITS) - 1;
-
-    /// # Panics
-    ///
-    /// If `start_index` is `u32::MAX` or the range is longer than 30 bits.
-    pub(crate) fn new(start_index: u32, end_index: u32) -> Self {
-        Self::with_arena_tag(start_index, end_index, 0)
-    }
-
-    pub(crate) fn with_arena_tag(start_index: u32, end_index: u32, arena_tag: u32) -> Self {
-        let length = end_index
-            .checked_sub(start_index)
-            .expect("a slice cannot end before it starts");
-        assert!(length <= Self::MAX_LENGTH, "source range length overflow");
-        assert!(arena_tag < 4, "source arena tag overflow");
-        Self {
-            start_plus_one: start_index
-                .checked_add(1)
-                .and_then(NonZeroU32::new)
-                .expect("a slice cannot start at index u32::MAX"),
-            tagged_length:  length | (arena_tag << Self::LENGTH_BITS),
-            _marker:        PhantomData,
-        }
-    }
-
-    pub(crate) fn start_index(self) -> u32 {
-        self.start_plus_one.get() - 1
-    }
-
-    pub(crate) fn length(self) -> u32 {
-        self.tagged_length & Self::MAX_LENGTH
-    }
-
-    pub(crate) fn arena_tag(self) -> u32 {
-        self.tagged_length >> Self::LENGTH_BITS
-    }
-
-    pub(crate) fn empty() -> Self {
-        Self::default()
-    }
-}
 
 impl<T> Default for VectorSlice<T> {
     fn default() -> Self {

@@ -7,18 +7,6 @@ use super::Target;
 use crate::util::bump::Bump;
 
 impl Target {
-    /// Clang and GCC expose char8 atomic lock-free macros with C23 keywords;
-    /// Clang's MSVC target omits GCC spellings. C23: §7.17.1 paragraph 4,
-    /// p. 293; PDF p. 306 specifies the corresponding header macro.
-    pub(crate) fn atomic_c23_macros(self) -> &'static str {
-        match self {
-            | Self::LinuxGnu => include_str!("x86_64-unknown-linux-gnu-atomic-c23.h"),
-            | Self::LinuxMusl => include_str!("x86_64-unknown-linux-musl-atomic-c23.h"),
-            | Self::WindowsGnu => include_str!("x86_64-w64-windows-gnu-atomic-c23.h"),
-            | Self::WindowsMsvc => include_str!("x86_64-pc-windows-msvc-atomic-c23.h"),
-        }
-    }
-
     /// Ordinary target definitions, read before the user's translation unit.
     /// C99: reserved implementation names §7.1.3p1, p. 166; PDF p. 178;
     /// implementation-defined limits §5.2.4.2, pp. 21-27; PDF pp. 33-39.
@@ -34,6 +22,18 @@ impl Target {
             | (Self::WindowsMsvc, true) => include_str!("x86_64-pc-windows-msvc-gnu17.h"),
         };
         arena.alloc_str(source)
+    }
+
+    /// Clang and GCC expose char8 atomic lock-free macros with C23 keywords;
+    /// Clang's MSVC target omits GCC spellings. C23: §7.17.1 paragraph 4,
+    /// p. 293; PDF p. 306 specifies the corresponding header macro.
+    pub(crate) fn atomic_c23_macros(self) -> &'static str {
+        match self {
+            | Self::LinuxGnu => include_str!("x86_64-unknown-linux-gnu-atomic-c23.h"),
+            | Self::LinuxMusl => include_str!("x86_64-unknown-linux-musl-atomic-c23.h"),
+            | Self::WindowsGnu => include_str!("x86_64-w64-windows-gnu-atomic-c23.h"),
+            | Self::WindowsMsvc => include_str!("x86_64-pc-windows-msvc-atomic-c23.h"),
+        }
     }
 }
 

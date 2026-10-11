@@ -61,44 +61,7 @@ pub(super) struct DiagnosticReporter<'r, 'tu> {
     pub(super) warnings: usize,
 }
 
-/// One diagnostic awaiting rendering, with any later errors folded in.
-struct PendingDiagnostic<'r, 'tu> {
-    diagnostic: Diagnostic<'tu>,
-    location: &'r [SourceVector],
-    ordering_location: Option<(u32, u32)>,
-    /// Its place among the pending diagnostics when it was reported, which
-    /// keeps the order of diagnostics at one location stable.
-    sequence: usize,
-    /// Whether errors at the same place may be folded into this one.
-    foldable: bool,
-    /// An unclosed angle header and an empty translation unit remain two
-    /// separate diagnostics even when they point at the same EOF position.
-    preserve_empty_translation_unit: bool,
-}
-
-impl PendingDiagnostic<'_, '_> {
-    fn absorbs(&self, location: &[SourceVector]) -> bool {
-        self.foldable
-            && self.diagnostic.severity == ErrorSeverity::Error
-            && self.location == location
-    }
-}
-
 impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
-    pub(super) fn new(arena: &'r Bump, diagnostics: &'tu Bump, color: RenderColor) -> Self {
-        Self {
-            arena,
-            diagnostics,
-            renderer: Renderer::new(color),
-            pending: ArenaVec::new_in(arena),
-            last_parser: None,
-            last_other: None,
-            other_errors: ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            errors: 0,
-            warnings: 0,
-        }
-    }
-
     pub(super) fn report(&mut self, error: &TranslationError<'_>, context: &mut Context<'_>) {
         let source = error.source_vectors(context);
         let diagnostic = error.diagnostic_in(context, source, self.diagnostics);
@@ -150,6 +113,34 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             self.last_parser = Some((index, consumed));
         } else {
             self.last_other = Some(index);
+        }
+    }
+
+    /// Renders and counts every pending diagnostic. Later errors can no
+    /// longer fold into them, so the folding targets are forgotten.
+    pub(super) fn flush(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
+        self.last_parser = None;
+        self.last_other = None;
+        self.other_errors.clear();
+        for PendingDiagnostic { diagnostic, .. } in self.pending.drain(..) {
+            match diagnostic.severity {
+                | ErrorSeverity::Error => self.errors += 1,
+                | ErrorSeverity::Warning => self.warnings += 1,
+            }
+            out.write_all(self.renderer.render_text(&diagnostic, context).as_bytes())?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn finish(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
+        self.flush(context, out)?;
+        let errors = count_of(self.errors, "error");
+        let warnings = count_of(self.warnings, "warning");
+        match (self.errors, self.warnings) {
+            | (0, 0) => Ok(()),
+            | (_, 0) => writeln!(out, "{errors} generated."),
+            | (0, _) => writeln!(out, "{warnings} generated."),
+            | _ => writeln!(out, "{errors} and {warnings} generated."),
         }
     }
 
@@ -217,31 +208,40 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         }
     }
 
-    /// Renders and counts every pending diagnostic. Later errors can no
-    /// longer fold into them, so the folding targets are forgotten.
-    pub(super) fn flush(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
-        self.last_parser = None;
-        self.last_other = None;
-        self.other_errors.clear();
-        for PendingDiagnostic { diagnostic, .. } in self.pending.drain(..) {
-            match diagnostic.severity {
-                | ErrorSeverity::Error => self.errors += 1,
-                | ErrorSeverity::Warning => self.warnings += 1,
-            }
-            out.write_all(self.renderer.render_text(&diagnostic, context).as_bytes())?;
+    pub(super) fn new(arena: &'r Bump, diagnostics: &'tu Bump, color: RenderColor) -> Self {
+        Self {
+            arena,
+            diagnostics,
+            renderer: Renderer::new(color),
+            pending: ArenaVec::new_in(arena),
+            last_parser: None,
+            last_other: None,
+            other_errors: ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            errors: 0,
+            warnings: 0,
         }
-        Ok(())
     }
+}
 
-    pub(super) fn finish(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
-        self.flush(context, out)?;
-        let errors = count_of(self.errors, "error");
-        let warnings = count_of(self.warnings, "warning");
-        match (self.errors, self.warnings) {
-            | (0, 0) => Ok(()),
-            | (_, 0) => writeln!(out, "{errors} generated."),
-            | (0, _) => writeln!(out, "{warnings} generated."),
-            | _ => writeln!(out, "{errors} and {warnings} generated."),
-        }
+/// One diagnostic awaiting rendering, with any later errors folded in.
+struct PendingDiagnostic<'r, 'tu> {
+    diagnostic: Diagnostic<'tu>,
+    location: &'r [SourceVector],
+    ordering_location: Option<(u32, u32)>,
+    /// Its place among the pending diagnostics when it was reported, which
+    /// keeps the order of diagnostics at one location stable.
+    sequence: usize,
+    /// Whether errors at the same place may be folded into this one.
+    foldable: bool,
+    /// An unclosed angle header and an empty translation unit remain two
+    /// separate diagnostics even when they point at the same EOF position.
+    preserve_empty_translation_unit: bool,
+}
+
+impl PendingDiagnostic<'_, '_> {
+    fn absorbs(&self, location: &[SourceVector]) -> bool {
+        self.foldable
+            && self.diagnostic.severity == ErrorSeverity::Error
+            && self.location == location
     }
 }
