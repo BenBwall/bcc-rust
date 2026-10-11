@@ -10,6 +10,7 @@ use thiserror::Error;
 
 /// How [`optimize`](super::optimize) runs. `Default` is the full pipeline,
 /// verified after every pass in debug and test builds.
+#[cfg_attr(not(debug_assertions), derive(Default))]
 pub(crate) struct OptimizerOptions<'a> {
     /// The passes to run once each, in order, instead of the default
     /// pipeline (from `--passes=fold,dce,simplify-cfg`).
@@ -32,6 +33,7 @@ pub(crate) struct OptimizerOptions<'a> {
     pub(super) injected:        Option<fn(&mut super::draft::Draft<'_, '_>) -> bool>,
 }
 
+#[cfg(debug_assertions)]
 impl Default for OptimizerOptions<'_> {
     fn default() -> Self {
         Self {
