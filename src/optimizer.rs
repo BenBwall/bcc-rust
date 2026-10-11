@@ -145,11 +145,23 @@ const MAX_ROUNDS: u32 = 8;
 /// Optimizes every defined function of `module` and reports what it did.
 ///
 /// The module must verify for the pre-ABI profile. `scratch` holds the
-/// per-function working data; the caller resets it between calls.
+/// module-lifetime call graph and ordering; the caller resets it between calls.
+/// A separate arena holds function work and is reset after every function.
 pub(crate) fn optimize(
     module: &mut Module<'_>,
     options: &OptimizerOptions<'_>,
     scratch: &Bump,
+) -> OptimizationReport {
+    let mut function_scratch = Bump::new();
+    optimize_with_function_scratch(module, options, scratch, &mut function_scratch)
+}
+
+/// Runs the module pipeline with independently owned function scratch.
+fn optimize_with_function_scratch(
+    module: &mut Module<'_>,
+    options: &OptimizerOptions<'_>,
+    scratch: &Bump,
+    function_scratch: &mut Bump,
 ) -> OptimizationReport {
     let mut report = OptimizationReport::new(options.bisect_limit);
     let mut functions = ArenaVec::new_in(scratch);
@@ -169,7 +181,8 @@ pub(crate) fn optimize(
         functions.extend_from_slice(&graph.order);
     }
     for func in functions {
-        optimize_function(module, func, options, &mut report, &graph, scratch);
+        optimize_function(module, func, options, &mut report, &graph, function_scratch);
+        function_scratch.reset();
         report.functions += 1;
     }
     report

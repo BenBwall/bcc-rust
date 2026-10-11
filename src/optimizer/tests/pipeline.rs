@@ -1,7 +1,10 @@
 //! The pipeline: several passes together, bisecting, verification, printing
 //! and reports.
 
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    fmt::Write as _,
+};
 
 use super::*;
 use crate::ir::{
@@ -544,4 +547,58 @@ fn verification_defaults_on_in_debug_builds() {
     );
     assert!(OptimizerOptions::default().passes.is_none());
     assert!(OptimizerOptions::default().bisect_limit.is_none());
+}
+
+#[test]
+fn review_optimizer_scratch_does_not_accumulate_function_work() {
+    let usage = |count: usize| {
+        let arena = Bump::new();
+        let scratch = Bump::new();
+        let text = independent_functions(count);
+        let mut module = parse(&arena, &text);
+        let report = optimize(&mut module, &OptimizerOptions::default(), &scratch);
+        assert_eq!(report.functions as usize, count);
+        (scratch.used(), scratch.high_water())
+    };
+    let one = usage(1);
+    let many = usage(1000);
+    eprintln!("optimizer scratch: one={one:?}, 1000={many:?}");
+    // Module-wide function ids and the call graph can grow linearly;
+    // per-function drafts and analyses must be reclaimed.
+    assert!(many.0 < one.0 + 256 * 1000, "{one:?} -> {many:?}");
+    assert!(many.1 < one.1 + 256 * 1000, "{one:?} -> {many:?}");
+}
+
+#[test]
+fn review_function_scratch_high_water_is_bounded() {
+    let usage = |count: usize| {
+        let arena = Bump::new();
+        let module_scratch = Bump::new();
+        let mut function_scratch = Bump::new();
+        let text = independent_functions(count);
+        let mut module = parse(&arena, &text);
+        _ = optimize_with_function_scratch(
+            &mut module,
+            &OptimizerOptions::default(),
+            &module_scratch,
+            &mut function_scratch,
+        );
+        assert_eq!(function_scratch.used(), 0);
+        function_scratch.high_water()
+    };
+    assert_eq!(usage(1), usage(1000));
+}
+
+/// Identical independent functions keep the per-function workload fixed.
+fn independent_functions(count: usize) -> String {
+    let mut text = String::new();
+    for i in 0..count {
+        writeln!(
+            text,
+            "function @f{i}(i32) -> i32 external {{\nblock0(v0: i32):\n v1 = iconst.i32 1\n v2 = \
+             iadd.i32 v0, v1\n return v2\n}}"
+        )
+        .unwrap();
+    }
+    text
 }
