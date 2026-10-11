@@ -30,6 +30,7 @@ use crate::{
     ir::{
         AggregateParam,
         Align,
+        ExtendedParam,
         FuncId,
         GlobalDecl,
         GlobalId,
@@ -226,7 +227,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// [`ParamAbi::Aggregate`]; a structure or union result is returned
     /// through a `ptr` to the receiving object inserted as parameter 0 and
     /// described by [`ParamAbi::Result`], and the signature has no result.
-    /// The lists are allocated in `scratch`.
+    /// A parameter or result of an integer type narrower than `int` records
+    /// its signedness, or that it is `_Bool`
+    /// ([`Extension`](crate::ir::Extension)). The lists are allocated in
+    /// `scratch`.
     /// C99: §6.5.2.2 paragraph 4, p. 71; PDF p. 83 (arguments are passed
     /// by value); §6.9.1 paragraph 10, p. 142; PDF p. 154 (each parameter is
     /// an object of the callee).
@@ -240,7 +244,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let types = &self.sema.types;
         let mut params = ArenaVec::new_in(scratch);
         let mut aggregates = ArenaVec::new_in(scratch);
-        let result = match repr(types, result)? {
+        let mut extensions = ArenaVec::new_in(scratch);
+        let result_representation = repr(types, result)?;
+        let result = match result_representation {
             | Repr::Void => None,
             | Repr::Aggregate => {
                 params.push(Type::Ptr);
@@ -265,9 +271,16 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                         )?),
                     });
                 },
-                | representation => params.push(representation.value_type().ok_or(
-                    LoweringErrorKind::MissingFact("a parameter has no value type"),
-                )?),
+                | representation => {
+                    if let Some(extension) = representation.extension() {
+                        let index = u32::try_from(params.len())
+                            .map_err(|_| LoweringErrorKind::MissingFact("too many parameters"))?;
+                        extensions.push(ExtendedParam { index, extension });
+                    }
+                    params.push(representation.value_type().ok_or(
+                        LoweringErrorKind::MissingFact("a parameter has no value type"),
+                    )?);
+                },
             }
         }
         Ok(Signature {
@@ -275,6 +288,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             result,
             variadic,
             aggregates: scratch.alloc_slice_copy(&aggregates),
+            extensions: scratch.alloc_slice_copy(&extensions),
+            result_extension: result_representation.extension(),
         })
     }
 

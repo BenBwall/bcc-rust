@@ -15,7 +15,7 @@ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:
 
 global @.str internal constant size 7, align 1 = bytes "25642025640a00"
 
-function @f(i8, i16, ptr) -> i32 external {
+function @f(i8 signed, i16 signed, ptr) -> i32 external {
 block0(v0: i8, v1: i16, v2: ptr):
     v3 = global_addr @.str
     v4 = sext.i32 v0
@@ -44,6 +44,6 @@ function @printf(ptr, ...) -> i32 external
 
 function @old() -> i32 external
 
-function @proto(i64, i8) -> i64 external
+function @proto(i64, i8 signed) -> i64 external
 
 function @pick() -> ptr external

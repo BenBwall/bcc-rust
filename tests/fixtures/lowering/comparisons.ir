@@ -47,7 +47,7 @@ block0(v0: ptr, v1: ptr):
     return v15
 }
 
-function @chars(i8, i8) -> i32 external {
+function @chars(i8 signed, i8 unsigned) -> i32 external {
 block0(v0: i8, v1: i8):
     v2 = sext.i32 v0
     v3 = zext.i32 v1

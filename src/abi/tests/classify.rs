@@ -1,6 +1,6 @@
 //! Classification: the System V eightbyte classes of aggregate layouts, and
-//! the lowered signatures each target gives aggregate parameters and
-//! results.
+//! the lowered signatures each target gives aggregate parameters and results
+//! and narrow integers.
 
 use sysv::{
     Class,
@@ -235,4 +235,34 @@ function @fits(ptr result(size 32, align 8), i64, i64, i64, i64, ptr aggregate(s
 @sret(ptr sret(size 32, align 8), i64, i64, i64, i64, i64, ptr byval(size 8, align 8))
 @fits(ptr sret(size 32, align 8), i64, i64, i64, i64, i64)"
     );
+}
+
+/// Narrow integers keep their place among the lowered parameters and take
+/// the target's extension: System V widens each of them, Win64 only
+/// `_Bool`.
+#[test]
+fn narrow_integers_take_the_targets_extension() {
+    let text = "\
+function @narrow(i8 signed, i16 unsigned, i8 bool, i32) -> i16 signed external
+function @mixed(ptr result(size 16, align 8, [0: i64, 8: i64]), i8 unsigned, ptr aggregate(size \
+                16, align 8, [0: i64, 8: i64]), i16 signed) external
+function @truth(ptr aggregate(size 0, align 1), i8 bool) -> i8 bool external
+";
+    pretty_assertions::assert_eq!(
+        lowered_signatures(text, Target::LinuxGnu),
+        "\
+@narrow(i8 signext, i16 zeroext, i8 zeroext, i32) -> i16 signext
+@mixed(ptr registers(i64, i64, align 8), i8 zeroext, i64, i64, i16 signext)
+@truth(i8 zeroext) -> i8 zeroext"
+    );
+    for target in [Target::WindowsGnu, Target::WindowsMsvc] {
+        pretty_assertions::assert_eq!(
+            lowered_signatures(text, target),
+            "\
+@narrow(i8, i16, i8 zeroext, i32) -> i16
+@mixed(ptr sret(size 16, align 8), i8, ptr, i16)
+@truth(ptr, i8 zeroext) -> i8 zeroext",
+            "{target:?}"
+        );
+    }
 }

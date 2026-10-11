@@ -12,6 +12,8 @@ use crate::{
         AggregateLayout,
         AggregateParam,
         Align,
+        ExtendedParam,
+        Extension,
         Module,
         ParamAbi,
         ResultRegisters,
@@ -62,7 +64,7 @@ pub(crate) fn plan_signature<'ir: 's, 's>(
         };
         args.push(plan);
     }
-    let lowered = lowered_signature(signature, &result, &args, scratch);
+    let lowered = lowered_signature(signature, convention, &result, &args, scratch);
     Ok(SignaturePlan {
         result,
         args: scratch.alloc_slice_copy(&args),
@@ -181,19 +183,32 @@ impl Convention {
             | Target::WindowsGnu | Target::WindowsMsvc => Self::Win64,
         }
     }
+
+    /// How a narrow integer parameter or result with the pre-ABI
+    /// `extension` travels, if the convention widens it.
+    const fn extension(self, extension: Extension) -> Option<Extension> {
+        match self {
+            | Self::SystemV => Some(sysv::extension(extension)),
+            | Self::Win64 => win64::extension(extension),
+        }
+    }
 }
 
 /// The post-ABI signature of a plan: aggregates in registers become their
 /// parts, ignored ones disappear, and the others keep a `ptr` described by
 /// the target's decision without the scalars only classification needed.
+/// Narrow integers keep their place with the extension `convention` gives
+/// them.
 fn lowered_signature<'s>(
     signature: Signature<'_>,
+    convention: Convention,
     result: &ResultPlan<'s>,
     args: &[ArgPlan<'s>],
     scratch: &'s Bump,
 ) -> Signature<'s> {
     let mut params = ArenaVec::with_capacity_in(signature.params.len() + 1, scratch);
     let mut aggregates = ArenaVec::new_in(scratch);
+    let mut extensions = ArenaVec::new_in(scratch);
     let mut describe = |params: &ArenaVec<'_, Type>, abi| {
         let index = u32::try_from(params.len()).expect("a signature has few parameters");
         aggregates.push(AggregateParam { index, abi });
@@ -210,9 +225,20 @@ fn lowered_signature<'s>(
         },
     }
     let first = usize::from(!matches!(result, ResultPlan::Scalar));
-    for (&ty, plan) in signature.params[first..].iter().zip(args) {
+    for ((index, &ty), plan) in signature.params.iter().enumerate().skip(first).zip(args) {
         match *plan {
-            | ArgPlan::Keep => params.push(ty),
+            | ArgPlan::Keep => {
+                if let Some(extension) = signature
+                    .param_extension(index)
+                    .and_then(|extension| convention.extension(extension))
+                {
+                    extensions.push(ExtendedParam {
+                        index: u32::try_from(params.len()).expect("a signature has few parameters"),
+                        extension,
+                    });
+                }
+                params.push(ty);
+            },
             | ArgPlan::Registers { parts, .. } => params.extend_from_slice(parts.types()),
             | ArgPlan::Stack { layout, align } => {
                 describe(
@@ -225,10 +251,14 @@ fn lowered_signature<'s>(
         }
     }
     Signature {
-        params:     scratch.alloc_slice_copy(&params),
-        result:     signature.result,
-        variadic:   signature.variadic,
-        aggregates: scratch.alloc_slice_copy(&aggregates),
+        params:           scratch.alloc_slice_copy(&params),
+        result:           signature.result,
+        variadic:         signature.variadic,
+        aggregates:       scratch.alloc_slice_copy(&aggregates),
+        extensions:       scratch.alloc_slice_copy(&extensions),
+        result_extension: signature
+            .result_extension
+            .and_then(|extension| convention.extension(extension)),
     }
 }
 

@@ -85,12 +85,14 @@ impl<'ir> Module<'ir> {
             result,
             variadic,
             aggregates: &[],
+            extensions: &[],
+            result_extension: None,
         })
     }
 
     /// Interns any call signature, copying its parameters, its aggregate
-    /// parameters and their layouts into the module's arena the first time
-    /// it is seen.
+    /// parameters and their layouts, and its extended parameters into the
+    /// module's arena the first time it is seen.
     pub(crate) fn intern(&mut self, signature: Signature<'_>) -> SigId {
         if let Some(&id) = self.signature_ids.get(&signature) {
             return id;
@@ -106,6 +108,8 @@ impl<'ir> Module<'ir> {
             result: signature.result,
             variadic: signature.variadic,
             aggregates,
+            extensions: arena.alloc_slice_copy(signature.extensions),
+            result_extension: signature.result_extension,
         };
         let id = self.signatures.push(signature);
         _ = self.signature_ids.insert(signature, id);
@@ -288,26 +292,43 @@ impl fmt::Debug for Module<'_> {
 }
 
 /// A call signature: parameter types, an optional result, whether extra
-/// arguments may follow the fixed ones, and which `ptr` parameters stand for
-/// structures and unions.
+/// arguments may follow the fixed ones, which `ptr` parameters stand for
+/// structures and unions, and which integer parameters and result C typed
+/// narrower than `int`.
 ///
 /// The IR has no aggregate values, so a structure or union passed or
 /// returned by value is a `ptr` parameter that an [`AggregateParam`]
 /// describes. Before ABI lowering the description is C's view with the
 /// aggregate's layout ([`ParamAbi::Aggregate`], [`ParamAbi::Result`]); ABI
 /// lowering replaces it by the target's decision ([`ParamAbi::ByVal`],
-/// [`ParamAbi::Sret`], [`ParamAbi::Registers`]) or by plain scalars.
+/// [`ParamAbi::Sret`], [`ParamAbi::Registers`]) or by plain scalars. In the
+/// same way an `i8` or `i16` parameter or result records whether its C type
+/// is signed, unsigned or `_Bool` before ABI lowering, and how the target
+/// widens it after ([`Extension`]).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct Signature<'ir> {
-    pub(crate) params:     &'ir [Type],
-    pub(crate) result:     Option<Type>,
-    pub(crate) variadic:   bool,
+    pub(crate) params:           &'ir [Type],
+    pub(crate) result:           Option<Type>,
+    pub(crate) variadic:         bool,
     /// The parameters that stand for an aggregate, in increasing parameter
     /// order; empty when every parameter is a plain scalar or pointer.
-    pub(crate) aggregates: &'ir [AggregateParam<'ir>],
+    pub(crate) aggregates:       &'ir [AggregateParam<'ir>],
+    /// The `i8` and `i16` parameters with an [`Extension`], in increasing
+    /// parameter order.
+    pub(crate) extensions:       &'ir [ExtendedParam],
+    /// The [`Extension`] of an `i8` or `i16` result.
+    pub(crate) result_extension: Option<Extension>,
 }
 
 impl<'ir> Signature<'ir> {
+    /// The extension of parameter `index`, if it has one.
+    pub(crate) fn param_extension(&self, index: usize) -> Option<Extension> {
+        self.extensions
+            .iter()
+            .find(|param| param.index as usize == index)
+            .map(|param| param.extension)
+    }
+
     /// How parameter `index` stands for an aggregate, if it does.
     pub(crate) fn param_abi(&self, index: usize) -> Option<ParamAbi<'ir>> {
         self.aggregates
@@ -320,6 +341,71 @@ impl<'ir> Signature<'ir> {
     /// 0, if it does.
     pub(crate) fn result_param(&self) -> Option<ParamAbi<'ir>> {
         self.param_abi(0).filter(|abi| abi.is_result())
+    }
+}
+
+/// An `i8` or `i16` parameter with an [`Extension`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct ExtendedParam {
+    /// The parameter's position in [`Signature::params`].
+    pub(crate) index:     u32,
+    pub(crate) extension: Extension,
+}
+
+/// What an integer parameter or result narrower than `int` was in C, and
+/// how the calling convention widens it. Before ABI lowering it is the C
+/// type's signedness; after it, whether the caller (for an argument) or the
+/// callee (for a result) extends the value to 32 bits, which the other side
+/// may rely on. A post-ABI `i8` or `i16` without an extension has upper
+/// register bits that nobody may read.
+/// C99: §6.2.5 paragraphs 2-6, pp. 33-34; PDF pp. 45-46 (signed, unsigned
+/// and `_Bool` types).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum Extension {
+    /// Pre-ABI: a signed integer type, such as `short`, `signed char`, or
+    /// `char` where it is signed.
+    Signed,
+    /// Pre-ABI: an unsigned integer type other than `_Bool`.
+    Unsigned,
+    /// Pre-ABI: `_Bool`, whose value is 0 or 1.
+    Bool,
+    /// Post-ABI: sign-extended to 32 bits (LLVM's `signext`).
+    Sign,
+    /// Post-ABI: zero-extended to 32 bits (LLVM's `zeroext`).
+    Zero,
+}
+
+impl Extension {
+    /// Every extension, in the order the textual form lists them.
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Signed,
+        Self::Unsigned,
+        Self::Bool,
+        Self::Sign,
+        Self::Zero,
+    ];
+
+    /// Whether this kind exists before ABI lowering rather than after.
+    pub(crate) const fn is_pre_abi(self) -> bool {
+        matches!(self, Self::Signed | Self::Unsigned | Self::Bool)
+    }
+
+    /// The textual form's keyword for this kind.
+    pub(crate) const fn keyword(self) -> &'static str {
+        match self {
+            | Self::Signed => "signed",
+            | Self::Unsigned => "unsigned",
+            | Self::Bool => "bool",
+            | Self::Sign => "signext",
+            | Self::Zero => "zeroext",
+        }
+    }
+
+    /// The kind `keyword` names.
+    pub(crate) fn from_keyword(keyword: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|extension| extension.keyword() == keyword)
     }
 }
 

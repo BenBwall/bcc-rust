@@ -26,6 +26,7 @@ use super::{
 use crate::ir::{
     AggregateFlags,
     AggregateLayout,
+    Extension,
     ResultRegisters,
     Type,
 };
@@ -64,6 +65,21 @@ pub(super) fn result(layout: AggregateLayout<'_>) -> ResultPlan<'_> {
             },
         },
         | None => ResultPlan::Memory(layout),
+    }
+}
+
+/// How an integer argument or result narrower than `int` travels: only a
+/// `_Bool` is widened, with zeros, to 32 bits; the upper bits of the others
+/// are unspecified.
+/// Microsoft x64, "Parameter passing", leaves the unused bits of a slot
+/// undefined; Clang nevertheless extends `_Bool` and relies on it
+/// (`WinX86_64ABIInfo::classify`: "Bool type is always extended to the
+/// ABI, other builtin types are not extended").
+pub(super) const fn extension(extension: Extension) -> Option<Extension> {
+    match extension {
+        | Extension::Bool => Some(Extension::Zero),
+        | Extension::Signed | Extension::Unsigned => None,
+        | Extension::Sign | Extension::Zero => Some(extension),
     }
 }
 

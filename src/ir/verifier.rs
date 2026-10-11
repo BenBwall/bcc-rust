@@ -30,6 +30,7 @@ use super::{
         Opcode,
     },
     module::{
+        Extension,
         GlobalInit,
         ParamAbi,
         Signature,
@@ -92,11 +93,11 @@ fn verify_function_into<'m, 's>(
         });
         return;
     };
-    verify_signature(signature, profile, |index, problem| {
+    verify_signature(signature, profile, |kind| {
         errors.push(VerifierError {
-            item:     function.name,
+            item: function.name,
             location: Location::Item,
-            kind:     VerifierErrorKind::ParamAbi { index, problem },
+            kind,
         });
     });
     let Some(body) = &function.body else {
@@ -126,16 +127,19 @@ fn verify_function_into<'m, 's>(
     verifier.dominance();
 }
 
-/// Checks how a signature's parameters stand for aggregates, calling
-/// `report` with the parameter and the problem for each one wrong: a
-/// description must name a `ptr` parameter, in increasing order; a result
-/// must be parameter 0 of a signature without a result; its kind must
-/// belong to the profile; and its scalars must lie within the aggregate.
+/// Checks how a signature's parameters stand for aggregates and which are
+/// extended, calling `report` for each one wrong: a description must name a
+/// `ptr` parameter, in increasing order; a result must be parameter 0 of a
+/// signature without a result; its kind must belong to the profile; and its
+/// scalars must lie within the aggregate. An extension must name an `i8` or
+/// `i16` parameter or result, in increasing order, with a kind of the
+/// profile.
 fn verify_signature(
     signature: Signature<'_>,
     profile: Profile,
-    mut report: impl FnMut(u32, ParamAbiProblem),
+    mut report: impl FnMut(VerifierErrorKind),
 ) {
+    verify_extensions(signature, profile, &mut report);
     let mut previous = None;
     for param in signature.aggregates {
         let index = param.index;
@@ -164,9 +168,54 @@ fn verify_signature(
             None
         };
         if let Some(problem) = problem {
-            report(index, problem);
+            report(VerifierErrorKind::ParamAbi { index, problem });
         }
         previous = Some(index);
+    }
+}
+
+/// Checks the extensions of `signature`'s parameters and result for
+/// [`verify_signature`].
+fn verify_extensions(
+    signature: Signature<'_>,
+    profile: Profile,
+    report: &mut impl FnMut(VerifierErrorKind),
+) {
+    let check = |ty: Option<Type>, extension: Extension| {
+        if !matches!(ty, Some(Type::I8 | Type::I16)) {
+            Some(ExtensionProblem::NotNarrowInteger)
+        } else if extension.is_pre_abi() != (profile == Profile::PreAbi) {
+            Some(ExtensionProblem::Profile)
+        } else {
+            None
+        }
+    };
+    let mut previous = None;
+    for param in signature.extensions {
+        let index = param.index;
+        let problem = if previous.is_some_and(|previous| index <= previous) {
+            Some(ExtensionProblem::Order)
+        } else {
+            check(
+                signature.params.get(index as usize).copied(),
+                param.extension,
+            )
+        };
+        if let Some(problem) = problem {
+            report(VerifierErrorKind::Extension {
+                param: Some(index),
+                problem,
+            });
+        }
+        previous = Some(index);
+    }
+    if let Some(extension) = signature.result_extension
+        && let Some(problem) = check(signature.result, extension)
+    {
+        report(VerifierErrorKind::Extension {
+            param: None,
+            problem,
+        });
     }
 }
 
@@ -474,8 +523,8 @@ impl Verifier<'_, '_, '_, '_> {
             | InstData::CallIndirect { sig, args } =>
                 match checker.verifier.module.get_signature(sig) {
                     | Some(signature) => {
-                        verify_signature(signature, checker.verifier.profile, |index, problem| {
-                            checker.report(VerifierErrorKind::ParamAbi { index, problem });
+                        verify_signature(signature, checker.verifier.profile, |kind| {
+                            checker.report(kind);
                         });
                         let values = checker.verifier.body.value_list(args);
                         if let Some((&callee, args)) = values.split_first() {
@@ -902,6 +951,12 @@ pub(crate) enum VerifierErrorKind {
         index:   u32,
         problem: ParamAbiProblem,
     },
+    /// A signature's parameter `param`, or its result for `None`, has a
+    /// wrong extension.
+    Extension {
+        param:   Option<u32>,
+        problem: ExtensionProblem,
+    },
     /// A global's bytes are not as long as the global.
     InitializerSize {
         expected: u64,
@@ -926,6 +981,17 @@ pub(crate) enum ParamAbiProblem {
     ScalarOutside,
     /// A result register is `i1` or `ptr`.
     RegisterType,
+}
+
+/// What is wrong with an extended parameter or result of a signature.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ExtensionProblem {
+    /// Extended parameters are not in increasing parameter order.
+    Order,
+    /// The parameter or result does not exist or is not `i8` or `i16`.
+    NotNarrowInteger,
+    /// The kind belongs to the other profile.
+    Profile,
 }
 
 /// The kind of entity an [`VerifierErrorKind::InvalidReference`] names.
@@ -1054,6 +1120,18 @@ impl fmt::Display for VerifierErrorKind {
                     | ParamAbiProblem::RegisterType => "returns a register of type i1 or ptr",
                 }
             ),
+            | Self::Extension { param, problem } => {
+                match param {
+                    | Some(index) => write!(f, "parameter {index} ")?,
+                    | None => f.write_str("the result ")?,
+                }
+                f.write_str(match problem {
+                    | ExtensionProblem::Order => "is extended out of order",
+                    | ExtensionProblem::NotNarrowInteger =>
+                        "has an extension but is not an i8 or i16",
+                    | ExtensionProblem::Profile => "has an extension of the other profile",
+                })
+            },
             | Self::InitializerSize { expected, found } => write!(
                 f,
                 "the initializer has {found} bytes for a size of {expected}"

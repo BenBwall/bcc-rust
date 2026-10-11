@@ -30,6 +30,7 @@ use crate::ir::{
     AggregateFlags,
     AggregateLayout,
     Align,
+    Extension,
     ParamAbi,
     ResultRegisters,
     Signature,
@@ -115,6 +116,22 @@ pub(super) fn result<'s>(
             | _ => unreachable!("an aggregate has one or two parts"),
         },
     })
+}
+
+/// How an integer argument or result narrower than `int` travels: widened
+/// to 32 bits by its producer, with its sign for a signed type and with
+/// zeros for an unsigned one or `_Bool`.
+/// The psABI §3.2.3 only fixes bits 1-7 of a `_Bool` and leaves the upper
+/// bits of other narrow integers unspecified, but Clang widens these to 32
+/// bits and relies on it on the receiving side
+/// (`X86_64ABIInfo::classifyArgumentType` and `classifyReturnType` give
+/// promotable integers `ABIArgInfo::getExtend`), so code that links with
+/// it must as well.
+pub(super) const fn extension(extension: Extension) -> Extension {
+    match extension {
+        | Extension::Signed | Extension::Sign => Extension::Sign,
+        | Extension::Unsigned | Extension::Bool | Extension::Zero => Extension::Zero,
+    }
 }
 
 /// The IR type of each eightbyte of an aggregate in registers, or `None`

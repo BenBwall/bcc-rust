@@ -107,6 +107,8 @@ pub(crate) use module::{
     AggregateLayout,
     AggregateParam,
     AggregateScalar,
+    ExtendedParam,
+    Extension,
     Global,
     GlobalDecl,
     GlobalInit,

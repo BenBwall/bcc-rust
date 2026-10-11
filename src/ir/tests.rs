@@ -1,9 +1,11 @@
 //! Tests for the IR: building, printing and parsing the textual form,
-//! verification, dominance, and the instruction record's size.
+//! verification, dominance, aggregate and extended parameters, and the
+//! instruction record's size.
 
 mod aggregates;
 mod builder;
 mod dominators;
+mod extensions;
 mod text;
 mod verifier;
 

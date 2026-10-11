@@ -12,6 +12,7 @@ use crate::{
         AggregateLayout,
         AggregateScalar,
         Align,
+        Extension,
         Type,
     },
     target::{
@@ -159,6 +160,26 @@ impl Repr {
 
     pub(super) const fn signed(self) -> bool {
         matches!(self, Self::Int { signed: true, .. })
+    }
+
+    /// What a parameter or result of this representation records for ABI
+    /// lowering: the signedness of an integer type narrower than `int`
+    /// (an `i8` or `i16`), or that it is `_Bool`. Conventions differ in
+    /// whether such a value arrives widened, so ABI lowering decides.
+    /// C99: §6.2.5 paragraphs 2-6, pp. 33-34; PDF pp. 45-46.
+    pub(super) const fn extension(self) -> Option<Extension> {
+        match self {
+            | Self::Int {
+                ty: Type::I8 | Type::I16,
+                signed,
+            } => Some(if signed {
+                Extension::Signed
+            } else {
+                Extension::Unsigned
+            }),
+            | Self::Bool => Some(Extension::Bool),
+            | _ => None,
+        }
     }
 }
 

@@ -45,6 +45,8 @@ use super::{
         AggregateLayout,
         AggregateParam,
         AggregateScalar,
+        ExtendedParam,
+        Extension,
         GlobalDecl,
         GlobalInit,
         Linkage,
@@ -974,11 +976,13 @@ impl<'t> Cursor<'_, 't> {
         })
     }
 
-    /// `(ty [abi], ..., [...]) [-> ty]`, with its lists in `scratch`.
+    /// `(ty [abi | extension], ..., [...]) [-> ty [extension]]`, with its
+    /// lists in `scratch`.
     fn signature<'s>(&mut self, scratch: &'s Bump) -> Result<Signature<'s>, ParseError<'t>> {
         self.expect(TokenKind::LParen, "`(`")?;
         let mut params = ArenaVec::new_in(scratch);
         let mut aggregates = ArenaVec::new_in(scratch);
+        let mut extensions = ArenaVec::new_in(scratch);
         let mut variadic = false;
         while !self.eat(TokenKind::RParen) {
             if variadic {
@@ -991,24 +995,39 @@ impl<'t> Cursor<'_, 't> {
                 variadic = true;
             } else {
                 params.push(self.ty()?);
+                let index = u32::try_from(params.len() - 1)
+                    .map_err(|_| self.peek().error(ParseErrorKind::NumberTooLarge))?;
                 if let Some(abi) = self.param_abi(scratch)? {
-                    let index = u32::try_from(params.len() - 1)
-                        .map_err(|_| self.peek().error(ParseErrorKind::NumberTooLarge))?;
                     aggregates.push(AggregateParam { index, abi });
+                } else if let Some(extension) = self.extension() {
+                    extensions.push(ExtendedParam { index, extension });
                 }
             }
         }
-        let result = if self.eat(TokenKind::Arrow) {
-            Some(self.ty()?)
+        let (result, result_extension) = if self.eat(TokenKind::Arrow) {
+            (Some(self.ty()?), self.extension())
         } else {
-            None
+            (None, None)
         };
         Ok(Signature {
             params: scratch.alloc_slice_copy(&params),
             result,
             variadic,
             aggregates: scratch.alloc_slice_copy(&aggregates),
+            extensions: scratch.alloc_slice_copy(&extensions),
+            result_extension,
         })
+    }
+
+    /// The extension keyword after a parameter or result type, if one
+    /// follows: `signed`, `unsigned`, `bool`, `signext` or `zeroext`.
+    fn extension(&mut self) -> Option<Extension> {
+        let TokenKind::Ident(keyword) = self.peek().kind else {
+            return None;
+        };
+        let extension = Extension::from_keyword(keyword)?;
+        _ = self.next();
+        Some(extension)
     }
 
     /// The description of an aggregate parameter after its type, if one

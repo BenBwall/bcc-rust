@@ -321,6 +321,9 @@ fn display_signature(signature: Signature<'_>) -> impl fmt::Display + '_ {
             if let Some(abi) = signature.param_abi(index) {
                 write!(f, " {}", display_param_abi(abi))?;
             }
+            if let Some(extension) = signature.param_extension(index) {
+                write!(f, " {}", extension.keyword())?;
+            }
         }
         if signature.variadic {
             f.write_str(if signature.params.is_empty() {
@@ -330,9 +333,12 @@ fn display_signature(signature: Signature<'_>) -> impl fmt::Display + '_ {
             })?;
         }
         f.write_char(')')?;
+        if let Some(result) = signature.result {
+            write!(f, " -> {result}")?;
+        }
         signature
-            .result
-            .map_or(Ok(()), |result| write!(f, " -> {result}"))
+            .result_extension
+            .map_or(Ok(()), |extension| write!(f, " {}", extension.keyword()))
     })
 }
 
