@@ -31,7 +31,8 @@
 //!
 //! - Execution: `machine.rs` loads a module and moves between frames and
 //!   blocks; `execute.rs` dispatches one instruction; `varargs.rs` implements
-//!   `va_start`, `va_arg`, `va_copy` and `va_end`.
+//!   `va_start`, `va_arg`, `va_copy` and `va_end`. `main.rs` supplies writable
+//!   arguments for hosted C entry.
 //! - Semantics of values: `value.rs` defines runtime values and pointers;
 //!   `arithmetic.rs` the arithmetic, comparisons and conversions; `memory.rs`
 //!   objects, loads, stores, copies and provenance.
@@ -49,6 +50,7 @@
 // Execution
 mod execute;
 mod machine;
+mod main;
 mod varargs;
 
 // Semantics of values
@@ -133,6 +135,22 @@ pub(crate) fn run(
     run_with_limits(module, entry, args, host, Limits::default())
 }
 
+/// Runs hosted C main with no command-line arguments: argc is 1, argv[0]
+/// names an unavailable program name (the empty string), and argv[1] is null.
+/// Functions accepting no parameters keep the ordinary zero-argument entry.
+/// C99: §5.1.2.2.1 paragraphs 1-2, p. 12; PDF p. 24.
+pub(crate) fn run_main(module: &Module<'_>, host: &mut dyn Host) -> Result<Outcome, Trap> {
+    if let Some(crate::ir::Symbol::Function(func)) = module.symbol("main")
+        && module.function_signature(func).params.is_empty()
+    {
+        return run(module, "main", &[], host);
+    }
+    let arena = Bump::new();
+    let mut machine = Machine::load(module, &arena, Limits::default())?;
+    machine.enter_main()?;
+    machine.run(host)
+}
+
 /// Runs `entry` of `module` with `args`, stopping at `limits`.
 pub(crate) fn run_with_limits(
     module: &Module<'_>,
@@ -144,20 +162,27 @@ pub(crate) fn run_with_limits(
     let arena = Bump::new();
     let mut machine = Machine::load(module, &arena, limits)?;
     machine.enter(entry, args)?;
-    loop {
-        if machine.steps == limits.steps {
-            return Err(Trap::StepLimit);
-        }
-        machine.steps += 1;
-        let (location, inst) = machine.fetch();
-        match machine.execute(inst, host) {
-            | Ok(None) => {},
-            | Ok(Some(termination)) =>
-                return Ok(Outcome {
-                    termination,
-                    steps: machine.steps,
-                }),
-            | Err(fault) => return Err(machine.trap(fault, location)),
+    machine.run(host)
+}
+
+impl Machine<'_, '_, '_> {
+    /// Executes an entered program until it terminates or traps.
+    fn run(&mut self, host: &mut dyn Host) -> Result<Outcome, Trap> {
+        loop {
+            if self.steps == self.limits.steps {
+                return Err(Trap::StepLimit);
+            }
+            self.steps += 1;
+            let (location, inst) = self.fetch();
+            match self.execute(inst, host) {
+                | Ok(None) => {},
+                | Ok(Some(termination)) =>
+                    return Ok(Outcome {
+                        termination,
+                        steps: self.steps,
+                    }),
+                | Err(fault) => return Err(self.trap(fault, location)),
+            }
         }
     }
 }

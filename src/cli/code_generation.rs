@@ -309,7 +309,7 @@ impl CodeGeneration {
 fn interpret(module: &Module<'_>, target: Target) -> i32 {
     let arena = Bump::new();
     let mut host = DefaultHost::for_target(&arena, target);
-    let result = interpreter::run(module, "main", &[], &mut host);
+    let result = interpreter::run_main(module, &mut host);
     let mut stdout = io::stdout().lock();
     if let Err(error) = stdout
         .write_all(host.output())

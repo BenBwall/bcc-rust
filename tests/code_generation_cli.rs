@@ -214,6 +214,21 @@ mod tests {
     }
 
     #[test]
+    fn interpret_supplies_modifiable_main_arguments() {
+        let source = "int main(int argc, char **argv) {\nif (argc != 1 || argv == 0 || argv[0] == \
+                      0 || argv[1] != 0) return 1;\nargv[0][0] = 'x'; argv[0] = 0; return 0;\n}\n";
+        for target in [
+            "--target=x86_64-w64-windows-gnu",
+            "--target=x86_64-unknown-linux-gnu",
+        ] {
+            for opt in ["--opt=none", "--opt=bcc"] {
+                let output = bcc(source, &["--interpret", target, opt]);
+                assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+            }
+        }
+    }
+
+    #[test]
     fn interpreter_traps_report_an_error_and_a_distinct_status() {
         let output = bcc(
             "int main(void) {\n  int a[2];\n  return a[5];\n}\n",
