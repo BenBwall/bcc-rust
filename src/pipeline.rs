@@ -18,16 +18,12 @@
 //! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
 //! PDF pp. 21-22.
 
-// Phase storage
-mod storage;
-
-// Semantic analysis
-mod analysis;
+// Stage drivers
+mod stages;
 
 use std::path::Path;
 
-pub(crate) use analysis::analyze_translation_unit;
-pub(crate) use storage::{
+pub(crate) use stages::{
     parse_with_arena,
     preprocess_with_diagnostics,
     with_preprocessor,
@@ -62,6 +58,16 @@ pub(crate) fn parse_translation_unit<'tu>(
     );
     let parse = Bump::new();
     parse_with_arena(preprocessed, context, &parse)
+}
+
+/// The semantic half of phase 7 starts after syntax parsing has completed.
+/// Inspection callers may stop at `parse_translation_unit` to keep syntax modes
+/// unchanged. C99: §5.1.1.2p1, p. 10; PDF p. 22.
+pub(crate) fn analyze_translation_unit<'tu>(
+    context: &mut Context<'tu>,
+    unit: &ParsedTranslationUnit<'tu>,
+) -> crate::translation_phases::semantic_analysis::SemanticTranslationUnit<'tu> {
+    crate::translation_phases::semantic_analysis::analyze(context, unit)
 }
 
 // Tests
