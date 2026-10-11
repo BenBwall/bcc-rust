@@ -16,8 +16,8 @@
 //!   numbers, and other characters.
 //! - Quoted tokens and whitespace: `scanning/literals.rs` reads literals,
 //!   comments, and whitespace.
-//! - Output and state setup: `scanning/spelling.rs` interns spellings, records
-//!   entries and diagnostics, and constructs the lexer.
+//! - Output: `scanning/spelling.rs` interns spellings and records entries and
+//!   diagnostics.
 //!
 //! C99: §5.1.1.2 paragraph 1 (phase 3), p. 10; PDF p. 22;
 //! preprocessing-token categories and maximal munch §6.4 paragraphs 1-4,
@@ -28,7 +28,7 @@
 mod literals;
 mod tokens;
 
-// Entry recording and lexer setup.
+// Entry recording.
 mod spelling;
 
 use super::{

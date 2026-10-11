@@ -18,6 +18,7 @@
 //! phase 4.
 //!
 //! Files by role:
+//! - State construction: `construction.rs` builds the lexer state.
 //! - Source mapping: `splicing.rs` replaces trigraphs and deletes splices;
 //!   `positions.rs` maps offsets back to physical source positions.
 //! - Scanning: `scanning.rs` reads bytes and handles the end of input;
@@ -41,6 +42,9 @@
 //! phase-4 `#include` handling (§6.4 paragraph 4, p. 50; PDF p. 62; §6.4.7, pp.
 //! 64-65; PDF pp. 76-77). Escape values and conversion to C tokens belong to
 //! later phases.
+
+// Lexer construction.
+mod construction;
 
 // Source mapping.
 mod positions;
