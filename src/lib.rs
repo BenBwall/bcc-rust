@@ -37,6 +37,15 @@ pub(crate) mod translation_phases;
     )
 )]
 pub(crate) mod ir;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        unused_imports,
+        reason = "Nothing runs the optimizer yet; its tests exercise it until the driver does."
+    )
+)]
+mod optimizer;
 
 // Invocation and language choices
 mod cli;
