@@ -31,7 +31,7 @@ pub(crate) mod translation_phases;
 #[expect(
     dead_code,
     unused_imports,
-    reason = "Nothing lowers to the IR yet, and its printer, parser and verifier come next."
+    reason = "Nothing lowers to the IR yet, and its verifier comes next."
 )]
 pub(crate) mod ir;
 

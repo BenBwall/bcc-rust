@@ -10,7 +10,8 @@
 //! position, and aggregates that are never values. The IR follows LLVM's
 //! poison semantics without `undef`.
 //!
-//! A [`FunctionBuilder`] grows a body one instruction at a time.
+//! A [`FunctionBuilder`] appends instructions, [`Module`]'s `Display` prints
+//! the textual form, and [`parse_module`] reads it back.
 //!
 //! For `int add(int a, int b) { return a + b; }`, lowering declares `@add`
 //! with the signature `(i32, i32) -> i32`, creates the entry block with
@@ -26,13 +27,16 @@
 //! ```
 //!
 //! Read [`Module`], [`Function`], [`Body`] and [`InstData`] first, then
-//! [`FunctionBuilder`] to see how bodies grow.
+//! [`FunctionBuilder`] to see how bodies grow, and `printer.rs` for the
+//! textual form.
 //!
 //! - Representation: `entities.rs` defines the `u32` entities and their dense
 //!   tables; `types.rs` the value types; `instructions.rs` the opcodes, the
 //!   instruction record and its flags; `function.rs` a function body and its
 //!   queries; `module.rs` signatures, globals, symbols and result types.
 //! - Construction: `builder.rs` builds a body one instruction at a time.
+//! - Textual form: `printer.rs` writes it; `parser.rs` reads it, with
+//!   `parser/lexer.rs` splitting it into tokens.
 //! - `tests.rs` and `tests/` exercise each of these.
 //!
 //! The IR is not a C translation phase. Where one of its rules exists because
@@ -48,6 +52,10 @@ mod types;
 
 // Construction
 mod builder;
+
+// Textual form
+mod parser;
+mod printer;
 
 pub(crate) use builder::FunctionBuilder;
 pub(crate) use entities::{
@@ -90,6 +98,11 @@ pub(crate) use module::{
     Relocation,
     Signature,
     Symbol,
+};
+pub(crate) use parser::{
+    ParseError,
+    ParseErrorKind,
+    parse_module,
 };
 pub(crate) use types::Type;
 
