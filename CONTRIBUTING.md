@@ -25,10 +25,14 @@ so nothing needs to be declared before it is used.
   helpers it uses in the order it uses them, then constructors and accessors,
   then trait impls such as `Debug`, `Display`, and `Default`. `#[cfg(test)]`
   modules come last.
-- **Directories group files by role** when three or more siblings share one,
-  such as grammar frames, extension frames, or builtin tables. The entry file
-  re-exports what other modules use, so moving a file does not change
-  crate-visible paths.
+- **A family of parallel files gets its own directory.** When a module has one
+  file per grammar frame, extension, builtin table, directive, or scanner
+  concern, those files move into a subdirectory with its own entry file, as in
+  `parsing/frames/`, `parsing/extensions/`, `semantic_analysis/builtins/`,
+  `preprocessing/directives/`, and `preprocessor_tokenizer/scanning/`. Other
+  role groups stay flat in the module's directory, under a `//` heading over
+  their `mod` lines in the entry file. The entry file re-exports what other
+  modules use, so moving a file does not change crate-visible paths.
 
 ## Citing the C standard
 
