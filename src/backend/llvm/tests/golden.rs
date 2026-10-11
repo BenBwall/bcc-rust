@@ -18,7 +18,9 @@ impl Golden {
     }
 }
 
-pub(super) const GOLDENS: &[Golden] = &[ARITHMETIC, LOOP, MEMORY, CALLS, SWITCH, GLOBALS, VARARGS];
+pub(super) const GOLDENS: &[Golden] = &[
+    ARITHMETIC, LOOP, MEMORY, CALLS, SWITCH, GLOBALS, VARARGS, AGGREGATES,
+];
 
 const ARITHMETIC: Golden = Golden {
     name:     "arithmetic",
@@ -439,6 +441,110 @@ declare void @llvm.va_copy.p0(ptr, ptr)
 declare void @llvm.va_end.p0(ptr)
 "#,
 };
+
+/// The post-ABI forms of aggregates: `sret` and `byval` parameters, and
+/// results in one or two registers, whose return area the callee allocates
+/// and the caller stores to.
+const AGGREGATES: Golden = Golden {
+    name:     "aggregates",
+    input:    "\
+abi lowered
+
+function @memory(ptr sret(size 24, align 8), ptr byval(size 24, align 8), i32) external
+
+function @pair(ptr registers(i64, f64, align 8), i64) external {
+block0(v0: ptr, v1: i64):
+    store.i64 v1, v0, align 8
+    v2 = iconst.i64 8
+    v3 = ptr_add inbounds v0, v2
+    v4 = sitofp.f64 v1
+    store.f64 v4, v3, align 8
+    return
+}
+
+function @small(ptr registers(i32, align 4)) internal {
+block0(v0: ptr):
+    v1 = iconst.i32 7
+    store.i32 v1, v0, align 4
+    return
+}
+
+function @caller() -> i64 external {
+    slot0 = stack_slot 24, align 8
+    slot1 = stack_slot 24, align 8
+    slot2 = stack_slot 16, align 8
+    slot3 = stack_slot 4, align 4
+block0:
+    v0 = stack_addr slot0
+    v1 = stack_addr slot1
+    v2 = iconst.i32 3
+    call @memory(v0, v1, v2)
+    v3 = stack_addr slot2
+    v4 = iconst.i64 5
+    call @pair(v3, v4)
+    v5 = stack_addr slot3
+    v6 = func_addr @small
+    call_indirect v6(v5) : (ptr registers(i32, align 4))
+    v7 = load.i64 v3, align 8
+    return v7
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+declare void @memory(ptr sret([24 x i8]) align 8, ptr byval([24 x i8]) align 8, i32)
+
+define dso_local { i64, double } @pair(i64 %v1) {
+block0:
+  %v0 = alloca [16 x i8], align 8
+  store i64 %v1, ptr %v0, align 8
+  %v3 = getelementptr inbounds i8, ptr %v0, i64 8
+  %v4 = sitofp i64 %v1 to double
+  store double %v4, ptr %v3, align 8
+  %inst5.ret = load { i64, double }, ptr %v0, align 8
+  ret { i64, double } %inst5.ret
+}
+
+define internal i32 @small() {
+block0:
+  %v0 = alloca [16 x i8], align 8
+  store i32 7, ptr %v0, align 4
+  %inst2.ret = load i32, ptr %v0, align 8
+  ret i32 %inst2.ret
+}
+
+define dso_local i64 @caller() {
+block0:
+  %slot0 = alloca [24 x i8], align 8
+  %slot1 = alloca [24 x i8], align 8
+  %slot2 = alloca [16 x i8], align 8
+  %slot3 = alloca [4 x i8], align 4
+  call void @memory(ptr sret([24 x i8]) align 8 %slot0, ptr byval([24 x i8]) align 8 %slot1, i32 3)
+  %inst6.ret = call { i64, double } @pair(i64 5)
+  store { i64, double } %inst6.ret, ptr %slot2, align 8
+  %inst9.ret = call i32 () @small()
+  store i32 %inst9.ret, ptr %slot3, align 4
+  %v7 = load i64, ptr %slot2, align 8
+  ret i64 %v7
+}
+"#,
+};
+
+#[test]
+fn pre_abi_aggregates_are_refused() {
+    let arena = Bump::new();
+    let module = parse_module(
+        &arena,
+        "function @f(ptr aggregate(size 8, align 8, [0: i64])) external\n",
+    )
+    .unwrap();
+    let mut out = String::new();
+    assert_eq!(
+        emit_module(&module, Target::LinuxGnu, &mut out),
+        Err(EmitError::NotAbiLowered)
+    );
+}
 
 #[test]
 fn modules_print_their_golden_llvm_ir() {

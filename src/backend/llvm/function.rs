@@ -26,6 +26,8 @@ use crate::{
         Linkage,
         Module,
         Opcode,
+        ParamAbi,
+        ResultRegisters,
         Signature,
         Value,
         ValueDef,
@@ -47,13 +49,13 @@ impl Emitter<'_, '_, '_> {
         let module = self.module;
         let function = module.function(func);
         let signature = module.signature(function.signature);
-        let result = signature.result.map_or("void", type_name);
+        let result = result_type(signature);
         let name = symbol(function.name);
         let Some(body) = &function.body else {
             return writeln!(
                 self.out,
                 "declare {result} {name}{}",
-                parameter_types(signature)
+                parameter_types(signature, true)
             );
         };
         let linkage = match function.linkage {
@@ -63,11 +65,15 @@ impl Emitter<'_, '_, '_> {
         write!(self.out, "define {linkage} {result} {name}(")?;
         let entry = body.entry_block().ok_or(fmt::Error)?;
         let mut separator = "";
-        for &param in body.block_params(entry) {
+        for (index, &param) in body.block_params(entry).iter().enumerate() {
+            if !passed(signature, index) {
+                continue;
+            }
             write!(
                 self.out,
-                "{separator}{} %{param}",
-                type_name(body.value_type(param))
+                "{separator}{}{} %{param}",
+                type_name(body.value_type(param)),
+                attributes(signature.param_abi(index))
             )?;
             separator = ", ";
         }
@@ -76,10 +82,11 @@ impl Emitter<'_, '_, '_> {
         }
         self.out.write_str(") {\n")?;
         let mut printer = BodyPrinter {
-            out:        &mut *self.out,
+            out: &mut *self.out,
             intrinsics: &mut self.intrinsics,
-            values:     Values { module, body },
-            edges:      IncomingEdges::compute(body, scratch),
+            values: Values { module, body },
+            edges: IncomingEdges::compute(body, scratch),
+            signature,
         };
         for block in body.blocks() {
             if printer.edges.reachable[block.index()] {
@@ -90,14 +97,21 @@ impl Emitter<'_, '_, '_> {
     }
 }
 
-/// `(i32, ptr, ...)`: a signature's parameter types for a declaration or an
-/// indirect call.
-fn parameter_types(signature: Signature<'_>) -> impl fmt::Display + '_ {
+/// `(i32, ptr, ...)`: a signature's parameter types for a declaration, with
+/// their `byval` and `sret` attributes, or for the function type of a call,
+/// without. A return area for registers is not a parameter.
+fn parameter_types(signature: Signature<'_>, with_attributes: bool) -> impl fmt::Display + '_ {
     fmt::from_fn(move |f| {
         f.write_str("(")?;
         let mut separator = "";
-        for &ty in signature.params {
+        for (index, &ty) in signature.params.iter().enumerate() {
+            if !passed(signature, index) {
+                continue;
+            }
             write!(f, "{separator}{}", type_name(ty))?;
+            if with_attributes {
+                write!(f, "{}", attributes(signature.param_abi(index)))?;
+            }
             separator = ", ";
         }
         if signature.variadic {
@@ -107,12 +121,74 @@ fn parameter_types(signature: Signature<'_>) -> impl fmt::Display + '_ {
     })
 }
 
+/// The LLVM result type of a function of `signature`: its result, `void`,
+/// or the registers an aggregate result comes back in, as one type or a
+/// literal structure of two.
+fn result_type(signature: Signature<'_>) -> impl fmt::Display {
+    let registers = match signature.result_param() {
+        | Some(ParamAbi::Registers(registers)) => Some(registers),
+        | _ => None,
+    };
+    let result = signature.result;
+    fmt::from_fn(move |f| match registers {
+        | Some(ResultRegisters {
+            first,
+            second: Some(second),
+            ..
+        }) => write!(f, "{{ {}, {} }}", type_name(first), type_name(second)),
+        | Some(registers) => f.write_str(type_name(registers.first)),
+        | None => f.write_str(result.map_or("void", type_name)),
+    })
+}
+
+/// Whether parameter `index` is passed: every parameter but a return area
+/// for registers.
+fn passed(signature: Signature<'_>, index: usize) -> bool {
+    !matches!(signature.param_abi(index), Some(ParamAbi::Registers(_)))
+}
+
+/// The attributes after a parameter's or argument's type: ` byval([N x
+/// i8]) align A` for an aggregate copied to the stack and ` sret([N x i8])
+/// align A` for a result returned in memory.
+fn attributes(abi: Option<ParamAbi<'_>>) -> impl fmt::Display + '_ {
+    fmt::from_fn(move |f| match abi {
+        | Some(ParamAbi::ByVal(layout)) => write!(
+            f,
+            " byval([{} x i8]) align {}",
+            layout.size,
+            layout.align.bytes()
+        ),
+        | Some(ParamAbi::Sret(layout)) => write!(
+            f,
+            " sret([{} x i8]) align {}",
+            layout.size,
+            layout.align.bytes()
+        ),
+        | _ => Ok(()),
+    })
+}
+
+/// The LLVM type of the registers an aggregate result comes back in.
+fn registers_type(registers: ResultRegisters) -> impl fmt::Display {
+    fmt::from_fn(move |f| match registers.second {
+        | Some(second) => write!(
+            f,
+            "{{ {}, {} }}",
+            type_name(registers.first),
+            type_name(second)
+        ),
+        | None => f.write_str(type_name(registers.first)),
+    })
+}
+
 /// Prints the blocks of one body.
 struct BodyPrinter<'a, 'm, 'ir, 's> {
     out:        &'a mut dyn fmt::Write,
     intrinsics: &'a mut Intrinsics,
     values:     Values<'m, 'ir>,
     edges:      IncomingEdges<'s>,
+    /// The function's signature, for an aggregate result in registers.
+    signature:  Signature<'ir>,
 }
 
 impl BodyPrinter<'_, '_, '_, '_> {
@@ -130,6 +206,16 @@ impl BodyPrinter<'_, '_, '_, '_> {
                     "  %{slot} = alloca [{} x i8], align {}",
                     data.size,
                     data.align.bytes()
+                )?;
+            }
+            // The return area of a result in registers is the callee's own.
+            if let Some(ParamAbi::Registers(registers)) = self.signature.result_param()
+                && let Some(&area) = body.block_params(block).first()
+            {
+                writeln!(
+                    self.out,
+                    "  %{area} = alloca [16 x i8], align {}",
+                    registers.align.bytes().max(8)
                 )?;
             }
         }
@@ -319,6 +405,7 @@ impl BodyPrinter<'_, '_, '_, '_> {
                 let function = values.module.function(func);
                 let signature = values.module.signature(function.signature);
                 self.call(
+                    inst,
                     signature,
                     signature.variadic,
                     symbol(function.name),
@@ -328,7 +415,7 @@ impl BodyPrinter<'_, '_, '_, '_> {
             | InstData::CallIndirect { sig, args } => {
                 let signature = values.module.signature(sig);
                 let (&callee, args) = body.value_list(args).split_first().ok_or(fmt::Error)?;
-                self.call(signature, true, values.operand(callee), args)
+                self.call(inst, signature, true, values.operand(callee), args)
             },
             | InstData::Jump { dest } => write!(self.out, "br label %{}", body.block_call(dest).0),
             | InstData::Brif {
@@ -364,9 +451,21 @@ impl BodyPrinter<'_, '_, '_, '_> {
                 }
                 self.out.write_str("  ]")
             },
-            | InstData::Return { value } => match value {
-                | Some(value) => write!(self.out, "ret {}", values.typed(value)),
-                | None => self.out.write_str("ret void"),
+            | InstData::Return { value } => match (value, self.signature.result_param()) {
+                | (Some(value), _) => write!(self.out, "ret {}", values.typed(value)),
+                | (None, Some(ParamAbi::Registers(registers))) => {
+                    let area = body
+                        .entry_block()
+                        .and_then(|entry| body.block_params(entry).first().copied())
+                        .ok_or(fmt::Error)?;
+                    let ty = registers_type(registers);
+                    write!(
+                        self.out,
+                        "%{inst}.ret = load {ty}, ptr %{area}, align {}\n  ret {ty} %{inst}.ret",
+                        registers.align.bytes().max(8)
+                    )
+                },
+                | (None, _) => self.out.write_str("ret void"),
             },
             | InstData::Unreachable => self.out.write_str("unreachable"),
             | InstData::Const { .. }
@@ -382,26 +481,56 @@ impl BodyPrinter<'_, '_, '_, '_> {
     /// A call: the result type alone for a direct call to a fixed-arity
     /// function, else the whole function type, which LLVM needs for a
     /// variadic callee and which states an indirect callee's signature.
+    /// Arguments carry the parameters' `byval` and `sret` attributes. A
+    /// result in registers is named `%instN.ret` and stored to the return
+    /// area the IR passes, which is not an LLVM argument.
     fn call(
         &mut self,
+        inst: Inst,
         signature: Signature<'_>,
         function_type: bool,
         callee: impl fmt::Display,
         args: &[Value],
     ) -> fmt::Result {
         let values = self.values;
-        let result = signature.result.map_or("void", type_name);
-        write!(self.out, "call {result} ")?;
+        let registers = match signature.result_param() {
+            | Some(ParamAbi::Registers(registers)) => Some(registers),
+            | _ => None,
+        };
+        if registers.is_some() {
+            write!(self.out, "%{inst}.ret = ")?;
+        }
+        write!(self.out, "call {} ", result_type(signature))?;
         if function_type {
-            write!(self.out, "{} ", parameter_types(signature))?;
+            write!(self.out, "{} ", parameter_types(signature, false))?;
         }
         write!(self.out, "{callee}(")?;
         let mut separator = "";
-        for &arg in args {
-            write!(self.out, "{separator}{}", values.typed(arg))?;
+        for (index, &arg) in args.iter().enumerate() {
+            if !passed(signature, index) {
+                continue;
+            }
+            let abi = signature.param_abi(index);
+            let ty = type_name(values.body.value_type(arg));
+            write!(
+                self.out,
+                "{separator}{ty}{} {}",
+                attributes(abi),
+                values.operand(arg)
+            )?;
             separator = ", ";
         }
-        self.out.write_str(")")
+        self.out.write_str(")")?;
+        if let (Some(registers), Some(&area)) = (registers, args.first()) {
+            write!(
+                self.out,
+                "\n  store {} %{inst}.ret, {}, align {}",
+                registers_type(registers),
+                values.typed(area),
+                registers.align.bytes()
+            )?;
+        }
+        Ok(())
     }
 
     /// A call of a `void` intrinsic, which the module then declares.

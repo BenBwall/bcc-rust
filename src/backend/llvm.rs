@@ -20,6 +20,14 @@
 //!   `may_overlap`, and `fill` calls `llvm.memset`; the `va_*` operations call
 //!   `llvm.va_start`, `llvm.va_copy` and `llvm.va_end`, and `va_arg` is LLVM's
 //!   `va_arg`.
+//! - Aggregate parameters print as ABI lowering decided: `byval` and `sret`
+//!   become `ptr byval([N x i8]) align A` and `ptr sret([N x i8]) align A`, on
+//!   parameters and call arguments alike. A `registers` return area is not a
+//!   parameter: the function returns the registers (`{ i64, double }` or one
+//!   type), its entry block allocates the area under the parameter's name, and
+//!   `return` loads the registers from it; a call names its result `%instN.ret`
+//!   and stores it to the area the IR passes. A module that still uses a
+//!   pre-ABI aggregate signature is refused.
 //! - A global's contents are `[N x i8]`, or, when it holds address constants, a
 //!   packed struct `<{ [k x i8], ptr, ... }>` that alternates byte runs with
 //!   the relocated pointers (`getelementptr (i8, ptr @sym, i64 addend)` when
@@ -78,7 +86,11 @@ pub(crate) use driver::{
 pub(crate) use target::data_layout;
 
 use crate::{
-    ir::Module,
+    ir::{
+        InstData,
+        Module,
+        SigId,
+    },
     target::Target,
     util::bump::Bump,
 };
@@ -97,6 +109,9 @@ pub(crate) fn emit_module<'m>(
             module:    module.triple(),
             requested: target.triple(),
         });
+    }
+    if uses_pre_abi_signature(module) {
+        return Err(EmitError::NotAbiLowered);
     }
     let mut emitter = Emitter {
         module,
@@ -124,6 +139,29 @@ pub(crate) fn emit_module<'m>(
     }
     emitter.intrinsic_declarations()?;
     Ok(())
+}
+
+/// Whether a function or an indirect call uses a signature that still
+/// passes structures the pre-ABI way. ABI lowering leaves the signatures it
+/// replaced interned, so only those in use count.
+fn uses_pre_abi_signature(module: &Module<'_>) -> bool {
+    let pre_abi = |sig: SigId| {
+        module
+            .signature(sig)
+            .aggregates
+            .iter()
+            .any(|param| param.abi.is_pre_abi())
+    };
+    module.functions().any(|(_, function)| {
+        pre_abi(function.signature)
+            || function.body.as_ref().is_some_and(|body| {
+                body.blocks().any(|block| {
+                    body.block_insts(block).iter().any(|&inst| {
+                        matches!(*body.inst(inst), InstData::CallIndirect { sig, .. } if pre_abi(sig))
+                    })
+                })
+            })
+    })
 }
 
 /// The printer's state: the module, the output, and the intrinsics used so
@@ -194,6 +232,10 @@ pub(crate) enum EmitError<'m> {
         module:    &'m str,
         requested: &'static str,
     },
+    /// A signature still passes structures or unions in the pre-ABI way,
+    /// which only ABI lowering turns into the target's convention.
+    #[error("the module passes structures by value before ABI lowering")]
+    NotAbiLowered,
     /// Two relocations of a global share bytes; the verifier only checks
     /// that each fits.
     #[error("@{global}: the relocations at offsets {first} and {second} overlap")]
