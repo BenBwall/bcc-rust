@@ -916,7 +916,7 @@ in `target/INT128_COMMITS.md`; no commits or pushes were made.
 
 ## C11 atomics (2026-10-09)
 
-`atomics.rs` owns the type-generic intrinsic classification and checking.
+`builtins/atomics.rs` owns the type-generic intrinsic classification and checking.
 `TypeKind::Atomic(TypeId)` preserves identity independently of cv/restrict
 qualifiers. Eligibility is checked after the work stack resolves the operand
 type. Compatibility descends through atomic nodes with explicit continuations.
@@ -1080,7 +1080,7 @@ reject Boolean operands.
 
 `__builtin_shufflevector`, `__builtin_convertvector`, `__builtin_bit_cast` and
 the overloaded elementwise/nontemporal builtins used by the resources have
-operand-dependent typing. `x86_builtin_table.rs` declares 384 x86 builtins and two population-count builtins from
+operand-dependent typing. `builtins/x86_builtin_table.rs` declares 384 x86 builtins and two population-count builtins from
 canonical Clang call signatures, with constant-operand positions and immediate
 ranges (including gather scale choices). `scripts/generate_x86_builtins.py`
 derives the catalog from names called by the shipped headers, queries Clang's
