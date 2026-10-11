@@ -74,22 +74,22 @@ arms below differ only in who optimizes; LLVM's code generator is shared
 
 | Arm | Middle end | LLVM invocation | Question it answers |
 | --- | --- | --- | --- |
-| A0 | none | `clang -O0 x.ll` | baseline |
-| N | none | `clang -O2 -Xclang -disable-llvm-passes x.ll` | codegen-only control on unoptimized bcc IR |
-| A1 | bcc pipeline | `clang -O2 -Xclang -disable-llvm-passes x.ll` | our optimizer alone, LLVM codegen |
-| A2 | none | `clang -O2 x.ll` | LLVM's optimizer alone on our IR |
-| A3 | bcc pipeline | `clang -O2 x.ll` | does our optimizer help or hurt LLVM |
+| A0 | none | `default<O0>`, O0 machine | baseline |
+| N | none | no IR passes, O2 machine | codegen-only control on unoptimized bcc IR |
+| A1 | bcc pipeline | no IR passes, O2 machine | our optimizer alone, LLVM codegen |
+| A2 | none | `default<O2>`, O2 machine | LLVM's optimizer alone on our IR |
+| A3 | bcc pipeline | `default<O2>`, O2 machine | does our optimizer help or hurt LLVM |
 | R | clang front end | `clang -O2 x.c` | reference ceiling |
 
 A1/N isolates what our optimizer adds on top of LLVM's code generator;
 N/A2 measures the work left to it. A ratio below 1 means the numerator arm
 is faster.
 
-`-Xclang -disable-llvm-passes` keeps the `-O2` code generator but runs no IR
-pass; the integration note verified it on the pinned clang. It is a clang
-internal option, so the harness checks it on each LLVM upgrade. The LLVM printer
-must emit the same facts (`nsw`, `inbounds`, alignment, `noalias`, TBAA) in every
-arm, or the arms measure different inputs.
+`--llvm-codegen-only` skips `LLVMRunPasses` entirely while the target machine
+keeps the selected optimization level. Otherwise LLVM-C runs the new pass
+manager's `default<O0|O1|O2|O3>`. All arms share the same module construction,
+target machine CPU/features, flags and ABI attributes. Access tags remain
+unmapped until the IR has a TBAA descriptor table.
 
 Lowering builds SSA for non-address-taken scalars directly (see below). Clang's
 own front end instead emits every local as an `alloca` and lets LLVM's SROA
@@ -600,27 +600,30 @@ pub(crate) trait Backend {
 
 ### LLVM back end
 
-The integration note recommends staged access to LLVM, and the prototype takes
-the first stage:
+The backend constructs LLVM 23.1.1 modules directly through `llvm-sys` 231.0.1
+and the scoped wrappers in `src/backend/llvm/api.rs`. LLVM verifies the module
+before optimization; the new pass manager runs the requested default pipeline,
+then the target machine emits an object (or assembly) into an LLVM-owned memory
+buffer. `--emit=llvm` prints the constructed module using
+`LLVMPrintModuleToString`. The handwritten printer and `.ll` compile process
+are gone. Final executable linking still uses bundled clang/LLD.
 
-1. **Textual `.ll` handed to the bundled clang** (prototype). The pinned
-   `target/llvm/bin/clang` accepts `.ll` input, honours `-O0`/`-O2` and
-   `-disable-llvm-passes`, verifies the IR, and links with the same sysroot and
-   `lld` the repository already uses. No LLVM library is linked into the
-   compiler, so the arena rules hold. Process start-up costs about 0.4 s and text
-   parsing about 7% of a full `-O2` run; the harness times them separately.
-2. **`opt`/`llc` in the LLVM distribution build**, when the experiments need
-   custom pass lists (`opt -passes=...`) or a strictly IR-pass-free `llc -O0`.
-3. **In-process LLVM-C**, only if text overhead dominates measurements. On the
-   Windows GNU host this needs a MinGW-ABI build of the LLVM libraries, because
-   the cached ones are built with MSVC.
+Each target retains its triple and data layout. Block parameters become phis;
+all blocks and phis exist before instructions, and incoming edges are attached
+last, including duplicate terminator edges. Stack slots become entry allocas,
+`ptr_add` becomes byte GEP with its inbounds flag, arithmetic flags survive
+construction, and memory/varargs operations use overloaded LLVM intrinsics.
+Calls and declarations share byval, sret, alignment and narrow integer
+extension attributes. Register aggregate returns retain their return areas.
+Globals with relocations use packed structures with exact byte offsets.
 
-The mapping is mechanical: each module becomes one `.ll` file with the target's
-`target triple` and `target datalayout`; block parameters become phis at block
-entry with incoming values added once all blocks exist; stack slots become
-entry-block `alloca`s; `ptr_add inbounds` becomes `getelementptr inbounds i8`;
-flags map one-to-one; access tags become `!tbaa` metadata; `copy` and `fill`
-become `llvm.memcpy`/`llvm.memmove`/`llvm.memset`.
+Windows GNU needs a separate GNU-ABI static library build in `target/llvm-libs`:
+the shared MSVC-built `target/llvm` remains untouched. Bundled clang/clang++
+use the located MinGW sysroot and its static C++/pthread runtime. The build
+script queries the installed `llvm-config` for the link closure. Binding-only
+llvm-sys features avoid Cargo's dependency/bootstrap ordering problem. Linux
+source tool distributions include libraries and llvm-config, and compatible
+prebuilt installations can supply both directly.
 
 ### Interpreter
 
@@ -661,13 +664,13 @@ bcc-rust x.c --emit=ir              print the bcc IR (after the optimizer, if it
 bcc-rust x.c --emit=ir-abi          print the bcc IR after ABI lowering
 bcc-rust x.c --emit=llvm            print the LLVM IR
 bcc-rust x.c --interpret            run main in the interpreter; exit with its status
-bcc-rust x.c -o x.exe [-c]          build an executable (or an object) through clang
+bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with clang
     [--opt=none|bcc]                the bcc optimizer; none is the default
     [--passes=fold,dce,simplify-cfg] an explicit pass list, run once (implies bcc)
     [--opt-bisect-limit=N]          apply only the first N rewrites (implies bcc)
     [--print-after-all]             each function after every pass, to stderr
-    [--llvm-opt=none|O0|O1|O2|O3]   clang's -O level; none passes no flag
-    [--llvm-codegen-only]           add -Xclang -disable-llvm-passes
+    [--llvm-opt=none|O0|O1|O2|O3]   LLVM pipeline and machine level; none means O0
+    [--llvm-codegen-only]           skip LLVM IR passes; retain machine level
 bcc-rust --print-default-passes     print the default pass list and exit
 ```
 
@@ -739,7 +742,7 @@ itself. Windows inliner measurements and validation are recorded in
 ## Open questions
 
 - Byte-offset `getelementptr i8` versus typed GEPs: measure LLVM's response on
-  one benchmark before settling the printer.
+  one benchmark before introducing typed GEP construction.
 - Multi-result values versus a pair projection for post-ABI calls returning two
   registers: ABI lowering avoids both for now with return areas
   (`registers(...)`); revisit when a native back end wants the registers as

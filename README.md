@@ -6,8 +6,8 @@ subset, plus GNU and opt-in MSVC extensions. Its non-recursive language parser
 builds syntax trees; semantic analysis covers declarations, expressions,
 initializers, statements and functions. A prototype middle end lowers a subset
 of C (integers, pointers, arrays, structures, calls and the C statements) to its
-own IR, optimizes it, interprets it, and builds executables through the bundled
-clang; see [middle-end.md](middle-end.md).
+own IR, optimizes it, interprets it, and builds executables through LLVM-C and the bundled
+linker; see [middle-end.md](middle-end.md).
 
 See [language-standards.md](language-standards.md) for language modes, extension
 flags, shared configuration, implementation details and remaining semantic
@@ -45,8 +45,9 @@ Every back end receives the module after ABI lowering, which fixes how the
 module before it, as the optimizer leaves it, and `--emit=ir-abi` after it.
 `--interpret` prints what the program writes and exits with `main`'s status
 (or `exit`'s), 70 when the interpreter stops the program for undefined
-behaviour or an unsupported operation, and 134 on `abort`. `-o` writes the LLVM
-IR to a temporary file and runs the bundled `target/llvm/bin/clang`; linking
+behaviour or an unsupported operation, and 134 on `abort`. `-o` builds the LLVM
+module in-process with LLVM-C, verifies it, and emits an object; the bundled
+`target/llvm/bin/clang` drives only final executable linking. Linking
 needs the C library of the `--target`, so pass the host's triple (the default
 target is `x86_64-unknown-linux-gnu`). `--opt=bcc` runs the bcc optimizer
 (off by default); `--passes=fold,dce,...` runs a pass list once,
@@ -54,8 +55,8 @@ target is `x86_64-unknown-linux-gnu`). `--opt=bcc` runs the bcc optimizer
 each function to stderr after every pass, each implying `--opt=bcc`.
 `bcc-rust --print-default-passes` prints the default pass list in `--passes`
 syntax (it needs no input file), so scripts need not keep a copy.
-`--llvm-opt=none|O0|O1|O2|O3` selects clang's level and `--llvm-codegen-only`
-adds `-Xclang -disable-llvm-passes`, so `--opt=bcc --llvm-opt=O2
+`--llvm-opt=none|O0|O1|O2|O3` selects the LLVM IR pipeline and code-generation level and `--llvm-codegen-only`
+runs no LLVM IR passes, so `--opt=bcc --llvm-opt=O2
 --llvm-codegen-only` is comparison arm A1 of
 [middle-end.md](middle-end.md#comparison-arms). Errors, constructs lowering
 does not support yet (such as variable length arrays) and clang failures exit
@@ -117,7 +118,12 @@ This is not yet a production-ready or conforming C99 compiler.
   LLVM; later builds reuse the Ninja cache under ignored `target/llvm/`.
 - For Windows GNU, MinGW headers. The build finds the installation through
   `gcc.exe` on `PATH`, or accepts `MINGW_ROOT` explicitly. GCC does not compile
-  the C helper. For MSVC, the Visual Studio C headers and SDK are required.
+  the C helper. MinGW must also supply G++ headers and static `libstdc++.a`,
+  `libgcc_eh.a` and `libwinpthread.a`. A separate library-only LLVM build
+  uses bundled Clang with the GNU ABI in `target/llvm-libs`, never the MSVC
+  libraries in the tool cache. The cold build takes several minutes with
+  eight jobs and about 1 GB of extra build/install storage on this host; later builds reuse the stamped
+  installation. For MSVC, the Visual Studio C headers and SDK are required.
 - On Linux, the target's static C runtime development libraries. Instead of
   building LLVM, a Linux host can use LLVM's official prebuilt release of the
   same version (`LLVM-23.1.1-Linux-X64` from the `llvmorg-23.1.1` GitHub
@@ -128,7 +134,8 @@ This is not yet a production-ready or conforming C99 compiler.
   toolchain's `lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld`, which is
   LLD 23.1.1 from the same LLVM revision as rustc. The build uses only
   `clang`, `llvm-ar`, `ld.lld`, `libclang`, and Clang's resource headers from
-  the release.
+  the release. LLVM-C additionally uses its static LLVM libraries and
+  `llvm-config`; distributions without them need the source library build.
 - Nightly Rustfmt for the repository's unstable formatting options.
 - A 64-bit host and target. Every arena and growable compiler buffer
   reserves 100 GiB of address space, which costs no memory until it is
@@ -237,6 +244,19 @@ matching Clang/LLD driver and requests a static CRT; MSVC also requests a static
 CRT. The complete build and executable verification have been exercised on
 `x86_64-pc-windows-gnu`; Linux and MSVC configurations require validation on
 their respective hosts.
+
+The backend uses `llvm-sys` 231.0.1 declarations and a thin scoped LLVM-C
+wrapper. Cargo runs dependency build scripts first, so llvm-sys's
+`no-llvm-linking` and `disable-alltargets-init` features let our build script
+bootstrap the installation, then query `llvm-config --link-static --libnames`
+for Core, Passes and X86 code generation. On Linux the tool installation
+includes those libraries and `llvm-config`, so CI reuses its existing cache.
+On Windows GNU, bundled `clang++ --target=x86_64-w64-windows-gnu` uses the
+MinGW sysroot found through `MINGW_ROOT` or `gcc.exe` on PATH. Static runtime
+archives are located with that GCC's `-print-file-name`; emulated TLS matches
+GCC's libstdc++. LLVM's own allocations use the C++ heap; Rust compilation
+buffers still use arenas. LLVM owners live outside arenas and dispose their
+objects on every return path.
 
 libclang is loaded only by the binding generator during the build. It is not
 linked into the resulting executable. Rust's `llvm-tools` component supplies

@@ -2,6 +2,20 @@ Research date: 2026-10-11.
 
 # Driving LLVM from bcc-rust for optimizer comparisons
 
+## Status (2026-10-11)
+
+The owner selected option C using `llvm-sys` 231.0.1. The backend now constructs
+and verifies modules through LLVM-C, runs `LLVMRunPasses` default pipelines,
+and emits objects in memory; clang remains only the executable link driver.
+Windows GNU builds a separate static X86 LLVM installation in
+`target/llvm-libs` with bundled clang++ and MinGW's static libstdc++/winpthread,
+including emulated TLS to match GCC. Linux reuses compatible installed static
+libraries and llvm-config. Binding-only llvm-sys features let this crate's
+build script bootstrap and link LLVM without a Cargo dependency ordering race.
+The investigation below records the earlier text-driver prototype and the
+tradeoffs that led to this implementation; its unattempted-build statements
+and CLI workaround describe that earlier state.
+
 ## Question and short answer
 
 bcc-rust will grow its own middle-end IR and optimizer. The owner also wants
