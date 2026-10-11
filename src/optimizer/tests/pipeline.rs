@@ -142,8 +142,9 @@ fn code_that_is_already_minimal_is_returned_unchanged() {
     assert_pipeline(tests_loop::COUNT_LOOP, tests_loop::COUNT_LOOP);
 }
 
-mod tests_loop {
-    pub(super) const COUNT_LOOP: &str = "\
+#[test]
+fn a_constant_in_a_loop_moves_to_its_preheader() {
+    let input = "\
 function @count(i32) -> i32 external {
     slot0 = stack_slot 4, align 4
 block0(v0: i32):
@@ -159,6 +160,29 @@ block2:
     jump block1(v7, v5)
 block3:
     return v3
+}
+";
+    assert_pipeline(input, tests_loop::COUNT_LOOP);
+}
+
+mod tests_loop {
+    /// The loop of the middle-end plan, with its constant already hoisted.
+    pub(super) const COUNT_LOOP: &str = "\
+function @count(i32) -> i32 external {
+    slot0 = stack_slot 4, align 4
+block0(v0: i32):
+    v1 = iconst.i32 0
+    v2 = iconst.i32 1
+    jump block1(v1, v1)
+block1(v3: i32, v4: i32):
+    v5 = icmp.i32 slt v3, v0
+    brif v5, block2, block3
+block2:
+    v6 = iadd.i32 nsw v4, v3
+    v7 = iadd.i32 nsw v3, v2
+    jump block1(v7, v6)
+block3:
+    return v4
 }
 ";
 }
@@ -439,7 +463,7 @@ fn print_after_all_prints_even_when_a_pass_changes_nothing() {
 #[test]
 fn the_report_counts_rewrites_and_times_passes() {
     // A dead loop for `fold`, `simplify-cfg` and `dce`, then a live one with
-    // a repeated product for `gvn`.
+    // a repeated invariant product for `gvn` and `licm`.
     let input = "\
 function @f(i32) -> i32 external {
 block0(v0: i32):

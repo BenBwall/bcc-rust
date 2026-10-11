@@ -11,9 +11,10 @@
 //! once the function is done (or earlier, when the verifier or a printer
 //! asks to see the function after a pass).
 //!
-//! The default pipeline is `fold`, `simplify-cfg`, `gvn`, `dce` (dead code
-//! last, so it sweeps what the others leave), repeated until a round changes
-//! nothing or [`MAX_ROUNDS`] rounds have run. An explicit
+//! The default pipeline is `fold`, `simplify-cfg`, `gvn`, `licm`, `dce`
+//! (value numbering before code motion, so one copy of a repeated invariant
+//! moves, and dead code last, so it sweeps what the others leave), repeated
+//! until a round changes nothing or [`MAX_ROUNDS`] rounds have run. An explicit
 //! `--passes=` list runs once, in the order given. Every rewrite first asks
 //! [`OptimizationReport::allow`], which counts rewrites globally and refuses
 //! them all once the bisect limit is reached, so `--opt-bisect-limit=N`
@@ -48,11 +49,14 @@
 //! - Working copy: `draft.rs` lifts and edits a function; `draft/analysis.rs`
 //!   computes reachability, ordering, predecessors, use counts and the
 //!   control-flow graph; `draft/lower.rs` writes the body back.
+//! - Analyses: `loops.rs` finds natural loops and their nesting from the
+//!   dominator tree.
 //! - Passes: `fold.rs` (with `fold/eval.rs`, exact integer evaluation),
-//!   `dce.rs`, `simplify_cfg.rs` and `gvn.rs` (value numbering over the
-//!   dominator tree).
-//! - `tests.rs` and `tests/` exercise each pass on textual IR and the pipeline
-//!   as a whole.
+//!   `dce.rs`, `simplify_cfg.rs`, `gvn.rs` (value numbering over the dominator
+//!   tree) and `licm.rs` (loop-invariant code motion).
+//! - `tests.rs` and `tests/` exercise each pass on textual IR, the pipeline as
+//!   a whole, and run programs in the interpreter before and after `gvn` and
+//!   `licm`.
 //!
 //! The optimizer implements the IR's semantics, not C's; where a rule exists
 //! because of C (signed overflow is undefined, so `nsw` results may be
@@ -70,10 +74,14 @@ mod report;
 // Working copy
 mod draft;
 
+// Analyses
+mod loops;
+
 // Passes
 mod dce;
 mod fold;
 mod gvn;
+mod licm;
 mod simplify_cfg;
 
 // Tests
@@ -219,6 +227,7 @@ fn run_pass(
         | Pass::Dce => dce::run(draft, report),
         | Pass::SimplifyCfg => simplify_cfg::run(draft, report),
         | Pass::Gvn => gvn::run(draft, report),
+        | Pass::Licm => licm::run(draft, report),
     };
     report.end_pass(pass, start.elapsed());
     #[cfg(test)]

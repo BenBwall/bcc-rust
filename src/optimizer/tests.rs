@@ -1,12 +1,16 @@
-//! Tests for the optimizer: each pass on textual IR, then the pipeline.
+//! Tests for the optimizer: each pass and the loop analysis on textual IR,
+//! then the pipeline, then programs run in the interpreter before and after.
 //!
 //! A test parses IR text, verifies it, runs the optimizer, verifies the
 //! result, and compares the printed result with the expected text. After a
 //! pass, the printed values are numbered from 0 in listing order.
 
 mod dce;
+mod equivalence;
 mod fold;
 mod gvn;
+mod licm;
+mod loops;
 mod options;
 mod pipeline;
 mod simplify_cfg;
