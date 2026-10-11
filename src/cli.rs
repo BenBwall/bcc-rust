@@ -34,8 +34,6 @@ mod token;
 // Measurements
 mod measured;
 
-#[cfg(test)]
-use std::fmt::Write as _;
 use std::path::Path;
 
 use arguments::{

@@ -1,6 +1,9 @@
-use std::io::{
-    self,
-    Write,
+use std::{
+    fmt::Write as _,
+    io::{
+        self,
+        Write,
+    },
 };
 
 use super::{

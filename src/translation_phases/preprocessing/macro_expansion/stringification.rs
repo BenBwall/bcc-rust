@@ -8,7 +8,7 @@ use std::{
     ops::ControlFlow,
 };
 
-use super::find_argument;
+use super::arguments::find_argument;
 use crate::{
     translation_phases::{
         Context,

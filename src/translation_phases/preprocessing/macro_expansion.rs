@@ -51,7 +51,6 @@ mod stringification;
 
 use std::fmt::Debug;
 
-use arguments::find_argument;
 pub(crate) use arguments::{
     FunctionLikeMacroArgument,
     MacroArguments,

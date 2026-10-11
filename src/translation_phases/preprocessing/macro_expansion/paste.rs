@@ -10,7 +10,7 @@ use std::ops::RangeBounds;
 use super::{
     HashHash,
     MacroArguments,
-    find_argument,
+    arguments::find_argument,
 };
 use crate::{
     configuration::Feature,

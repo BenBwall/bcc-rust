@@ -79,10 +79,8 @@ mod inspection;
 use std::cell::Cell;
 
 pub(crate) use builtins::{
-    atomics::modeled as atomic_builtin,
     implemented_builtin,
     named_builtin,
-    x86_builtins,
 };
 use collection::Collection;
 use declarations::compatible_enum_type;

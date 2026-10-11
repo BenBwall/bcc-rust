@@ -9,7 +9,7 @@ use std::cell::OnceCell;
 use super::{
     FunctionLikeMacroArgument,
     MacroArguments,
-    find_argument,
+    arguments::find_argument,
 };
 use crate::{
     configuration::Feature,

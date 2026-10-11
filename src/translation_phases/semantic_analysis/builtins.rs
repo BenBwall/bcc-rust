@@ -32,7 +32,7 @@ pub(super) mod atomics;
 
 // Target signatures and operands
 mod x86_builtin_table;
-pub(crate) mod x86_builtins;
+mod x86_builtins;
 
 pub(crate) use modeled as implemented_builtin;
 pub(crate) use names::named_builtin;
