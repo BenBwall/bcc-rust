@@ -298,6 +298,9 @@ Later gaps (initializer placement plans, static address constants, VLA extents,
 builtin result types, bit-field storage units) are scheduled with the features
 that need them.
 
+Status: items 1-6 are done; [semantic-analysis.md](semantic-analysis.md)
+describes the retained interfaces.
+
 ### Algorithm
 
 Lowering walks each function body with an explicit work stack, like semantic
