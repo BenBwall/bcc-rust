@@ -20,68 +20,6 @@ use super::{
     },
 };
 
-/// GNU attributes extend C99 declaration specifiers. Only names at
-/// attribute-list depth count; identifiers in parenthesized arguments do not.
-/// C99: §6.7, p. 97; PDF p. 109 (GNU attribute extension).
-/// GNU extension: GCC manual, "Attribute Syntax".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
-fn attribute_names<'a>(
-    a: &'a AttributeSpecifier<'_>,
-    context: &'a super::Context<'_>,
-) -> impl Iterator<Item = (usize, &'a str)> {
-    let level = match a
-        .tokens
-        .first()
-        .map(|t| context.string_cache.at(t.contents).trim_matches('_'))
-    {
-        | Some("attribute") => 2,
-        | Some("declspec") => 1,
-        | _ => 0,
-    };
-    let mut depth = 0usize;
-    a.tokens.iter().enumerate().filter_map(move |(i, token)| {
-        let spelling = context
-            .string_cache
-            .at(token.contents)
-            .trim_end_matches('\0');
-        match spelling {
-            | "(" => {
-                depth += 1;
-                None
-            },
-            | ")" => {
-                depth = depth.saturating_sub(1);
-                None
-            },
-            | _ if depth == level => Some((i, spelling.trim_matches('_'))),
-            | _ => None,
-        }
-    })
-}
-
-/// GNU construction and alignment suffixes apply to the declared type.
-/// C99: §6.7, p. 97; PDF p. 109 (GNU attribute extension).
-/// GNU extension: GCC manual, "Vector Extensions".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
-/// GNU extension: GCC manual, "Attribute Syntax".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
-pub(super) fn declared_type_attribute(
-    a: &AttributeSpecifier<'_>,
-    context: &super::Context<'_>,
-) -> bool {
-    attribute_names(a, context).any(|(_, name)| matches!(name, "vector_size" | "aligned"))
-}
-
-pub(super) fn constructs_vector(a: &AttributeSpecifier<'_>, context: &super::Context<'_>) -> bool {
-    attribute_names(a, context).any(|(_, name)| name == "vector_size")
-}
-
-/// Clang `__builtin_shufflevector` implementation identity.
-/// <https://clang.llvm.org/docs/LanguageExtensions.html#builtin-shufflevector>
-pub(super) fn named_builtin(name: &str) -> bool {
-    name == "__builtin_shufflevector"
-}
-
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Group vector construction before alignment-only attributes,
     /// independently of which syntax attribute list carries them.
@@ -110,6 +48,187 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         ty
+    }
+
+    /// Checks and types element-wise vector operators and comparisons.
+    /// GNU extension: GCC manual, "Vector Extensions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
+    pub(super) fn vector_binary(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        op: BinaryOperator,
+        left: ExpressionInfo<'tu>,
+        right: ExpressionInfo<'tu>,
+    ) -> Option<ExpressionInfo<'tu>> {
+        use BinaryOperator as B;
+        // C11 §6.3.2.1p2, p. 54; PDF p. 72: value conversion removes
+        // atomicity. Keep the original left category for assignment checks.
+        let lt = self.types.non_atomic(left.ty);
+        let rt = self.types.non_atomic(right.ty);
+        let lv = self.vector(lt);
+        let rv = self.vector(rt);
+        if lv.is_none() && rv.is_none() {
+            return None;
+        }
+        if op == B::Comma {
+            return Some(Self::expression_result(e, rt.unqualified()));
+        }
+        if op == B::Subscript {
+            if let Some((element, _, _)) = lv
+                && self.integer_type(rt).is_some()
+            {
+                let element = element.qualified(left.ty.qualifiers);
+                let mut result = Self::expression_result(e, element);
+                result.category = if left.category == ValueCategory::Rvalue
+                    || matches!(self.types.nodes[left.ty.index], TypeKind::Atomic(_))
+                {
+                    ValueCategory::Rvalue
+                } else if element.qualifiers.contains(TypeQualifiers::CONST) {
+                    ValueCategory::Lvalue
+                } else {
+                    left.category
+                };
+                // Clang disallows taking the address of a vector element.
+                result.register = left.register;
+                return Some(result);
+            }
+            return Some(self.vector_error(e));
+        }
+        let assignment = matches!(
+            op,
+            B::Assignment
+                | B::AdditionAssignment
+                | B::SubtractionAssignment
+                | B::MultiplicationAssignment
+                | B::DivisionAssignment
+                | B::ModuloAssignment
+                | B::BitwiseAndAssignment
+                | B::BitwiseOrAssignment
+                | B::BitwiseXorAssignment
+                | B::LeftShiftAssignment
+                | B::RightShiftAssignment
+        );
+        if assignment && left.category != ValueCategory::ModifiableLvalue {
+            return Some(self.vector_error(e));
+        }
+        if op == B::Assignment {
+            return Some(if self.vector_assignment(lt, rt) {
+                Self::expression_result(e, lt.unqualified())
+            } else {
+                self.vector_error(e)
+            });
+        }
+        let (element, count, align) = lv.or(rv)?;
+        let valid = match (lv, rv) {
+            | (Some(_), Some(_)) => self.vector_assignment(lt, rt),
+            // Clang's GNU scalar splat form requires an ordinary vector;
+            // atomic vector values still work with another vector operand.
+            | (Some(_), None) =>
+                !matches!(self.types.nodes[left.ty.index], TypeKind::Atomic(_))
+                    && self.vector_splat(element, ExpressionInfo { ty: rt, ..right }),
+            | (None, Some(_)) =>
+                !assignment
+                    && !matches!(self.types.nodes[right.ty.index], TypeKind::Atomic(_))
+                    && self.vector_splat(element, ExpressionInfo { ty: lt, ..left }),
+            | _ => false,
+        };
+        // GNU lane-wise extension of C99 §6.5.5p2, §6.5.7p2 and §6.5.10p2:
+        // both vector operands must have integer elements; shifts pair lanes.
+        let integer = self.integer_type(element).is_some()
+            && lv.is_none_or(|v| self.integer_type(v.0).is_some())
+            && rv.is_none_or(|v| self.integer_type(v.0).is_some());
+        let lanes_match = !matches!(
+            op,
+            B::LeftShift | B::RightShift | B::LeftShiftAssignment | B::RightShiftAssignment
+        ) || lv.zip(rv).is_none_or(|(a, b)| a.1 == b.1);
+        let allowed = match op {
+            | B::Addition
+            | B::Subtraction
+            | B::Multiplication
+            | B::Division
+            | B::AdditionAssignment
+            | B::SubtractionAssignment
+            | B::MultiplicationAssignment
+            | B::DivisionAssignment
+            | B::Equal
+            | B::NotEqual
+            | B::LessThan
+            | B::LessThanOrEqual
+            | B::GreaterThan
+            | B::GreaterThanOrEqual => true,
+            | B::Modulo
+            | B::LeftShift
+            | B::RightShift
+            | B::BitwiseAnd
+            | B::BitwiseOr
+            | B::BitwiseXor
+            | B::ModuloAssignment
+            | B::LeftShiftAssignment
+            | B::RightShiftAssignment
+            | B::BitwiseAndAssignment
+            | B::BitwiseOrAssignment
+            | B::BitwiseXorAssignment => integer,
+            | _ => false,
+        };
+        if !valid || !allowed || !lanes_match {
+            return Some(self.vector_error(e));
+        }
+        let comparison = matches!(
+            op,
+            B::Equal
+                | B::NotEqual
+                | B::LessThan
+                | B::LessThanOrEqual
+                | B::GreaterThan
+                | B::GreaterThanOrEqual
+        );
+        let result_element = if comparison {
+            let size = self.types.layout(element)?.size;
+            self.types.scalar(match size {
+                | 1 => Scalar::SignedChar,
+                | 2 => Scalar::Short,
+                | 4 => Scalar::Int,
+                | 8 => Scalar::LongLong,
+                | 16 => Scalar::Int128,
+                | _ => return Some(self.vector_error(e)),
+            })
+        } else {
+            element
+        };
+        let ty = self.types.intern(TypeKind::Vector {
+            element: result_element,
+            count,
+            align: if comparison {
+                self.types
+                    .layout(result_element)?
+                    .size
+                    .checked_mul(count)?
+                    .checked_next_power_of_two()?
+            } else {
+                align
+            },
+        });
+        let operand_ty = self.types.intern(TypeKind::Vector {
+            element,
+            count,
+            align,
+        });
+        self.convert(left.expression, operand_ty, ConversionKind::Arithmetic);
+        self.convert(right.expression, operand_ty, ConversionKind::Arithmetic);
+        Some(Self::expression_result(
+            e,
+            if assignment { lt.unqualified() } else { ty },
+        ))
+    }
+
+    /// Implementation choice: accepts vector assignment between equal byte
+    /// widths.
+    /// GNU extension: GCC manual, "Vector Extensions".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
+    pub(super) fn vector_assignment(&self, to: TypeId, from: TypeId) -> bool {
+        self.vector(to).is_some()
+            && self.vector(from).is_some()
+            && self.vector_width(to) == self.vector_width(from)
     }
 
     pub(super) fn vector(&self, ty: TypeId) -> Option<(TypeId, u64, u64)> {
@@ -379,16 +498,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Implementation choice: accepts vector assignment between equal byte
-    /// widths.
-    /// GNU extension: GCC manual, "Vector Extensions".
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
-    pub(super) fn vector_assignment(&self, to: TypeId, from: TypeId) -> bool {
-        self.vector(to).is_some()
-            && self.vector(from).is_some()
-            && self.vector_width(to) == self.vector_width(from)
-    }
-
     /// Checks whether a scalar can be broadcast to vector lanes without
     /// truncation.
     /// GNU extension: GCC manual, "Vector Extensions".
@@ -454,177 +563,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => return false,
         };
         source_precision <= precision
-    }
-
-    /// Checks and types element-wise vector operators and comparisons.
-    /// GNU extension: GCC manual, "Vector Extensions".
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
-    pub(super) fn vector_binary(
-        &mut self,
-        e: &'tu Expression<'tu>,
-        op: BinaryOperator,
-        left: ExpressionInfo<'tu>,
-        right: ExpressionInfo<'tu>,
-    ) -> Option<ExpressionInfo<'tu>> {
-        use BinaryOperator as B;
-        // C11 §6.3.2.1p2, p. 54; PDF p. 72: value conversion removes
-        // atomicity. Keep the original left category for assignment checks.
-        let lt = self.types.non_atomic(left.ty);
-        let rt = self.types.non_atomic(right.ty);
-        let lv = self.vector(lt);
-        let rv = self.vector(rt);
-        if lv.is_none() && rv.is_none() {
-            return None;
-        }
-        if op == B::Comma {
-            return Some(Self::expression_result(e, rt.unqualified()));
-        }
-        if op == B::Subscript {
-            if let Some((element, _, _)) = lv
-                && self.integer_type(rt).is_some()
-            {
-                let element = element.qualified(left.ty.qualifiers);
-                let mut result = Self::expression_result(e, element);
-                result.category = if left.category == ValueCategory::Rvalue
-                    || matches!(self.types.nodes[left.ty.index], TypeKind::Atomic(_))
-                {
-                    ValueCategory::Rvalue
-                } else if element.qualifiers.contains(TypeQualifiers::CONST) {
-                    ValueCategory::Lvalue
-                } else {
-                    left.category
-                };
-                // Clang disallows taking the address of a vector element.
-                result.register = left.register;
-                return Some(result);
-            }
-            return Some(self.vector_error(e));
-        }
-        let assignment = matches!(
-            op,
-            B::Assignment
-                | B::AdditionAssignment
-                | B::SubtractionAssignment
-                | B::MultiplicationAssignment
-                | B::DivisionAssignment
-                | B::ModuloAssignment
-                | B::BitwiseAndAssignment
-                | B::BitwiseOrAssignment
-                | B::BitwiseXorAssignment
-                | B::LeftShiftAssignment
-                | B::RightShiftAssignment
-        );
-        if assignment && left.category != ValueCategory::ModifiableLvalue {
-            return Some(self.vector_error(e));
-        }
-        if op == B::Assignment {
-            return Some(if self.vector_assignment(lt, rt) {
-                Self::expression_result(e, lt.unqualified())
-            } else {
-                self.vector_error(e)
-            });
-        }
-        let (element, count, align) = lv.or(rv)?;
-        let valid = match (lv, rv) {
-            | (Some(_), Some(_)) => self.vector_assignment(lt, rt),
-            // Clang's GNU scalar splat form requires an ordinary vector;
-            // atomic vector values still work with another vector operand.
-            | (Some(_), None) =>
-                !matches!(self.types.nodes[left.ty.index], TypeKind::Atomic(_))
-                    && self.vector_splat(element, ExpressionInfo { ty: rt, ..right }),
-            | (None, Some(_)) =>
-                !assignment
-                    && !matches!(self.types.nodes[right.ty.index], TypeKind::Atomic(_))
-                    && self.vector_splat(element, ExpressionInfo { ty: lt, ..left }),
-            | _ => false,
-        };
-        // GNU lane-wise extension of C99 §6.5.5p2, §6.5.7p2 and §6.5.10p2:
-        // both vector operands must have integer elements; shifts pair lanes.
-        let integer = self.integer_type(element).is_some()
-            && lv.is_none_or(|v| self.integer_type(v.0).is_some())
-            && rv.is_none_or(|v| self.integer_type(v.0).is_some());
-        let lanes_match = !matches!(
-            op,
-            B::LeftShift | B::RightShift | B::LeftShiftAssignment | B::RightShiftAssignment
-        ) || lv.zip(rv).is_none_or(|(a, b)| a.1 == b.1);
-        let allowed = match op {
-            | B::Addition
-            | B::Subtraction
-            | B::Multiplication
-            | B::Division
-            | B::AdditionAssignment
-            | B::SubtractionAssignment
-            | B::MultiplicationAssignment
-            | B::DivisionAssignment
-            | B::Equal
-            | B::NotEqual
-            | B::LessThan
-            | B::LessThanOrEqual
-            | B::GreaterThan
-            | B::GreaterThanOrEqual => true,
-            | B::Modulo
-            | B::LeftShift
-            | B::RightShift
-            | B::BitwiseAnd
-            | B::BitwiseOr
-            | B::BitwiseXor
-            | B::ModuloAssignment
-            | B::LeftShiftAssignment
-            | B::RightShiftAssignment
-            | B::BitwiseAndAssignment
-            | B::BitwiseOrAssignment
-            | B::BitwiseXorAssignment => integer,
-            | _ => false,
-        };
-        if !valid || !allowed || !lanes_match {
-            return Some(self.vector_error(e));
-        }
-        let comparison = matches!(
-            op,
-            B::Equal
-                | B::NotEqual
-                | B::LessThan
-                | B::LessThanOrEqual
-                | B::GreaterThan
-                | B::GreaterThanOrEqual
-        );
-        let result_element = if comparison {
-            let size = self.types.layout(element)?.size;
-            self.types.scalar(match size {
-                | 1 => Scalar::SignedChar,
-                | 2 => Scalar::Short,
-                | 4 => Scalar::Int,
-                | 8 => Scalar::LongLong,
-                | 16 => Scalar::Int128,
-                | _ => return Some(self.vector_error(e)),
-            })
-        } else {
-            element
-        };
-        let ty = self.types.intern(TypeKind::Vector {
-            element: result_element,
-            count,
-            align: if comparison {
-                self.types
-                    .layout(result_element)?
-                    .size
-                    .checked_mul(count)?
-                    .checked_next_power_of_two()?
-            } else {
-                align
-            },
-        });
-        let operand_ty = self.types.intern(TypeKind::Vector {
-            element,
-            count,
-            align,
-        });
-        self.convert(left.expression, operand_ty, ConversionKind::Arithmetic);
-        self.convert(right.expression, operand_ty, ConversionKind::Arithmetic);
-        Some(Self::expression_result(
-            e,
-            if assignment { lt.unqualified() } else { ty },
-        ))
     }
 
     #[cold]
@@ -780,4 +718,66 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         );
         Self::expression_result(e, self.types.unknown())
     }
+}
+
+/// GNU attributes extend C99 declaration specifiers. Only names at
+/// attribute-list depth count; identifiers in parenthesized arguments do not.
+/// C99: §6.7, p. 97; PDF p. 109 (GNU attribute extension).
+/// GNU extension: GCC manual, "Attribute Syntax".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+fn attribute_names<'a>(
+    a: &'a AttributeSpecifier<'_>,
+    context: &'a super::Context<'_>,
+) -> impl Iterator<Item = (usize, &'a str)> {
+    let level = match a
+        .tokens
+        .first()
+        .map(|t| context.string_cache.at(t.contents).trim_matches('_'))
+    {
+        | Some("attribute") => 2,
+        | Some("declspec") => 1,
+        | _ => 0,
+    };
+    let mut depth = 0usize;
+    a.tokens.iter().enumerate().filter_map(move |(i, token)| {
+        let spelling = context
+            .string_cache
+            .at(token.contents)
+            .trim_end_matches('\0');
+        match spelling {
+            | "(" => {
+                depth += 1;
+                None
+            },
+            | ")" => {
+                depth = depth.saturating_sub(1);
+                None
+            },
+            | _ if depth == level => Some((i, spelling.trim_matches('_'))),
+            | _ => None,
+        }
+    })
+}
+
+/// GNU construction and alignment suffixes apply to the declared type.
+/// C99: §6.7, p. 97; PDF p. 109 (GNU attribute extension).
+/// GNU extension: GCC manual, "Vector Extensions".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
+/// GNU extension: GCC manual, "Attribute Syntax".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+pub(super) fn declared_type_attribute(
+    a: &AttributeSpecifier<'_>,
+    context: &super::Context<'_>,
+) -> bool {
+    attribute_names(a, context).any(|(_, name)| matches!(name, "vector_size" | "aligned"))
+}
+
+pub(super) fn constructs_vector(a: &AttributeSpecifier<'_>, context: &super::Context<'_>) -> bool {
+    attribute_names(a, context).any(|(_, name)| name == "vector_size")
+}
+
+/// Clang `__builtin_shufflevector` implementation identity.
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#builtin-shufflevector>
+pub(super) fn named_builtin(name: &str) -> bool {
+    name == "__builtin_shufflevector"
 }

@@ -31,24 +31,6 @@ use super::{
 };
 use crate::util::bump::ArenaString;
 
-#[derive(Clone, Copy)]
-enum Part<'tu> {
-    Text(&'tu str),
-    Type(TypeId),
-    Function(&'tu [TypeId], bool, bool),
-}
-
-/// One inspected item of a scope, in discovery order within its table.
-#[derive(Clone, Copy)]
-enum Item {
-    Tag(usize),
-    Binding(usize),
-}
-
-/// Deeper nesting is shown by a `[depth=N]` prefix rather than more spaces,
-/// as in syntax inspection, so output stays linear in the item count.
-const MAXIMUM_INDENT: usize = 32;
-
 impl<'tu> SemanticTranslationUnit<'tu> {
     pub(crate) fn inspect<'d>(&self, context: &Context<'tu>, arena: &'d Bump) -> &'d str {
         let mut out = ArenaString::new_in(arena);
@@ -474,6 +456,24 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         }
     }
 }
+
+/// One inspected item of a scope, in discovery order within its table.
+#[derive(Clone, Copy)]
+enum Item {
+    Tag(usize),
+    Binding(usize),
+}
+
+#[derive(Clone, Copy)]
+enum Part<'tu> {
+    Text(&'tu str),
+    Type(TypeId),
+    Function(&'tu [TypeId], bool, bool),
+}
+
+/// Deeper nesting is shown by a `[depth=N]` prefix rather than more spaces,
+/// as in syntax inspection, so output stays linear in the item count.
+const MAXIMUM_INDENT: usize = 32;
 
 fn indent(out: &mut ArenaString<'_>, depth: usize) {
     for _ in 0..depth.min(MAXIMUM_INDENT) {

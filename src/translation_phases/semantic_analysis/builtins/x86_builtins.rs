@@ -15,17 +15,15 @@ use super::{
     x86_builtin_table::BUILTINS,
 };
 
-/// Used by semantic lookup and __`has_builtin`; no implicit unknown signatures.
-pub(crate) fn known(name: &str) -> bool {
-    BUILTINS.binary_search_by(|entry| entry.0.cmp(name)).is_ok()
-}
-
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Builds the declared result and parameter types of a recognized x86
     /// intrinsic.
     /// GNU extension: GCC manual, "x86 Built-in Functions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Built-in-Functions.html>
-    pub(super) fn x86_builtin_type(&mut self, name: super::Identifier) -> Option<TypeId> {
+    pub(in crate::translation_phases::semantic_analysis) fn x86_builtin_type(
+        &mut self,
+        name: super::Identifier,
+    ) -> Option<TypeId> {
         let i = BUILTINS
             .binary_search_by(|entry| entry.0.cmp(self.context.string_cache.at(name.name)))
             .ok()?;
@@ -97,7 +95,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GNU extension: GCC manual, "x86 Built-in Functions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Built-in-Functions.html>
     /// C99: §6.5.2.2 paragraph 7, p. 72; PDF p. 84.
-    pub(super) fn x86_immediates(
+    pub(in crate::translation_phases::semantic_analysis) fn x86_immediates(
         &mut self,
         function: ExpressionInfo<'tu>,
         args: super::ArenaList<'tu, &'tu Expression<'tu>>,
@@ -146,7 +144,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// a single C prototype. Retain the checked operand-dependent result.
     /// Clang extension: Clang Language Extensions, "Builtin Functions".
     /// <https://clang.llvm.org/docs/LanguageExtensions.html#builtin-functions>
-    pub(super) fn vector_overload(
+    pub(in crate::translation_phases::semantic_analysis) fn vector_overload(
         &mut self,
         e: &'tu Expression<'tu>,
         function: &'tu Expression<'tu>,
@@ -317,4 +315,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let ty = self.types.scalar(Scalar::Void);
         Self::expression_result(e, ty)
     }
+}
+
+/// Used by semantic lookup and __`has_builtin`; no implicit unknown signatures.
+pub(crate) fn known(name: &str) -> bool {
+    BUILTINS.binary_search_by(|entry| entry.0.cmp(name)).is_ok()
 }

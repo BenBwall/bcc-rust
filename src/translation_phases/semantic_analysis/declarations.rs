@@ -27,6 +27,7 @@ use super::{
     ScopeKind,
     SemanticErrorKind,
     SourceVectors,
+    SpecifierExtensionKind,
     StorageClass,
     StructOrUnion,
     Tag,
@@ -42,41 +43,6 @@ use super::{
         FieldPath,
     },
 };
-
-/// The x86-64 System V target ignores MSVC calling conventions.
-/// MSVC extension: Microsoft Learn, "Argument Passing and Naming Conventions".
-/// <https://learn.microsoft.com/en-us/cpp/cpp/argument-passing-and-naming-conventions>
-fn calling_convention(keyword: super::super::preprocessing::KeywordTokenType) -> bool {
-    use super::super::preprocessing::KeywordTokenType as K;
-    matches!(
-        keyword,
-        K::Cdecl | K::Stdcall | K::Fastcall | K::Vectorcall | K::Thiscall
-    )
-}
-
-/// The standard integer type an MSVC sized-integer keyword names, as in Clang
-/// and MSVC: `__int8` is plain `char`, and `__int16`, `__int32` and `__int64`
-/// are `short`, `int` and `long long`, so `__int32` is never `long`. An
-/// explicit sign selects the signed or unsigned type.
-///
-/// MSVC extension; the integer types are C99: §6.7.2p2, pp. 99-100;
-/// PDF pp. 111-112.
-/// MSVC extension: Microsoft Learn, "__int8, __int16, __int32, __int64".
-/// <https://learn.microsoft.com/en-us/cpp/cpp/int8-int16-int32-int64>
-fn ms_integer(width: u8, signedness: Option<bool>) -> Scalar {
-    match (width, signedness) {
-        | (8, None) => Scalar::Char,
-        | (8, Some(true)) => Scalar::SignedChar,
-        | (8, Some(false)) => Scalar::UnsignedChar,
-        | (16, Some(false)) => Scalar::UnsignedShort,
-        | (16, _) => Scalar::Short,
-        | (32, Some(false)) => Scalar::UnsignedInt,
-        | (32, _) => Scalar::Int,
-        | (64, Some(false)) => Scalar::UnsignedLongLong,
-        | (64, _) => Scalar::LongLong,
-        | _ => unreachable!("MSVC sized integers are 8, 16, 32 or 64 bits wide"),
-    }
-}
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Resolves the parser's validated specifier multiset into a canonical
@@ -248,194 +214,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Specifier extensions whose meaning this phase does not model:
-    /// alignment, thread or constexpr storage, MSVC pointer modifiers and
-    /// layout attributes. Other attributes, `__extension__` and x86-64
-    /// calling conventions leave the declared type unchanged.
-    /// C99: §4 paragraph 6, p. 7; PDF p. 19.
-    pub(super) fn unmodeled_extension(
-        &self,
-        mut chain: Option<&'tu super::SpecifierExtension<'tu>>,
-    ) -> bool {
-        use super::SpecifierExtensionKind as K;
-        while let Some(item) = chain {
-            if match item.kind {
-                | K::ExtensionMarker => false,
-                | K::Attributes(attribute) => self.layout_attribute(attribute),
-                | K::MsModifier(keyword) => !calling_convention(keyword),
-                | K::Alignment(_) | K::ThreadLocal | K::Constexpr => true,
-            } {
-                return true;
+    /// Unmodeled specifier extensions make only this declaration's type
+    /// unanalyzed; a tag named here keeps its own completion and layout.
+    /// C99: §6.7.2p2-5, pp. 99-100; PDF pp. 111-112.
+    pub(super) fn spec(&mut self, spec: DeclarationSpecifiers<'tu>, force_tag: bool) {
+        if spec.auto_with_storage_class || self.unmodeled_extension(spec.extensions) {
+            self.taint(true);
+            self.work.push(Work::UnknownType);
+        }
+        self.work.push(Work::VectorAttributes(spec.extensions));
+        self.work.push(Work::Spec(
+            spec.type_specifiers,
+            spec.type_qualifiers,
+            spec.source_vectors,
+            force_tag,
+        ));
+        let mut extension = spec.extensions;
+        while let Some(item) = extension {
+            if let SpecifierExtensionKind::Alignment(operand) = item.kind {
+                self.syntax_operand(operand);
             }
-            chain = item.next;
-        }
-        false
-    }
-
-    /// GNU, standard-syntax vendor and MSVC attributes that change size,
-    /// alignment or representation. Their arguments are not interpreted, so
-    /// any such name, or an attribute that failed to parse, is conservative.
-    /// GNU extension: GCC manual, "Attribute Syntax".
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
-    /// MSVC extension: Microsoft Learn, "declspec".
-    /// <https://learn.microsoft.com/en-us/cpp/cpp/declspec>
-    pub(super) fn layout_attribute(&self, attribute: &super::AttributeSpecifier<'tu>) -> bool {
-        attribute.recovered
-            || attribute.tokens.iter().any(|token| {
-                let name = self.context.string_cache.at(token.contents);
-                let name = name
-                    .strip_prefix("__")
-                    .and_then(|n| n.strip_suffix("__"))
-                    .unwrap_or(name);
-                matches!(name, "align" | "packed" | "mode" | "ext_vector_type")
-            })
-    }
-
-    /// Discover core type names inside opaque later-standard operands.
-    /// C99: §6.7.6, p. 122; PDF p. 134; extensions remain unanalyzed.
-    pub(super) fn syntax_operand(&mut self, operand: super::SyntaxOperand<'tu>) {
-        match operand {
-            | super::SyntaxOperand::Expression(expression) =>
-                self.work.push(Work::Expression(expression)),
-            | super::SyntaxOperand::Type(name) => {
-                self.work.push(Work::DiscardType);
-                self.work.push(Work::TypeName(name));
-            },
-        }
-    }
-
-    /// A tag-only declaration shadows outer tags; a reference reuses visible
-    /// tags. C99: §6.7.2.3p1-9, pp. 106-107; PDF pp. 118-119.
-    fn tag(
-        &mut self,
-        kind: TagKind,
-        name: Option<Identifier>,
-        body: bool,
-        force: bool,
-        allow_incomplete: bool,
-        source: SourceVectors,
-    ) -> (usize, bool) {
-        let visible = name.and_then(|n| self.lookup(Namespace::Tag, n.name));
-        if let Some(entry) = visible
-            && ((!body && !force) || entry.scope == self.scope)
-        {
-            let tag = self.types.tags[entry.binding];
-            if body || force {
-                self.tag_declarations.push((entry.binding, self.scope));
-            }
-            if tag.kind != kind {
-                self.error(
-                    SemanticErrorKind::TagKindMismatch,
-                    source,
-                    name.map(|n| n.name),
-                    Some(entry.name.source_vectors),
-                );
-                return if body {
-                    (self.rejected_tag(kind, name), true)
-                } else {
-                    (entry.binding, false)
-                };
-            }
-            // A nested list redefines a tag whose own list is still open: its
-            // type is incomplete until the closing brace (§6.7.2.3p1 and p4).
-            if body && (tag.complete.get() || self.defining.contains_key(&entry.binding)) {
-                self.error(
-                    SemanticErrorKind::TagRedefinition,
-                    source,
-                    name.map(|n| n.name),
-                    Some(entry.name.source_vectors),
-                );
-                return (self.rejected_tag(kind, name), true);
-            }
-            return (entry.binding, body);
-        }
-        if kind == TagKind::Enum
-            && !body
-            && !allow_incomplete
-            && !self.context.configuration.gnu_extensions()
-        {
-            self.error(
-                SemanticErrorKind::IncompleteEnum,
-                source,
-                name.map(|n| n.name),
-                None,
-            );
-        }
-        let index = self.new_tag(kind, name);
-        self.tag_declarations.push((index, self.scope));
-        if let Some(name) = name {
-            self.install(name, Namespace::Tag, index);
-        }
-        (index, body)
-    }
-
-    /// Creates a distinct incomplete structure, union or enumeration type.
-    /// C99: §6.7.2.3 paragraphs 4-5, p. 106; PDF p. 118.
-    fn new_tag(&mut self, kind: TagKind, name: Option<Identifier>) -> usize {
-        let index = self.types.tags.len();
-        let tag = self.types.tu.alloc(Tag {
-            name: name.map(|n| n.name),
-            kind,
-            members: Cell::new(&[]),
-            fields: Cell::new(&[]),
-            layout: Cell::new(None),
-            complete: Cell::new(false),
-            tainted: Cell::new(false),
-            contains_flexible: Cell::new(false),
-            compatible: Cell::new(Scalar::Int),
-        });
-        self.types.tags.push(tag);
-        index
-    }
-
-    /// A rejected definition still declares the tags, enumerators and
-    /// members inside its list, so later uses of them do not cascade. Its
-    /// uninstalled tag is unanalyzed: neither the rejected nor the original
-    /// contents is a trustworthy type for the declaration.
-    #[cold]
-    #[inline(never)]
-    fn rejected_tag(&mut self, kind: TagKind, name: Option<Identifier>) -> usize {
-        let index = self.new_tag(kind, name);
-        self.types.tags[index].tainted.set(true);
-        index
-    }
-
-    /// Enforces the implementation's PTRDIFF_MAX-byte object-size limit for
-    /// declared bounds and initializer-completed arrays.
-    /// C99: §5.2.4.1p1, pp. 20-21; PDF pp. 32-33 (implementation limit);
-    /// §6.5.6p9, pp. 83-84; PDF pp. 95-96 (representable pointer differences).
-    pub(super) fn validate_array_size(
-        &mut self,
-        element: TypeId,
-        count: i128,
-        source: SourceVectors,
-    ) -> bool {
-        if self.types.layout(element).is_some_and(|layout| {
-            i128::from(layout.size)
-                .checked_mul(count)
-                .is_none_or(|size| size > i128::from(i64::MAX))
-        }) {
-            self.error(SemanticErrorKind::ObjectTooLarge, source, None, None);
-            false
-        } else {
-            true
-        }
-    }
-
-    /// Checks `restrict` after typedef expansion as well as after pointer
-    /// derivation. C99: §6.7.3p2, p. 108; PDF p. 120.
-    pub(super) fn validate_qualifiers(&mut self, ty: TypeId, source: SourceVectors) {
-        if !ty.qualifiers.contains(TypeQualifiers::RESTRICT) {
-            return;
-        }
-        let valid = match self.types.nodes[ty.index] {
-            | TypeKind::Unknown => true,
-            | TypeKind::Pointer(target) =>
-                !matches!(self.types.nodes[target.index], TypeKind::Function { .. }),
-            | _ => false,
-        };
-        if !valid {
-            self.error(SemanticErrorKind::InvalidRestrict, source, None, None);
+            extension = item.next;
         }
     }
 
@@ -573,56 +372,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.types.unknown()
                 }),
             | _ => self.values.push(base),
-        }
-    }
-
-    /// Parameter array qualifiers/static belong only to the outermost array
-    /// derivation. Walk constructors in type-construction order, including
-    /// parenthesized pointer derivations, without native recursion.
-    /// C99: §6.7.5.2p1, p. 116; PDF p. 128.
-    pub(super) fn validate_parameter_arrays(&mut self, declarator: Declarator<'tu>) {
-        enum Step<'tu> {
-            Declarator(Declarator<'tu>),
-            Direct(DirectDeclarator<'tu>, SourceVectors),
-        }
-        let mut work = ArenaVec::new_in(self.scratch);
-        let mut constrained = None;
-        work.push(Step::Declarator(declarator));
-        while let Some(step) = work.pop() {
-            let (derives, next) = match step {
-                | Step::Declarator(d) => {
-                    for &direct in d.kind {
-                        work.push(Step::Direct(direct, d.source_vectors));
-                    }
-                    (!d.pointer.levels.is_empty(), None)
-                },
-                | Step::Direct(DirectDeclarator::Parenthesized(p), _) => {
-                    work.push(Step::Declarator(p.declarator));
-                    (false, None)
-                },
-                | Step::Direct(
-                    DirectDeclarator::Array {
-                        type_qualifiers,
-                        is_static,
-                        ..
-                    },
-                    source,
-                ) => (
-                    true,
-                    (!type_qualifiers.is_empty() || is_static).then_some(source),
-                ),
-                | Step::Direct(
-                    DirectDeclarator::Function { .. } | DirectDeclarator::KAndRStyleFunction { .. },
-                    _,
-                ) => (true, None),
-                | _ => (false, None),
-            };
-            if derives {
-                if let Some(source) = constrained.take() {
-                    self.error(SemanticErrorKind::InvalidParameter, source, None, None);
-                }
-                constrained = next;
-            }
         }
     }
 
@@ -926,82 +675,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// C99: §6.7.5p3, pp. 114-115; PDF pp. 126-127; §6.7.5.2p2, p. 116; PDF p.
-    /// 128.
-    pub(super) fn variably_modified(&self, ty: TypeId) -> bool {
-        self.types.variably_modified(ty)
-    }
-
-    /// Rejects non-integer bounds using the already-analyzed expression type,
-    /// suppressing dependent constraints on unanalyzed types.
-    /// C99: §6.7.5.2p1, p. 116; PDF p. 128.
-    pub(super) fn non_integer_bound(&self, expression: &'tu super::Expression<'tu>) -> bool {
-        let ty = self.expression_info(expression).ty;
-        !self.types.unanalyzed(ty) && self.integer_type(ty).is_none()
-    }
-
-    /// An untagged structure or union specifier with no declarator, or with
-    /// MSVC anonymous structures a tagged or typedef one, declares an
-    /// anonymous member whose names join this record's namespace.
-    /// C11: §6.7.2.1p13, p. 115; PDF p. 133; C99: §6.7p3, p. 97; PDF p. 109.
-    pub(super) fn anonymous_member(
-        &mut self,
-        tag: usize,
-        member: super::StructDeclaration<'tu>,
-        base: TypeId,
-    ) -> Option<Member> {
-        let anonymous = match member.type_specifiers {
-            | TypeSpecifiers::StructOrUnion(s) if s.identifier.is_none() =>
-                s.struct_declaration_list.is_some(),
-            | TypeSpecifiers::StructOrUnion(_) | TypeSpecifiers::TypedefName(_) => self
-                .context
-                .configuration
-                .accepts(crate::configuration::Feature::MsAnonymousStructs),
-            | _ => false,
-        };
-        let TypeKind::Tag(inner) = self.types.nodes[base.index] else {
-            return None;
-        };
-        if !anonymous || self.types.tags[inner].kind == TagKind::Enum {
-            return None;
-        }
-        for field in self.types.tags[inner].fields.get() {
-            if let Some(previous) = self
-                .member_names
-                .insert((tag, field.name.name), field.name.source_vectors)
-            {
-                self.error(
-                    SemanticErrorKind::DuplicateMember,
-                    field.name.source_vectors,
-                    Some(field.name.name),
-                    Some(previous),
-                );
-            }
-        }
-        Some(Member {
-            name:           None,
-            source_vectors: member.source_vectors,
-            invalid:        false,
-            ty:             base,
-            width:          None,
-            offset:         0,
-            bit_offset:     0,
-            anonymous:      true,
-        })
-    }
-
-    /// Reports a GNU flexible-array form through the extension policy.
-    /// C99: §4p6, p. 7; PDF p. 19.
-    pub(super) fn flexible_extension(&mut self, spelling: &str, source: SourceVectors) {
-        if !self.tainted {
-            self.context.report_extension(
-                crate::configuration::Feature::FlexibleArrayExtensions,
-                spelling,
-                source,
-            );
-        }
-    }
-
     /// System V packs non-straddling fields at the bit cursor. Microsoft
     /// reserves entire units, sharing only consecutive fields of equal size;
     /// a zero-width field affects layout only after a nonzero bit-field.
@@ -1230,5 +903,383 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     align: alignment,
                 }));
         }
+    }
+
+    /// Specifier extensions whose meaning this phase does not model:
+    /// alignment, thread or constexpr storage, MSVC pointer modifiers and
+    /// layout attributes. Other attributes, `__extension__` and x86-64
+    /// calling conventions leave the declared type unchanged.
+    /// C99: §4 paragraph 6, p. 7; PDF p. 19.
+    pub(super) fn unmodeled_extension(
+        &self,
+        mut chain: Option<&'tu super::SpecifierExtension<'tu>>,
+    ) -> bool {
+        use super::SpecifierExtensionKind as K;
+        while let Some(item) = chain {
+            if match item.kind {
+                | K::ExtensionMarker => false,
+                | K::Attributes(attribute) => self.layout_attribute(attribute),
+                | K::MsModifier(keyword) => !calling_convention(keyword),
+                | K::Alignment(_) | K::ThreadLocal | K::Constexpr => true,
+            } {
+                return true;
+            }
+            chain = item.next;
+        }
+        false
+    }
+
+    /// GNU, standard-syntax vendor and MSVC attributes that change size,
+    /// alignment or representation. Their arguments are not interpreted, so
+    /// any such name, or an attribute that failed to parse, is conservative.
+    /// GNU extension: GCC manual, "Attribute Syntax".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+    /// MSVC extension: Microsoft Learn, "declspec".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/declspec>
+    pub(super) fn layout_attribute(&self, attribute: &super::AttributeSpecifier<'tu>) -> bool {
+        attribute.recovered
+            || attribute.tokens.iter().any(|token| {
+                let name = self.context.string_cache.at(token.contents);
+                let name = name
+                    .strip_prefix("__")
+                    .and_then(|n| n.strip_suffix("__"))
+                    .unwrap_or(name);
+                matches!(name, "align" | "packed" | "mode" | "ext_vector_type")
+            })
+    }
+
+    /// Discover core type names inside opaque later-standard operands.
+    /// C99: §6.7.6, p. 122; PDF p. 134; extensions remain unanalyzed.
+    pub(super) fn syntax_operand(&mut self, operand: super::SyntaxOperand<'tu>) {
+        match operand {
+            | super::SyntaxOperand::Expression(expression) =>
+                self.work.push(Work::Expression(expression)),
+            | super::SyntaxOperand::Type(name) => {
+                self.work.push(Work::DiscardType);
+                self.work.push(Work::TypeName(name));
+            },
+        }
+    }
+
+    /// A tag-only declaration shadows outer tags; a reference reuses visible
+    /// tags. C99: §6.7.2.3p1-9, pp. 106-107; PDF pp. 118-119.
+    fn tag(
+        &mut self,
+        kind: TagKind,
+        name: Option<Identifier>,
+        body: bool,
+        force: bool,
+        allow_incomplete: bool,
+        source: SourceVectors,
+    ) -> (usize, bool) {
+        let visible = name.and_then(|n| self.lookup(Namespace::Tag, n.name));
+        if let Some(entry) = visible
+            && ((!body && !force) || entry.scope == self.scope)
+        {
+            let tag = self.types.tags[entry.binding];
+            if body || force {
+                self.tag_declarations.push((entry.binding, self.scope));
+            }
+            if tag.kind != kind {
+                self.error(
+                    SemanticErrorKind::TagKindMismatch,
+                    source,
+                    name.map(|n| n.name),
+                    Some(entry.name.source_vectors),
+                );
+                return if body {
+                    (self.rejected_tag(kind, name), true)
+                } else {
+                    (entry.binding, false)
+                };
+            }
+            // A nested list redefines a tag whose own list is still open: its
+            // type is incomplete until the closing brace (§6.7.2.3p1 and p4).
+            if body && (tag.complete.get() || self.defining.contains_key(&entry.binding)) {
+                self.error(
+                    SemanticErrorKind::TagRedefinition,
+                    source,
+                    name.map(|n| n.name),
+                    Some(entry.name.source_vectors),
+                );
+                return (self.rejected_tag(kind, name), true);
+            }
+            return (entry.binding, body);
+        }
+        if kind == TagKind::Enum
+            && !body
+            && !allow_incomplete
+            && !self.context.configuration.gnu_extensions()
+        {
+            self.error(
+                SemanticErrorKind::IncompleteEnum,
+                source,
+                name.map(|n| n.name),
+                None,
+            );
+        }
+        let index = self.new_tag(kind, name);
+        self.tag_declarations.push((index, self.scope));
+        if let Some(name) = name {
+            self.install(name, Namespace::Tag, index);
+        }
+        (index, body)
+    }
+
+    /// Creates a distinct incomplete structure, union or enumeration type.
+    /// C99: §6.7.2.3 paragraphs 4-5, p. 106; PDF p. 118.
+    fn new_tag(&mut self, kind: TagKind, name: Option<Identifier>) -> usize {
+        let index = self.types.tags.len();
+        let tag = self.types.tu.alloc(Tag {
+            name: name.map(|n| n.name),
+            kind,
+            members: Cell::new(&[]),
+            fields: Cell::new(&[]),
+            layout: Cell::new(None),
+            complete: Cell::new(false),
+            tainted: Cell::new(false),
+            contains_flexible: Cell::new(false),
+            compatible: Cell::new(Scalar::Int),
+        });
+        self.types.tags.push(tag);
+        index
+    }
+
+    /// A rejected definition still declares the tags, enumerators and
+    /// members inside its list, so later uses of them do not cascade. Its
+    /// uninstalled tag is unanalyzed: neither the rejected nor the original
+    /// contents is a trustworthy type for the declaration.
+    #[cold]
+    #[inline(never)]
+    fn rejected_tag(&mut self, kind: TagKind, name: Option<Identifier>) -> usize {
+        let index = self.new_tag(kind, name);
+        self.types.tags[index].tainted.set(true);
+        index
+    }
+
+    /// Enforces the implementation's PTRDIFF_MAX-byte object-size limit for
+    /// declared bounds and initializer-completed arrays.
+    /// C99: §5.2.4.1p1, pp. 20-21; PDF pp. 32-33 (implementation limit);
+    /// §6.5.6p9, pp. 83-84; PDF pp. 95-96 (representable pointer differences).
+    pub(super) fn validate_array_size(
+        &mut self,
+        element: TypeId,
+        count: i128,
+        source: SourceVectors,
+    ) -> bool {
+        if self.types.layout(element).is_some_and(|layout| {
+            i128::from(layout.size)
+                .checked_mul(count)
+                .is_none_or(|size| size > i128::from(i64::MAX))
+        }) {
+            self.error(SemanticErrorKind::ObjectTooLarge, source, None, None);
+            false
+        } else {
+            true
+        }
+    }
+
+    /// Checks `restrict` after typedef expansion as well as after pointer
+    /// derivation. C99: §6.7.3p2, p. 108; PDF p. 120.
+    pub(super) fn validate_qualifiers(&mut self, ty: TypeId, source: SourceVectors) {
+        if !ty.qualifiers.contains(TypeQualifiers::RESTRICT) {
+            return;
+        }
+        let valid = match self.types.nodes[ty.index] {
+            | TypeKind::Unknown => true,
+            | TypeKind::Pointer(target) =>
+                !matches!(self.types.nodes[target.index], TypeKind::Function { .. }),
+            | _ => false,
+        };
+        if !valid {
+            self.error(SemanticErrorKind::InvalidRestrict, source, None, None);
+        }
+    }
+
+    /// Parameter array qualifiers/static belong only to the outermost array
+    /// derivation. Walk constructors in type-construction order, including
+    /// parenthesized pointer derivations, without native recursion.
+    /// C99: §6.7.5.2p1, p. 116; PDF p. 128.
+    pub(super) fn validate_parameter_arrays(&mut self, declarator: Declarator<'tu>) {
+        enum Step<'tu> {
+            Declarator(Declarator<'tu>),
+            Direct(DirectDeclarator<'tu>, SourceVectors),
+        }
+        let mut work = ArenaVec::new_in(self.scratch);
+        let mut constrained = None;
+        work.push(Step::Declarator(declarator));
+        while let Some(step) = work.pop() {
+            let (derives, next) = match step {
+                | Step::Declarator(d) => {
+                    for &direct in d.kind {
+                        work.push(Step::Direct(direct, d.source_vectors));
+                    }
+                    (!d.pointer.levels.is_empty(), None)
+                },
+                | Step::Direct(DirectDeclarator::Parenthesized(p), _) => {
+                    work.push(Step::Declarator(p.declarator));
+                    (false, None)
+                },
+                | Step::Direct(
+                    DirectDeclarator::Array {
+                        type_qualifiers,
+                        is_static,
+                        ..
+                    },
+                    source,
+                ) => (
+                    true,
+                    (!type_qualifiers.is_empty() || is_static).then_some(source),
+                ),
+                | Step::Direct(
+                    DirectDeclarator::Function { .. } | DirectDeclarator::KAndRStyleFunction { .. },
+                    _,
+                ) => (true, None),
+                | _ => (false, None),
+            };
+            if derives {
+                if let Some(source) = constrained.take() {
+                    self.error(SemanticErrorKind::InvalidParameter, source, None, None);
+                }
+                constrained = next;
+            }
+        }
+    }
+
+    /// C99: §6.7.5p3, pp. 114-115; PDF pp. 126-127; §6.7.5.2p2, p. 116; PDF p.
+    /// 128.
+    pub(super) fn variably_modified(&self, ty: TypeId) -> bool {
+        self.types.variably_modified(ty)
+    }
+
+    /// Rejects non-integer bounds using the already-analyzed expression type,
+    /// suppressing dependent constraints on unanalyzed types.
+    /// C99: §6.7.5.2p1, p. 116; PDF p. 128.
+    pub(super) fn non_integer_bound(&self, expression: &'tu super::Expression<'tu>) -> bool {
+        let ty = self.expression_info(expression).ty;
+        !self.types.unanalyzed(ty) && self.integer_type(ty).is_none()
+    }
+
+    /// An untagged structure or union specifier with no declarator, or with
+    /// MSVC anonymous structures a tagged or typedef one, declares an
+    /// anonymous member whose names join this record's namespace.
+    /// C11: §6.7.2.1p13, p. 115; PDF p. 133; C99: §6.7p3, p. 97; PDF p. 109.
+    pub(super) fn anonymous_member(
+        &mut self,
+        tag: usize,
+        member: super::StructDeclaration<'tu>,
+        base: TypeId,
+    ) -> Option<Member> {
+        let anonymous = match member.type_specifiers {
+            | TypeSpecifiers::StructOrUnion(s) if s.identifier.is_none() =>
+                s.struct_declaration_list.is_some(),
+            | TypeSpecifiers::StructOrUnion(_) | TypeSpecifiers::TypedefName(_) => self
+                .context
+                .configuration
+                .accepts(crate::configuration::Feature::MsAnonymousStructs),
+            | _ => false,
+        };
+        let TypeKind::Tag(inner) = self.types.nodes[base.index] else {
+            return None;
+        };
+        if !anonymous || self.types.tags[inner].kind == TagKind::Enum {
+            return None;
+        }
+        for field in self.types.tags[inner].fields.get() {
+            if let Some(previous) = self
+                .member_names
+                .insert((tag, field.name.name), field.name.source_vectors)
+            {
+                self.error(
+                    SemanticErrorKind::DuplicateMember,
+                    field.name.source_vectors,
+                    Some(field.name.name),
+                    Some(previous),
+                );
+            }
+        }
+        Some(Member {
+            name:           None,
+            source_vectors: member.source_vectors,
+            invalid:        false,
+            ty:             base,
+            width:          None,
+            offset:         0,
+            bit_offset:     0,
+            anonymous:      true,
+        })
+    }
+
+    /// Reports a GNU flexible-array form through the extension policy.
+    /// C99: §4p6, p. 7; PDF p. 19.
+    pub(super) fn flexible_extension(&mut self, spelling: &str, source: SourceVectors) {
+        if !self.tainted {
+            self.context.report_extension(
+                crate::configuration::Feature::FlexibleArrayExtensions,
+                spelling,
+                source,
+            );
+        }
+    }
+}
+
+/// The x86-64 System V target ignores MSVC calling conventions.
+/// MSVC extension: Microsoft Learn, "Argument Passing and Naming Conventions".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/argument-passing-and-naming-conventions>
+fn calling_convention(keyword: super::super::preprocessing::KeywordTokenType) -> bool {
+    use super::super::preprocessing::KeywordTokenType as K;
+    matches!(
+        keyword,
+        K::Cdecl | K::Stdcall | K::Fastcall | K::Vectorcall | K::Thiscall
+    )
+}
+
+/// The standard integer type an MSVC sized-integer keyword names, as in Clang
+/// and MSVC: `__int8` is plain `char`, and `__int16`, `__int32` and `__int64`
+/// are `short`, `int` and `long long`, so `__int32` is never `long`. An
+/// explicit sign selects the signed or unsigned type.
+///
+/// MSVC extension; the integer types are C99: §6.7.2p2, pp. 99-100;
+/// PDF pp. 111-112.
+/// MSVC extension: Microsoft Learn, "__int8, __int16, __int32, __int64".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/int8-int16-int32-int64>
+fn ms_integer(width: u8, signedness: Option<bool>) -> Scalar {
+    match (width, signedness) {
+        | (8, None) => Scalar::Char,
+        | (8, Some(true)) => Scalar::SignedChar,
+        | (8, Some(false)) => Scalar::UnsignedChar,
+        | (16, Some(false)) => Scalar::UnsignedShort,
+        | (16, _) => Scalar::Short,
+        | (32, Some(false)) => Scalar::UnsignedInt,
+        | (32, _) => Scalar::Int,
+        | (64, Some(false)) => Scalar::UnsignedLongLong,
+        | (64, _) => Scalar::LongLong,
+        | _ => unreachable!("MSVC sized integers are 8, 16, 32 or 64 bits wide"),
+    }
+}
+
+/// GCC and Clang choose an enumeration's compatible integer type from
+/// its range; the target may instead select a fixed type. Nonnegative
+/// ranges use unsigned int and widen to the target unsigned maximum type;
+/// negative ranges use int and widen to the signed maximum type.
+/// This choice is implementation-defined.
+/// C99: §6.7.2.2 paragraph 4, p. 105; PDF p. 117.
+pub(super) fn compatible_enum_type(
+    (low, high): (i128, i128),
+    target: &crate::target::TargetLayout,
+) -> Scalar {
+    if let Some(scalar) = target.fixed_enum_type {
+        return scalar;
+    }
+    if low >= 0 {
+        if high <= i128::from(u32::MAX) {
+            Scalar::UnsignedInt
+        } else {
+            target.uintmax_t
+        }
+    } else if low >= i128::from(i32::MIN) && high <= i128::from(i32::MAX) {
+        Scalar::Int
+    } else {
+        target.intmax_t
     }
 }

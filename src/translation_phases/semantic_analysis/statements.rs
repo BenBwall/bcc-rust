@@ -31,117 +31,6 @@ use super::{
     expressions::ConversionKind,
 };
 
-/// Resumable statement scope, switch, loop and return checks.
-/// C99: §6.8.4 paragraph 3, p. 133; PDF p. 145.
-/// C99: §6.8.5 paragraphs 3-5, p. 135; PDF p. 147.
-/// C99: §6.8.6.4 paragraphs 1-3, p. 139; PDF p. 151.
-#[derive(Clone, Copy)]
-pub(super) enum StatementWork<'tu> {
-    /// C99: §6.8.4p3, p. 133; PDF p. 145; §6.8.5p5, p. 135;
-    /// PDF p. 147. Associated substatements are blocks, including expressions.
-    Substatement(&'tu Statement<'tu>),
-    SwitchReady(ExpressionSlot<'tu>, &'tu Statement<'tu>),
-    SwitchFinish(usize, Option<usize>),
-    LeaveLoop,
-    ForDeclarationDone(&'tu Declaration<'tu>),
-    CaseDone(
-        Option<&'tu Expression<'tu>>,
-        Option<&'tu Expression<'tu>>,
-        SourceVectors,
-    ),
-    ReturnDone(Option<ExpressionSlot<'tu>>, SourceVectors),
-}
-
-/// A persistent declaration-scope path; forward labels can retain it after
-/// the lexical scope has closed. C99: §6.8.6.1p1, p. 137; PDF p. 149.
-#[derive(Clone, Copy)]
-struct VmScope {
-    binding: usize,
-    parent:  Option<usize>,
-    depth:   usize,
-}
-
-/// A function-scoped label or a GNU local label and its definition.
-/// GNU extension: GCC manual, "Local Labels".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
-/// C99: §6.2.1 paragraph 3, p. 29; PDF p. 41.
-/// C99: §6.8.1 paragraph 3, p. 132; PDF p. 144.
-#[derive(Clone, Copy)]
-struct Label {
-    local:      bool,
-    function:   usize,
-    name:       Identifier,
-    definition: Option<Identifier>,
-    vm:         Option<usize>,
-    used:       Option<Identifier>,
-}
-
-/// A goto target and the variably modified scope path at its use.
-/// C99: §6.8.6.1 paragraph 1, p. 137; PDF p. 149.
-#[derive(Clone, Copy)]
-struct Jump {
-    function: usize,
-    label:    usize,
-    source:   Identifier,
-    vm:       Option<usize>,
-}
-
-/// A converted switch case value or inclusive GNU case interval.
-/// GNU extension: GCC manual, "Case Ranges".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html>
-/// C99: §6.8.4.2 paragraph 3, p. 134; PDF p. 146.
-/// C99: §6.8.4.2 paragraph 5, p. 134; PDF p. 146.
-#[derive(Clone, Copy)]
-struct Case {
-    lower:   i128,
-    upper:   i128,
-    source:  SourceVectors,
-    ordinal: usize,
-}
-
-/// Promoted controlling type and scope/label state for one switch.
-/// C99: §6.8.4.2 paragraphs 2-5, p. 134; PDF p. 146.
-#[derive(Clone, Copy)]
-struct Switch<'s> {
-    ty:    TypeId,
-    vm:    Option<usize>,
-    cases: &'s Collection<'s, Case>,
-}
-
-pub(super) struct State<'s> {
-    pub(super) loops:    usize,
-    pub(super) switch:   Option<usize>,
-    pub(super) vm:       Option<usize>,
-    pub(super) scope_vm: ArenaVec<'s, Option<usize>>,
-    vm_scopes:           ArenaVec<'s, VmScope>,
-    labels:              ArenaVec<'s, Label>,
-    label_names:         ArenaMap<'s, (usize, StringCacheId), usize>,
-    jumps:               ArenaVec<'s, Jump>,
-    switches:            ArenaVec<'s, Switch<'s>>,
-    case_count:          usize,
-    vm_queries:          ArenaMap<'s, (Option<usize>, Option<usize>), Option<usize>>,
-}
-
-impl<'s> State<'s> {
-    pub(super) fn new(scratch: &'s Bump) -> Self {
-        let mut scope_vm = ArenaVec::new_in(scratch);
-        scope_vm.push(None);
-        Self {
-            loops: 0,
-            switch: None,
-            vm: None,
-            scope_vm,
-            vm_scopes: ArenaVec::new_in(scratch),
-            labels: ArenaVec::new_in(scratch),
-            label_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            jumps: ArenaVec::new_in(scratch),
-            switches: ArenaVec::new_in(scratch),
-            case_count: 0,
-            vm_queries: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-        }
-    }
-}
-
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Completes statement scope, switch promotion, for declaration and return
     /// checks.
@@ -644,6 +533,117 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if previous.is_none_or(|p| case.upper > p.upper) {
                 previous = Some(case);
             }
+        }
+    }
+}
+
+/// Resumable statement scope, switch, loop and return checks.
+/// C99: §6.8.4 paragraph 3, p. 133; PDF p. 145.
+/// C99: §6.8.5 paragraphs 3-5, p. 135; PDF p. 147.
+/// C99: §6.8.6.4 paragraphs 1-3, p. 139; PDF p. 151.
+#[derive(Clone, Copy)]
+pub(super) enum StatementWork<'tu> {
+    /// C99: §6.8.4p3, p. 133; PDF p. 145; §6.8.5p5, p. 135;
+    /// PDF p. 147. Associated substatements are blocks, including expressions.
+    Substatement(&'tu Statement<'tu>),
+    SwitchReady(ExpressionSlot<'tu>, &'tu Statement<'tu>),
+    SwitchFinish(usize, Option<usize>),
+    LeaveLoop,
+    ForDeclarationDone(&'tu Declaration<'tu>),
+    CaseDone(
+        Option<&'tu Expression<'tu>>,
+        Option<&'tu Expression<'tu>>,
+        SourceVectors,
+    ),
+    ReturnDone(Option<ExpressionSlot<'tu>>, SourceVectors),
+}
+
+/// A persistent declaration-scope path; forward labels can retain it after
+/// the lexical scope has closed. C99: §6.8.6.1p1, p. 137; PDF p. 149.
+#[derive(Clone, Copy)]
+struct VmScope {
+    binding: usize,
+    parent:  Option<usize>,
+    depth:   usize,
+}
+
+/// A function-scoped label or a GNU local label and its definition.
+/// GNU extension: GCC manual, "Local Labels".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
+/// C99: §6.2.1 paragraph 3, p. 29; PDF p. 41.
+/// C99: §6.8.1 paragraph 3, p. 132; PDF p. 144.
+#[derive(Clone, Copy)]
+struct Label {
+    local:      bool,
+    function:   usize,
+    name:       Identifier,
+    definition: Option<Identifier>,
+    vm:         Option<usize>,
+    used:       Option<Identifier>,
+}
+
+/// A goto target and the variably modified scope path at its use.
+/// C99: §6.8.6.1 paragraph 1, p. 137; PDF p. 149.
+#[derive(Clone, Copy)]
+struct Jump {
+    function: usize,
+    label:    usize,
+    source:   Identifier,
+    vm:       Option<usize>,
+}
+
+/// A converted switch case value or inclusive GNU case interval.
+/// GNU extension: GCC manual, "Case Ranges".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html>
+/// C99: §6.8.4.2 paragraph 3, p. 134; PDF p. 146.
+/// C99: §6.8.4.2 paragraph 5, p. 134; PDF p. 146.
+#[derive(Clone, Copy)]
+struct Case {
+    lower:   i128,
+    upper:   i128,
+    source:  SourceVectors,
+    ordinal: usize,
+}
+
+/// Promoted controlling type and scope/label state for one switch.
+/// C99: §6.8.4.2 paragraphs 2-5, p. 134; PDF p. 146.
+#[derive(Clone, Copy)]
+struct Switch<'s> {
+    ty:    TypeId,
+    vm:    Option<usize>,
+    cases: &'s Collection<'s, Case>,
+}
+
+pub(super) struct State<'s> {
+    pub(super) loops:    usize,
+    pub(super) switch:   Option<usize>,
+    pub(super) vm:       Option<usize>,
+    pub(super) scope_vm: ArenaVec<'s, Option<usize>>,
+    vm_scopes:           ArenaVec<'s, VmScope>,
+    labels:              ArenaVec<'s, Label>,
+    label_names:         ArenaMap<'s, (usize, StringCacheId), usize>,
+    jumps:               ArenaVec<'s, Jump>,
+    switches:            ArenaVec<'s, Switch<'s>>,
+    case_count:          usize,
+    vm_queries:          ArenaMap<'s, (Option<usize>, Option<usize>), Option<usize>>,
+}
+
+impl<'s> State<'s> {
+    pub(super) fn new(scratch: &'s Bump) -> Self {
+        let mut scope_vm = ArenaVec::new_in(scratch);
+        scope_vm.push(None);
+        Self {
+            loops: 0,
+            switch: None,
+            vm: None,
+            scope_vm,
+            vm_scopes: ArenaVec::new_in(scratch),
+            labels: ArenaVec::new_in(scratch),
+            label_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            jumps: ArenaVec::new_in(scratch),
+            switches: ArenaVec::new_in(scratch),
+            case_count: 0,
+            vm_queries: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         }
     }
 }

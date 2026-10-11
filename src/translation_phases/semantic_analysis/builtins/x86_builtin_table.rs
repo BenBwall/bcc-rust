@@ -5,13 +5,9 @@
 //! builtins and their constant operands.
 //! <https://gcc.gnu.org/onlinedocs/gcc/x86-Built-in-Functions.html>
 
-/// (name, result and parameter encodings, immediate index, minimum, maximum and
-/// allowed-value mask).
-pub(super) type Immediate = (usize, i128, i128, u16);
-
 /// Clang x86 intrinsic signatures and constant immediate operand requirements.
 #[rustfmt::skip]
-pub(super) const BUILTINS: &[(&str, &str, &[Immediate])] = &[
+pub(in crate::translation_phases::semantic_analysis) const BUILTINS: &[(&str, &str, &[Immediate])] = &[
     ("__builtin_ia32_addcarryx_u32", "A,A,I,I,PI", &[]),
     ("__builtin_ia32_addcarryx_u64", "A,A,Q,Q,PQ", &[]),
     ("__builtin_ia32_addsubpd", "V2d,V2d,V2d", &[]),
@@ -399,3 +395,7 @@ pub(super) const BUILTINS: &[(&str, &str, &[Immediate])] = &[
     ("__builtin_popcount", "i,I", &[]),
     ("__builtin_popcountll", "i,Q", &[]),
 ];
+
+/// (name, result and parameter encodings, immediate index, minimum, maximum and
+/// allowed-value mask).
+pub(in crate::translation_phases::semantic_analysis) type Immediate = (usize, i128, i128, u16);

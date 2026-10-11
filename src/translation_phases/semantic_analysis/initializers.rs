@@ -31,138 +31,7 @@ use super::{
     expressions::ConversionKind,
 };
 
-fn unparenthesized<'tu>(mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
-    while let ExpressionType::Parenthesized { expression } = e.kind {
-        e = expression;
-    }
-    e
-}
-
-/// C99: §6.7.8p11, p. 126; PDF p. 138. Scalar braces preserve the
-/// initializing expression and its assignment conversion.
-fn scalar_initializer_expression<'tu>(
-    mut initializer: &'tu Initializer<'tu>,
-) -> Option<&'tu Expression<'tu>> {
-    loop {
-        if initializer.recovered {
-            return None;
-        }
-        match initializer.kind {
-            | InitializerType::AssignmentExpression(expression) => return Some(expression),
-            | InitializerType::InitializerList(list) => {
-                let [element] = list.elements.as_slice() else {
-                    return None;
-                };
-                if element.designation.is_some() {
-                    return None;
-                }
-                initializer = element.initializer;
-            },
-        }
-    }
-}
-
-/// One selected subobject; parent cursors preserve continuation after a nested
-/// designator or an elided brace. C99: §6.7.8p17-20, pp. 126-127;
-/// PDF pp. 138-139.
-#[derive(Clone, Copy)]
-struct Current<'s> {
-    container:  TypeId,
-    index:      u64,
-    parent:     Option<&'s Current<'s>>,
-    root_index: u64,
-}
-
-/// Resumable brace-list and current-object initialization tasks.
-/// C99: §6.7.8 paragraphs 17-20, pp. 126-127; PDF pp. 138-139.
-#[derive(Clone, Copy)]
-enum InitWork<'tu, 's> {
-    Value(TypeId, &'tu Initializer<'tu>),
-    List(
-        TypeId,
-        &'tu BracedInitializerList<'tu>,
-        usize,
-        &'s Current<'s>,
-        bool,
-    ),
-}
-
 impl<'tu> Analyzer<'_, 'tu, '_> {
-    /// Checks declaration initialization, completes array types and retains
-    /// constant values.
-    /// C99: §6.7.8 paragraphs 3-5, p. 125; PDF p. 137.
-    /// C99: §6.7.8 paragraph 22, p. 127; PDF p. 139.
-    /// C99: §6.7 paragraph 7, p. 98; PDF p. 110.
-    /// C99: §6.6 paragraph 10, p. 96; PDF p. 108.
-    pub(super) fn initialize_declaration(
-        &mut self,
-        index: usize,
-        initializer: &'tu Initializer<'tu>,
-    ) {
-        let binding = self.bindings[index];
-        if initializer.recovered {
-            self.bindings[index].ty = self.types.unknown();
-            return;
-        }
-        // C99 §6.7.8p5, p. 125; PDF p. 137.
-        if binding.kind == BindingKind::Object
-            && binding.linkage != Linkage::None
-            && self.scopes[binding.scope].kind != ScopeKind::File
-        {
-            self.error(
-                SemanticErrorKind::LinkedBlockInitializer,
-                initializer.source_vectors,
-                Some(binding.name.name),
-                None,
-            );
-            return;
-        }
-        if binding.kind != BindingKind::Object {
-            self.error(
-                SemanticErrorKind::InvalidInitializer,
-                initializer.source_vectors,
-                None,
-                None,
-            );
-            return;
-        }
-        let ty = self.check_initializer(
-            binding.ty,
-            initializer,
-            binding.duration == Duration::Static,
-        );
-        self.bindings[index].ty = ty;
-        if !self.types.unanalyzed(ty) && !self.complete_object(ty) {
-            self.error(
-                SemanticErrorKind::IncompleteObject,
-                initializer.source_vectors,
-                Some(binding.name.name),
-                None,
-            );
-        }
-        // GCC folds a static const, non-volatile integer object's constant
-        // initializer where its value is read in GNU modes.
-        if binding.duration == Duration::Static
-            && ty.qualifiers.contains(TypeQualifiers::CONST)
-            && !ty.qualifiers.contains(TypeQualifiers::VOLATILE)
-            && let Some((bits, signed)) = self.integer_type(ty)
-            && let Some(e) = scalar_initializer_expression(initializer)
-            && let info = self.expression_info(e)
-            && info.constant == ConstantClass::Arithmetic
-            && let Some(value) = info.integer
-        {
-            // C99 §6.3.1.2p1, p. 43; PDF p. 55: _Bool uses truth
-            // conversion rather than truncating to its one-bit model.
-            self.bindings[index].value = Some(
-                if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
-                    Integer::int(i128::from(value.value != 0)).cast(bits, signed)
-                } else {
-                    value.cast(bits, signed)
-                },
-            );
-        }
-    }
-
     /// Applies scalar assignment conversion and aggregate current-object rules.
     /// The returned type completes an array of unknown size from its highest
     /// initialized index. C99: §6.7.8p11-22, pp. 126-127; PDF pp. 138-139.
@@ -482,6 +351,81 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Checks declaration initialization, completes array types and retains
+    /// constant values.
+    /// C99: §6.7.8 paragraphs 3-5, p. 125; PDF p. 137.
+    /// C99: §6.7.8 paragraph 22, p. 127; PDF p. 139.
+    /// C99: §6.7 paragraph 7, p. 98; PDF p. 110.
+    /// C99: §6.6 paragraph 10, p. 96; PDF p. 108.
+    pub(super) fn initialize_declaration(
+        &mut self,
+        index: usize,
+        initializer: &'tu Initializer<'tu>,
+    ) {
+        let binding = self.bindings[index];
+        if initializer.recovered {
+            self.bindings[index].ty = self.types.unknown();
+            return;
+        }
+        // C99 §6.7.8p5, p. 125; PDF p. 137.
+        if binding.kind == BindingKind::Object
+            && binding.linkage != Linkage::None
+            && self.scopes[binding.scope].kind != ScopeKind::File
+        {
+            self.error(
+                SemanticErrorKind::LinkedBlockInitializer,
+                initializer.source_vectors,
+                Some(binding.name.name),
+                None,
+            );
+            return;
+        }
+        if binding.kind != BindingKind::Object {
+            self.error(
+                SemanticErrorKind::InvalidInitializer,
+                initializer.source_vectors,
+                None,
+                None,
+            );
+            return;
+        }
+        let ty = self.check_initializer(
+            binding.ty,
+            initializer,
+            binding.duration == Duration::Static,
+        );
+        self.bindings[index].ty = ty;
+        if !self.types.unanalyzed(ty) && !self.complete_object(ty) {
+            self.error(
+                SemanticErrorKind::IncompleteObject,
+                initializer.source_vectors,
+                Some(binding.name.name),
+                None,
+            );
+        }
+        // GCC folds a static const, non-volatile integer object's constant
+        // initializer where its value is read in GNU modes.
+        if binding.duration == Duration::Static
+            && ty.qualifiers.contains(TypeQualifiers::CONST)
+            && !ty.qualifiers.contains(TypeQualifiers::VOLATILE)
+            && let Some((bits, signed)) = self.integer_type(ty)
+            && let Some(e) = scalar_initializer_expression(initializer)
+            && let info = self.expression_info(e)
+            && info.constant == ConstantClass::Arithmetic
+            && let Some(value) = info.integer
+        {
+            // C99 §6.3.1.2p1, p. 43; PDF p. 55: _Bool uses truth
+            // conversion rather than truncating to its one-bit model.
+            self.bindings[index].value = Some(
+                if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
+                    Integer::int(i128::from(value.value != 0)).cast(bits, signed)
+                } else {
+                    value.cast(bits, signed)
+                },
+            );
+        }
+    }
+
     fn aggregate(&self, ty: TypeId) -> bool {
         matches!(
             self.types.nodes[ty.index],
@@ -670,4 +614,60 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             cursor = *cursor.parent.unwrap_or(&cursor);
         }
     }
+}
+
+fn unparenthesized<'tu>(mut e: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
+    while let ExpressionType::Parenthesized { expression } = e.kind {
+        e = expression;
+    }
+    e
+}
+
+/// C99: §6.7.8p11, p. 126; PDF p. 138. Scalar braces preserve the
+/// initializing expression and its assignment conversion.
+fn scalar_initializer_expression<'tu>(
+    mut initializer: &'tu Initializer<'tu>,
+) -> Option<&'tu Expression<'tu>> {
+    loop {
+        if initializer.recovered {
+            return None;
+        }
+        match initializer.kind {
+            | InitializerType::AssignmentExpression(expression) => return Some(expression),
+            | InitializerType::InitializerList(list) => {
+                let [element] = list.elements.as_slice() else {
+                    return None;
+                };
+                if element.designation.is_some() {
+                    return None;
+                }
+                initializer = element.initializer;
+            },
+        }
+    }
+}
+
+/// One selected subobject; parent cursors preserve continuation after a nested
+/// designator or an elided brace. C99: §6.7.8p17-20, pp. 126-127;
+/// PDF pp. 138-139.
+#[derive(Clone, Copy)]
+struct Current<'s> {
+    container:  TypeId,
+    index:      u64,
+    parent:     Option<&'s Current<'s>>,
+    root_index: u64,
+}
+
+/// Resumable brace-list and current-object initialization tasks.
+/// C99: §6.7.8 paragraphs 17-20, pp. 126-127; PDF pp. 138-139.
+#[derive(Clone, Copy)]
+enum InitWork<'tu, 's> {
+    Value(TypeId, &'tu Initializer<'tu>),
+    List(
+        TypeId,
+        &'tu BracedInitializerList<'tu>,
+        usize,
+        &'s Current<'s>,
+        bool,
+    ),
 }

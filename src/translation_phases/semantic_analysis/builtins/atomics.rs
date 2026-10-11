@@ -18,138 +18,6 @@ use super::{
     TypeQualifiers,
 };
 
-/// Vendor atomic intrinsic families.
-/// Clang extension: Clang Language Extensions, "C11 atomic builtins".
-/// <https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins>
-/// GNU extension: GCC manual, "__atomic Builtins".
-/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
-/// GNU extension: GCC manual, "__sync Builtins".
-/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Family {
-    C11,
-    Gnu,
-    Sync,
-}
-
-/// Atomic operations and their operand contracts.
-/// Clang extension: Clang Language Extensions, "C11 atomic builtins".
-/// <https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins>
-/// GNU extension: GCC manual, "__atomic Builtins".
-/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
-/// GNU extension: GCC manual, "__sync Builtins".
-/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Operation {
-    Init,
-    ThreadFence,
-    SignalFence,
-    AlwaysLockFree,
-    IsLockFree,
-    Load,
-    Store,
-    Exchange,
-    Compare,
-    TestSet,
-    Clear,
-    FetchAdd,
-    FetchSub,
-    FetchBitwise,
-    FetchMinMax,
-    ValueCompare,
-}
-
-/// Atomic builtin family, operation and required operand count.
-/// Clang extension: Clang Language Extensions, "C11 atomic builtins".
-/// <https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins>
-/// GNU extension: GCC manual, "__atomic Builtins".
-/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
-/// GNU extension: GCC manual, "__sync Builtins".
-/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
-#[derive(Clone, Copy)]
-struct Intrinsic {
-    family:    Family,
-    operation: Operation,
-    generic:   bool,
-    count:     usize,
-}
-
-/// Recognizes atomic builtin spellings and their signatures.
-/// Clang extension: Clang Language Extensions, "C11 atomic builtins".
-/// <https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins>
-/// GNU extension: GCC manual, "__atomic Builtins".
-/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
-/// GNU extension: GCC manual, "__sync Builtins".
-/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
-fn intrinsic(name: &str) -> Option<Intrinsic> {
-    use Family as F;
-    use Operation as O;
-    let (family, name) = if let Some(name) = name.strip_prefix("__c11_atomic_") {
-        (F::C11, name)
-    } else if let Some(name) = name.strip_prefix("__atomic_") {
-        (F::Gnu, name)
-    } else {
-        (F::Sync, name.strip_prefix("__sync_")?)
-    };
-    let (operation, generic, count) = match (family, name) {
-        | (F::C11, "init") => (O::Init, false, 2),
-        | (F::C11 | F::Gnu, "thread_fence") => (O::ThreadFence, false, 1),
-        | (F::C11 | F::Gnu, "signal_fence") => (O::SignalFence, false, 1),
-        | (F::Sync, "synchronize") => (O::ThreadFence, false, 0),
-        | (F::Gnu, "always_lock_free") => (O::AlwaysLockFree, false, 2),
-        | (F::C11, "is_lock_free") => (O::IsLockFree, false, 1),
-        | (F::Gnu, "is_lock_free") => (O::IsLockFree, false, 2),
-        | (F::C11, "load") | (F::Gnu, "load_n") => (O::Load, false, 2),
-        | (F::Gnu, "load") => (O::Load, true, 3),
-        | (F::C11, "store") | (F::Gnu, "store_n") => (O::Store, false, 3),
-        | (F::Gnu, "store") => (O::Store, true, 3),
-        | (F::C11, "exchange") | (F::Gnu, "exchange_n") => (O::Exchange, false, 3),
-        | (F::Gnu, "exchange") => (O::Exchange, true, 4),
-        | (F::C11, "compare_exchange_strong" | "compare_exchange_weak") => (O::Compare, false, 5),
-        | (F::Gnu, "compare_exchange_n") => (O::Compare, false, 6),
-        | (F::Gnu, "compare_exchange") => (O::Compare, true, 6),
-        | (F::Gnu, "test_and_set") => (O::TestSet, false, 2),
-        | (F::Gnu, "clear") => (O::Clear, false, 2),
-        | (F::Sync, "lock_test_and_set") => (O::Exchange, false, 2),
-        | (F::Sync, "lock_release") => (O::Clear, false, 1),
-        | (F::Sync, "bool_compare_and_swap") => (O::Compare, false, 3),
-        | (F::Sync, "val_compare_and_swap") => (O::ValueCompare, false, 3),
-        | (F::C11 | F::Gnu, "fetch_add")
-        | (F::Gnu, "add_fetch")
-        | (F::Sync, "fetch_and_add" | "add_and_fetch") =>
-            (O::FetchAdd, false, if family == F::Sync { 2 } else { 3 }),
-        | (F::C11 | F::Gnu, "fetch_sub")
-        | (F::Gnu, "sub_fetch")
-        | (F::Sync, "fetch_and_sub" | "sub_and_fetch") =>
-            (O::FetchSub, false, if family == F::Sync { 2 } else { 3 }),
-        | (F::C11 | F::Gnu, "fetch_and" | "fetch_or" | "fetch_xor" | "fetch_nand")
-        | (F::Gnu, "and_fetch" | "or_fetch" | "xor_fetch" | "nand_fetch")
-        | (
-            F::Sync,
-            "fetch_and_and" | "fetch_and_or" | "fetch_and_xor" | "fetch_and_nand" | "and_and_fetch"
-            | "or_and_fetch" | "xor_and_fetch" | "nand_and_fetch",
-        ) => (
-            O::FetchBitwise,
-            false,
-            if family == F::Sync { 2 } else { 3 },
-        ),
-        | (F::C11 | F::Gnu, "fetch_min" | "fetch_max") | (F::Gnu, "min_fetch" | "max_fetch") =>
-            (O::FetchMinMax, false, 3),
-        | _ => return None,
-    };
-    Some(Intrinsic {
-        family,
-        operation,
-        generic,
-        count,
-    })
-}
-
-/// Exact builtin recognition is shared with the preprocessing feature query.
-pub(crate) fn modeled(name: &str) -> bool {
-    intrinsic(name).is_some()
-}
-
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Clang/GCC type-generic atomic builtin contract, independent of lowering.
     /// Clang extension: Clang Language Extensions, "C11 atomic builtins".
@@ -158,7 +26,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
     /// GNU extension: GCC manual, "__sync Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
-    pub(super) fn atomic_call(
+    pub(in crate::translation_phases::semantic_analysis) fn atomic_call(
         &mut self,
         e: &'tu Expression<'tu>,
         mut callee: &'tu Expression<'tu>,
@@ -462,7 +330,7 @@ impl Analyzer<'_, '_, '_> {
     /// C11: §6.7.3 paragraph 3, p. 121; PDF p. 139.
     /// Clang extension: Clang rejects `_Atomic` on an incomplete type with
     /// `err_atomic_specifier_bad_type` in `DiagnosticSemaKinds.td`.
-    pub(super) fn atomic_type(
+    pub(in crate::translation_phases::semantic_analysis) fn atomic_type(
         &mut self,
         value: TypeId,
         source: SourceVectors,
@@ -490,4 +358,136 @@ impl Analyzer<'_, '_, '_> {
                 .qualified(value.qualifiers)
         }
     }
+}
+
+/// Vendor atomic intrinsic families.
+/// Clang extension: Clang Language Extensions, "C11 atomic builtins".
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins>
+/// GNU extension: GCC manual, "__atomic Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+/// GNU extension: GCC manual, "__sync Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Family {
+    C11,
+    Gnu,
+    Sync,
+}
+
+/// Atomic operations and their operand contracts.
+/// Clang extension: Clang Language Extensions, "C11 atomic builtins".
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins>
+/// GNU extension: GCC manual, "__atomic Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+/// GNU extension: GCC manual, "__sync Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Operation {
+    Init,
+    ThreadFence,
+    SignalFence,
+    AlwaysLockFree,
+    IsLockFree,
+    Load,
+    Store,
+    Exchange,
+    Compare,
+    TestSet,
+    Clear,
+    FetchAdd,
+    FetchSub,
+    FetchBitwise,
+    FetchMinMax,
+    ValueCompare,
+}
+
+/// Atomic builtin family, operation and required operand count.
+/// Clang extension: Clang Language Extensions, "C11 atomic builtins".
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins>
+/// GNU extension: GCC manual, "__atomic Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+/// GNU extension: GCC manual, "__sync Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
+#[derive(Clone, Copy)]
+struct Intrinsic {
+    family:    Family,
+    operation: Operation,
+    generic:   bool,
+    count:     usize,
+}
+
+/// Recognizes atomic builtin spellings and their signatures.
+/// Clang extension: Clang Language Extensions, "C11 atomic builtins".
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins>
+/// GNU extension: GCC manual, "__atomic Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
+/// GNU extension: GCC manual, "__sync Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
+fn intrinsic(name: &str) -> Option<Intrinsic> {
+    use Family as F;
+    use Operation as O;
+    let (family, name) = if let Some(name) = name.strip_prefix("__c11_atomic_") {
+        (F::C11, name)
+    } else if let Some(name) = name.strip_prefix("__atomic_") {
+        (F::Gnu, name)
+    } else {
+        (F::Sync, name.strip_prefix("__sync_")?)
+    };
+    let (operation, generic, count) = match (family, name) {
+        | (F::C11, "init") => (O::Init, false, 2),
+        | (F::C11 | F::Gnu, "thread_fence") => (O::ThreadFence, false, 1),
+        | (F::C11 | F::Gnu, "signal_fence") => (O::SignalFence, false, 1),
+        | (F::Sync, "synchronize") => (O::ThreadFence, false, 0),
+        | (F::Gnu, "always_lock_free") => (O::AlwaysLockFree, false, 2),
+        | (F::C11, "is_lock_free") => (O::IsLockFree, false, 1),
+        | (F::Gnu, "is_lock_free") => (O::IsLockFree, false, 2),
+        | (F::C11, "load") | (F::Gnu, "load_n") => (O::Load, false, 2),
+        | (F::Gnu, "load") => (O::Load, true, 3),
+        | (F::C11, "store") | (F::Gnu, "store_n") => (O::Store, false, 3),
+        | (F::Gnu, "store") => (O::Store, true, 3),
+        | (F::C11, "exchange") | (F::Gnu, "exchange_n") => (O::Exchange, false, 3),
+        | (F::Gnu, "exchange") => (O::Exchange, true, 4),
+        | (F::C11, "compare_exchange_strong" | "compare_exchange_weak") => (O::Compare, false, 5),
+        | (F::Gnu, "compare_exchange_n") => (O::Compare, false, 6),
+        | (F::Gnu, "compare_exchange") => (O::Compare, true, 6),
+        | (F::Gnu, "test_and_set") => (O::TestSet, false, 2),
+        | (F::Gnu, "clear") => (O::Clear, false, 2),
+        | (F::Sync, "lock_test_and_set") => (O::Exchange, false, 2),
+        | (F::Sync, "lock_release") => (O::Clear, false, 1),
+        | (F::Sync, "bool_compare_and_swap") => (O::Compare, false, 3),
+        | (F::Sync, "val_compare_and_swap") => (O::ValueCompare, false, 3),
+        | (F::C11 | F::Gnu, "fetch_add")
+        | (F::Gnu, "add_fetch")
+        | (F::Sync, "fetch_and_add" | "add_and_fetch") =>
+            (O::FetchAdd, false, if family == F::Sync { 2 } else { 3 }),
+        | (F::C11 | F::Gnu, "fetch_sub")
+        | (F::Gnu, "sub_fetch")
+        | (F::Sync, "fetch_and_sub" | "sub_and_fetch") =>
+            (O::FetchSub, false, if family == F::Sync { 2 } else { 3 }),
+        | (F::C11 | F::Gnu, "fetch_and" | "fetch_or" | "fetch_xor" | "fetch_nand")
+        | (F::Gnu, "and_fetch" | "or_fetch" | "xor_fetch" | "nand_fetch")
+        | (
+            F::Sync,
+            "fetch_and_and" | "fetch_and_or" | "fetch_and_xor" | "fetch_and_nand" | "and_and_fetch"
+            | "or_and_fetch" | "xor_and_fetch" | "nand_and_fetch",
+        ) => (
+            O::FetchBitwise,
+            false,
+            if family == F::Sync { 2 } else { 3 },
+        ),
+        | (F::C11 | F::Gnu, "fetch_min" | "fetch_max") | (F::Gnu, "min_fetch" | "max_fetch") =>
+            (O::FetchMinMax, false, 3),
+        | _ => return None,
+    };
+    Some(Intrinsic {
+        family,
+        operation,
+        generic,
+        count,
+    })
+}
+
+/// Exact builtin recognition is shared with the preprocessing feature query.
+pub(crate) fn modeled(name: &str) -> bool {
+    intrinsic(name).is_some()
 }
