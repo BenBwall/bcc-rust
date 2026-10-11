@@ -7,16 +7,26 @@
 //! PDF p. 23. This module preserves locations rather than checking grammar.
 
 use super::{
-    ArenaQueue,
-    Bump,
     Context,
-    GetPosition,
-    MergeAnchors,
-    RegionVec,
-    SourceArena,
-    SourcePosition,
-    SourceVector,
-    SourceVectors,
+    merge_anchors::MergeAnchors,
+};
+use crate::{
+    translation_phases::{
+        GetPosition,
+        provenance::{
+            SourceArena,
+            SourcePosition,
+            SourceVector,
+            SourceVectors,
+        },
+    },
+    util::{
+        bump::{
+            ArenaQueue,
+            Bump,
+        },
+        region_vec::RegionVec,
+    },
 };
 
 impl Context<'_> {
@@ -169,7 +179,7 @@ impl Context<'_> {
     }
 
     /// Appends the vectors of `source` to `target`.
-    pub(super) fn copy_into(&mut self, target: SourceArena, source: SourceVectors) {
+    fn copy_into(&mut self, target: SourceArena, source: SourceVectors) {
         let (_, end) = Self::checked_source_append(
             target,
             self.arena(target).len(),
@@ -300,7 +310,7 @@ impl Context<'_> {
         })
     }
 
-    pub(super) fn push_source_vector_value(&mut self, vector: SourceVector) -> u32 {
+    fn push_source_vector_value(&mut self, vector: SourceVector) -> u32 {
         let (index, _) = Self::checked_source_append(
             SourceArena::Preprocessor,
             self.source_vectors.0.len(),
@@ -434,7 +444,7 @@ impl Context<'_> {
             .expect("source segment count overflow")
     }
 
-    pub(super) fn merge_target(all_preprocessor: bool) -> SourceArena {
+    fn merge_target(all_preprocessor: bool) -> SourceArena {
         if all_preprocessor {
             SourceArena::Preprocessor
         } else {
@@ -472,7 +482,7 @@ impl Context<'_> {
         (range_start, end)
     }
 
-    pub(super) fn arena(&self, arena: SourceArena) -> &[SourceVector] {
+    fn arena(&self, arena: SourceArena) -> &[SourceVector] {
         match arena {
             | SourceArena::Preprocessor => &self.source_vectors.0,
             | SourceArena::ParserTokens => &self.parser_token_vectors,

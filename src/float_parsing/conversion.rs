@@ -1,16 +1,21 @@
 //! Converts float and double spellings and adapts binary64 results to the
 //! long-double carrier used by Microsoft targets.
 
+use std::ffi::c_char;
+
 use super::{
-    FloatTokenType,
     LongDouble,
-    Packed,
     ParseFloatError,
-    c_char,
-    consumed_whole_spelling,
     ffi,
-    range::class_of,
-    range_error,
+    range::{
+        class_of,
+        consumed_whole_spelling,
+        range_error,
+    },
+};
+use crate::{
+    translation_phases::preprocessing::FloatTokenType,
+    util::packed::Packed,
 };
 
 /// Converts a NUL-terminated unsuffixed `double` constant spelling.
@@ -20,7 +25,7 @@ pub(crate) fn string_to_double(s: &str) -> Result<f64, ParseFloatError> {
     parse_double(s, 0)
 }
 
-pub(super) fn parse_double(s: &str, suffix_bytes: usize) -> Result<f64, ParseFloatError> {
+fn parse_double(s: &str, suffix_bytes: usize) -> Result<f64, ParseFloatError> {
     assert!(
         s.ends_with('\0'),
         "string_to_double: string must end with null byte. Was: {s:?}"

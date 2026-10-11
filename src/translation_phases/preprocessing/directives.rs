@@ -49,15 +49,6 @@ mod definitions;
 mod error;
 mod pragma;
 
-use std::{
-    ffi::OsStr,
-    ops::ControlFlow,
-    path::{
-        Component,
-        Path,
-    },
-};
-
 use super::{
     Expander,
     LiteralUnit,
@@ -66,39 +57,12 @@ use super::{
         PreprocessorErrorType,
     },
     language_features,
-    runtime::{
-        TokenizerFrame,
-        TokenizerFrameType,
-    },
-    token::{
-        StringTokenType,
-        TokenType,
-    },
 };
 use crate::{
-    configuration::{
-        ExtensionPolicy,
-        Feature,
-    },
-    translation_phases::{
-        Context,
-        ErrorSeverity,
-        SourcePosition,
-        SourceVectors,
-        TranslationError,
-        TranslationPhase,
-        preprocessor_tokenizer::{
-            LogicalCharacter,
-            PreprocessorToken,
-            PreprocessorTokenType,
-            logical_characters,
-            position_after,
-        },
-    },
-    util::bump::{
-        ArenaString,
-        ArenaVec,
-        Bump,
+    configuration::Feature,
+    translation_phases::preprocessor_tokenizer::{
+        PreprocessorToken,
+        PreprocessorTokenType,
     },
 };
 

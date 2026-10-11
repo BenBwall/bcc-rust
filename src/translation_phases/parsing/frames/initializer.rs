@@ -16,17 +16,6 @@
 use std::fmt::Debug;
 
 use super::{
-    Parser,
-    declaration_syntax::{
-        BracedInitializerList,
-        Designation,
-        Designator,
-        DesignatorType,
-        Initializer,
-        InitializerElement,
-        InitializerType,
-    },
-    errors::ParserErrorType,
     expression::{
         ExpressionBoundary,
         ExpressionFrame,
@@ -36,31 +25,44 @@ use super::{
         binary_operator,
         is_postfix_starter,
     },
-    frame_pool::{
-        FramePools,
-        PoolBox,
-    },
-    machine::{
-        ConstantExpressionResult,
-        InitializerResult,
-        ParseAction,
-        ParseFrame,
-        ParseValue,
-        expression_value,
-        unexpected_return,
-    },
-    recovery::DelimiterDepth,
     statement::is_statement_keyword,
-    syntax::{
-        ConstantExpression,
-        ExpressionType,
-        Identifier,
-    },
 };
 use crate::{
     translation_phases::{
         Context,
         SourceVectors,
+        parsing::{
+            Parser,
+            declaration_syntax::{
+                BracedInitializerList,
+                Designation,
+                Designator,
+                DesignatorType,
+                Initializer,
+                InitializerElement,
+                InitializerType,
+            },
+            errors::ParserErrorType,
+            frame_pool::{
+                FramePools,
+                PoolBox,
+            },
+            machine::{
+                ConstantExpressionResult,
+                InitializerResult,
+                ParseAction,
+                ParseFrame,
+                ParseValue,
+                expression_value,
+                unexpected_return,
+            },
+            recovery::DelimiterDepth,
+            syntax::{
+                ConstantExpression,
+                ExpressionType,
+                Identifier,
+            },
+        },
         preprocessing::{
             OperatorTokenType,
             Token,

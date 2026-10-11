@@ -20,41 +20,43 @@
 use std::fmt::Debug;
 
 use super::{
-    Parser,
     compound_statement::CompoundStatementFrame,
     declaration::{
         DeclarationContext,
         DeclarationFrame,
     },
-    declaration_syntax::{
-        Declaration,
-        Declarator,
-        DirectDeclarator,
-        TypeSpecifiers,
-    },
-    errors::ParserErrorType,
     expression_operators::is_operator,
-    machine::{
-        ParseAction,
-        ParseFrame,
-        ParseValue,
-        unexpected_return,
-    },
-    scope::{
-        NameClass,
-        ScopeKind,
-        list_key,
-    },
-    syntax::{
-        FunctionDefinition,
-        Statement,
-        StatementType,
-    },
 };
 use crate::{
     translation_phases::{
         SourceVectors,
         TranslationError,
+        parsing::{
+            Parser,
+            declaration_syntax::{
+                Declaration,
+                Declarator,
+                DirectDeclarator,
+                TypeSpecifiers,
+            },
+            errors::ParserErrorType,
+            machine::{
+                ParseAction,
+                ParseFrame,
+                ParseValue,
+                unexpected_return,
+            },
+            scope::{
+                NameClass,
+                ScopeKind,
+                list_key,
+            },
+            syntax::{
+                FunctionDefinition,
+                Statement,
+                StatementType,
+            },
+        },
         preprocessing::{
             OperatorTokenType,
             Token,

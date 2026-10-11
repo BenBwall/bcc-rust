@@ -4,10 +4,11 @@
 //! PDF pp. 163-165; macro definition lifetime, §6.10.3.5 paragraph 1, p. 155;
 //! PDF p. 167. Replacement execution belongs to the macro reader.
 
-use super::{
-    Debug,
-    StringCacheId,
-    TokenSource,
+use std::fmt::Debug;
+
+use crate::{
+    translation_phases::preprocessor_tokenizer::TokenSource,
+    util::string_cache::StringCacheId,
 };
 
 /// A macro name's current definition. It lasts until `#undef` names it or
@@ -32,7 +33,9 @@ pub(crate) enum MacroDefinition<'pp> {
         /// GNU named variadic parameter, distinct from standard `__VA_ARGS__`.
         variadic_alias: Option<StringCacheId>,
     },
-    /// A predefined macro or the `_Pragma` operator, expanded by the driver.
+    /// A predefined macro or the `_Pragma` operator, which the macro-replacing
+    /// reader expands through
+    /// [`Expander::expand_builtin`](crate::translation_phases::preprocessing::Expander::expand_builtin).
     ///
     /// C99: §6.10.8 paragraph 1, p. 160; PDF p. 172, and §6.10.9 paragraph
     /// 1, p. 161; PDF p. 173.

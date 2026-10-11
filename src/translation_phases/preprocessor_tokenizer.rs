@@ -3,7 +3,7 @@
 //! lexer then reads the resulting text from left to right, records token
 //! boundaries and original source positions, and saves diagnostics for replay
 //! when phase 4 reads each token. Comments and horizontal whitespace become one
-//! space; newlines stay.
+//! space, a block comment's own newlines included; other newlines stay.
 //!
 //! For example, `ab` followed by a backslash, a physical newline, and `cd + 1`
 //! becomes `abcd + 1` after splicing. The lexing loop records an identifier, a
@@ -18,6 +18,7 @@
 //! phase 4.
 //!
 //! Files by role:
+//! - State construction: `construction.rs` builds the lexer state.
 //! - Source mapping: `splicing.rs` replaces trigraphs and deletes splices;
 //!   `positions.rs` maps offsets back to physical source positions.
 //! - Scanning: `scanning.rs` reads bytes and handles the end of input;
@@ -29,7 +30,7 @@
 //! - Token sources: `token_source.rs` reads lexed files; `replay.rs` reads
 //!   tokens made in phase 4.
 //! - Token and diagnostic types: `token.rs` defines preprocessing tokens;
-//!   `errors.rs` defines lexical and final-newline diagnostics.
+//!   `errors.rs` defines the lexical diagnostics.
 //! - Tests: `tests.rs` checks lexer snapshots, replay, and preprocessing;
 //!   `storage.rs` also holds the packed-entry layout test.
 //!
@@ -41,6 +42,9 @@
 //! phase-4 `#include` handling (§6.4 paragraph 4, p. 50; PDF p. 62; §6.4.7, pp.
 //! 64-65; PDF pp. 76-77). Escape values and conversion to C tokens belong to
 //! later phases.
+
+// Lexer construction.
+mod construction;
 
 // Source mapping.
 mod positions;
@@ -58,7 +62,7 @@ mod replay;
 mod token_source;
 
 // Token and diagnostic types.
-pub(super) mod errors;
+mod errors;
 mod token;
 
 pub(crate) use errors::{
@@ -90,7 +94,6 @@ use super::{
     Context,
     SourcePosition,
     SourceVector,
-    SourceVectors,
     initial_processing::terminal_splice_length,
     provenance::source_offset,
 };
@@ -117,7 +120,7 @@ impl<'a> LexedFile<'a> {
     /// when the file needs one of them, and releases it when the file is
     /// lexed, so a large file's spliced copy does not stay committed for the
     /// rest of preprocessing.
-    pub(super) fn lex(
+    fn lex(
         context: &mut Context<'_>,
         arena: &'a Bump,
         source_file_index: u32,

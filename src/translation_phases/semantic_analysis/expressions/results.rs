@@ -4,10 +4,10 @@
 //! C99: §6.3.2.1, pp. 46-47; PDF pp. 58-59;
 //! §6.6, pp. 95-96; PDF pp. 107-108.
 
-use super::{
-    Expression,
-    ExpressionInfo,
-    TypeId,
+use super::ExpressionInfo;
+use crate::translation_phases::{
+    parsing::syntax::Expression,
+    semantic_analysis::types::TypeId,
 };
 
 /// One contextual conversion and its resulting type.

@@ -1,8 +1,8 @@
 //! Recording phase-3 token entries. [`super::super::Lexer::push`] writes a
 //! packed entry and attaches its diagnostics and end-of-input reading state.
-//! The remaining methods intern spellings, record extension locations, and set
-//! up the lexer. Diagnostics are replayed by the token source; this module does
-//! not interpret token values or expand macros.
+//! The remaining methods intern spellings and record extension locations.
+//! Diagnostics are replayed by the token source; this module does not interpret
+//! token values or expand macros.
 //!
 //! C99: §5.1.1.2 paragraph 1 (phase 3), p. 10; PDF p. 22;
 //! preprocessing-token categories §6.4 paragraphs 1-3, p. 49; PDF p. 61.
@@ -11,30 +11,20 @@
 
 use super::{
     super::{
-        Context,
         Lexer,
-        LexingFile,
-        PreprocessorTokenType,
-        PreprocessorTokenizerErrorType,
-        SourcePosition,
-        positions::PositionTracker,
-        splicing::Remap,
+        errors::PreprocessorTokenizerErrorType,
         storage::{
             Entry,
             LexDiagnostic,
         },
+        token::PreprocessorTokenType,
     },
     Lexed,
 };
 use crate::{
     configuration::Feature,
-    util::{
-        bump::{
-            ArenaVec,
-            Bump,
-        },
-        string_cache::StringCacheId,
-    },
+    translation_phases::provenance::SourcePosition,
+    util::string_cache::StringCacheId,
 };
 
 impl Lexer<'_, '_, '_, '_> {
@@ -77,9 +67,7 @@ impl Lexer<'_, '_, '_, '_> {
     }
 
     /// Leaves room for the one-past-last entry used when reading EOF.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn checked_entry_index(
-        length: usize,
-    ) -> u32 {
+    pub(super) fn checked_entry_index(length: usize) -> u32 {
         let next = length
             .checked_add(1)
             .and_then(|count| u32::try_from(count).ok())
@@ -88,7 +76,7 @@ impl Lexer<'_, '_, '_, '_> {
     }
 
     /// Finishes a token spelled exactly by `start..end`.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn spelled(
+    pub(super) fn spelled(
         &mut self,
         start: usize,
         end: usize,
@@ -104,7 +92,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// Digraph-only diagnostics stay outside the common token completion path.
     /// C95 amendment 1 introduced the alternative token spellings.
     /// C99: §6.4.6p3, p. 64; PDF p. 76.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn digraph(
+    pub(super) fn digraph(
         &mut self,
         start: usize,
         end: usize,
@@ -117,7 +105,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// Maps a spelling's endpoints to original source bytes. Adjacent splices
     /// stay outside the diagnostic, while splices within the spelling are kept.
     /// C99: phase-2 deletion §5.1.1.2p1, pp. 9-10; PDF pp. 21-22.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn record_spliced_extension(
+    pub(super) fn record_spliced_extension(
         &mut self,
         feature: Feature,
         spelling: &'static str,
@@ -131,7 +119,7 @@ impl Lexer<'_, '_, '_, '_> {
 
     /// Keeps extension diagnostics beside their entry, so skipped groups stay
     /// silent. C99: §5.1.1.3p1, p. 11; PDF p. 23; GNU lexical extensions.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn record_extension(
+    pub(super) fn record_extension(
         &mut self,
         feature: Feature,
         spelling: &'static str,
@@ -171,7 +159,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// reached without closing its token. Scan loops keep only the call.
     #[cold]
     #[inline(never)]
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn diagnose_to_eof(
+    pub(super) fn diagnose_to_eof(
         &mut self,
         error_type: PreprocessorTokenizerErrorType,
         start: SourcePosition,
@@ -189,7 +177,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// Queues a diagnostic from `start` to the byte offset `end`.
     #[cold]
     #[inline(never)]
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn diagnose_to(
+    pub(super) fn diagnose_to(
         &mut self,
         error_type: PreprocessorTokenizerErrorType,
         start: SourcePosition,
@@ -204,19 +192,12 @@ impl Lexer<'_, '_, '_, '_> {
         });
     }
 
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn intern(
-        &mut self,
-        start: usize,
-        end: usize,
-    ) -> StringCacheId {
+    fn intern(&mut self, start: usize, end: usize) -> StringCacheId {
         let text = self.text;
         self.intern_spelling(&text[start..end])
     }
 
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn intern_spelling(
-        &mut self,
-        spelling: &str,
-    ) -> StringCacheId {
+    fn intern_spelling(&mut self, spelling: &str) -> StringCacheId {
         if let [byte @ 0..=127] = spelling.as_bytes() {
             let index = usize::from(*byte);
             if let Some(id) = self.ascii[index] {
@@ -231,11 +212,8 @@ impl Lexer<'_, '_, '_, '_> {
     }
 }
 
-impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn char_at(
-        &self,
-        offset: usize,
-    ) -> char {
+impl Lexer<'_, '_, '_, '_> {
+    pub(super) fn char_at(&self, offset: usize) -> char {
         self.text[offset..]
             .chars()
             .next()
@@ -244,60 +222,8 @@ impl<'a, 'tu, 'arena, 's> Lexer<'a, 'tu, 'arena, 's> {
 
     /// Where reading past the end stands:
     /// beyond every trailing splice.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn eof_position(
-        &self,
-    ) -> SourcePosition {
+    fn eof_position(&self) -> SourcePosition {
         let mut tracker = self.tracker.clone();
         tracker.advance_past_deletions(self.bytes.len())
-    }
-
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn new(
-        context: &'a mut Context<'tu>,
-        arena: &'arena Bump,
-        scratch: &'s Bump,
-        text: &'a str,
-        remaps: &'a [Remap],
-        physically_empty: bool,
-    ) -> Self {
-        let bytes = text.as_bytes();
-        let lacks_final_newline = !physically_empty && bytes.last() != Some(&b'\n');
-        Self {
-            ascii: [None; 128],
-            context,
-            text,
-            bytes,
-            tracker: PositionTracker::new(bytes, remaps),
-            pos: 0,
-            current_line_high: 0,
-            lacks_final_newline,
-            virtual_newline: lacks_final_newline,
-            reached_eof: false,
-            terminal_splice: false,
-            splice_armed: true,
-            read_end: false,
-            read_final_newline: false,
-            scratch,
-            pending: ArenaVec::new_in(scratch),
-            file: LexingFile {
-                entries: arena.tail_vec(),
-                line_high_starts: ArenaVec::new_in(scratch),
-                end_of_tokens: SourcePosition::default(),
-                eof: SourcePosition::default(),
-                diagnostics: ArenaVec::new_in(scratch),
-                other_locations: ArenaVec::new_in(scratch),
-                final_newline_entry: None,
-                final_newline_readers: ArenaVec::new_in(scratch),
-                lacks_final_newline,
-                end_readers: ArenaVec::new_in(scratch),
-            },
-        }
-    }
-
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn with_terminal_splice(
-        mut self,
-        terminal_splice: bool,
-    ) -> Self {
-        self.terminal_splice = terminal_splice;
-        self
     }
 }

@@ -11,9 +11,6 @@ use std::fmt::Debug;
 
 use super::{
     Parser,
-    compound_statement::CompoundStatementFrame,
-    declaration::DeclarationFrame,
-    declaration_specifiers::DeclarationSpecifiersFrame,
     declaration_syntax::{
         Declaration,
         DeclarationSpecifiers,
@@ -24,28 +21,36 @@ use super::{
         StructOrUnionSpecifier,
         TypeName,
     },
-    declarator::DeclaratorFrame,
-    enum_specifier::EnumSpecifierFrame,
-    expression::ExpressionFrame,
-    external_declaration::ExternalDeclarationFrame,
+    extensions::{
+        gnu::{
+            GnuFrame,
+            GnuValue,
+        },
+        modern::{
+            ModernFrame,
+            ModernValue,
+        },
+    },
     frame_pool::{
         FramePools,
         PoolBox,
     },
-    function_definition::FunctionDefinitionFrame,
-    gnu::{
-        GnuFrame,
-        GnuValue,
+    frames::{
+        compound_statement::CompoundStatementFrame,
+        declaration::DeclarationFrame,
+        declaration_specifiers::DeclarationSpecifiersFrame,
+        declarator::DeclaratorFrame,
+        enum_specifier::EnumSpecifierFrame,
+        expression::ExpressionFrame,
+        external_declaration::ExternalDeclarationFrame,
+        function_definition::FunctionDefinitionFrame,
+        initializer::InitializerFrame,
+        parameter_list::ParameterListFrame,
+        statement::StatementFrame,
+        struct_or_union::StructOrUnionSpecifierFrame,
+        type_name::TypeNameFrame,
     },
-    initializer::InitializerFrame,
-    modern::{
-        ModernFrame,
-        ModernValue,
-    },
-    parameter_list::ParameterListFrame,
     recovery::SynchronizationSet,
-    statement::StatementFrame,
-    struct_or_union::StructOrUnionSpecifierFrame,
     syntax::{
         ConstantExpression,
         Expression,
@@ -53,7 +58,6 @@ use super::{
         FunctionDefinition,
         Statement,
     },
-    type_name::TypeNameFrame,
 };
 #[cfg(test)]
 use crate::translation_phases::preprocessing::TokenType;

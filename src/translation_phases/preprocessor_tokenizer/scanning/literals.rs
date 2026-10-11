@@ -1,7 +1,8 @@
 //! Quoted tokens, whitespace, and comments in translation phase 3.
 //! The scanners retain newlines and replace horizontal whitespace and comments
-//! with a space. Quoted-token scanning records spellings and recovers partial
-//! tokens; escape validity and literal values are checked after lexing.
+//! with a space; a block comment's own newlines become part of that space.
+//! Quoted-token scanning records spellings and recovers partial tokens; escape
+//! validity and literal values are checked after lexing.
 //!
 //! C99: §5.1.1.2 paragraph 1 (phase 3), p. 10; PDF p. 22;
 //! comments §6.4.9 paragraphs 1-2, p. 66; PDF p. 78;
@@ -13,12 +14,12 @@ use super::{
         Lexer,
         PreprocessorTokenType,
         PreprocessorTokenizerErrorType,
-        SourcePosition,
     },
     Lexed,
 };
 use crate::{
     configuration::Feature,
+    translation_phases::SourcePosition,
     util::byte_scan,
 };
 
@@ -26,10 +27,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// Continues a whitespace token from `end`; comments join it.
     /// C99: comment replacement and whitespace choice §5.1.1.2p3, p. 10;
     /// PDF p. 22; comments §6.4.9p1-2, p. 66; PDF p. 78.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn lex_whitespace(
-        &mut self,
-        mut end: usize,
-    ) -> Lexed {
+    pub(super) fn lex_whitespace(&mut self, mut end: usize) -> Lexed {
         loop {
             end += byte_scan::horizontal_space_run(&self.bytes[end..]);
             match self.peek(end) {
@@ -51,10 +49,7 @@ impl Lexer<'_, '_, '_, '_> {
 
     /// Returns the offset of the line ending that ends a `//` comment.
     /// C99: §6.4.9p2, p. 66; PDF p. 78.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn skip_line_comment(
-        &mut self,
-        body: usize,
-    ) -> usize {
+    pub(super) fn skip_line_comment(&mut self, body: usize) -> usize {
         let end = body + byte_scan::find_line_feed(&self.bytes[body..]);
         _ = self.peek(end);
         end
@@ -64,10 +59,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// end of input.
     /// C99: §6.4.9p1, p. 66; PDF p. 78; partial-comment constraint §5.1.1.2p3,
     /// p. 10; PDF p. 22.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn skip_block_comment(
-        &mut self,
-        mut end: usize,
-    ) -> usize {
+    pub(super) fn skip_block_comment(&mut self, mut end: usize) -> usize {
         let body = end;
         loop {
             end += byte_scan::block_comment_run(&self.bytes[end..]);
@@ -98,7 +90,7 @@ impl Lexer<'_, '_, '_, '_> {
     /// C99: `character-constant` and `escape-sequence` §6.4.4.4p1, p. 59;
     /// PDF p. 71; `string-literal` §6.4.5p1, p. 62; PDF p. 74. Escape validity
     /// and value are checked after lexing.
-    pub(in crate::translation_phases::preprocessor_tokenizer) fn lex_quoted(
+    pub(super) fn lex_quoted(
         &mut self,
         start: usize,
         position: SourcePosition,

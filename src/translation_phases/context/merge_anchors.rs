@@ -5,10 +5,8 @@
 //! Diagnostic locations: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
 //! Syntax and semantic constraints remain in their phases.
 
-use super::{
-    Context,
-    SourceVectors,
-};
+use super::Context;
+use crate::translation_phases::provenance::SourceVectors;
 
 /// Which ranges [`Context::merge_vector_list`] keeps, decided in order
 /// without collecting them: empty ranges are dropped, and parser anchors are
@@ -17,9 +15,9 @@ use super::{
 #[derive(Clone, Copy)]
 pub(super) struct MergeAnchors {
     /// Whether any range is an anchor; otherwise every nonempty range stays.
-    pub(super) any:        bool,
-    pub(super) first_real: Option<SourceVectors>,
-    pub(super) real_seen:  bool,
+    any:        bool,
+    first_real: Option<SourceVectors>,
+    real_seen:  bool,
 }
 
 impl MergeAnchors {

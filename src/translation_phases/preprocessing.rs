@@ -8,8 +8,9 @@
 //!
 //! For `#define TWICE(x) x + x` followed by `TWICE(2) "a" "b"`, the directive
 //! stores a definition. The reader collects `2`, substitutes it twice, and
-//! rescans `2 + 2`. Conversion produces three parser tokens and joins the two
-//! following string literals into one containing `ab`.
+//! rescans `2 + 2`. Conversion turns `2 + 2` into three parser tokens and
+//! joins the two following string literals into a fourth, one string
+//! containing `ab`.
 //!
 //! Read [`Preprocessor::preprocess_into_arena`], [`Preprocessor::run`], and
 //! [`Expander::next_iterator_item`] first. Then follow
@@ -63,12 +64,9 @@ mod errors;
 
 use std::{
     cell::OnceCell,
-    fmt::Debug,
     ops::ControlFlow,
-    path::Path,
 };
 
-use conditional::ConditionalGroup;
 pub(crate) use errors::{
     PreprocessorError,
     PreprocessorErrorType,
@@ -81,8 +79,6 @@ use macro_expansion::{
     MacroDefinition,
 };
 use runtime::{
-    FileFrame,
-    MacroDeprecation,
     OutputPurpose,
     PreprocessorState,
     QueryExpansion,
@@ -91,7 +87,6 @@ use runtime::{
     TokenizerFrame,
     TokenizerFrameType,
 };
-use rustc_hash::FxBuildHasher;
 pub(crate) use token::{
     CharacterTokenType,
     FloatTokenType,
@@ -104,24 +99,17 @@ pub(crate) use token::{
     Token,
     TokenType,
 };
-use token_conversion::LiteralScratch;
 
-#[cfg(test)]
-use crate::util::shared::SharedVec;
 use crate::{
-    headers::HeaderSearch,
     translation_phases::{
         Context,
-        GetPosition,
         GetSourceFileIndex,
         SetPosition,
-        SetSourceFileIndex,
         SourcePosition,
         SourceVector,
         TranslationError,
         TranslationPhase,
         preprocessor_tokenizer::{
-            LexedFiles,
             PreprocessorToken,
             PreprocessorTokenType,
             TokenSource,
@@ -129,26 +117,14 @@ use crate::{
     },
     util::{
         bump::{
-            ArenaMap,
-            ArenaSet,
             ArenaVec,
             Bump,
         },
         region_vec::RegionVec,
-        string_cache::StringCacheId,
     },
 };
 
 impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
-    /// Runs translation phases 4 through 6 without the parser's resource
-    /// budget, for direct preprocessing tests.
-    #[cfg(test)]
-    pub(crate) fn preprocess_all(&mut self, context: &mut Context<'tu>) -> RegionVec<Token> {
-        let mut tokens = RegionVec::new();
-        let _ = self.preprocess_into_arena(context, usize::MAX, &mut tokens);
-        tokens
-    }
-
     /// Appends phase-6 output to the caller's token buffer before parsing
     /// starts. Diagnostics stay pending in `context`; retained provenance
     /// survives compaction of preprocessor working storage between tokens.
@@ -207,23 +183,6 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
         });
     }
 
-    /// Calls `visit` with each phase-6 token as [`Expander::next_item`]
-    /// produces it, without compacting provenance.
-    #[cfg(test)]
-    pub(crate) fn for_each_item(
-        &mut self,
-        context: &mut Context<'tu>,
-        mut visit: impl FnMut(&mut Context<'tu>, Token),
-    ) {
-        self.run(context, |preprocessor| match preprocessor.next_item() {
-            | Some(token) => {
-                visit(preprocessor.context, token);
-                ControlFlow::Continue(())
-            },
-            | None => ControlFlow::Break(()),
-        });
-    }
-
     /// Calls `step` until it breaks. Between calls, once enough frames were
     /// pushed and no expansion is active, the expansion arena is reset.
     ///
@@ -263,6 +222,32 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             }
         }
     }
+
+    /// Runs translation phases 4 through 6 without the parser's resource
+    /// budget, for direct preprocessing tests.
+    #[cfg(test)]
+    pub(crate) fn preprocess_all(&mut self, context: &mut Context<'tu>) -> RegionVec<Token> {
+        let mut tokens = RegionVec::new();
+        let _ = self.preprocess_into_arena(context, usize::MAX, &mut tokens);
+        tokens
+    }
+
+    /// Calls `visit` with each phase-6 token as [`Expander::next_item`]
+    /// produces it, without compacting provenance.
+    #[cfg(test)]
+    pub(crate) fn for_each_item(
+        &mut self,
+        context: &mut Context<'tu>,
+        mut visit: impl FnMut(&mut Context<'tu>, Token),
+    ) {
+        self.run(context, |preprocessor| match preprocessor.next_item() {
+            | Some(token) => {
+                visit(preprocessor.context, token);
+                ControlFlow::Continue(())
+            },
+            | None => ControlFlow::Break(()),
+        });
+    }
 }
 
 impl Expander<'_, '_, '_, '_> {
@@ -289,7 +274,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// Placemarkers left by `##` are dropped here (C99: §6.10.3.4 paragraph
     /// 1, p. 155; PDF p. 167), and a name met while its macro is being
     /// replaced is marked unavailable for good (§6.10.3.4 paragraph 2).
-    pub(super) fn next_preprocessor_token<const SHOULD_IGNORE_WHITESPACE: bool>(
+    fn next_preprocessor_token<const SHOULD_IGNORE_WHITESPACE: bool>(
         &mut self,
     ) -> Option<PreprocessorToken> {
         self.last_was_newline = self.current_is_newline;

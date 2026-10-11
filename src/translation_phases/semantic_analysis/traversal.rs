@@ -5,14 +5,16 @@
 
 use super::{
     Analyzer,
+    ScopeKind,
+    Work,
+};
+use crate::translation_phases::parsing::syntax::{
     Expression,
     ExpressionSlot,
     ExpressionType,
     ForInitializer,
-    ScopeKind,
     Statement,
     StatementType,
-    Work,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {

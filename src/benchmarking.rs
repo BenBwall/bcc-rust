@@ -3,8 +3,9 @@
 //! measure arena use. Prepared parsing holds preprocessing results separately
 //! so a benchmark can time parsing without preprocessing again.
 //!
-//! For `parse_source("int x;")`, the driver copies source into the context,
-//! parses the declaration, and summarizes syntax roots, tokens, and errors.
+//! For `parse_source("int x;")`, the source is copied into the
+//! translation-unit arena, the declaration is parsed, and the summary counts
+//! the external declarations and diagnostics.
 //!
 //! Read [`parse`], [`ParseBenchmarkSummary`], and [`BenchmarkInput`], then
 //! [`with_prepared_parse`] for parser-only measurements.
@@ -28,13 +29,9 @@ mod semantic;
 // Memory measurements
 mod measurements;
 
-use std::{
-    path::Path,
-    sync::OnceLock,
-};
+use std::path::Path;
 
 pub use input::BenchmarkInput;
-use input::benchmark_context;
 use inspection::summarize_parse;
 pub use inspection::{
     parse_file,
@@ -60,23 +57,7 @@ pub use semantic::{
     sema_source,
 };
 
-use crate::{
-    configuration::CompilerConfiguration,
-    pipeline::{
-        parse_with_arena,
-        with_preprocessor,
-    },
-    translation_phases::{
-        Context,
-        TranslationPhase,
-        parsing::{
-            Parser,
-            PreprocessedTranslationUnit,
-        },
-        preprocessor_tokenizer::TokenSource,
-    },
-    util::bump::Bump,
-};
+use crate::util::bump::Bump;
 
 /// Runs translation phases 1 through 7 and summarizes the parse.
 #[doc(hidden)]

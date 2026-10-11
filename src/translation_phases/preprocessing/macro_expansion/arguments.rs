@@ -6,21 +6,34 @@
 //! PDF p. 165. Stringification and pasting consume the resulting operand
 //! frames.
 
-use super::{
-    ArenaVec,
-    Context,
-    Debug,
-    Expander,
-    OnceCell,
-    PreprocessorToken,
-    PreprocessorTokenType,
-    SourceVectors,
-    StringCacheId,
-    TokenSource,
-    TokenizerFrame,
-    TokenizerFrameType,
-    TranslationPhase,
-    replace,
+use std::{
+    cell::OnceCell,
+    fmt::Debug,
+    mem::replace,
+};
+
+use crate::{
+    translation_phases::{
+        Context,
+        SourceVectors,
+        TranslationPhase,
+        preprocessing::{
+            Expander,
+            runtime::{
+                TokenizerFrame,
+                TokenizerFrameType,
+            },
+        },
+        preprocessor_tokenizer::{
+            PreprocessorToken,
+            PreprocessorTokenType,
+            TokenSource,
+        },
+    },
+    util::{
+        bump::ArenaVec,
+        string_cache::StringCacheId,
+    },
 };
 
 #[expect(
@@ -105,7 +118,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165: the argument is
     /// replaced as if it formed the rest of the file, with no other tokens
     /// available.
-    pub(in crate::translation_phases::preprocessing) fn expanded_argument(
+    pub(super) fn expanded_argument(
         &mut self,
         token: PreprocessorToken,
         argument: &'x FunctionLikeMacroArgument<'x>,
@@ -158,10 +171,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// An argument written in a replacement list that has parameters of its
     /// own is replayed after those parameters are replaced, so the operand is
     /// what that enclosing replacement produced.
-    pub(in crate::translation_phases::preprocessing) fn operand_frame(
-        &mut self,
-        token: PreprocessorToken,
-    ) -> Option<TokenizerFrame<'x>> {
+    pub(super) fn operand_frame(&mut self, token: PreprocessorToken) -> Option<TokenizerFrame<'x>> {
         let mut frame = self.raw_macro_argument_frame(token)?;
         let TokenizerFrameType::FunctionLikeMacroArgument {
             argument,
@@ -200,14 +210,14 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// rescanned, and only then does the nested invocation take its operand.
     /// The operand's own tokens are not macro-replaced. Leading and trailing
     /// whitespace is not part of the result.
-    pub(in crate::translation_phases::preprocessing) fn replace_operand_argument(
+    pub(super) fn replace_operand_argument(
         &mut self,
         argument: &'x FunctionLikeMacroArgument<'x>,
     ) -> ArenaVec<'x, PreprocessorToken> {
         self.read_argument(argument, false)
     }
 
-    pub(in crate::translation_phases::preprocessing) fn read_argument(
+    pub(super) fn read_argument(
         &mut self,
         argument: &'x FunctionLikeMacroArgument<'x>,
         expand: bool,
@@ -267,9 +277,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// within phase 4.
     ///
     /// C99: §6.10.3.3 paragraph 2 and footnote 151, p. 154; PDF p. 166.
-    pub(in crate::translation_phases::preprocessing) fn placeholder(
-        context: &mut Context<'_>,
-    ) -> PreprocessorToken {
+    pub(super) fn placeholder(context: &mut Context<'_>) -> PreprocessorToken {
         PreprocessorToken {
             kind:           PreprocessorTokenType::Placeholder,
             contents:       context.string_cache.intern(""),
@@ -277,7 +285,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         }
     }
 
-    pub(in crate::translation_phases::preprocessing) fn update_macro_argument_paren_depth(
+    pub(super) fn update_macro_argument_paren_depth(
         &self,
         token: PreprocessorToken,
         variadic: bool,
@@ -344,7 +352,7 @@ pub(crate) type MacroArguments<'x> = &'x [FunctionLikeMacroArgument<'x>];
 
 /// The argument for parameter `name`. Excess arguments kept for recovery
 /// share one name; as with a map insert, the last one wins.
-pub(in crate::translation_phases::preprocessing) fn find_argument(
+pub(super) fn find_argument(
     arguments: MacroArguments<'_>,
     name: StringCacheId,
 ) -> Option<&FunctionLikeMacroArgument<'_>> {

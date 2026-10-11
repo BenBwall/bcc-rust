@@ -12,12 +12,12 @@ use std::fmt::{
     Display,
 };
 
-use super::{
-    Context,
-    SourceVectors,
-};
 use crate::{
     diagnostics::quote_spelling,
+    translation_phases::{
+        Context,
+        SourceVectors,
+    },
     util::string_cache::StringCacheId,
 };
 

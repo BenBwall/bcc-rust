@@ -12,31 +12,35 @@
 use std::fmt::Debug;
 
 use super::{
-    Parser,
     declaration_specifiers::{
         DeclarationSpecifiersFrame,
         SpecifierMode,
-    },
-    declaration_syntax::{
-        DeclarationSpecifiers,
-        Declarator,
-        TypeName,
     },
     declarator::{
         DeclaratorFrame,
         DeclaratorMode,
     },
-    machine::{
-        ParseAction,
-        ParseFrame,
-        ParseValue,
-        unexpected_return,
-    },
 };
-use crate::translation_phases::preprocessing::{
-    OperatorTokenType,
-    Token,
-    TokenType,
+use crate::translation_phases::{
+    parsing::{
+        Parser,
+        declaration_syntax::{
+            DeclarationSpecifiers,
+            Declarator,
+            TypeName,
+        },
+        machine::{
+            ParseAction,
+            ParseFrame,
+            ParseValue,
+            unexpected_return,
+        },
+    },
+    preprocessing::{
+        OperatorTokenType,
+        Token,
+        TokenType,
+    },
 };
 
 impl<'tu, 'p> TypeNameFrame<'tu> {

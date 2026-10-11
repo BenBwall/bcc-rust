@@ -5,23 +5,35 @@
 //! §6.7, pp. 97-124; PDF pp. 109-136.
 
 use super::{
-    ArenaMap,
-    Context,
-    Conversion,
-    Expression,
-    ExpressionInfo,
-    ExpressionType,
-    Field,
-    FunctionDefinition,
-    Identifier,
-    Integer,
-    Parameter,
-    SourceVectors,
-    StringCacheId,
-    TypeId,
-    TypeKind,
-    Types,
-    UnaryOperator,
+    expressions::{
+        Conversion,
+        ExpressionInfo,
+    },
+    integer::Integer,
+    types::{
+        Field,
+        Parameter,
+        TypeId,
+        TypeKind,
+        Types,
+    },
+};
+use crate::{
+    translation_phases::{
+        Context,
+        SourceVectors,
+        parsing::syntax::{
+            Expression,
+            ExpressionType,
+            FunctionDefinition,
+            Identifier,
+            UnaryOperator,
+        },
+    },
+    util::{
+        bump::ArenaMap,
+        string_cache::StringCacheId,
+    },
 };
 
 /// Durable semantic output. Working maps/stacks are gone when this is returned.

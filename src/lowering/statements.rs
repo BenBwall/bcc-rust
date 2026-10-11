@@ -13,10 +13,7 @@
 use super::{
     Construct,
     FunctionLowerer,
-    JumpTargets,
-    Local,
     LoweringError,
-    Task,
     module_items::at,
     ssa::{
         Draft,
@@ -30,8 +27,11 @@ use super::{
     },
     work::{
         Item,
+        JumpTargets,
+        Local,
         Object,
         Operand,
+        Task,
     },
 };
 use crate::{

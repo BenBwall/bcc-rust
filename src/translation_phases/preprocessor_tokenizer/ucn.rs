@@ -2,14 +2,16 @@
 //!
 //! C99: §6.4.2.1p3, p. 51; PDF p. 63; §6.4.3p1-4, p. 53; PDF p. 65; the
 //! permitted ranges are Annex D, pp. 440-441; PDF pp. 452-453.
-use super::{
-    Context,
-    PreprocessorTokenType,
-    StringCacheId,
-};
-use crate::util::bump::{
-    ArenaString,
-    Bump,
+use super::PreprocessorTokenType;
+use crate::{
+    translation_phases::Context,
+    util::{
+        bump::{
+            ArenaString,
+            Bump,
+        },
+        string_cache::StringCacheId,
+    },
 };
 
 /// Records the canonical spelling of the identifier spelled `raw`, built in

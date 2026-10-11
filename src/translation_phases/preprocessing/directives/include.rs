@@ -6,32 +6,51 @@
 //! Opened files return to the shared preprocessing reader for macro
 //! replacement.
 
-use super::{
-    ArenaString,
-    ArenaVec,
-    Bump,
-    Component,
-    Context,
-    ControlFlow,
-    ErrorSeverity,
-    Expander,
-    ExtensionPolicy,
-    Feature,
-    LogicalCharacter,
-    OsStr,
-    Path,
-    PreprocessorError,
-    PreprocessorErrorType,
-    PreprocessorToken,
-    PreprocessorTokenType,
-    SourcePosition,
-    SourceVectors,
-    TokenizerFrame,
-    TokenizerFrameType,
-    TranslationError,
-    TranslationPhase,
-    logical_characters,
-    position_after,
+use std::{
+    ffi::OsStr,
+    ops::ControlFlow,
+    path::{
+        Component,
+        Path,
+    },
+};
+
+use crate::{
+    configuration::{
+        ExtensionPolicy,
+        Feature,
+    },
+    translation_phases::{
+        Context,
+        ErrorSeverity,
+        SourcePosition,
+        SourceVectors,
+        TranslationError,
+        TranslationPhase,
+        preprocessing::{
+            Expander,
+            errors::{
+                PreprocessorError,
+                PreprocessorErrorType,
+            },
+            runtime::{
+                TokenizerFrame,
+                TokenizerFrameType,
+            },
+        },
+        preprocessor_tokenizer::{
+            LogicalCharacter,
+            PreprocessorToken,
+            PreprocessorTokenType,
+            logical_characters,
+            position_after,
+        },
+    },
+    util::bump::{
+        ArenaString,
+        ArenaVec,
+        Bump,
+    },
 };
 
 impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
@@ -41,10 +60,7 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     /// C99: §6.10.2 paragraphs 1-6, pp. 149-150; PDF pp. 161-162, and
     /// §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22. Tokens after the
     /// header name do not match any of the forms of paragraphs 2-4.
-    pub(in crate::translation_phases::preprocessing) fn parse_include_directive(
-        &mut self,
-        directive: PreprocessorToken,
-    ) {
+    pub(super) fn parse_include_directive(&mut self, directive: PreprocessorToken) {
         let including_file = self.physical_source_file_index();
         let header = match self.peek_include_operand() {
             | IncludeOperand::Angle => Some(self.read_written_angle_header(directive)),

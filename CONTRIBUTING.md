@@ -20,15 +20,28 @@ so nothing needs to be declared before it is used.
      loop runs on. Constructors, helpers, error types, token types, and debug
      views live in submodules. A module with no loop, such as a collection of
      utilities, gives this place to its entry point or its central type.
+
+  A file that implements one grammar frame or one view and keeps a single
+  helper child beside it (`parsing/frames/expression.rs` with
+  `expression/lookahead.rs`, `parsing/inspection.rs` with
+  `inspection/labels.rs`) is not a module entry file in this sense: it keeps
+  its body, with its central item first, as any other file does.
 - **Every file puts its most important item first.** Order items as a reader
   should meet them: the entry point or core algorithm, then the types and
   helpers it uses in the order it uses them, then constructors and accessors,
   then trait impls such as `Debug`, `Display`, and `Default`. `#[cfg(test)]`
   modules come last.
-- **Directories group files by role** when three or more siblings share one,
-  such as grammar frames, extension frames, or builtin tables. The entry file
-  re-exports what other modules use, so moving a file does not change
-  crate-visible paths.
+- **A family of parallel files gets its own directory.** When a module has one
+  file per grammar frame, extension frame, builtin table, directive, or scanner
+  concern, those files move into a subdirectory with its own entry file, as in
+  `parsing/frames/`, `parsing/extensions/`, `semantic_analysis/builtins/`,
+  `preprocessing/directives/`, and `preprocessor_tokenizer/scanning/`. A
+  subsystem with enough parts to need its own map gets one too: the
+  preprocessor's working state in `preprocessing/runtime/`, and the arena and
+  collection utilities in `util/memory/` and `util/collections/`. Other role
+  groups stay flat in the module's directory, under a `//` heading over their
+  `mod` lines in the entry file. The entry file re-exports what other
+  modules use, so moving a file does not change crate-visible paths.
 
 ## Citing the C standard
 

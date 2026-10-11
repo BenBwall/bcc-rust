@@ -56,7 +56,7 @@ use crate::{
     translation_phases::{
         Context,
         SourceVectors,
-        StrExt,
+        interface::StrExt,
         preprocessor_tokenizer::{
             PreprocessorToken,
             PreprocessorTokenType,

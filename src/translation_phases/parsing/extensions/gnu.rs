@@ -6,26 +6,30 @@
 //! manuals specify the vendor grammar. Types, constraints, assembly meaning,
 //! builtin evaluation and label resolution belong to later analysis.
 
-use super::super::{
-    Parser,
-    errors::ParserErrorType,
-    expression::{
-        ExpressionBoundary,
-        ExpressionFrame,
-        ExpressionMode,
-    },
-    machine::{
-        ParseAction,
-        ParseFrame,
-        ParseValue,
-        any_expression_value,
+use super::{
+    super::{
+        Parser,
+        errors::ParserErrorType,
+        frames::{
+            expression::{
+                ExpressionBoundary,
+                ExpressionFrame,
+                ExpressionMode,
+            },
+            type_name::TypeNameFrame,
+        },
+        machine::{
+            ParseAction,
+            ParseFrame,
+            ParseValue,
+            any_expression_value,
+        },
+        syntax::{
+            Expression,
+            Identifier,
+        },
     },
     modern::SyntaxOperand,
-    syntax::{
-        Expression,
-        Identifier,
-    },
-    type_name::TypeNameFrame,
 };
 use crate::{
     translation_phases::{
@@ -739,11 +743,7 @@ impl<'tu, 'p> GnuFrame<'tu, 'p> {
         }
     }
 
-    pub(in crate::translation_phases::parsing) fn new(
-        arena: &'p Bump,
-        kind: GnuKind,
-        errors: usize,
-    ) -> Self {
+    fn new(arena: &'p Bump, kind: GnuKind, errors: usize) -> Self {
         Self {
             kind,
             phase: Phase::Start,

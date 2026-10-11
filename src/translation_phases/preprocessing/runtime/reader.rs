@@ -7,21 +7,28 @@
 //! Token conversion and string concatenation are delegated to
 //! `token_conversion`.
 
-use super::super::{
-    Context,
-    ControlFlow,
-    Expander,
-    HashHash,
+use std::ops::ControlFlow;
+
+use super::{
+    super::{
+        Expander,
+        HashHash,
+        PreprocessorError,
+        PreprocessorErrorType,
+        Token,
+    },
     OutputPurpose,
-    PreprocessorError,
-    PreprocessorErrorType,
-    PreprocessorToken,
-    PreprocessorTokenType,
-    Token,
-    TokenSource,
     TokenizerFrame,
     TokenizerFrameType,
+};
+use crate::translation_phases::{
+    Context,
     TranslationPhase,
+    preprocessor_tokenizer::{
+        PreprocessorToken,
+        PreprocessorTokenType,
+        TokenSource,
+    },
 };
 
 impl Expander<'_, '_, '_, '_> {

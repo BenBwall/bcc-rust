@@ -4,6 +4,7 @@
 //! predefined macros, §6.10.8 paragraph 1, p. 160; PDF p. 172.
 //! The constructed reader leaves C syntax and semantics to later phases.
 
+use std::path::Path;
 #[cfg(test)]
 #[expect(
     clippy::disallowed_types,
@@ -11,30 +12,38 @@
 )]
 use std::path::PathBuf;
 
-#[cfg(test)]
-use super::super::SharedVec;
-use super::super::{
-    ArenaMap,
-    ArenaSet,
-    ArenaVec,
-    Bump,
-    Context,
-    FileFrame,
-    FxBuildHasher,
-    GetPosition,
-    HeaderSearch,
-    LexedFiles,
-    LiteralScratch,
-    MacroDefinition,
+use rustc_hash::FxBuildHasher;
+
+use super::{
+    super::{
+        Preprocessor,
+        command_line,
+        expression::PreprocessorExpressionParser,
+        language_features,
+        macro_expansion::MacroDefinition,
+        token_conversion::LiteralScratch,
+    },
     OutputPurpose,
-    Path,
-    Preprocessor,
-    PreprocessorExpressionParser,
     PreprocessorState,
     Resting,
-    SourcePosition,
-    command_line,
-    language_features,
+    frames::FileFrame,
+};
+#[cfg(test)]
+use crate::util::shared::SharedVec;
+use crate::{
+    headers::HeaderSearch,
+    translation_phases::{
+        Context,
+        GetPosition,
+        SourcePosition,
+        preprocessor_tokenizer::LexedFiles,
+    },
+    util::bump::{
+        ArenaMap,
+        ArenaSet,
+        ArenaVec,
+        Bump,
+    },
 };
 
 impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
@@ -235,7 +244,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
 /// defined names of §6.10.8 paragraph 2, p. 161; PDF p. 173, is defined.
 /// `_Pragma` is an operator (§6.10.9, p. 161; PDF p. 173), not a macro; it
 /// is registered here so that rescanning recognizes it.
-pub(in crate::translation_phases::preprocessing) const PREDEFINED_MACRO_NAMES: [&str; 10] = [
+const PREDEFINED_MACRO_NAMES: [&str; 10] = [
     "__LINE__",
     "__FILE__",
     "__DATE__",

@@ -1,11 +1,12 @@
 //! Classifies conversion results and detects incomplete spellings, overflow,
 //! and underflow without losing the literal spelling.
 
-use super::{
-    Debug,
-    FloatTokenType,
-    c_char,
+use std::{
+    ffi::c_char,
+    fmt::Debug,
 };
+
+use crate::translation_phases::preprocessing::FloatTokenType;
 
 /// Classifies overflow and underflow after host conversion.
 /// C99: §7.20.1.3p10, p. 310; PDF p. 322.
@@ -23,7 +24,7 @@ pub(super) fn range_error(class: FloatClass, spelling: &str) -> Option<FloatRang
 /// Only digits of the constant's base count, so a suffix such as the `f` of
 /// an exponent-free `0.0f` is not mistaken for a hexadecimal digit.
 /// C99: `floating-constant` significand §6.4.4.2p1-3, pp. 57-58; PDF pp. 69-70.
-pub(super) fn significand_is_nonzero(spelling: &str) -> bool {
+fn significand_is_nonzero(spelling: &str) -> bool {
     let (digits, exponent_markers, is_digit): (&str, &[char], fn(&char) -> bool) = match spelling
         .strip_prefix("0x")
         .or_else(|| spelling.strip_prefix("0X"))

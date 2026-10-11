@@ -1,16 +1,25 @@
-//! Emit an error-directive message from the rest of its line.
+//! Emit the message of an `#error` or `#warning` directive from the rest of
+//! its line.
 //!
 //! C99: translation phase 4; error directive, §6.10.5 paragraph 1, p. 159;
 //! PDF p. 171. This handler reports the directive, without analyzing C syntax.
 
-use super::{
-    ArenaString,
-    Expander,
-    PreprocessorError,
-    PreprocessorErrorType,
-    PreprocessorToken,
-    PreprocessorTokenType,
-    TranslationPhase,
+use crate::{
+    translation_phases::{
+        TranslationPhase,
+        preprocessing::{
+            Expander,
+            errors::{
+                PreprocessorError,
+                PreprocessorErrorType,
+            },
+        },
+        preprocessor_tokenizer::{
+            PreprocessorToken,
+            PreprocessorTokenType,
+        },
+    },
+    util::bump::ArenaString,
 };
 
 impl Expander<'_, '_, '_, '_> {
@@ -21,10 +30,7 @@ impl Expander<'_, '_, '_, '_> {
     /// p. 7; PDF p. 19.
     #[cold]
     #[inline(never)]
-    pub(in crate::translation_phases::preprocessing) fn parse_error_directive(
-        &mut self,
-        directive: PreprocessorToken,
-    ) {
+    pub(super) fn parse_error_directive(&mut self, directive: PreprocessorToken) {
         let mut contents = ArenaString::new_in(self.scratch);
         // A directive ending at end of file is complete; the missing final
         // newline is diagnosed on its own.

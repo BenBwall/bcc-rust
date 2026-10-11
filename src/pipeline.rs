@@ -16,31 +16,27 @@
 //! [`lower_translation_unit`].
 //!
 //! Files by role:
-//! - Phase storage and token collection: `storage.rs`.
-//! - Semantic handoff: `analysis.rs`.
+//! - Stage drivers: `stages.rs` scopes the preprocessing and parser arenas to
+//!   their stages and collects the preprocessed tokens.
 //! - Middle-end handoff: `middle_end.rs`.
 //! - End-to-end fixtures: `tests.rs` and `tests/`.
 //!
 //! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
 //! PDF pp. 21-22.
 
-// Phase storage
-mod storage;
-
-// Semantic analysis
-mod analysis;
+// Stage drivers
+mod stages;
 
 // Middle end
 mod middle_end;
 
 use std::path::Path;
 
-pub(crate) use analysis::analyze_translation_unit;
 pub(crate) use middle_end::{
     MiddleEndError,
     lower_translation_unit,
 };
-pub(crate) use storage::{
+pub(crate) use stages::{
     parse_with_arena,
     preprocess_with_diagnostics,
     with_preprocessor,
@@ -50,21 +46,12 @@ use crate::{
     headers::HeaderSearch,
     translation_phases::{
         Context,
-        TranslationError,
         parsing::{
             ParsedTranslationUnit,
             Parser,
-            PreprocessedTranslationUnit,
-        },
-        preprocessing::{
-            Preprocessor,
-            Token,
         },
     },
-    util::{
-        bump::Bump,
-        region_vec::RegionVec,
-    },
+    util::bump::Bump,
 };
 
 /// Completes preprocessing before constructing the parser. The parser-facing
@@ -84,6 +71,16 @@ pub(crate) fn parse_translation_unit<'tu>(
     );
     let parse = Bump::new();
     parse_with_arena(preprocessed, context, &parse)
+}
+
+/// The semantic half of phase 7 starts after syntax parsing has completed.
+/// Inspection callers may stop at `parse_translation_unit` to keep syntax modes
+/// unchanged. C99: §5.1.1.2p1, p. 10; PDF p. 22.
+pub(crate) fn analyze_translation_unit<'tu>(
+    context: &mut Context<'tu>,
+    unit: &ParsedTranslationUnit<'tu>,
+) -> crate::translation_phases::semantic_analysis::SemanticTranslationUnit<'tu> {
+    crate::translation_phases::semantic_analysis::analyze(context, unit)
 }
 
 // Tests

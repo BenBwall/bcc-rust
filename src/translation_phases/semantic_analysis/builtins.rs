@@ -5,9 +5,11 @@
 //! happens here.
 //!
 //! Read [`modeled`] for keyword recognition and [`named_builtin`] for name
-//! recognition, then [`Analyzer::type_builtin`] for header intrinsic dispatch.
-//! [`Analyzer::atomic_call`] and [`Analyzer::x86_builtin_operand`] check the
-//! named call families.
+//! recognition, then [`Analyzer::type_builtin`](super::Analyzer::type_builtin)
+//! for header intrinsic dispatch.
+//! [`Analyzer::atomic_call`](super::Analyzer::atomic_call) and
+//! [`Analyzer::x86_builtin_operand`](super::Analyzer::x86_builtin_operand)
+//! check the named call families.
 //!
 //! - Header intrinsics: `intrinsics.rs` handles varargs, type operands and
 //!   member offsets; `names.rs` joins the named-call recognition queries.
@@ -30,35 +32,25 @@ pub(super) mod atomics;
 
 // Target signatures and operands
 mod x86_builtin_table;
-pub(crate) mod x86_builtins;
+mod x86_builtins;
 
 pub(crate) use modeled as implemented_builtin;
 pub(crate) use names::named_builtin;
 
 use super::{
-    Analyzer,
-    ArenaList,
-    ArenaVec,
-    ArrayBound,
-    Cell,
-    ConstantClass,
-    Expression,
-    ExpressionInfo,
-    ExpressionType,
-    Identifier,
-    Integer,
-    Scalar,
-    SemanticErrorKind,
-    SourceVectors,
-    SyntaxOperand,
-    Tag,
-    TagKind,
-    TypeId,
-    TypeKind,
-    TypeQualifiers,
     expressions,
+    integer::Integer,
 };
-use crate::translation_phases::preprocessing::KeywordTokenType;
+use crate::{
+    translation_phases::{
+        parsing::syntax::{
+            ExpressionType,
+            Identifier,
+        },
+        preprocessing::KeywordTokenType,
+    },
+    util::arena_list::ArenaList,
+};
 
 /// Intrinsics supporting standard headers are available even in strict modes.
 /// GCC/Clang implementation keywords extending C99 §7.15, pp. 249-252;

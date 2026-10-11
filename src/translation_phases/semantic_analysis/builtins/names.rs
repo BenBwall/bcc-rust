@@ -3,11 +3,13 @@
 //! These calls are GCC/Clang extensions.
 //! C99: §6.5.2.2, pp. 71-72; PDF pp. 83-84 (extended function calls).
 
-use super::super::{
-    atomic_builtin,
+use super::{
+    atomics::modeled as atomic_builtin,
+    x86_builtins,
+};
+use crate::translation_phases::semantic_analysis::{
     type_generic,
     vectors,
-    x86_builtins,
 };
 
 /// Builtins parsed as ordinary calls, queried by the preprocessor.

@@ -17,9 +17,7 @@
 use super::{
     Construct,
     FunctionLowerer,
-    Local,
     LoweringError,
-    Task,
     module_items::{
         at,
         peel,
@@ -33,9 +31,11 @@ use super::{
     work::{
         BitFieldBits,
         Item,
+        Local,
         Object,
         Operand,
         Place,
+        Task,
     },
 };
 use crate::{

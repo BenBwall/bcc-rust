@@ -9,11 +9,14 @@
 //!
 //! For `typedef int T; T f(T x) { return x + 1; }`, the loop first pushes an
 //! external-declaration frame. Its declaration children recognize the typedef
-//! and publish `T` before reducing the first root. The next external frame
-//! recognizes `T` as a type, parses the function head, and pushes a
-//! function-definition frame. The compound and statement frames then push an
-//! expression frame for `x + 1`. Child values return up the same stack until
-//! the second root reduces.
+//! and publish `T` before the external frame reduces the first root. The next
+//! external frame again pushes a declaration frame, whose
+//! declaration-specifiers child classifies `T` as a typedef name; the
+//! declaration frame parses the head `T f(T x)` and returns it. Seeing a
+//! definition head before `{`, the external frame pushes a function-definition
+//! frame. The compound and statement frames then push an expression frame for
+//! `x + 1`. Child values return up the same stack until the second root
+//! reduces.
 //!
 //! Read these items first:
 //!
@@ -22,11 +25,11 @@
 //!    the state they run on.
 //! 2. [`ParseFrame`], [`ParseAction`], [`ParseValue`], and [`ParseFrame::step`]
 //!    in `parsing/machine.rs` for frame dispatch and typed child returns.
-//! 3. [`external_declaration::ExternalDeclarationFrame::step`], then
-//!    [`declaration::DeclarationFrame::step`] for the declaration/function
-//!    split.
-//! 4. [`expression::ExpressionFrame::step`] for the Double-E reducer, and
-//!    [`Parser::recover`] for synchronization after malformed input.
+//! 3. [`frames::external_declaration::ExternalDeclarationFrame::step`], then
+//!    [`frames::declaration::DeclarationFrame::step`] for the
+//!    declaration/function split.
+//! 4. [`frames::expression::ExpressionFrame::step`] for the Double-E reducer,
+//!    and [`Parser::recover`] for synchronization after malformed input.
 //! 5. [`ParsedTranslationUnit`] and [`ParsedTranslationUnit::inspect`] for the
 //!    retained result and its iterative inspection view.
 //!
@@ -35,8 +38,8 @@
 //! - Machine core: `machine.rs` dispatches frames; `frame_pool.rs` recycles
 //!   their storage; `token_cursor.rs` owns token access; `scope.rs` classifies
 //!   names; `recovery.rs` scans to production-specific boundaries.
-//! - Input and shared operations: `input.rs` creates parsers; `limits.rs`
-//!   handles resource exhaustion; `allocation.rs` allocates syntax;
+//! - Construction and shared operations: `construction.rs` creates parsers;
+//!   `limits.rs` handles resource exhaustion; `allocation.rs` allocates syntax;
 //!   `lookahead.rs` resolves declaration/type ambiguity; `errors.rs` reports
 //!   diagnostics; `token_diagnostics.rs` tracks pending diagnostic occurrences.
 //! - Grammar frames: `frames.rs` groups `frames/external_declaration.rs`,
@@ -75,10 +78,10 @@ mod recovery;
 mod scope;
 mod token_cursor;
 
-// Input and shared operations
+// Construction and shared operations
 mod allocation;
+mod construction;
 mod errors;
-mod input;
 mod limits;
 mod lookahead;
 mod token_diagnostics;
@@ -102,28 +105,10 @@ use errors::{
     ParserErrorType,
     ParserResource,
 };
-use expression_operators::is_operator;
-pub(crate) use extensions::{
+use extensions::{
     gnu,
     modern,
     msvc,
-};
-use external_declaration::ExternalDeclarationFrame;
-use frames::{
-    compound_statement,
-    declaration,
-    declaration_specifiers,
-    declarator,
-    enum_specifier,
-    expression,
-    expression_operators,
-    external_declaration,
-    function_definition,
-    initializer,
-    parameter_list,
-    statement,
-    struct_or_union,
-    type_name,
 };
 pub(crate) use gnu::{
     Builtin,
@@ -165,6 +150,10 @@ pub(crate) use translation_unit::{
     PreprocessedTranslationUnit,
 };
 
+use self::frames::{
+    expression_operators::is_operator,
+    external_declaration::ExternalDeclarationFrame,
+};
 use crate::{
     translation_phases::{
         Context,
@@ -217,7 +206,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
     ///
     /// C99: translation-unit is a nonempty sequence of external-declaration
     /// values under §6.9, p. 140; PDF p. 152.
-    pub(super) fn drive(&mut self) -> Option<ExternalDeclaration<'tu>> {
+    fn drive(&mut self) -> Option<ExternalDeclaration<'tu>> {
         // A resource failure is terminal: the remaining input is neither
         // fetched nor parsed, so it cannot grow the exhausted storage.
         if self.resource_limit_reported {

@@ -3,16 +3,27 @@
 //! C99: translation phase 4; line control, §6.10.4, p. 158; PDF p. 170.
 //! Physical file identity remains available to include handling.
 
-use super::{
-    ControlFlow,
-    Expander,
-    Path,
-    PreprocessorError,
-    PreprocessorErrorType,
-    PreprocessorToken,
-    PreprocessorTokenType,
-    StringTokenType,
-    TokenType,
+use std::{
+    ops::ControlFlow,
+    path::Path,
+};
+
+use crate::translation_phases::{
+    preprocessing::{
+        Expander,
+        errors::{
+            PreprocessorError,
+            PreprocessorErrorType,
+        },
+        token::{
+            StringTokenType,
+            TokenType,
+        },
+    },
+    preprocessor_tokenizer::{
+        PreprocessorToken,
+        PreprocessorTokenType,
+    },
 };
 
 impl Expander<'_, '_, '_, '_> {
@@ -26,7 +37,7 @@ impl Expander<'_, '_, '_, '_> {
     /// other; a wide or encoded one is diagnosed and its name ignored.
     /// C11: §6.10.4 paragraph 1, p. 173; PDF p. 191, retains the character
     /// string literal requirement for the newly available encoded literals.
-    pub(in crate::translation_phases::preprocessing) fn parse_line_directive(&mut self) {
+    pub(super) fn parse_line_directive(&mut self) {
         let Some(token) = self.expect_token_without_rewind::<true>(
             |_, t| t.kind == PreprocessorTokenType::Number,
             |_, t| {

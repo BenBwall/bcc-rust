@@ -1,25 +1,40 @@
 //! Runs compilation for the selected view, reports diagnostics, and prints
 //! tokens, syntax, or semantic information.
 
-use std::fmt::Write as _;
+use std::{
+    fmt::Write as _,
+    io::{
+        self,
+        Write,
+    },
+    path::Path,
+};
+
+use clap::Args;
 
 use super::{
-    ArenaString,
-    Args,
-    Bump,
-    Context,
-    DiagnosticReporter,
-    HeaderSearch,
-    InspectionOptions,
-    ParsedTranslationUnit,
-    Path,
-    RenderColor,
-    Write,
     describe_token,
-    io,
-    parse_translation_unit,
-    preprocess_with_diagnostics,
-    with_preprocessor,
+    diagnostic_reporter::DiagnosticReporter,
+};
+use crate::{
+    diagnostics::ColorChoice as RenderColor,
+    headers::HeaderSearch,
+    pipeline::{
+        parse_translation_unit,
+        preprocess_with_diagnostics,
+        with_preprocessor,
+    },
+    translation_phases::{
+        Context,
+        parsing::{
+            InspectionOptions,
+            ParsedTranslationUnit,
+        },
+    },
+    util::bump::{
+        ArenaString,
+        Bump,
+    },
 };
 
 pub(super) fn print_parser_output<'tu>(
@@ -164,7 +179,7 @@ pub(super) struct TokenOutput<'a> {
     reason = "std's thread builder takes the name as a `String`; spawning the deep-stack thread \
               allocates in std anyway."
 )]
-pub(super) fn print_raw_syntax(unit: &ParsedTranslationUnit<'_>) {
+fn print_raw_syntax(unit: &ParsedTranslationUnit<'_>) {
     let raw = unit.raw_debug();
     std::thread::scope(|scope| {
         std::thread::Builder::new()
@@ -190,16 +205,16 @@ pub(super) fn print_raw_syntax(unit: &ParsedTranslationUnit<'_>) {
 pub(super) struct ParserOutput {
     /// Print resolved declarations, types, linkage and storage duration.
     #[clap(long, conflicts_with_all = ["tokens", "syntax_tree", "raw_syntax"])]
-    pub(super) semantic_types:   bool,
+    semantic_types:   bool,
     /// Print a deterministic, source-oriented C syntax tree.
     #[clap(long, conflicts_with = "tokens")]
-    pub(super) syntax_tree:      bool,
+    syntax_tree:      bool,
     /// Include line and column locations in `--syntax-tree` output.
     #[clap(long, requires = "syntax_tree")]
-    pub(super) syntax_locations: bool,
+    syntax_locations: bool,
     /// Print the raw syntax tree, in Rust debug form, for storage debugging.
     #[clap(long, conflicts_with = "tokens")]
-    pub(super) raw_syntax:       bool,
+    raw_syntax:       bool,
 }
 
 #[derive(Args)]
@@ -222,4 +237,4 @@ pub(super) fn expect_stderr(result: io::Result<()>) {
 /// recurses once per nesting level of the tree, which the iterative parser
 /// accepts far deeper than the main thread's stack allows. The stack is
 /// reserved, not committed, so unused depth costs only address space.
-pub(super) const RAW_SYNTAX_STACK_BYTES: usize = 1 << 30;
+const RAW_SYNTAX_STACK_BYTES: usize = 1 << 30;

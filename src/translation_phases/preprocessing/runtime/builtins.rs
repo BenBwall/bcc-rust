@@ -17,19 +17,27 @@ use std::{
 use chrono::Local;
 
 use super::super::{
-    Bump,
-    Context,
     Expander,
     PreprocessorError,
     PreprocessorErrorType,
-    PreprocessorToken,
-    PreprocessorTokenType,
-    StringCacheId,
-    TranslationPhase,
 };
 use crate::{
-    translation_phases::preprocessor_tokenizer::TokenSource,
-    util::bump::ArenaString,
+    translation_phases::{
+        Context,
+        TranslationPhase,
+        preprocessor_tokenizer::{
+            PreprocessorToken,
+            PreprocessorTokenType,
+            TokenSource,
+        },
+    },
+    util::{
+        bump::{
+            ArenaString,
+            Bump,
+        },
+        string_cache::StringCacheId,
+    },
 };
 
 impl Expander<'_, '_, '_, '_> {
@@ -207,9 +215,9 @@ impl Expander<'_, '_, '_, '_> {
 /// space before a day below 10, and `"hh:mm:ss"`. The values stay constant
 /// for the translation unit (§6.10.8 paragraph 3, p. 161; PDF p. 173).
 #[derive(Debug)]
-pub(in crate::translation_phases::preprocessing) struct TranslationTimestamp<'pp> {
-    pub(in crate::translation_phases::preprocessing) date: ArenaString<'pp>,
-    pub(in crate::translation_phases::preprocessing) time: ArenaString<'pp>,
+pub(super) struct TranslationTimestamp<'pp> {
+    date: ArenaString<'pp>,
+    time: ArenaString<'pp>,
 }
 
 /// Spells `value` as a narrow C string literal whose evaluated contents are
@@ -264,10 +272,7 @@ impl<'pp> TranslationTimestamp<'pp> {
     ///
     /// A pinned value stands in for the actual time of translation that
     /// C99 §6.10.8p1 names; that is GCC's and Clang's choice too.
-    pub(in crate::translation_phases::preprocessing) fn new(
-        pp: &'pp Bump,
-        source_date_epoch: Option<i64>,
-    ) -> Self {
+    fn new(pp: &'pp Bump, source_date_epoch: Option<i64>) -> Self {
         let time = source_date_epoch
             .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
             .map_or_else(|| Local::now().naive_local(), |time| time.naive_utc());

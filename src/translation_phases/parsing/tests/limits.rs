@@ -20,7 +20,6 @@ use crate::{
         TranslationError,
         parsing::{
             Parser,
-            ParserLimits,
             declaration_syntax::{
                 Declaration,
                 Declarator,
@@ -35,6 +34,7 @@ use crate::{
                 ParserErrorType,
                 ParserResource,
             },
+            limits::ParserLimits,
             scope::{
                 NameClass,
                 ScopeKind,

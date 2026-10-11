@@ -1,18 +1,22 @@
 //! Diagnostic builders collect labelled source ranges, notes, and help in
 //! arena storage. Phase errors implement the shared rendering interface.
 
-use super::{
-    ArenaVec,
-    Bump,
-    Context,
-    ErrorSeverity,
-    SourceVector,
-    SourceVectors,
-};
 #[cfg(test)]
 use super::{
     OwnedDiagnostic,
     OwnedExplanation,
+};
+use crate::{
+    translation_phases::{
+        Context,
+        ErrorSeverity,
+        SourceVector,
+        SourceVectors,
+    },
+    util::bump::{
+        ArenaVec,
+        Bump,
+    },
 };
 
 /// A diagnostic ready to be rendered. Its text and labels live in the arena
@@ -29,7 +33,7 @@ pub(crate) struct Diagnostic<'d> {
 impl<'d> Diagnostic<'d> {
     /// Adds the range the diagnostic is about. Its first location becomes the
     /// `-->` location.
-    pub(super) fn primary(mut self, source: SourceVectors, label: Option<&'d str>) -> Self {
+    fn primary(mut self, source: SourceVectors, label: Option<&'d str>) -> Self {
         self.labels.push(Label {
             source:  LabelSource::Range(source),
             message: label,
@@ -80,7 +84,7 @@ impl<'d> Diagnostic<'d> {
 /// The location-independent part of a diagnostic: what went wrong, a short
 /// label for the primary range, and any notes and help, all in one arena.
 pub(crate) struct Explanation<'d> {
-    pub(super) arena:   &'d Bump,
+    arena:              &'d Bump,
     pub(crate) message: &'d str,
     pub(crate) label:   Option<&'d str>,
     pub(crate) notes:   ArenaVec<'d, &'d str>,

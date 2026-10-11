@@ -22,37 +22,39 @@
 use std::fmt::Debug;
 
 use super::{
-    Parser,
-    declaration_syntax::{
-        DeclarationSpecifiers,
-        TypeQualifiers,
-        TypeSpecifiers,
-    },
     enum_specifier::EnumSpecifierFrame,
-    errors::ParserErrorType,
-    machine::{
-        EnumSpecifierResult,
-        ParseAction,
-        ParseFrame,
-        ParseValue,
-        unexpected_return,
-    },
-    modern::{
-        ExtendedType,
-        ModernKind,
-        ModernValue,
-        SpecifierExtension,
-        SpecifierExtensionKind,
-        SyntaxOperand,
-    },
     struct_or_union::StructOrUnionSpecifierFrame,
-    syntax::{
-        Identifier,
-        StorageClass,
-    },
 };
 use crate::translation_phases::{
     SourceVectors,
+    parsing::{
+        Parser,
+        declaration_syntax::{
+            DeclarationSpecifiers,
+            TypeQualifiers,
+            TypeSpecifiers,
+        },
+        errors::ParserErrorType,
+        extensions::modern::{
+            ExtendedType,
+            ModernKind,
+            ModernValue,
+            SpecifierExtension,
+            SpecifierExtensionKind,
+            SyntaxOperand,
+        },
+        machine::{
+            EnumSpecifierResult,
+            ParseAction,
+            ParseFrame,
+            ParseValue,
+            unexpected_return,
+        },
+        syntax::{
+            Identifier,
+            StorageClass,
+        },
+    },
     preprocessing::{
         KeywordTokenType,
         OperatorTokenType,
@@ -1033,9 +1035,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
 /// C99: §6.7.1 paragraph 1, p. 98; PDF p. 110. `typedef` is a storage-class
 /// specifier for syntactic convenience only (paragraph 3, p. 98;
 /// PDF p. 110).
-pub(in crate::translation_phases::parsing) fn storage_class(
-    token: TokenType,
-) -> Option<StorageClass> {
+fn storage_class(token: TokenType) -> Option<StorageClass> {
     match token {
         | TokenType::Keyword(KeywordTokenType::Auto) => Some(StorageClass::Auto),
         | TokenType::Keyword(KeywordTokenType::Register) => Some(StorageClass::Register),

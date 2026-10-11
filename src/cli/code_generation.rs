@@ -16,6 +16,11 @@ use std::path::PathBuf;
 use std::{
     cell::RefCell,
     fmt,
+    io::{
+        self,
+        Write,
+    },
+    path::Path,
 };
 
 use clap::{
@@ -24,16 +29,8 @@ use clap::{
 };
 
 use super::{
-    Bump,
-    Context,
-    DiagnosticReporter,
-    HeaderSearch,
-    Path,
-    RenderColor,
-    Write,
-    io,
+    diagnostic_reporter::DiagnosticReporter,
     output::expect_stderr,
-    parse_translation_unit,
 };
 use crate::{
     backend::{
@@ -50,6 +47,8 @@ use crate::{
             OutputKind,
         },
     },
+    diagnostics::ColorChoice as RenderColor,
+    headers::HeaderSearch,
     ir::{
         Module,
         Profile,
@@ -64,9 +63,14 @@ use crate::{
         MiddleEndError,
         analyze_translation_unit,
         lower_translation_unit,
+        parse_translation_unit,
     },
     target::Target,
-    util::bump::ArenaString,
+    translation_phases::Context,
+    util::bump::{
+        ArenaString,
+        Bump,
+    },
 };
 
 /// The status of a compilation that reported errors, or whose back end

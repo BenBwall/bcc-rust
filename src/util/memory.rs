@@ -17,12 +17,15 @@ pub(crate) mod bump;
 pub(crate) mod vm;
 
 // Immutable storage
+pub(crate) mod arena_list;
+
 /// Compile checks import the crate-private allocator from its source file.
 ///
 /// ```compile_fail,E0080
-/// # #[path = "util/memory/bump.rs"]
+/// # #[path = "memory/bump.rs"]
 /// # mod bump;
 /// let arena = bump::Bump::new();
 /// arena.alloc(String::from("owned"));
 /// ```
-pub(crate) mod arena_list;
+#[cfg(doctest)]
+struct AllocatorCompileChecks;

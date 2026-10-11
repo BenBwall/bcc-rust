@@ -45,7 +45,7 @@ impl Expander<'_, '_, '_, '_> {
     /// list (§6.10.3.3 paragraph 1, p. 154; PDF p. 166) is an error that
     /// discards the definition, as GCC does, so its uses do not expand into
     /// further errors.
-    pub(in crate::translation_phases::preprocessing) fn parse_define_directive(&mut self) {
+    pub(super) fn parse_define_directive(&mut self) {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             |_, t| t.kind.is_identifier(),
             |_, token| {
@@ -355,7 +355,7 @@ impl Expander<'_, '_, '_, '_> {
     /// predefined name, which §6.10.8 paragraph 4, p. 161; PDF p. 173
     /// forbids, is diagnosed and leaves the name defined, as a redefinition
     /// does.
-    pub(in crate::translation_phases::preprocessing) fn parse_undef_directive(&mut self) {
+    pub(super) fn parse_undef_directive(&mut self) {
         let Some(name) = self.expect_token_from_previous_phase::<true>(
             |_, t| t.kind.is_identifier(),
             |_, token| {

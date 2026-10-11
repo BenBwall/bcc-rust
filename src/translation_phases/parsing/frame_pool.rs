@@ -32,27 +32,31 @@ use super::{
         StructDeclaration,
         StructDeclarator,
     },
-    expression::{
-        CallState,
-        ExpressionOperand,
+    extensions::{
+        gnu::{
+            AsmOperand,
+            GnuFrame,
+            OffsetMember,
+        },
+        modern::{
+            GenericAssociation,
+            ModernFrame,
+            ModernKind,
+            SyntaxOperand,
+        },
+        msvc::MsvcFrame,
     },
-    expression_operators::LanguageExpressionOperator,
-    gnu::{
-        AsmOperand,
-        GnuFrame,
-        OffsetMember,
+    frames::{
+        expression::{
+            CallState,
+            ExpressionOperand,
+        },
+        expression_operators::LanguageExpressionOperator,
+        initializer::DesignationState,
+        parameter_list::ParameterListFrame,
+        struct_or_union::StructOrUnionSpecifierFrame,
     },
-    initializer::DesignationState,
     machine::ParseFrame,
-    modern::{
-        GenericAssociation,
-        ModernFrame,
-        ModernKind,
-        SyntaxOperand,
-    },
-    msvc::MsvcFrame,
-    parameter_list::ParameterListFrame,
-    struct_or_union::StructOrUnionSpecifierFrame,
     syntax::{
         BlockItem,
         Identifier,

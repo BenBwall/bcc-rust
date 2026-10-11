@@ -6,21 +6,33 @@
 //! Diagnostic locations: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
 //! Directive interpretation remains in preprocessing.
 
+use std::{
+    cell::OnceCell,
+    ffi::OsStr,
+    path::Path,
+};
+
+use rustc_hash::FxBuildHasher;
+
 use super::{
-    ArenaSet,
-    ArenaString,
-    ArenaVec,
-    Bump,
     Context,
-    ErrorSeverity,
-    FxBuildHasher,
-    HeaderSearch,
-    OnceCell,
-    OsStr,
-    Path,
-    SourceText,
-    SourceVector,
-    SourceVectors,
+    source_text::SourceText,
+};
+use crate::{
+    headers::HeaderSearch,
+    translation_phases::{
+        ErrorSeverity,
+        provenance::{
+            SourceVector,
+            SourceVectors,
+        },
+    },
+    util::bump::{
+        ArenaSet,
+        ArenaString,
+        ArenaVec,
+        Bump,
+    },
 };
 
 impl<'tu> Context<'tu> {
@@ -220,7 +232,7 @@ impl<'tu> Context<'tu> {
             .map(move |(offset, directory)| (start + offset, directory))
     }
 
-    pub(super) fn alloc_path(tu: &'tu Bump, path: &Path) -> &'tu Path {
+    fn alloc_path(tu: &'tu Bump, path: &Path) -> &'tu Path {
         let bytes = tu.alloc_slice_copy(path.as_os_str().as_encoded_bytes());
         // SAFETY: These are the complete encoded bytes of an OsStr from this
         // process and target, copied without splitting or changing them.

@@ -6,23 +6,27 @@
 
 use super::{
     Analyzer,
-    ConstantClass,
-    ExpressionInfo,
-    Floating,
-    Integer,
-    Scalar,
     SemanticErrorKind,
-    SyntaxOperand,
-    TagKind,
-    TypeId,
-    TypeKind,
-    ValueCategory,
+    constants::Floating,
+    expressions::{
+        ConstantClass,
+        ExpressionInfo,
+        ValueCategory,
+    },
+    integer::Integer,
+    types::{
+        Scalar,
+        TagKind,
+        TypeId,
+        TypeKind,
+    },
 };
 use crate::{
     float_parsing::LongDouble,
     translation_phases::{
         parsing::{
             Builtin,
+            SyntaxOperand,
             syntax::{
                 Expression,
                 UnaryOperator,

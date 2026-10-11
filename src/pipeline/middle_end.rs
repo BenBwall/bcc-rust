@@ -10,11 +10,6 @@
 //! `--emit=ir` prints the pre-ABI module and `--emit=ir-abi` the post-ABI
 //! one.
 
-use super::{
-    Bump,
-    Context,
-    ParsedTranslationUnit,
-};
 use crate::{
     abi::{
         AbiError,
@@ -29,7 +24,12 @@ use crate::{
         OptimizerOptions,
         optimize,
     },
-    translation_phases::semantic_analysis::SemanticTranslationUnit,
+    translation_phases::{
+        Context,
+        parsing::ParsedTranslationUnit,
+        semantic_analysis::SemanticTranslationUnit,
+    },
+    util::bump::Bump,
 };
 
 /// Lowers the analyzed `syntax` for the configured target into `arena`,

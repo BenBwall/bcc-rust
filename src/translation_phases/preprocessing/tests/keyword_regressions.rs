@@ -1,13 +1,17 @@
 //! Keyword classification must happen after macro replacement.
 use std::path::PathBuf;
 
-use super::{
-    Context,
-    Preprocessor,
-    SharedVec,
-    TokenType,
+use crate::{
+    translation_phases::{
+        Context,
+        preprocessing::{
+            KeywordTokenType,
+            Preprocessor,
+            token::TokenType,
+        },
+    },
+    util::shared::SharedVec,
 };
-use crate::translation_phases::preprocessing::KeywordTokenType;
 
 #[test]
 fn every_c99_keyword_and_near_miss_is_classified_after_expansion() {

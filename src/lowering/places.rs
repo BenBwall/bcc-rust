@@ -12,7 +12,6 @@
 
 use super::{
     FunctionLowerer,
-    Local,
     LoweringError,
     module_items::at,
     ssa::Op,
@@ -23,6 +22,7 @@ use super::{
     },
     work::{
         Item,
+        Local,
         Operand,
         Place,
     },

@@ -12,17 +12,15 @@
 //! `pipeline::lower_translation_unit` for the middle end. Read [`run`] to
 //! follow a command-line compilation.
 //!
-//! Files by role:
-//! - Compiler driver: `pipeline.rs`, `translation_phases.rs`, and their
-//!   directories.
+//! Files by role, each with any directory of the same name:
+//! - Compiler phases and driver: `pipeline.rs`, `translation_phases.rs`.
 //! - Middle end and back ends: `lowering.rs`, `ir.rs`, `optimizer.rs`,
-//!   `abi.rs`, `backend.rs`, and their directories.
-//! - Invocation: `main.rs`, `cli.rs`, `configuration.rs`, and their
-//!   directories.
-//! - Representations: `target.rs`, `headers.rs`, `float_parsing.rs`,
-//!   `binary128.rs`.
-//! - Storage and reporting: `util.rs`, `diagnostics.rs`, and their directories.
-//! - Measurements and fixtures: `benchmarking.rs`, `test_support.rs`.
+//!   `abi.rs`, `backend.rs`.
+//! - Invocation and language choices: `main.rs`, `cli.rs`, `configuration.rs`,
+//!   `headers.rs`, `target.rs`.
+//! - Values, storage, and reporting: `binary128.rs`, `diagnostics.rs`,
+//!   `float_parsing.rs`, `util.rs`.
+//! - Measurements and test support: `benchmarking.rs`, `test_support.rs`.
 //!
 //! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
 //! PDF pp. 21-22. Translation phase 8 (linking) is left to the bundled
@@ -74,7 +72,7 @@ pub(crate) mod configuration;
 mod headers;
 mod target;
 
-// Values and storage
+// Values, storage, and reporting
 mod binary128;
 pub(crate) mod diagnostics;
 pub(crate) mod float_parsing;
@@ -93,7 +91,6 @@ mod benchmarking;
 )]
 mod test_support;
 
-// Only the benchmarking binary emits coz progress points.
 #[cfg(feature = "benchmarking-internals")]
 pub use benchmarking::{
     ArenaUsage,
@@ -120,6 +117,7 @@ pub use cli::{
     compile_file_with_arguments_measured,
     run,
 };
+// Only the benchmarking binary emits coz progress points.
 #[cfg(all(unix, feature = "benchmarking-internals"))]
 use coz as _;
 

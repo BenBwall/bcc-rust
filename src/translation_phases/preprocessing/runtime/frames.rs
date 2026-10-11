@@ -6,19 +6,27 @@
 //! rescanning, §6.10.3.4 paragraph 1, p. 155; PDF p. 167.
 //! Directive handlers and replacement operators decide which frames to push.
 
-use std::mem::take;
+use std::{
+    fmt::Debug,
+    mem::take,
+};
 
 use super::super::{
-    Debug,
     Expander,
-    FunctionLikeMacroArgument,
-    MacroArguments,
-    MacroDefinition,
     PreprocessorError,
     PreprocessorErrorType,
-    SourceVector,
-    StringCacheId,
-    TokenSource,
+    macro_expansion::{
+        FunctionLikeMacroArgument,
+        MacroArguments,
+        MacroDefinition,
+    },
+};
+use crate::{
+    translation_phases::{
+        SourceVector,
+        preprocessor_tokenizer::TokenSource,
+    },
+    util::string_cache::StringCacheId,
 };
 
 impl<'x> Expander<'_, '_, '_, 'x> {
@@ -151,9 +159,9 @@ const _: () = {
 
 /// A source-file frame kept while no expansion is active.
 #[derive(Debug)]
-pub(in crate::translation_phases::preprocessing) struct FileFrame<'pp> {
-    pub(in crate::translation_phases::preprocessing) conditional_base:           usize,
-    pub(in crate::translation_phases::preprocessing) physical_source_file_index: u32,
-    pub(in crate::translation_phases::preprocessing) include_search_index:       Option<usize>,
-    pub(in crate::translation_phases::preprocessing) tokenizer:                  TokenSource<'pp>,
+pub(super) struct FileFrame<'pp> {
+    pub(super) conditional_base:           usize,
+    pub(super) physical_source_file_index: u32,
+    pub(super) include_search_index:       Option<usize>,
+    pub(super) tokenizer:                  TokenSource<'pp>,
 }

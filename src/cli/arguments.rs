@@ -6,7 +6,15 @@
     reason = "clap parses path arguments into `PathBuf`s; the compiler borrows them as `&Path`."
 )]
 use std::path::PathBuf;
+use std::{
+    ffi::OsStr,
+    ops::RangeInclusive,
+};
 
+use chrono::{
+    DateTime,
+    Utc,
+};
 use clap::{
     Arg,
     Args,
@@ -18,17 +26,15 @@ use clap::{
     parser::ValueSource,
 };
 
-use super::{
-    Cli,
-    CompilerConfiguration,
-    Context,
-    DateTime,
-    ExtensionPolicy,
-    LanguageMode,
-    MsvcFeature,
-    OsStr,
-    RangeInclusive,
-    Utc,
+use super::Cli;
+use crate::{
+    configuration::{
+        CompilerConfiguration,
+        ExtensionPolicy,
+        LanguageMode,
+        MsvcFeature,
+    },
+    translation_phases::Context,
 };
 
 /// Normalize GCC's single-dash long options before clap. Values and tokens
@@ -152,7 +158,7 @@ impl Cli {
 
 /// A GCC language flag, which clap receives as `--language-option`.
 #[derive(Clone, Copy)]
-pub(super) enum LanguageFlag {
+enum LanguageFlag {
     /// `-pedantic` or `-Wpedantic` (warn), or `-pedantic-errors` (deny).
     Pedantic(ExtensionPolicy),
     /// `-fms-extensions` or `-fno-ms-extensions`.
@@ -164,7 +170,7 @@ pub(super) enum LanguageFlag {
 }
 
 impl LanguageFlag {
-    pub(super) fn parse(text: &str) -> Option<Self> {
+    fn parse(text: &str) -> Option<Self> {
         match text {
             | "-pedantic" | "-Wpedantic" => return Some(Self::Pedantic(ExtensionPolicy::Warn)),
             | "-pedantic-errors" => return Some(Self::Pedantic(ExtensionPolicy::Deny)),
@@ -183,7 +189,7 @@ impl LanguageFlag {
         }
     }
 
-    pub(super) fn apply(self, configuration: CompilerConfiguration) -> CompilerConfiguration {
+    fn apply(self, configuration: CompilerConfiguration) -> CompilerConfiguration {
         match self {
             | Self::Pedantic(policy) => configuration.with_extension_policy(policy),
             | Self::MsvcExtensions(enabled) => configuration.with_msvc_extensions(enabled),
@@ -215,7 +221,7 @@ pub(super) struct CliInput {
 pub(super) struct SourceDateEpoch(Option<i64>);
 
 /// Exact clang-style explanation, deliberately omitting deprecated aliases.
-pub(super) const STANDARD_NOTES: &str =
+const STANDARD_NOTES: &str =
     "note: use 'c89', 'c90', or 'iso9899:1990' for 'ISO C 1990' standard\nnote: use \
      'iso9899:199409' for 'ISO C 1990 with amendment 1' standard\nnote: use 'gnu89' or 'gnu90' \
      for 'ISO C 1990 with GNU extensions' standard\nnote: use 'c99' or 'iso9899:1999' for 'ISO C \
@@ -248,7 +254,7 @@ pub(super) fn preprocessing_option(value: &str) -> Result<String, &'static str> 
 
 /// GCC's single-dash header search options, which clap receives with two
 /// dashes. The first three take a directory, separately or joined.
-pub(super) const SINGLE_DASH_SEARCH_FLAGS: [&str; 6] = [
+const SINGLE_DASH_SEARCH_FLAGS: [&str; 6] = [
     "iquote",
     "isystem",
     "idirafter",
@@ -258,7 +264,7 @@ pub(super) const SINGLE_DASH_SEARCH_FLAGS: [&str; 6] = [
 ];
 
 /// The seconds since the Unix epoch that a date can represent.
-pub(super) const SOURCE_DATE_EPOCH_RANGE: RangeInclusive<i64> =
+const SOURCE_DATE_EPOCH_RANGE: RangeInclusive<i64> =
     DateTime::<Utc>::MIN_UTC.timestamp()..=DateTime::<Utc>::MAX_UTC.timestamp();
 
 /// Parses a [`SourceDateEpoch`]: a decimal integer with an optional sign and

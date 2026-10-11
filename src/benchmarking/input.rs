@@ -1,13 +1,15 @@
 //! Generates and caches benchmark source inputs and constructs contexts
 //! with deterministic date and time macros.
 
-use std::fmt::Write;
+use std::{
+    fmt::Write,
+    sync::OnceLock,
+};
 
-use super::{
-    Bump,
-    CompilerConfiguration,
-    Context,
-    OnceLock,
+use crate::{
+    configuration::CompilerConfiguration,
+    translation_phases::Context,
+    util::bump::Bump,
 };
 
 /// A generated benchmark translation unit.
@@ -132,7 +134,7 @@ impl BenchmarkInput {
     reason = "Builds a benchmark input once, outside any measured interval, and keeps it for the \
               process."
 )]
-pub(super) fn expression_heavy_source(count: usize) -> String {
+fn expression_heavy_source(count: usize) -> String {
     let mut source = String::from(
         "typedef struct point { int x, y; } point;
          int table[64];
@@ -164,7 +166,7 @@ pub(super) fn expression_heavy_source(count: usize) -> String {
     reason = "Builds a benchmark input once, outside any measured interval, and keeps it for the \
               process."
 )]
-pub(super) fn declaration_heavy_source(count: usize) -> String {
+fn declaration_heavy_source(count: usize) -> String {
     let mut source = String::new();
     for index in 0..count {
         let _ = write!(

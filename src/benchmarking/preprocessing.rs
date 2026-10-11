@@ -1,13 +1,18 @@
 //! Benchmark entry points count lexer and preprocessor output tokens.
 
+use std::path::Path;
+
 use super::{
     BenchmarkInput,
-    Bump,
-    Path,
-    TokenSource,
-    TranslationPhase,
-    benchmark_context,
-    with_preprocessor,
+    input::benchmark_context,
+};
+use crate::{
+    pipeline::with_preprocessor,
+    translation_phases::{
+        TranslationPhase,
+        preprocessor_tokenizer::TokenSource,
+    },
+    util::bump::Bump,
 };
 
 /// Runs translation phases 1 through 6 over the whole translation unit and

@@ -25,24 +25,26 @@ use super::{
         StructOrUnionSpecifier,
         TypeName,
     },
-    gnu::{
-        Asm,
-        AsmOperand,
-        Builtin,
-        OffsetMember,
-    },
-    modern::{
-        AttributeSpecifier,
-        ExtendedType,
-        GenericAssociation,
-        GenericSelection,
-        SpecifierExtension,
-        StaticAssertion,
-        SyntaxOperand,
-    },
-    msvc::{
-        MsAsm,
-        Seh,
+    extensions::{
+        gnu::{
+            Asm,
+            AsmOperand,
+            Builtin,
+            OffsetMember,
+        },
+        modern::{
+            AttributeSpecifier,
+            ExtendedType,
+            GenericAssociation,
+            GenericSelection,
+            SpecifierExtension,
+            StaticAssertion,
+            SyntaxOperand,
+        },
+        msvc::{
+            MsAsm,
+            Seh,
+        },
     },
     syntax::{
         AttributedStatement,

@@ -2,9 +2,9 @@ use std::hint::black_box;
 
 use super::{
     FloatRangeError,
-    LONG_DOUBLE_BYTES,
     ParseFloatError,
     ffi,
+    representation::LONG_DOUBLE_BYTES,
     string_to_double,
     string_to_float,
     string_to_long_double,

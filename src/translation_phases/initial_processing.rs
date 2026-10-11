@@ -2,6 +2,7 @@
 //! [`terminal_splice_length`] recognizes a backslash or enabled `??/` trigraph
 //! followed by LF, CRLF, or CR at the end of the source. Whole-buffer rewriting
 //! and token formation run in [`super::preprocessor_tokenizer`].
+//! [`InitialProcessorError`] reports a missing or escaped final newline.
 //!
 //! For example, a source ending in a backslash and LF has a terminal splice of
 //! two bytes. The lexer saves that physical span and reports an escaped final
@@ -11,9 +12,7 @@
 //! the missing-newline and escaped-newline diagnostics.
 //!
 //! Files by role:
-//! - Final-newline recognition: `initial_processing.rs`.
-//! - Diagnostic types and rendering: `preprocessor_tokenizer/errors.rs`,
-//!   re-exported here as [`InitialProcessorError`].
+//! - Final-newline recognition and diagnostics: `initial_processing.rs`.
 //! - Source mapping and lexing: `preprocessor_tokenizer/splicing.rs` and
 //!   `preprocessor_tokenizer.rs`.
 //!
@@ -21,7 +20,27 @@
 //! the final-newline rule is in phase 2, p. 10; PDF p. 22.
 //! Trigraph replacement is §5.2.1.1 paragraph 1, p. 18; PDF p. 30.
 
-pub(crate) use super::preprocessor_tokenizer::errors::InitialProcessorError;
+use thiserror::Error;
+
+use super::{
+    Context,
+    ErrorSeverity,
+    GetPosition,
+    GetSeverity,
+    GetSourceVectors,
+    SourcePosition,
+    SourceVector,
+    SourceVectors,
+};
+use crate::{
+    diagnostics::{
+        Diagnostic,
+        Explanation,
+        ToDiagnostic,
+        format_in,
+    },
+    util::bump::Bump,
+};
 
 /// The length of the line splice that escapes the final newline of
 /// `source`, spelled before trigraph replacement and line splicing.
@@ -32,4 +51,75 @@ pub(crate) fn terminal_splice_length(source: &str, trigraphs: bool) -> Option<us
         .into_iter()
         .find(|suffix| (trigraphs || !suffix.starts_with("??")) && source.ends_with(suffix))
         .map(str::len)
+}
+
+/// Violations of the required final physical newline before line splicing.
+/// C99: §5.1.1.2p2, p. 10; PDF p. 22.
+#[derive(Debug, Error)]
+pub(crate) enum InitialProcessorError {
+    /// A nonempty source file ends without a new-line character.
+    /// C99: §5.1.1.2p2, p. 10; PDF p. 22.
+    #[error("no newline at end of file")]
+    MissingFinalNewline(SourceVector),
+    /// A backslash immediately precedes the final physical newline.
+    /// C99: §5.1.1.2p2, p. 10; PDF p. 22.
+    #[error("final newline is escaped")]
+    EscapedFinalNewline(SourceVector),
+}
+
+impl ToDiagnostic for InitialProcessorError {
+    fn diagnostic_in<'d>(
+        &self,
+        _context: &Context<'_>,
+        source: SourceVectors,
+        arena: &'d Bump,
+    ) -> Diagnostic<'d> {
+        let message = format_in!(arena, "{self}");
+        match self {
+            | Self::EscapedFinalNewline(_) => Explanation::new(arena, message)
+                .label("this splice removes the final physical newline")
+                .note(
+                    "C99 5.1.1.2p2: the final newline shall not be immediately preceded by a \
+                     backslash before splicing",
+                )
+                .help("add an unescaped newline at the end of the file")
+                .at(self.severity(), source),
+            | Self::MissingFinalNewline(_) => Explanation::new(arena, message)
+                .label("the file ends without a newline")
+                .note("C99 §5.1.1.2p2: a nonempty source file shall end in a new-line character")
+                .help("add a newline at the end of the file")
+                .at(self.severity(), source),
+        }
+    }
+}
+
+impl GetPosition for InitialProcessorError {
+    #[inline(always)]
+    fn position(&self, context: &Context<'_>) -> SourcePosition {
+        match self {
+            | Self::MissingFinalNewline(vector) | Self::EscapedFinalNewline(vector) =>
+                vector.position(context),
+        }
+    }
+}
+
+impl GetSeverity for InitialProcessorError {
+    fn severity(&self) -> ErrorSeverity {
+        match self {
+            | Self::MissingFinalNewline(_) | Self::EscapedFinalNewline(_) => ErrorSeverity::Warning,
+        }
+    }
+}
+
+impl GetSourceVectors for InitialProcessorError {
+    fn source_vectors(&self, context: &mut Context<'_>) -> SourceVectors {
+        match self {
+            | Self::MissingFinalNewline(vector) | Self::EscapedFinalNewline(vector) => context
+                .create_source_vectors(
+                    vector.position(context),
+                    vector.source_file_index,
+                    vector.length as usize,
+                ),
+        }
+    }
 }

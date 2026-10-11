@@ -7,14 +7,16 @@ use super::{
             TypeQualifiers,
             TypeSpecifiers,
         },
-        modern::{
-            AttributeSpecifier,
-            AttributeSyntax,
-            ExtendedType,
-        },
-        msvc::{
-            MsAsm,
-            Seh,
+        extensions::{
+            modern::{
+                AttributeSpecifier,
+                AttributeSyntax,
+                ExtendedType,
+            },
+            msvc::{
+                MsAsm,
+                Seh,
+            },
         },
         syntax::{
             Statement,

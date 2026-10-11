@@ -3,8 +3,8 @@
 //! declaration starts one explicit stack of continuations. The driver pops a
 //! continuation, performs its step and pushes any remaining work. Scratch maps
 //! and stacks are dropped after translation-unit checks; the retained results
-//! stay in the source arena. Semantic lookup is independent of the parser's
-//! typedef lookup.
+//! stay in the translation-unit arena. Semantic lookup is independent of the
+//! parser's typedef lookup.
 //!
 //! For `int x = 1;`, the loop first resolves `int`, constructs the declarator
 //! and installs `x` in file scope. It then visits the initializer's literal,
@@ -43,7 +43,7 @@
 //! C99: §6.3, pp. 42-48; PDF pp. 54-60; §6.5, pp. 67-94; PDF pp. 79-106
 //! (conversions and expressions).
 //! C99: §6.7.8, pp. 125-130; PDF pp. 137-142 (initializers).
-//! C99: §6.8-§6.9.2, pp. 131-143; PDF pp. 143-155 (statements and definitions).
+//! C99: §6.8-§6.9.2, pp. 131-144; PDF pp. 143-156 (statements and definitions).
 //! Backend control-flow and emitted code are not constructed.
 
 // Driver storage and names
@@ -76,22 +76,32 @@ mod diagnostics;
 mod errors;
 mod inspection;
 
+#[cfg(test)]
 use std::cell::Cell;
 
-use builtins::atomics;
 pub(crate) use builtins::{
-    atomics::modeled as atomic_builtin,
     implemented_builtin,
     named_builtin,
-    x86_builtins,
 };
 use collection::Collection;
+#[expect(
+    unused_imports,
+    reason = "The retained semantic vocabulary is the crate interface for lowering and inspection."
+)]
 pub(crate) use constants::Floating;
 use declarations::compatible_enum_type;
 pub(crate) use errors::{
     SemanticError,
     SemanticErrorKind,
 };
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "The retained semantic vocabulary is the crate interface for lowering and \
+                  inspection."
+    )
+)]
 pub(crate) use expressions::{
     ConstantClass,
     Conversion,
@@ -117,6 +127,11 @@ use scopes::{
     Entry,
     Namespace,
 };
+use types::TypeInterner;
+#[expect(
+    unused_imports,
+    reason = "The retained semantic vocabulary is the crate interface for lowering and inspection."
+)]
 pub(crate) use types::{
     ArrayBound,
     Field,
@@ -131,17 +146,11 @@ pub(crate) use types::{
     TypeKind,
     Types,
 };
-use types::{
-    TypeInterner,
-    align_up,
-};
 
 use super::{
     Context,
     DiagnosticPolicy,
-    ErrorSeverity,
     SourceVectors,
-    TranslationError,
     parsing::{
         AttributeSpecifier,
         ExtendedType,
@@ -161,7 +170,6 @@ use super::{
             ParameterDeclaration,
             StructDeclaration,
             StructDeclarator,
-            StructOrUnion,
             TypeName,
             TypeQualifiers,
             TypeSpecifiers,
@@ -175,11 +183,9 @@ use super::{
             ExpressionSlot,
             ExpressionType,
             ExternalDeclaration,
-            ForInitializer,
             FunctionDefinition,
             Identifier,
             Statement,
-            StatementType,
             StorageClass,
             UnaryOperator,
         },

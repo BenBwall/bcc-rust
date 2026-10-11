@@ -1,12 +1,13 @@
 //! Runs semantic analysis and summarizes results for benchmark inputs.
 
+use std::path::Path;
+
 use super::{
     BenchmarkInput,
-    Bump,
     ParseBenchmarkSummary,
-    Path,
-    benchmark_context,
+    input::benchmark_context,
 };
+use crate::util::bump::Bump;
 
 /// Runs the full pipeline including declaration semantic analysis.
 #[doc(hidden)]
@@ -25,7 +26,7 @@ pub fn sema_source(source: &str) -> ParseBenchmarkSummary {
     summarize_semantic(&tu, source)
 }
 
-pub(super) fn summarize_semantic<'tu>(tu: &'tu Bump, source: &'tu str) -> ParseBenchmarkSummary {
+fn summarize_semantic<'tu>(tu: &'tu Bump, source: &'tu str) -> ParseBenchmarkSummary {
     let mut context = benchmark_context(tu);
     let unit = crate::pipeline::parse_translation_unit(
         &mut context,

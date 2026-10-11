@@ -2,7 +2,6 @@
 
 use std::path::PathBuf;
 
-use super::Preprocessor;
 use crate::{
     configuration::CompilerConfiguration,
     translation_phases::{
@@ -10,6 +9,7 @@ use crate::{
         SourceVector,
         preprocessing::{
             IntegerTokenType,
+            Preprocessor,
             Token,
             TokenType,
         },

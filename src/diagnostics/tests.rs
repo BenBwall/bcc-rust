@@ -1,6 +1,13 @@
 use std::path::Path;
 
-use super::*;
+use super::{
+    formatting::MAX_QUOTED_SPELLING,
+    *,
+};
+use crate::translation_phases::{
+    ErrorSeverity,
+    SourceVectors,
+};
 
 fn with_context<R>(text: &str, inspect: impl FnOnce(&mut Context<'_>, u32) -> R) -> R {
     let tu = Bump::new();

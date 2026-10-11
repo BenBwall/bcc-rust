@@ -9,9 +9,13 @@ use super::{
     Analyzer,
     SemanticError,
     SemanticErrorKind,
-    SourceVectors,
-    StringCacheId,
-    TranslationError,
+};
+use crate::{
+    translation_phases::{
+        SourceVectors,
+        TranslationError,
+    },
+    util::string_cache::StringCacheId,
 };
 
 impl Analyzer<'_, '_, '_> {
@@ -34,7 +38,8 @@ impl Analyzer<'_, '_, '_> {
                 previous,
             };
             let severity = crate::translation_phases::GetSeverity::severity(&error);
-            self.error_diagnostics += usize::from(severity == super::ErrorSeverity::Error);
+            self.error_diagnostics +=
+                usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
             if !self.context.withholds(severity, false, source_vectors) {
                 self.context
                     .append_pending_errors([TranslationError::Semantic(error)]);
@@ -60,8 +65,10 @@ impl Analyzer<'_, '_, '_> {
                 baseline,
                 source_vectors,
                 |severity| {
-                    *semantic_errors += usize::from(severity == super::ErrorSeverity::Error);
-                    *error_diagnostics += usize::from(severity == super::ErrorSeverity::Error);
+                    *semantic_errors +=
+                        usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
+                    *error_diagnostics +=
+                        usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
                     TranslationError::Semantic(SemanticError {
                         extension_severity: Some(severity),
                         kind,

@@ -35,14 +35,7 @@ mod formatting;
 #[cfg(test)]
 mod owned;
 
-use std::fmt::{
-    self,
-    Display,
-};
-
 pub(crate) use color::ColorChoice;
-#[cfg(test)]
-use formatting::MAX_QUOTED_SPELLING;
 pub(crate) use formatting::{
     closest_match,
     count_of,
@@ -61,20 +54,10 @@ pub(crate) use owned::{
     OwnedDiagnostic,
     OwnedExplanation,
 };
-use owo_colors::Style;
 
 use crate::{
-    translation_phases::{
-        Context,
-        ErrorSeverity,
-        SourceVector,
-        SourceVectors,
-    },
-    util::bump::{
-        ArenaString,
-        ArenaVec,
-        Bump,
-    },
+    translation_phases::Context,
+    util::bump::Bump,
 };
 
 impl Renderer {

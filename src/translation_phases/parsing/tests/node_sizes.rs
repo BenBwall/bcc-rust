@@ -5,8 +5,6 @@
 //! deliberate one.
 
 use super::super::{
-    ParseFrame,
-    ParseValue,
     declaration_syntax::{
         Declaration,
         DeclarationSpecifiers,
@@ -28,25 +26,31 @@ use super::super::{
         StructOrUnionSpecifier,
         TypeName,
     },
-    gnu::{
-        Asm,
-        AsmOperand,
-        AsmQualifiers,
-        Builtin,
-        OffsetMember,
+    extensions::{
+        gnu::{
+            Asm,
+            AsmOperand,
+            AsmQualifiers,
+            Builtin,
+            OffsetMember,
+        },
+        modern::{
+            AttributeSpecifier,
+            ExtendedType,
+            GenericAssociation,
+            GenericSelection,
+            SpecifierExtension,
+            StaticAssertion,
+            SyntaxOperand,
+        },
+        msvc::{
+            MsAsm,
+            Seh,
+        },
     },
-    modern::{
-        AttributeSpecifier,
-        ExtendedType,
-        GenericAssociation,
-        GenericSelection,
-        SpecifierExtension,
-        StaticAssertion,
-        SyntaxOperand,
-    },
-    msvc::{
-        MsAsm,
-        Seh,
+    machine::{
+        ParseFrame,
+        ParseValue,
     },
     syntax::{
         AttributedStatement,

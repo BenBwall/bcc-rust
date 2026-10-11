@@ -74,7 +74,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         self.report_with_feature(error_type, token, Some(feature));
     }
 
-    pub(super) fn report_with_feature(
+    fn report_with_feature(
         &mut self,
         error_type: ParserErrorType<'tu>,
         token: Option<Token>,
@@ -183,10 +183,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
     /// Returns a zero-width anchor just after the previous token when `found`
     /// starts a later line of the same file: the likely place of a missing
     /// `;`.
-    pub(super) fn semicolon_insertion_point(
-        &mut self,
-        found: Option<Token>,
-    ) -> Option<SourceVectors> {
+    fn semicolon_insertion_point(&mut self, found: Option<Token>) -> Option<SourceVectors> {
         let previous = self.cursor.previous?;
         let previous = self.context.user_source_end(previous.source_vectors)?;
         let next = self

@@ -41,50 +41,31 @@ mod source_vectors;
 mod diagnostics;
 mod literals;
 
-use std::{
-    cell::OnceCell,
-    ffi::OsStr,
-    path::Path,
-};
+use std::path::Path;
 
 use expansion_sites::ExpansionSites;
-use merge_anchors::MergeAnchors;
 use rustc_hash::FxBuildHasher;
-use segmented_vec::SegmentedVec;
 use source_text::SourceText;
 
+#[cfg(test)]
+use super::provenance::{
+    SourcePosition,
+    SourceVectors,
+};
 use super::{
-    ErrorSeverity,
-    GetPosition,
-    GetSeverity,
     TranslationError,
     provenance::{
-        SourceArena,
-        SourcePosition,
         SourceVector,
         SourceVectorStack,
-        SourceVectors,
     },
 };
 use crate::{
     configuration::CompilerConfiguration,
-    headers::HeaderSearch,
-    translation_phases::{
-        initial_processing::InitialProcessorError,
-        parsing::ParserError,
-        preprocessing::{
-            KeywordTokenType,
-            LiteralUnit,
-            PreprocessorError,
-        },
-        preprocessor_tokenizer::PreprocessorTokenizerError,
-    },
+    translation_phases::preprocessing::LiteralUnit,
     util::{
         bump::{
             ArenaMap,
             ArenaQueue,
-            ArenaSet,
-            ArenaString,
             ArenaVec,
             Bump,
         },

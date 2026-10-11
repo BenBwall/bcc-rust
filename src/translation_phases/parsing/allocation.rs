@@ -101,7 +101,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
         marked
     }
 
-    pub(super) fn expression_children_recovered(kind: &ExpressionType<'tu>) -> bool {
+    fn expression_children_recovered(kind: &ExpressionType<'tu>) -> bool {
         let expression_recovered = |expression: &Expression<'_>| expression.recovered;
         match kind {
             | ExpressionType::StatementExpression(x) => x.recovered,

@@ -1,4 +1,26 @@
-use super::*;
+use std::{
+    fmt::Write as _,
+    io::{
+        self,
+        Write,
+    },
+};
+
+use super::{
+    output::{
+        TokenOutput,
+        print_preprocessor_output_in,
+    },
+    *,
+};
+use crate::{
+    configuration::{
+        ExtensionPolicy,
+        MsvcFeature,
+    },
+    diagnostics::ColorChoice as RenderColor,
+    util::bump::ArenaString,
+};
 
 #[test]
 #[expect(
