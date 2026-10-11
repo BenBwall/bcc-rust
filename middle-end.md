@@ -710,8 +710,12 @@ triple to produce a runnable program; `main` is called without arguments.
   command line.
   Native test programs run with captured stdout/stderr and a 20-second
   deadline; `BCC_TEST_TIMEOUT_MS` overrides it with a positive millisecond
-  count. On timeout the shared runner kills and reaps the process and reports
-  its command and output. Differential failures also include the seed, arm,
+  count. On timeout the shared runner kills the process tree (Windows) or
+  process group (Unix), reaps the direct child and reports its command and
+  captured output. Pipe readers get a 250-millisecond grace period, then are
+  detached if an escaped descendant still holds a pipe open. The same deadline
+  covers pipes left open after the direct child exits. Differential failures
+  also include the seed, arm,
   rerun command and both bcc and LLVM IR. Object-only output needs no MinGW
   discovery; the CLI regression removes `MINGW_ROOT` and clears `PATH`.
 - `benches/c` holds ten self-checking performance programs; their reduced
