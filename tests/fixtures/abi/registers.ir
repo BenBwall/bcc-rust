@@ -99,4 +99,3 @@ block0:
     v12 = iadd.i64 v9, v11
     return v12
 }
-

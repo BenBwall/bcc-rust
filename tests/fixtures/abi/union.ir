@@ -139,4 +139,3 @@ block0:
     v14 = zext.i32 v13
     return v14
 }
-

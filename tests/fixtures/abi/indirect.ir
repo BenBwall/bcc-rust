@@ -91,4 +91,3 @@ block0:
     v8 = call_indirect v6(v19, v5, v7) : (i64, ptr, i32) -> i32
     return v8
 }
-

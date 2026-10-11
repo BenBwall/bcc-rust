@@ -30,7 +30,11 @@ fn check(name: &str, text: &str, expected: u128) {
             expected,
             "{name} after ABI lowering for {suffix}:\n{lowered}"
         );
-        writeln!(snapshot, "; {suffix}\n{lowered}").unwrap();
+        // A blank line separates the targets, without one at the end.
+        if !snapshot.is_empty() {
+            snapshot.push('\n');
+        }
+        write!(snapshot, "; {suffix}\n{lowered}").unwrap();
     }
     assert_snapshot(&format!("tests/fixtures/abi/{name}.ir"), &snapshot);
 }
