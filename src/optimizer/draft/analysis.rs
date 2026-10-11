@@ -70,35 +70,9 @@ impl<'s> Draft<'_, 's> {
     /// The distinct live predecessors of every block, reachable or not, as
     /// rows of one array.
     pub(in crate::optimizer) fn predecessors(&self) -> Predecessors<'s> {
-        let blocks = self.blocks.len();
-        let mut starts = ArenaVec::with_capacity_in(blocks + 1, self.scratch);
-        starts.resize(blocks + 1, 0_u32);
-        let mut pairs: ArenaVec<'s, (Block, Block)> = ArenaVec::new_in(self.scratch);
-        for block in self.alive_blocks() {
-            let first = pairs.len();
-            for edge in self.block(block).term.edges() {
-                if !pairs[first..]
-                    .iter()
-                    .any(|&(target, _)| target == edge.target)
-                {
-                    pairs.push((edge.target, block));
-                    starts[edge.target.index() + 1] += 1;
-                }
-            }
+        Predecessors {
+            cfg: self.control_flow_graph(),
         }
-        for index in 1..starts.len() {
-            starts[index] += starts[index - 1];
-        }
-        let mut cursors = ArenaVec::with_capacity_in(blocks, self.scratch);
-        cursors.extend_from_slice(&starts[..blocks]);
-        let mut rows = ArenaVec::with_capacity_in(pairs.len(), self.scratch);
-        rows.resize(pairs.len(), Block::new(0));
-        for &(target, source) in &pairs {
-            let cursor = &mut cursors[target.index()];
-            rows[*cursor as usize] = source;
-            *cursor += 1;
-        }
-        Predecessors { starts, rows }
     }
 
     /// The edges between the live blocks, numbered as in the draft, for
@@ -140,14 +114,12 @@ impl<'s> Draft<'_, 's> {
 /// The predecessors of every block of a draft.
 #[derive(Debug)]
 pub(in crate::optimizer) struct Predecessors<'s> {
-    starts: ArenaVec<'s, u32>,
-    rows:   ArenaVec<'s, Block>,
+    cfg: ControlFlowGraph<'s>,
 }
 
 impl Predecessors<'_> {
     /// The distinct live blocks with an edge to `block`.
     pub(in crate::optimizer) fn of(&self, block: Block) -> &[Block] {
-        let index = block.index();
-        &self.rows[self.starts[index] as usize..self.starts[index + 1] as usize]
+        self.cfg.predecessors(block)
     }
 }

@@ -14,6 +14,67 @@ use crate::ir::{
 };
 
 #[test]
+fn large_switch_predecessors_and_dce_are_linear() {
+    use std::fmt::Write as _;
+    let targets = 20_000;
+    let mut text =
+        format!("function @f(i32) external {{\nblock0(v0: i32):\n    switch v0, block{targets}, [");
+    for target in 1..=targets {
+        if target != 1 {
+            text.push_str(", ");
+        }
+        write!(
+            text,
+            "{}: block{target}, {}: block{target}",
+            target * 2,
+            target * 2 + 1
+        )
+        .unwrap();
+    }
+    text.push_str("]\n");
+    for target in 1..=targets {
+        writeln!(text, "block{target}:").unwrap();
+        text.push_str(if target == 2 {
+            "    jump block1\n"
+        } else {
+            "    return\n"
+        });
+    }
+    text.push_str("}\n");
+    let arena = Bump::new();
+    let mut module = parse(&arena, &text);
+    let body = module.functions().next().unwrap().1.body.as_ref().unwrap();
+    let start = Instant::now();
+    for _ in 0..4 {
+        let scratch = Bump::new();
+        let draft = Draft::lift(body, &scratch);
+        let predecessors = draft.predecessors();
+        assert_eq!(predecessors.of(Block::new(0)), []);
+        assert_eq!(
+            predecessors.of(Block::new(1)),
+            [Block::new(0), Block::new(2)]
+        );
+        for target in 2..=targets {
+            assert_eq!(predecessors.of(Block::new(target)), [Block::new(0)]);
+        }
+    }
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(1),
+        "four draft predecessor constructions took {:?}",
+        start.elapsed()
+    );
+    let scratch = Bump::new();
+    let start = Instant::now();
+    _ = optimize(&mut module, &only(&[Pass::Dce]), &scratch);
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "DCE took {:?}",
+        start.elapsed()
+    );
+    assert_verifies(&module, "large switch after DCE");
+}
+
+#[test]
 fn insert_rewrite_move_and_replace_lower_densely() {
     let arena = Bump::new();
     let scratch = Bump::new();
