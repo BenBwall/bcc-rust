@@ -1,10 +1,12 @@
 //! Code generation: lowers the analyzed translation unit to the bcc IR,
-//! optimizes it when asked, and hands it to a back end. `--emit` prints the
-//! bcc IR or LLVM IR, `--interpret` runs `main` in the IR interpreter, and
-//! `-o` builds an executable or object through the bundled clang.
+//! optimizes it when asked, lowers its calls for the target's ABI, and hands
+//! it to a back end. `--emit` prints the bcc IR or LLVM IR, `--interpret`
+//! runs `main` in the IR interpreter, and `-o` builds an executable or object
+//! through the bundled clang.
 //!
-//! There is no ABI lowering yet, so the back ends receive the pre-ABI
-//! module; lowering refuses the by-value aggregate calls that would need it.
+//! Every back end receives the post-ABI module. `--emit=ir` prints the
+//! pre-ABI module the optimizer worked on, where a structure passed by value
+//! is still one `ptr` parameter, and `--emit=ir-abi` the post-ABI one.
 
 #[expect(
     clippy::disallowed_types,
@@ -48,7 +50,10 @@ use crate::{
             OutputKind,
         },
     },
-    ir::Module,
+    ir::{
+        Module,
+        Profile,
+    },
     optimizer::{
         OptimizerOptions,
         Pass,
@@ -56,6 +61,7 @@ use crate::{
         parse_pass_list,
     },
     pipeline::{
+        MiddleEndError,
         analyze_translation_unit,
         lower_translation_unit,
     },
@@ -103,13 +109,23 @@ pub(super) fn generate_code<'tu>(
     let ir = Bump::new();
     let print_after_all = RefCell::new(StderrText);
     let optimizer = options.optimizer(&print_after_all);
-    let lowered = lower_translation_unit(context, &unit, &sema, &ir, optimizer.as_ref());
+    let profile = if options.emit == Some(Emit::Ir) {
+        Profile::PreAbi
+    } else {
+        Profile::PostAbi
+    };
+    let lowered = lower_translation_unit(context, &unit, &sema, &ir, optimizer.as_ref(), profile);
     let module = match lowered {
         | Ok(module) => module,
-        | Err(errors) => {
+        | Err(MiddleEndError::Lowering(errors)) => {
             for error in errors.errors {
                 reporter.report_late(error, error.source, context);
             }
+            expect_stderr(reporter.finish(context, stderr));
+            return FAILURE_STATUS;
+        },
+        | Err(MiddleEndError::Abi(error)) => {
+            reporter.report_late(&error, None, context);
             expect_stderr(reporter.finish(context, stderr));
             return FAILURE_STATUS;
         },
@@ -117,7 +133,7 @@ pub(super) fn generate_code<'tu>(
     expect_stderr(reporter.finish(context, stderr));
     let target = context.configuration.target();
     match (options.emit, &options.output_path) {
-        | (Some(Emit::Ir), _) => print_stdout(format_args!("{module}")),
+        | (Some(Emit::Ir | Emit::IrAbi), _) => print_stdout(format_args!("{module}")),
         | (Some(Emit::Llvm), _) => print_llvm(&module, target),
         | (None, Some(path)) => build(&module, target, path, options),
         | (None, None) => interpret(&module, target),
@@ -153,8 +169,8 @@ pub(super) fn print_default_passes() -> i32 {
     reason = "clap's derived parser owns the output path."
 )]
 pub(super) struct CodeGeneration {
-    /// Print the bcc IR (after the optimizer, if one runs) or the LLVM IR to
-    /// stdout.
+    /// Print the bcc IR (after the optimizer, if one runs; before ABI
+    /// lowering for `ir`, after it for `ir-abi`) or the LLVM IR to stdout.
     #[arg(long, value_enum, value_name = "IR", group = "back_end",
         conflicts_with_all = ["tokens", "semantic_types", "syntax_tree", "raw_syntax"])]
     pub(super) emit:              Option<Emit>,
@@ -198,8 +214,10 @@ pub(super) struct CodeGeneration {
 /// What `--emit` prints.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
 pub(super) enum Emit {
-    /// The bcc IR.
+    /// The bcc IR before ABI lowering, as the optimizer leaves it.
     Ir,
+    /// The bcc IR after ABI lowering, as the back ends receive it.
+    IrAbi,
     /// LLVM IR.
     Llvm,
 }

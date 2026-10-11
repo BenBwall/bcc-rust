@@ -33,12 +33,16 @@ Code generation runs only when asked for, after the same diagnostics:
 
 ```sh
 bcc-rust x.c --emit=ir                 # the bcc IR, to stdout
+bcc-rust x.c --emit=ir-abi             # the bcc IR after ABI lowering
 bcc-rust x.c --emit=llvm               # LLVM IR, to stdout
 bcc-rust x.c --interpret               # run main in the IR interpreter
 bcc-rust x.c --target=x86_64-w64-windows-gnu -o x.exe [--llvm-opt=O2]
 bcc-rust x.c --target=x86_64-w64-windows-gnu -c -o x.o
 ```
 
+Every back end receives the module after ABI lowering, which fixes how the
+`--target` passes structures by value and `va_arg`; `--emit=ir` prints the
+module before it, as the optimizer leaves it, and `--emit=ir-abi` after it.
 `--interpret` prints what the program writes and exits with `main`'s status
 (or `exit`'s), 70 when the interpreter stops the program for undefined
 behaviour or an unsupported operation, and 134 on `abort`. `-o` writes the LLVM
@@ -54,8 +58,8 @@ syntax (it needs no input file), so scripts need not keep a copy.
 adds `-Xclang -disable-llvm-passes`, so `--opt=bcc --llvm-opt=O2
 --llvm-codegen-only` is comparison arm A1 of
 [middle-end.md](middle-end.md#comparison-arms). Errors, constructs lowering
-does not support yet (such as floating point) and clang failures exit with
-status 1.
+does not support yet (such as variable length arrays) and clang failures exit
+with status 1.
 
 Diagnostics are rendered like `rustc`'s: a lowercase message, the
 `file:line:column` location, the quoted source line with `^` under the problem
@@ -97,7 +101,7 @@ empty variadic calls through the CLI. Semantic analysis follows parsing in the d
 `--semantic-types` inspects resolved declaration types, linkage and duration.
 See [semantic-analysis.md](semantic-analysis.md) for implemented boundaries and
 validation gaps. Code generation covers the prototype subset of
-[middle-end.md](middle-end.md), without ABI lowering yet.
+[middle-end.md](middle-end.md), with ABI lowering for x86-64 System V and Win64.
 This is not yet a production-ready or conforming C99 compiler.
 
 ## Prerequisites

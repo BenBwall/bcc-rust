@@ -58,11 +58,10 @@ so they see identical calling-convention decisions. The optimizer runs before AB
 lowering, where aggregate copies and calls are still visible as such; passes that
 need post-ABI form can run after it later.
 
-**Prototype:** there is no ABI lowering yet, so the driver
-(`pipeline::lower_translation_unit`) hands the pre-ABI module straight to the
-back ends. That is sound for what lowering accepts: it refuses structures and
-unions passed or returned by value, so every call already passes scalars and
-pointers, and the LLVM back end prints `va_arg` as LLVM's own `va_arg`.
+The driver (`pipeline::lower_translation_unit`) follows this order: it lowers,
+optimizes when asked, and lowers the ABI for every back end, the interpreter
+included. `--emit=ir` prints the pre-ABI module the optimizer worked on and
+`--emit=ir-abi` the post-ABI one the back ends receive.
 
 ### Comparison arms
 
@@ -263,7 +262,7 @@ and, if defined, a body. A global has a name, a linkage, size, alignment, a
 
 ### Textual form
 
-The printer and parser round-trip a textual form used by `--emit-ir`, golden
+The printer and parser round-trip a textual form used by `--emit=ir`, golden
 tests (`BLESS=1` rewrites them, as for the lexing snapshots) and pass unit tests:
 
 ```text
@@ -425,10 +424,12 @@ the others leave. Inlining is not implemented.
 ## ABI lowering
 
 `abi::lower_abi(module, target, scratch)` turns a verified pre-ABI module into a
-post-ABI one. The driver calls it after the optimizer and before any back end:
+post-ABI one. The driver calls it after the optimizer and before any back end, for
+`--emit=llvm`, `--interpret`, `-o` and `--emit=ir-abi`; only `--emit=ir` stops
+before it:
 
 ```text
-lower_translation_unit → optimize → lower_abi → emit_module (LLVM) | run (interpreter)
+lowering → optimize → lower_abi → emit_module (LLVM) | run (interpreter)
 ```
 
 It plans every interned signature for the target, gives each function its
@@ -464,8 +465,8 @@ any other is passed by reference to the caller's copy and returned through
 **Known gaps:** scalar `signext`/`zeroext` attributes for `char` and `short`
 parameters and results, which Clang emits on System V, are not produced yet;
 aggregates in the variable part of a call and `va_arg` of aggregates are
-unsupported; packed structures and bit-fields in small aggregates do not reach
-ABI lowering yet, since the front end does not model them.
+unsupported; packed structures do not reach ABI lowering yet, since the front
+end does not model them.
 
 The conformance tests in `src/abi/tests/conformance.rs` link bcc-compiled C with
 Clang-compiled C, exchanging every supported shape in both directions, and run
@@ -544,6 +545,7 @@ analyses) lives in a scratch arena reset between functions.
 
 ```text
 bcc-rust x.c --emit=ir              print the bcc IR (after the optimizer, if it runs)
+bcc-rust x.c --emit=ir-abi          print the bcc IR after ABI lowering
 bcc-rust x.c --emit=llvm            print the LLVM IR
 bcc-rust x.c --interpret            run main in the interpreter; exit with its status
 bcc-rust x.c -o x.exe [-c]          build an executable (or an object) through clang
@@ -569,8 +571,8 @@ is one invocation:
 | A2 | `--llvm-opt=O2` |
 | A3 | `--opt=bcc --llvm-opt=O2` |
 
-Exit statuses: 0 on success; 1 after an error, a construct lowering does not
-support yet, or a clang failure; for `--interpret`, the status `main` returns
+Exit statuses: 0 on success; 1 after an error, a construct lowering or ABI
+lowering does not support yet, or a clang failure; for `--interpret`, the status `main` returns
 or `exit` receives, 70 when the interpreter stops the program (undefined
 behaviour, an unsupported operation, a limit), and 134 on `abort`. The
 interpreter's C library uses the `--target`'s type widths (`%ld` reads 32 bits

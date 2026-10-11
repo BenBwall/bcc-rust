@@ -1,8 +1,10 @@
-//! End-to-end tests of the middle end. Every lowering test program runs in
-//! the interpreter, as lowered and after the default bcc pipeline, and must
-//! return its expected status. A subset is compiled through the bundled
-//! clang in each comparison arm of `middle-end.md`, run natively, and
-//! compared with the interpreter.
+//! End-to-end tests of the middle end. Every lowering test program and every
+//! program passing structures by value runs in the interpreter, as lowered
+//! and after the default bcc pipeline, before and after ABI lowering, and
+//! must return its expected status. The structure programs and a subset of
+//! the others are compiled through the bundled clang in each comparison arm
+//! of `middle-end.md` after ABI lowering, as the driver does, run natively,
+//! and compared with the interpreter.
 //!
 //! Each clang run costs about 0.4 s, so the arms run side by side. Without
 //! the bundled clang, or on a host the LLVM back end does not target, the
@@ -15,6 +17,7 @@ use std::{
 };
 
 use crate::{
+    abi::tests::programs::PROGRAMS as BY_VALUE_PROGRAMS,
     backend::{
         interpreter::{
             self,
@@ -53,13 +56,14 @@ use crate::{
     util::bump::Bump,
 };
 
-/// Compiles `source` for `target` through lowering and, with `optimize`,
-/// the default bcc pipeline, verifies the module and hands it to `then` with
-/// the target.
+/// Compiles `source` for `target` through lowering, with `optimize` the
+/// default bcc pipeline, and for [`Profile::PostAbi`] ABI lowering, verifies
+/// the module for `profile` and hands it to `then` with the target.
 fn with_module<R>(
     source: &str,
     target: Target,
     optimize: bool,
+    profile: Profile,
     then: impl FnOnce(&Module<'_>, Target) -> R,
 ) -> R {
     let tu = Bump::new();
@@ -76,10 +80,18 @@ fn with_module<R>(
     assert!(sema.lowerable(&context), "the front end accepts\n{source}");
     let ir = Bump::new();
     let options = OptimizerOptions::default();
-    let module = lower_translation_unit(&context, &unit, &sema, &ir, optimize.then_some(&options))
-        .unwrap_or_else(|errors| panic!("lowering failed: {errors:?}\n{source}"));
+    let module = lower_translation_unit(
+        &context,
+        &unit,
+        &sema,
+        &ir,
+        optimize.then_some(&options),
+        profile,
+    )
+    .unwrap_or_else(|error| panic!("the middle end failed: {error:?}\n{source}"));
+    assert_eq!(module.profile(), profile);
     let verifier = Bump::new();
-    let errors = verify_module(&module, Profile::PreAbi, &verifier);
+    let errors = verify_module(&module, profile, &verifier);
     assert!(errors.is_empty(), "{errors:?}\n{module}");
     then(&module, target)
 }
@@ -108,18 +120,53 @@ fn interpret(module: &Module<'_>, target: Target) -> (i32, String) {
 fn program(name: &str) -> &'static Program {
     PROGRAMS
         .iter()
+        .chain(BY_VALUE_PROGRAMS)
         .find(|program| program.name == name)
         .unwrap_or_else(|| panic!("no program {name}"))
 }
 
+/// Each combination of running the bcc pipeline and lowering for the ABI.
+const STAGES: [(bool, Profile); 4] = [
+    (false, Profile::PreAbi),
+    (false, Profile::PostAbi),
+    (true, Profile::PreAbi),
+    (true, Profile::PostAbi),
+];
+
 #[test]
 fn every_program_interprets_to_its_status() {
-    for program in PROGRAMS {
-        for optimize in [false, true] {
-            let (status, _) = with_module(program.source, Target::LinuxGnu, optimize, interpret);
+    for program in PROGRAMS.iter().chain(BY_VALUE_PROGRAMS) {
+        for (optimize, profile) in STAGES {
+            let (status, _) = with_module(
+                program.source,
+                Target::LinuxGnu,
+                optimize,
+                profile,
+                interpret,
+            );
             assert_eq!(
                 status, program.expected,
-                "{} (optimized: {optimize})",
+                "{} (optimized: {optimize}, {profile:?})",
+                program.name
+            );
+        }
+    }
+}
+
+#[test]
+fn structures_by_value_interpret_to_their_status_on_win64() {
+    for program in BY_VALUE_PROGRAMS {
+        for (optimize, profile) in STAGES {
+            let (status, _) = with_module(
+                program.source,
+                Target::WindowsGnu,
+                optimize,
+                profile,
+                interpret,
+            );
+            assert_eq!(
+                status, program.expected,
+                "{} (optimized: {optimize}, {profile:?})",
                 program.name
             );
         }
@@ -128,11 +175,12 @@ fn every_program_interprets_to_its_status() {
 
 #[test]
 fn printf_output_is_captured_by_the_interpreter() {
-    for optimize in [false, true] {
+    for (optimize, profile) in STAGES {
         let (status, output) = with_module(
             program("printf_hello").source,
             Target::LinuxGnu,
             optimize,
+            profile,
             interpret,
         );
         assert_eq!((status, output.as_str()), (0, "answer 42\n"));
@@ -141,9 +189,14 @@ fn printf_output_is_captured_by_the_interpreter() {
             (Target::LinuxGnu, "-5 3000000000 8\n"),
             (Target::WindowsGnu, "-5 3000000000 4\n"),
         ] {
-            let (_, output) =
-                with_module(program("printf_long").source, target, optimize, interpret);
-            assert_eq!(output, expected, "{target:?}");
+            let (_, output) = with_module(
+                program("printf_long").source,
+                target,
+                optimize,
+                profile,
+                interpret,
+            );
+            assert_eq!(output, expected, "{target:?} {profile:?}");
         }
     }
 }
@@ -185,8 +238,9 @@ const ARMS: [Arm; 4] = [
     },
 ];
 
-/// The programs compiled through LLVM: loops, recursion, memory, globals,
-/// control flow, indirect calls, and output through `printf`.
+/// The programs compiled through LLVM besides those passing structures by
+/// value: loops, recursion, memory, globals, control flow, indirect calls,
+/// and output through `printf`.
 const LLVM_PROGRAMS: [&str; 8] = [
     "sum_to_ten",
     "recursive_fibonacci",
@@ -238,15 +292,24 @@ fn llvm_arms_match_the_interpreter() {
     };
     let directory = TempDir::new("middle-end-arms");
     let mut runs = Vec::new();
-    for name in LLVM_PROGRAMS {
+    let names = LLVM_PROGRAMS
+        .into_iter()
+        .chain(BY_VALUE_PROGRAMS.iter().map(|program| program.name));
+    for name in names {
         let source = program(name).source;
         for arm in ARMS {
-            let (expected, ll) = with_module(source, target, arm.bcc, |module, target| {
-                let mut text = String::new();
-                emit_module(module, target, &mut text)
-                    .unwrap_or_else(|error| panic!("{name} {}: {error}", arm.name));
-                (interpret(module, target), text)
-            });
+            let (expected, ll) = with_module(
+                source,
+                target,
+                arm.bcc,
+                Profile::PostAbi,
+                |module, target| {
+                    let mut text = String::new();
+                    emit_module(module, target, &mut text)
+                        .unwrap_or_else(|error| panic!("{name} {}: {error}", arm.name));
+                    (interpret(module, target), text)
+                },
+            );
             let path = directory.join(format!("{name}-{}.ll", arm.name));
             std::fs::write(&path, ll).unwrap();
             runs.push((name, arm, expected, path));

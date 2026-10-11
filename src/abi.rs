@@ -169,4 +169,4 @@ fn signature_user<'ir>(module: &Module<'ir>, sig: SigId) -> &'ir str {
     reason = "Tests build inputs and expected values with std types; the arena rule covers the \
               compiler, not its tests."
 )]
-mod tests;
+pub(crate) mod tests;

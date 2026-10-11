@@ -1,8 +1,24 @@
-//! What ABI lowering reports instead of lowering a module.
+//! What ABI lowering reports instead of lowering a module. An error names
+//! its function, since the IR keeps no source positions, and renders through
+//! the shared diagnostic interface without a location.
 
 use std::fmt;
 
-use crate::ir::Type;
+use crate::{
+    diagnostics::{
+        Diagnostic,
+        Explanation,
+        ToDiagnostic,
+        format_in,
+    },
+    ir::Type,
+    translation_phases::{
+        Context,
+        ErrorSeverity,
+        SourceVectors,
+    },
+    util::bump::Bump,
+};
 
 /// A case ABI lowering does not handle, in the function where it appears.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -34,5 +50,18 @@ impl fmt::Display for AbiError<'_> {
                  lowering",
             ),
         }
+    }
+}
+
+impl ToDiagnostic for AbiError<'_> {
+    fn diagnostic_in<'d>(
+        &self,
+        _context: &Context<'_>,
+        source: SourceVectors,
+        arena: &'d Bump,
+    ) -> Diagnostic<'d> {
+        Explanation::new(arena, format_in!(arena, "{self}"))
+            .note("the program is valid C; this compiler cannot translate it yet")
+            .at(ErrorSeverity::Error, source)
     }
 }

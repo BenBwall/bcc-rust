@@ -34,6 +34,12 @@ mod tests {
     const HELLO: &str = "int printf(const char *, ...);\nint main(void) {\n  printf(\"%s %d\\n\", \
                          \"answer\", 42);\n  return 3;\n}\n";
 
+    /// Passes a structure by value both ways, which ABI lowering turns into
+    /// two registers on System V and an `sret` pointer and a copy on Win64.
+    const PAIR: &str = "struct pair { long long a, b; };\nstruct pair swap(struct pair p) {\n  \
+                        struct pair r = { p.b, p.a };\n  return r;\n}\nint main(void) {\n  struct \
+                        pair p = { 3, 40 };\n  return swap(p).a + 2;\n}\n";
+
     /// Runs the compiler on the inline `source` with `flags`.
     fn bcc(source: &str, flags: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
@@ -131,6 +137,64 @@ mod tests {
         );
         assert!(stdout.contains("define dso_local i32 @main()"), "{stdout}");
         assert!(stdout.contains("declare i32 @printf(ptr, ...)"), "{stdout}");
+    }
+
+    #[test]
+    fn back_ends_receive_the_module_after_abi_lowering() {
+        // `--emit=ir` prints the module before ABI lowering ...
+        let pre = bcc(PAIR, &["--emit=ir", "--opt=bcc"]);
+        assert!(pre.status.success(), "{}", text(&pre.stderr));
+        let pre = text(&pre.stdout);
+        assert!(!pre.contains("abi lowered"), "{pre}");
+        assert!(
+            pre.contains(
+                "function @swap(ptr result(size 16, align 8, [0: i64, 8: i64]), ptr \
+                 aggregate(size 16, align 8, [0: i64, 8: i64])) external"
+            ),
+            "{pre}"
+        );
+        // ... and `--emit=ir-abi` after it, for the target's convention.
+        let post = bcc(PAIR, &["--emit=ir-abi", "--opt=bcc"]);
+        assert!(post.status.success(), "{}", text(&post.stderr));
+        let post = text(&post.stdout);
+        assert!(post.contains("abi lowered\n"), "{post}");
+        assert!(
+            post.contains("function @swap(ptr registers(i64, i64, align 8), i64, i64) external"),
+            "{post}"
+        );
+        let win64 = bcc(PAIR, &["--emit=ir-abi", "--target=x86_64-w64-windows-gnu"]);
+        let win64 = text(&win64.stdout);
+        assert!(
+            win64.contains("function @swap(ptr sret(size 16, align 8), ptr) external"),
+            "{win64}"
+        );
+
+        // The LLVM back end prints the target's convention ...
+        let llvm = bcc(PAIR, &["--emit=llvm"]);
+        assert!(llvm.status.success(), "{}", text(&llvm.stderr));
+        let llvm = text(&llvm.stdout);
+        assert!(
+            llvm.contains("define dso_local { i64, i64 } @swap(i64 %"),
+            "{llvm}"
+        );
+        let llvm = text(&bcc(PAIR, &["--emit=llvm", "--target=x86_64-w64-windows-gnu"]).stdout);
+        assert!(llvm.contains("sret([16 x i8]) align 8"), "{llvm}");
+
+        // ... and the interpreter runs the post-ABI module for each target.
+        for target in [
+            "--target=x86_64-unknown-linux-gnu",
+            "--target=x86_64-w64-windows-gnu",
+        ] {
+            for opt in ["--opt=none", "--opt=bcc"] {
+                let run = bcc(PAIR, &["--interpret", target, opt]);
+                assert_eq!(
+                    run.status.code(),
+                    Some(42),
+                    "{target} {opt}: {}",
+                    text(&run.stderr)
+                );
+            }
+        }
     }
 
     #[test]
@@ -270,7 +334,20 @@ mod tests {
         let compiled = bcc(HELLO, &[&target, "-c", "-o", &path(&object)]);
         assert!(compiled.status.success(), "{}", text(&compiled.stderr));
         assert!(object.is_file());
+
+        // A structure passed and returned by value goes through ABI lowering.
+        let pair = temporary("pair.exe");
+        for flags in [&["--llvm-opt=O0"][..], &["--opt=bcc", "--llvm-opt=O2"][..]] {
+            let built = bcc(
+                PAIR,
+                &[&[&target[..], "-o", &path(&pair)][..], flags].concat(),
+            );
+            assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+            let run = Command::new(&pair).output().unwrap();
+            assert_eq!(run.status.code(), Some(42), "{flags:?}");
+        }
         drop(std::fs::remove_file(executable));
         drop(std::fs::remove_file(object));
+        drop(std::fs::remove_file(pair));
     }
 }

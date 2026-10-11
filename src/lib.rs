@@ -1,8 +1,9 @@
 //! BCC translates C source into a syntax tree and semantic information. Each
 //! source file is lexed once, preprocessing finishes before parsing starts, and
 //! semantic analysis consumes the finished tree. On request, the middle end
-//! lowers the analyzed unit to the bcc IR and optimizes it, and a back end
-//! prints it, interprets it, or builds it through the bundled clang. The
+//! lowers the analyzed unit to the bcc IR, optimizes it and lowers its calls
+//! for the target's ABI, and a back end prints it, interprets it, or builds it
+//! through the bundled clang. The
 //! command-line program selects the input, language mode, target, and output.
 //!
 //! Start with `translation_phases` (`translation_phases.rs`) for the phase map,
@@ -15,7 +16,7 @@
 //! - Compiler driver: `pipeline.rs`, `translation_phases.rs`, and their
 //!   directories.
 //! - Middle end and back ends: `lowering.rs`, `ir.rs`, `optimizer.rs`,
-//!   `backend.rs`, and their directories.
+//!   `abi.rs`, `backend.rs`, and their directories.
 //! - Invocation: `main.rs`, `cli.rs`, `configuration.rs`, and their
 //!   directories.
 //! - Representations: `target.rs`, `headers.rs`, `float_parsing.rs`,
@@ -34,13 +35,6 @@ mod pipeline;
 pub(crate) mod translation_phases;
 
 // Middle end
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Nothing runs ABI lowering yet; its tests exercise it until the driver does."
-    )
-)]
 mod abi;
 #[cfg_attr(
     not(test),

@@ -7,7 +7,7 @@
 
 mod classify;
 mod conformance;
-mod programs;
+pub(crate) mod programs;
 mod rewrite;
 mod varargs;
 

@@ -1,6 +1,8 @@
 //! C programs that pass and return structures and unions by value, lowered
 //! for each target and run in the interpreter before and after ABI
-//! lowering; both runs must return the expected status.
+//! lowering; both runs must return the expected status. The end-to-end tests
+//! in `pipeline/tests/middle_end.rs` also build them through each LLVM
+//! comparison arm and run them natively.
 
 use std::path::Path;
 
@@ -15,7 +17,10 @@ use crate::{
     },
     configuration::CompilerConfiguration,
     headers::HeaderSearch,
-    lowering::lower_translation_unit,
+    lowering::{
+        lower_translation_unit,
+        tests::programs::Program,
+    },
     optimizer::{
         OptimizerOptions,
         optimize,
@@ -27,14 +32,8 @@ use crate::{
     translation_phases::Context,
 };
 
-/// A C program and the status its `main` returns.
-pub(super) struct Program {
-    pub(super) name:     &'static str,
-    pub(super) source:   &'static str,
-    pub(super) expected: u8,
-}
-
-pub(super) const PROGRAMS: &[Program] = &[
+/// The programs, each with the status its `main` returns.
+pub(crate) const PROGRAMS: &[Program] = &[
     Program {
         name:     "pair_in_registers",
         source:   "struct pair { long a, b; };
@@ -214,14 +213,14 @@ pub(super) fn lower_c<'ir>(
 }
 
 /// The status `main` of `module` returns in the interpreter.
-fn main_status(module: &Module<'_>) -> u8 {
+fn main_status(module: &Module<'_>) -> i32 {
     let arena = Bump::new();
     let mut host = DefaultHost::new_in(&arena);
     match run(module, "main", &[], &mut host) {
         | Ok(Outcome {
             termination: Termination::Returned(Some(RuntimeValue::Int(bits))),
             ..
-        }) => u8::try_from(bits & 0xFF).unwrap(),
+        }) => i32::from_le_bytes(bits.to_le_bytes()[..4].try_into().unwrap()),
         | other => panic!(
             "{:?}",
             other.map_err(|trap| trap.display_in(module).to_string())
