@@ -49,7 +49,7 @@ function @v() -> i32 external {
 block0:
     v0 = iconst.i32 3
     v1 = stack_addr slot0
-    store.i32 v0, v1, align 4
+    store.i32 volatile v0, v1, align 4
     v2 = stack_addr slot0
     v3 = stack_addr slot0
     v4 = load.i32 volatile v3, align 4

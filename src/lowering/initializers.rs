@@ -82,7 +82,11 @@ use crate::{
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Leaf<'tu> {
     /// Implicit zero initialization of a complete braced subobject.
-    Zero { offset: u64, size: u64 },
+    Zero {
+        offset: u64,
+        size:   u64,
+        ty:     TypeId,
+    },
     /// A scalar subobject and the expression whose converted value it
     /// gets.
     Scalar {
@@ -95,6 +99,7 @@ pub(super) enum Leaf<'tu> {
     /// A character array of `size` bytes initialized by a string literal
     /// (§6.7.8p14).
     String {
+        ty:      TypeId,
         offset:  u64,
         size:    u64,
         literal: &'tu Expression<'tu>,
@@ -203,7 +208,11 @@ pub(super) fn leaves<'tu, 's>(
                     let size = types::layout(&sema.types, subobject.ty)
                         .map_err(|kind| at(kind, element.source_vectors))?
                         .size;
-                    leaves.push(Leaf::Zero { offset, size });
+                    leaves.push(Leaf::Zero {
+                        offset,
+                        size,
+                        ty: subobject.ty,
+                    });
                     frames.push(Frame {
                         ty: subobject.ty,
                         offset,
@@ -321,6 +330,7 @@ impl<'tu> Walker<'_, 'tu> {
                 .ok_or_else(|| LoweringError::missing("an array has no size", source))?
                 .size;
             return Ok(Some(Leaf::String {
+                ty,
                 offset,
                 size,
                 literal: expression,
@@ -347,6 +357,8 @@ impl<'tu> Walker<'_, 'tu> {
     /// The subobject at position `next` of an aggregate: an array element,
     /// the next named or anonymous member of a structure, or the first of
     /// a union (§6.7.8p17); `None` when the aggregate is full.
+    /// C99: §6.5.2.3 paragraph 3, p. 73; PDF p. 85; §6.7.3 paragraphs
+    /// 6 and 8, p. 109; PDF p. 121 (subobjects retain destination qualifiers).
     fn subobject(
         &self,
         ty: TypeId,
@@ -364,7 +376,7 @@ impl<'tu> Walker<'_, 'tu> {
                     .ok_or_else(|| LoweringError::missing("an array element has no size", source))?
                     .size;
                 Ok(Some(Subobject {
-                    ty:        element,
+                    ty:        element.qualified(ty.qualifiers),
                     offset:    next as u64 * size,
                     bit_field: None,
                     next:      next + 1,
@@ -385,7 +397,7 @@ impl<'tu> Walker<'_, 'tu> {
                     return Err(LoweringError::unsupported(Construct::Initializer, source));
                 }
                 Ok(Some(Subobject {
-                    ty:        member.ty,
+                    ty:        member.ty.qualified(ty.qualifiers),
                     offset:    member.offset,
                     bit_field: member.width.map(|width| BitFieldBits {
                         bit_offset: member.bit_offset,
@@ -505,10 +517,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let mut tasks = ArenaVec::with_capacity_in(2 * leaves.len(), self.scratch);
         for leaf in leaves {
             match leaf {
-                | Leaf::Zero { offset, size } => tasks.push(Task::InitializeZero {
+                | Leaf::Zero { offset, size, ty } => tasks.push(Task::InitializeZero {
                     object,
                     offset,
                     size,
+                    ty,
                 }),
                 | Leaf::Scalar {
                     offset,
@@ -541,8 +554,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     offset,
                     size,
                     literal,
+                    ty,
                 } => tasks.push(Task::InitializeString {
                     object,
+                    ty,
                     offset,
                     size,
                     literal,
@@ -556,11 +571,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 
     /// Replaces the implicit members of a braced subobject with zeroes.
     /// C99: §6.7.8 paragraph 19, p. 127; PDF p. 139.
+    /// C99: §6.7.3 paragraph 6, p. 109; PDF p. 121.
     pub(super) fn initialize_zero(
         &mut self,
         object: Object,
         offset: u64,
         size: u64,
+        ty: TypeId,
     ) -> Result<(), LoweringError> {
         let base = match object {
             | Object::Slot(slot) => self.inst(InstData::StackAddr { slot }, Type::Ptr),
@@ -583,7 +600,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         _ = self.draft.push(
             Op::Inst(InstData::MemoryRange {
                 opcode: Opcode::Fill,
-                flags:  InstFlags::empty(),
+                flags:  self.initialization_flags(ty),
                 align:  Align::BYTE,
                 args:   [address, zero, size],
             }),
@@ -594,6 +611,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 
     /// Stores the value on top of the stack into an object being
     /// initialized, at `offset` bytes from its start.
+    /// C99: §6.7.3 paragraph 6, p. 109; PDF p. 121.
     pub(super) fn initialize(
         &mut self,
         object: Object,
@@ -629,7 +647,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         };
         let place = Item {
             operand: Operand::Place(place),
-            ty:      ty.unqualified(),
+            ty,
         };
         _ = self.write(place, item, source)?;
         Ok(())
@@ -638,12 +656,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// Copies a string literal's bytes into a character array; a literal
     /// one longer than an exactly sized array loses its null character.
     /// C99: §6.7.8 paragraph 14, p. 126; PDF p. 138.
+    /// C99: §6.7.3 paragraph 6, p. 109; PDF p. 121.
     pub(super) fn initialize_string(
         &mut self,
         object: Object,
         offset: u64,
         size: u64,
         literal: &'tu Expression<'tu>,
+        ty: TypeId,
     ) -> Result<(), LoweringError> {
         let source = literal.source_vectors;
         let global = self.unit.string(peel(literal))?;
@@ -666,7 +686,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         _ = self.draft.push(
             Op::Inst(InstData::MemoryRange {
                 opcode: Opcode::Copy,
-                flags:  InstFlags::empty(),
+                flags:  self.initialization_flags(ty),
                 align:  Align::BYTE,
                 args:   [destination, string, length],
             }),
@@ -687,11 +707,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let address = self.inst(InstData::StackAddr { slot }, Type::Ptr);
         let zero = self.iconst(Type::I8, 0);
         let size = self.iconst(Type::I64, i128::from(layout.size));
-        let flags = if types::is_volatile(ty) {
-            InstFlags::VOLATILE
-        } else {
-            InstFlags::empty()
-        };
+        let flags = self.initialization_flags(ty);
         _ = self.draft.push(
             Op::Inst(InstData::MemoryRange {
                 opcode: Opcode::Fill,
@@ -702,6 +718,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             None,
         );
         Ok(())
+    }
+
+    /// Range writes retain qualifiers on the object or its array elements.
+    /// C99: §6.7.3 paragraphs 6 and 8, p. 109; PDF p. 121.
+    fn initialization_flags(&self, mut ty: TypeId) -> InstFlags {
+        loop {
+            if types::is_volatile(ty) {
+                return InstFlags::VOLATILE;
+            }
+            match self.unit.sema.types.kind(ty) {
+                | TypeKind::Array(element, _) => ty = element,
+                | _ => return InstFlags::empty(),
+            }
+        }
     }
 
     /// A compound literal in a function: an unnamed automatic object,

@@ -101,6 +101,10 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// binding without a search.
     declarators:              ArenaMap<'a, (StringCacheId, SourceVectors), usize>,
     definitions:              ArenaMap<'a, usize, DefinitionKind>,
+    /// Completed types of linked object definitions, including tentative ones.
+    /// C99: §6.2.7 paragraph 4, p. 40; PDF p. 52; §6.9.2 paragraph 2,
+    /// p. 143; PDF p. 155.
+    defined_objects:          ArenaMap<'a, StringCacheId, usize>,
     /// Definitions share their linked name across separate semantic bindings.
     /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42.
     defined_functions:        ArenaSet<'a, StringCacheId>,
@@ -116,6 +120,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// Returns the function definitions in order, each with its function if
     /// it is to be lowered: inline definitions and unsupported signatures
     /// have none.
+    /// C99: §6.2.7 paragraph 4, p. 40; PDF p. 52; §6.9.2 paragraph 2,
+    /// p. 143; PDF p. 155.
     pub(super) fn declare_items(
         &mut self,
         syntax: &ParsedTranslationUnit<'tu>,
@@ -356,6 +362,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 "a function and an object share a name",
             )),
             | None => {
+                // C99 §6.2.7p4, §6.9.2p2: an initializer can refer to an
+                // earlier incomplete declaration. Reserve the same symbol
+                // using the definition's completed type from the outset.
+                let data = self
+                    .defined_objects
+                    .get(&data.name.name)
+                    .map_or(data, |&binding| self.sema.bindings[binding]);
                 let declaration = self.global_declaration(data, linkage(data))?;
                 Ok(self.module.declare_global(name, declaration))
             },
@@ -597,7 +610,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         let mut relocations = ArenaVec::new_in(tables);
         for leaf in leaves {
             match leaf {
-                | Leaf::Zero { offset, size } => {
+                | Leaf::Zero { offset, size, .. } => {
                     let start =
                         usize::try_from(offset).expect("an initializer offset fits the object");
                     let end =
@@ -624,6 +637,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     offset,
                     size,
                     literal,
+                    ..
                 } => {
                     let ExpressionType::StringLiteral(StringTokenType::String(id)) =
                         peel(literal).kind
@@ -976,6 +990,17 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         for definition in sema.definitions {
             _ = definitions.insert(definition.binding, definition.kind);
         }
+        let mut defined_objects = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
+        for definition in sema.definitions {
+            let binding = sema.bindings[definition.binding];
+            if matches!(
+                definition.kind,
+                DefinitionKind::Object | DefinitionKind::Tentative
+            ) && binding.linkage != Linkage::None
+            {
+                _ = defined_objects.insert(binding.name.name, definition.binding);
+            }
+        }
         let mut defined_functions = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables);
         for function in sema.functions {
             if let Some(binding) = function.binding {
@@ -990,6 +1015,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             declarators,
             definitions,
             defined_functions,
+            defined_objects,
             address_taken: address_taken::find(sema, tables),
             statics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             strings: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),

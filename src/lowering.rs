@@ -253,13 +253,15 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 object,
                 offset,
                 size,
-            } => self.initialize_zero(object, offset, size),
+                ty,
+            } => self.initialize_zero(object, offset, size, ty),
             | Task::InitializeString {
                 object,
                 offset,
                 size,
                 literal,
-            } => self.initialize_string(object, offset, size, literal),
+                ty,
+            } => self.initialize_string(object, offset, size, literal, ty),
             | Task::InitializeAggregate {
                 object,
                 ty,

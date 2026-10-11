@@ -129,7 +129,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 
     /// The value of the object at `place`, whose lvalue type is `ty`,
     /// converted to type `to` by lvalue conversion. A structure is not
-    /// loaded: its value is its address.
+    /// loaded: its value is its address. A volatile aggregate is copied
+    /// at conversion, before the value loses its lvalue qualifiers.
+    /// C99: §6.3.2.1 paragraph 2, p. 46; PDF p. 58; §6.7.3 paragraph 6,
+    /// p. 109; PDF p. 121.
     pub(super) fn read(
         &mut self,
         place: Place,
@@ -142,7 +145,28 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let result = self.value_type(ty, source)?;
                 Operand::Value(self.load_bit_field(address, field, types::is_volatile(ty), result))
             },
-            | (Place::Memory(address), Repr::Aggregate) => Operand::Aggregate(address),
+            | (Place::Memory(address), Repr::Aggregate) => {
+                let address = if types::is_volatile(ty) {
+                    let layout = types::layout(&self.unit.sema.types, ty)
+                        .map_err(|kind| at(kind, source))?;
+                    let align = types::align(layout);
+                    let copy = self.fresh_object(layout.size, align, source)?;
+                    let size = self.iconst(Type::I64, i128::from(layout.size));
+                    _ = self.draft.push(
+                        Op::Inst(InstData::MemoryRange {
+                            opcode: Opcode::Copy,
+                            flags: InstFlags::VOLATILE,
+                            align,
+                            args: [copy, address, size],
+                        }),
+                        None,
+                    );
+                    copy
+                } else {
+                    address
+                };
+                Operand::Aggregate(address)
+            },
             | (Place::Variable(var), _) => Operand::Value(self.draft.use_var(var)),
             | (Place::Memory(address), representation) => {
                 let value_type = representation

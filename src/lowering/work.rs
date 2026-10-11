@@ -73,12 +73,14 @@ pub(super) enum Task<'tu> {
     },
     /// Zero a complete braced subobject before its explicit members.
     InitializeZero {
+        ty:     TypeId,
         object: Object,
         offset: u64,
         size:   u64,
     },
     /// Copy a string literal into a character array being initialized.
     InitializeString {
+        ty:      TypeId,
         object:  Object,
         offset:  u64,
         size:    u64,

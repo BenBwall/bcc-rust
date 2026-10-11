@@ -1,4 +1,4 @@
-//! Executing regressions for the PR #39 initializer review.
+//! Executing and IR regressions for the PR #39 lowering reviews.
 use super::*;
 use crate::backend::interpreter::{
     Outcome,
@@ -22,6 +22,25 @@ fn check(source: &str) {
             "{target:?}: {result:?}"
         );
     }
+}
+
+/// Both the lowered and optimized IR must retain observable accesses.
+fn access_texts(source: &str) -> [String; 2] {
+    let text = lowered(source);
+    let arena = Bump::new();
+    let mut module = parse_module(&arena, &text).unwrap();
+    let scratch = Bump::new();
+    _ = crate::optimizer::optimize(
+        &mut module,
+        &crate::optimizer::OptimizerOptions::default(),
+        &scratch,
+    );
+    let verifier = Bump::new();
+    assert!(
+        verify_module(&module, Profile::PreAbi, &verifier).is_empty(),
+        "{module}"
+    );
+    [text, module.to_string()]
 }
 
 #[test]
@@ -68,4 +87,101 @@ fn static_overwrites_replace_pointer_relocations() {
          main(void) { for (int i = 0; i < 8; i++) if (u.bytes[i]) return 3; return p[0] != 0 || \
          q[0] != &b; }",
     );
+}
+
+#[test]
+fn incomplete_extern_array_is_completed_before_initialized_definition() {
+    check("extern int a[]; int *p = a; int a[3] = {1, 2, 3}; int main(void) { return p[2] != 3; }");
+}
+
+#[test]
+fn incomplete_extern_array_is_completed_before_zero_definition() {
+    check(
+        "extern int a[]; int *p = a; int a[3]; int main(void) { if (p[2] != 0) return 1; p[2] = \
+         7; return a[2] != 7; }",
+    );
+}
+
+#[test]
+fn tentative_array_uses_final_composite_type() {
+    check(
+        "int a[]; int *p = a; int a[2]; int main(void) { if (p[1] != 0) return 1; p[1] = 9; \
+         return a[1] != 9; }",
+    );
+}
+
+#[test]
+fn forward_declared_struct_uses_completed_layout() {
+    check(
+        "struct S; extern struct S s; struct S *p = &s; struct S { int x; long y; }; struct S s = \
+         {1, 42}; int main(void) { return p->y != 42; }",
+    );
+}
+
+#[test]
+fn volatile_scalar_initialization_is_an_observable_store() {
+    for text in access_texts("void f(void) { volatile int x = 1; }") {
+        assert!(text.contains("store.i32 volatile"), "{text}");
+    }
+}
+
+#[test]
+fn volatile_aggregate_initialization_preserves_all_destination_accesses() {
+    let text = lowered(
+        "struct S { unsigned x:3; int a[2]; char s[3]; }; void f(void) { volatile struct S x = \
+         {1, {2}, \"hi\"}; volatile struct S y = x; }",
+    );
+    for line in text.lines().filter(|line| {
+        line.contains("store.")
+            || line.trim_start().starts_with("copy ")
+            || line.trim_start().starts_with("fill ")
+    }) {
+        assert!(line.contains("volatile"), "{line}\n{text}");
+    }
+}
+
+#[test]
+fn volatile_members_and_compound_literals_keep_initialization_qualifiers() {
+    let text = lowered(
+        "struct S { volatile int x; volatile unsigned b:3; }; void f(void) { struct S s = {1, 2}; \
+         (volatile struct S){3, 4}; }",
+    );
+    for line in text.lines().filter(|line| line.contains("store.")) {
+        assert!(line.contains("volatile"), "{line}\n{text}");
+    }
+}
+
+#[test]
+fn volatile_aggregate_reads_are_observable_when_copied_or_passed() {
+    for source in [
+        "struct S { int x; }; volatile struct S s = {42}; int main(void) { struct S t = s; return \
+         0; }",
+        "struct S { int x; }; volatile struct S s = {42}; void sink(struct S); void f(void) { \
+         sink(s); }",
+        "struct S { int x; }; volatile struct S s = {42}; struct S f(void) { return s; }",
+        "struct S { int x; }; volatile struct S s = {42}; void f(void) { struct S t; t = s; }",
+    ] {
+        for text in access_texts(source) {
+            assert!(
+            text.lines()
+                .any(|line| line.trim_start().starts_with("copy ") && line.contains("volatile")),
+            "{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn volatile_array_initialization_keeps_range_accesses() {
+    for text in access_texts(
+        "void f(void) { volatile char s[3] = \"hi\"; volatile int a[2][2] = {{1}, {2}}; }",
+    ) {
+        for line in text.lines().filter(|line| {
+            line.contains("store.")
+                || line.trim_start().starts_with("copy ")
+                || line.trim_start().starts_with("fill ")
+        }) {
+            assert!(line.contains("volatile"), "{line}\n{text}");
+        }
+    }
 }
