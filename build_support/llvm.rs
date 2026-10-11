@@ -4,6 +4,9 @@ use std::{
     path::PathBuf,
 };
 
+#[path = "llvm/cache.rs"]
+mod cache;
+
 /// Builds and installs the pinned LLVM tools unless an installation for
 /// `version` already exists, returning the installation prefix.
 pub(super) fn build(version: &str) -> PathBuf {
@@ -106,20 +109,17 @@ pub(super) fn link_libraries(version: &str, tools: &std::path::Path) {
     let stamp = prefix.join(".installed-version");
     let identity = format!("{version}-{host}-static-x86-v1");
     let installed = || fs::read_to_string(&stamp).is_ok_and(|value| value == identity);
-    fs::create_dir_all(&prefix).unwrap();
-    let lock = fs::File::options()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(prefix.join(".build-lock"))
-        .unwrap();
-    lock.lock().unwrap();
     let config_name = format!("llvm-config{}", env::consts::EXE_SUFFIX);
     // Linux distributions may already contain ABI-compatible static libraries.
     let prebuilt = !windows_gnu
         && tools.join("bin").join(&config_name).is_file()
         && tools.join("lib/libLLVMCore.a").is_file();
     let install = if prebuilt { tools } else { &prefix };
+    let _lock = if prebuilt {
+        None
+    } else {
+        cache::lock_for_install(&prefix, &stamp, &identity).unwrap()
+    };
     if !prebuilt && !installed() {
         let jobs = env::var("NUM_JOBS")
             .unwrap()
