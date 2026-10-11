@@ -72,6 +72,7 @@ use crate::{
         },
     },
     util::bump::{
+        ArenaMap,
         ArenaVec,
         Bump,
     },
@@ -121,7 +122,10 @@ pub(super) fn leaves<'tu, 's>(
     initializer: &'tu Initializer<'tu>,
     arena: &'s Bump,
 ) -> Result<ArenaVec<'s, Leaf<'tu>>, LoweringError> {
-    let walker = Walker { sema };
+    let mut walker = Walker {
+        sema,
+        selected_unions: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+    };
     let mut leaves = ArenaVec::new_in(arena);
     let list = match initializer.kind {
         | InitializerType::AssignmentExpression(expression) => {
@@ -166,7 +170,7 @@ pub(super) fn leaves<'tu, 's>(
         if let Some(designation) = element.designation
             && designated != Some((owner, position))
         {
-            walker.designate(&mut frames, owner, designation)?;
+            walker.designate(&mut frames, owner, designation, &mut leaves)?;
             designated = Some((owner, position));
             continue;
         }
@@ -183,6 +187,7 @@ pub(super) fn leaves<'tu, 's>(
             _ = frames.pop();
             continue;
         };
+        walker.select_union(frame, element.source_vectors, &mut leaves)?;
         let offset = frame.offset + subobject.offset;
         let consume = |frames: &mut ArenaVec<'_, Frame<'tu>>| {
             frames[top].next = subobject.next;
@@ -224,6 +229,12 @@ pub(super) fn leaves<'tu, 's>(
             | InitializerType::AssignmentExpression(expression) =>
                 match walker.leaf(subobject.ty, offset, expression)? {
                     | Some(mut leaf) => {
+                        if let Leaf::Copy { ty, .. } = leaf {
+                            let size = types::layout(&sema.types, ty)
+                                .map_err(|kind| at(kind, element.source_vectors))?
+                                .size;
+                            walker.forget_subobjects(&frames, offset, size);
+                        }
                         if let Leaf::Scalar { bit_field, .. } = &mut leaf {
                             *bit_field = subobject.bit_field;
                         }
@@ -297,11 +308,14 @@ struct Subobject {
     next:      usize,
 }
 
-struct Walker<'a, 'tu> {
-    sema: &'a SemanticTranslationUnit<'tu>,
+struct Walker<'a, 'tu, 's> {
+    sema:            &'a SemanticTranslationUnit<'tu>,
+    /// Selection survives frames closed and reopened by designators. The
+    /// type distinguishes nested unions starting at the same byte offset.
+    selected_unions: ArenaMap<'s, (u64, usize), usize>,
 }
 
-impl<'tu> Walker<'_, 'tu> {
+impl<'tu> Walker<'_, 'tu, '_> {
     /// What a non-braced initializer `expression` stores into a subobject
     /// of type `ty`, or `None` if it initializes the subobject's first
     /// member instead.
@@ -420,10 +434,11 @@ impl<'tu> Walker<'_, 'tu> {
     /// makes its subobject the next one (§6.7.8p17-18). A member reached
     /// through anonymous members opens a frame for each.
     fn designate(
-        &self,
+        &mut self,
         frames: &mut ArenaVec<'_, Frame<'tu>>,
         owner: usize,
         designation: &'tu Designation<'tu>,
+        leaves: &mut ArenaVec<'_, Leaf<'tu>>,
     ) -> Result<(), LoweringError> {
         frames.truncate(owner + 1);
         let designators = designation.designators.as_slice();
@@ -456,14 +471,14 @@ impl<'tu> Walker<'_, 'tu> {
                         let top = frames.len() - 1;
                         frames[top].next = member;
                         if step + 1 < steps {
-                            self.open_next(frames, source)?;
+                            self.open_next(frames, source, leaves)?;
                         }
                     }
                 },
                 | DesignatorType::Range(_) | DesignatorType::Error => return Err(unsupported()),
             }
             if index + 1 < designators.len() {
-                self.open_next(frames, source)?;
+                self.open_next(frames, source, leaves)?;
             }
         }
         Ok(())
@@ -472,15 +487,17 @@ impl<'tu> Walker<'_, 'tu> {
     /// Opens a frame for the top frame's next subobject, which the
     /// following elements initialize.
     fn open_next(
-        &self,
+        &mut self,
         frames: &mut ArenaVec<'_, Frame<'tu>>,
         source: SourceVectors,
+        leaves: &mut ArenaVec<'_, Leaf<'tu>>,
     ) -> Result<(), LoweringError> {
         let top = frames.len() - 1;
         let frame = frames[top];
         let subobject = self
             .subobject(frame.ty, frame.next, source)?
             .ok_or_else(|| LoweringError::unsupported(Construct::Designator, source))?;
+        self.select_union(frame, source, leaves)?;
         frames[top].next = subobject.next;
         frames.push(Frame {
             ty:     subobject.ty,
@@ -489,6 +506,60 @@ impl<'tu> Walker<'_, 'tu> {
             list:   None,
         });
         Ok(())
+    }
+
+    /// A newly selected union member replaces the previous member, including
+    /// its implicitly initialized subobjects. Designators within the same
+    /// member keep accumulating writes.
+    /// C99: §6.7.8 paragraphs 17-19, pp. 126-127; PDF pp. 138-139.
+    fn select_union(
+        &mut self,
+        frame: Frame<'tu>,
+        source: SourceVectors,
+        leaves: &mut ArenaVec<'_, Leaf<'tu>>,
+    ) -> Result<(), LoweringError> {
+        let Some(tag) = self.sema.types.tag(frame.ty) else {
+            return Ok(());
+        };
+        if tag.kind != TagKind::Union {
+            return Ok(());
+        }
+        let member = tag
+            .members
+            .get()
+            .iter()
+            .enumerate()
+            .skip(frame.next)
+            .find(|(_, member)| member.initializable())
+            .map(|(index, _)| index)
+            .ok_or_else(|| LoweringError::unsupported(Construct::Designator, source))?;
+        let previous = self
+            .selected_unions
+            .insert((frame.offset, frame.ty.index), member);
+        if previous.is_some_and(|previous| previous != member) {
+            let size = types::layout(&self.sema.types, frame.ty)
+                .map_err(|kind| at(kind, source))?
+                .size;
+            leaves.push(Leaf::Zero {
+                offset: frame.offset,
+                size,
+                ty: frame.ty,
+            });
+        }
+        Ok(())
+    }
+
+    /// A whole-subobject expression copy has no known selected union member
+    /// below it. The containing frames keep their selected members.
+    /// C99: §6.7.8 paragraph 19, p. 127; PDF p. 139.
+    fn forget_subobjects(&mut self, frames: &[Frame<'tu>], offset: u64, size: u64) {
+        self.selected_unions.retain(|&(at, ty), _| {
+            at < offset
+                || at >= offset + size
+                || frames
+                    .iter()
+                    .any(|frame| frame.offset == at && frame.ty.index == ty)
+        });
     }
 
     fn scalar(&self, ty: TypeId, source: SourceVectors) -> Result<bool, LoweringError> {

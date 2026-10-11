@@ -17,6 +17,7 @@ use std::{
 };
 
 mod runtime_calls;
+mod union_initializers;
 
 use crate::{
     abi::tests::programs::PROGRAMS as BY_VALUE_PROGRAMS,
