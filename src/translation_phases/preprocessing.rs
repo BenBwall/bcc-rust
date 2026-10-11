@@ -8,8 +8,9 @@
 //!
 //! For `#define TWICE(x) x + x` followed by `TWICE(2) "a" "b"`, the directive
 //! stores a definition. The reader collects `2`, substitutes it twice, and
-//! rescans `2 + 2`. Conversion produces three parser tokens and joins the two
-//! following string literals into one containing `ab`.
+//! rescans `2 + 2`. Conversion turns `2 + 2` into three parser tokens and
+//! joins the two following string literals into a fourth, one string
+//! containing `ab`.
 //!
 //! Read [`Preprocessor::preprocess_into_arena`], [`Preprocessor::run`], and
 //! [`Expander::next_iterator_item`] first. Then follow

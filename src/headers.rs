@@ -2,7 +2,9 @@
 //! text. When resource headers are enabled,
 //! [`Context::set_header_search`](crate::translation_phases::Context::set_header_search)
 //! places the built-in directory after the system directories and before the
-//! `-idirafter` ones, so ordinary include handling can use these headers.
+//! C library's directories and the `-idirafter` ones, so ordinary include
+//! handling finds these headers and a resource header such as `<limits.h>` can
+//! `#include_next` the library's header of the same name.
 //!
 //! Read [`text`], [`HeaderSearch`], and [`DIRECTORY`].
 //!

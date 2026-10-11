@@ -29,9 +29,12 @@ so nothing needs to be declared before it is used.
   file per grammar frame, extension, builtin table, directive, or scanner
   concern, those files move into a subdirectory with its own entry file, as in
   `parsing/frames/`, `parsing/extensions/`, `semantic_analysis/builtins/`,
-  `preprocessing/directives/`, and `preprocessor_tokenizer/scanning/`. Other
-  role groups stay flat in the module's directory, under a `//` heading over
-  their `mod` lines in the entry file. The entry file re-exports what other
+  `preprocessing/directives/`, and `preprocessor_tokenizer/scanning/`. A
+  subsystem with enough parts to need its own map gets one too: the
+  preprocessor's working state in `preprocessing/runtime/`, and the arena and
+  collection utilities in `util/memory/` and `util/collections/`. Other role
+  groups stay flat in the module's directory, under a `//` heading over their
+  `mod` lines in the entry file. The entry file re-exports what other
   modules use, so moving a file does not change crate-visible paths.
 
 ## Citing the C standard
