@@ -143,6 +143,11 @@ block0:
   %v25 = select i1 %v22, fp128 1.500000e+00, fp128 poison
   ret fp128 %v25
 }
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 4, !"PIC Level", i32 2}
+!1 = !{i32 4, !"PIE Level", i32 2}
 "#,
 };
 
@@ -207,6 +212,11 @@ block1:                                           ; preds = %block0, %block0
   %v2 = phi i32 [ %v1, %block0 ], [ %v1, %block0 ]
   ret i32 %v2
 }
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 4, !"PIC Level", i32 2}
+!1 = !{i32 4, !"PIE Level", i32 2}
 "#,
 };
 
@@ -274,6 +284,11 @@ declare void @llvm.memset.p0.i64(ptr writeonly captures(none), i8, i64, i1 immar
 
 attributes #0 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
 attributes #1 = { nocallback nofree nosync nounwind willreturn memory(argmem: write) }
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 4, !"PIC Level", i32 2}
+!1 = !{i32 4, !"PIE Level", i32 2}
 "#,
 };
 
@@ -322,6 +337,11 @@ block0:
   call void %v1()
   ret i32 %v5
 }
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 4, !"PIC Level", i32 2}
+!1 = !{i32 4, !"PIE Level", i32 2}
 "#,
 };
 
@@ -367,6 +387,11 @@ block3:                                           ; preds = %block2, %block0, %b
   %v4 = phi i32 [ 20, %block0 ], [ 20, %block0 ], [ %v3, %block2 ]
   ret i32 %v4
 }
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 4, !"PIC Level", i32 2}
+!1 = !{i32 4, !"PIE Level", i32 2}
 "#,
 };
 
@@ -407,6 +432,11 @@ define i32 @answer() {
 block0:
   ret i32 42
 }
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 4, !"PIC Level", i32 2}
+!1 = !{i32 4, !"PIE Level", i32 2}
 "#,
 };
 
@@ -475,6 +505,11 @@ declare void @llvm.va_copy.p0(ptr, ptr) #0
 declare void @llvm.va_end.p0(ptr) #0
 
 attributes #0 = { nocallback nofree nosync nounwind willreturn }
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 4, !"PIC Level", i32 2}
+!1 = !{i32 4, !"PIE Level", i32 2}
 "#,
 };
 
@@ -566,6 +601,11 @@ block0:
   %v7 = load i64, ptr %slot2, align 8
   ret i64 %v7
 }
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 4, !"PIC Level", i32 2}
+!1 = !{i32 4, !"PIE Level", i32 2}
 "#,
 };
 
@@ -622,6 +662,11 @@ block0:
   %v7 = sext i16 %v6 to i32
   ret i32 %v7
 }
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 4, !"PIC Level", i32 2}
+!1 = !{i32 4, !"PIE Level", i32 2}
 "#,
 };
 

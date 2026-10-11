@@ -224,6 +224,30 @@ impl<'s> Session<'s> {
         unsafe {
             LLVMSetDataLayout(module, layout.as_ptr());
         }
+        if position_independent(target) {
+            // Clang marks ELF executables as PIC and PIE (level 2), which
+            // lets code generation use direct references to symbols the
+            // executable defines.
+            for key in ["PIC Level", "PIE Level"] {
+                // SAFETY: The context is live.
+                let int = unsafe { LLVMInt32TypeInContext(context) };
+                // SAFETY: A constant of the live i32 type.
+                let two = unsafe { llvm_sys::core::LLVMConstInt(int, 2, 0) };
+                // SAFETY: Wraps the live constant as metadata.
+                let value = unsafe { llvm_sys::core::LLVMValueAsMetadata(two) };
+                // SAFETY: Module, key bytes and metadata are live; LLVM copies
+                // the key.
+                unsafe {
+                    llvm_sys::core::LLVMAddModuleFlag(
+                        module,
+                        llvm_sys::LLVMModuleFlagBehavior::LLVMModuleFlagBehaviorOverride,
+                        key.as_ptr().cast(),
+                        key.len(),
+                        value,
+                    );
+                }
+            }
+        }
         session
     }
 
@@ -948,7 +972,11 @@ impl<'s> Session<'s> {
                 c"x86-64".as_ptr(),
                 c"".as_ptr(),
                 level,
-                LLVMRelocMode::LLVMRelocDefault,
+                if position_independent(target) {
+                    LLVMRelocMode::LLVMRelocPIC
+                } else {
+                    LLVMRelocMode::LLVMRelocDefault
+                },
                 LLVMCodeModel::LLVMCodeModelDefault,
             )
         });
@@ -1125,4 +1153,10 @@ impl fmt::Debug for Session<'_> {
             .field("module", &self.module)
             .finish_non_exhaustive()
     }
+}
+
+/// Whether the target links position-independent executables by default,
+/// as Clang and GCC do on Linux; code for them must be PIC.
+fn position_independent(target: Target) -> bool {
+    matches!(target, Target::LinuxGnu | Target::LinuxMusl)
 }
