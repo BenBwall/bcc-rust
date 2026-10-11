@@ -62,6 +62,8 @@ pub(crate) enum Pass {
     Promote,
     /// Sparse conditional constant propagation.
     Sccp,
+    /// Integer facts from dominating conditions and division rewrites.
+    KnownBits,
 }
 
 impl Pass {
@@ -71,11 +73,12 @@ impl Pass {
         Self::Fold,
         Self::SimplifyCfg,
         Self::Sccp,
+        Self::KnownBits,
         Self::Gvn,
         Self::Licm,
         Self::Dce,
     ];
-    pub(crate) const COUNT: usize = 7;
+    pub(crate) const COUNT: usize = 8;
 
     /// The name `--passes` and reports use.
     pub(crate) const fn name(self) -> &'static str {
@@ -87,6 +90,7 @@ impl Pass {
             | Self::Licm => "licm",
             | Self::Promote => "promote",
             | Self::Sccp => "sccp",
+            | Self::KnownBits => "known-bits",
         }
     }
 
@@ -104,6 +108,7 @@ impl Pass {
             | Self::Licm => 4,
             | Self::Promote => 5,
             | Self::Sccp => 6,
+            | Self::KnownBits => 7,
         }
     }
 }
@@ -164,9 +169,11 @@ pub(crate) fn parse_pass_list(text: &str) -> Result<PassList, PassListError<'_>>
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Error)]
 pub(crate) enum PassListError<'a> {
     /// A name that is empty or not a pass; the known passes are `fold`,
-    /// `dce`, `simplify-cfg`, `gvn`, `licm`, `promote` and `sccp`.
+    /// `dce`, `simplify-cfg`, `gvn`, `licm`, `promote`, `sccp` and
+    /// `known-bits`.
     #[error(
-        "unknown pass `{0}` (the passes are fold, dce, simplify-cfg, gvn, licm, promote and sccp)"
+        "unknown pass `{0}` (the passes are fold, dce, simplify-cfg, gvn, licm, promote, sccp and \
+         known-bits)"
     )]
     Unknown(&'a str),
     #[error("a pass list holds at most {} passes", PassList::CAPACITY)]

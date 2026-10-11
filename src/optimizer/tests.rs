@@ -6,15 +6,18 @@
 //! pass, the printed values are numbered from 0 in listing order.
 
 mod dce;
+mod draft;
 mod equivalence;
 mod fold;
 mod gvn;
+mod known_bits;
 mod licm;
 mod loops;
 mod options;
 mod pipeline;
 mod promote;
 mod sccp;
+mod select;
 mod simplify_cfg;
 mod ssa_pipeline;
 

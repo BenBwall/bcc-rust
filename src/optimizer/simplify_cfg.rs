@@ -1,6 +1,6 @@
 //! Control-flow graph simplification.
 //!
-//! One round runs four steps in order, and the pass repeats rounds until
+//! One round runs five steps in order, and the pass repeats rounds until
 //! nothing changes, because each step exposes work for the others:
 //!
 //! 1. **Thread jumps** through forwarding blocks: a block with no instructions
@@ -14,21 +14,27 @@
 //!    blocks without defining them. An edge is left alone when redirecting it
 //!    would give one terminator two edges to a block with different arguments,
 //!    which the verifier forbids.
-//! 2. **Fold identical branches**: a `brif` whose two edges agree, or a
+//! 2. **Form selects** for single-entry cheap diamond/triangle arms using
+//!    `select.rs`. Each differing join argument is one bisectable rewrite. Each
+//!    arm costs at most four units; loads, stores, calls, division and
+//!    remainder never speculate. Moved arithmetic loses poison-producing flags.
+//! 3. **Fold identical branches**: a `brif` whose two edges agree, or a
 //!    `switch` whose edges all agree, becomes a `jump`.
-//! 3. **Remove unreachable blocks**, all at once and counted as one rewrite: a
+//! 4. **Remove unreachable blocks**, all at once and counted as one rewrite: a
 //!    block removed on its own could leave a surviving unreachable block using
 //!    its values.
-//! 4. **Merge a block into its only predecessor** when that predecessor ends in
+//! 5. **Merge a block into its only predecessor** when that predecessor ends in
 //!    a `jump` to it and the edge is the only one into the block. The block's
 //!    parameters are replaced by the jump's arguments and its instructions and
 //!    terminator are appended to the predecessor.
 //!
 //! Folding a constant branch is the fold pass's job, not this one's; it
-//! leaves the dead arm unreachable for step 3.
+//! leaves the dead arm unreachable for step 4.
 //!
 //! C99: §5.1.2.3 paragraph 5, pp. 13-14; PDF pp. 25-26 (only the program's
 //! observable behaviour must be kept, not its control-flow shape).
+
+mod select;
 
 use super::{
     draft::{
@@ -57,6 +63,7 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
     let mut changed = false;
     for _ in 0..MAX_ROUNDS {
         let mut round = thread_jumps(draft, report);
+        round |= select::run(draft, report);
         round |= fold_identical_branches(draft, report);
         round |= remove_unreachable_blocks(draft, report);
         round |= merge_into_predecessors(draft, report);
@@ -176,7 +183,7 @@ fn threaded<'s>(
     agrees.then_some((target, args))
 }
 
-/// Step 2: turns branches whose edges all agree into jumps.
+/// Step 3: turns branches whose edges all agree into jumps.
 fn fold_identical_branches(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> bool {
     let mut changed = false;
     for index in 0..draft.blocks.len() {
@@ -205,7 +212,7 @@ fn fold_identical_branches(draft: &mut Draft<'_, '_>, report: &mut OptimizationR
     changed
 }
 
-/// Step 3: drops every block the entry cannot reach, as one rewrite.
+/// Step 4: drops every block the entry cannot reach, as one rewrite.
 fn remove_unreachable_blocks(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> bool {
     let reachable = draft.reachable();
     let unreachable =
@@ -221,7 +228,7 @@ fn remove_unreachable_blocks(draft: &mut Draft<'_, '_>, report: &mut Optimizatio
     true
 }
 
-/// Step 4: appends a block to its only predecessor.
+/// Step 5: appends a block to its only predecessor.
 fn merge_into_predecessors(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> bool {
     let mut changed = false;
     let incoming = draft.incoming_edge_counts();

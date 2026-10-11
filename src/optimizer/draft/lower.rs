@@ -207,14 +207,14 @@ impl<'s> Draft<'_, 's> {
                     args: [map(a), map(b), map(c)],
                 },
                 | InstData::Call { func, args } => {
-                    let args = self.mapped(body.value_list(args), &map);
+                    let args = self.mapped(self.call_operands(inst, args), &map);
                     InstData::Call {
                         func,
                         args: builder.value_list(&args),
                     }
                 },
                 | InstData::CallIndirect { sig, args } => {
-                    let args = self.mapped(body.value_list(args), &map);
+                    let args = self.mapped(self.call_operands(inst, args), &map);
                     InstData::CallIndirect {
                         sig,
                         args: builder.value_list(&args),

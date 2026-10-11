@@ -17,9 +17,11 @@
 //! - **moving an instruction** takes its id out of one block's list and puts it
 //!   into another's;
 //! - **adding a block** appends one, numbered after the body's blocks;
-//! - **adding values**: a new block parameter, or a new constant at the top of
-//!   the entry block, gets a value numbered after the original body's (and a
-//!   constant an instruction numbered after its instructions);
+//! - **adding instructions** inserts any non-terminator at a chosen position,
+//!   with ids numbered after the body and optional results; inline operands
+//!   stay in the record and new call operand lists are arena-owned;
+//! - **adding values** appends block parameters or instruction results;
+//! - **rewriting instructions** keeps result identity and clears old folds;
 //! - **weakening flags** records new flags for an instruction, which
 //!   [`Draft::inst`] then reports;
 //! - **removing a stack slot** drops it from the lowered body, whose remaining
@@ -75,15 +77,16 @@ pub(super) struct Draft<'b, 's> {
     folded:             ArenaVec<'s, Option<Constant>>,
     /// Whether an instruction was removed, by instruction index.
     removed:            ArenaVec<'s, bool>,
-    /// An instruction's record with flags a pass changed, by index of an
-    /// instruction of the body.
+    /// Rewritten records and records of added instructions, by instruction id.
     edited:             ArenaVec<'s, Option<InstData>>,
     /// The values the passes added; value `body.value_count() + i` is entry
     /// `i`.
     added_values:       ArenaVec<'s, ValueData>,
-    /// The result of each constant instruction the passes added, numbered
-    /// after the body's instructions. Each one is folded to its constant.
-    added_insts:        ArenaVec<'s, Value>,
+    /// Optional results of added instructions, numbered after the body's.
+    added_insts:        ArenaVec<'s, Option<Value>>,
+    /// Owned call operands for inserted or rewritten calls. Other operands
+    /// fit inline in `InstData`, including all three select operands.
+    call_args:          ArenaVec<'s, Option<&'s [Value]>>,
     /// Whether a stack slot was removed, by slot index.
     removed_slots:      ArenaVec<'s, bool>,
 }
@@ -167,6 +170,8 @@ impl<'b, 's> Draft<'b, 's> {
         removed.resize(body.inst_count(), false);
         let mut edited = ArenaVec::with_capacity_in(body.inst_count(), scratch);
         edited.resize(body.inst_count(), None);
+        let mut call_args = ArenaVec::with_capacity_in(body.inst_count(), scratch);
+        call_args.resize(body.inst_count(), None);
         let mut removed_slots = ArenaVec::with_capacity_in(body.stack_slot_count(), scratch);
         removed_slots.resize(body.stack_slot_count(), false);
         Self {
@@ -180,6 +185,7 @@ impl<'b, 's> Draft<'b, 's> {
             added_values: ArenaVec::new_in(scratch),
             added_insts: ArenaVec::new_in(scratch),
             removed_slots,
+            call_args,
         }
     }
 
@@ -187,8 +193,7 @@ impl<'b, 's> Draft<'b, 's> {
 
     /// The value that uses of `value` now refer to.
     pub(super) fn resolve(&self, mut value: Value) -> Value {
-        // Replacements point at values that existed first, so chains end; the
-        // bound turns a pass bug into a panic instead of a hang.
+        // Replacements may point at new values; the bound catches cycles.
         for _ in 0..=self.replacements.len() {
             let next = self.replacements[value.index()];
             if next == value {
@@ -251,24 +256,27 @@ impl<'b, 's> Draft<'b, 's> {
     /// constants added before it and ahead of the original instructions, and
     /// returns its result, which dominates every block.
     pub(super) fn add_constant(&mut self, constant: Constant) -> Value {
-        let inst = Inst::new(self.inst_count());
         let ty = match constant {
             | Constant::Int(ty, _) | Constant::Poison(ty) => ty,
         };
-        let value = self.add_value(ValueData {
-            ty,
-            def: ValueDef::Result(inst),
-        });
-        self.added_insts.push(value);
-        self.folded.push(Some(constant));
-        self.removed.push(false);
+        let (inst, result) = self.new_inst(
+            InstData::Nullary {
+                opcode: Opcode::Poison,
+                ty,
+            },
+            Some(ty),
+        );
+        let value = result.expect("a constant defines a value");
+        self.folded[inst.index()] = Some(constant);
         let original = self.body.inst_count();
-        let entry = &mut self.blocks[Self::entry().index()].insts;
+        let entry = &self.blocks[Self::entry().index()].insts;
         let position = entry
             .iter()
-            .position(|inst| inst.index() < original)
+            .position(|inst| inst.index() < original || self.folded[inst.index()].is_none())
             .unwrap_or(entry.len());
-        entry.insert(position, inst);
+        self.blocks[Self::entry().index()]
+            .insts
+            .insert(position, inst);
         value
     }
 
@@ -293,7 +301,7 @@ impl<'b, 's> Draft<'b, 's> {
         if let Some(constant) = self.folded[inst.index()] {
             return Some(constant);
         }
-        match *self.body.inst(inst) {
+        match *self.inst(inst) {
             | InstData::Const {
                 opcode: Opcode::Iconst,
                 ty,
@@ -305,7 +313,7 @@ impl<'b, 's> Draft<'b, 's> {
                 ..
             } => self
                 .body
-                .const_bits(self.body.inst(inst))
+                .const_bits(self.inst(inst))
                 .map(|bits| Constant::Int(ty, bits & ty.mask())),
             | InstData::Nullary {
                 opcode: Opcode::Poison,
@@ -323,21 +331,90 @@ impl<'b, 's> Draft<'b, 's> {
 
     // Instructions
 
-    /// The instruction's current data: its original record, with the flags
-    /// a pass set. For a folded instruction it is still that record; use
-    /// [`Draft::inst_constant`] first. An added constant has a placeholder
-    /// record without operands.
+    /// The current record, including general rewrites and added instructions.
+    /// For a folded instruction use [`Draft::inst_constant`] first.
     pub(super) fn inst(&self, inst: Inst) -> &InstData {
-        const PLACEHOLDER: InstData = InstData::Nullary {
-            opcode: Opcode::Poison,
-            ty:     Type::I1,
-        };
-        if inst.index() >= self.body.inst_count() {
-            return &PLACEHOLDER;
-        }
         self.edited[inst.index()]
             .as_ref()
             .unwrap_or_else(|| self.body.inst(inst))
+    }
+
+    /// Inserts a general non-terminator at `position`. Calls need their
+    /// signature's result type; pass `None` for instructions without a result.
+    /// Pool handles in `data` refer to the original body. Use `set_call_args`
+    /// for new call operand lists, and `add_constant` for new wide integers.
+    pub(super) fn add_inst(
+        &mut self,
+        block: Block,
+        position: usize,
+        data: InstData,
+        result_type: Option<Type>,
+    ) -> Option<Value> {
+        let (inst, result) = self.new_inst(data, result_type);
+        self.block_mut(block).insts.insert(position, inst);
+        result
+    }
+
+    /// Rewrites a non-terminator while preserving its result and type.
+    /// Clears a previous fold and any owned call operand list.
+    pub(super) fn replace_inst(&mut self, inst: Inst, data: InstData) {
+        assert!(!data.is_terminator(), "terminators belong in Term");
+        self.edited[inst.index()] = Some(data);
+        self.folded[inst.index()] = None;
+        self.call_args[inst.index()] = None;
+    }
+
+    /// Moves an instruction without changing its result identity. Its operands
+    /// must dominate the new position, which must dominate all its uses.
+    pub(super) fn move_inst(&mut self, inst: Inst, from: Block, to: Block) {
+        let position = self
+            .block(from)
+            .insts
+            .iter()
+            .position(|&id| id == inst)
+            .expect("the source block contains the instruction");
+        _ = self.block_mut(from).insts.remove(position);
+        self.block_mut(to).insts.push(inst);
+    }
+
+    /// Copies a call's variable-length operands into the draft's arena.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "General draft support for passes that create calls."
+        )
+    )]
+    pub(super) fn set_call_args(&mut self, inst: Inst, args: &[Value]) {
+        assert!(
+            matches!(
+                self.inst(inst),
+                InstData::Call { .. } | InstData::CallIndirect { .. }
+            ),
+            "owned argument lists belong only to calls"
+        );
+        self.call_args[inst.index()] = Some(self.scratch.alloc_slice_copy(args));
+    }
+
+    pub(super) fn call_operands(&self, inst: Inst, list: crate::ir::ValueList) -> &[Value] {
+        self.call_args[inst.index()].unwrap_or_else(|| self.body.value_list(list))
+    }
+
+    fn new_inst(&mut self, data: InstData, result_type: Option<Type>) -> (Inst, Option<Value>) {
+        assert!(!data.is_terminator(), "terminators belong in Term");
+        let inst = Inst::new(self.inst_count());
+        let result = result_type.map(|ty| {
+            self.add_value(ValueData {
+                ty,
+                def: ValueDef::Result(inst),
+            })
+        });
+        self.added_insts.push(result);
+        self.folded.push(None);
+        self.removed.push(false);
+        self.edited.push(Some(data));
+        self.call_args.push(None);
+        (inst, result)
     }
 
     /// Gives `inst`, a `Binary` instruction, the flags `flags`. Passes only
@@ -359,7 +436,7 @@ impl<'b, 's> Draft<'b, 's> {
 
     pub(super) fn inst_result(&self, inst: Inst) -> Option<Value> {
         match inst.index().checked_sub(self.body.inst_count()) {
-            | Some(added) => Some(self.added_insts[added]),
+            | Some(added) => self.added_insts[added],
             | None => self.body.inst_result(inst),
         }
     }
@@ -374,8 +451,23 @@ impl<'b, 's> Draft<'b, 's> {
     /// nothing.
     pub(super) fn for_each_operand(&self, inst: Inst, mut visit: impl FnMut(Value)) {
         if self.folded[inst.index()].is_none() {
-            self.body
-                .visit_operands(inst, |value| visit(self.resolve(value)));
+            let mut operand = |value| visit(self.resolve(value));
+            match *self.inst(inst) {
+                | InstData::Binary { args, .. }
+                | InstData::IntCompare { args, .. }
+                | InstData::FloatCompare { args, .. }
+                | InstData::Store { args, .. } => args.into_iter().for_each(operand),
+                | InstData::Select { args, .. } | InstData::MemoryRange { args, .. } =>
+                    args.into_iter().for_each(operand),
+                | InstData::Unary { arg, .. } => operand(arg),
+                | InstData::Load { addr, .. } => operand(addr),
+                | InstData::Call { args, .. } | InstData::CallIndirect { args, .. } => self
+                    .call_operands(inst, args)
+                    .iter()
+                    .copied()
+                    .for_each(operand),
+                | _ => {},
+            }
         }
     }
 

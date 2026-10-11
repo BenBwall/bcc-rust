@@ -103,7 +103,7 @@ block0(v0: i32):
 }
 
 #[test]
-fn a_block_with_two_predecessors_is_not_merged() {
+fn a_two_predecessor_join_becomes_a_select() {
     let input = "\
 function @f(i1) -> i32 external {
 block0(v0: i1):
@@ -120,7 +120,17 @@ block3(v5: i32):
     return v5
 }
 ";
-    assert_pass_leaves(Pass::SimplifyCfg, input);
+    let expected = "function @f(i1) -> i32 external {
+block0(v0: i1):
+    v1 = iconst.i32 1
+    v2 = iconst.i32 2
+    v3 = iadd.i32 v1, v2
+    v4 = isub.i32 v1, v2
+    v5 = select.i32 v0, v3, v4
+    return v5
+}
+";
+    assert_pass(Pass::SimplifyCfg, input, expected);
 }
 
 #[test]
@@ -174,7 +184,7 @@ block0(v0: i32, v1: i1):
 }
 
 #[test]
-fn threading_leaves_edges_that_would_conflict() {
+fn selects_resolve_edges_that_threading_cannot_merge() {
     // Both forwarding blocks lead to block3, with different arguments, so at
     // most one edge of the `brif` may go there directly.
     let input = "\
@@ -190,14 +200,10 @@ block3(v4: i32):
     return v4
 }
 ";
-    let expected = "\
-function @f(i32, i1) -> i32 external {
+    let expected = "function @f(i32, i1) -> i32 external {
 block0(v0: i32, v1: i1):
     v2 = iconst.i32 9
-    brif v1, block2(v0), block1
-block1:
-    jump block2(v2)
-block2(v3: i32):
+    v3 = select.i32 v1, v0, v2
     return v3
 }
 ";
@@ -248,12 +254,9 @@ block3:
     let expected = "function @f(i32, i1) -> i32 external {
 block0(v0: i32, v1: i1):
     v2 = iconst.i32 5
-    brif v1, block1(v2), block2
-block1(v3: i32):
+    v3 = select.i32 v1, v2, v0
     v4 = iadd.i32 v3, v3
     return v4
-block2:
-    jump block1(v0)
 }
 ";
     assert_pass(Pass::SimplifyCfg, input, expected);
@@ -390,7 +393,7 @@ block3:
 /// `block4`, which uses its parameter, so an edge may be threaded to
 /// `block3` but not past it.
 #[test]
-fn a_forwarding_block_whose_parameter_is_used_later_is_kept() {
+fn a_forwarding_parameter_used_later_is_replaced_by_a_select() {
     let input = "\
 function @f(i32, i1) -> i32 external {
 block0(v0: i32, v1: i1):
@@ -406,14 +409,10 @@ block4:
     return v3
 }
 ";
-    let expected = "\
-function @f(i32, i1) -> i32 external {
+    let expected = "function @f(i32, i1) -> i32 external {
 block0(v0: i32, v1: i1):
-    brif v1, block2(v0), block1
-block1:
     v2 = iconst.i32 7
-    jump block2(v2)
-block2(v3: i32):
+    v3 = select.i32 v1, v0, v2
     return v3
 }
 ";

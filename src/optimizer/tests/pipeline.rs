@@ -71,14 +71,9 @@ function @f(i32) -> i32 external {
 block0(v0: i32):
     v1 = iconst.i32 1
     v2 = icmp.i32 sgt v0, v1
-    brif v2, block1, block2
-block1:
     v3 = iadd.i32 v0, v1
-    jump block3(v3)
-block2:
     v4 = isub.i32 v0, v1
-    jump block3(v4)
-block3(v5: i32):
+    v5 = select.i32 v2, v3, v4
     return v5
 }
 ";
@@ -458,11 +453,11 @@ fn print_after_all_prints_even_when_a_pass_changes_nothing() {
     assert!(printed.ends_with(tests_loop::COUNT_LOOP), "{printed}");
 }
 
-/// Two loops that give every pass work. The first keeps a flag in a slot:
-/// `promote` turns the slot into a parameter, `fold` drops the `+ 0`, `sccp`
-/// finds the flag constant and `dce` drops the unused product. The second
-/// computes an invariant product twice, for `gvn` and then `licm`, and its
-/// exit chain is for `simplify-cfg`.
+/// Two loops and a masked division that give every pass work. The first keeps a
+/// flag in a slot: `promote` turns the slot into a parameter, `fold` drops the
+/// `+ 0`, `sccp` finds the flag constant and `dce` drops the unused product.
+/// The second computes an invariant product twice, for `gvn` and then `licm`,
+/// and its exit chain is for `simplify-cfg`.
 const EVERY_PASS: &str = "\
 function @f(i32) -> i32 external {
     slot0 = stack_slot 4, align 4
@@ -497,6 +492,16 @@ block6:
     v16 = iadd.i32 v14, v5
     return v16
 }
+
+function @half(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 15
+    v2 = iconst.i32 4
+    v3 = and.i32 v0, v1
+    v4 = sdiv.i32 v3, v2
+    return v4
+}
+
 ";
 
 #[test]
