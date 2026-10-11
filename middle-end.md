@@ -58,6 +58,12 @@ so they see identical calling-convention decisions. The optimizer runs before AB
 lowering, where aggregate copies and calls are still visible as such; passes that
 need post-ABI form can run after it later.
 
+**Prototype:** there is no ABI lowering yet, so the driver
+(`pipeline::lower_translation_unit`) hands the pre-ABI module straight to the
+back ends. That is sound for what lowering accepts: it refuses structures and
+unions passed or returned by value, so every call already passes scalars and
+pointers, and the LLVM back end prints `va_arg` as LLVM's own `va_arg`.
+
 ### Comparison arms
 
 The LLVM back end exists as much for measurement as for code generation. The
@@ -433,13 +439,38 @@ analyses) lives in a scratch arena reset between functions.
 ## Command line
 
 ```text
-bcc-rust x.c --emit=ir              print the bcc IR after the optimizer
+bcc-rust x.c --emit=ir              print the bcc IR (after the optimizer, if it runs)
 bcc-rust x.c --emit=llvm            print the LLVM IR
 bcc-rust x.c --interpret            run main in the interpreter; exit with its status
-bcc-rust x.c -o x.exe [--opt=0|bcc] [--llvm-opt=none|O0|O2|O3]
-                                    build an executable through clang
-bcc-rust x.c --passes=fold,dce,simplify-cfg
+bcc-rust x.c -o x.exe [-c]          build an executable (or an object) through clang
+    [--opt=none|bcc]                the bcc optimizer; none is the default
+    [--passes=fold,dce,simplify-cfg] an explicit pass list, run once (implies bcc)
+    [--opt-bisect-limit=N]          apply only the first N rewrites (implies bcc)
+    [--print-after-all]             each function after every pass, to stderr
+    [--llvm-opt=none|O0|O1|O2|O3]   clang's -O level; none passes no flag
+    [--llvm-codegen-only]           add -Xclang -disable-llvm-passes
 ```
+
+The back-end modes exclude one another and the inspection views
+(`--tokens`, `--syntax-tree`, `--raw-syntax`, `--semantic-types`); the other
+options require a back-end mode. `--emit` and `--interpret` print to stdout and
+the diagnostics, `--print-after-all` and interpreter traps to stderr. Each arm
+is one invocation:
+
+| Arm | Flags |
+| --- | --- |
+| A0 | `--llvm-opt=O0` |
+| A1 | `--opt=bcc --llvm-opt=O2 --llvm-codegen-only` |
+| A2 | `--llvm-opt=O2` |
+| A3 | `--opt=bcc --llvm-opt=O2` |
+
+Exit statuses: 0 on success; 1 after an error, a construct lowering does not
+support yet, or a clang failure; for `--interpret`, the status `main` returns
+or `exit` receives, 70 when the interpreter stops the program (undefined
+behaviour, an unsupported operation, a limit), and 134 on `abort`. The
+interpreter's C library uses the `--target`'s type widths (`%ld` reads 32 bits
+on Windows). `-o` links with the C library of `--target`, so it needs the host's
+triple to produce a runnable program; `main` is called without arguments.
 
 ## Testing
 
@@ -447,6 +478,12 @@ bcc-rust x.c --passes=fold,dce,simplify-cfg
 - Verifier tests with deliberately broken IR.
 - Interpreter tests: small C programs with known exit codes or output.
 - End-to-end tests: compile through LLVM, run, compare with the interpreter.
+  `src/pipeline/tests/middle_end.rs` runs every program of
+  `src/lowering/tests/programs.rs` in the interpreter with and without the bcc
+  pipeline, and compiles eight of them (two printing with `printf`) in arms
+  A0-A3 for the host, running them side by side and comparing status and
+  output with the interpreter. `tests/code_generation_cli.rs` covers the
+  command line.
 - Corpora later: GCC c-torture `execute`, then Csmith/YARPGen differential runs,
   then Embench and Polybench for performance (see the methodology note).
 

@@ -4,7 +4,10 @@
 supporting C89/C90, C95, C99, C11, C17/C18, C23 and a documented C2y draft
 subset, plus GNU and opt-in MSVC extensions. Its non-recursive language parser
 builds syntax trees; semantic analysis covers declarations, expressions,
-initializers, statements and functions. Code generation is not implemented.
+initializers, statements and functions. A prototype middle end lowers a subset
+of C (integers, pointers, arrays, structures, calls and the C statements) to its
+own IR, optimizes it, interprets it, and builds executables through the bundled
+clang; see [middle-end.md](middle-end.md).
 
 See [language-standards.md](language-standards.md) for language modes, extension
 flags, shared configuration, implementation details and remaining semantic
@@ -23,8 +26,34 @@ language parser, and semantic analysis, and prints diagnostics. Pass
 `--semantic-types` for resolved declarations and types, `--syntax-tree` for a stable,
 source-oriented tree, `--syntax-locations` to add locations, `--raw-syntax` for
 the raw Rust debug form of the tree, or `--tokens` for parser-facing
-preprocessing tokens. Normal operation does not dump internal storage. The CLI does not emit an object file
-or executable.
+preprocessing tokens. Normal operation does not dump internal storage. These
+views exit with status 0 whatever they diagnose.
+
+Code generation runs only when asked for, after the same diagnostics:
+
+```sh
+bcc-rust x.c --emit=ir                 # the bcc IR, to stdout
+bcc-rust x.c --emit=llvm               # LLVM IR, to stdout
+bcc-rust x.c --interpret               # run main in the IR interpreter
+bcc-rust x.c --target=x86_64-w64-windows-gnu -o x.exe [--llvm-opt=O2]
+bcc-rust x.c --target=x86_64-w64-windows-gnu -c -o x.o
+```
+
+`--interpret` prints what the program writes and exits with `main`'s status
+(or `exit`'s), 70 when the interpreter stops the program for undefined
+behaviour or an unsupported operation, and 134 on `abort`. `-o` writes the LLVM
+IR to a temporary file and runs the bundled `target/llvm/bin/clang`; linking
+needs the C library of the `--target`, so pass the host's triple (the default
+target is `x86_64-unknown-linux-gnu`). `--opt=bcc` runs the bcc optimizer
+(off by default); `--passes=fold,dce,...` runs a pass list once,
+`--opt-bisect-limit=N` stops after N rewrites, and `--print-after-all` prints
+each function to stderr after every pass, each implying `--opt=bcc`.
+`--llvm-opt=none|O0|O1|O2|O3` selects clang's level and `--llvm-codegen-only`
+adds `-Xclang -disable-llvm-passes`, so `--opt=bcc --llvm-opt=O2
+--llvm-codegen-only` is comparison arm A1 of
+[middle-end.md](middle-end.md#comparison-arms). Errors, constructs lowering
+does not support yet (such as floating point) and clang failures exit with
+status 1.
 
 Diagnostics are rendered like `rustc`'s: a lowercase message, the
 `file:line:column` location, the quoted source line with `^` under the problem
@@ -65,7 +94,8 @@ literals, GNU macros/keywords/imaginary constants, and MSVC macro pragmas and
 empty variadic calls through the CLI. Semantic analysis follows parsing in the default CLI mode;
 `--semantic-types` inspects resolved declaration types, linkage and duration.
 See [semantic-analysis.md](semantic-analysis.md) for implemented boundaries and
-validation gaps. Code generation remains unimplemented.
+validation gaps. Code generation covers the prototype subset of
+[middle-end.md](middle-end.md), without ABI lowering yet.
 This is not yet a production-ready or conforming C99 compiler.
 
 ## Prerequisites
@@ -589,7 +619,8 @@ describes the layout.
 | [`src/target.rs`](src/target.rs) and [`src/target/`](src/target/) | Select the translation target and its scalar data model, and hold the target macros frozen from the pinned Clang. |
 | [`src/headers.rs`](src/headers.rs) and [`src/headers/`](src/headers/) | Embed the resource headers and configure header search. |
 | [`src/float_parsing.rs`](src/float_parsing.rs) and [`build_support/`](build_support/) | Convert floating constants and print host `long double` values through the native C helper, which the build script compiles with the pinned Clang. |
-| [`src/lib.rs`](src/lib.rs), [`src/cli.rs`](src/cli.rs), and [`src/pipeline.rs`](src/pipeline.rs) | Wire the CLI to semantic analysis by default, to the syntax views with `--syntax-tree` and `--raw-syntax`, and to the token dump with `--tokens`; create each phase's arenas in order; and report diagnostics. |
+| [`src/lib.rs`](src/lib.rs), [`src/cli.rs`](src/cli.rs), and [`src/pipeline.rs`](src/pipeline.rs) | Wire the CLI to semantic analysis by default, to the syntax views with `--syntax-tree` and `--raw-syntax`, to the token dump with `--tokens`, and to the middle end and back ends with `--emit`, `--interpret` and `-o`; create each phase's arenas in order; and report diagnostics. |
+| [`src/lowering.rs`](src/lowering.rs), [`src/ir.rs`](src/ir.rs), [`src/optimizer.rs`](src/optimizer.rs), [`src/backend.rs`](src/backend.rs), and their directories | Lower the analyzed unit to the bcc IR, optimize it, and interpret it or print it as LLVM IR for the bundled clang; [middle-end.md](middle-end.md) is the plan and IR specification. |
 
 ## Parser direction
 
