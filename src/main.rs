@@ -12,7 +12,10 @@ use std::process::ExitCode;
 #[cfg(not(feature = "benchmarking-internals"))]
 fn main() -> ExitCode {
     match bcc_rust::run() {
-        | Ok(()) => ExitCode::SUCCESS,
+        | Ok(0) => ExitCode::SUCCESS,
+        // `ExitCode` holds only a byte; an interpreted program's status is
+        // an `int`.
+        | Ok(status) => std::process::exit(status),
         | Err(bcc_rust::MainError::ParseArgumentsError(error)) => error.exit(),
         | Err(error) => {
             eprintln!("{error}");

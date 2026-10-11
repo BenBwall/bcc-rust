@@ -661,10 +661,6 @@ impl<'tu> Types<'tu> {
 
     /// The structure, union or enumeration a type names, if any.
     /// C99: §6.7.2.3p4-8, pp. 106-107; PDF pp. 118-119.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Retained for lowering, which matches on tags.")
-    )]
     pub(crate) fn tag(&self, ty: TypeId) -> Option<&'tu Tag<'tu>> {
         match self.kind(ty) {
             | TypeKind::Tag(id) => Some(self.tags[id]),
@@ -675,10 +671,6 @@ impl<'tu> Types<'tu> {
     /// Removes atomicity, keeping the qualifiers of `ty`, as lvalue
     /// conversion does.
     /// C11: §6.3.2.1 paragraph 2, p. 54; PDF p. 72.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Retained for lowering of lvalue conversions.")
-    )]
     pub(crate) fn non_atomic(&self, ty: TypeId) -> TypeId {
         match self.kind(ty) {
             | TypeKind::Atomic(value) => value.qualified(ty.qualifiers),
@@ -692,10 +684,6 @@ impl<'tu> Types<'tu> {
     /// treats such a type as unsupported. The scratch interner caches the
     /// array tail; this walks the derivations instead.
     /// C99: array derivations §6.2.5p20, pp. 35-36; PDF pp. 47-48.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Retained for lowering's unsupported-type check.")
-    )]
     pub(crate) fn unanalyzed(&self, mut ty: TypeId) -> bool {
         while let TypeKind::Array(element, _) = self.kind(ty) {
             ty = element;

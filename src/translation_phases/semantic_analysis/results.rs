@@ -29,23 +29,9 @@ use super::{
 pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) types:              Types<'tu>,
     pub(crate) bindings:           &'tu [Binding],
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Finalized definitions are retained for backend lowering."
-        )
-    )]
     pub(crate) definitions:        &'tu [Definition],
     /// Every function definition in traversal order, nested GNU definitions
     /// included, with its binding, body and parameter bindings.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Function records are retained for backend lowering."
-        )
-    )]
     pub(crate) functions:          &'tu [FunctionRecord<'tu>],
     pub(crate) scopes:             &'tu [Scope],
     pub(crate) type_names:         &'tu [(SourceVectors, TypeId)],
@@ -198,13 +184,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
 
     /// The typed record of `expression`, in expected O(1).
     /// C99: §6.3.2.1p1-4, p. 46; PDF p. 58.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Lowering looks expressions up; no lowering exists yet."
-        )
-    )]
     pub(crate) fn expression_info(
         &self,
         expression: &Expression<'tu>,
@@ -229,13 +208,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     /// selection.
     /// C99: §6.5.2.3 paragraphs 3-4, p. 73; PDF p. 85.
     /// C11: §6.7.2.1 paragraph 13, p. 115; PDF p. 133 (anonymous members).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Lowering selects members; no lowering exists yet."
-        )
-    )]
     pub(crate) fn selected_field(&self, mut member: &Expression<'tu>) -> Option<&'tu Field<'tu>> {
         let index = self.expression_info(member)?.field_index()?;
         let (base, indirect) = loop {
@@ -267,13 +239,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
 
     /// The conversions applied to `expression`, empty when it has no record.
     /// C99: §6.3, pp. 42-48; PDF pp. 54-60.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Lowering looks expressions up; no lowering exists yet."
-        )
-    )]
     pub(crate) fn expression_conversions(
         &self,
         expression: &Expression<'tu>,
@@ -288,10 +253,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     /// remain possible, so lowering still rejects any type for which
     /// [`Types::unanalyzed`] holds.
     /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Lowering gates on it; no lowering exists yet.")
-    )]
     pub(crate) fn lowerable(&self, context: &Context<'_>) -> bool {
         self.errors == 0 && context.error_count() == 0
     }

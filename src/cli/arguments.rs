@@ -111,6 +111,8 @@ pub(super) fn normalize_language_arguments(
                     | "--source-date-epoch"
                     | "--language-option"
                     | "--preprocessing-option"
+                    | "-o"
+                    | "--output"
             );
             normalized.push(argument);
         }

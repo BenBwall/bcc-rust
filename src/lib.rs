@@ -1,16 +1,21 @@
 //! BCC translates C source into a syntax tree and semantic information. Each
 //! source file is lexed once, preprocessing finishes before parsing starts, and
-//! semantic analysis consumes the finished tree. The command-line program
-//! selects the input, language mode, target, and output view.
+//! semantic analysis consumes the finished tree. On request, the middle end
+//! lowers the analyzed unit to the bcc IR and optimizes it, and a back end
+//! prints it, interprets it, or builds it through the bundled clang. The
+//! command-line program selects the input, language mode, target, and output.
 //!
 //! Start with `translation_phases` (`translation_phases.rs`) for the phase map,
-//! then `pipeline::parse_translation_unit` for the batch driver and
-//! `pipeline::analyze_translation_unit` for semantic analysis. Read [`run`]
-//! to follow a command-line compilation.
+//! then `pipeline::parse_translation_unit` for the batch driver,
+//! `pipeline::analyze_translation_unit` for semantic analysis and
+//! `pipeline::lower_translation_unit` for the middle end. Read [`run`] to
+//! follow a command-line compilation.
 //!
 //! Files by role:
 //! - Compiler driver: `pipeline.rs`, `translation_phases.rs`, and their
 //!   directories.
+//! - Middle end and back ends: `lowering.rs`, `ir.rs`, `optimizer.rs`,
+//!   `backend.rs`, and their directories.
 //! - Invocation: `main.rs`, `cli.rs`, `configuration.rs`, and their
 //!   directories.
 //! - Representations: `target.rs`, `headers.rs`, `float_parsing.rs`,
@@ -19,7 +24,8 @@
 //! - Measurements and fixtures: `benchmarking.rs`, `test_support.rs`.
 //!
 //! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
-//! PDF pp. 21-22. Code generation and linking are outside this front end.
+//! PDF pp. 21-22. Translation phase 8 (linking) is left to the bundled
+//! clang.
 
 #![cfg_attr(feature = "portable-simd", feature(portable_simd))]
 
@@ -33,7 +39,8 @@ pub(crate) mod translation_phases;
     expect(
         dead_code,
         unused_imports,
-        reason = "Nothing lowers to the IR yet, so no back end runs outside its tests."
+        reason = "The driver uses the interpreter's entry point and the LLVM printer and driver; \
+                  the re-exports for hosts, traps and tools serve their tests."
     )
 )]
 mod backend;
@@ -42,24 +49,19 @@ mod backend;
     expect(
         dead_code,
         unused_imports,
-        reason = "Nothing lowers to the IR yet; its tests exercise it until lowering does."
+        reason = "Only tests parse the textual IR or verify whole modules; the driver builds, \
+                  prints and optimizes modules."
     )
 )]
 pub(crate) mod ir;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "No command lowers to the IR yet; its tests exercise it."
-    )
-)]
 mod lowering;
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
         unused_imports,
-        reason = "Nothing runs the optimizer yet; its tests exercise it until the driver does."
+        reason = "The driver runs the pipeline; the per-pass counts and times and some re-exports \
+                  serve the optimizer's tests."
     )
 )]
 mod optimizer;
@@ -85,7 +87,7 @@ mod benchmarking;
     clippy::disallowed_macros,
     clippy::disallowed_methods,
     reason = "Test fixtures name files with std paths and strings; the arena rule covers the \
-              compiler, not its tests."
+ \n                  compiler, not its tests."
 )]
 mod test_support;
 

@@ -1,7 +1,8 @@
 //! The command-line interface parses options, loads the input, and builds a
 //! translation context with the selected language mode and target. [`run`]
-//! chooses token output or parsing and semantic analysis, then prints the
-//! requested view and diagnostics.
+//! chooses token output, parsing and semantic analysis, or code generation,
+//! then prints the requested view and diagnostics and returns the exit
+//! status.
 //!
 //! For `bcc-rust --input "int x;" --syntax-tree`, arguments select an inline
 //! source and syntax output. The driver preprocesses and parses that source,
@@ -9,11 +10,13 @@
 //!
 //! Read [`run`], then [`Cli`], [`Cli::configuration`], and
 //! [`output::print_parser_output`]. Token output starts at
-//! [`output::print_preprocessor_output`].
+//! [`output::print_preprocessor_output`], and code generation (`--emit`,
+//! `--interpret`, `-o`) at [`code_generation::generate_code`].
 //!
 //! Files by role:
 //! - Invocation: `arguments.rs`, `search.rs`, `errors.rs`.
 //! - Output: `output.rs`, `token.rs`, `diagnostic_reporter.rs`.
+//! - Code generation: `code_generation.rs`.
 //! - Measurement entry points: `measured.rs`.
 //! - CLI fixtures: `tests.rs`.
 //!
@@ -27,6 +30,7 @@ mod errors;
 mod search;
 
 // Output and diagnostic reporting
+mod code_generation;
 mod diagnostic_reporter;
 mod output;
 mod token;
@@ -67,6 +71,10 @@ use clap::{
     Args,
     ColorChoice,
     Parser,
+};
+use code_generation::{
+    CodeGeneration,
+    generate_code,
 };
 use diagnostic_reporter::DiagnosticReporter;
 pub use errors::MainError;
@@ -123,8 +131,12 @@ use crate::{
     },
 };
 
+/// Runs the compiler on the command line's arguments and returns the
+/// process's exit status. The inspection views exit with zero after
+/// printing their diagnostics; code generation exits nonzero after errors,
+/// and `--interpret` with the program's status.
 #[doc(hidden)]
-pub fn run() -> Result<(), MainError> {
+pub fn run() -> Result<i32, MainError> {
     let args = Cli::try_parse_from(normalize_language_arguments(std::env::args_os()))?;
     let tu = Bump::new();
     let (input_string, source_filename): (&str, &Path) =
@@ -152,8 +164,20 @@ pub fn run() -> Result<(), MainError> {
     let mut context = Context::with_configuration(&tu, configuration);
     args.configure_preprocessing(&mut context);
 
+    context.configuration = context
+        .configuration
+        .with_repeated_specifier_warnings(!args.no_repeated_specifier_warnings);
+
     if args.output.tokens {
         print_preprocessor_output(&mut context, source_filename, input_string, search);
+    } else if args.code_generation.requested() {
+        return Ok(generate_code(
+            &mut context,
+            source_filename,
+            input_string,
+            search,
+            &args.code_generation,
+        ));
     } else {
         print_parser_output(
             &mut context,
@@ -161,10 +185,9 @@ pub fn run() -> Result<(), MainError> {
             input_string,
             search,
             &args.output.parser,
-            !args.no_repeated_specifier_warnings,
         );
     }
-    Ok(())
+    Ok(0)
 }
 
 #[derive(Parser)]
@@ -197,6 +220,8 @@ struct Cli {
     search: CliHeaderSearch,
     #[command(flatten)]
     output: CliOutput,
+    #[command(flatten)]
+    code_generation: CodeGeneration,
     /// Suppress the `repeated-specifiers` quality warning group.
     #[clap(long)]
     no_repeated_specifier_warnings: bool,
