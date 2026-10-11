@@ -149,24 +149,24 @@ mod tests {
 
     #[test]
     fn unsupported_constructs_and_errors_fail_code_generation_only() {
-        let float = "int main(void) {\n  float f = 1;\n  return f;\n}\n";
+        let vla = "int main(void) {\n  int n = 3;\n  int a[n];\n  a[0] = 1;\n  return a[0];\n}\n";
         for flags in [
             &["--interpret"][..],
             &["--emit=ir"][..],
             &["--emit=llvm"][..],
         ] {
-            let output = bcc(float, flags);
+            let output = bcc(vla, flags);
             assert_eq!(output.status.code(), Some(1), "{flags:?}");
             assert!(output.stdout.is_empty(), "{flags:?}");
             let stderr = text(&output.stderr);
             assert!(
-                stderr.contains("error: not yet supported by lowering: floating-point arithmetic"),
+                stderr.contains("error: not yet supported by lowering: variable length arrays"),
                 "{stderr}"
             );
             assert!(stderr.contains("1 error generated."), "{stderr}");
         }
         // Without a back end, the program is valid C and nothing is lowered.
-        let output = bcc(float, &[]);
+        let output = bcc(vla, &[]);
         assert!(output.status.success());
         assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
 
