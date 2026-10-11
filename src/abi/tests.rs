@@ -1,9 +1,12 @@
 //! ABI lowering tests: eightbyte classification and Win64 sizes
 //! (`classify.rs`), signatures, callers and callees rewritten from textual
 //! IR (`rewrite.rs`), `va_arg` expansion (`varargs.rs`), C programs run in
-//! the interpreter before and after ABI lowering (`programs.rs`).
+//! the interpreter before and after ABI lowering (`programs.rs`), and
+//! conformance with Clang-compiled code through the LLVM back end
+//! (`conformance.rs`).
 
 mod classify;
+mod conformance;
 mod programs;
 mod rewrite;
 mod varargs;
