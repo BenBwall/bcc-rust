@@ -1,3 +1,14 @@
+//! Recording phase-3 token entries. [`super::super::Lexer::push`] writes a
+//! packed entry and attaches its diagnostics and end-of-input reading state.
+//! The remaining methods intern spellings, record extension locations, and set
+//! up the lexer. Diagnostics are replayed by the token source; this module does
+//! not interpret token values or expand macros.
+//!
+//! C99: §5.1.1.2 paragraph 1 (phase 3), p. 10; PDF p. 22;
+//! preprocessing-token categories §6.4 paragraphs 1-3, p. 49; PDF p. 61.
+//! Non-newline whitespace is replaced by one space, the implementation-defined
+//! choice in phase 3.
+
 use super::{
     super::{
         Context,

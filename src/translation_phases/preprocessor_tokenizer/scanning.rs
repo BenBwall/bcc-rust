@@ -1,6 +1,36 @@
+//! The lexer reads one spliced byte at a time through [`Lexer::peek`]. Reading
+//! past the buffer records final-newline diagnostics and can supply a missing
+//! newline. The token scanners share this reading state and return a [`Lexed`]
+//! kind and spelling for the entry loop to store.
+//!
+//! For example, reading the end of a buffer containing `x` supplies one
+//! newline. A second read at that position returns no byte until a real
+//! character is read again. This preserves the order of token formation and
+//! diagnostic replay.
+//!
+//! Read [`Lexer::peek`], then [`Lexed`], [`Lexer::lex_token`], and
+//! [`Lexer::push`]. The whole-file loop is [`Lexer::run`].
+//!
+//! Files by role:
+//! - Token boundaries: `scanning/tokens.rs` selects punctuation, identifiers,
+//!   numbers, and other characters.
+//! - Quoted tokens and whitespace: `scanning/literals.rs` reads literals,
+//!   comments, and whitespace.
+//! - Output and state setup: `scanning/spelling.rs` interns spellings, records
+//!   entries and diagnostics, and constructs the lexer.
+//!
+//! C99: §5.1.1.2 paragraph 1 (phase 3), p. 10; PDF p. 22;
+//! preprocessing-token categories and maximal munch §6.4 paragraphs 1-4,
+//! pp. 49-50; PDF pp. 61-62. This module records token spellings;
+//! literal values and phase-7 conversion are checked later.
+
+// Token boundaries and quoted tokens.
 mod literals;
-mod spelling;
 mod tokens;
+
+// Entry recording and lexer setup.
+mod spelling;
+
 use super::{
     Lexer,
     PreprocessorTokenType,

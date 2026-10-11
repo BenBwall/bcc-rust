@@ -1,3 +1,14 @@
+//! Whole-buffer translation phases 1 and 2. [`splice`] replaces enabled
+//! trigraphs, maps physical line endings to LF, and deletes line splices.
+//! [`Remap`] records where cleaned offsets stop matching physical source
+//! offsets; [`logical_characters`] reconstructs characters in an existing
+//! source span. Token formation and diagnostic replay belong to the lexer and
+//! token source.
+//!
+//! C99: §5.1.1.2 paragraph 1 (phases 1-2), pp. 9-10; PDF pp. 21-22;
+//! trigraph replacement §5.2.1.1 paragraph 1, p. 18; PDF p. 30.
+//! Accepting LF, CRLF, and CR is an implementation-defined phase-1 mapping.
+
 use std::ops::Range;
 
 use crate::util::{

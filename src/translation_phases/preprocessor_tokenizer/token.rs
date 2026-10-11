@@ -1,3 +1,12 @@
+//! Preprocessing tokens shared by phase-3 lexing and phase-4 macro expansion.
+//! [`PreprocessorToken`] carries the kind, spelling, and provenance;
+//! [`PreprocessorTokenType`] includes lexical categories and internal macro
+//! markers. These types do not perform macro expansion or phase-7 conversion.
+//!
+//! C99: §6.4 paragraphs 1-3, p. 49; PDF p. 61;
+//! phase-3 whitespace §5.1.1.2 paragraph 1, p. 10; PDF p. 22;
+//! phase-4 placemarkers §6.10.3.3, p. 154; PDF p. 166.
+
 use std::fmt::{
     self,
     Display,

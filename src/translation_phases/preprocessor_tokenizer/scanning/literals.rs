@@ -1,3 +1,13 @@
+//! Quoted tokens, whitespace, and comments in translation phase 3.
+//! The scanners retain newlines and replace horizontal whitespace and comments
+//! with a space. Quoted-token scanning records spellings and recovers partial
+//! tokens; escape validity and literal values are checked after lexing.
+//!
+//! C99: §5.1.1.2 paragraph 1 (phase 3), p. 10; PDF p. 22;
+//! comments §6.4.9 paragraphs 1-2, p. 66; PDF p. 78;
+//! character constants §6.4.4.4 paragraph 1, p. 59; PDF p. 71;
+//! string literals §6.4.5 paragraph 1, p. 62; PDF p. 74.
+
 use super::{
     super::{
         Lexer,

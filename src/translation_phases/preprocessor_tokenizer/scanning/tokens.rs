@@ -1,3 +1,12 @@
+//! Phase-3 token selection. [`super::super::Lexer::lex_token`] dispatches on
+//! the first byte, then extends identifiers and preprocessing numbers or
+//! selects the longest punctuator. Header names belong to phase-4 include
+//! handling; numeric values and conversion to C tokens belong to later phases.
+//!
+//! C99: §6.4 paragraphs 1-4, pp. 49-50; PDF pp. 61-62;
+//! identifiers §6.4.2.1 paragraph 1, p. 51; PDF p. 63;
+//! preprocessing numbers §6.4.8 paragraphs 1-4, p. 65; PDF p. 77.
+
 use super::{
     super::{
         Lexer,

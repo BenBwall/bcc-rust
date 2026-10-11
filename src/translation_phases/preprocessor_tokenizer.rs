@@ -1,39 +1,66 @@
-//! Whole-file lexing: translation phases 1 through 3.
+//! Each source buffer is processed once through translation phases 1-3.
+//! Trigraph replacement, newline mapping, and line splicing run first. The
+//! lexer then reads the resulting text from left to right, records token
+//! boundaries and original source positions, and saves diagnostics for replay
+//! when phase 4 reads each token. Comments and horizontal whitespace become one
+//! space; newlines stay.
 //!
-//! C99: §5.1.1.2p1, p. 9; PDF p. 21; §5.1.1.2p2-3, p. 10; PDF p. 22. Trigraphs
-//! follow §5.2.1.1p1, p. 18; PDF p. 30; preprocessing-token boundaries follow
-//! §6.4p1-4, pp. 49-50; PDF pp. 61-62.
+//! For example, `ab` followed by a backslash, a physical newline, and `cd + 1`
+//! becomes `abcd + 1` after splicing. The lexing loop records an identifier, a
+//! space, `+`, a space, and a preprocessing number. Their positions still refer
+//! to the physical source. [`TokenSource`] reads these saved entries without
+//! lexing again.
 //!
-//! Translation phases 1 and 2 run over the entire buffer first: one
-//! vectorized scan finds every byte that could start a trigraph, a line
-//! splice, or a carriage return, so a buffer without any is lexed in place
-//! and only the rest is copied once. Phase 3 then lexes the spliced text to
-//! completion into the struct-of-arrays [`LexedFile`], which
-//! [`token_source`] replays to phase 4.
+//! Read [`LexedFile::lex`] first, then [`Lexer::run`], [`Lexer`], and
+//! [`LexingFile`]. Follow [`splicing::splice`] for phases 1-2,
+//! [`Lexer::lex_token`] for token selection, and [`LexingFile::finish`] for
+//! packed storage. [`TokenSource`] and [`LexedFiles`] connect the saved file to
+//! phase 4.
 //!
-//! Provenance and diagnostics follow reading order: positions refer to the
-//! original source, a token after a deleted splice starts at the splice, the
-//! newline supplied for a file without a final one is consumed by whichever
-//! token first looks at the end of input, and a final newline escaped by a
-//! line splice is reported once each time the end of input is read after a
-//! real character. Non-newline whitespace is collapsed to one space, the
-//! implementation-defined choice in §5.1.1.2p3, p. 10; PDF p. 22.
+//! Files by role:
+//! - Source mapping: `splicing.rs` replaces trigraphs and deletes splices;
+//!   `positions.rs` maps offsets back to physical source positions.
+//! - Scanning: `scanning.rs` reads bytes and handles the end of input;
+//!   `scanning/tokens.rs` selects tokens, identifiers, and numbers;
+//!   `scanning/literals.rs` reads quoted tokens and comments;
+//!   `scanning/spelling.rs` records entries, spellings, and diagnostics;
+//!   `ucn.rs` canonicalizes identifier universal character names.
+//! - Packed storage: `storage.rs` packs entries and side tables.
+//! - Token sources: `token_source.rs` reads lexed files; `replay.rs` reads
+//!   tokens made in phase 4.
+//! - Token and diagnostic types: `token.rs` defines preprocessing tokens;
+//!   `errors.rs` defines lexical and final-newline diagnostics.
+//! - Tests: `tests.rs` checks lexer snapshots, replay, and preprocessing;
+//!   `storage.rs` also holds the packed-entry layout test.
+//!
+//! C99: §5.1.1.2 paragraph 1 (phases 1-3), pp. 9-10; PDF pp. 21-22;
+//! trigraph replacement §5.2.1.1 paragraph 1, p. 18; PDF p. 30;
+//! lexical categories and maximal munch §6.4 paragraphs 1-4, pp. 49-50;
+//! PDF pp. 61-62. Collapsing horizontal whitespace is the
+//! implementation-defined choice in phase 3. Header names are interpreted by
+//! phase-4 `#include` handling (§6.4 paragraph 4, p. 50; PDF p. 62; §6.4.7, pp.
+//! 64-65; PDF pp. 76-77). Escape values and conversion to C tokens belong to
+//! later phases.
 
-//! Preprocessing-token formation in translation phase 3.
-//!
-//! C99: §5.1.1.2p3, p. 10; PDF p. 22; lexical categories and maximal munch are
-//! §6.4p1-4, pp. 49-50; PDF pp. 61-62. This lexer does not form header-name
-//! tokens; `#include` handling interprets their source spelling in phase 4
-//! (§6.4p4, p. 50; PDF p. 62; §6.4.7, pp. 64-65; PDF pp. 76-77).
-pub(super) mod errors;
+// Source mapping.
 mod positions;
-mod replay;
-mod scanning;
 mod splicing;
-mod storage;
-mod token;
-mod token_source;
+
+// Token scanning.
+mod scanning;
 pub(crate) mod ucn;
+
+// Packed storage.
+mod storage;
+
+// Token sources.
+mod replay;
+mod token_source;
+
+// Token and diagnostic types.
+pub(super) mod errors;
+mod token;
+
 pub(crate) use errors::{
     PreprocessorTokenizerError,
     PreprocessorTokenizerErrorType,
@@ -209,6 +236,7 @@ struct LexingFile<'arena, 's> {
     end_readers:           ArenaVec<'s, u32>,
 }
 
+// Tests.
 #[cfg(test)]
 mod batch {
     pub(super) use super::storage::LexedFile;

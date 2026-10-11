@@ -1,3 +1,15 @@
+//! Diagnostics recorded by translation phases 1-3. Lexical errors describe
+//! partial comments, partial quoted tokens, and characters that cannot become
+//! C tokens. [`InitialProcessorError`] describes the final physical newline.
+//! The lexer records locations; token sources decide when to replay
+//! diagnostics. Literal values and other phase-7 constraints are checked later.
+//!
+//! C99: §5.1.1.2 paragraph 1 (phases 2-3), p. 10; PDF p. 22;
+//! §6.4 paragraphs 2-3, p. 49; PDF p. 61;
+//! comments §6.4.9 paragraphs 1-2, p. 66; PDF p. 78;
+//! character constants §6.4.4.4 paragraph 1, p. 59; PDF p. 71;
+//! string literals §6.4.5 paragraph 1, p. 62; PDF p. 74.
+
 use std::fmt::{
     self,
     Display,

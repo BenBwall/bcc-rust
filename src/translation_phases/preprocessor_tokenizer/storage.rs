@@ -1,3 +1,13 @@
+//! Saved phase-3 tokens and the side tables needed to read them in phase 4.
+//! [`LexingFile::finish`] keeps exactly the entries written and copies the side
+//! tables beside them. [`LexedFile`] stores packed positions, spellings, and
+//! deferred diagnostics. Cursor movement belongs to [`super::token_source`];
+//! this module does not expand macros or convert preprocessing tokens to C
+//! tokens.
+//!
+//! C99: §5.1.1.2 paragraph 1 (phase 3), p. 10; PDF p. 22;
+//! preprocessing-token categories §6.4 paragraphs 1-3, p. 49; PDF p. 61.
+
 use std::cell::Cell;
 
 use super::{
