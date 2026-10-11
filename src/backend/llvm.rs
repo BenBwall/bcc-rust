@@ -68,6 +68,9 @@ pub(crate) fn emit_module<'m>(
     Ok(())
 }
 
+/// Validates the IR references before inspecting or emitting call signatures.
+/// C99: §6.5.2.2 paragraph 2, p. 71; PDF p. 83 (prototype argument types);
+/// validity of dense signature references is an additional IR contract.
 fn build_module<'m>(
     module: &'m Module<'_>,
     target: Target,
@@ -80,19 +83,19 @@ fn build_module<'m>(
             requested: target.triple(),
         });
     }
-    if uses_pre_abi_signature(module) {
-        return Err(EmitError::NotAbiLowered);
-    }
     // The C API's builders require well-typed operands. Validate the arena IR
     // at this safe boundary before making any construction call into LLVM.
     // Handwritten scalar test modules may retain a native LLVM va_arg, which
-    // belongs to the pre-ABI profile; aggregate/extension signatures above
+    // belongs to the pre-ABI profile; aggregate/extension signatures below
     // must still already be lowered.
     let errors = crate::ir::verify_module(module, crate::ir::Profile::PostAbi, arena);
     if !errors.is_empty()
         && !crate::ir::verify_module(module, crate::ir::Profile::PreAbi, arena).is_empty()
     {
         return Err(EmitError::InvalidIr);
+    }
+    if uses_pre_abi_signature(module) {
+        return Err(EmitError::NotAbiLowered);
     }
     let mut functions = ArenaVec::new_in(arena);
     for (_, function) in module.functions() {

@@ -705,6 +705,23 @@ fn overlapping_relocations_are_refused() {
 }
 
 #[test]
+fn uninterned_function_signatures_are_invalid_ir() {
+    use crate::ir::{
+        Entity,
+        Linkage,
+    };
+    let arena = Bump::new();
+    let mut module = Module::new(&arena);
+    _ = module.declare_function("broken", SigId::new(17), Linkage::External);
+    let mut out = String::new();
+    assert_eq!(
+        emit_module(&module, Target::LinuxGnu, &mut out),
+        Err(EmitError::InvalidIr)
+    );
+    assert!(out.is_empty(), "invalid IR must not produce output");
+}
+
+#[test]
 fn names_and_constants_are_spelled_for_llvm() {
     let arena = Bump::new();
     let api = Session::new(&arena, Target::LinuxGnu);
