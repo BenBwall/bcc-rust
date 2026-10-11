@@ -1,10 +1,10 @@
 //! Floating constants as IR bits: the folded values semantic analysis keeps
-//! are native x87 `long double`s, and lowering needs the exact bits of an
+//! are host `long double`s, and lowering needs the exact bits of an
 //! `f32`, `f64` or `f80` constant.
 //!
 //! An x87 extended value is 80 bits: a 64-bit significand with an explicit
 //! integer bit, a 15-bit biased exponent and a sign. [`constant_bits`]
-//! reads it from the first ten bytes of a [`LongDouble`], rounds it to the
+//! decodes the host carrier through [`LongDouble::x87_parts`], rounds it to the
 //! nearest value of the destination format (ties to even, as C99 Annex F
 //! requires of conversions), and returns the bits `fconst` takes: the
 //! destination format's own bits, with `f80` as the significand in the low
@@ -29,18 +29,23 @@ use crate::{
 const X87_BIAS: i64 = 16383;
 
 /// The sign, biased exponent and significand of an x87 value, if the
-/// carrier holds one.
+/// carrier holds a supported host representation.
 fn parts(value: &LongDouble) -> Option<(bool, u16, u64)> {
-    let bytes = value.value.get(..10)?;
-    let significand = u64::from_le_bytes(bytes[..8].try_into().ok()?);
-    let top = u16::from_le_bytes(bytes[8..10].try_into().ok()?);
-    Some((top >> 15 == 1, top & 0x7FFF, significand))
+    value.x87_parts()
 }
 
 /// The bits of `value` as a constant of the floating type `ty`, or `None`
-/// for any other type or a carrier too short to hold an x87 value.
+/// for any other type or an unsupported host carrier.
 pub(super) fn constant_bits(value: &LongDouble, ty: Type) -> Option<u128> {
-    let (sign, exponent, significand) = parts(value)?;
+    constant_parts(parts(value)?, ty)
+}
+
+/// Converts decoded carrier parts to the target format.
+/// C99: §6.3.1.5, p. 44; PDF p. 56.
+pub(super) fn constant_parts(
+    (sign, exponent, significand): (bool, u16, u64),
+    ty: Type,
+) -> Option<u128> {
     let (mantissa_bits, exponent_bits) = match ty {
         | Type::F32 => (23, 8),
         | Type::F64 => (52, 11),

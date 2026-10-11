@@ -12,6 +12,7 @@
 
 use super::super::floats::{
     constant_bits,
+    constant_parts,
     from_integer,
     from_unsigned,
     to_integer,
@@ -20,6 +21,23 @@ use crate::{
     float_parsing::LongDouble,
     ir::Type,
 };
+
+#[test]
+fn binary64_and_x87_carriers_produce_the_same_target_bits() {
+    for value in interesting_doubles() {
+        let binary64 = LongDouble::decode_x87(&value.to_bits().to_le_bytes())
+            .expect("binary64 carrier decodes");
+        let x87_bits = constant_bits(&LongDouble::from_double(value), Type::F80).unwrap();
+        let x87 = LongDouble::decode_x87(&x87_bits.to_le_bytes()[..10]).unwrap();
+        for ty in [Type::F32, Type::F64, Type::F80] {
+            assert_eq!(
+                constant_parts(binary64, ty),
+                constant_parts(x87, ty),
+                "{value:e} {ty}"
+            );
+        }
+    }
+}
 
 /// A deterministic sequence of 64-bit patterns.
 fn patterns() -> impl Iterator<Item = u64> {
