@@ -15,6 +15,8 @@ import subprocess
 import sys
 
 SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS))
+import crash_dialogs  # noqa: E402
 
 
 def resolve(name: str) -> Path:
@@ -41,6 +43,9 @@ def main() -> int:
         command = [sys.executable, str(script), *args]
     else:
         sys.exit(f"run.py: cannot run {script.name}; expected a .rs or .py script")
+    # Scripts run compiled C programs that may crash; keep Windows from
+    # opening an error dialog for each (the child inherits the error mode).
+    crash_dialogs.suppress()
     try:
         return subprocess.run(command, env=environment).returncode
     except KeyboardInterrupt:

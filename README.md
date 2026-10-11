@@ -187,6 +187,13 @@ With `benchmarking-internals`, the `allocation_count` test asserts that
 compiling a translation unit allocates nothing from the global allocator;
 [its module documentation](tests/allocation_count.rs) lists what it covers.
 
+On Windows, Cargo starts every test and binary through
+[`scripts/cargo_runner.py`](scripts/cargo_runner.py) (so Python must be on
+`PATH`), and `scripts/run.py` does the same for repository scripts. Both set
+the process error mode that keeps a crashing C program, which tests and
+benchmark harnesses compile and run, from opening a Windows Error Reporting
+dialog; every process they start inherits it.
+
 Cargo explicitly targets the host so build scripts and proc macros do not
 receive the executable's LTO flags. Artifacts are consequently under
 `target/<host-triple>/debug/` or `target/<host-triple>/release/`.
