@@ -295,7 +295,21 @@ and, if defined, a body. A global has a name, a linkage, size, alignment, a
 ### Textual form
 
 The printer and parser round-trip a textual form used by `--emit=ir`, golden
-tests (`BLESS=1` rewrites them, as for the lexing snapshots) and pass unit tests:
+tests (`BLESS=1` rewrites them, as for the lexing snapshots) and pass unit tests.
+
+Symbols use `@name` when the nonempty name contains only ASCII letters,
+digits, `_`, `.`, `$`, or non-ASCII characters other than controls. UTF-8
+identifiers (including decoded C universal character names) remain UTF-8.
+Other names use `@"name"`: quotes and backslashes escape as `\"` and `\\`,
+and controls as `\u{hex}` Unicode scalars. The parser accepts these same
+escapes and rejects invalid scalars. Values, blocks and stack slots have
+numeric IDs (`v0`, `block0`, `slot0`), not source identifier names.
+
+All alignments are powers of two from 1 through 2^31 bytes. `Align` construction
+enforces this common limit for globals, stack slots (LLVM allocas), loads,
+stores, memory intrinsics and ABI layouts; the text parser rejects larger
+values. LLVM's C++ IR supports 2^32, but `LLVMSetAlignment` takes a 32-bit
+unsigned byte count, so 2^31 is the largest representable power of two.
 
 ```text
 function @add(i32, i32) -> i32 external {

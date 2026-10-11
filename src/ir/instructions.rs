@@ -501,24 +501,29 @@ impl fmt::Display for InstFlags {
     }
 }
 
-/// A power-of-two alignment, stored as its base-2 logarithm.
+/// A power-of-two alignment, stored as its base-2 logarithm. The IR limit
+/// fits LLVM-C's unsigned alignment argument for all memory operations.
+///
+/// C99: §6.3.2.3 paragraph 7, pp. 47-48; PDF pp. 59-60 (object pointer
+/// alignment); the maximum here is an IR representation limit.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct Align(u8);
 
 impl Align {
     /// One byte.
     pub(crate) const BYTE: Self = Self(0);
-    /// The base-2 logarithm of the largest alignment LLVM accepts.
-    pub(crate) const MAX_LOG2: u32 = 32;
+    /// The base-2 logarithm of the largest alignment supported by bcc IR.
+    /// LLVM's C++ maximum is 2^32, but `LLVMSetAlignment` takes a `u32`.
+    pub(crate) const MAX_LOG2: u32 = 31;
 
     /// The alignment of `bytes`, if it is a power of two no greater than
-    /// 2^32.
+    /// 2^31. This constructor enforces the limit for every IR alignment.
     pub(crate) const fn from_bytes(bytes: u64) -> Option<Self> {
         let log2 = bytes.trailing_zeros();
         if bytes.is_power_of_two() && log2 <= Self::MAX_LOG2 {
             #[expect(
                 clippy::cast_possible_truncation,
-                reason = "The logarithm was just checked to be at most 32."
+                reason = "The logarithm was just checked to be at most 31."
             )]
             let log2 = log2 as u8;
             Some(Self(log2))

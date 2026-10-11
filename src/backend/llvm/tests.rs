@@ -1,6 +1,7 @@
 //! Tests for the LLVM back end: golden LLVM IR for textual bcc IR, clang's
 //! acceptance of that IR, and programs compiled and run through clang.
 
+mod alignments;
 mod clang;
 mod golden;
 mod handles;

@@ -60,6 +60,8 @@ pub(super) enum TokenKind<'t> {
     Slot(u32),
     /// `@name`, holding the name without `@`.
     Symbol(&'t str),
+    /// `@"name"`, holding the contents with escapes still encoded.
+    QuotedSymbol(&'t str),
     /// A decimal integer, with its sign apart from its magnitude.
     Int {
         negative:  bool,
@@ -147,8 +149,15 @@ impl<'t> Lexer<'t> {
             },
             | b'"' => self.string(start)?,
             | b'@' => {
+                if self.peek() == Some(b'"') {
+                    self.pos += 1;
+                    let name = self.quoted_symbol(start)?;
+                    return Ok(self.token(TokenKind::QuotedSymbol(name), start, line_start));
+                }
                 let name = self.take_while(|byte| {
-                    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$')
+                    byte.is_ascii_alphanumeric()
+                        || matches!(byte, b'_' | b'.' | b'$')
+                        || !byte.is_ascii()
                 });
                 if name.is_empty() {
                     return Err(self.error(start, ParseErrorKind::UnexpectedCharacter('@')));
@@ -229,6 +238,35 @@ impl<'t> Lexer<'t> {
         }
         self.pos += 1;
         Ok(TokenKind::String(contents))
+    }
+
+    /// Finds the closing quote, leaving decoding and escape validation to
+    /// the parser. Escaped quotes do not end a symbol.
+    fn quoted_symbol(&mut self, start: usize) -> Result<&'t str, ParseError<'t>> {
+        let contents = self.pos;
+        while let Some(&byte) = self.bytes.get(self.pos) {
+            match byte {
+                | b'"' => {
+                    let name = &self.text[contents..self.pos];
+                    self.pos += 1;
+                    return Ok(name);
+                },
+                | b'\n' | b'\r' => break,
+                | b'\\' => {
+                    self.pos += 1;
+                    if self
+                        .bytes
+                        .get(self.pos)
+                        .is_none_or(|byte| matches!(byte, b'\n' | b'\r'))
+                    {
+                        break;
+                    }
+                    self.pos += 1;
+                },
+                | _ => self.pos += 1,
+            }
+        }
+        Err(self.error(start, ParseErrorKind::UnterminatedString))
     }
 
     fn take_while(&mut self, mut keep: impl FnMut(u8) -> bool) -> &'t str {

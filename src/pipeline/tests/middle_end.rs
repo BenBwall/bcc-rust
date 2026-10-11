@@ -41,6 +41,7 @@ use crate::{
     ir::{
         Module,
         Profile,
+        parse_module,
         verify_module,
     },
     lowering::tests::programs::{
@@ -117,6 +118,28 @@ fn interpret(module: &Module<'_>, target: Target) -> (i32, String) {
     };
     let output = String::from_utf8(host.output().to_vec()).expect("the output is UTF-8");
     (status, output)
+}
+
+#[test]
+fn c_unicode_identifiers_round_trip_through_ir_text() {
+    for source in [
+        "int café(void){return 1;}",
+        r"int caf\u00e9(void){return 1;}",
+    ] {
+        with_module(
+            source,
+            Target::LinuxGnu,
+            false,
+            Profile::PreAbi,
+            |module, _| {
+                assert!(module.symbol("café").is_some());
+                let printed = module.to_string();
+                let arena = Bump::new();
+                let parsed = parse_module(&arena, &printed).unwrap();
+                assert_eq!(parsed.to_string(), printed);
+            },
+        );
+    }
 }
 
 /// The program called `name`.

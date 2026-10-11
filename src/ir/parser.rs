@@ -8,8 +8,12 @@
 //! that number. A use may therefore precede its definition in the text, and
 //! printing a parsed module reproduces its numbering. Nothing here recurses:
 //! the grammar is flat, and lists are read in loops.
+//!
+//! `lexer.rs` splits tokens; `names.rs` decodes quoted symbol names before
+//! declarations and uses resolve them in the module's symbol table.
 
 mod lexer;
+mod names;
 
 use std::fmt;
 
@@ -96,20 +100,20 @@ fn declare_items<'t>(
             | TokenKind::Ident("target") => parse_target(cursor, module)?,
             | TokenKind::Ident("global") => {
                 let (name, declaration) = parse_global_header(cursor)?;
-                if module.symbol(name.text_name()).is_some() {
+                if module.symbol(name.text_name(scratch)?).is_some() {
                     return Err(name.error(ParseErrorKind::DuplicateSymbol(name.text)));
                 }
-                _ = module.declare_global(name.text_name(), declaration);
+                _ = module.declare_global(name.text_name(scratch)?, declaration);
                 skip_global_init(cursor)?;
             },
             | TokenKind::Ident("abi") => parse_abi(cursor, module)?,
             | TokenKind::Ident("function") => {
                 let (name, signature, linkage) = parse_function_header(cursor, scratch)?;
-                if module.symbol(name.text_name()).is_some() {
+                if module.symbol(name.text_name(scratch)?).is_some() {
                     return Err(name.error(ParseErrorKind::DuplicateSymbol(name.text)));
                 }
                 let signature = module.intern(signature);
-                _ = module.declare_function(name.text_name(), signature, linkage);
+                _ = module.declare_function(name.text_name(scratch)?, signature, linkage);
                 if cursor.eat(TokenKind::LBrace) {
                     while !matches!(cursor.peek().kind, TokenKind::RBrace | TokenKind::End) {
                         _ = cursor.next();
@@ -136,7 +140,7 @@ fn define_items<'t>(
             | TokenKind::Ident("abi") => parse_abi(cursor, module)?,
             | TokenKind::Ident("global") => {
                 let (name, _) = parse_global_header(cursor)?;
-                let Some(Symbol::Global(global)) = module.symbol(name.text_name()) else {
+                let Some(Symbol::Global(global)) = module.symbol(name.text_name(scratch)?) else {
                     unreachable!("the first pass declared every global");
                 };
                 if cursor.eat(TokenKind::Equals) {
@@ -145,7 +149,7 @@ fn define_items<'t>(
             },
             | TokenKind::Ident("function") => {
                 let (name, ..) = parse_function_header(cursor, scratch)?;
-                let Some(Symbol::Function(func)) = module.symbol(name.text_name()) else {
+                let Some(Symbol::Function(func)) = module.symbol(name.text_name(scratch)?) else {
                     unreachable!("the first pass declared every function");
                 };
                 if cursor.eat(TokenKind::LBrace) {
@@ -271,7 +275,7 @@ fn parse_global_init<'t>(
             cursor.expect(TokenKind::Colon, "`:`")?;
             let name = cursor.symbol()?;
             let symbol = module
-                .symbol(name.text_name())
+                .symbol(name.text_name(scratch)?)
                 .ok_or_else(|| name.error(ParseErrorKind::UnknownSymbol(name.text)))?;
             let addend = if cursor.eat(TokenKind::Plus) {
                 let (token, magnitude) = cursor.unsigned()?;
@@ -568,7 +572,7 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
             },
             | Opcode::GlobalAddr => {
                 let token = self.cursor.symbol()?;
-                match self.builder.module().symbol(token.text_name()) {
+                match self.builder.module().symbol(token.text_name(self.scratch)?) {
                     | Some(Symbol::Global(global)) => InstData::GlobalAddr { global },
                     | _ => return Err(token.error(ParseErrorKind::NotAGlobal(token.text))),
                 }
@@ -821,7 +825,7 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
     /// `@name` of a function.
     fn function(&mut self) -> Result<FuncId, ParseError<'t>> {
         let token = self.cursor.symbol()?;
-        match self.builder.module().symbol(token.text_name()) {
+        match self.builder.module().symbol(token.text_name(self.scratch)?) {
             | Some(Symbol::Function(func)) => Ok(func),
             | _ => Err(token.error(ParseErrorKind::NotAFunction(token.text))),
         }
@@ -872,7 +876,7 @@ impl<'t> Cursor<'_, 't> {
     fn symbol(&mut self) -> Result<Token<'t>, ParseError<'t>> {
         let token = self.next();
         match token.kind {
-            | TokenKind::Symbol(_) => Ok(token),
+            | TokenKind::Symbol(_) | TokenKind::QuotedSymbol(_) => Ok(token),
             | _ => Err(token.expected("a `@` symbol")),
         }
     }
@@ -1116,14 +1120,6 @@ impl<'t> Cursor<'_, 't> {
 }
 
 impl<'t> Token<'t> {
-    /// A symbol token's name without its `@`.
-    fn text_name(&self) -> &'t str {
-        match self.kind {
-            | TokenKind::Symbol(name) => name,
-            | _ => self.text,
-        }
-    }
-
     fn error(&self, kind: ParseErrorKind<'t>) -> ParseError<'t> {
         ParseError {
             line: self.line,
@@ -1154,6 +1150,8 @@ pub(crate) struct ParseError<'t> {
 pub(crate) enum ParseErrorKind<'t> {
     UnexpectedCharacter(char),
     UnterminatedString,
+    /// A quoted symbol has an unknown escape or invalid Unicode scalar.
+    BadSymbolEscape,
     NumberTooLarge,
     Expected {
         expected: &'static str,
@@ -1197,6 +1195,7 @@ impl fmt::Display for ParseErrorKind<'_> {
             | Self::UnexpectedCharacter(character) =>
                 write!(f, "unexpected character {character:?}"),
             | Self::UnterminatedString => f.write_str("unterminated string"),
+            | Self::BadSymbolEscape => f.write_str("invalid escape in quoted symbol"),
             | Self::NumberTooLarge => f.write_str("number too large"),
             | Self::Expected {
                 expected,
@@ -1222,7 +1221,7 @@ impl fmt::Display for ParseErrorKind<'_> {
             | Self::MissingResult(opcode) =>
                 write!(f, "`{opcode}` defines a value that needs a name"),
             | Self::IntegerOutOfRange(ty) => write!(f, "the constant does not fit in {ty}"),
-            | Self::BadAlignment => f.write_str("an alignment is a power of two up to 2^32"),
+            | Self::BadAlignment => f.write_str("an alignment is a power of two up to 2^31"),
             | Self::BadHex => f.write_str("bytes are written as pairs of hexadecimal digits"),
         }
     }

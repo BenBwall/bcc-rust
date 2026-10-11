@@ -120,6 +120,119 @@ fn every_form_round_trips_and_verifies() {
 }
 
 #[test]
+fn symbol_names_round_trip_through_definitions_and_uses() {
+    for name in [
+        "café",
+        "函数",
+        "with space",
+        "punctuation;:@(){}[]",
+        "quote\"slash\\",
+        "line\n\r\t\0\u{1}",
+        "",
+    ] {
+        let arena = Bump::new();
+        let mut module = Module::new(&arena);
+        let global = module.declare_global(
+            name,
+            GlobalDecl {
+                linkage:  Linkage::Internal,
+                size:     8,
+                align:    Align::BYTE,
+                constant: false,
+            },
+        );
+        module.define_global(
+            global,
+            GlobalInit::Bytes {
+                bytes:       &[0; 8],
+                relocations: &[Relocation {
+                    offset: 0,
+                    symbol: Symbol::Global(global),
+                    addend: 0,
+                }],
+            },
+        );
+        let signature = module.intern_signature(&[], None, false);
+        let function_name = format!("f_{name}");
+        let func = module.declare_function(&function_name, signature, Linkage::External);
+        let mut builder = FunctionBuilder::new(&mut module, func);
+        let entry = builder.create_entry_block();
+        builder.switch_to_block(entry);
+        _ = builder.global_addr(global);
+        _ = builder.func_addr(func);
+        _ = builder.call(func, &[]);
+        builder.ret(None);
+        builder.finish();
+        let printed = module.to_string();
+        let parsed_arena = Bump::new();
+        let parsed = parse(&parsed_arena, &printed);
+        assert_eq!(parsed.to_string(), printed);
+        assert!(parsed.symbol(name).is_some());
+        assert!(parsed.symbol(&function_name).is_some());
+        assert_eq!(verify(&parsed, Profile::PreAbi), Vec::<String>::new());
+    }
+}
+
+#[test]
+fn malformed_symbol_escapes_are_parse_errors() {
+    let arena = Bump::new();
+    for name in [
+        r#"@"bad\q""#,
+        r#"@"\u{}""#,
+        r#"@"\u{d800}""#,
+        r#"@"\u{110000}""#,
+        r#"@"\u{1234567}""#,
+    ] {
+        let input = format!("function {name}() external\n");
+        let error = parse_module(&arena, &input).unwrap_err();
+        assert_eq!(error.kind, ParseErrorKind::BadSymbolEscape, "{name}");
+    }
+    for input in [
+        "function @\"unfinished\\",
+        "function @\"line\nbreak\"() external",
+    ] {
+        let error = parse_module(&arena, input).unwrap_err();
+        assert_eq!(error.kind, ParseErrorKind::UnterminatedString);
+    }
+    let error = parse_module(
+        &arena,
+        "function @café() external\nfunction @\"caf\\u{e9}\"() external\n",
+    )
+    .unwrap_err();
+    assert!(matches!(error.kind, ParseErrorKind::DuplicateSymbol(_)));
+}
+
+#[test]
+fn alignments_beyond_the_llvm_c_api_limit_are_parse_errors() {
+    for text in
+        [
+            "global @g internal size 4, align 4294967296 = zero\n",
+            "function @f() external {\n    slot0 = stack_slot 4, align 4294967296\nblock0:\n    \
+             return\n}\n",
+            "function @f(ptr) external {\nblock0(v0: ptr):\n    v1 = load.i32 v0, align \
+             4294967296\n    return\n}\n",
+            "function @f(ptr, i32) external {\nblock0(v0: ptr, v1: i32):\n    store.i32 v1, v0, \
+             align 4294967296\n    return\n}\n",
+            "function @f(ptr, i64) external {\nblock0(v0: ptr, v1: i64):\n    copy v0, v0, v1, \
+             align 4294967296\n    return\n}\n",
+            "function @f(ptr, i8, i64) external {\nblock0(v0: ptr, v1: i8, v2: i64):\n    fill \
+             v0, v1, v2, align 4294967296\n    return\n}\n",
+            "function @f(ptr aggregate(size 4, align 4294967296, [0: i32])) external\n",
+            "function @f(ptr byval(size 4, align 4294967296)) external\n",
+            "function @f(ptr sret(size 4, align 4294967296)) external\n",
+            "function @f(ptr registers(i32, align 4294967296)) external\n",
+        ]
+    {
+        let arena = Bump::new();
+        let error = parse_module(&arena, text).unwrap_err();
+        assert_eq!(error.kind, ParseErrorKind::BadAlignment, "{text}");
+    }
+    assert!(Align::from_bytes(2_147_483_648).is_some());
+    assert!(Align::from_bytes(4_294_967_296).is_none());
+    assert!(Align::from_bytes(8_589_934_592).is_none());
+}
+
+#[test]
 fn parsed_module_holds_what_the_text_says() {
     let arena = Bump::new();
     let module = parse(&arena, EVERY_FORM);
@@ -282,7 +395,7 @@ fn bad_text_reports_where_and_why() {
         ),
         (
             "global @g internal size 4, align 3",
-            "1:34: an alignment is a power of two up to 2^32",
+            "1:34: an alignment is a power of two up to 2^31",
         ),
         (
             "global @g internal size 1, align 1 = bytes \"0g\"",

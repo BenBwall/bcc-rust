@@ -70,8 +70,8 @@ impl<'ir> Module<'ir> {
             let function = self.function(func);
             write!(
                 f,
-                "function @{}{} {}",
-                function.name,
+                "function {}{} {}",
+                display_name(function.name),
                 self.display_signature(function.signature),
                 function.linkage.name()
             )?;
@@ -241,7 +241,12 @@ impl<'ir> Module<'ir> {
     pub(crate) fn display_global(&self, global: GlobalId) -> impl fmt::Display + '_ {
         fmt::from_fn(move |f| {
             let data = self.global(global);
-            write!(f, "global @{} {}", data.name, data.linkage.name())?;
+            write!(
+                f,
+                "global {} {}",
+                display_name(data.name),
+                data.linkage.name()
+            )?;
             if data.constant {
                 f.write_str(" constant")?;
             }
@@ -298,7 +303,7 @@ impl<'ir> Module<'ir> {
     /// `@name`, or the raw id of a function the module does not have.
     fn display_func_name(&self, func: FuncId) -> impl fmt::Display + '_ {
         fmt::from_fn(move |f| match self.get_function(func) {
-            | Some(function) => write!(f, "@{}", function.name),
+            | Some(function) => write!(f, "{}", display_name(function.name)),
             | None => write!(f, "{func}"),
         })
     }
@@ -306,10 +311,40 @@ impl<'ir> Module<'ir> {
     /// `@name`, or the raw id of a global the module does not have.
     fn display_global_name(&self, global: GlobalId) -> impl fmt::Display + '_ {
         fmt::from_fn(move |f| match self.get_global(global) {
-            | Some(data) => write!(f, "@{}", data.name),
+            | Some(data) => write!(f, "{}", display_name(data.name)),
             | None => write!(f, "{global}"),
         })
     }
+}
+
+/// Quotes names outside the bare-symbol alphabet, preserving UTF-8 and
+/// escaping delimiters and controls. Locals and blocks have numeric IDs.
+///
+/// C99: §6.4.2.1 paragraph 2, p. 51; PDF p. 63 (identifiers may include
+/// non-Latin characters); quoting is the bcc IR representation rule.
+fn display_name(name: &str) -> impl fmt::Display + '_ {
+    fmt::from_fn(move |f| {
+        f.write_char('@')?;
+        if !name.is_empty()
+            && name.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(c, '_' | '.' | '$')
+                    || (!c.is_ascii() && !c.is_control())
+            })
+        {
+            return f.write_str(name);
+        }
+        f.write_char('"')?;
+        for c in name.chars() {
+            match c {
+                | '"' => f.write_str("\\\"")?,
+                | '\\' => f.write_str("\\\\")?,
+                | c if c.is_control() => write!(f, "\\u{{{:x}}}", u32::from(c))?,
+                | c => f.write_char(c)?,
+            }
+        }
+        f.write_char('"')
+    })
 }
 
 fn display_signature(signature: Signature<'_>) -> impl fmt::Display + '_ {
