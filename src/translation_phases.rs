@@ -14,8 +14,9 @@
 //! and token-source interface.
 //!
 //! Files by role:
-//! - Phases 1-3: `initial_processing.rs` maps characters and splices lines;
-//!   `preprocessor_tokenizer.rs` and its directory form and replay tokens.
+//! - Phases 1-3: `initial_processing.rs` defines the phase 1-2 diagnostics and
+//!   recognizes an escaped final newline; `preprocessor_tokenizer.rs` and its
+//!   directory map characters, splice lines, and form and replay tokens.
 //! - Phases 4-6: `preprocessing.rs` and its directory execute directives,
 //!   expand macros, convert literals, and concatenate adjacent string literals.
 //! - Phase 7: `parsing.rs` and its directory build syntax;

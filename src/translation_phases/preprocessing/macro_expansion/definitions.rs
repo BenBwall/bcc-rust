@@ -33,7 +33,9 @@ pub(crate) enum MacroDefinition<'pp> {
         /// GNU named variadic parameter, distinct from standard `__VA_ARGS__`.
         variadic_alias: Option<StringCacheId>,
     },
-    /// A predefined macro or the `_Pragma` operator, expanded by the driver.
+    /// A predefined macro or the `_Pragma` operator, which the macro-replacing
+    /// reader expands through
+    /// [`Expander::expand_builtin`](crate::translation_phases::preprocessing::Expander::expand_builtin).
     ///
     /// C99: §6.10.8 paragraph 1, p. 160; PDF p. 172, and §6.10.9 paragraph
     /// 1, p. 161; PDF p. 173.

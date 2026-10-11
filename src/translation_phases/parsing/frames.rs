@@ -6,7 +6,9 @@
 //!
 //! For `int x = 1;`, the external-declaration frame pushes a declaration frame.
 //! Its specifier, declarator, and initializer children return in turn. The
-//! declaration consumes `;` and returns a root to the outer loop.
+//! declaration consumes `;` and reduces a `ParseValue::Declaration` to the
+//! external-declaration frame. That frame reduces the root
+//! `ParseValue::ExternalDeclaration`, and [`super::Parser::drive`] returns it.
 //!
 //! Start with [`super::machine::ParseFrame::step`], then
 //! [`external_declaration::ExternalDeclarationFrame::step`] and

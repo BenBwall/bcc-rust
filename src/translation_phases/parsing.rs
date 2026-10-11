@@ -9,11 +9,14 @@
 //!
 //! For `typedef int T; T f(T x) { return x + 1; }`, the loop first pushes an
 //! external-declaration frame. Its declaration children recognize the typedef
-//! and publish `T` before reducing the first root. The next external frame
-//! recognizes `T` as a type, parses the function head, and pushes a
-//! function-definition frame. The compound and statement frames then push an
-//! expression frame for `x + 1`. Child values return up the same stack until
-//! the second root reduces.
+//! and publish `T` before the external frame reduces the first root. The next
+//! external frame again pushes a declaration frame, whose
+//! declaration-specifiers child classifies `T` as a typedef name; the
+//! declaration frame parses the head `T f(T x)` and returns it. Seeing a
+//! definition head before `{`, the external frame pushes a function-definition
+//! frame. The compound and statement frames then push an expression frame for
+//! `x + 1`. Child values return up the same stack until the second root
+//! reduces.
 //!
 //! Read these items first:
 //!
