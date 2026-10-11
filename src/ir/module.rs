@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+use bitflags::bitflags;
+
 use super::{
     Function,
     Module,
@@ -19,6 +21,7 @@ use super::{
         Opcode,
     },
     types::Type,
+    verifier::Profile,
 };
 use crate::util::bump::{
     ArenaMap,
@@ -69,22 +72,41 @@ impl<'ir> Module<'ir> {
         }
     }
 
-    /// Interns a call signature, copying its parameters into the module's
-    /// arena the first time it is seen.
+    /// Interns a call signature of scalar and pointer parameters, copying
+    /// them into the module's arena the first time it is seen.
     pub(crate) fn intern_signature(
         &mut self,
         params: &[Type],
         result: Option<Type>,
         variadic: bool,
     ) -> SigId {
-        let signature = Signature {
-            params: self.arena.alloc_slice_copy(params),
+        self.intern(Signature {
+            params,
             result,
             variadic,
-        };
+            aggregates: &[],
+        })
+    }
+
+    /// Interns any call signature, copying its parameters, its aggregate
+    /// parameters and their layouts into the module's arena the first time
+    /// it is seen.
+    pub(crate) fn intern(&mut self, signature: Signature<'_>) -> SigId {
         if let Some(&id) = self.signature_ids.get(&signature) {
             return id;
         }
+        let arena = self.arena;
+        let aggregates =
+            arena.alloc_slice_fill_iter(signature.aggregates.iter().map(|param| AggregateParam {
+                index: param.index,
+                abi:   param.abi.copy_into(arena),
+            }));
+        let signature = Signature {
+            params: arena.alloc_slice_copy(signature.params),
+            result: signature.result,
+            variadic: signature.variadic,
+            aggregates,
+        };
         let id = self.signatures.push(signature);
         _ = self.signature_ids.insert(signature, id);
         id
@@ -143,6 +165,13 @@ impl<'ir> Module<'ir> {
         assert!(previous.is_none(), "the symbol @{name} is declared twice");
     }
 
+    /// Records that ABI lowering has run, or, for the textual parser, that
+    /// the text says it has. The interpreter lays out `va_list` for the
+    /// target only in a post-ABI module, whose `va_arg` is expanded.
+    pub(crate) fn set_profile(&mut self, profile: Profile) {
+        self.profile = profile;
+    }
+
     /// Sets the target triple and the LLVM data-layout string.
     pub(crate) fn set_target(&mut self, triple: &str, data_layout: &str) {
         self.triple = self.arena.alloc_str(triple);
@@ -157,6 +186,7 @@ impl<'ir> Module<'ir> {
             arena,
             triple: "",
             data_layout: "",
+            profile: Profile::PreAbi,
             functions: Table::new_in(arena),
             globals: Table::new_in(arena),
             signatures: Table::new_in(arena),
@@ -175,6 +205,11 @@ impl<'ir> Module<'ir> {
 
     pub(crate) fn data_layout(&self) -> &'ir str {
         self.data_layout
+    }
+
+    /// Whether ABI lowering has run on the module.
+    pub(crate) fn profile(&self) -> Profile {
+        self.profile
     }
 
     pub(crate) fn function(&self, func: FuncId) -> &Function<'ir> {
@@ -238,6 +273,7 @@ impl fmt::Debug for Module<'_> {
         f.debug_struct("Module")
             .field("triple", &self.triple)
             .field("data_layout", &self.data_layout)
+            .field("profile", &self.profile)
             .field("functions", &self.functions)
             .field("globals", &self.globals)
             .field("signatures", &self.signatures)
@@ -245,13 +281,205 @@ impl fmt::Debug for Module<'_> {
     }
 }
 
-/// A call signature: parameter types, an optional result, and whether extra
-/// arguments may follow the fixed ones.
+/// A call signature: parameter types, an optional result, whether extra
+/// arguments may follow the fixed ones, and which `ptr` parameters stand for
+/// structures and unions.
+///
+/// The IR has no aggregate values, so a structure or union passed or
+/// returned by value is a `ptr` parameter that an [`AggregateParam`]
+/// describes. Before ABI lowering the description is C's view with the
+/// aggregate's layout ([`ParamAbi::Aggregate`], [`ParamAbi::Result`]); ABI
+/// lowering replaces it by the target's decision ([`ParamAbi::ByVal`],
+/// [`ParamAbi::Sret`], [`ParamAbi::Registers`]) or by plain scalars.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct Signature<'ir> {
-    pub(crate) params:   &'ir [Type],
-    pub(crate) result:   Option<Type>,
-    pub(crate) variadic: bool,
+    pub(crate) params:     &'ir [Type],
+    pub(crate) result:     Option<Type>,
+    pub(crate) variadic:   bool,
+    /// The parameters that stand for an aggregate, in increasing parameter
+    /// order; empty when every parameter is a plain scalar or pointer.
+    pub(crate) aggregates: &'ir [AggregateParam<'ir>],
+}
+
+impl<'ir> Signature<'ir> {
+    /// How parameter `index` stands for an aggregate, if it does.
+    pub(crate) fn param_abi(&self, index: usize) -> Option<ParamAbi<'ir>> {
+        self.aggregates
+            .iter()
+            .find(|param| param.index as usize == index)
+            .map(|param| param.abi)
+    }
+
+    /// How the function returns a structure or union through its parameter
+    /// 0, if it does.
+    pub(crate) fn result_param(&self) -> Option<ParamAbi<'ir>> {
+        self.param_abi(0).filter(|abi| abi.is_result())
+    }
+}
+
+/// A `ptr` parameter that stands for a structure or union.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct AggregateParam<'ir> {
+    /// The parameter's position in [`Signature::params`].
+    pub(crate) index: u32,
+    pub(crate) abi:   ParamAbi<'ir>,
+}
+
+/// What an aggregate parameter means. The first two kinds exist only before
+/// ABI lowering and the others only after it; the verifier checks which.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum ParamAbi<'ir> {
+    /// Pre-ABI: the parameter addresses a copy of a structure or union
+    /// argument that the caller made for this call. The callee owns the copy
+    /// until it returns and may write it; nothing else addresses it.
+    Aggregate(AggregateLayout<'ir>),
+    /// Pre-ABI, parameter 0 only: the parameter addresses the object that
+    /// receives the structure or union result, which the callee stores
+    /// before it returns. The signature has no result. The caller passes a
+    /// fresh object that nothing else addresses.
+    Result(AggregateLayout<'ir>),
+    /// Post-ABI: the aggregate is passed in memory, in the stack's argument
+    /// area, and the parameter addresses that copy (LLVM's `byval`). The
+    /// layout's alignment is the stack slot's, which ABI lowering may raise
+    /// above the aggregate's; the caller's pointer must have it too.
+    ByVal(AggregateLayout<'ir>),
+    /// Post-ABI, parameter 0 only: the result is returned in memory at the
+    /// address the caller passes, and the callee returns that address as
+    /// well (LLVM's `sret`).
+    Sret(AggregateLayout<'ir>),
+    /// Post-ABI, parameter 0 only: the result is returned in registers. The
+    /// parameter is a return area that the IR stores the result into, as for
+    /// [`ParamAbi::Result`], but it is not passed. A back end reserves the
+    /// area in the callee and loads the registers from it at `return`; in
+    /// the caller it stores the returned registers to the area the call
+    /// passes, which ABI lowering makes at least [`ResultRegisters::bytes`]
+    /// long and aligned to [`ResultRegisters::align`].
+    Registers(ResultRegisters),
+}
+
+impl<'ir> ParamAbi<'ir> {
+    /// Whether this kind describes a result rather than an argument.
+    pub(crate) const fn is_result(self) -> bool {
+        matches!(self, Self::Result(_) | Self::Sret(_) | Self::Registers(_))
+    }
+
+    /// Whether this kind exists before ABI lowering rather than after.
+    pub(crate) const fn is_pre_abi(self) -> bool {
+        matches!(self, Self::Aggregate(_) | Self::Result(_))
+    }
+
+    /// The aggregate's layout, for the kinds that carry one.
+    pub(crate) const fn layout(self) -> Option<AggregateLayout<'ir>> {
+        match self {
+            | Self::Aggregate(layout)
+            | Self::Result(layout)
+            | Self::ByVal(layout)
+            | Self::Sret(layout) => Some(layout),
+            | Self::Registers(_) => None,
+        }
+    }
+
+    /// The textual form's keyword for this kind.
+    pub(crate) const fn keyword(self) -> &'static str {
+        match self {
+            | Self::Aggregate(_) => "aggregate",
+            | Self::Result(_) => "result",
+            | Self::ByVal(_) => "byval",
+            | Self::Sret(_) => "sret",
+            | Self::Registers(_) => "registers",
+        }
+    }
+
+    /// This description with its layout's scalars in `arena`.
+    fn copy_into(self, arena: &Bump) -> ParamAbi<'_> {
+        let copy = |layout: AggregateLayout<'_>| AggregateLayout {
+            scalars: arena.alloc_slice_copy(layout.scalars),
+            size:    layout.size,
+            align:   layout.align,
+            flags:   layout.flags,
+        };
+        match self {
+            | Self::Aggregate(layout) => ParamAbi::Aggregate(copy(layout)),
+            | Self::Result(layout) => ParamAbi::Result(copy(layout)),
+            | Self::ByVal(layout) => ParamAbi::ByVal(copy(layout)),
+            | Self::Sret(layout) => ParamAbi::Sret(copy(layout)),
+            | Self::Registers(registers) => ParamAbi::Registers(registers),
+        }
+    }
+}
+
+/// The facts about a structure or union that calling conventions classify
+/// it by: its size and alignment, two properties of its members, and, for
+/// one of at most [`AggregateLayout::MAX_SCALAR_BYTES`] bytes, the scalars
+/// it is made of. The IR has no type graph, so lowering records these from
+/// the C type.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct AggregateLayout<'ir> {
+    pub(crate) size:    u64,
+    pub(crate) align:   Align,
+    pub(crate) flags:   AggregateFlags,
+    /// Every scalar member and array element, through nested aggregates, by
+    /// byte offset; the members of a union overlap. Empty for an aggregate
+    /// larger than [`AggregateLayout::MAX_SCALAR_BYTES`].
+    pub(crate) scalars: &'ir [AggregateScalar],
+}
+
+impl AggregateLayout<'_> {
+    /// The largest aggregate whose scalars are recorded: two eightbytes,
+    /// the most any supported convention passes in registers, since the IR
+    /// has no vector types.
+    pub(crate) const MAX_SCALAR_BYTES: u64 = 16;
+}
+
+bitflags! {
+    /// Properties of an aggregate's members that change how it is passed.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+    pub(crate) struct AggregateFlags: u8 {
+        /// A member, at some level of nesting, is not at a multiple of its
+        /// type's alignment, as in a packed structure.
+        const UNALIGNED = 1 << 0;
+        /// The aggregate, or one it contains, ends in a flexible array
+        /// member.
+        const FLEXIBLE = 1 << 1;
+    }
+}
+
+impl AggregateFlags {
+    /// Each flag with its textual name, in printing order.
+    pub(crate) const NAMES: [(Self, &'static str); 2] =
+        [(Self::UNALIGNED, "unaligned"), (Self::FLEXIBLE, "flexible")];
+}
+
+/// One scalar of an aggregate: its byte offset and IR type.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct AggregateScalar {
+    pub(crate) offset: u32,
+    pub(crate) ty:     Type,
+}
+
+/// The registers an aggregate result comes back in: the first holds bytes
+/// 0-7 of the result and the second bytes 8-15.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct ResultRegisters {
+    pub(crate) first:  Type,
+    pub(crate) second: Option<Type>,
+    /// The aggregate's alignment, which its return area has.
+    pub(crate) align:  Align,
+}
+
+impl ResultRegisters {
+    /// The registers' types in order.
+    pub(crate) fn types(self) -> impl Iterator<Item = Type> {
+        std::iter::once(self.first).chain(self.second)
+    }
+
+    /// The bytes of the return area the registers cover.
+    pub(crate) fn bytes(self) -> u64 {
+        match self.second {
+            | Some(second) => 8 + u64::from(second.bytes()),
+            | None => u64::from(self.first.bytes()),
+        }
+    }
 }
 
 /// Whether a symbol is visible outside its module.

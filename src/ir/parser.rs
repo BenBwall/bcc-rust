@@ -41,13 +41,21 @@ use super::{
         Opcode,
     },
     module::{
+        AggregateFlags,
+        AggregateLayout,
+        AggregateParam,
+        AggregateScalar,
         GlobalDecl,
         GlobalInit,
         Linkage,
+        ParamAbi,
         Relocation,
+        ResultRegisters,
+        Signature,
         Symbol,
     },
     types::Type,
+    verifier::Profile,
 };
 use crate::util::bump::{
     ArenaVec,
@@ -92,13 +100,13 @@ fn declare_items<'t>(
                 _ = module.declare_global(name.text_name(), declaration);
                 skip_global_init(cursor)?;
             },
+            | TokenKind::Ident("abi") => parse_abi(cursor, module)?,
             | TokenKind::Ident("function") => {
-                let (name, params, result, variadic, linkage) =
-                    parse_function_header(cursor, scratch)?;
+                let (name, signature, linkage) = parse_function_header(cursor, scratch)?;
                 if module.symbol(name.text_name()).is_some() {
                     return Err(name.error(ParseErrorKind::DuplicateSymbol(name.text)));
                 }
-                let signature = module.intern_signature(&params, result, variadic);
+                let signature = module.intern(signature);
                 _ = module.declare_function(name.text_name(), signature, linkage);
                 if cursor.eat(TokenKind::LBrace) {
                     while !matches!(cursor.peek().kind, TokenKind::RBrace | TokenKind::End) {
@@ -107,7 +115,7 @@ fn declare_items<'t>(
                     cursor.expect(TokenKind::RBrace, "`}`")?;
                 }
             },
-            | _ => return Err(token.expected("`target`, `global` or `function`")),
+            | _ => return Err(token.expected("`target`, `abi`, `global` or `function`")),
         }
     }
 }
@@ -123,6 +131,7 @@ fn define_items<'t>(
         match token.kind {
             | TokenKind::End => return Ok(()),
             | TokenKind::Ident("target") => parse_target(cursor, module)?,
+            | TokenKind::Ident("abi") => parse_abi(cursor, module)?,
             | TokenKind::Ident("global") => {
                 let (name, _) = parse_global_header(cursor)?;
                 let Some(Symbol::Global(global)) = module.symbol(name.text_name()) else {
@@ -141,9 +150,20 @@ fn define_items<'t>(
                     parse_body(cursor, module, func, scratch)?;
                 }
             },
-            | _ => return Err(token.expected("`target`, `global` or `function`")),
+            | _ => return Err(token.expected("`target`, `abi`, `global` or `function`")),
         }
     }
+}
+
+/// `abi lowered`: the module is post-ABI.
+fn parse_abi<'t>(
+    cursor: &mut Cursor<'_, 't>,
+    module: &mut Module<'_>,
+) -> Result<(), ParseError<'t>> {
+    _ = cursor.next();
+    cursor.expect(TokenKind::Ident("lowered"), "`lowered`")?;
+    module.set_profile(Profile::PostAbi);
+    Ok(())
 }
 
 /// `target triple = "..."` or `target datalayout = "..."`.
@@ -284,19 +304,15 @@ fn parse_global_init<'t>(
 }
 
 /// `function @name(params) [-> ty] linkage`, up to the body.
-#[expect(
-    clippy::type_complexity,
-    reason = "Both passes destructure the header in place."
-)]
 fn parse_function_header<'t, 's>(
     cursor: &mut Cursor<'_, 't>,
     scratch: &'s Bump,
-) -> Result<(Token<'t>, ArenaVec<'s, Type>, Option<Type>, bool, Linkage), ParseError<'t>> {
+) -> Result<(Token<'t>, Signature<'s>, Linkage), ParseError<'t>> {
     _ = cursor.next();
     let name = cursor.symbol()?;
-    let (params, result, variadic) = cursor.signature(scratch)?;
+    let signature = cursor.signature(scratch)?;
     let linkage = cursor.linkage()?;
-    Ok((name, params, result, variadic, linkage))
+    Ok((name, signature, linkage))
 }
 
 /// Parses a body after its `{`, through its `}`.
@@ -603,9 +619,9 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                 let args = self.argument_list(Some(callee))?;
                 self.cursor
                     .expect(TokenKind::Colon, "`:` and a signature")?;
-                let (params, result, variadic) = self.cursor.signature(self.scratch)?;
+                let signature = self.cursor.signature(self.scratch)?;
                 InstData::CallIndirect {
-                    sig:  self.builder.intern_signature(&params, result, variadic),
+                    sig:  self.builder.intern(signature),
                     args: self.builder.value_list(&args),
                 }
             },
@@ -958,13 +974,11 @@ impl<'t> Cursor<'_, 't> {
         })
     }
 
-    /// `(ty, ..., [...]) [-> ty]`.
-    fn signature<'s>(
-        &mut self,
-        scratch: &'s Bump,
-    ) -> Result<(ArenaVec<'s, Type>, Option<Type>, bool), ParseError<'t>> {
+    /// `(ty [abi], ..., [...]) [-> ty]`, with its lists in `scratch`.
+    fn signature<'s>(&mut self, scratch: &'s Bump) -> Result<Signature<'s>, ParseError<'t>> {
         self.expect(TokenKind::LParen, "`(`")?;
         let mut params = ArenaVec::new_in(scratch);
+        let mut aggregates = ArenaVec::new_in(scratch);
         let mut variadic = false;
         while !self.eat(TokenKind::RParen) {
             if variadic {
@@ -977,6 +991,11 @@ impl<'t> Cursor<'_, 't> {
                 variadic = true;
             } else {
                 params.push(self.ty()?);
+                if let Some(abi) = self.param_abi(scratch)? {
+                    let index = u32::try_from(params.len() - 1)
+                        .map_err(|_| self.peek().error(ParseErrorKind::NumberTooLarge))?;
+                    aggregates.push(AggregateParam { index, abi });
+                }
             }
         }
         let result = if self.eat(TokenKind::Arrow) {
@@ -984,7 +1003,93 @@ impl<'t> Cursor<'_, 't> {
         } else {
             None
         };
-        Ok((params, result, variadic))
+        Ok(Signature {
+            params: scratch.alloc_slice_copy(&params),
+            result,
+            variadic,
+            aggregates: scratch.alloc_slice_copy(&aggregates),
+        })
+    }
+
+    /// The description of an aggregate parameter after its type, if one
+    /// follows: `aggregate`, `result`, `byval` or `sret` with a layout, as
+    /// `(size N, align N[, flag]...[, [offset: ty, ...]])`, or
+    /// `registers(ty[, ty], align N)`.
+    fn param_abi<'s>(&mut self, scratch: &'s Bump) -> Result<Option<ParamAbi<'s>>, ParseError<'t>> {
+        let TokenKind::Ident(keyword) = self.peek().kind else {
+            return Ok(None);
+        };
+        let make: fn(AggregateLayout<'s>) -> ParamAbi<'s> = match keyword {
+            | "aggregate" => ParamAbi::Aggregate,
+            | "result" => ParamAbi::Result,
+            | "byval" => ParamAbi::ByVal,
+            | "sret" => ParamAbi::Sret,
+            | "registers" => return self.result_registers().map(Some),
+            | _ => return Ok(None),
+        };
+        _ = self.next();
+        self.expect(TokenKind::LParen, "`(`")?;
+        self.expect(TokenKind::Ident("size"), "`size`")?;
+        let (token, size) = self.unsigned()?;
+        let size = u64::try_from(size).map_err(|_| token.error(ParseErrorKind::NumberTooLarge))?;
+        self.expect(TokenKind::Comma, "`,`")?;
+        let align = self.align()?;
+        let mut flags = AggregateFlags::empty();
+        let mut scalars = ArenaVec::new_in(scratch);
+        while self.eat(TokenKind::Comma) {
+            if self.eat(TokenKind::LBracket) {
+                while !self.eat(TokenKind::RBracket) {
+                    if !scalars.is_empty() {
+                        self.expect(TokenKind::Comma, "`,` or `]`")?;
+                    }
+                    let (token, offset) = self.unsigned()?;
+                    let offset = u32::try_from(offset)
+                        .map_err(|_| token.error(ParseErrorKind::NumberTooLarge))?;
+                    self.expect(TokenKind::Colon, "`:`")?;
+                    let ty = self.ty()?;
+                    scalars.push(AggregateScalar { offset, ty });
+                }
+                break;
+            }
+            let token = self.next();
+            flags |= match token.kind {
+                | TokenKind::Ident(name) => AggregateFlags::NAMES
+                    .iter()
+                    .find(|&&(_, text)| text == name)
+                    .map(|&(flag, _)| flag),
+                | _ => None,
+            }
+            .ok_or_else(|| token.expected("`unaligned`, `flexible` or `[`"))?;
+        }
+        self.expect(TokenKind::RParen, "`)`")?;
+        Ok(Some(make(AggregateLayout {
+            size,
+            align,
+            flags,
+            scalars: scratch.alloc_slice_copy(&scalars),
+        })))
+    }
+
+    /// `registers(ty[, ty], align N)`.
+    fn result_registers<'s>(&mut self) -> Result<ParamAbi<'s>, ParseError<'t>> {
+        _ = self.next();
+        self.expect(TokenKind::LParen, "`(`")?;
+        let first = self.ty()?;
+        self.expect(TokenKind::Comma, "`,`")?;
+        let second = if matches!(self.peek().kind, TokenKind::Ident("align")) {
+            None
+        } else {
+            let second = self.ty()?;
+            self.expect(TokenKind::Comma, "`,`")?;
+            Some(second)
+        };
+        let align = self.align()?;
+        self.expect(TokenKind::RParen, "`)`")?;
+        Ok(ParamAbi::Registers(ResultRegisters {
+            first,
+            second,
+            align,
+        }))
     }
 }
 

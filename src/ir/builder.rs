@@ -498,6 +498,11 @@ impl<'m, 'ir> FunctionBuilder<'m, 'ir> {
         self.module.intern_signature(params, result, variadic)
     }
 
+    /// Interns any signature, as [`Module::intern`] does.
+    pub(crate) fn intern(&mut self, signature: super::Signature<'_>) -> SigId {
+        self.module.intern(signature)
+    }
+
     pub(crate) fn body(&self) -> &Body<'ir> {
         &self.body
     }

@@ -31,6 +31,7 @@ use super::{
     },
     module::{
         GlobalInit,
+        ParamAbi,
         Signature,
         Symbol,
     },
@@ -91,6 +92,13 @@ fn verify_function_into<'m, 's>(
         });
         return;
     };
+    verify_signature(signature, profile, |index, problem| {
+        errors.push(VerifierError {
+            item:     function.name,
+            location: Location::Item,
+            kind:     VerifierErrorKind::ParamAbi { index, problem },
+        });
+    });
     let Some(body) = &function.body else {
         return;
     };
@@ -118,15 +126,62 @@ fn verify_function_into<'m, 's>(
     verifier.dominance();
 }
 
+/// Checks how a signature's parameters stand for aggregates, calling
+/// `report` with the parameter and the problem for each one wrong: a
+/// description must name a `ptr` parameter, in increasing order; a result
+/// must be parameter 0 of a signature without a result; its kind must
+/// belong to the profile; and its scalars must lie within the aggregate.
+fn verify_signature(
+    signature: Signature<'_>,
+    profile: Profile,
+    mut report: impl FnMut(u32, ParamAbiProblem),
+) {
+    let mut previous = None;
+    for param in signature.aggregates {
+        let index = param.index;
+        let problem = if previous.is_some_and(|previous| index <= previous) {
+            Some(ParamAbiProblem::Order)
+        } else if signature.params.get(index as usize) != Some(&Type::Ptr) {
+            Some(ParamAbiProblem::NotPointer)
+        } else if param.abi.is_pre_abi() != (profile == Profile::PreAbi) {
+            Some(ParamAbiProblem::Profile)
+        } else if param.abi.is_result() && (index != 0 || signature.result.is_some()) {
+            Some(ParamAbiProblem::Result)
+        } else if let Some(layout) = param.abi.layout()
+            && layout
+                .scalars
+                .iter()
+                .any(|scalar| u64::from(scalar.offset) + u64::from(scalar.ty.bytes()) > layout.size)
+        {
+            Some(ParamAbiProblem::ScalarOutside)
+        } else if let ParamAbi::Registers(registers) = param.abi
+            && registers
+                .types()
+                .any(|ty| matches!(ty, Type::I1 | Type::Ptr))
+        {
+            Some(ParamAbiProblem::RegisterType)
+        } else {
+            None
+        };
+        if let Some(problem) = problem {
+            report(index, problem);
+        }
+        previous = Some(index);
+    }
+}
+
 /// Which stage of lowering a module is in, and so which constraints apply.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Profile {
-    /// Before ABI lowering: `va_arg` is an operation.
+    /// Before ABI lowering: `va_arg` is an operation, and a `ptr`
+    /// parameter may stand for a structure or union passed or returned by
+    /// value ([`ParamAbi::Aggregate`], [`ParamAbi::Result`]).
     PreAbi,
-    /// After ABI lowering: `va_arg` has been expanded for the target. Calls
-    /// pass only scalars and pointers in both profiles today, since
-    /// aggregates are never values; by-value aggregate parameters, when they
-    /// arrive, are pre-ABI only.
+    /// After ABI lowering: `va_arg` has been expanded for the target, and
+    /// aggregate parameters say how the target passes them
+    /// ([`ParamAbi::ByVal`], [`ParamAbi::Sret`], [`ParamAbi::Registers`]).
+    /// In both profiles every value is a scalar or a pointer, since
+    /// aggregates are never values.
     PostAbi,
 }
 
@@ -419,6 +474,9 @@ impl Verifier<'_, '_, '_, '_> {
             | InstData::CallIndirect { sig, args } =>
                 match checker.verifier.module.get_signature(sig) {
                     | Some(signature) => {
+                        verify_signature(signature, checker.verifier.profile, |index, problem| {
+                            checker.report(VerifierErrorKind::ParamAbi { index, problem });
+                        });
                         let values = checker.verifier.body.value_list(args);
                         if let Some((&callee, args)) = values.split_first() {
                             checker.operand(0, callee, Type::Ptr);
@@ -839,6 +897,11 @@ pub(crate) enum VerifierErrorKind {
         opcode:  Opcode,
         profile: Profile,
     },
+    /// A signature's parameter `index` stands for an aggregate wrongly.
+    ParamAbi {
+        index:   u32,
+        problem: ParamAbiProblem,
+    },
     /// A global's bytes are not as long as the global.
     InitializerSize {
         expected: u64,
@@ -846,6 +909,23 @@ pub(crate) enum VerifierErrorKind {
     },
     /// A relocation's eight bytes do not fit in the global.
     RelocationRange(u64),
+}
+
+/// What is wrong with an aggregate parameter of a signature.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ParamAbiProblem {
+    /// Descriptions are not in increasing parameter order.
+    Order,
+    /// The parameter does not exist or is not a `ptr`.
+    NotPointer,
+    /// The kind belongs to the other profile.
+    Profile,
+    /// A result kind is not parameter 0, or the signature also has a result.
+    Result,
+    /// A scalar of the layout extends past the aggregate's size.
+    ScalarOutside,
+    /// A result register is `i1` or `ptr`.
+    RegisterType,
 }
 
 /// The kind of entity an [`VerifierErrorKind::InvalidReference`] names.
@@ -959,6 +1039,21 @@ impl fmt::Display for VerifierErrorKind {
                 write!(f, "the use of {value} is not dominated by its definition"),
             | Self::NotAllowedInProfile { opcode, profile } =>
                 write!(f, "{opcode} is not allowed in the {profile:?} profile"),
+            | Self::ParamAbi { index, problem } => write!(
+                f,
+                "parameter {index} {}",
+                match problem {
+                    | ParamAbiProblem::Order => "is described out of order",
+                    | ParamAbiProblem::NotPointer => "stands for an aggregate but is not a ptr",
+                    | ParamAbiProblem::Profile => "has an aggregate kind of the other profile",
+                    | ParamAbiProblem::Result =>
+                        "returns an aggregate but is not parameter 0 of a signature without a \
+                         result",
+                    | ParamAbiProblem::ScalarOutside =>
+                        "has an aggregate scalar beyond the aggregate's size",
+                    | ParamAbiProblem::RegisterType => "returns a register of type i1 or ptr",
+                }
+            ),
             | Self::InitializerSize { expected, found } => write!(
                 f,
                 "the initializer has {found} bytes for a size of {expected}"

@@ -103,11 +103,17 @@ pub(crate) use instructions::{
     ValueList,
 };
 pub(crate) use module::{
+    AggregateFlags,
+    AggregateLayout,
+    AggregateParam,
+    AggregateScalar,
     Global,
     GlobalDecl,
     GlobalInit,
     Linkage,
+    ParamAbi,
     Relocation,
+    ResultRegisters,
     Signature,
     Symbol,
 };
@@ -120,6 +126,7 @@ pub(crate) use types::Type;
 pub(crate) use verifier::{
     EntityKind,
     Location,
+    ParamAbiProblem,
     Profile,
     VerifierError,
     VerifierErrorKind,
@@ -138,6 +145,8 @@ pub(crate) struct Module<'ir> {
     arena:         &'ir Bump,
     triple:        &'ir str,
     data_layout:   &'ir str,
+    /// Whether ABI lowering has run.
+    profile:       Profile,
     functions:     Table<'ir, FuncId, Function<'ir>>,
     globals:       Table<'ir, GlobalId, Global<'ir>>,
     signatures:    Table<'ir, SigId, Signature<'ir>>,

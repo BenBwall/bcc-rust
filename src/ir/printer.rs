@@ -24,11 +24,14 @@ use super::{
         InstData,
     },
     module::{
+        AggregateFlags,
         GlobalInit,
+        ParamAbi,
         Signature,
         Symbol,
     },
     types::Type,
+    verifier::Profile,
 };
 
 impl fmt::Display for Module<'_> {
@@ -37,6 +40,10 @@ impl fmt::Display for Module<'_> {
         if !self.triple().is_empty() || !self.data_layout().is_empty() {
             writeln!(f, "target triple = \"{}\"", self.triple())?;
             writeln!(f, "target datalayout = \"{}\"", self.data_layout())?;
+            separator = "\n";
+        }
+        if self.profile() == Profile::PostAbi {
+            writeln!(f, "abi lowered")?;
             separator = "\n";
         }
         if self.globals().next().is_some() {
@@ -311,6 +318,9 @@ fn display_signature(signature: Signature<'_>) -> impl fmt::Display + '_ {
         for (index, ty) in signature.params.iter().enumerate() {
             let separator = if index == 0 { "" } else { ", " };
             write!(f, "{separator}{ty}")?;
+            if let Some(abi) = signature.param_abi(index) {
+                write!(f, " {}", display_param_abi(abi))?;
+            }
         }
         if signature.variadic {
             f.write_str(if signature.params.is_empty() {
@@ -323,6 +333,40 @@ fn display_signature(signature: Signature<'_>) -> impl fmt::Display + '_ {
         signature
             .result
             .map_or(Ok(()), |result| write!(f, " -> {result}"))
+    })
+}
+
+/// An aggregate parameter's kind and facts, as
+/// `aggregate(size 12, align 4, [0: i32, 4: f32, 8: f32])`, `byval(size 24,
+/// align 8)` or `registers(i64, f64, align 8)`. Flags such as `unaligned`
+/// follow the alignment.
+fn display_param_abi(abi: ParamAbi<'_>) -> impl fmt::Display + '_ {
+    fmt::from_fn(move |f| {
+        write!(f, "{}(", abi.keyword())?;
+        let Some(layout) = abi.layout() else {
+            if let ParamAbi::Registers(registers) = abi {
+                for ty in registers.types() {
+                    write!(f, "{ty}, ")?;
+                }
+                write!(f, "align {}", registers.align.bytes())?;
+            }
+            return f.write_char(')');
+        };
+        write!(f, "size {}, align {}", layout.size, layout.align.bytes())?;
+        for (flag, name) in AggregateFlags::NAMES {
+            if layout.flags.contains(flag) {
+                write!(f, ", {name}")?;
+            }
+        }
+        if !layout.scalars.is_empty() {
+            f.write_str(", [")?;
+            for (index, scalar) in layout.scalars.iter().enumerate() {
+                let separator = if index == 0 { "" } else { ", " };
+                write!(f, "{separator}{}: {}", scalar.offset, scalar.ty)?;
+            }
+            f.write_char(']')?;
+        }
+        f.write_char(')')
     })
 }
 
