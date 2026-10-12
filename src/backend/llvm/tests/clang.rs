@@ -65,6 +65,73 @@ fn llvm_emits_every_golden_module() {
 }
 
 #[test]
+fn extended_poison_arguments_agree_with_the_interpreter() {
+    use crate::backend::interpreter::{
+        RuntimeValue,
+        Termination,
+        run_text,
+    };
+
+    for (ty, extension) in [("i8", "zeroext"), ("i16", "signext")] {
+        let program = format!(
+            "abi lowered
+function @ignore({ty} {extension}) -> i32 internal {{
+block0(v0: {ty}):
+    v1 = iconst.i32 0
+    return v1
+}}
+function @unused_result() -> {ty} {extension} internal {{
+block0:
+    v0 = poison.{ty}
+    return v0
+}}
+function @main() -> i32 external {{
+block0:
+    v0 = poison.{ty}
+    v1 = call @ignore(v0)
+    v2 = func_addr @ignore
+    v3 = call_indirect v2(v0) : ({ty} {extension}) -> i32
+    v4 = call @unused_result()
+    v5 = iadd.i32 v1, v3
+    return v5
+}}
+"
+        );
+        let arena = Bump::new();
+        let module = parse_module(&arena, &program).unwrap();
+        let printed = module.to_string();
+        let reparsed = parse_module(&arena, &printed).unwrap();
+        assert_eq!(reparsed.to_string(), printed);
+        let result = run_text(&printed, "main").result.unwrap();
+        assert_eq!(
+            result.termination,
+            Termination::Returned(Some(RuntimeValue::Int(0)))
+        );
+        let llvm = emit(&printed, Profile::PostAbi, Target::LinuxGnu);
+        assert!(!llvm.contains("noundef"), "{llvm}");
+        assert_runs("extended-poison", &printed, 0, "");
+        if let Some(target) = host()
+            && toolchain(target).is_some()
+        {
+            let directory = TempDir::new("llvm-poison-o0");
+            let executable = directory.join("poison.exe");
+            compile_module(
+                &reparsed,
+                &executable,
+                LlvmOptions {
+                    opt: Some(OptLevel::O0),
+                    disable_llvm_passes: false,
+                    target,
+                    kind: OutputKind::Executable,
+                },
+            )
+            .unwrap();
+            assert_eq!(run(&executable), (0, String::new()));
+        }
+    }
+}
+
+#[test]
 fn register_pair_return_areas_agree_with_the_interpreter() {
     let program = "abi lowered
 function @pair(ptr registers(i32, i64, align 4)) internal {

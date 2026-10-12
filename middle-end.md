@@ -241,6 +241,16 @@ function @f(i8, i16, i8 zeroext) -> i8 external                          ; Win64
 The values stay `i8` and `i16` in both profiles; only the LLVM attributes, and a
 native back end's extension instructions, depend on the decision.
 
+Extensions describe register bits only: they do not require an argument or
+result to be defined. Poison may reach an unused parameter or be returned to
+a caller that ignores it, with the same semantics in the interpreter and LLVM.
+The IR does not yet model `noundef`, and the LLVM back end emits no `noundef`
+parameter, argument or return attributes. Clang's scalar C signatures carry
+that additional promise, so optimizer comparisons do not yet have identical
+defined-value attributes. Explicit support is deferred until C lowering,
+aggregate ABI conversion, interpreter checks and optimizer rewrites can all
+preserve the promise; inferring it from `signext` or `zeroext` is unsound.
+
 Terminators end every block and nothing else does:
 
 ```text

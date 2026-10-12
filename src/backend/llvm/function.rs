@@ -217,6 +217,9 @@ pub(super) fn attributes(api: &Session<'_>, value: Val<'_>, signature: Signature
     }
 }
 
+/// Maps the register extension only; poison remains legal at calls and returns.
+/// C99: §6.2.5 paragraphs 2-6, p. 33; PDF p. 45 (integer types);
+/// the extension convention and poison semantics are additional IR contracts.
 fn extension(
     api: &Session<'_>,
     value: Val<'_>,
@@ -230,9 +233,6 @@ fn extension(
         | _ => return,
     };
     api.attribute(value, index, name, 0, None, call);
-    if index != 0 {
-        api.attribute(value, index, "noundef", 0, None, call);
-    }
 }
 
 struct BodyBuilder<'a, 'm, 'ir> {

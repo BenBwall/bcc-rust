@@ -609,10 +609,8 @@ block0:
 "#,
 };
 
-/// Narrow integers that ABI lowering extends: `noundef signext` and
-/// `noundef zeroext` on parameters and arguments, `signext` and `zeroext`
-/// before results, as Clang prints them, on definitions, declarations and
-/// both kinds of call.
+/// Narrow integer extensions on definitions, declarations, results and both
+/// kinds of call. Extensions do not promise defined values (`noundef`).
 const EXTENSIONS: Golden = Golden {
     name:     "extensions",
     input:    "\
@@ -645,9 +643,9 @@ source_filename = "bcc"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
 
-declare signext i8 @widen(i8 noundef signext, i16 noundef zeroext, i32)
+declare signext i8 @widen(i8 signext, i16 zeroext, i32)
 
-define internal zeroext i8 @truth(i8 noundef zeroext %v0) {
+define internal zeroext i8 @truth(i8 zeroext %v0) {
 block0:
   ret i8 %v0
 }
@@ -656,8 +654,8 @@ declare i16 @plain(i8, i16)
 
 define i32 @caller(i8 %v0) {
 block0:
-  %v3 = call signext i8 @widen(i8 noundef signext %v0, i16 noundef zeroext 300, i32 7)
-  %v5 = call zeroext i8 @truth(i8 noundef zeroext %v3)
+  %v3 = call signext i8 @widen(i8 signext %v0, i16 zeroext 300, i32 7)
+  %v5 = call zeroext i8 @truth(i8 zeroext %v3)
   %v6 = call i16 @plain(i8 %v5, i16 300)
   %v7 = sext i16 %v6 to i32
   ret i32 %v7
