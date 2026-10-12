@@ -1,5 +1,6 @@
-//! Analyses over a draft, computed on demand and never kept: no pass keeps
-//! one across an edit, so none can go stale.
+//! Analyses over a draft, computed on demand. A pass may reuse CFG data
+//! while live blocks and edge targets stay unchanged; graph edits invalidate
+//! it.
 
 use super::Draft;
 use crate::{

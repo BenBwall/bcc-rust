@@ -7,18 +7,29 @@ use super::{
     OptimizationReport,
     Term,
 };
-use crate::ir::{
-    Block,
-    Entity,
-    InstData,
-    InstFlags,
-    Opcode,
+use crate::{
+    ir::{
+        Block,
+        ControlFlowGraph,
+        Entity,
+        InstData,
+        InstFlags,
+        Opcode,
+    },
+    util::bump::Bump,
 };
 
 /// Forms one select per differing argument of a diamond or triangle.
 /// Partial bisect runs keep the branch and use each granted select on both
 /// outgoing paths. Moving the arms is part of the first select rewrite.
 pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> bool {
+    run_in(draft, report, &mut Bump::new())
+}
+
+/// Cached predecessors live separately from edits and are reclaimed on a
+/// graph change. C99: §6.8.4.1 paragraph 2, pp. 133-134; PDF pp. 145-146.
+fn run_in(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport, analysis: &mut Bump) -> bool {
+    let mut cached = None;
     let mut changed = false;
     for index in 0..draft.blocks.len() {
         let block = Block::new(index);
@@ -34,12 +45,10 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
             continue;
         };
         let (cond, then, otherwise) = (draft.resolve(*cond), then.clone(), otherwise.clone());
-        let predecessors = draft.predecessors();
         let candidate = |edge: &Edge<'_>| match &draft.block(edge.target).term {
             | Term::Jump(next)
                 if edge.target != block
                     && edge.target != Draft::entry()
-                    && predecessors.of(edge.target) == [block]
                     && cheap_arm(draft, edge.target) =>
                 Some(next.target),
             | _ => None,
@@ -58,8 +67,22 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
             continue;
         }
         let arms = [then.target, otherwise.target];
+        let predecessors = cached.get_or_insert_with(|| {
+            ControlFlowGraph::from_successors(draft.blocks.len(), analysis, |block, add| {
+                let data = draft.block(block);
+                if data.alive {
+                    data.term.edges().for_each(|edge| add(edge.target));
+                }
+            })
+        });
+        if arms
+            .iter()
+            .any(|&arm| arm != join && predecessors.predecessors(arm) != [block])
+        {
+            continue;
+        }
         if predecessors
-            .of(join)
+            .predecessors(join)
             .iter()
             .any(|&pred| pred != block && !arms.contains(&pred))
         {
@@ -157,6 +180,8 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
                     draft.block_mut(arm).alive = false;
                 }
             }
+            cached = None;
+            analysis.reset();
         } else {
             // Keep unconverted arguments path-dependent at the bisect limit.
             for (edge, outgoing) in [(&then, a), (&otherwise, b)] {
@@ -242,5 +267,83 @@ fn outgoing<'s>(draft: &Draft<'_, 's>, edge: &Edge<'s>, join: Block) -> Edge<'s>
             unreachable!()
         };
         next.clone()
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "This regression builds test IR with owned strings."
+)]
+mod tests {
+    use std::time::Instant;
+
+    use super::*;
+    use crate::{
+        ir::{
+            Profile,
+            parse_module,
+            verify_module,
+        },
+        util::bump::Bump,
+    };
+    #[test]
+    fn ineligible_call_arms_use_bounded_time_and_scratch() {
+        use std::fmt::Write as _;
+        // Fail at the small size before a quadratic implementation can retain
+        // gigabytes at the full review workload.
+        for (count, calls) in [(1000, true), (10_000, true), (1000, false), (10_000, false)] {
+            let mut text = "function @sink() external\nfunction @f(i1) external {\nblock0(v0: \
+                            i1):\n"
+                .to_owned();
+            for index in 0..count {
+                let arm = 2 * index + 1;
+                let join = arm + 1;
+                writeln!(
+                    text,
+                    " brif v0, block{arm}, block{join}\nblock{arm}:\n call @sink()\n jump \
+                     block{join}\nblock{join}:"
+                )
+                .unwrap();
+            }
+            text.push_str(" return\n}\n");
+            if !calls {
+                text = text.replace(" call @sink()\n", "");
+            }
+            let arena = Bump::new();
+            let module = parse_module(&arena, &text).unwrap();
+            assert!(verify_module(&module, Profile::PreAbi, &Bump::new()).is_empty());
+            let body = module
+                .functions()
+                .find(|(_, f)| f.name == "f")
+                .unwrap()
+                .1
+                .body
+                .as_ref()
+                .unwrap();
+            let scratch = Bump::new();
+            let mut draft = Draft::lift(body, &scratch);
+            let before = scratch.used();
+            let start = Instant::now();
+            let mut report = OptimizationReport::new(None);
+            let mut analysis = Bump::new();
+            assert!(!run_in(&mut draft, &mut report, &mut analysis));
+            assert!(analysis.high_water() < count * 1024);
+            assert!(
+                scratch.high_water() - before < count * 1024,
+                "{count} call triangles retained {} analysis bytes",
+                scratch.high_water() - before
+            );
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(2),
+                "{count} call triangles took {:?}",
+                start.elapsed()
+            );
+            eprintln!(
+                "{count} triangles (calls={calls}): {} analysis bytes, {:?}",
+                analysis.high_water() + scratch.high_water() - before,
+                start.elapsed()
+            );
+        }
     }
 }
