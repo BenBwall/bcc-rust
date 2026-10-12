@@ -337,7 +337,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else if let Some(info) = self.math128_builtin(e, function_expression, &arguments)
                 {
                     info
-                } else if let Some(info) = self.constant_p(e, function_expression, arguments) {
+                } else if let Some(info) =
+                    self.common_builtin_call(e, function_expression, arguments)
+                {
                     info
                 } else {
                     self.type_call(e, self.expression_info(function_expression), arguments)
@@ -372,6 +374,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 info.category = self.object_category(info.ty);
                 info.static_address = self.scope == 0;
+            },
+            | E::StatementExpression(statement) => {
+                use crate::translation_phases::parsing::syntax::{
+                    BlockItem,
+                    ExpressionSlot,
+                    StatementType,
+                };
+                if let StatementType::Compound { items } = statement.kind
+                    && let Some(BlockItem::Statement(last)) = items.last()
+                    && let StatementType::Expression(ExpressionSlot::Parsed(tail)) = last.kind
+                {
+                    // GNU extension: GCC "Statement Exprs" preserves the
+                    // final expression's C value category. Executing the block
+                    // prevents folding even when its tail is constant.
+                    // <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+                    info = ExpressionInfo {
+                        expression: e,
+                        selected_expression: Some(tail),
+                        integer: None,
+                        floating: None,
+                        ice: false,
+                        constant: ConstantClass::None,
+                        ..self.expression_info(tail)
+                    };
+                } else {
+                    info = Self::expression_result(e, self.types.scalar(Scalar::Void));
+                }
             },
             // Unmodeled extensions retain unknown results and suppress constraints.
             | _ => {},

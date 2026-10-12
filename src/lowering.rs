@@ -58,7 +58,10 @@ mod module_items;
 
 // Function bodies
 mod bit_fields;
+mod builtin_effects;
+mod builtins;
 mod expressions;
+mod gnu;
 mod initializers;
 mod places;
 mod statements;
@@ -292,9 +295,18 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.evaluate_raw(expression)
             },
             | Task::EvaluateRaw(expression) => self.evaluate_raw(expression),
+            | Task::BuiltinEffects(expression, read) => self.builtin_effects(expression, read),
             | Task::SnapshotArgument(expression) => self.snapshot_argument(expression),
             | Task::Convert { expression, skip } => self.convert_recorded(expression, skip),
             | Task::Finish(expression) => self.finish(expression),
+            | Task::FinishBuiltin(expression, builtin) => self.finish_builtin(expression, builtin),
+            | Task::FinishKeyword(expression, builtin) => self.finish_keyword(expression, builtin),
+            | Task::OmittedConditional {
+                expression,
+                conditional,
+                otherwise,
+                merge,
+            } => self.omitted_conditional(expression, conditional, otherwise, merge),
             | Task::ReadForUpdate(expression) => {
                 let place = *self.operands.last().expect("the place is on the stack");
                 self.operands.push(place);

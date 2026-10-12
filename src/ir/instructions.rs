@@ -30,15 +30,16 @@ use super::{
 /// function body, not in this record.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum InstData {
-    /// Integer and floating arithmetic, `ptr_add` (type `ptr`) and `va_copy`
-    /// (type `ptr`, no result).
+    /// Integer and floating arithmetic, unsigned overflow predicates (result
+    /// `i1`), `ptr_add` (type `ptr`) and `va_copy` (type `ptr`, no result).
     Binary {
         opcode: Opcode,
         ty:     Type,
         flags:  InstFlags,
         args:   [Value; 2],
     },
-    /// `fneg`, `freeze`, the conversions (type = result type), `va_arg`, and
+    /// Bit counts/swaps, `fneg`, `freeze`, conversions (type = result type),
+    /// `dyn_alloca` (`i64` byte count, result `ptr`), `va_arg`, and
     /// `va_start` and `va_end` (type `ptr`, no result).
     Unary {
         opcode: Opcode,
@@ -75,7 +76,7 @@ pub(crate) enum InstData {
         ty:       Type,
         constant: ConstId,
     },
-    /// `poison` and `null` (type `ptr`).
+    /// `poison`, `null` (type `ptr`), and `trap` (no result).
     Nullary {
         opcode: Opcode,
         ty:     Type,
@@ -259,6 +260,16 @@ named! {
         Fdiv = "fdiv",
         Frem = "frem",
         Fneg = "fneg",
+        Clz = "clz",
+        Ctz = "ctz",
+        ClzDefined = "clz_defined",
+        CtzDefined = "ctz_defined",
+        Popcount = "popcount",
+        Bswap = "bswap",
+        UaddOverflow = "uadd_overflow",
+        UmulOverflow = "umul_overflow",
+        DynAlloca = "dyn_alloca",
+        Trap = "trap",
         Icmp = "icmp",
         Fcmp = "fcmp",
         Select = "select",
@@ -329,6 +340,22 @@ impl Opcode {
         )
     }
 
+    pub(crate) const fn is_bit_unary(self) -> bool {
+        matches!(
+            self,
+            Self::Clz
+                | Self::Ctz
+                | Self::ClzDefined
+                | Self::CtzDefined
+                | Self::Popcount
+                | Self::Bswap
+        )
+    }
+
+    pub(crate) const fn is_overflow(self) -> bool {
+        matches!(self, Self::UaddOverflow | Self::UmulOverflow)
+    }
+
     /// `fadd` through `frem`: floating operands and result of one type.
     pub(crate) const fn is_float_binary(self) -> bool {
         matches!(
@@ -379,6 +406,7 @@ impl Opcode {
                 | Self::Switch
                 | Self::Return
                 | Self::Unreachable
+                | Self::Trap
         )
     }
 

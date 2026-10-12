@@ -80,9 +80,14 @@ mod inspection;
 use std::cell::Cell;
 
 pub(crate) use builtins::{
+    BitOperation,
+    CommonBuiltin,
+    OverflowOperation,
+    common_builtin,
     implemented_builtin,
     library_builtin_name,
     named_builtin,
+    overflow_type_operand_is_pure,
 };
 use collection::Collection;
 #[expect(

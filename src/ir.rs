@@ -49,6 +49,7 @@
 //! clause.
 
 // Representation
+mod bits;
 mod entities;
 mod function;
 mod instructions;
@@ -67,6 +68,10 @@ mod cfg;
 mod dominators;
 mod verifier;
 
+pub(crate) use bits::{
+    bit_unary,
+    unsigned_overflow,
+};
 pub(crate) use builder::FunctionBuilder;
 pub(crate) use cfg::ControlFlowGraph;
 pub(crate) use dominators::DominatorTree;

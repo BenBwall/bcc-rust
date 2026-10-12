@@ -49,6 +49,12 @@ impl Machine<'_, '_, '_> {
             } => {
                 let (a, b) = (self.value(a), self.value(b));
                 match opcode {
+                    | _ if opcode.is_overflow() => match (a, b) {
+                        | (RuntimeValue::Int(a), RuntimeValue::Int(b)) => RuntimeValue::Int(
+                            u128::from(crate::ir::unsigned_overflow(opcode, ty, a, b)),
+                        ),
+                        | _ => RuntimeValue::Poison,
+                    },
                     | Opcode::PtrAdd =>
                         self.memory
                             .ptr_add(a, b, flags.contains(InstFlags::INBOUNDS)),
@@ -63,6 +69,23 @@ impl Machine<'_, '_, '_> {
             | InstData::Unary { opcode, ty, arg } => {
                 let value = self.value(arg);
                 match opcode {
+                    | _ if opcode.is_bit_unary() => match value {
+                        | RuntimeValue::Int(bits) => crate::ir::bit_unary(opcode, ty, bits)
+                            .map_or(RuntimeValue::Poison, |bits| RuntimeValue::int(ty, bits)),
+                        | _ => RuntimeValue::Poison,
+                    },
+                    | Opcode::DynAlloca => {
+                        let RuntimeValue::Int(size) = value else {
+                            return Err(Fault::Ub(UbKind::PoisonAddress));
+                        };
+                        let pointer = self.memory.allocate(
+                            super::memory::ObjectKind::Stack,
+                            truncate_u64(size),
+                            crate::ir::Align::from_bytes(16).expect("default stack alignment"),
+                        )?;
+                        self.slots.push(pointer);
+                        RuntimeValue::Ptr(pointer)
+                    },
                     | Opcode::Fneg => float_negate(ty, value)?,
                     | Opcode::Freeze if value.is_poison() => RuntimeValue::zero(ty),
                     | Opcode::Freeze => value,
@@ -114,6 +137,10 @@ impl Machine<'_, '_, '_> {
                     | _ => RuntimeValue::int(ty, bits),
                 }
             },
+            | InstData::Nullary {
+                opcode: Opcode::Trap,
+                ..
+            } => return Ok(Some(Termination::Aborted)),
             | InstData::Nullary { opcode, .. } =>
                 if opcode == Opcode::Null {
                     RuntimeValue::NULL

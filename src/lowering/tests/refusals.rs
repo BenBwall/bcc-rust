@@ -8,14 +8,14 @@ use crate::diagnostics::ToDiagnostic;
 fn asm_collision_keeps_checking_later_function_bodies() {
     let errors = lower(
         "int a __asm__(\"same\")=1; int b __asm__(\"same\")=2;\nint f(int n){{static int same; \
-         int *p=&same;}int a[n]; return 0;}\nint g(void){return ({ 1; });}",
+         int *p=&same;}int a[n]; return 0;}\nint g(void){__asm__(\"nop\");return 1;}",
     )
     .unwrap_err();
     assert_eq!(errors.len(), 3, "{errors:?}");
     for construct in [
         "assembler labels",
         "variable length arrays",
-        "statement expressions",
+        "inline assembly",
     ] {
         assert!(
             errors.iter().any(|error| error.ends_with(construct)),
@@ -61,16 +61,11 @@ fn unsupported_constructs_name_themselves() {
             "struct s { int a; }; int f(int n, ...); int g(struct s v) { return f(1, v); }",
             "structures and unions passed as variable arguments",
         ),
-        ("int f(void) { return ({ 1; }); }", "statement expressions"),
         ("void f(void) { __asm__(\"nop\"); }", "inline assembly"),
         ("_Atomic int a; int f(void) { return a; }", "atomic types"),
         (
             "int f(void) { void *p = &&l; l: return p != 0; }",
             "label addresses",
-        ),
-        (
-            "int f(int x) { return x ?: 1; }",
-            "conditionals with an omitted operand",
         ),
         (
             "_Complex double z; int f(void) { return __real__ z; }",

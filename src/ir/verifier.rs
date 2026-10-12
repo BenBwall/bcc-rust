@@ -478,7 +478,7 @@ impl Verifier<'_, '_, '_, '_> {
         };
         match data {
             | InstData::Binary { ty, args, .. } => {
-                let operands = if opcode.is_int_binary() {
+                let operands = if opcode.is_int_binary() || opcode.is_overflow() {
                     checker.require(ty.is_int(), ty);
                     [ty, ty]
                 } else if opcode.is_float_binary() {
@@ -494,6 +494,19 @@ impl Verifier<'_, '_, '_, '_> {
                 checker.operands(&args, &operands);
             },
             | InstData::Unary { ty, arg, .. } => match opcode {
+                | _ if opcode.is_bit_unary() => {
+                    checker.require(
+                        ty.is_int()
+                            && (opcode != Opcode::Bswap
+                                || matches!(ty, Type::I16 | Type::I32 | Type::I64 | Type::I128)),
+                        ty,
+                    );
+                    checker.operand(0, arg, ty);
+                },
+                | Opcode::DynAlloca => {
+                    checker.require(ty == Type::I64, ty);
+                    checker.operand(0, arg, Type::I64);
+                },
                 | Opcode::Fneg => {
                     checker.require(ty.is_float(), ty);
                     checker.operand(0, arg, ty);
@@ -546,7 +559,9 @@ impl Verifier<'_, '_, '_, '_> {
                 }
             },
             | InstData::Nullary { ty, .. } => checker.require(
-                opcode == Opcode::Poison || (opcode == Opcode::Null && ty == Type::Ptr),
+                opcode == Opcode::Trap
+                    || opcode == Opcode::Poison
+                    || (opcode == Opcode::Null && ty == Type::Ptr),
                 ty,
             ),
             | InstData::StackAddr { slot } => {

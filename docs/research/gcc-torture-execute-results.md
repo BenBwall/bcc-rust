@@ -839,3 +839,303 @@ hash comparison and option/command checks were rerun against the final
 manifest. This remains an exploratory survey, not a passing DejaGnu profile.
 The whole-file commit plan is `target/commit-plan.md`. Nothing was staged
 or committed, and no Git metadata was modified.
+
+## 2026-10-12: common GCC builtins and inexpensive GNU lowering
+
+This section records a fresh before/after survey at base commit
+`0a75654397d5c65825a5bdc36ec12a77727ee350` on `claude/torture-builtins`.
+Both runs read the existing GCC 15.2.0 corpus without editing it, select the same
+1,677 top-level execute sources, and use eight jobs, a ten-second deadline, GNU17,
+and `x86_64-w64-windows-gnu`. DejaGnu directives remain recorded rather than applied.
+The shared `target/llvm` and `target/llvm-libs` junctions were preserved.
+
+```powershell
+cargo build --release
+python scripts/run_gcc_torture_execute.py --source C:\Users\benbw\Documents\GitRepo\bcc-rust\target\compiler-corpus\gcc-15.2.0 --output target/compiler-corpus/execute-builtins-before --jobs 8 --timeout 10
+# After the implementation and another release build:
+python scripts/run_gcc_torture_execute.py --source C:\Users\benbw\Documents\GitRepo\bcc-rust\target\compiler-corpus\gcc-15.2.0 --output target/compiler-corpus/execute-builtins-after --jobs 8 --timeout 10
+```
+
+Manifests, compiler hashes, per-source results, command lines, diagnostics, and
+execution logs are in those two output directories. The final compiler SHA-512 is
+`e49974c66bf23a180236562cc50c1439234e885363453d1e554b4f5ed64d79783eea3b18b6b105e79e7babeb3ee2ccaa11332268404f727eb75b358d0943aba1`.
+Intermediate surveys are retained separately at `execute-builtins-after-initial`
+and `execute-builtins-after-pre-final`; the tables below use the final run only.
+
+### Counts per arm
+
+Each cell is **before → after**. I0 is the interpreter without bcc optimization;
+I1 adds bcc optimization; A0 uses LLVM O0; A1 uses bcc optimization and LLVM O2.
+
+| Outcome | I0 | I1 | A0 | A1 |
+| --- | ---: | ---: | ---: | ---: |
+| pass | 1062 → 1137 | 1066 → 1141 | 1199 → 1279 | 1189 → 1269 |
+| frontend-error | 139 → 138 | 139 → 138 | 139 → 138 | 139 → 138 |
+| lowering-unsupported | 307 → 224 | 307 → 224 | 307 → 224 | 307 → 224 |
+| abi-unsupported | 0 → 4 | 0 → 4 | 0 → 4 | 0 → 4 |
+| interpreter-trap | 154 → 158 | 149 → 153 | 0 → 0 | 0 → 0 |
+| wrong-result | 15 → 16 | 16 → 17 | 17 → 17 | 27 → 27 |
+| link-error | 0 → 0 | 0 → 0 | 15 → 15 | 15 → 15 |
+| timeout | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 |
+| compiler-crash | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 |
+
+All-four-arm passes rise from 1061 to 1136. There are
+80 newly executable sources, of which 75 pass all four arms. The combined
+frontend/lowering refusal count falls from 446 to 362 per arm; four sources now
+reach the existing extended-floating-point ABI refusal. Arm disagreements rise
+from 155 to 160 as additional sources reach execution. No compiler crash occurs.
+The final run completes in 331.0 seconds with no deadlines or compiler crashes.
+The intermediate pre-final survey had two A0 compile deadlines (`pr56899.c` and
+`pr57124.c`); both pass in this full final run and in the earlier isolated recheck
+at `target/compiler-corpus/execute-builtins-timeout-recheck`.
+
+
+### Features and sources unblocked
+
+Counts below are distinct newly executable sources per family. Families overlap:
+`pr19449.c` needs both the hint/query path and `__builtin_choose_expr`. A builtin
+name that appears zero times in the first-refusal inventory still has focused
+tests and support; first refusals do not enumerate latent dependencies.
+
+| Added support | Newly executable sources |
+| --- | ---: |
+| Existing IR varargs operations connected to `__builtin_va_start/arg/copy` | 28 |
+| Generic and typed add/sub/mul overflow, and `*_overflow_p` | 14 |
+| Expect/probability, assume-aligned, unreachable, trap, prefetch, constant/object-size queries | 14 |
+| clz/ctz/popcount/parity/ffs/clrsb and l/ll variants; bswap16/32/64 | 9 |
+| Statement expressions, including lvalue results | 7 |
+| Dynamic `__builtin_alloca` and ordinary GNU `alloca` | 5 |
+| `__builtin_choose_expr` lvalue-preserving lowering | 1 |
+| Existing constant `__builtin_offsetof` semantic result accepted by lowering | 1 |
+| Case ranges lowered to bounded comparisons, without enumerating values | 1 |
+| Omitted-middle conditional with one evaluation of its first operand | 1 |
+
+The alloca implementation adds `dyn_alloca` to IR with function-lifetime storage,
+16-byte alignment, verifier/parser/printer support, interpreter frame cleanup,
+and LLVM dynamic array allocation. Functions containing it are excluded from
+inlining because extending the allocation lifetime would change the contract.
+Bit operations use `llvm.ctlz`, `llvm.cttz`, `llvm.ctpop`, and `llvm.bswap`;
+zero clz/ctz is poison. Overflow uses exact sign/magnitude arithmetic through
+128 bits plus carry, and LLVM unsigned add/mul overflow intrinsics. Typed result
+pointers retain the destination type; predicates retain bit-field precision and
+evaluate third-operand effects while ignoring its value. Prefetch evaluates its
+arguments but emits no prefetch operation. Constant-p returns one only for an
+integer constant expression. Both object-size queries conservatively return the
+documented unknown answer (all ones for modes 0/1, zero for modes 2/3), without
+evaluating the queried pointer. GNU builtins use the shared extension-policy gate.
+
+Contracts follow GCC's [Other Builtins](https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html),
+[Bit Operation Builtins](https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html),
+[Byte-Swapping Builtins](https://gcc.gnu.org/onlinedocs/gcc/Byte-Swapping-Builtins.html),
+[Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html),
+[Object Size Checking](https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html),
+and [Stack Allocation](https://gcc.gnu.org/onlinedocs/gcc/Stack-Allocation.html).
+`middle-end.md`, `semantic-analysis.md`, and `language-standards.md` record the
+implementation boundaries. No optimizer or ABI correctness repairs outside this
+feature support are included.
+
+The statement-expression sources are `20000703-1.c`, `20000917-1.c`,
+`20001203-2.c`, `20020206-1.c`, `20020320-1.c`, `950906-1.c`, and `compndlit-1.c`.
+The ordinary-alloca frontend recovery is `20020314-1.c`; the constant offsetof
+recovery is `pr30778.c`; case ranges unblock `pr34154.c`; omitted-middle
+conditionals unblock `pr68249.c`. Remaining family source lists are recorded in
+the per-builtin table below.
+
+### Exact first-refusal builtin inventory
+
+The baseline contains 111 sources with an unanalyzed semantic type and 54 with
+“this builtin”; these are diagnostic construct counts, not 165 independent
+builtin names. The following inventory extracts only builtin tokens under the
+primary diagnostic underline, avoiding incidental names elsewhere in a function
+or macro expansion. Counts are distinct sources and can overlap. “Unblocked”
+means that source subsequently reaches interpretation rather than a refusal.
+Already recognized aliases such as memcpy-family/library names can appear here
+because a surrounding type is opaque; their appearance is not evidence that the
+library call itself was newly implemented. Non-builtin opaque-type excerpts are
+listed separately. The raw JSON inventories are retained alongside results.
+
+| Name at baseline refusal | Before | Unblocked | After first refusal | Baseline sources |
+| --- | ---: | ---: | ---: | --- |
+| `__builtin_va_start` | 50 | 28 | 0 | `20000519-1.c`, `20041113-1.c`, `20041214-1.c`, `20071213-1.c`, `920625-1.c`, `920908-1.c`, `931004-10.c`, `931004-12.c`, `931004-14.c`, `931004-2.c`, `931004-4.c`, `931004-6.c`, `931004-8.c`, `980205.c`, `980716-1.c`, `991216-2.c`, `multi-ix.c`, `pr44575.c`, `pr44942.c`, `pr56205.c`, `pr64979.c`, `pr92904.c`, `stdarg-1.c`, `stdarg-2.c`, `stdarg-3.c`, `stdarg-4.c`, `strct-stdarg-1.c`, `strct-varg-1.c`, `va-arg-1.c`, `va-arg-10.c`, `va-arg-11.c`, `va-arg-12.c`, `va-arg-13.c`, `va-arg-14.c`, `va-arg-15.c`, `va-arg-16.c`, `va-arg-17.c`, `va-arg-18.c`, `va-arg-19.c`, `va-arg-2.c`, `va-arg-20.c`, `va-arg-22.c`, `va-arg-23.c`, `va-arg-26.c`, `va-arg-4.c`, `va-arg-5.c`, `va-arg-6.c`, `va-arg-9.c`, `va-arg-pack-1.c`, `va-arg-trap-1.c` |
+| `__builtin_alloca` | 9 | 4 | 0 | `20021113-1.c`, `20070824-1.c`, `alloca-1.c`, `built-in-setjmp.c`, `frame-address.c`, `pr36321.c`, `pr64242.c`, `pr84521.c`, `pr86528.c` |
+| `__builtin_mul_overflow` | 9 | 9 | 0 | `pr108789.c`, `pr64006.c`, `pr68381.c`, `pr71554.c`, `pr84169.c`, `pr89434.c`, `pr91450-1.c`, `pr91450-2.c`, `pr93213.c` |
+| `__builtin_va_arg` | 8 | 6 | 0 | `20000519-1.c`, `20071213-1.c`, `pr64979.c`, `stdarg-1.c`, `stdarg-2.c`, `va-arg-13.c`, `va-arg-20.c`, `va-arg-9.c` |
+| `__builtin_prefetch` | 6 | 5 | 0 | `builtin-prefetch-1.c`, `builtin-prefetch-2.c`, `builtin-prefetch-3.c`, `builtin-prefetch-4.c`, `builtin-prefetch-5.c`, `builtin-prefetch-6.c` |
+| `__builtin_add_overflow` | 5 | 5 | 0 | `pr108789.c`, `pr85095.c`, `pr90311.c`, `pr91635.c`, `pr93494.c` |
+| `__builtin_expect` | 5 | 3 | 0 | `20020418-1.c`, `pr115277.c`, `pr43385.c`, `pr85156.c`, `pr91597.c` |
+| `__builtin_ffs` | 4 | 4 | 0 | `ffs-1.c`, `ffs-2.c`, `pr61725.c`, `pr97325.c` |
+| `__builtin_longjmp` | 4 | 0 | 4 | `built-in-setjmp.c`, `pr60003.c`, `pr64242.c`, `pr84521.c` |
+| `__builtin_unreachable` | 4 | 4 | 0 | `20230509-1.c`, `20241029-1.c`, `pr81281.c`, `pr97888-1.c` |
+| `__builtin_return_address` | 3 | 0 | 3 | `20010122-1.c`, `20030323-1.c`, `20030811-1.c` |
+| `__builtin_bswap32` | 2 | 2 | 0 | `bswap-3.c`, `pr90025.c` |
+| `__builtin_offsetof` | 2 | 1 | 0 | `pr30778.c`, `pr49390.c` |
+| `__builtin_setjmp` | 2 | 0 | 4 | `pr60003.c`, `pr84521.c` |
+| `__builtin_signbit` | 2 | 0 | 2 | `20080502-1.c`, `pr35456.c` |
+| `__builtin_apply` | 1 | 0 | 1 | `pr47237.c` |
+| `__builtin_apply_args` | 1 | 0 | 1 | `pr47237.c` |
+| `__builtin_bswap16` | 1 | 1 | 0 | `pr97386-1.c` |
+| `__builtin_bswap64` | 1 | 1 | 0 | `bswap-1.c` |
+| `__builtin_choose_expr` | 1 | 1 | 0 | `pr19449.c` |
+| `__builtin_clz` | 1 | 1 | 0 | `pr37780.c` |
+| `__builtin_constant_p` | 1 | 1 | 0 | `pr19449.c` |
+| `__builtin_copysign` | 1 | 0 | 1 | `pr44683.c` |
+| `__builtin_ctz` | 1 | 1 | 0 | `pr37780.c` |
+| `__builtin_frame_address` | 1 | 0 | 1 | `frame-address.c` |
+| `__builtin_isinf` | 1 | 0 | 1 | `pr39228.c` |
+| `__builtin_isinff` | 1 | 0 | 1 | `pr39228.c` |
+| `__builtin_isinfl` | 1 | 0 | 1 | `pr39228.c` |
+| `__builtin_memcmp` | 1 | 0 | 1 | `pr77718.c` |
+| `__builtin_memset` | 1 | 0 | 1 | `pr77718.c` |
+| `__builtin_mul_overflow_p` | 1 | 1 | 0 | `pr105984.c` |
+| `__builtin_shuffle` | 1 | 0 | 1 | `pr94591.c` |
+| `__builtin_snprintf` | 1 | 0 | 1 | `pr78622.c` |
+| `__builtin_strcmp` | 1 | 0 | 1 | `921007-1.c` |
+| `__builtin_trap` | 1 | 1 | 0 | `pr115033.c` |
+| `__builtin_va_arg_pack` | 1 | 0 | 1 | `va-arg-pack-1.c` |
+| `__builtin_va_copy` | 1 | 1 | 0 | `va-arg-10.c` |
+
+<details>
+<summary>Exact non-builtin opaque-type baseline excerpts</summary>
+
+- non-builtin opaque type (61): `20000917-1.c`, `20001203-2.c`, `20010518-2.c`, `20020108-1.c`, `20020206-1.c`, `20020227-1.c`, `20020320-1.c`, `20030224-2.c`, `20040625-1.c`, `20040709-2.c`, `20040709-3.c`, `20050107-1.c`, `20050119-1.c`, `20050119-2.c`, `20051113-1.c`, `20100430-1.c`, `20111212-1.c`, `20120105-1.c`, `20170401-1.c`, `20190820-1.c`, `960117-1.c`, `960416-1.c`, `990208-1.c`, `bf-pack-1.c`, `cbrt.c`, `memclr.c`, `memcpy-a1.c`, `memcpy-a2.c`, `memcpy-a4.c`, `memcpy-a8.c`, `misalign.c`, `nest-align-1.c`, `packed-1.c`, `packed-2.c`, `packed-aligned.c`, `pr108064.c`, `pr114552.c`, `pr22141-2.c`, `pr23135.c`, `pr23467.c`, `pr29006.c`, `pr45070.c`, `pr52979-1.c`, `pr52979-2.c`, `pr57344-1.c`, `pr57344-2.c`, `pr57344-3.c`, `pr57344-4.c`, `pr65369.c`, `pr68532.c`, `pr70602.c`, `pr71083.c`, `pr77718.c`, `simd-1.c`, `strct-pack-1.c`, `strct-pack-2.c`, `strct-pack-3.c`, `strct-pack-4.c`, `struct-cpy-1.c`, `struct-ret-2.c`, `zerolen-2.c`
+
+</details>
+
+### Remaining unsupported constructs
+
+These counts describe the final interpreter diagnostic and can overlap within a
+source. Newly revealed VLA/local-label refusals explain increases in those rows.
+The 138 frontend-error sources are predominantly unavailable hosted headers;
+they are retained as frontend errors, not recategorized as builtin coverage.
+
+| Construct | Before | After | Remaining sources |
+| --- | ---: | ---: | --- |
+| type not analyzed by semantic analysis | 111 | 66 | `20010122-1.c`, `20010518-2.c`, `20020108-1.c`, `20020227-1.c`, `20030224-2.c`, `20030323-1.c`, `20030811-1.c`, `20040625-1.c`, `20040709-2.c`, `20040709-3.c`, `20050107-1.c`, `20050119-1.c`, `20050119-2.c`, `20051113-1.c`, `20080502-1.c`, `20100430-1.c`, `20111212-1.c`, `20120105-1.c`, `20170401-1.c`, `20190820-1.c`, `960117-1.c`, `960416-1.c`, `990208-1.c`, `alloca-1.c`, `bf-pack-1.c`, `built-in-setjmp.c`, `cbrt.c`, `frame-address.c`, `memclr.c`, `memcpy-a1.c`, `memcpy-a2.c`, `memcpy-a4.c`, `memcpy-a8.c`, `misalign.c`, `packed-1.c`, `packed-2.c`, `packed-aligned.c`, `pr108064.c`, `pr22141-2.c`, `pr23135.c`, `pr23467.c`, `pr29006.c`, `pr35456.c`, `pr39228.c`, `pr44683.c`, `pr45070.c`, `pr47237.c`, `pr52979-1.c`, `pr52979-2.c`, `pr60003.c`, `pr64242.c`, `pr65369.c`, `pr68532.c`, `pr70602.c`, `pr71083.c`, `pr77718.c`, `pr78622.c`, `pr84521.c`, `simd-1.c`, `strct-pack-1.c`, `strct-pack-2.c`, `strct-pack-3.c`, `strct-pack-4.c`, `struct-cpy-1.c`, `struct-ret-2.c`, `zerolen-2.c` |
+| inline assembly | 61 | 61 | `20001009-2.c`, `20030222-1.c`, `20061031-1.c`, `20071211-1.c`, `20071220-1.c`, `20071220-2.c`, `20080122-1.c`, `960312-1.c`, `990130-1.c`, `990413-2.c`, `bitfld-5.c`, `pr103376.c`, `pr108498-1.c`, `pr110252-2.c`, `pr114552.c`, `pr38533.c`, `pr40022.c`, `pr40657.c`, `pr41239.c`, `pr43385.c`, `pr43560.c`, `pr44852.c`, `pr45695.c`, `pr47925.c`, `pr49218.c`, `pr49279.c`, `pr49390.c`, `pr51581-1.c`, `pr51581-2.c`, `pr51877.c`, `pr51933.c`, `pr52286.c`, `pr56205.c`, `pr56866.c`, `pr57344-1.c`, `pr57344-2.c`, `pr57344-3.c`, `pr57344-4.c`, `pr58277-1.c`, `pr58419.c`, `pr63641.c`, `pr65053-1.c`, `pr65053-2.c`, `pr65648.c`, `pr65956.c`, `pr68328.c`, `pr69691.c`, `pr78438.c`, `pr78726.c`, `pr79354.c`, `pr79737-2.c`, `pr80421.c`, `pr81588.c`, `pr82954.c`, `pr84478.c`, `pr84524.c`, `pr85156.c`, `pr85756.c`, `pr88904.c`, `pr93945.c`, `pr94130.c` |
+| nested functions | 29 | 29 | `20000822-1.c`, `20010209-1.c`, `20010605-1.c`, `20030501-1.c`, `20040520-1.c`, `20061220-1.c`, `20090219-1.c`, `920415-1.c`, `920428-2.c`, `920501-7.c`, `920612-2.c`, `920721-4.c`, `921017-1.c`, `921215-1.c`, `931002-1.c`, `comp-goto-2.c`, `nest-align-1.c`, `nest-stdar-1.c`, `nestfunc-1.c`, `nestfunc-2.c`, `nestfunc-3.c`, `nestfunc-5.c`, `nestfunc-6.c`, `nestfunc-7.c`, `pr103405.c`, `pr22061-3.c`, `pr22061-4.c`, `pr24135.c`, `pr71494.c` |
+| vector types | 20 | 20 | `20050316-1.c`, `20050316-2.c`, `20050316-3.c`, `20050604-1.c`, `20050607-1.c`, `20060420-1.c`, `pr105613.c`, `pr109040.c`, `pr110817-1.c`, `pr110817-2.c`, `pr60960.c`, `pr70903.c`, `pr85169.c`, `pr94524-1.c`, `pr94524-2.c`, `pr94591.c`, `simd-2.c`, `simd-4.c`, `simd-5.c`, `simd-6.c` |
+| structures and unions passed as variable arguments | 17 | 17 | `20180921-1.c`, `920625-1.c`, `920908-1.c`, `931004-10.c`, `931004-12.c`, `931004-14.c`, `931004-2.c`, `931004-4.c`, `931004-6.c`, `931004-8.c`, `pr44575.c`, `pr92904.c`, `stdarg-3.c`, `strct-stdarg-1.c`, `strct-varg-1.c`, `va-arg-22.c`, `va-arg-pack-1.c` |
+| complex arithmetic | 12 | 12 | `20010605-2.c`, `20020411-1.c`, `20030910-1.c`, `960512-1.c`, `complex-1.c`, `complex-2.c`, `complex-4.c`, `complex-5.c`, `complex-7.c`, `pr38969.c`, `pr42248.c`, `pr49644.c` |
+| this static initializer | 10 | 10 | `20040302-1.c`, `20041214-1.c`, `20050929-1.c`, `20071210-1.c`, `20071220-1.c`, `20071220-2.c`, `920501-4.c`, `pr23324.c`, `pr70460.c`, `pr84478.c` |
+| variable length arrays | 6 | 7 | `20040411-1.c`, `20040811-1.c`, `920721-2.c`, `920929-1.c`, `pr22061-1.c`, `pr43220.c`, `vla-dealloc-1.c` |
+| local labels | 1 | 2 | `930406-1.c`, `980526-1.c` |
+| computed goto | 1 | 1 | `920501-3.c` |
+| label addresses | 1 | 1 | `920501-5.c` |
+| this builtin | 54 | 1 | `921007-1.c` |
+| case ranges | 1 | 0 | None |
+| conditionals with an omitted operand | 1 | 0 | None |
+| statement expressions | 4 | 0 | None |
+
+<details>
+<summary>Exact baseline construct sources</summary>
+
+- case ranges (1): `pr34154.c`.
+- complex arithmetic (12): `20010605-2.c`, `20020411-1.c`, `20030910-1.c`, `960512-1.c`, `complex-1.c`, `complex-2.c`, `complex-4.c`, `complex-5.c`, `complex-7.c`, `pr38969.c`, `pr42248.c`, `pr49644.c`.
+- computed goto (1): `920501-3.c`.
+- conditionals with an omitted operand (1): `pr68249.c`.
+- inline assembly (61): `20001009-2.c`, `20030222-1.c`, `20061031-1.c`, `20071211-1.c`, `20071220-1.c`, `20071220-2.c`, `20080122-1.c`, `960312-1.c`, `990130-1.c`, `990413-2.c`, `bitfld-5.c`, `pr103376.c`, `pr108498-1.c`, `pr110252-2.c`, `pr114552.c`, `pr38533.c`, `pr40022.c`, `pr40657.c`, `pr41239.c`, `pr43385.c`, `pr43560.c`, `pr44852.c`, `pr45695.c`, `pr47925.c`, `pr49218.c`, `pr49279.c`, `pr49390.c`, `pr51581-1.c`, `pr51581-2.c`, `pr51877.c`, `pr51933.c`, `pr52286.c`, `pr56205.c`, `pr56866.c`, `pr57344-1.c`, `pr57344-2.c`, `pr57344-3.c`, `pr57344-4.c`, `pr58277-1.c`, `pr58419.c`, `pr63641.c`, `pr65053-1.c`, `pr65053-2.c`, `pr65648.c`, `pr65956.c`, `pr68328.c`, `pr69691.c`, `pr78438.c`, `pr78726.c`, `pr79354.c`, `pr79737-2.c`, `pr80421.c`, `pr81588.c`, `pr82954.c`, `pr84478.c`, `pr84524.c`, `pr85156.c`, `pr85756.c`, `pr88904.c`, `pr93945.c`, `pr94130.c`.
+- label addresses (1): `920501-5.c`.
+- local labels (1): `980526-1.c`.
+- nested functions (29): `20000822-1.c`, `20010209-1.c`, `20010605-1.c`, `20030501-1.c`, `20040520-1.c`, `20061220-1.c`, `20090219-1.c`, `920415-1.c`, `920428-2.c`, `920501-7.c`, `920612-2.c`, `920721-4.c`, `921017-1.c`, `921215-1.c`, `931002-1.c`, `comp-goto-2.c`, `nest-align-1.c`, `nest-stdar-1.c`, `nestfunc-1.c`, `nestfunc-2.c`, `nestfunc-3.c`, `nestfunc-5.c`, `nestfunc-6.c`, `nestfunc-7.c`, `pr103405.c`, `pr22061-3.c`, `pr22061-4.c`, `pr24135.c`, `pr71494.c`.
+- statement expressions (4): `20000703-1.c`, `930406-1.c`, `950906-1.c`, `compndlit-1.c`.
+- structures and unions passed as variable arguments (17): `20180921-1.c`, `920625-1.c`, `920908-1.c`, `931004-10.c`, `931004-12.c`, `931004-14.c`, `931004-2.c`, `931004-4.c`, `931004-6.c`, `931004-8.c`, `pr44575.c`, `pr92904.c`, `stdarg-3.c`, `strct-stdarg-1.c`, `strct-varg-1.c`, `va-arg-22.c`, `va-arg-pack-1.c`.
+- this builtin (54): `20000519-1.c`, `20041113-1.c`, `20041214-1.c`, `20071213-1.c`, `920625-1.c`, `920908-1.c`, `921007-1.c`, `931004-10.c`, `931004-12.c`, `931004-14.c`, `931004-2.c`, `931004-4.c`, `931004-6.c`, `931004-8.c`, `980205.c`, `980716-1.c`, `991216-2.c`, `multi-ix.c`, `pr19449.c`, `pr30778.c`, `pr44575.c`, `pr44942.c`, `pr49390.c`, `pr56205.c`, `pr64979.c`, `pr92904.c`, `stdarg-1.c`, `stdarg-2.c`, `stdarg-3.c`, `stdarg-4.c`, `strct-stdarg-1.c`, `strct-varg-1.c`, `va-arg-1.c`, `va-arg-10.c`, `va-arg-11.c`, `va-arg-12.c`, `va-arg-13.c`, `va-arg-14.c`, `va-arg-15.c`, `va-arg-16.c`, `va-arg-17.c`, `va-arg-18.c`, `va-arg-19.c`, `va-arg-2.c`, `va-arg-20.c`, `va-arg-22.c`, `va-arg-23.c`, `va-arg-26.c`, `va-arg-4.c`, `va-arg-5.c`, `va-arg-6.c`, `va-arg-9.c`, `va-arg-pack-1.c`, `va-arg-trap-1.c`.
+- this static initializer (10): `20040302-1.c`, `20041214-1.c`, `20050929-1.c`, `20071210-1.c`, `20071220-1.c`, `20071220-2.c`, `920501-4.c`, `pr23324.c`, `pr70460.c`, `pr84478.c`.
+- type not analyzed by semantic analysis (111): `20000917-1.c`, `20001203-2.c`, `20010122-1.c`, `20010518-2.c`, `20020108-1.c`, `20020206-1.c`, `20020227-1.c`, `20020320-1.c`, `20020418-1.c`, `20021113-1.c`, `20030224-2.c`, `20030323-1.c`, `20030811-1.c`, `20040625-1.c`, `20040709-2.c`, `20040709-3.c`, `20050107-1.c`, `20050119-1.c`, `20050119-2.c`, `20051113-1.c`, `20070824-1.c`, `20080502-1.c`, `20100430-1.c`, `20111212-1.c`, `20120105-1.c`, `20170401-1.c`, `20190820-1.c`, `20230509-1.c`, `20241029-1.c`, `960117-1.c`, `960416-1.c`, `990208-1.c`, `alloca-1.c`, `bf-pack-1.c`, `bswap-1.c`, `bswap-3.c`, `built-in-setjmp.c`, `builtin-prefetch-1.c`, `builtin-prefetch-2.c`, `builtin-prefetch-3.c`, `builtin-prefetch-4.c`, `builtin-prefetch-5.c`, `builtin-prefetch-6.c`, `cbrt.c`, `ffs-1.c`, `ffs-2.c`, `frame-address.c`, `memclr.c`, `memcpy-a1.c`, `memcpy-a2.c`, `memcpy-a4.c`, `memcpy-a8.c`, `misalign.c`, `packed-1.c`, `packed-2.c`, `packed-aligned.c`, `pr105984.c`, `pr108064.c`, `pr108789.c`, `pr115033.c`, `pr115277.c`, `pr22141-2.c`, `pr23135.c`, `pr23467.c`, `pr29006.c`, `pr35456.c`, `pr36321.c`, `pr37780.c`, `pr39228.c`, `pr44683.c`, `pr45070.c`, `pr47237.c`, `pr52979-1.c`, `pr52979-2.c`, `pr60003.c`, `pr61725.c`, `pr64006.c`, `pr64242.c`, `pr65369.c`, `pr68381.c`, `pr68532.c`, `pr70602.c`, `pr71083.c`, `pr71554.c`, `pr77718.c`, `pr78622.c`, `pr81281.c`, `pr84169.c`, `pr84521.c`, `pr85095.c`, `pr86528.c`, `pr89434.c`, `pr90025.c`, `pr90311.c`, `pr91450-1.c`, `pr91450-2.c`, `pr91597.c`, `pr91635.c`, `pr93213.c`, `pr93494.c`, `pr97325.c`, `pr97386-1.c`, `pr97888-1.c`, `simd-1.c`, `strct-pack-1.c`, `strct-pack-2.c`, `strct-pack-3.c`, `strct-pack-4.c`, `struct-cpy-1.c`, `struct-ret-2.c`, `zerolen-2.c`.
+- variable length arrays (6): `20040411-1.c`, `20040811-1.c`, `920721-2.c`, `920929-1.c`, `pr43220.c`, `vla-dealloc-1.c`.
+- vector types (20): `20050316-1.c`, `20050316-2.c`, `20050316-3.c`, `20050604-1.c`, `20050607-1.c`, `20060420-1.c`, `pr105613.c`, `pr109040.c`, `pr110817-1.c`, `pr110817-2.c`, `pr60960.c`, `pr70903.c`, `pr85169.c`, `pr94524-1.c`, `pr94524-2.c`, `pr94591.c`, `simd-2.c`, `simd-4.c`, `simd-5.c`, `simd-6.c`.
+
+</details>
+
+The remaining builtin first-refusal sources are:
+
+- `__builtin_longjmp` (4): `built-in-setjmp.c`, `pr60003.c`, `pr64242.c`, `pr84521.c`.
+- `__builtin_setjmp` (4): `built-in-setjmp.c`, `pr60003.c`, `pr64242.c`, `pr84521.c`.
+- `__builtin_return_address` (3): `20010122-1.c`, `20030323-1.c`, `20030811-1.c`.
+- `__builtin_signbit` (2): `20080502-1.c`, `pr35456.c`.
+- `__builtin_apply` (1): `pr47237.c`.
+- `__builtin_apply_args` (1): `pr47237.c`.
+- `__builtin_copysign` (1): `pr44683.c`.
+- `__builtin_frame_address` (1): `frame-address.c`.
+- `__builtin_isinf` (1): `pr39228.c`.
+- `__builtin_isinff` (1): `pr39228.c`.
+- `__builtin_isinfl` (1): `pr39228.c`.
+- `__builtin_memcmp` (1): `pr77718.c`.
+- `__builtin_memset` (1): `pr77718.c`.
+- `__builtin_shuffle` (1): `pr94591.c`.
+- `__builtin_snprintf` (1): `pr78622.c`.
+- `__builtin_strcmp` (1): `921007-1.c`.
+- `__builtin_va_arg_pack` (1): `va-arg-pack-1.c`.
+
+Deferred families include setjmp/longjmp, apply/apply_args, stack/frame address
+introspection, vector shuffle, additional floating classification/library opaque
+types, and va_arg_pack. Aggregate varargs and the Windows extended-float ABI remain
+existing refusals. Inline assembly, nested functions, vector and complex values,
+VLAs, computed goto/local labels, and nonconstant static-initializer cases remain
+separate work. No feature in the requested scalar builtin list was deferred.
+
+### Triage of newly executable failures
+
+| Source | Final arms I0/I1/A0/A1 | Evidence and boundary |
+| --- | --- | --- |
+| `20020314-1.c` | trap/trap/pass/pass | Alloca now lowers; the interpreter reaches an old unprototyped `exit` declaration and rejects its signature against the runtime host contract. |
+| `pr36321.c` | wrong/wrong/pass/pass | Subtracts addresses of separate alloca objects, including a zero-sized allocation, and assumes a contiguous descending native stack. The interpreter intentionally uses separate objects; C99 §6.5.6p9 permits pointer subtraction only within one array (printed pp. 83–84, PDF pp. 95–96). |
+| `pr44942.c` | trap/trap/pass/pass | Newly reached f80/f128 varargs interpretation is an existing unsupported interpreter representation. |
+| `stdarg-4.c` | trap/trap/link/link | GNU17 external inline definitions with `always_inline` do not emit the external bodies expected by the test; ignored attribute/inline linkage behavior predates this work. |
+| `va-arg-14.c` | trap/trap/pass/pass | Passes an uninitialized Windows va_list cursor by value before overwriting the callee copy. Poison is observed at the call; C99 §6.7.8p10 leaves an uninitialized automatic object indeterminate (printed p. 126, PDF p. 138). |
+
+`stdarg-1.c`, `stdarg-2.c`, `va-arg-5.c`, and `va-arg-6.c` additionally move from
+lowering refusal to the existing Windows f80 ABI refusal. `941202-1.c` was already
+executable in the interpreter before, so is not counted among the 80; ordinary
+alloca lowering changes both native arms from link errors to passes. Its remaining
+interpreter failure is the same old-style exit signature boundary. No newly
+executable failure was traced to the added scalar builtin implementations, so
+unrelated optimizer/ABI behavior was preserved.
+
+### Validation
+
+Focused tests cover target-dependent semantic signatures, wrong operand counts
+and types, immediate constraints and extension policy, integer constant queries,
+IR verifier failures, parse/print round trips before and after ABI legalization,
+poison and termination, LLVM intrinsic emission, and optimized/unoptimized
+execution. Eight C programs cover bit variants, query argument effects, overflow
+boundaries including mixed signedness/128-bit/bit-field/volatile destinations,
+allocation lifetime and ordinary-name shadowing, GNU expressions, and varargs.
+Both targets execute in the interpreter and emit LLVM; the five native arms run
+on Windows. The Linux native test reports a skip when WSL is unavailable on this
+host. Installed GCC 13.2.0 O0/O2 comparisons pass eight reference executions.
+Their evidence is `target/builtins-gcc-oracles.json`; the added effect-only
+overflow regression also passes GCC O0/O2 (`target/overflow-effects-gcc.json`).
+Final release CLI probes are
+`target/final-builtin-probes.json`. The bswap64 signature is also checked with
+`__builtin_types_compatible_p` against `__UINT64_TYPE__` on both targets
+(`target/bswap-signature-probes.json`), following GCC 15.2
+[builtins.def](https://github.com/gcc-mirror/gcc/blob/releases/gcc-15.2.0/gcc/builtins.def)
+and [c-common.cc](https://github.com/gcc-mirror/gcc/blob/releases/gcc-15.2.0/gcc/c-family/c-common.cc).
+
+The required checks pass on the final source revision. `cargo +nightly fmt`
+was run before validation. Final checks were sequential; feature builds began
+only after CLI integration tests exited.
+
+| Check | Result |
+| --- | --- |
+| `cargo test --all-targets` | Pass: 1,726 passed, six existing ignored tests across 20 suites |
+| `cargo test --features benchmarking-internals --test allocation_count` | Pass: 26 checks |
+| `cargo +nightly fmt --check` | Pass |
+| `cargo clippy --all-targets -- -D warnings` | Pass |
+| `cargo clippy --release --all-targets -- -D warnings` | Pass |
+| `cargo clippy --all-targets --features benchmarking-internals -- -D warnings` | Pass |
+| `BCC_DIFFTEST_CASES=1000 cargo test --lib difftest` | Pass: six tests, two existing long sweeps ignored |
+| `git diff --check` | Pass |
+| `cargo build --bin bcc-rust` | Pass; ordinary CLI restored after feature builds and verified with `--help` |
+
+Logs are `target/builtins-check-*.log`. The final release build and all 32 focused
+release probes pass. The source SHA-512 values match across the before/after runs
+for all 1,677 files. The Linux native runner is unavailable on this Windows host;
+its conditional test reports that limitation rather than claiming Linux native
+execution. Interpreter, verifier, round-trip, and LLVM checks cover both targets.
+
+The whole-file plan is `target/commit-plan.md`: five focused Conventional Commits,
+with no file split across commits. Shared dispatch/task/opcode files require
+family changes to be grouped by compiler seam. No files are staged and no commits
+have been created. The shared prebuilt LLVM junctions are preserved.

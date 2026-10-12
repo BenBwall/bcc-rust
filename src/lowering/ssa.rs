@@ -120,6 +120,7 @@ pub(super) enum Terminator<'s> {
         cases:   ArenaVec<'s, (i128, Edge<'s>)>,
     },
     Return(Option<Value>),
+    Unreachable,
 }
 
 /// A branch to a block with arguments for its parameters.
@@ -446,7 +447,7 @@ impl<'s> Terminator<'s> {
             | Self::Jump(edge) => (std::slice::from_ref(edge), &[]),
             | Self::Brif(_, edges) => (edges, &[]),
             | Self::Switch { default, cases, .. } => (std::slice::from_ref(default), cases),
-            | Self::Return(_) => (&[], &[]),
+            | Self::Return(_) | Self::Unreachable => (&[], &[]),
         };
         first.iter().chain(rest.iter().map(|(_, edge)| edge))
     }

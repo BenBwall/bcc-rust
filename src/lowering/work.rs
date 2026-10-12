@@ -110,6 +110,8 @@ pub(super) enum Task<'tu> {
     /// Evaluate an expression without its conversions, leaving a place for
     /// an lvalue.
     EvaluateRaw(&'tu Expression<'tu>),
+    /// Overflow predicates retain only third-operand effects, with no item.
+    BuiltinEffects(&'tu Expression<'tu>, bool),
     /// Apply the conversions recorded on an expression, from the `skip`th.
     Convert {
         expression: &'tu Expression<'tu>,
@@ -117,6 +119,20 @@ pub(super) enum Task<'tu> {
     },
     /// Complete an operator whose operands are on the stack.
     Finish(&'tu Expression<'tu>),
+    FinishKeyword(
+        &'tu Expression<'tu>,
+        &'tu crate::translation_phases::parsing::Builtin<'tu>,
+    ),
+    OmittedConditional {
+        expression:  &'tu Expression<'tu>,
+        conditional: &'tu ConditionalExpression<'tu>,
+        otherwise:   Block,
+        merge:       Block,
+    },
+    FinishBuiltin(
+        &'tu Expression<'tu>,
+        crate::translation_phases::semantic_analysis::CommonBuiltin,
+    ),
     /// Copy the place on top of the stack and convert the copy, as a
     /// compound assignment or increment reads its operand.
     ReadForUpdate(&'tu Expression<'tu>),

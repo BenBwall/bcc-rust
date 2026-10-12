@@ -218,6 +218,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 function_expression,
                 arguments,
             } => {
+                if self.schedule_builtin(expression, function_expression, arguments) {
+                    return Ok(());
+                }
                 self.tasks.push(Task::Finish(expression));
                 for &argument in arguments.iter().rev() {
                     self.tasks.push(Task::SnapshotArgument(argument));
@@ -268,14 +271,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 )),
             | E::CompoundLiteral { initializer, .. } =>
                 self.compound_literal(info.ty, initializer, source)?,
-            | E::StatementExpression(_)
-            | E::Builtin(_)
-            | E::LabelAddress(_)
-            | E::OmittedConditional(_)
-            | E::Countof(_)
-            | E::Boolean(_)
-            | E::Nullptr
-            | E::Error =>
+            | E::Builtin(b) => self.schedule_keyword(expression, b)?,
+            | E::OmittedConditional(c) => {
+                let merge_params = self.merge_params(info.ty, source)?;
+                let merge = self.draft.create_block(merge_params);
+                let otherwise = self.draft.create_block(&[]);
+                self.tasks.push(Task::OmittedConditional {
+                    expression,
+                    conditional: c,
+                    otherwise,
+                    merge,
+                });
+                self.tasks.push(Task::EvaluateRaw(c.condition_expression));
+            },
+            | E::StatementExpression(statement) => self.statement_expression(statement, info.ty),
+            | E::LabelAddress(_) | E::Countof(_) | E::Boolean(_) | E::Nullptr | E::Error =>
                 return Err(LoweringError::missing(
                     "an expression was not parsed",
                     source,
@@ -1456,10 +1466,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 /// The construct an expression form is, if lowering does not support it.
 fn unsupported(expression: &Expression<'_>) -> Option<Construct> {
     Some(match expression.kind {
-        | ExpressionType::StatementExpression(_) => Construct::StatementExpression,
-        | ExpressionType::Builtin(_) => Construct::Builtin,
+        | ExpressionType::Builtin(b) if !matches!(b.keyword,crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaArg|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaStart|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaEnd|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaCopy|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinTypesCompatible|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinOffsetof) => Construct::Builtin,
         | ExpressionType::LabelAddress(_) => Construct::LabelAddress,
-        | ExpressionType::OmittedConditional(_) => Construct::OmittedConditional,
         | ExpressionType::Countof(_) | ExpressionType::Nullptr => Construct::Extension,
         | _ => return None,
     })

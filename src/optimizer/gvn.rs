@@ -349,13 +349,17 @@ fn key(draft: &Draft<'_, '_>, inst: Inst) -> Option<Key> {
 pub(super) fn is_pure(data: &InstData) -> bool {
     match *data {
         | InstData::Binary { opcode, .. } => opcode != Opcode::VaCopy,
-        | InstData::Unary { opcode, .. } => opcode == Opcode::Fneg || opcode.is_conversion(),
+        | InstData::Unary { opcode, .. } =>
+            opcode == Opcode::Fneg || opcode.is_conversion() || opcode.is_bit_unary(),
         | InstData::IntCompare { .. }
         | InstData::FloatCompare { .. }
         | InstData::Select { .. }
         | InstData::Const { .. }
         | InstData::WideConst { .. }
-        | InstData::Nullary { .. }
+        | InstData::Nullary {
+            opcode: Opcode::Poison | Opcode::Null,
+            ..
+        }
         | InstData::StackAddr { .. }
         | InstData::GlobalAddr { .. }
         | InstData::FuncAddr { .. } => true,

@@ -15,6 +15,7 @@ mod atomics;
 mod float128;
 mod int128;
 mod mingw_inline;
+mod scalar_builtins;
 mod targets;
 mod type_generic;
 mod vectors;

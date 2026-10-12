@@ -279,7 +279,10 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                 opcode: Opcode::Null,
                 ty,
             } => api.null(api.ty(ty)),
-            | InstData::Nullary { ty, .. } => api.poison(api.ty(ty)),
+            | InstData::Nullary {
+                opcode: Opcode::Poison,
+                ty,
+            } => api.poison(api.ty(ty)),
             | InstData::StackAddr { slot } => self.slots[slot.index()],
             | InstData::GlobalAddr { global } => self.emitter.globals[global.index()],
             | InstData::FuncAddr { func } => self.emitter.functions[func.index()],
@@ -300,12 +303,22 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
         let opcode = data.opcode();
         let value = match *data {
             | InstData::Binary {
+                ty,
                 flags,
                 args: [a, b],
                 ..
             } => {
                 let (a, b) = (self.value(a)?, self.value(b)?);
                 match opcode {
+                    | _ if opcode.is_overflow() => {
+                        let name = if opcode == Opcode::UaddOverflow {
+                            "llvm.uadd.with.overflow"
+                        } else {
+                            "llvm.umul.with.overflow"
+                        };
+                        let pair = self.intrinsic(name, &[a, b], &[api.ty(ty)]);
+                        api.extract_value(pair, 1)
+                    },
                     | Opcode::PtrAdd => api.gep(a, b, flags.contains(InstFlags::INBOUNDS)),
                     | Opcode::VaCopy =>
                         self.intrinsic("llvm.va_copy", &[a, b], &[api.ty(Type::Ptr)]),
@@ -319,6 +332,31 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
             | InstData::Unary { ty, arg, .. } => {
                 let arg = self.value(arg)?;
                 match opcode {
+                    | Opcode::Clz | Opcode::ClzDefined | Opcode::Ctz | Opcode::CtzDefined => {
+                        let name = if matches!(opcode, Opcode::Clz | Opcode::ClzDefined) {
+                            "llvm.ctlz"
+                        } else {
+                            "llvm.cttz"
+                        };
+                        self.intrinsic(
+                            name,
+                            &[
+                                arg,
+                                api.bits(
+                                    Type::I1,
+                                    u128::from(matches!(opcode, Opcode::Clz | Opcode::Ctz)),
+                                ),
+                            ],
+                            &[api.ty(ty)],
+                        )
+                    },
+                    | Opcode::Popcount => self.intrinsic("llvm.ctpop", &[arg], &[api.ty(ty)]),
+                    | Opcode::Bswap => self.intrinsic("llvm.bswap", &[arg], &[api.ty(ty)]),
+                    | Opcode::DynAlloca => {
+                        let value = api.array_alloca(api.ty(Type::I8), arg);
+                        api.alignment(value, 16);
+                        value
+                    },
                     | Opcode::Fneg => api.fneg(arg),
                     | Opcode::Freeze => api.freeze(arg),
                     | Opcode::VaArg => api.va_arg(arg, api.ty(ty)),
@@ -460,6 +498,10 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     api.ret_void()
                 }
             },
+            | InstData::Nullary {
+                opcode: Opcode::Trap,
+                ..
+            } => self.intrinsic("llvm.trap", &[], &[]),
             | InstData::Unreachable => api.unreachable(),
             | _ => return Err(std::fmt::Error.into()),
         };
@@ -584,7 +626,10 @@ fn folds(data: &InstData) -> bool {
         data,
         InstData::Const { .. }
             | InstData::WideConst { .. }
-            | InstData::Nullary { .. }
+            | InstData::Nullary {
+                opcode: Opcode::Poison | Opcode::Null,
+                ..
+            }
             | InstData::StackAddr { .. }
             | InstData::GlobalAddr { .. }
             | InstData::FuncAddr { .. }

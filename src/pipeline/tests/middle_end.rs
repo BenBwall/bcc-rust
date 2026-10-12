@@ -21,6 +21,7 @@ mod braced_strings;
 mod compound_assignments;
 mod declaration_initializers;
 mod runtime_calls;
+mod scalar_builtins;
 mod union_initializers;
 
 use crate::{
@@ -102,7 +103,11 @@ fn with_configured_module<R>(
         HeaderSearch::default(),
     );
     let sema = analyze_translation_unit(&mut context, &unit);
-    assert!(sema.lowerable(&context), "the front end accepts\n{source}");
+    assert!(
+        sema.lowerable(&context),
+        "the front end accepts\n{source}\n{:?}",
+        context.take_pending_errors()
+    );
     let ir = Bump::new();
     let options = OptimizerOptions::default();
     let module = lower_translation_unit(

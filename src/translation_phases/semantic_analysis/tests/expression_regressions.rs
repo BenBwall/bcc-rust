@@ -434,9 +434,20 @@ fn constant_p_has_int_type_and_checks_array_bounds() {
             configuration,
             |context, unit| {
                 let errors = context.take_pending_errors();
-                assert_eq!(errors.len(), 1, "{configuration:?}: {errors:?}");
+                assert_eq!(errors.len(), 5, "{configuration:?}: {errors:?}");
+                assert_eq!(
+                    errors
+                        .iter()
+                        .filter(|error| matches!(error, TranslationError::Extension(_)))
+                        .count(),
+                    4
+                );
+                let constraint = errors
+                    .iter()
+                    .find(|e| matches!(e, TranslationError::Semantic(_)))
+                    .unwrap();
                 assert!(matches!(
-                    errors[0],
+                    constraint,
                     TranslationError::Semantic(SemanticError {
                         kind: SemanticErrorKind::InvalidArrayBound,
                         ..
