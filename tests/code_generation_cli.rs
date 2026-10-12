@@ -685,7 +685,7 @@ mod tests {
             std::time::Duration::from_secs(60),
         );
         if result.is_err() {
-            _ = reader.kill();
+            drop(reader.kill());
         }
         let reader_status = reader.wait().unwrap();
         std::fs::remove_file(&source).unwrap();
