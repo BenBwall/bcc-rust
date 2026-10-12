@@ -679,10 +679,18 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     };
                     // C99 §6.7.8p19: only this subobject's following
                     // initializers can preserve its explicit bytes. Search
-                    // overlapping ranges, then keep source-order scope rules.
+                    // only after this reset and before the next selection of
+                    // the same union or the enclosing brace's end. Nested
+                    // braces and enclosing union resets still delimit below.
+                    let end = if union_reset {
+                        end.min(coverage.next_reset(index))
+                    } else {
+                        end
+                    };
                     coverage.overlapping(
                         8 * offset,
                         8 * (offset + size),
+                        index + 1..end,
                         &mut candidates,
                         &mut search,
                     );

@@ -9,25 +9,66 @@ use crate::backend::interpreter::{
 
 #[test]
 fn twenty_thousand_union_switches_lower_quickly_with_bounded_arena_use() {
+    assert_array_union_switch_resources(false);
+}
+
+#[test]
+fn twenty_thousand_scattered_union_switches_lower_with_bounded_resources() {
+    assert_array_union_switch_resources(true);
+}
+
+fn assert_array_union_switch_resources(scattered: bool) {
     use std::fmt::Write as _;
 
     let mut source = String::from(
         "union U { long long old; struct { int x, y; } next; }; int main(void) { union U a[20000] \
          = {",
     );
-    for index in 0..20_000 {
+    for position in 0..20_000 {
+        let index = if scattered {
+            if position % 2 == 0 {
+                position / 2
+            } else {
+                19_999 - position / 2
+            }
+        } else {
+            position
+        };
         write!(source, "[{index}].old = -1, [{index}].next.x = 1,").unwrap();
     }
     source.push_str(
         "}; return a[0].next.x != 1 || a[0].next.y || a[9999].next.x != 1 || a[9999].next.y || \
          a[19999].next.x != 1 || a[19999].next.y; }",
     );
+    assert_union_switch_resources(
+        &source,
+        if scattered {
+            "scattered array of unions"
+        } else {
+            "array of unions"
+        },
+    );
+}
+
+#[test]
+fn twenty_thousand_same_union_switches_lower_with_bounded_resources() {
+    let source = format!(
+        "union U {{ long long old; struct {{ int x, y; }} next; }}; int main(void) {{ union U u = \
+         {{{}}}; return !(u.next.x == 1 && u.next.y == 0); }}",
+        ".old = -1, .next.x = 1,".repeat(20_000)
+    );
+    assert_union_switch_resources(&source, "same union");
+}
+
+/// Both distributions must fit the same time and arena budgets, and leave
+/// the last selected member's omitted fields zero in the interpreter.
+fn assert_union_switch_resources(source: &str, name: &str) {
     let tu = Bump::new();
     let mut context = Context::new(&tu);
     let syntax = parse_translation_unit(
         &mut context,
         Path::new("<test>"),
-        tu.alloc_str(&source),
+        tu.alloc_str(source),
         HeaderSearch::default(),
     );
     let sema = analyze_translation_unit(&mut context, &syntax);
@@ -46,7 +87,7 @@ fn twenty_thousand_union_switches_lower_quickly_with_bounded_arena_use() {
     .unwrap();
     let elapsed = start.elapsed();
     eprintln!(
-        "20,000 union switches: {elapsed:?}, {} IR bytes, {} scratch bytes",
+        "20,000 switches ({name}): {elapsed:?}, {} IR bytes, {} scratch bytes",
         arena.high_water(),
         scratch.high_water()
     );
