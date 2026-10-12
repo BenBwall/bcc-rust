@@ -5,6 +5,7 @@
 1. Run `git status --short` before editing. Preserve unrelated tracked changes and untracked artifacts.
 2. Run commands from the repository root. Use the narrowest relevant checks while working, then run `git diff --check` and inspect the final diff before handoff.
 3. Report commands that fail as current evidence; a failing baseline is not permission to weaken checks or modify unrelated source.
+4. On Windows, never start a compiled test program directly (`.	est.exe`, `& $exe`): run it as `python scripts/cargo_runner.py <program> [args...]`. A crashing program otherwise opens an error dialog on the user's desktop; the wrapper sets the error mode that suppresses it. `cargo test`, `scripts/run.py` and the survey and benchmark scripts already do this.
 
 Canonical checks:
 

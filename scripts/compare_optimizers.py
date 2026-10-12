@@ -68,6 +68,11 @@ import time
 
 import crash_dialogs
 
+# Every program this module starts inherits the error mode, so suppress crash
+# dialogs on import: callers that use these functions without main() are
+# covered too.
+crash_dialogs.suppress()
+
 ROOT = Path(__file__).resolve().parents[1]
 EXE = ".exe" if os.name == "nt" else ""
 STANDARD_ARMS = {
@@ -706,7 +711,6 @@ def parse_arguments(argv):
 
 
 def main(argv=None):
-    crash_dialogs.suppress()
     args = parse_arguments(argv)
     if args.summarize:
         print(summarize(load_records(args.summarize), args.bootstrap, args.seed, args.baseline, args.metric))

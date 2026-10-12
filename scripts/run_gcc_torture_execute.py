@@ -23,6 +23,11 @@ import time
 import crash_dialogs
 from run_gcc_torture import ANSI, ERROR_HEADING, ROOT, VERSION, evidence, sha512
 
+# Every program this module starts inherits the error mode, so suppress crash
+# dialogs on import: callers that use these functions without main() are
+# covered too.
+crash_dialogs.suppress()
+
 
 TARGET = "x86_64-w64-windows-gnu"
 ARMS = {
@@ -39,7 +44,6 @@ PANIC = re.compile(r"panicked at|stack overflow|fatal runtime error")
 
 
 def main():
-    crash_dialogs.suppress()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True,
                         help="Existing GCC release root, gcc.c-torture root, or execute directory")
