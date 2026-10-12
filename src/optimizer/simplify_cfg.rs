@@ -53,7 +53,10 @@ use crate::{
         Entity,
         Value,
     },
-    util::bump::ArenaVec,
+    util::bump::{
+        ArenaMap,
+        ArenaVec,
+    },
 };
 
 /// The most rounds one run takes. Each round that changes anything removes a
@@ -78,7 +81,9 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
     changed
 }
 
-/// Step 1: redirects edges around forwarding blocks.
+/// Step 1: redirects edges around forwarding blocks, indexing the current
+/// terminator destinations so duplicate-edge argument checks stay linear.
+/// C99: ?5.1.2.3p5, pp. 13-14; PDF pp. 25-26 (preserve observable behaviour).
 fn thread_jumps(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> bool {
     let mut changed = false;
     let reachable = draft.reachable();
@@ -91,22 +96,48 @@ fn thread_jumps(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> b
         if !draft.block(block).alive || !reachable[index] {
             continue;
         }
-        for edge_index in 0..draft.block(block).term.edges().count() {
-            let Some((target, args)) = threaded(draft, &targets, block, edge_index) else {
+        // Own the terminator while rewriting it so edge traversal stays linear:
+        // repeated `nth` calls would themselves rescan a wide switch's prefix.
+        let mut term = std::mem::replace(&mut draft.block_mut(block).term, Term::Unreachable);
+        let mut destinations = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, draft.scratch);
+        for edge in term.edges() {
+            let entry = destinations.entry(edge.target).or_insert_with(|| {
+                let mut args = ArenaVec::with_capacity_in(edge.args.len(), draft.scratch);
+                args.extend(edge.args.iter().map(|&arg| draft.resolve(arg)));
+                (0_usize, args)
+            });
+            entry.0 += 1;
+        }
+        for edge in term.edges_mut() {
+            let Some((target, args)) = threaded(draft, &targets, edge) else {
                 continue;
             };
-            if !report.allow() {
-                return changed;
+            if destinations
+                .get(&target)
+                .is_some_and(|(_, canonical)| *canonical != args)
+            {
+                continue;
             }
-            let edge = draft
-                .block_mut(block)
-                .term
-                .edges_mut()
-                .nth(edge_index)
-                .expect("the edge was just read");
+            if !report.allow() {
+                break;
+            }
+            if let Some((count, _)) = destinations.get_mut(&edge.target) {
+                *count -= 1;
+                if *count == 0 {
+                    drop(destinations.remove(&edge.target));
+                }
+            }
+            let entry = destinations
+                .entry(target)
+                .or_insert_with(|| (0, args.clone()));
+            entry.0 += 1;
             edge.target = target;
             edge.args = args;
             changed = true;
+        }
+        draft.block_mut(block).term = term;
+        if report.limit_reached() {
+            return changed;
         }
     }
     changed
@@ -211,19 +242,16 @@ enum ForwardingTarget<'s> {
     Resolved(Edge<'s>),
 }
 
-/// Where the `edge_index`th edge of `block` would lead if it skipped every
+/// Where `edge` would lead if it skipped every
 /// forwarding block on its way, with the arguments it would pass. `None` if
-/// it would not move, or if moving would give the terminator two edges to a
-/// block with different arguments. `targets` caches the round's forwarding
+/// it would not move. The caller checks argument agreement through its
+/// destination index. `targets` caches the round's forwarding
 /// destinations and parameter substitutions.
 fn threaded<'s>(
     draft: &Draft<'_, 's>,
     targets: &[ForwardingTarget<'s>],
-    block: Block,
-    edge_index: usize,
+    edge: &Edge<'s>,
 ) -> Option<(Block, ArenaVec<'s, Value>)> {
-    let term = &draft.block(block).term;
-    let edge = term.edges().nth(edge_index)?;
     let ForwardingTarget::Resolved(destination) = &targets[edge.target.index()] else {
         return None;
     };
@@ -241,17 +269,7 @@ fn threaded<'s>(
                 .map_or(arg, |position| draft.resolve(edge.args[position])),
         );
     }
-    let agrees = term.edges().enumerate().all(|(other_index, other)| {
-        other_index == edge_index
-            || other.target != target
-            || (other.args.len() == args.len()
-                && other
-                    .args
-                    .iter()
-                    .zip(&args)
-                    .all(|(&x, &y)| draft.resolve(x) == y))
-    });
-    agrees.then_some((target, args))
+    Some((target, args))
 }
 
 /// Step 3: turns branches whose edges all agree into jumps.

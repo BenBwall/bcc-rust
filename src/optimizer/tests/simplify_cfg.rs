@@ -4,6 +4,100 @@
 use super::*;
 
 #[test]
+fn switch_threading_preserves_duplicate_arguments_at_every_bisect_prefix() {
+    use crate::backend::interpreter::RuntimeValue;
+    let input = "function @f(i32, i32, i32) -> i32 external {
+block0(v0: i32, v1: i32, v2: i32):
+    switch v0, block1(v1), [1: block1(v1), 2: block2(v2), 3: block3(v1)]
+block1(v3: i32):
+    jump block4(v3)
+block2(v4: i32):
+    jump block4(v4)
+block3(v5: i32):
+    jump block2(v5)
+block4(v6: i32):
+    return v6
+}
+";
+    let (_, report) = optimize_text(input, &only(&[Pass::SimplifyCfg]));
+    for limit in 0..=report.transformations() {
+        let options = OptimizerOptions {
+            bisect_limit: Some(limit),
+            ..only(&[Pass::SimplifyCfg])
+        };
+        let (optimized, _) = optimize_text(input, &options);
+        for selector in 0..=4 {
+            let actual = equivalence::returned(
+                &optimized,
+                "f",
+                &[
+                    RuntimeValue::Int(selector),
+                    RuntimeValue::Int(11),
+                    RuntimeValue::Int(29),
+                ],
+            );
+            assert_eq!(
+                actual,
+                RuntimeValue::Int(if selector == 2 { 29 } else { 11 }),
+                "limit {limit}, selector {selector}"
+            );
+        }
+    }
+}
+
+#[test]
+fn twenty_thousand_switch_edges_optimize_quickly() {
+    use std::{
+        fmt::Write,
+        sync::mpsc,
+        thread,
+        time::Duration,
+    };
+    let (sender, receiver) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let mut input = String::from(
+            "function @f(i32) -> i32 external {\nblock0(v0: i32):\n    switch v0, block1(v0), [",
+        );
+        for case in 1..=20_000 {
+            if case != 1 {
+                input.push_str(", ");
+            }
+            write!(input, "{case}: block{}(v0)", case + 1).unwrap();
+        }
+        input.push_str("]\n");
+        for block in 1..=20_001 {
+            writeln!(
+                input,
+                "block{block}(v{block}: i32):\n    jump block20002(v{block})"
+            )
+            .unwrap();
+        }
+        input.push_str("block20002(v20002: i32):\n    return v20002\n}\n");
+        let (optimized, report) = optimize_text(&input, &only(&[Pass::SimplifyCfg]));
+        assert_eq!(
+            optimized,
+            "function @f(i32) -> i32 external {\nblock0(v0: i32):\n    return v0\n}\n"
+        );
+        for value in [0, 1, 19_999, 20_000, 20_001] {
+            let argument = crate::backend::interpreter::RuntimeValue::Int(value);
+            assert_eq!(
+                equivalence::returned(&optimized, "f", &[argument]),
+                argument
+            );
+        }
+        eprintln!(
+            "20,000 switch edges: {:?}",
+            report.stats(Pass::SimplifyCfg).time
+        );
+        sender.send(()).unwrap();
+    });
+    receiver
+        .recv_timeout(Duration::from_secs(10))
+        .expect("20,000 switch edges must optimize within ten seconds");
+    worker.join().unwrap();
+}
+
+#[test]
 fn twenty_thousand_forwarding_blocks_optimize_quickly() {
     use std::{
         fmt::Write,
