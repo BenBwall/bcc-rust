@@ -664,3 +664,178 @@ CLI after feature checks. Its `--print-default-passes` command exits normally.
 
 The whole-file commit plan is `target/commit-plan.md`. No files were staged
 or committed, and no Git metadata writes were performed.
+
+### GNU89 inline and supported dg-options: 2026-10-12
+
+This update starts at `b78cdbae` on `claude/torture-correctness` and compares
+against `execute-implicit-after`, the preceding snapshot. The final survey
+uses the same 1,677 sources, eight workers, ten-second deadlines and four
+Windows GNU arms, now with supported source options applied. Every source
+SHA-512 matches the baseline. Both shared LLVM junctions were preserved.
+
+```powershell
+cargo build --release --bin bcc-rust
+python scripts/run_gcc_torture_execute.py --source C:\Users\benbw\Documents\GitRepo\bcc-rust\target\compiler-corpus\gcc-15.2.0 --output target/compiler-corpus/execute-gnu89-after --jobs 8 --timeout 10
+```
+
+| Class | I0 before | after | I1 before | after | A0 before | after | A1 before | after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| pass | 1145 | 1151 | 1150 | 1156 | 1200 | 1206 | 1190 | 1196 |
+| frontend-error | 139 | 139 | 139 | 139 | 139 | 139 | 139 | 139 |
+| lowering-unsupported | 307 | 311 | 307 | 311 | 307 | 311 | 307 | 311 |
+| abi-unsupported | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| compiler-crash | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| interpreter-trap | 72 | 61 | 66 | 55 | 0 | 0 | 0 | 0 |
+| wrong-result | 14 | 15 | 15 | 16 | 16 | 17 | 26 | 27 |
+| timeout | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| link-error | 0 | 0 | 0 | 0 | 15 | 4 | 15 | 4 |
+
+There are **87 -> 77 adverse sources** and **73 -> 62 disagreements**. All
+eleven named inline sources lose their native link failures. Six now pass all
+four arms; four expose lowering capability gaps; one exposes a builtin wrong
+result. All 44 changed arms are confined to those eleven sources. No previously
+passing arm regresses. Frontend errors are unchanged; compiler crashes and
+timeouts are zero.
+
+The survey returns 1 because adverse sources and unsupported features remain.
+Its elapsed time is 400.239 seconds, an uncontrolled observation rather
+than a performance comparison. The initial run, preserved as
+`execute-gnu89-contended`, had seven native compilation timeouts while the
+full test build linked multiple LTO binaries. All seven arms pass in the
+final repeat, which ran after all Cargo checks and builds had finished.
+
+The compiler now selects GNU89 inline semantics before C99, including the
+C95 amendment, and C99 semantics from C99 onward. `-fgnu89-inline` and
+`-fno-gnu89-inline` override that default independently of `-std`; the last
+inline flag wins. An explicit C99-inline override is also accepted in a
+pre-C99 mode, a bcc extension beyond GCC's accepted flag combinations.
+The existing `gnu_inline`/`__gnu_inline__` attribute selects GNU semantics
+per function, and `__has_attribute(gnu_inline)` now reports 1. The predefined
+`__GNUC_GNU_INLINE__` or `__GNUC_STDC_INLINE__` follows the global mode:
+exactly one is defined, with value 1. Frozen target macro tables are unchanged.
+
+GNU plain inline definitions emit an external body; GNU extern-inline
+bodies remain inline-only even after an ordinary declaration. Those facts
+are retained per definition in semantic analysis and consumed by lowering,
+so interpreter and LLVM emission share one decision. C99 inline-only
+classification still considers all file-scope declarations; a declaration
+with extern or without inline makes the body external. Static inline remains
+internal. The existing Microsoft ABI behavior in C99 mode is retained.
+The emission rules cite C99 §6.7.4p6-7 (pp. 112-113; PDF pp. 124-125),
+§6.9p5 (p. 140; PDF p. 152), [GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html)
+and [GCC's inline option](https://gcc.gnu.org/onlinedocs/gcc/C-Dialect-Options.html#index-fgnu89-inline).
+
+IR inspection covers plain, extern and static inline, declarations before
+and after a body, block-scope declarations, attribute inheritance and
+replacement bodies. Semantic tests check mode-dependent body restrictions
+and duplicate definitions. CLI regressions run two-function programs through
+unoptimized/optimized interpretation and native O0, including function
+addresses, and check that inline-only calls remain external. Macro tests
+cover both overrides; bundled Clang O0/O2 and macro probes independently
+confirm the defaults and supported combinations.
+
+The runner parses unconditional `dg-options` and `dg-additional-options`,
+preserving order: the former replaces the base options, and the latter
+appends additional options. It applies the CLI's supported language,
+preprocessing and header-search flags, including `-f[no-]gnu89-inline`,
+supported `-std` aliases, `-w`, pedantic policy, hosted/freestanding and MSVC
+flags, definitions, undefinitions and forced includes. `-w` now suppresses
+warning rendering and counts without suppressing errors. Unknown flags
+remain recorded; target/effective-target selectors are deferred rather than
+evaluated, and backend/output controls cannot replace the fixed survey arms.
+Additional-source and target-skip behavior is unchanged. Applied flags,
+unsupported tokens and option directive decisions are recorded per source
+in both results and the manifest, beside each exact compiler command.
+
+102 sources receive supported options: 75 request GNU89, 13 request GNU17,
+12 request GNU89 inline, one requests C99 and one requests C89. These
+language selections cause no other status transitions. `p18298.c` is the
+twelfth inline-option source; it remains F/F/F/F because `stdlib.h` is not
+available under the survey's header-search configuration.
+
+Arm order is I0/I1/A0/A1. P = pass, T = interpreter trap, L = link error,
+U = lowering unsupported, W = wrong result, F = frontend error.
+
+| Source | Before | After | Reclassification |
+| --- | --- | --- | --- |
+| `20001121-1.c` | T/T/L/L | P/P/P/P | Resolved: GNU89 external inline body |
+| `20020107-1.c` | T/T/L/L | U/U/U/U | Lowering: inline assembly in the newly emitted body |
+| `930526-1.c` | T/T/L/L | P/P/P/P | Resolved: GNU89 external inline body |
+| `961223-1.c` | T/T/L/L | P/P/P/P | Resolved: GNU89 external inline body |
+| `980608-1.c` | T/T/L/L | U/U/U/U | Lowering: va_start in the newly emitted body |
+| `bcp-1.c` | T/T/L/L | W/W/W/W | Builtin semantics: constant_p rejects a string literal |
+| `loop-2c.c` | T/T/L/L | P/P/P/P | Resolved: GNU89 external inline body |
+| `restrict-1.c` | T/T/L/L | P/P/P/P | Resolved: GNU89 external inline body |
+| `unroll-1.c` | T/T/L/L | P/P/P/P | Resolved: GNU89 external inline body |
+| `va-arg-7.c` | T/T/L/L | U/U/U/U | Lowering: va_start in the newly emitted body |
+| `va-arg-8.c` | T/T/L/L | U/U/U/U | Lowering: va_start in the newly emitted body |
+| `p18298.c` | F/F/F/F | F/F/F/F | Unchanged: missing stdlib.h |
+| `pr7284-1.c` | T/T/P/P | T/T/P/P | Updated triage: missing C89 signed-shift policy |
+
+`20020107-1.c` now exposes its empty output/input-constraint asm at line 20;
+lowering reports unsupported inline assembly. The three varargs sources
+now expose unsupported `__builtin_va_start` in their emitted `debug` bodies:
+`980608-1.c:17`, `va-arg-7.c:16`, and `va-arg-8.c:20`. These are capability
+refusals, with valid source bodies retained and checked, rather than residual
+inline linkage failures.
+
+`bcp-1.c` now aborts in all four arms. Its `good1` requires
+`__builtin_constant_p("hi") == 1`; bcc currently folds only arithmetic
+constants and emits 0 for this string literal. A two-function reduction
+returns 1 in bcc's interpreter, while GCC 13.2.0 on PATH returns 0 at O0/O2.
+The complete unmodified source also passes GCC at O0/O2 with
+`-std=gnu17 -fgnu89-inline`. This is a demonstrated builtin semantic gap;
+no builtin tables were changed.
+
+`pr7284-1.c` remains T/T/P/P, but now receives its requested `-std=c89`.
+Its previous “unapplied option / undefined C99 shift” explanation no longer
+applies. The interpreter still observes poison for the signed shift in
+`f(128)`, so it is reclassified as a missing C89 signed-shift policy in
+lowering. C89 §3.3.7 (p. 49; PDF p. 63) specifies the bit shift without
+C99's signed representability condition. GCC 13.2.0 O0/O2 and both native
+bcc arms pass. The remaining native link errors are `941202-1.c`, which
+requires compiler stack-allocation lowering for `alloca`, and `alias-2.c`,
+`alias-3.c`, and `alias-4.c`, which require GNU symbol aliases. Those
+limitations are unchanged.
+
+Other adverse sources receiving standard options retain their existing
+diagnoses: `20051012-1.c`, `920501-1.c`, `921202-1.c`, `921208-2.c`, and
+`pr67037.c` have untyped-call/signature assumptions; `920730-1.c` overflows
+signed addition before its unsigned cast; `loop-3b.c` overflows signed
+multiplication; `20021127-1.c` expects builtin `llabs` folding despite its
+own aborting definition. None is repaired by selecting its requested
+standard, and signed addition/multiplication overflow remains undefined
+before C99 too. Their statuses are unchanged.
+
+| Check | Result |
+| --- | --- |
+| `cargo test --all-targets` | Passed: 1,732 tests across 20 targets; six existing ignored tests. |
+| `cargo test --features benchmarking-internals --test allocation_count` | Passed: 25 tests. |
+| `cargo +nightly fmt --check` | Passed, after cargo +nightly fmt. |
+| `cargo clippy --all-targets -- -D warnings` | Passed. |
+| `cargo clippy --release --all-targets -- -D warnings` | Passed. |
+| `cargo clippy --all-targets --features benchmarking-internals -- -D warnings` | Passed. |
+| `git diff --check` | Passed. |
+| `BCC_DIFFTEST_CASES=1000 cargo test --lib difftest` | Passed with BCC_DIFFTEST_CASES=1000: six checks; two existing ignored long sweeps. |
+| `python scripts/run.py --help` | Passed. |
+| `python -m unittest discover -s scripts -p test_run_gcc_torture*.py` | Passed: 26 tests. |
+| `cargo build --release --bin bcc-rust` | Passed. |
+| `cargo build --bin bcc-rust` | Passed. |
+
+All Cargo checks ran sequentially in the final validation pass. No
+benchmarking-internals build overlapped CLI integration tests. After the
+feature checks, `cargo build --bin bcc-rust` restored the plain CLI; the
+final handoff repeats that build and verifies `--print-default-passes` exits
+normally. The first development Clippy pass identified an independent-switch
+struct lint and a single-character test pattern; both were addressed before
+the complete final check pass. No test assertions or ignored-test settings
+were weakened.
+
+Evidence is retained in `target/compiler-corpus/execute-gnu89-after/`
+(manifest, summaries, source hashes, arm logs and `transitions.json`),
+`target/gnu89-checks.json`, `target/gnu89-final-*.log`,
+`target/gnu89-reference/clang.json` and `target/gnu89-triage/`. The source
+hash comparison and option/command checks were rerun against the final
+manifest. This remains an exploratory survey, not a passing DejaGnu profile.
+The whole-file commit plan is `target/commit-plan.md`. Nothing was staged
+or committed, and no Git metadata was modified.
