@@ -21,6 +21,7 @@ use super::{
         Fault,
         Location,
         Trap,
+        UbKind,
     },
     value::{
         Pointer,
@@ -155,12 +156,23 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             return Ok(None);
         }
         let call = HostCall {
-            name:   callee.name,
-            args:   &self.arguments,
-            result: self.module.function_signature(func).result,
+            name:      callee.name,
+            args:      &self.arguments,
+            arg_types: &self.argument_types,
+            result:    self.module.function_signature(func).result,
         };
         match host.call(call, &mut self.memory)? {
             | HostReturn::Value(value) => {
+                // A host's value is untrusted, including custom hosts. Check
+                // before it enters a typed SSA slot. C99 §6.5.2.2p9.
+                let compatible = match (call.result, value) {
+                    | (None, None) => true,
+                    | (Some(ty), Some(value)) => value.matches_type(ty),
+                    | _ => false,
+                };
+                if !compatible {
+                    return Err(UbKind::SignatureMismatch.into());
+                }
                 if let (Some(result), Some(value)) = (result, value) {
                     self.set(result, value);
                 }

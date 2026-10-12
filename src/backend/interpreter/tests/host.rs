@@ -355,3 +355,24 @@ block0:
         "the custom host provides only @answer"
     );
 }
+
+#[test]
+fn custom_host_results_are_checked_before_entering_typed_slots() {
+    // AnswerHost always returns a pointer; both declarations are incompatible.
+    for result in [" -> f64", ""] {
+        let text = format!(
+            "function @answer(){result} external\nfunction @main() -> i32 external {{\nblock0:\n"
+        );
+        let text = if result.is_empty() {
+            format!("{text}    call @answer()\n    v0 = iconst.i32 0\n    return v0\n}}\n")
+        } else {
+            format!("{text}    v0 = call @answer()\n    v1 = fptosi.i32 v0\n    return v1\n}}\n")
+        };
+        let arena = Bump::new();
+        let module = parse_module(&arena, &text).unwrap();
+        assert!(matches!(
+            run(&module, "main", &[], &mut AnswerHost),
+            Err(Trap::UndefinedBehavior(UbKind::SignatureMismatch, _))
+        ));
+    }
+}

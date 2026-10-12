@@ -30,6 +30,18 @@ impl RuntimeValue {
     /// The null pointer.
     pub(crate) const NULL: Self = Self::Ptr(Pointer::NULL);
 
+    /// Whether this value can inhabit a slot of `ty`; poison has every type.
+    pub(crate) const fn matches_type(self, ty: Type) -> bool {
+        match self {
+            | Self::Int(_) => ty.is_int(),
+            | Self::F32(_) => matches!(ty, Type::F32),
+            | Self::F64(_) => matches!(ty, Type::F64),
+            | Self::F128(_) => matches!(ty, Type::F128),
+            | Self::Ptr(_) => matches!(ty, Type::Ptr),
+            | Self::Poison => true,
+        }
+    }
+
     /// The integer `bits` of type `ty`, masked to its width.
     pub(crate) const fn int(ty: Type, bits: u128) -> Self {
         Self::Int(bits & ty.mask())

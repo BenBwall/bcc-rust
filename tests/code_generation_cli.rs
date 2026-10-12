@@ -40,6 +40,47 @@ mod tests {
                        i;\n  return s;\n}\n";
 
     #[test]
+    fn incompatible_host_signatures_trap_before_execution() {
+        for source in [
+            "double malloc(unsigned long); int main(void){return (int)malloc(1);}",
+            "double putchar(int); int main(void){return (int)putchar(65);}",
+            "double abs(int); int main(void){return (int)abs(-1);}",
+            "double printf(const char *, ...); int main(void){return (int)printf(\"x\");}",
+            "int fabs(double); int main(void){return fabs(-1.);}",
+            "int free(void *); int main(void){return free(0);}",
+            "int exit(int); int main(void){return exit(0);}",
+            "int abort(void); int main(void){return abort();}",
+            "void putchar(int); int main(void){putchar(65); return 0;}",
+            "int putchar(double); int main(void){return putchar(65.);}",
+            "void *memcpy(void *, const void *, double); int main(void){char a, b; memcpy(&a, &b, \
+             1.); return 0;}",
+            "int puts(void); int main(void){return puts();}",
+            "int abs(int, int); int main(void){return abs(1, 2);}",
+            "double putchar(int); int main(void){double (*p)(int)=putchar; return (int)p(65);}",
+        ] {
+            for opt in ["--opt=none", "--opt=bcc"] {
+                let output = bcc(&format!("{source}\n"), &["--interpret", opt]);
+                assert_eq!(
+                    output.status.code(),
+                    Some(70),
+                    "{source}: {}",
+                    text(&output.stderr)
+                );
+                assert!(
+                    text(&output.stderr).contains("wrong signature"),
+                    "{source}: {}",
+                    text(&output.stderr)
+                );
+                assert!(
+                    output.stdout.is_empty(),
+                    "{source}: {}",
+                    text(&output.stdout)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn poison_return_from_main_traps_like_exit() {
         for ending in ["return x;", "exit(x);"] {
             let source = format!("void exit(int); int main(void) {{ int x; {ending} }}\n");

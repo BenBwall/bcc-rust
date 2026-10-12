@@ -50,11 +50,13 @@ pub(crate) trait Host {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct HostCall<'c> {
     /// The callee's name, without the `@`.
-    pub(crate) name:   &'c str,
+    pub(crate) name:      &'c str,
     /// The arguments, fixed and variadic, in order.
-    pub(crate) args:   &'c [RuntimeValue],
+    pub(crate) args:      &'c [RuntimeValue],
+    /// Operand types after default promotions and ABI lowering.
+    pub(crate) arg_types: &'c [Type],
     /// The callee's declared result type, if any.
-    pub(crate) result: Option<Type>,
+    pub(crate) result:    Option<Type>,
 }
 
 /// How a host call ended.
@@ -96,6 +98,7 @@ pub(crate) struct DefaultHost<'a> {
 
 impl Host for DefaultHost<'_> {
     fn call(&mut self, call: HostCall<'_>, memory: &mut Memory<'_>) -> Result<HostReturn, Fault> {
+        check_signature(call)?;
         let args = call.args;
         let arg = |index: usize| args.get(index).copied().unwrap_or(RuntimeValue::Poison);
         let value = match call.name {
@@ -275,6 +278,46 @@ impl Host for DefaultHost<'_> {
             | value => value,
         })))
     }
+}
+
+/// Rejects incompatible calls before a library function performs any effects.
+/// All supported targets use i32 int and i64 `size_t`. Open C declarations are
+/// checked using their call operands, after default argument promotions.
+/// C99: §6.5.2.2 paragraphs 6 and 9, pp. 71-72; PDF pp. 83-84.
+fn check_signature(call: HostCall<'_>) -> Result<(), Fault> {
+    use Type::{
+        F64,
+        I32,
+        I64,
+        Ptr,
+    };
+    let (params, result, variadic): (&[Type], Option<Type>, bool) = match call.name {
+        | "putchar" | "abs" | "isprint" => (&[I32], Some(I32), false),
+        | "puts" => (&[Ptr], Some(I32), false),
+        | "printf" => (&[Ptr], Some(I32), true),
+        | "sprintf" => (&[Ptr, Ptr], Some(I32), true),
+        | "malloc" => (&[I64], Some(Ptr), false),
+        | "calloc" => (&[I64, I64], Some(Ptr), false),
+        | "free" => (&[Ptr], None, false),
+        | "memcpy" | "memmove" | "strncpy" => (&[Ptr, Ptr, I64], Some(Ptr), false),
+        | "memcmp" | "strncmp" => (&[Ptr, Ptr, I64], Some(I32), false),
+        | "strcmp" => (&[Ptr, Ptr], Some(I32), false),
+        | "strcpy" => (&[Ptr, Ptr], Some(Ptr), false),
+        | "memchr" | "memset" => (&[Ptr, I32, I64], Some(Ptr), false),
+        | "strchr" | "strrchr" => (&[Ptr, I32], Some(Ptr), false),
+        | "strlen" => (&[Ptr], Some(I64), false),
+        | "fabs" | "floor" => (&[F64], Some(F64), false),
+        | "exit" => (&[I32], None, false),
+        | "abort" => (&[], None, false),
+        | _ => return Ok(()),
+    };
+    if call.result != result
+        || (!variadic && call.arg_types.len() != params.len())
+        || !call.arg_types.starts_with(params)
+    {
+        return Err(UbKind::SignatureMismatch.into());
+    }
+    Ok(())
 }
 
 /// Compares bytes as unsigned char, stopping at n or the first string null.
