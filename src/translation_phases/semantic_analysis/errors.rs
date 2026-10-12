@@ -132,6 +132,9 @@ pub(crate) enum SemanticErrorKind {
     UnknownTypedef,
     /// C99: §6.5.1p2, p. 69; PDF p. 81.
     UndeclaredIdentifier,
+    /// Clang-compatible extension; C99: §6.5.2.2p6,p9, pp. 71-72;
+    /// PDF pp. 83-84; §7.1.4p2, p. 167; PDF p. 179.
+    ImplicitLibraryFunction(StringCacheId),
     /// C99: §6.5.3.2p1, p. 78; PDF p. 90.
     InvalidAddressOperand,
     /// C99: §6.5.3p1, p. 78; PDF p. 90.
@@ -310,6 +313,7 @@ impl SemanticErrorKind {
             | Self::InvalidImmediate => "expected an integer constant expression in range",
             | Self::UnknownTypedef => "not a typedef name in this scope",
             | Self::UndeclaredIdentifier => "not declared",
+            | Self::ImplicitLibraryFunction(_) => "library prototype used here",
             | Self::InvalidAddressOperand => "cannot take this address",
             | Self::InvalidUnaryOperand | Self::InvalidAdditiveOperands =>
                 "operand type is not allowed here",
@@ -410,6 +414,10 @@ impl SemanticErrorKind {
 
     fn explanation(self) -> (&'static str, &'static str) {
         match self {
+            | Self::ImplicitLibraryFunction(_) => (
+                "implicitly declaring library function",
+                "C99 §6.5.2.2p6,p9: calls require compatible function types; §7.1.4p2 permits declaring library functions without their headers",
+            ),
             | Self::AtomicBufferQualifiers => (
                 "atomic buffer argument discards pointer target qualifiers",
                 "Clang atomic builtins convert generic value, expected and output buffers to pointers to the unqualified value type",
@@ -911,7 +919,14 @@ impl ToDiagnostic for SemanticError {
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
         let (message, note) = self.kind.explanation();
-        let message = if let Some(name) = self.name {
+        let message = if let SemanticErrorKind::ImplicitLibraryFunction(ty) = self.kind {
+            format_in!(
+                arena,
+                "implicitly declaring library function {} with type `{}`",
+                quote_spelling(self.name.map_or("", |name| context.string_cache.at(name))),
+                context.string_cache.at(ty)
+            )
+        } else if let Some(name) = self.name {
             format_in!(
                 arena,
                 "{message}: {}",
@@ -954,7 +969,8 @@ impl GetSeverity for SemanticError {
         }
         if matches!(
             self.kind,
-            SemanticErrorKind::QualifiedFunction
+            SemanticErrorKind::ImplicitLibraryFunction(_)
+                | SemanticErrorKind::QualifiedFunction
                 | SemanticErrorKind::MainSignature
                 | SemanticErrorKind::TentativeArrayAssumedOne
                 | SemanticErrorKind::UnusedStaticFunction

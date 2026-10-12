@@ -1410,7 +1410,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C89 implicit function declarations are retained in GNU modes.
-    /// Strict C99 and later require a declaration.
+    /// Strict C99 and later require a declaration. Known library names use
+    /// their real prototypes, as Clang does, rather than C89 implicit int.
+    /// C99: §6.5.2.2 paragraphs 6 and 9, pp. 71-72; PDF pp. 83-84;
+    /// §7.1.4 paragraph 2, p. 167; PDF p. 179.
     /// C89: §3.3.2.2, p. 41; PDF p. 55.
     /// C99: §6.5.1 paragraph 2, p. 69; PDF p. 81.
     pub(in crate::translation_phases::semantic_analysis) fn implicit_function(
@@ -1462,12 +1465,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .is_native(crate::configuration::Feature::ImplicitFunctionDeclaration)
                 || self.context.configuration.gnu_extensions())
         {
-            let result = self.types.scalar(Scalar::Int);
-            let ty = self.types.intern(TypeKind::Function {
-                result,
-                parameters: &[],
-                prototype: false,
-                variadic: false,
+            let ty = self.implicit_library_type(name).unwrap_or_else(|| {
+                let result = self.types.scalar(Scalar::Int);
+                self.types.intern(TypeKind::Function {
+                    result,
+                    parameters: &[],
+                    prototype: false,
+                    variadic: false,
+                })
             });
             self.bind(
                 name,

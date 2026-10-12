@@ -228,3 +228,179 @@ fn alternate_integer_formats_match_native_arms() {
         assert_eq!(run_native(&exe).0, 0, "{}", arm.name);
     }
 }
+
+const IMPLICIT_PROGRAMS: &[(&str, &str)] = &[
+    ("implicit_exit", "int main(void) { exit(0); }"),
+    (
+        "implicit_strings",
+        "int main(void) { char b[4]; void *p = memcpy(b, \"abc\", 4); return p != b || strcmp(b, \
+         \"abc\") || strlen(b) != 3; }",
+    ),
+];
+
+#[test]
+fn implicit_library_calls_match_interpreter_and_native_arms() {
+    let directory = TempDir::new("implicit-library-calls");
+    for &(name, source) in IMPLICIT_PROGRAMS {
+        for target in [Target::LinuxGnu, Target::WindowsGnu] {
+            let configuration = CompilerConfiguration::default()
+                .with_target(target)
+                .with_gnu_extensions(true);
+            for (optimize, profile) in STAGES {
+                let actual = with_configured_module(
+                    source,
+                    target,
+                    optimize,
+                    profile,
+                    configuration,
+                    interpret,
+                );
+                assert_eq!(actual.0, 0, "{name} {target:?} {optimize} {profile:?}");
+            }
+            if host() == Some(target) {
+                for arm in ARMS {
+                    let exe = directory.join(format!("{name}-{}.exe", arm.name));
+                    with_configured_module(
+                        source,
+                        target,
+                        arm.bcc,
+                        Profile::PostAbi,
+                        configuration,
+                        |module, _| {
+                            compile_module(
+                                module,
+                                &exe,
+                                LlvmOptions {
+                                    opt: Some(arm.opt),
+                                    disable_llvm_passes: arm.disable_llvm_passes,
+                                    target,
+                                    kind: OutputKind::Executable,
+                                },
+                            )
+                            .unwrap();
+                        },
+                    );
+                    assert_eq!(run_native(&exe).0, 0, "{name} {}", arm.name);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn implicit_library_abi_and_noundef_match_clang() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        let size = if target == Target::LinuxGnu {
+            "unsigned long"
+        } else {
+            "unsigned long long"
+        };
+        let source = format!(
+            "void f(void *p, const void *q, {size} n, const char *a, const char *b, int status) \
+             {{ memcpy(p,q,n); void *(*copy)(void *, const void *, {size}) = memcpy; copy(p,q,n); \
+             strcmp(a,b); strlen(a); printf(\"%d\", status); exit(status); }}"
+        );
+        let directory = TempDir::new("implicit-library-abi");
+        let path = directory.join("source.c");
+        std::fs::write(&path, &source).unwrap();
+        let toolchain = Toolchain::bundled(Target::LinuxGnu).unwrap();
+        let clang = Command::new(toolchain.clang())
+            .args([
+                "-std=gnu17",
+                "-Wno-error=implicit-function-declaration",
+                "-O0",
+                "-S",
+                "-emit-llvm",
+                "-o",
+                "-",
+            ])
+            .arg(format!("--target={}", target.triple()))
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(
+            clang.status.success(),
+            "{}",
+            String::from_utf8_lossy(&clang.stderr)
+        );
+        let clang = String::from_utf8(clang.stdout).unwrap();
+        with_configured_module(
+            &source,
+            target,
+            false,
+            Profile::PostAbi,
+            CompilerConfiguration::default()
+                .with_target(target)
+                .with_gnu_extensions(true),
+            |module, _| {
+                let mut bcc = String::new();
+                crate::backend::llvm::emit_module(module, target, &mut bcc).unwrap();
+                for (name, result, args) in [
+                    ("memcpy", "ptr", vec!["ptr", "ptr", "i64"]),
+                    ("strcmp", "i32", vec!["ptr", "ptr"]),
+                    ("strlen", "i64", vec!["ptr"]),
+                    ("printf", "i32", vec!["ptr", "..."]),
+                    ("exit", "void", vec!["i32"]),
+                ] {
+                    let marker = format!("@{name}(");
+                    for text in [&bcc, &clang] {
+                        let declaration = text
+                            .lines()
+                            .find(|l| l.starts_with("declare ") && l.contains(&marker))
+                            .unwrap();
+                        assert!(
+                            declaration
+                                .split_once('@')
+                                .unwrap()
+                                .0
+                                .split_whitespace()
+                                .any(|w| w == result),
+                            "{declaration}"
+                        );
+                        assert!(
+                            !declaration.split_once('@').unwrap().0.contains("noundef"),
+                            "{declaration}"
+                        );
+                        let parameters = declaration
+                            .split_once(&marker)
+                            .unwrap()
+                            .1
+                            .split_once(')')
+                            .unwrap()
+                            .0;
+                        let actual: Vec<_> = parameters.split(',').map(str::trim).collect();
+                        assert_eq!(actual.len(), args.len(), "{declaration}");
+                        for (actual, expected) in actual.iter().zip(&args) {
+                            assert_eq!(
+                                actual.split_whitespace().next().unwrap(),
+                                *expected,
+                                "{declaration}"
+                            );
+                            assert_eq!(
+                                actual.contains("noundef"),
+                                *expected != "...",
+                                "{declaration}"
+                            );
+                        }
+                    }
+                    if name != "memcpy" {
+                        for text in [&bcc, &clang] {
+                            let call = text
+                                .lines()
+                                .find(|l| l.contains("call ") && l.contains(&marker))
+                                .unwrap();
+                            let count = if name == "printf" { 2 } else { args.len() };
+                            assert_eq!(call.matches("noundef").count(), count, "{call}");
+                        }
+                    }
+                }
+                // Clang rewrites direct memcpy to an intrinsic. The indirect
+                // call preserves its C ABI and all three scalar contracts.
+                for text in [&bcc, &clang] {
+                    let call = text.lines().rfind(|l| l.contains("call ptr ")).unwrap();
+                    assert_eq!(call.matches("noundef").count(), 3, "{call}");
+                }
+            },
+        );
+    }
+}

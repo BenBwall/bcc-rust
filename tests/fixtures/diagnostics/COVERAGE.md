@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **384 top-level C inputs and 384 stderr snapshots**, plus seven supporting headers and 142 mode/policy `.args` sidecars. One hundred nineteen of the inputs cover semantic analysis (twenty-eight for declarations, twenty-eight for expressions and initializers, forty-two for statements and functions, three for 128-bit integers, four for resource intrinsics, six for atomics and generic selection, four for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 123 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **385 top-level C inputs and 385 stderr snapshots**, plus seven supporting headers and 142 mode/policy `.args` sidecars. One hundred twenty of the inputs cover semantic analysis (twenty-eight for declarations, twenty-nine for expressions and initializers, forty-two for statements and functions, three for 128-bit integers, four for resource intrinsics, six for atomics and generic selection, four for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 123 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -812,3 +812,15 @@ the same rule.
 
 The pedantic member fixture also includes `system-headers/mingw-members.h`,
 which suppresses the promoted warning under `#pragma GCC system_header`.
+
+### Implicit library declarations
+
+`sema-implicit-library.c` renders `ImplicitLibraryFunction` warnings for
+`memcpy`, `strcmp`, `printf`, `strlen`, `abort` and `exit`, including the
+function name, complete target-specific type and C99 call/library note.
+The semantic tests cover repeated calls, all extension policies, C89/GNU17,
+LP64/LLP64, const inputs, variadic parameters, explicit incompatible declarations,
+unknown-name `int ()` fallback and strict C99 rejection. The pipeline regressions
+run headerless termination and memory/string calls before/after ABI lowering,
+with/without bcc optimization, and through all four native arms. A live Clang
+comparison checks LLVM scalar types and `noundef` at declarations and call sites.
