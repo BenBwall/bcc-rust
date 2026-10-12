@@ -693,7 +693,9 @@ token or directive boundary.
 `noinline`; `__has_builtin` returns 1 for `__builtin_va_arg`,
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
-`__builtin_choose_expr`, `__builtin_classify_type`, and the modeled `__c11_atomic_*`, `__atomic_*` and `__sync_*` names. Other names return 0. These tables describe the
+`__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
+`__atomic_*` and `__sync_*` names, and the [common GCC scalar intrinsic families](#common-gcc-scalar-intrinsics-2026-10-12).
+Unmodeled names return 0. These tables describe the
 syntax-front-end subset, not backend effects or a GCC/Clang version. Both GNU
 queries are available through their reserved spellings in strict modes and
 report GNU policy diagnostics.
@@ -1066,3 +1068,17 @@ for verification and limits.
 ## GNU vectors and x86 SIMD resources (2026-10-09)
 
 GNU vector semantics and x86 resource coverage follow [GCC Vector Extensions](https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html) and [Clang Language Extensions](https://clang.llvm.org/docs/LanguageExtensions.html); see semantic-analysis.md for the supported instruction families and constant-evaluation boundaries.
+
+
+### Common GCC scalar intrinsics (2026-10-12)
+
+`GnuBuiltins` is a GNU-origin feature in the existing configuration vocabulary.
+The semantic checker reports it for ordinary-call bit counts/swaps, expectation
+and alignment hints, trap/unreachable/prefetch, constant/object-size queries,
+overflow operations and stack allocation. `__has_builtin` recognizes the
+implemented reserved names through the shared classifier; generic unsupported
+builtin names remain false. `alloca` is also recognized in GNU mode, retaining
+ordinary local/internal names. GNU syntax for case ranges, omitted conditional
+operands and statement expressions continues to use its existing parser gates;
+C2y case ranges retain their ISO gate. The lowering/backend contracts and
+conservative query choices are documented in [middle-end.md](middle-end.md).

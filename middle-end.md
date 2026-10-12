@@ -189,7 +189,7 @@ load  <ty> addr                  → ty      flags: volatile, align, access tag
 store <ty> value, addr                     flags: volatile, align, access tag
 copy  dst, src, size, align                flags: volatile, may_overlap
 fill  dst, byte, size, align               (memset)
-dyn_alloca size, align           → ptr     (VLAs; later)
+dyn_alloca.i64 size             → ptr     (function-lifetime, align 16)
 ```
 
 Calls: `call func(args)` and `call_indirect sig, callee(args)`, each with zero
@@ -881,3 +881,76 @@ itself. Windows inliner measurements and validation are recorded in
   LICM move code; measure before switching to linked lists.
 - The `returns_twice` rule for the in-house optimizer needs a test written from
   C99 §7.13 before it is trusted.
+
+
+## GCC scalar intrinsics and GNU block expressions (2026-10-12)
+
+The scalar intrinsic layer shares a name classifier between semantic analysis
+and lowering. Fixed signatures retain target-dependent `long` and `size_t`
+widths; bswap64 uses the target's uint64_t type (unsigned long on LP64,
+unsigned long long on LLP64). Overloaded overflow operands retain their
+individual integer types.
+The call checker validates counts, pointer destinations, bool/enum exclusion,
+read-only destinations, and constant control operands. All ordinary-call GNU
+intrinsics use `Feature::GnuBuiltins` and `Context::report_extension`.
+
+`clz`/`ctz` are unary integer instructions with a same-width count result and
+poison on zero. `clz_defined`/`ctz_defined` return the operand width on zero;
+`popcount` and `bswap` are total unary integer operations (`bswap` requires
+16/32/64/128 bits). These map to LLVM `ctlz`, `cttz`, `ctpop`, and `bswap`;
+parity, ffs, and redundant-sign counts use ordinary integer operations.
+`uadd_overflow` and `umul_overflow` take two same-width integers and return
+`i1`, using LLVM's unsigned overflow intrinsics. Generic and typed GCC
+add/sub/mul overflow lower through unsigned 128-bit magnitudes and explicit
+signs, preserving infinite-precision comparisons even for mixed signedness
+and 128-bit extremes. Stores retain the wrapped result on overflow.
+Predicate forms evaluate the third operand's effects and use its bit-field
+precision without promoting it. The effect-only schedule discards unused
+nonvolatile reads even beside calls/increments, retains volatile reads, and
+branches only when needed to select effects. Constant predicates are integer constant
+expressions when their evaluated operands are integer constant expressions.
+
+`expect` and alignment assumptions return their first argument; probability
+and alignment arguments are checked without introducing optimizer promises.
+Prefetch evaluates its arguments and emits no memory access. `constant_p`
+returns one only for a retained integer constant expression. Both object-size
+queries conservatively return `(size_t)-1` in modes 0/1 or zero in modes 2/3;
+no bound is inferred and no argument is evaluated. `trap` is a side-effecting
+nullary instruction mapping to LLVM `trap`, followed by `unreachable`;
+`unreachable` itself ends control flow and is undefined when executed.
+
+`dyn_alloca.i64 size` is deliberately smaller than a general VLA/lifetime IR.
+It creates a fresh uninitialized byte object of the unsigned size on every
+execution, including each loop iteration, with 16-byte alignment (the current
+x86-64 targets' ordinary stack alignment). Its result is a pointer and its
+storage remains live until this invocation returns. The interpreter adds the
+object to the current frame's stack allocations and releases it on return;
+LLVM emits `alloca i8, i64 size, align 16` at the point of execution. Poison
+size is undefined; allocation/resource exhaustion is an interpreter failure.
+Zero-size allocations produce an object whose bytes cannot be accessed.
+Dynamic allocations are effectful, are neither moved nor merged, and callees
+containing them are not inlined, preserving function lifetime. Fixed stack
+slots keep their existing representation and size bound. Scoped VLA lifetimes,
+stack-save/restore, and explicitly aligned alloca variants remain deferred.
+
+GNU omitted-middle conditionals test a saved first value before converting the
+selected result, and evaluate that value once. Case ranges compare unsigned
+`control - lower <= upper - lower`, so very wide ranges need constant space;
+ordinary switch labels remain switch entries. Statement expressions execute
+an explicit-stack block schedule and retain the final expression's C value
+category, including lvalues; other endings yield void. Constant choose-expr
+selections lower only their chosen operand. Scalar header varargs use existing
+IR `va_start`, `va_arg`, `va_copy`, and `va_end`; aggregate varargs remain
+explicitly unsupported.
+
+Contracts: [GCC bit operations](https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html),
+[GCC overflow builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html),
+[GCC other builtins](https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html),
+[GCC object sizes](https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html),
+[GCC stack allocation](https://gcc.gnu.org/onlinedocs/gcc/Stack-Allocation.html),
+[GCC statement expressions](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html),
+[GCC case ranges](https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html), and
+[GCC omitted operands](https://gcc.gnu.org/onlinedocs/gcc/Conditionals.html).
+C99 §6.5.2.2p2,7, pp. 71-72; PDF pp. 83-84 governs fixed call conversions;
+§6.5.15p4, p. 90; PDF p. 102 governs conditional sequencing; §7.15.1,
+pp. 249-251; PDF pp. 261-263 governs the header varargs contracts.

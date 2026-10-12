@@ -1218,3 +1218,19 @@ intrinsic headers in both modes. The remaining MinGW `tgmath.h` and combined
 standard-header failures require a resource header plus Clang overloadable
 function resolution. Promotion overloads, real/complex overload selection and
 an unavailable variadic fallback make this a separate feature; it is deferred.
+
+
+### Common GCC scalar builtin coverage (2026-10-12)
+
+`builtins/common.rs` owns the fixed GCC scalar signatures, target-dependent
+parameter widths and fixed-width type identities, overloaded overflow
+constraints, control-argument validation,
+and conservative constant/object-size queries. Lowering shares its name
+classifier. `GnuBuiltins` reports these GNU-only calls through the common
+extension policy; prefetch now belongs to this family rather than vector
+builtins. Statement expressions retain the final expression's type and value
+category but never discard the block's effects by folding its tail. New focused
+semantic tests exercise signatures, rejected arities and types, ICE overflow
+predicates, and denied-extension diagnostics. See the GCC intrinsic contract
+section in [middle-end.md](middle-end.md) for conservative decisions and IR
+semantics. Unmodeled names still retain opaque types and bounded refusal.
