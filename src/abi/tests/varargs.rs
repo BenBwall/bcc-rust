@@ -12,6 +12,9 @@ use crate::test_support::assert_snapshot;
 
 #[test]
 fn repeated_va_start_keeps_backing_memory_bounded_and_lists_independent() {
+    // Every incoming argument is distinct. Each iteration checks both reads
+    // of the first list, the independent list's first read, and the snapshot
+    // copied after the first read; a failure returns that read's number.
     let program = "function @restart(i32, ...) -> i32 internal {
     slot0 = stack_slot 24, align 8
     slot1 = stack_slot 24, align 8
@@ -22,35 +25,63 @@ block0(v0: i32):
     v3 = stack_addr slot2
     v4 = iconst.i32 0
     v5 = iconst.i32 1
-    jump block1(v4, v4)
-block1(v6: i32, v7: i32):
+    v6 = iconst.i32 101
+    v7 = iconst.i32 211
+    jump block1(v4)
+block1(v8: i32):
     va_start v1
     va_start v2
-    v8 = va_arg.i32 v1
-    va_copy v3, v1
     v9 = va_arg.i32 v1
-    v10 = va_arg.i32 v2
-    v11 = va_arg.i32 v3
+    va_copy v3, v1
+    v10 = va_arg.i32 v1
+    v11 = va_arg.i32 v2
+    v12 = va_arg.i32 v3
     va_end v1
     va_end v2
     va_end v3
-    v12 = iadd.i32 v8, v9
-    v13 = iadd.i32 v12, v10
-    v14 = iadd.i32 v13, v11
-    v15 = iadd.i32 v7, v14
-    v16 = iadd.i32 v6, v5
-    v17 = icmp.i32 slt v16, v0
-    brif v17, block1(v16, v15), block2
+    v13 = icmp.i32 eq v9, v6
+    brif v13, block2, block7
 block2:
-    return v15
+    v14 = icmp.i32 eq v10, v7
+    brif v14, block3, block8
+block3:
+    v15 = icmp.i32 eq v11, v6
+    brif v15, block4, block9
+block4:
+    v16 = icmp.i32 eq v12, v7
+    brif v16, block5, block10
+block5:
+    v17 = iadd.i32 v8, v5
+    v18 = icmp.i32 slt v17, v0
+    brif v18, block1(v17), block6
+block6:
+    return v4
+block7:
+    v19 = iconst.i32 1
+    return v19
+block8:
+    v20 = iconst.i32 2
+    return v20
+block9:
+    v21 = iconst.i32 3
+    return v21
+block10:
+    v22 = iconst.i32 4
+    return v22
 }
 function @main() -> i32 external {
 block0:
     v0 = iconst.i32 100000
-    v1 = iconst.i32 3
-    v2 = iconst.i32 7
-    v3 = call @restart(v0, v1, v2, v1, v2, v1, v2, v1, v2)
-    return v3
+    v1 = iconst.i32 101
+    v2 = iconst.i32 211
+    v3 = iconst.i32 307
+    v4 = iconst.i32 401
+    v5 = iconst.i32 503
+    v6 = iconst.i32 601
+    v7 = iconst.i32 701
+    v8 = iconst.i32 809
+    v9 = call @restart(v0, v1, v2, v3, v4, v5, v6, v7, v8)
+    return v9
 }
 ";
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
@@ -64,9 +95,10 @@ block0:
         assert_eq!(
             outcome.termination,
             crate::backend::interpreter::Termination::Returned(Some(
-                crate::backend::interpreter::RuntimeValue::Int(2_000_000)
+                crate::backend::interpreter::RuntimeValue::Int(0)
             )),
-            "{target:?}"
+            "{target:?}: failure codes: 1 = first read, 2 = second read, 3 = independent list, 4 \
+             = va_copy snapshot"
         );
         eprintln!(
             "{target:?}: {} retained cells after 100,000 restarts",
