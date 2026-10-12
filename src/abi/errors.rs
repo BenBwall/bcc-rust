@@ -29,12 +29,20 @@ pub(crate) struct AbiError<'ir> {
 
 /// What ABI lowering does not handle.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[expect(
+    variant_size_differences,
+    reason = "The aggregate-size refusal retains the full input size for its diagnostic."
+)]
 pub(crate) enum AbiErrorKind {
     /// A `va_arg` of a type the target's expansion does not read yet.
     VaArgType(Type),
     /// An aggregate whose low eightbyte has no class but whose high one
     /// does, which no C type without vector or attribute extensions has.
     EmptyLowEightbyte,
+    /// An aggregate cannot fit the IR's `u32`-sized stack storage.
+    AggregateTooLarge(u64),
+    /// The input or lowered signature cannot fit `u32` parameter indices.
+    TooManyParameters,
 }
 
 impl fmt::Display for AbiError<'_> {
@@ -49,6 +57,13 @@ impl fmt::Display for AbiError<'_> {
                 "an aggregate whose first eightbyte holds no member is not yet supported by ABI \
                  lowering",
             ),
+            | AbiErrorKind::AggregateTooLarge(size) => write!(
+                f,
+                "aggregate size {size} exceeds ABI lowering's stack-slot limit of {} bytes",
+                u32::MAX,
+            ),
+            | AbiErrorKind::TooManyParameters =>
+                f.write_str("the signature exceeds ABI lowering's limit of 4294967295 parameters"),
         }
     }
 }

@@ -25,6 +25,7 @@ use super::{
         Parts,
         ResultPlan,
         SignaturePlan,
+        stack_slot_size,
     },
     sysv::{
         self,
@@ -78,6 +79,7 @@ pub(super) fn rewrite_body(
     func: FuncId,
     target: Target,
     plans: &[SignaturePlan<'_>],
+    lowered_signatures: &[SigId],
     old_signatures: &[SigId],
     scratch: &Bump,
 ) {
@@ -90,6 +92,7 @@ pub(super) fn rewrite_body(
         builder: FunctionBuilder::new(module, func),
         old: &old,
         plans,
+        lowered_signatures,
         old_signatures,
         convention: Convention::of(target),
         scratch,
@@ -110,14 +113,15 @@ pub(super) fn rewrite_body(
 
 /// The state of rebuilding one body.
 struct Rewriter<'a, 'm, 'ir, 's> {
-    builder:        FunctionBuilder<'m, 'ir>,
-    old:            &'a Body<'ir>,
-    plans:          &'a [SignaturePlan<'s>],
-    old_signatures: &'a [SigId],
-    convention:     Convention,
-    scratch:        &'a Bump,
+    builder:            FunctionBuilder<'m, 'ir>,
+    old:                &'a Body<'ir>,
+    plans:              &'a [SignaturePlan<'s>],
+    lowered_signatures: &'a [SigId],
+    old_signatures:     &'a [SigId],
+    convention:         Convention,
+    scratch:            &'a Bump,
     /// A scalar i128 result's post-ABI register return area.
-    wide_result:    Option<Value>,
+    wide_result:        Option<Value>,
 }
 
 /// What the entry block does for one parameter before the old code runs.
@@ -435,7 +439,7 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                 args: self.builder.value_list(&lowered),
             },
             | Callee::Indirect(_) => InstData::CallIndirect {
-                sig:  plan.lowered,
+                sig:  self.lowered_signatures[sig.index()],
                 args: self.builder.value_list(&lowered),
             },
         };
@@ -753,9 +757,10 @@ fn slot_of(body: &Body<'_>, value: Value) -> Option<usize> {
     }
 }
 
-/// A slot size; aggregates passed by value are far below 4 GiB.
+/// A slot size already checked by read-only ABI planning. Register and
+/// scalar temporaries are at most sixteen bytes; aggregate layouts fit `u32`.
 fn slot_size(size: u64) -> u32 {
-    u32::try_from(size).expect("a by-value aggregate is smaller than 4 GiB")
+    stack_slot_size(size).expect("ABI planning checked aggregate stack-slot sizes")
 }
 
 /// The larger of `align` and `bytes`.

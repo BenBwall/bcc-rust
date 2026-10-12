@@ -28,18 +28,24 @@ use crate::{
     },
 };
 
-/// Plans the pre-ABI signature `sig` for `target` and interns the post-ABI
-/// signature it gives, whose id the plan records.
+/// Plans the pre-ABI signature `sig` for `target` without changing the
+/// module. Checks storage and parameter-count limits before rewriting.
 /// C99: §6.5.2.2 paragraph 4, p. 71; PDF p. 83; §6.8.6.4 paragraph 3,
 /// p. 139; PDF p. 151. `__int128` is an extension; Win64 passes it through
 /// caller-owned storage and returns its bits in XMM0, as bundled Clang does.
 pub(crate) fn plan_signature<'ir: 's, 's>(
-    module: &mut Module<'ir>,
+    module: &Module<'ir>,
     target: Target,
     sig: SigId,
     scratch: &'s Bump,
 ) -> Result<SignaturePlan<'s>, AbiErrorKind> {
     let signature = module.signature(sig);
+    _ = parameter_count(signature.params.len())?;
+    for param in signature.aggregates {
+        if let Some(layout) = param.abi.layout() {
+            _ = stack_slot_size(layout.size)?;
+        }
+    }
     let convention = Convention::of(target);
     let mut args = ArenaVec::with_capacity_in(signature.params.len(), scratch);
     let mut registers = sysv::ArgumentRegisters::default();
@@ -73,23 +79,35 @@ pub(crate) fn plan_signature<'ir: 's, 's>(
         };
         args.push(plan);
     }
-    let lowered = lowered_signature(signature, convention, &result, &args, scratch);
+    let mut count = u32::from(matches!(
+        result,
+        ResultPlan::Memory(_) | ResultPlan::Registers { .. } | ResultPlan::VectorI128
+    ));
+    for arg in &args {
+        let added = match arg {
+            | ArgPlan::Ignore(_) => 0,
+            | ArgPlan::Registers { parts, .. } => u32::from(parts.count),
+            | _ => 1,
+        };
+        count = count
+            .checked_add(added)
+            .ok_or(AbiErrorKind::TooManyParameters)?;
+    }
     Ok(SignaturePlan {
         result,
         args: scratch.alloc_slice_copy(&args),
-        lowered: module.intern(lowered),
     })
 }
 
 /// The plan of one signature: how its result and each parameter after the
-/// result's are passed, and the lowered signature.
+/// result's are passed. The lowered signature is interned after all plans
+/// succeed.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SignaturePlan<'s> {
-    pub(crate) result:  ResultPlan<'s>,
+    pub(crate) result: ResultPlan<'s>,
     /// One plan per pre-ABI parameter, without the aggregate result's
     /// parameter 0.
-    pub(crate) args:    &'s [ArgPlan<'s>],
-    pub(crate) lowered: SigId,
+    pub(crate) args:   &'s [ArgPlan<'s>],
 }
 
 impl SignaturePlan<'_> {
@@ -213,7 +231,7 @@ impl Convention {
 /// the target's decision without the scalars only classification needed.
 /// Narrow integers keep their place with the extension `convention` gives
 /// them.
-fn lowered_signature<'s>(
+pub(super) fn lowered_signature<'s>(
     signature: Signature<'_>,
     convention: Convention,
     result: &ResultPlan<'s>,
@@ -224,7 +242,7 @@ fn lowered_signature<'s>(
     let mut aggregates = ArenaVec::new_in(scratch);
     let mut extensions = ArenaVec::new_in(scratch);
     let mut describe = |params: &ArenaVec<'_, Type>, abi| {
-        let index = u32::try_from(params.len()).expect("a signature has few parameters");
+        let index = parameter_count(params.len()).expect("ABI planning checked parameter counts");
         aggregates.push(AggregateParam { index, abi });
     };
     match *result {
@@ -261,7 +279,8 @@ fn lowered_signature<'s>(
                     .and_then(|extension| convention.extension(extension))
                 {
                     extensions.push(ExtendedParam {
-                        index: u32::try_from(params.len()).expect("a signature has few parameters"),
+                        index: parameter_count(params.len())
+                            .expect("ABI planning checked parameter counts"),
                         extension,
                     });
                 }
@@ -293,6 +312,18 @@ fn lowered_signature<'s>(
             .result_extension
             .and_then(|extension| convention.extension(extension)),
     }
+}
+
+/// Stack slots use `u32` byte sizes. Both ABI families share this limit
+/// for aggregate parameters and results, including caller-owned storage.
+/// Wider layouts remain valid IR; ABI planning refuses them before mutation.
+pub(super) fn stack_slot_size(size: u64) -> Result<u32, AbiErrorKind> {
+    u32::try_from(size).map_err(|_| AbiErrorKind::AggregateTooLarge(size))
+}
+
+/// LLVM and IR parameter indices use `u32`; check input and expanded counts.
+fn parameter_count(count: usize) -> Result<u32, AbiErrorKind> {
+    u32::try_from(count).map_err(|_| AbiErrorKind::TooManyParameters)
 }
 
 /// `layout` without its scalars, which only classification reads.

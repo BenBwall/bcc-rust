@@ -18,6 +18,161 @@ use crate::{
 };
 
 #[test]
+fn oversized_aggregate_is_refused_without_mutation_sysv() {
+    check_oversized_aggregate(Target::LinuxGnu);
+}
+
+#[test]
+fn oversized_aggregate_is_refused_without_mutation_win64() {
+    check_oversized_aggregate(Target::WindowsGnu);
+}
+
+fn check_oversized_aggregate(target: Target) {
+    let text = "\
+function @small(ptr aggregate(size 8, align 8, [0: i64])) external
+function @callee(ptr aggregate(size 4294967296, align 8)) external
+function @caller(ptr) external {
+block0(v0: ptr):
+    call @callee(v0)
+    return
+}
+";
+    assert_refused_without_mutation(
+        text,
+        target,
+        "callee",
+        AbiErrorKind::AggregateTooLarge(4_294_967_296),
+    );
+}
+
+#[test]
+fn oversized_aggregate_storage_is_refused_in_every_signature() {
+    for target in [
+        Target::LinuxGnu,
+        Target::LinuxMusl,
+        Target::WindowsGnu,
+        Target::WindowsMsvc,
+    ] {
+        for size in [4_294_967_296, u64::MAX] {
+            for kind in ["aggregate", "result"] {
+                let param = format!("ptr {kind}(size {size}, align 8)");
+                for variadic in ["", ", ..."] {
+                    for argument in ["v0", "v1"] {
+                        let text = format!(
+                            "\
+function @small(ptr aggregate(size 8, align 8, [0: i64])) external
+function @callee({param}{variadic}) external {{
+block0(v0: ptr):
+    return
+}}
+function @caller(ptr) external {{
+    slot0 = stack_slot 8, align 8
+block0(v0: ptr):
+    v1 = stack_addr slot0
+    call @callee({argument})
+    return
+}}
+"
+                        );
+                        assert_refused_without_mutation(
+                            &text,
+                            target,
+                            "callee",
+                            AbiErrorKind::AggregateTooLarge(size),
+                        );
+                    }
+                    // This signature exists only at an indirect call, so
+                    // planning must find it even without a declaration.
+                    let text = format!(
+                        "\
+function @small(ptr aggregate(size 8, align 8, [0: i64])) external
+function @caller(ptr, ptr) external {{
+block0(v0: ptr, v1: ptr):
+    call_indirect v0(v1) : ({param}{variadic})
+    return
+}}
+"
+                    );
+                    assert_refused_without_mutation(
+                        &text,
+                        target,
+                        "caller",
+                        AbiErrorKind::AggregateTooLarge(size),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn maximum_stack_sized_aggregate_still_lowers() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        for kind in ["aggregate", "result"] {
+            for argument in ["v0", "v1"] {
+                let text = format!(
+                    "\
+function @callee(ptr {kind}(size 4294967295, align 1), ...) external
+function @caller(ptr) external {{
+    slot0 = stack_slot 8, align 1
+block0(v0: ptr):
+    v1 = stack_addr slot0
+    call @callee({argument})
+    return
+}}
+"
+                );
+                let lowered = lower_text(&text, target);
+                if target == Target::LinuxGnu && kind == "aggregate" {
+                    assert!(
+                        lowered.contains("stack_slot 4294967295, align 8"),
+                        "{lowered}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn classification_refusal_does_not_intern_earlier_signatures() {
+    let text = "\
+function @small(ptr aggregate(size 8, align 8, [0: i64])) external
+function @callee(ptr aggregate(size 16, align 8, [8: i64])) external
+";
+    assert_refused_without_mutation(
+        text,
+        Target::LinuxGnu,
+        "callee",
+        AbiErrorKind::EmptyLowEightbyte,
+    );
+}
+
+#[track_caller]
+fn assert_refused_without_mutation(text: &str, target: Target, function: &str, kind: AbiErrorKind) {
+    let arena = Bump::new();
+    let mut module = parse_module(&arena, text).unwrap();
+    assert_verified(&module, Profile::PreAbi, text);
+    let before = module.to_string();
+    let signatures = module.signature_count();
+    let error = lower_abi(&mut module, target, &Bump::new()).unwrap_err();
+    assert_eq!(error, AbiError { function, kind });
+    if let AbiErrorKind::AggregateTooLarge(size) = kind {
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "@{function}: aggregate size {size} exceeds ABI lowering's stack-slot limit of \
+                 4294967295 bytes"
+            ),
+        );
+    }
+    assert_eq!(module.profile(), Profile::PreAbi);
+    assert_eq!(module.signature_count(), signatures);
+    assert_eq!(module.to_string(), before);
+    assert_verified(&module, Profile::PreAbi, text);
+}
+
+#[test]
 fn function_rewrite_and_verification_scratch_is_reclaimed() {
     let usage = |count| {
         let mut text = String::new();

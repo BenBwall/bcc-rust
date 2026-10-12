@@ -7,7 +7,8 @@
 //! [`lower_abi`] works in three steps. It first checks every `va_arg` type
 //! and plans every interned signature with the target's rules
 //! ([`plan_signature`]), so an unsupported case is reported before anything
-//! changes. It then gives each function its lowered signature. Last, it
+//! changes, including interning signatures. It then interns the lowered
+//! signatures and gives each function its lowered signature. Last, it
 //! rebuilds each defined function's body ([`rewrite::rewrite_body`]): the
 //! entry block receives the lowered parameters and rebuilds each aggregate
 //! that arrived in registers in a stack slot; each call packs the
@@ -139,13 +140,24 @@ fn lower_abi_with_function_scratch<'ir>(
         })?;
         plans.push(plan);
     }
+    let mut lowered_signatures = ArenaVec::with_capacity_in(count, scratch);
+    for (index, plan) in plans.iter().enumerate() {
+        let lowered = plan::lowered_signature(
+            module.signature(SigId::new(index)),
+            Convention::of(target),
+            &plan.result,
+            plan.args,
+            scratch,
+        );
+        lowered_signatures.push(module.intern(lowered));
+    }
     let mut old_signatures = ArenaVec::with_capacity_in(module.functions().count(), scratch);
     old_signatures.extend(module.functions().map(|(_, function)| function.signature));
     let mut functions = ArenaVec::new_in(scratch);
     functions.extend(module.functions().map(|(func, _)| func));
     for &func in &functions {
         let old = old_signatures[func.index()];
-        module.function_mut(func).signature = plans[old.index()].lowered;
+        module.function_mut(func).signature = lowered_signatures[old.index()];
     }
     for &func in &functions {
         rewrite::rewrite_body(
@@ -153,6 +165,7 @@ fn lower_abi_with_function_scratch<'ir>(
             func,
             target,
             &plans,
+            &lowered_signatures,
             &old_signatures,
             function_scratch,
         );

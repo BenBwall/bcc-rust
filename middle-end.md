@@ -114,6 +114,15 @@ tables:
 | `GlobalId` | module | a global object, defined or declared |
 | `SigId` | module | an interned call signature |
 
+Stack-slot byte sizes are `u32`, so one slot can hold at most 4,294,967,295
+bytes. Aggregate layout sizes remain `u64` in both IR profiles: wider layouts
+can be verified and represented by LLVM's array types. ABI lowering currently
+refuses aggregate parameters and results above the stack-slot limit on both
+System V and Win64, including `sret` results and caller-owned copies, rather
+than widening stack slots or allowing target-dependent storage limits. This is
+an ABI lowering limit, not a verifier constraint. Alignments are independently
+bounded by `Align` to powers of two no greater than 2^31 for LLVM-C.
+
 Instruction records are fixed size; operand lists longer than two (call
 arguments, branch arguments, switch cases) live in a per-function value pool and
 are referenced by `(start, len)`. A size test pins the record size, in the style
@@ -569,7 +578,9 @@ before it:
 lowering → optimize → lower_abi → emit_module (LLVM) | run (interpreter)
 ```
 
-It plans every interned signature for the target, gives each function its
+It plans every interned signature for the target without changing the module,
+checks aggregate storage sizes and expanded parameter counts, then interns the
+lowered signatures and gives each function its
 lowered signature, and rebuilds each body: the entry block rebuilds an
 aggregate that arrived in registers in a fresh slot standing for the old
 pointer parameter; each call loads the register parts of its aggregate
@@ -581,6 +592,13 @@ as aligned and large as the target needs, and drops ignored aggregates; each
 are reported before anything changes. The interpreter runs both profiles; in a
 post-ABI module its `va_start` lays the variadic arguments out as the target
 passes them.
+
+The storage preflight covers fixed aggregate parameters of variadic signatures
+as well as ordinary parameters, return areas and `byval` copies, whether a call
+passes an existing stack slot or needs a temporary. Scalar variadic arguments
+and `va_arg` use at most sixteen bytes; aggregate variadic arguments and
+aggregate `va_arg` remain unsupported. Signatures and their expanded parameter
+counts must also fit `u32`, as required by IR indices and LLVM-C.
 
 **System V x86-64** (Linux): eightbyte classification per the psABI §3.2.3, with
 Clang's choices where the document leaves room — aggregates over 16 bytes,
