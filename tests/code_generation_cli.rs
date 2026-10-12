@@ -643,6 +643,60 @@ mod tests {
     }
 
     #[test]
+    fn object_output_cannot_overwrite_input_source() {
+        assert_output_preserves_input(true, false);
+    }
+
+    #[test]
+    fn executable_output_cannot_overwrite_input_source() {
+        assert_output_preserves_input(false, false);
+    }
+
+    #[test]
+    fn object_output_cannot_overwrite_input_through_a_hard_link() {
+        assert_output_preserves_input(true, true);
+    }
+
+    #[test]
+    fn executable_output_cannot_overwrite_input_through_a_hard_link() {
+        assert_output_preserves_input(false, true);
+    }
+
+    fn assert_output_preserves_input(object: bool, hard_link: bool) {
+        let source = temporary("preserve.c");
+        let alias = temporary("alias.c");
+        std::fs::write(&source, SUM).unwrap();
+        let output = if hard_link {
+            std::fs::hard_link(&source, &alias).unwrap();
+            &alias
+        } else {
+            &source
+        };
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+        _ = command.arg(&source).arg("-o").arg(output);
+        if object {
+            _ = command.arg("-c");
+        }
+        let result = command.output().unwrap();
+        let contents = std::fs::read(&source).unwrap();
+        std::fs::remove_file(&source).unwrap();
+        if hard_link {
+            std::fs::remove_file(&alias).unwrap();
+        }
+        assert!(contents == SUM.as_bytes(), "the C source was overwritten");
+        assert_eq!(result.status.code(), Some(1), "{}", text(&result.stderr));
+        assert_eq!(
+            text(&result.stderr).trim(),
+            format!(
+                "error: output file '{}' is the same as input file '{}'",
+                output.display(),
+                source.display()
+            )
+        );
+        assert_eq!(result.stdout.as_slice(), b"");
+    }
+
+    #[test]
     fn output_builds_executables_and_objects_through_clang() {
         let Some(target) = host() else {
             eprintln!("skipping: the host is not a supported target");

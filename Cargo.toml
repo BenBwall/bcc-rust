@@ -135,7 +135,7 @@ coz = { version = "0.1.3", optional = true }
 libc = "0.2.175"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Memory", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
 [target.'cfg(windows)'.dev-dependencies]
 # Native test deadlines own a kill-on-close job. Security supplies the job

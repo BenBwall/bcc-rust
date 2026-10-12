@@ -15,7 +15,8 @@
 //!
 //! Files by role:
 //! - Invocation: `arguments.rs`, `search.rs`, `errors.rs`.
-//! - Output: `output.rs`, `token.rs`, `diagnostic_reporter.rs`.
+//! - Output: `output.rs`, `token.rs`, `diagnostic_reporter.rs`,
+//!   `output_file.rs`.
 //! - Code generation: `code_generation.rs`.
 //! - Measurement entry points: `measured.rs`.
 //! - CLI fixtures: `tests.rs`.
@@ -33,6 +34,7 @@ mod search;
 mod code_generation;
 mod diagnostic_reporter;
 mod output;
+mod output_file;
 mod token;
 
 // Measurements
@@ -106,6 +108,21 @@ pub fn run() -> Result<i32, MainError> {
             },
             | _ => unreachable!("clap requires exactly one input source"),
         };
+    if let (Some(input), Some(output)) = (&args.input.input_file, &args.code_generation.output_path)
+    {
+        let same_file = output_file::is_input(input, output).map_err(|source| {
+            MainError::InspectOutputFileError {
+                path: output.clone(),
+                source,
+            }
+        })?;
+        if same_file {
+            return Err(MainError::OutputIsInput {
+                input:  input.clone(),
+                output: output.clone(),
+            });
+        }
+    }
     let directories = args.search.directories();
     let search = HeaderSearch {
         quote:    tu.alloc_slice_fill_iter(directories.quote.iter().map(AsRef::as_ref)),
