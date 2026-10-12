@@ -450,6 +450,15 @@ constant), the conversion records applied to each operand in order, every
 binding with storage duration and linkage, and the type graph with target
 layouts and member offsets.
 
+Inline body emission is decided by semantic analysis and consumed by lowering:
+C99 inline-only bodies and GNU89 `extern inline` bodies remain external
+declarations in IR, so uninlined calls and addresses refer to the external
+symbol. Plain GNU89 `inline` and `static inline` bodies are lowered normally.
+The interpreter and LLVM therefore share the same decision. See
+`language-standards.md` for mode overrides and the per-function `gnu_inline`
+attribute. C99 §6.7.4p6-7 (pp. 112-113; PDF pp. 124-125), §6.9p5 (p. 140;
+PDF p. 152), and [GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html).
+
 ### Front-end prerequisites (stage 0)
 
 The audit lists gaps that block lowering. In order:

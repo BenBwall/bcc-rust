@@ -18,6 +18,7 @@ use std::{
 
 mod asm_labels;
 mod braced_strings;
+mod compound_assignments;
 mod declaration_initializers;
 mod runtime_calls;
 mod union_initializers;
@@ -73,9 +74,26 @@ fn with_module<R>(
     profile: Profile,
     then: impl FnOnce(&Module<'_>, Target) -> R,
 ) -> R {
+    with_configured_module(
+        source,
+        target,
+        optimize,
+        profile,
+        CompilerConfiguration::default().with_target(target),
+        then,
+    )
+}
+
+fn with_configured_module<R>(
+    source: &str,
+    target: Target,
+    optimize: bool,
+    profile: Profile,
+    configuration: CompilerConfiguration,
+    then: impl FnOnce(&Module<'_>, Target) -> R,
+) -> R {
     let tu = Bump::new();
     let source = tu.alloc_str(source);
-    let configuration = CompilerConfiguration::default().with_target(target);
     let mut context = Context::with_configuration(&tu, configuration);
     let unit = parse_translation_unit(
         &mut context,

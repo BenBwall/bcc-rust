@@ -69,8 +69,13 @@ as well.
 Compiler identity follows Clang's approach. Every language mode, including
 strict ISO modes, defines `__GNUC__` `4`, `__GNUC_MINOR__` `2` and
 `__GNUC_PATCHLEVEL__` `1`, the GCC version Clang claims, and the
-inline-semantics macro Clang defines: `__GNUC_GNU_INLINE__` before C99 and
-`__GNUC_STDC_INLINE__` from C99 on. Only `__STRICT_ANSI__` distinguishes
+inline-semantics macro Clang defines: `__GNUC_GNU_INLINE__` in GNU89 inline
+mode and `__GNUC_STDC_INLINE__` in C99 inline mode, each with value `1` and
+the other absent. Before C99 (including C95), GNU89 inline is the default;
+from C99 on, C99 inline is the default. `-fgnu89-inline` and
+`-fno-gnu89-inline` override this choice independently of `-std`, with the
+last inline flag winning. bcc permits explicitly selecting C99 inline even
+in a pre-C99 mode; GCC diagnoses that combination. Only `__STRICT_ANSI__` distinguishes
 strict modes from GNU modes in these macros. `-fms-extensions` defines
 `_MSC_VER` `1933`, `_MSC_FULL_VER` `193300000`, `_MSC_BUILD` `1` and
 `_MSC_EXTENSIONS` `1`: MSVC 19.33, Clang's default
@@ -217,6 +222,22 @@ pragma behavior under C99 §6.10.6p1, rather than a GNU language-mode feature.
 the default is Allow. Later policy flags win. Deny emits an error but keeps
 classified tokens available for structured parser recovery. Preprocessor
 extensions with their own diagnostics keep their established recovery.
+
+`-w` (also `--suppress-warnings`) suppresses warning rendering and warning
+counts in every CLI view. Errors and extension-policy errors remain visible.
+
+Inline emission follows [GCC's Inline manual](https://gcc.gnu.org/onlinedocs/gcc/Inline.html)
+and [its dialect options](https://gcc.gnu.org/onlinedocs/gcc/C-Dialect-Options.html#index-fgnu89-inline).
+GNU89 plain `inline` definitions emit an external body, while GNU89 `extern
+inline` bodies provide no external definition even if another declaration
+omits `inline`. `static inline` retains internal linkage in both modes.
+In C99 mode, any file-scope declaration with `extern` or without `inline`
+makes the inline body external (C99 §6.7.4p6-7, pp. 112-113; PDF pp. 124-125;
+§6.9p5, p. 140; PDF p. 152). Block-scope declarations do not decide this.
+The already parsed `gnu_inline`/`__gnu_inline__` attribute selects GNU89
+semantics per function even with `-fno-gnu89-inline`; it does not change the
+translation-unit predefined macro. `__has_attribute(gnu_inline)` is `1`.
+The Microsoft target retains its existing external-inline ABI behavior.
 
 MSVC groups are independently opt-in. `-fms-extensions` enables all ten groups;
 `-fno-ms-extensions` disables them. Each group has `-fms-NAME` and
@@ -828,10 +849,12 @@ diagnostics are not counted.
 - Implicit int is a removed C89 feature, not a GNU extension: C99 and later
   report `'implicit int' is a C89 feature removed in C99`.
 - Semantic calls to undeclared functions follow `ImplicitFunctionDeclaration`,
-  another removed C89 feature. C89/C95 create an unprototyped int-returning
-  declaration; GNU modes retain that behavior with the configured pedantic
-  policy. Strict C99 and later report an undeclared identifier. Ordinary
-  non-call identifier lookup never creates an implicit declaration.
+  another removed C89 feature. C89/C95 and GNU modes create a declaration
+  under the configured pedantic policy. Known library names use the complete
+  library prototype and emit a warning naming the function and type, as Clang
+  does; all other names retain unprototyped int returns. Explicit declarations
+  keep the user's type. Strict C99 and later report an undeclared identifier.
+  Ordinary non-call identifier lookup never creates an implicit declaration.
 - `__STRICT_ANSI__` is an implementation macro outside §6.10.8's protection, so
   `#undef` and `#define` apply to it as to any macro, as in GCC. The GNU builtins
   `__COUNTER__`, `__has_attribute`, and `__has_builtin` may be redefined or

@@ -242,8 +242,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     }
 
     /// Declares a function definition's symbol; `None` when its body is
-    /// not lowered, as for a C99 inline definition, which provides no
-    /// external definition (§6.7.4 paragraph 6, pp. 112-113; PDF pp. 124-125).
+    /// not lowered for a C99 inline-only or GNU extern-inline definition.
+    /// The semantic pass decides emission once for the interpreter and LLVM.
+    /// C99: §6.7.4p6-7, pp. 112-113; PDF pp. 124-125; §6.9p5,
+    /// p. 140; PDF p. 152. GNU extension: GCC manual, "Inline":
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Inline.html>.
     fn declare_definition(
         &mut self,
         record: &FunctionRecord<'tu>,

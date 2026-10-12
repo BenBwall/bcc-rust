@@ -5,12 +5,65 @@ import os
 from pathlib import Path
 import sys
 import time
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from run_gcc_torture_execute import classify, disagreement, invoke, summary, ARMS
+from run_gcc_torture_execute import classify, disagreement, invoke, summary, source_options, supported_options, survey_file, ARMS
 
 
 def result(stderr="", exit_code=0, timeout=False, stdout=""):
     return {"stderr": stderr, "stdout": stdout, "exit": exit_code, "timeout": timeout}
+
+
+class SourceOptionsTests(unittest.TestCase):
+    def test_supported_and_unsupported_options_are_separated(self):
+        options = source_options('/* { dg-options "-fgnu89-inline -std=gnu89 -w -fwrapv" } */')
+        self.assertEqual(options["applied_options"], ["-fgnu89-inline", "-std=gnu89", "-w"])
+        self.assertEqual(options["unsupported_options"], ["-fwrapv"])
+
+    def test_additional_options_and_replacement_preserve_order(self):
+        options = source_options('''/* { dg-additional-options "-D X=1" }
+            { dg-options "-std=c99" }
+            { dg-options "-std=gnu17 -fgnu89-inline -fno-gnu89-inline" }
+            { dg-additional-options "-U X" } */''')
+        self.assertEqual(options["applied_options"],
+                         ["-std=gnu17", "-fgnu89-inline", "-fno-gnu89-inline", "-D", "X=1", "-U", "X"])
+
+    def test_selectors_are_deferred_without_replacing_unconditional_flags(self):
+        options = source_options('''/* { dg-options "-w" }
+            { dg-options "-std=c89" { target { { x86_64-*-* } && ia32 } } }
+            { dg-additional-options "-DSIGNAL_SUPPRESS" { target { ! signal } } } */''')
+        self.assertEqual(options["applied_options"], ["-w"])
+        self.assertEqual(len(options["option_directives"]), 3)
+        self.assertEqual(options["option_directives"][1]["deferred_reason"], "target selector not evaluated")
+
+    def test_quoting_joined_operands_and_language_flags(self):
+        options = source_options('/* { dg-options "-I\'dir with spaces\' -std c99 -DVALUE=7 -fms-extensions -pedantic" } */')
+        self.assertEqual(options["applied_options"],
+                         ["-Idir with spaces", "-std", "c99", "-DVALUE=7", "-fms-extensions", "-pedantic"])
+
+    def test_invalid_values_missing_operands_and_arm_flags_are_unsupported(self):
+        self.assertEqual(supported_options(["-std=unknown", "-std", "c++17", "-O2", "-c", "-I"]),
+                         ([], ["-std=unknown", "-std", "c++17", "-O2", "-c", "-I"]))
+        self.assertEqual(source_options('/* { dg-options "-w')["applied_options"], [])
+
+    def test_survey_passes_and_records_flags_per_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "test.c"
+            source.write_text('/* { dg-options "-fgnu89-inline -fwrapv" } */\nint main(void) { return 0; }',
+                              encoding="utf-8")
+            args = SimpleNamespace(output=root / "output", bcc=Path("bcc"), timeout=1)
+            with patch("run_gcc_torture_execute.ARMS", {"interpret": ["--interpret"]}), \
+                    patch("run_gcc_torture_execute.invoke", return_value={**result(), "seconds": 0}) as call:
+                row = survey_file(source, root, args, {})
+            self.assertEqual(row["applied_options"], ["-fgnu89-inline"])
+            self.assertEqual(row["unsupported_options"], ["-fwrapv"])
+            command = call.call_args.args[0]
+            self.assertIn("-fgnu89-inline", command)
+            self.assertNotIn("-fwrapv", command)
+            self.assertEqual(row["arms"]["interpret"]["command"], command)
 
 
 class ExecuteClassifierTests(unittest.TestCase):

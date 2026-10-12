@@ -28,14 +28,14 @@ block0(v0: ptr, v1: i32):
     v14 = or.i8 v13, v9
     store.i8 v14, v0, align 1
     v15 = zext.i32 v9
-    v16 = load.i16 v0, align 2
-    v17 = iconst.i16 6
-    v18 = shl.i16 v16, v17
-    v19 = iconst.i16 10
-    v20 = ashr.i16 v18, v19
-    v21 = sext.i32 v20
-    v22 = iconst.i32 3
-    v23 = isub.i32 nsw v21, v22
+    v16 = iconst.i32 3
+    v17 = load.i16 v0, align 2
+    v18 = iconst.i16 6
+    v19 = shl.i16 v17, v18
+    v20 = iconst.i16 10
+    v21 = ashr.i16 v19, v20
+    v22 = sext.i32 v21
+    v23 = isub.i32 nsw v22, v16
     v24 = trunc.i16 v23
     v25 = iconst.i16 63
     v26 = and.i16 v24, v25
@@ -112,14 +112,14 @@ block0(v0: ptr, v1: i32):
     v93 = or.i8 v92, v88
     store.i8 v93, v0, align 1
     v94 = zext.i32 v88
-    v95 = load.i16 v0, align 2
-    v96 = iconst.i16 6
-    v97 = shl.i16 v95, v96
-    v98 = iconst.i16 10
-    v99 = ashr.i16 v97, v98
-    v100 = sext.i32 v99
-    v101 = iconst.i32 1
-    v102 = shl.i32 nsw v100, v101
+    v95 = iconst.i32 1
+    v96 = load.i16 v0, align 2
+    v97 = iconst.i16 6
+    v98 = shl.i16 v96, v97
+    v99 = iconst.i16 10
+    v100 = ashr.i16 v98, v99
+    v101 = sext.i32 v100
+    v102 = shl.i32 nsw v101, v95
     v103 = trunc.i16 v102
     v104 = iconst.i16 63
     v105 = and.i16 v103, v104

@@ -144,6 +144,11 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         self.last_other = None;
         self.other_errors.clear();
         for PendingDiagnostic { diagnostic, .. } in self.pending.drain(..) {
+            if diagnostic.severity == ErrorSeverity::Warning
+                && context.configuration.suppress_warnings()
+            {
+                continue;
+            }
             match diagnostic.severity {
                 | ErrorSeverity::Error => self.errors += 1,
                 | ErrorSeverity::Warning => self.warnings += 1,

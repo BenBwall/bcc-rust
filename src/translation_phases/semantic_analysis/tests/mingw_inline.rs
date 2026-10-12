@@ -60,6 +60,31 @@ fn gnu_extern_inline_can_be_redeclared_static_or_redefined() {
 }
 
 #[test]
+fn inline_mode_overrides_control_replacement_and_c99_body_restrictions() {
+    let source = "static int x; inline int f(void) { static int y; return x + y; }";
+    for standard in [CStandard::C89, CStandard::C99, CStandard::C17] {
+        let config =
+            CompilerConfiguration::new(standard, ExtensionPolicy::Allow).with_gnu_extensions(true);
+        assert_eq!(kinds(source, config.with_gnu89_inline(true)), []);
+        let errors = kinds(source, config.with_gnu89_inline(false));
+        assert!(
+            errors.contains(&SemanticErrorKind::InlineStaticObject),
+            "{errors:?}"
+        );
+        assert!(
+            errors.contains(&SemanticErrorKind::InlineInternalReference),
+            "{errors:?}"
+        );
+        let replace = "extern inline int f(void) { return 1; } int f(void) { return 7; }";
+        assert_eq!(kinds(replace, config.with_gnu89_inline(true)), []);
+        assert!(
+            kinds(replace, config.with_gnu89_inline(false))
+                .contains(&SemanticErrorKind::DuplicateDefinition)
+        );
+    }
+}
+
+#[test]
 fn gnu_extern_inline_with_inherited_internal_linkage_defines_the_function() {
     let configuration = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow);
     assert_eq!(

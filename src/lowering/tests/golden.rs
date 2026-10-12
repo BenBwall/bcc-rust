@@ -260,7 +260,7 @@ int first(void) { return __func__[0]; }",
 }
 
 #[test]
-fn implicit_declarations_call_unprototyped_functions() {
+fn implicit_declarations_use_library_prototypes_and_unknown_open_types() {
     let configuration = crate::configuration::CompilerConfiguration::new(
         crate::configuration::CStandard::C89,
         crate::configuration::ExtensionPolicy::Allow,
@@ -272,9 +272,13 @@ fn implicit_declarations_call_unprototyped_functions() {
     .expect("C89 declares called names implicitly");
     assert!(
         ir.contains(
-            "function @putchar(... noundef) -> i32 external
+            "function @putchar(i32 noundef) -> i32 external
 "
         ),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("function @exit2(... noundef) -> i32 external"),
         "{ir}"
     );
     assert!(ir.contains("call @putchar"), "{ir}");

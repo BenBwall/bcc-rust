@@ -181,3 +181,661 @@ python -m unittest discover -s scripts -p "test_run_gcc_torture*.py"
 The required checks are run sequentially when a feature build could replace the debug CLI used by integration tests. An earlier overlapping run was stopped after that collision caused hanging diagnostic subprocesses; a later linking attempt consequently failed on the still-running test executable. Those interrupted runs remain in `target/torture-check-*.log` as evidence. Final outcomes: all eight requested checks passed. `cargo test --all-targets` passed 1,558 tests across 17 suites, with three existing ignored tests; the allocation test passed 25 checks; the requested differential invocation passed five checks with two existing long sweeps ignored (the ordinary optimizer sweep uses `BCC_DIFFTEST_CASES=3000`); the Python runner/classifier suite passed 20 tests. Both Clippy profiles, formatting, and whitespace checks passed. Logs are `target/torture-check-*-last.log`; formatting/Python/whitespace were also verified directly. Source changes were complete before these final Rust checks.
 
 The whole-file Conventional Commit plan is `target/commit-plan.md`. No staging, commits, or Git metadata writes were performed.
+
+## Correctness follow-up: 2026-10-12
+
+This follow-up starts at clean head `0a756543` in `claude/torture-correctness`.
+It uses the same 1,677-source top-level corpus, target, four arms, default
+GNU17 dialect, eight workers and ten-second deadlines described above. Corpus
+SHA-512 values match between every before/after source row. Neither shared
+LLVM junction was changed or rebuilt; the corpus was only read. The earlier
+survey's totals are historical, not the baseline for this head.
+
+```powershell
+cargo build --release
+python scripts/run_gcc_torture_execute.py --source C:\Users\benbw\Documents\GitRepo\bcc-rust\target\compiler-corpus\gcc-15.2.0 --output target/compiler-corpus/execute-correctness-before --jobs 8 --timeout 10
+cargo build --release
+python scripts/run_gcc_torture_execute.py --source C:\Users\benbw\Documents\GitRepo\bcc-rust\target\compiler-corpus\gcc-15.2.0 --output target/compiler-corpus/execute-correctness-after --jobs 8 --timeout 10
+```
+
+Both complete surveys return 1 because raw failures remain. Before and after
+counts are below; I0 and I1 denote `interpret` and `interpret-bcc`.
+
+| Class | I0 before | after | I1 before | after | A0 before | after | A1 before | after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| pass | 1062 | 1064 | 1066 | 1068 | 1199 | 1200 | 1189 | 1190 |
+| frontend-error | 139 | 139 | 139 | 139 | 139 | 139 | 139 | 139 |
+| lowering-unsupported | 307 | 307 | 307 | 307 | 307 | 307 | 307 | 307 |
+| abi-unsupported | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| compiler-crash | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| interpreter-trap | 154 | 153 | 149 | 148 | 0 | 0 | 0 | 0 |
+| wrong-result | 15 | 14 | 16 | 15 | 17 | 16 | 27 | 26 |
+| timeout | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| link-error | 0 | 0 | 0 | 0 | 15 | 15 | 15 | 15 |
+
+
+No passing source/arm regressed. The only changed sources are `pr58943.c`
+(W/W/W/W to P/P/P/P) and `pr79327.c` (T/T/P/P to P/P/P/P).
+Disagreements decreased from 155 to 154: the first fix was a shared failure,
+so only the second removes a disagreement. There were zero compiler crashes
+and zero timeouts in either run. Before elapsed time was 609.937 seconds;
+after elapsed time was 488.608 seconds; these uncontrolled times are not a
+performance comparison.
+
+The fresh interpreter totals differ from the old report because the current
+head checks host signatures and unresolved external objects more strictly.
+Captured failing-instruction evidence identifies 81 implicit `int`-returning
+`exit` declarations, one implicit `int`-returning `strlen` declaration, and
+six mismatched old-style indirect calls. `exit` returns `void`, and Win64
+`strlen` returns 64-bit `size_t`; the retained call-site result types differ.
+These are legacy/GCC call assumptions, not defined C99 calls
+(C99 §6.5.2.2p6,p9, pp. 71-72; PDF pp. 83-84). One source, `loop-3b.c`, also
+overflows signed multiplication before passing a scalar argument; its I0
+trap occurs there before I1 reaches its incompatible `exit` call. Host
+signature checks and `noundef` checks were retained. The implicit-prototype
+follow-up below resolves the implicit library types while preserving those checks.
+
+The fixes are:
+
+1. **Compound assignment read across a called function.** Lowering read the
+   destination before the RHS call, then overwrote that call's modification
+   using the stale value. The smallest array reduction from `pr58943.c` is:
+
+   ```c
+   unsigned x[1] = {2};
+   unsigned f(void) { x[0] |= 128; return 1; }
+   int main(void) { x[0] |= f(); return x[0] != 131; }
+   ```
+
+   Both the interpreter and native A0 returned 1 before the change. The
+   lowering work stack now evaluates the RHS before evaluating and updating
+   the lvalue, preserving exactly one lvalue evaluation. All four arms now
+   return 0. Regressions also cover a scalar, a bit-field, the expression's
+   returned value, and a side-effecting function returning the lvalue's
+   address. C99 §6.5.16.2p3 (p. 93; PDF p. 105) permits this chosen operand
+   order and requires one evaluation of the lvalue. C11 §6.5.16.2p3
+   (pp. 103-104; PDF pp. 121-122) additionally specifies that the compound
+   assignment is one evaluation relative to an indeterminately sequenced
+   function call; that rule applies to this survey's GNU17 dialect. The
+   fix preserves C99's available RHS-first evaluation choice as well.
+
+2. **Interpreter alternate integer formatting.** The default host trapped
+   on `%#hho` and `%#hhx` in `pr79327.c`. A minimal reduction is:
+
+   ```c
+   int sprintf(char *, const char *, ...);
+   int main(void) {
+       char b[8];
+       return sprintf(b, "%#hho", 127) != 4
+           || b[0] != '0' || b[1] != '1' || b[2] != '7'
+           || b[3] != '7' || b[4] != 0;
+   }
+   ```
+
+   It previously trapped in the interpreter while native execution passed.
+   The host now supports octal conversion and `#` for octal/hexadecimal,
+   emits no hexadecimal prefix for zero, truncates promoted `hh` arguments
+   before deciding the prefix, and puts zero field padding after the base
+   prefix. Regressions check exact bytes, counts, null termination, zero,
+   uppercase hexadecimal, left alignment, zero padding and narrow argument
+   truncation; `sprintf` must leave stdout empty. C99 §7.19.6.1p6
+   (pp. 275-276; PDF pp. 287-288) defines the alternate forms and padding.
+   Precision and other previously unsupported conversions remain explicit
+   capability limits.
+
+Each reduction runs through optimized/unoptimized interpretation before and
+after ABI lowering on LinuxGNU and WindowsGNU. Native regressions run A0,
+A1, A2 and A3 on WindowsGNU. The compound regression was observed red in
+both interpreter and native tests before the fix. The reduced formatting
+program was observed to trap before the host change and pass natively;
+the final regression checks the same operation. Bundled Clang and installed
+MinGW GCC also pass both original fixed sources at `-O0` and `-O2`.
+
+The five changed lowering goldens (`assignment`, `bit_field_updates`,
+`bit_field_volatile`, `float_increments`, `globals`) reflect only the chosen
+RHS-first instruction order and consequent SSA value renumbering. Their C
+sources and semantic assertions were retained.
+
+The ten A0-pass/A1-wrong sources were prioritized and inspected individually:
+
+| Sources | Root cause under the recorded survey options |
+| --- | --- |
+| `20020508-2.c`, `20020508-3.c`, `pr40386.c` | Signed rotate expressions left-shift negative values or produce unrepresentable signed results; C99 §6.5.7p4. |
+| `20040409-1w.c`, `20040409-2w.c`, `20040409-3w.c`, `950704-1.c`, `pr22493-1.c` | Require their recorded `-fwrapv`; overflowing signed addition/subtraction/negation has no defined C99 result under the actual options; §6.5p5. |
+| `pr43629.c` | Applies `&=` to uninitialized automatic `x`; the interpreter's poison is observable before optimization; §6.7.8p10 and the documented indeterminate-value policy. |
+| `pr99079.c` | `1 << 31` is signed-int arithmetic before assignment to unsigned long long; §6.5.7p4. |
+
+No defined-program bcc optimizer miscompile was established in these ten
+signals. The raw failures were retained. Reference controls compiled all ten
+unchanged sources through GCC `-O0`, `-O2`, `-O2 -fwrapv`, and bundled Clang
+`-O0`, `-O2`, all with GNU17 on this host. The three `20040409-*w.c` files and
+`pr22493-1.c` abort under both GCC/Clang `-O2` and pass under GCC `-fwrapv`.
+`950704-1.c` aborts under Clang `-O2` and passes with GCC's required wrapping
+mode. The undefined shift/indeterminate sources happen to pass the reference
+compilers, which does not establish defined C99 semantics. The additional
+`pr36339.c` control faults under every GCC/Clang arm: its 32-bit Windows
+`unsigned long` truncates a 64-bit stack address.
+
+All 15 native link-error sources were inspected. Eleven require GNU89-inline
+options that the survey deliberately records without applying; three require
+GNU symbol aliases; `941202-1.c` requires compiler `alloca` lowering, for which
+MinGW has no external runtime symbol. No missing ordinary supported C library
+symbol was found. Implementing GNU aliases or dynamic stack allocation needs
+an IR/backend contract, rather than a dummy runtime function.
+
+Two remaining shared wrong results expose a valid-C99 missing feature, not
+undefined tests: parameter VLA bounds are not executed on function entry.
+The complete reduced programs are:
+
+```c
+int f(int n, int a[n++]) { return n; }
+int main(void) { int a[1]; return f(1, a) != 2; }
+```
+
+```c
+int f(int a, int b[a++], int c, int d[c++]) { return a != 2 || c != 2; }
+int main(void) { int a[1]; return f(1, a, 1, a); }
+```
+
+Both return 1 through bcc interpretation/native A0 and 0 through bundled
+Clang at O0/O2. Local reproductions are `target/vla-parameter-bound.c` and
+`target/vla-parameter-bounds.c`. C99 §6.9.1p10
+(p. 142; PDF p. 154) requires evaluating those size expressions. The current
+retained `ArrayBound::Variable` carries no runtime expression/extent, and
+prototype bindings differ from function-body bindings. A complete repair
+needs retained runtime-bound semantics, binding replay, saved extents,
+positivity and `sizeof`/pointer-stride behavior; it is left as a large feature.
+These failures are explicitly recorded as lowering gaps.
+
+Other required capabilities are full interpreter f80/f128 semantics, GNU
+typedef alignment, scalar-storage order, extended bit-field precision,
+symbol aliases, macro-save pragmas and function instrumentation. They were
+classified rather than hidden by refusing more inputs or altering survey
+options. GCC-specific expected behavior, unavailable options and actual
+undefined operations likewise remain visible in the raw counts.
+
+### Implicit library prototypes: 2026-10-12
+
+This update starts at `bdc88ada` on `claude/torture-correctness` and compares
+against `execute-correctness-after`, the preceding correctness baseline above.
+It reruns the same 1,677 unchanged sources with eight workers, ten-second
+deadlines, GNU17 and the same four Windows GNU arms. Every source SHA-512
+matches. Both shared LLVM junctions were preserved.
+
+```powershell
+cargo build --release --bin bcc-rust
+python scripts/run_gcc_torture_execute.py --source C:\Users\benbw\Documents\GitRepo\bcc-rust\target\compiler-corpus\gcc-15.2.0 --output target/compiler-corpus/execute-implicit-after --jobs 8 --timeout 10
+```
+
+The survey returns 1 because adverse sources remain. Its 518.243
+seconds and the baseline's 488.608 seconds are uncontrolled elapsed times,
+not a performance comparison.
+
+| Class | I0 before | after | I1 before | after | A0 before | after | A1 before | after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| pass | 1064 | 1145 | 1068 | 1150 | 1200 | 1200 | 1190 | 1190 |
+| frontend-error | 139 | 139 | 139 | 139 | 139 | 139 | 139 | 139 |
+| lowering-unsupported | 307 | 307 | 307 | 307 | 307 | 307 | 307 | 307 |
+| abi-unsupported | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| compiler-crash | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| interpreter-trap | 153 | 72 | 148 | 66 | 0 | 0 | 0 | 0 |
+| wrong-result | 14 | 14 | 15 | 15 | 16 | 16 | 26 | 26 |
+| timeout | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| link-error | 0 | 0 | 0 | 0 | 15 | 15 | 15 | 15 |
+
+There are **168 -> 87 adverse sources** and **154 -> 73 disagreements**.
+All 163 changed arms, across 82 sources, change from interpreter trap to pass;
+no passing source/arm regresses. Native counts, frontend errors, unsupported
+lowering, wrong results and link errors are unchanged. There are zero compiler
+crashes and zero timeouts. All 81 sources previously classified as
+`GCC/legacy call assumption` now pass all four arms. `loop-3b.c` additionally
+passes I1; its I0 signed-overflow trap remains, so its existing undefined-test
+classification is retained.
+
+Semantic analysis now gives permitted implicit declarations the library
+prototype, with target `size_t`, const input pointees and variadic parameters,
+and emits a structured warning naming the function and complete type. Unknown
+names keep `int ()`; explicit declarations keep the user's type. Strict C99
+and later retain their undeclared-identifier error. The existing extension
+policy still diagnoses the removed implicit-declaration feature. No host
+signature or defined-value checks were relaxed, and builtin folding, attributes
+and unsupported-intrinsic handling were not expanded.
+
+Captured failing instructions name `exit` (81) and `strlen` (one). Bundled
+Clang's diagnostics across the 88 signature-evidence sources additionally
+identify implicit `abort` in 79 sources, `exit` in
+85 and `strlen` in 1. All are covered by the existing
+24 complete library-alias prototypes, so no additional prototype entries are
+needed. The ordinary-name lookup shares that table; a mechanical comparison
+confirms all 24 alias symbols, signature codes and variadic flags are unchanged.
+
+Bundled Clang `-std=gnu17 -Wno-error=implicit-function-declaration -S -emit-llvm`
+confirms real types for `exit`, `abort`, `memcpy`, `strcmp`, `printf` and `strlen`.
+The warning option is needed because this Clang promotes undeclared calls to
+errors by default in GNU17. An explicit `int exit()` control retains an
+`i32 @exit(...)` declaration and call despite Clang's incompatible-library
+warning. The live regression compares scalar LLVM types, fixed/variadic
+arguments and `noundef` at declarations and calls on Linux GNU, Windows GNU
+and Windows MSVC. Clang rewrites direct `memcpy` to an intrinsic; its retained
+C declaration and indirect call provide the corresponding C ABI comparison.
+Return `noundef` remains absent, and scalar arguments retain their contracts.
+
+The semantic regression checks retained types, repeated-call warning count,
+full diagnostic type spelling, C89/GNU17, extension policies and LP64/LLP64.
+The diagnostic golden renders six library warnings without truncating types.
+Headerless `int main(void) { exit(0); }` and memory/string reductions return
+0 through optimized/unoptimized interpretation before/after ABI lowering on
+Linux GNU and Windows GNU, and through native A0/A1/A2/A3 on this host.
+The existing lowering regression now expects `putchar(int)` while explicitly
+checking that the unknown `exit2` remains open. User-written incompatible and
+open declarations retain their existing behavior and mismatch checks.
+
+This is a Clang-compatible extension to C89's implicit declaration rule
+(ANSI C89 §3.3.2.2, p. 41; PDF p. 55), not permission for undeclared
+C99 calls. C99 §6.5.2.2p6,p9 (pp. 71-72; PDF pp. 83-84) governs call
+compatibility; §7.1.4p2 (p. 167; PDF p. 179) permits a suitable library
+declaration without its associated header.
+
+Every changed source is reclassified below. The following adverse-source
+table reflects the new 87-source result; the full transition records, corpus
+hashes, manifests and arm logs remain under `target/`.
+
+| Source | Before | After | Reclassification |
+| --- | --- | --- | --- |
+| `20000412-3.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `20000717-3.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `20020819-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `20031211-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920409-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920411-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920428-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920520-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920603-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920721-3.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920728-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920731-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920812-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920908-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920909-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `921013-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `921110-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `921123-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `921124-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `921207-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `921218-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `921218-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930106-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930111-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930208-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930429-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930513-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930518-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930527-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930603-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930603-3.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930621-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930622-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930630-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930702-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930713-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930718-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930719-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930818-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930916-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930921-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930929-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930930-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931009-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931012-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931017-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931018-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931031-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931102-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931102-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931208-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931228-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `940115-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `940122-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `941101-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `941110-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `950322-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `950426-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `950512-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `950605-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `950621-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `960218-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `960402-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `960830-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `961112-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `990106-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `cmpdi-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `cmpsf-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `cmpsi-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `cmpsi-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `dbra-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `divmod-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `inst-check.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `int-compare.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `loop-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `loop-2d.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `loop-3.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `loop-3b.c` | T/T/P/P | T/P/P/P | Signed overflow remains in I0; I1 now passes |
+| `loop-3c.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `mod-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `pr55875.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `tstdi-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+
+The table below covers every remaining source with a wrong result, link
+error, interpreter trap, or arm disagreement. P/T/W/L mean
+pass/trap/wrong-result/link-error. There are now 87 sources after the
+implicit-prototype follow-up; its 81 resolved sources are listed above. Categories distinguish valid C99 lowering gaps,
+interpreter capability gaps, GNU extensions and test/runtime assumptions.
+The full before/after per-source classifications are also in
+`target/compiler-corpus/execute-implicit-after/triage.json`.
+
+| Source | I0/I1/A0/A1 | Classification | Cause |
+| --- | --- | --- | --- |
+| `20000227-1.c` | W/W/W/W | GCC/source assumption | Expects a Latin-1 source byte to become one execution byte; bcc uses UTF-8. |
+| `20001101.c` | T/T/P/P | Test: undefined C operation | Old-style pointer parameter receives integer zero without prototype conversion (C99 6.5.2.2p6). |
+| `20001121-1.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
+| `20010904-1.c` | W/W/W/W | GNU feature | Typedef-level aligned attribute is not modeled; requires aligned type layout through arrays and containing records. |
+| `20010904-2.c` | W/W/W/W | GNU feature | Typedef-level aligned attribute is not modeled; requires aligned type layout through arrays and containing records. |
+| `20011121-1.c` | T/T/P/P | Test: pointer assumption | GNU null-based member-offset idiom; runtime inbounds arithmetic on null traps. Use __builtin_offsetof for supported C99 code. |
+| `20020107-1.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
+| `20020413-1.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
+| `20020508-2.c` | T/T/P/W | Test: undefined C operation | Signed left shift of a negative value or an unrepresentable positive result (C99 6.5.7p4). |
+| `20020508-3.c` | T/T/P/W | Test: undefined C operation | Signed left shift of a negative value or an unrepresentable positive result (C99 6.5.7p4). |
+| `20021127-1.c` | W/W/W/W | GCC/library assumption | Expects builtin llabs folding to override its own aborting llabs definition; bcc calls the provided body. |
+| `20030316-1.c` | T/T/P/P | Test: undefined C operation | Addition overflows 32-bit Windows long; would not overflow an LP64 long (C99 6.5p5). |
+| `20030404-1.c` | T/P/P/P | Test: indeterminate input | Reads an uninitialized automatic value; optimization can eliminate the poison use (C99 6.7.8p10). |
+| `20030914-1.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
+| `20031003-1.c` | T/T/W/W | Test: undefined C operation | Converts 2147483648.0 to 32-bit int, outside its range (C99 6.3.1.4p1). |
+| `20040208-1.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
+| `20040409-1w.c` | T/T/P/W | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
+| `20040409-2w.c` | T/T/P/W | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
+| `20040409-3w.c` | T/T/P/W | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
+| `20040709-1.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
+| `20051012-1.c` | T/T/P/P | GCC/untyped call assumption | Arguments do not match the old-style definition; some explicitly require untyped_assembly (C99 6.5.2.2p6). |
+| `20090527-1.c` | T/T/P/P | Test: indeterminate input | Reads an uninitialized automatic value; optimization can eliminate the poison use (C99 6.7.8p10). |
+| `20230630-2.c` | W/W/W/W | GNU feature | scalar_storage_order attribute needs reversed scalar/bit-field representation and access lowering. |
+| `20230630-4.c` | W/W/W/W | GNU feature | scalar_storage_order attribute needs reversed scalar/bit-field representation and access lowering. |
+| `920501-1.c` | T/T/P/P | GCC/untyped call assumption | Arguments do not match the old-style definition; some explicitly require untyped_assembly (C99 6.5.2.2p6). |
+| `920612-1.c` | T/T/P/P | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
+| `920711-1.c` | T/T/P/P | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
+| `920730-1.c` | T/T/P/P | Test: undefined C operation | INT_MAX + 2 overflows before the cast to unsigned (C99 6.5p5). |
+| `920922-1.c` | T/T/P/P | Test: undefined C operation | Forms a pointer beyond the object and its one-past position (C99 6.5.6p8). |
+| `921202-1.c` | T/T/P/P | GCC/untyped call assumption | Arguments do not match the old-style definition; some explicitly require untyped_assembly (C99 6.5.2.2p6). |
+| `921208-2.c` | T/T/P/P | GCC/untyped call assumption | Arguments do not match the old-style definition; some explicitly require untyped_assembly (C99 6.5.2.2p6). |
+| `930526-1.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
+| `930529-1.c` | T/T/P/P | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
+| `930622-2.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
+| `941202-1.c` | T/T/L/L | GNU runtime / missing symbol | Requires compiler stack-allocation lowering; MinGW has no external alloca symbol. Dynamic allocation and lifetime support are not implemented. |
+| `950704-1.c` | T/T/P/W | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
+| `960215-1.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
+| `960405-1.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
+| `960513-1.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
+| `961223-1.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
+| `970217-1.c` | W/W/W/W | Lowering: large feature | Valid C99 parameter VLA bound side effects are not evaluated on function entry (6.9.1p10); needs retained runtime bounds and entry evaluation. |
+| `980526-2.c` | T/T/P/P | Test: undefined C operation | Signed major << 22 produces an unrepresentable int (C99 6.5.7p4). |
+| `980608-1.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
+| `991014-1.c` | T/T/P/P | Test: pointer assumption | GNU null-based member-offset idiom; runtime inbounds arithmetic on null traps. Use __builtin_offsetof for supported C99 code. |
+| `alias-2.c` | T/T/L/L | GNU feature / missing symbol | GNU alias attributes need an IR/backend alias model; native links lack the alias. Interpreter correctly rejects the unresolved external object. |
+| `alias-3.c` | T/T/L/L | GNU feature / missing symbol | GNU alias attributes need an IR/backend alias model; native links lack the alias. Interpreter correctly rejects the unresolved external object. |
+| `alias-4.c` | T/T/L/L | GNU feature / missing symbol | GNU alias attributes need an IR/backend alias model; native links lack the alias. Also uses nonstandard main(int). |
+| `align-2.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
+| `arith-rand-ll.c` | T/P/P/P | Test: undefined C operation | Random values exercise signed ABS at the minimum representable value; optimized algebra can remove this poison use. |
+| `arith-rand.c` | T/P/P/P | Test: undefined C operation | Random values exercise signed ABS at the minimum representable value; optimized algebra can remove this poison use. |
+| `bcp-1.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
+| `bf-sign-2.c` | W/W/W/W | GNU feature | Requires promotions of implementation-defined long/long-long bit-fields by declared bit width. |
+| `bitfld-3.c` | W/W/W/W | GNU feature | Requires GNU arithmetic at extended bit-field precision, including 33/40/41-bit operations. |
+| `bswap-2.c` | T/T/P/P | Test: undefined C operation | Integer promotions make the sign-bit left shift signed int; its result is unrepresentable in C99 (6.5.7p4). |
+| `conversion.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
+| `eeprof-1.c` | W/W/W/W | GCC/runtime assumption | Requires unapplied -finstrument-functions and the associated entry/exit instrumentation. |
+| `loop-2c.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
+| `loop-2e.c` | T/T/P/P | Test: pointer assumption | Arithmetic/member addressing on a forged integer pointer with no backing object; outside the interpreter object model (C99 6.5.6p8). |
+| `loop-3b.c` | T/P/P/P | Test: signed overflow | i * 4 overflows signed int before a scalar noundef call argument; C99 6.5p5. I1 now passes with the corrected exit prototype. |
+| `pr101188.c` | T/T/P/P | Test: indeterminate input | Passes uninitialized s.a to an indirect scalar noundef parameter; native Clang also emits noundef for it. Existing documented Clang-compatible indeterminate-argument policy applies. |
+| `pr103255.c` | T/T/P/P | Test: pointer assumption | Arithmetic/member addressing on a forged integer pointer with no backing object; outside the interpreter object model (C99 6.5.6p8). |
+| `pr22493-1.c` | T/T/P/W | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
+| `pr23047.c` | T/P/P/P | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
+| `pr32244-1.c` | W/W/W/W | GNU feature | Requires shift arithmetic at GNU 40-bit bit-field precision. |
+| `pr34099-2.c` | T/T/P/P | Test: indeterminate input | Reads an uninitialized automatic value; optimization can eliminate the poison use (C99 6.7.8p10). |
+| `pr34099.c` | T/T/P/P | Test: indeterminate input | Reads an uninitialized automatic value; optimization can eliminate the poison use (C99 6.7.8p10). |
+| `pr34176.c` | T/T/P/P | Test: undefined C operation | Increments and subtracts a null pointer, outside an array object (C99 6.5.6p8-9). |
+| `pr34971.c` | W/W/W/W | GNU feature | Requires rotate arithmetic at GNU 40-bit bit-field precision. |
+| `pr36339.c` | P/P/W/W | Target assumption | Truncates a 64-bit stack pointer through 32-bit unsigned long on LLP64; GCC and Clang fault at both O0/O2 on this host. |
+| `pr40386.c` | T/T/P/W | Test: undefined C operation | Signed left shift of a negative value or an unrepresentable positive result (C99 6.5.7p4). |
+| `pr43629.c` | T/W/P/W | Test: indeterminate input | Reads an uninitialized automatic value; optimization can eliminate the poison use (C99 6.7.8p10). |
+| `pr56051.c` | T/T/P/P | Test: undefined C operation | Integer promotions make the sign-bit left shift signed int; its result is unrepresentable in C99 (6.5.7p4). |
+| `pr57124.c` | T/T/P/P | Test: undefined C operation | Requires -fno-strict-overflow; promoted unsigned-short multiplication overflows signed int. |
+| `pr67037.c` | T/T/P/P | GCC/untyped call assumption | Arguments do not match the old-style definition; some explicitly require untyped_assembly (C99 6.5.2.2p6). |
+| `pr7284-1.c` | T/T/P/P | Test: undefined C operation | Requires -std=c89 for implementation-defined signed shift; the default GNU17 survey uses C99 shift rules. |
+| `pr77767.c` | W/W/W/W | Lowering: large feature | Valid C99 parameter VLA bound side effects are not evaluated on function entry (6.9.1p10); needs retained runtime bounds and entry evaluation. |
+| `pr99079.c` | T/T/P/W | Test: undefined C operation | Integer promotions make the sign-bit left shift signed int; its result is unrepresentable in C99 (6.5.7p4). |
+| `ptr-arith-1.c` | T/T/P/P | Test: undefined C operation | Forms a pointer beyond the object and its one-past position (C99 6.5.6p8). |
+| `pushpop_macro.c` | W/W/W/W | GNU feature | Requires push_macro/pop_macro pragma stacks, which are not implemented. |
+| `regstack-1.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
+| `restrict-1.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
+| `return-addr.c` | T/T/P/P | Test: undefined C operation | Forms before-object pointers and compares unrelated objects; source comments acknowledge undefined behavior. |
+| `shiftdi-2.c` | T/T/P/P | Test: undefined C operation | Signed left shift of a negative value or an unrepresentable positive result (C99 6.5.7p4). |
+| `string-opt-18.c` | T/T/P/P | Test: indeterminate input | Overlapping memcpy/strcpy on an uninitialized buffer (C99 7.21.2.1p2). |
+| `unroll-1.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
+| `va-arg-7.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
+| `va-arg-8.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
+
+
+Evidence is retained under `target/`: the correctness and implicit-prototype
+survey manifests, summaries,
+source hashes and per-arm logs; `compiler-corpus/execute-correctness-reference/results.json`
+contains exact reference compiler commands and exit statuses;
+`torture-signature-evidence.json` names every failing signature instruction
+and declaration, with emitted IR beside its baseline log. The scratch
+reference/triage drivers never write the corpus. These files are local
+evidence artifacts, not new source inputs or waived tests.
+
+All eight requested gates passed for the implicit-prototype update, with
+compiler changes complete before the final checks:
+
+| Check | Result |
+| --- | --- |
+| `cargo test --all-targets` | Passed: 1,724 tests across 20 targets; six existing ignored tests. |
+| `cargo test --features benchmarking-internals --test allocation_count` | Passed: 25 tests. |
+| `cargo +nightly fmt --check` | Passed, after running `cargo +nightly fmt`. |
+| `cargo clippy --all-targets -- -D warnings` | Passed. |
+| `cargo clippy --release --all-targets -- -D warnings` | Passed. |
+| `cargo clippy --all-targets --features benchmarking-internals -- -D warnings` | Passed. |
+| `git diff --check` | Passed, including the final report. |
+| `BCC_DIFFTEST_CASES=1000 cargo test --lib difftest` | Passed: six checks, two existing ignored long sweeps. |
+
+The full test run finished before the feature allocation build, and all
+subsequent Cargo checks ran sequentially. Logs and exact command exit statuses
+for this update are `target/implicit-checks.json` and
+`target/implicit-check-*.log`; the original correctness logs remain in
+`target/correctness-checks-all.json`, `target/correctness-checks-rest.json` and
+`target/correctness-check-*.log`. During development the intended prototype
+change required updating the existing implicit `putchar` assertion, while
+adding an explicit check for the unknown-name open signature. The warning
+golden now renders the complete library type. No behavioral assertions,
+survey classifications or ignored-test settings were weakened. The whole corpus remains an exploratory run with recorded unsupported
+features, not a passing DejaGnu profile or completed Stage 6 acceptance criterion.
+
+Finally, `cargo build --bin bcc-rust` passed and restored the ordinary debug
+CLI after feature checks. Its `--print-default-passes` command exits normally.
+
+The whole-file commit plan is `target/commit-plan.md`. No files were staged
+or committed, and no Git metadata writes were performed.
+
+### GNU89 inline and supported dg-options: 2026-10-12
+
+This update starts at `b78cdbae` on `claude/torture-correctness` and compares
+against `execute-implicit-after`, the preceding snapshot. The final survey
+uses the same 1,677 sources, eight workers, ten-second deadlines and four
+Windows GNU arms, now with supported source options applied. Every source
+SHA-512 matches the baseline. Both shared LLVM junctions were preserved.
+
+```powershell
+cargo build --release --bin bcc-rust
+python scripts/run_gcc_torture_execute.py --source C:\Users\benbw\Documents\GitRepo\bcc-rust\target\compiler-corpus\gcc-15.2.0 --output target/compiler-corpus/execute-gnu89-after --jobs 8 --timeout 10
+```
+
+| Class | I0 before | after | I1 before | after | A0 before | after | A1 before | after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| pass | 1145 | 1151 | 1150 | 1156 | 1200 | 1206 | 1190 | 1196 |
+| frontend-error | 139 | 139 | 139 | 139 | 139 | 139 | 139 | 139 |
+| lowering-unsupported | 307 | 311 | 307 | 311 | 307 | 311 | 307 | 311 |
+| abi-unsupported | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| compiler-crash | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| interpreter-trap | 72 | 61 | 66 | 55 | 0 | 0 | 0 | 0 |
+| wrong-result | 14 | 15 | 15 | 16 | 16 | 17 | 26 | 27 |
+| timeout | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| link-error | 0 | 0 | 0 | 0 | 15 | 4 | 15 | 4 |
+
+There are **87 -> 77 adverse sources** and **73 -> 62 disagreements**. All
+eleven named inline sources lose their native link failures. Six now pass all
+four arms; four expose lowering capability gaps; one exposes a builtin wrong
+result. All 44 changed arms are confined to those eleven sources. No previously
+passing arm regresses. Frontend errors are unchanged; compiler crashes and
+timeouts are zero.
+
+The survey returns 1 because adverse sources and unsupported features remain.
+Its elapsed time is 400.239 seconds, an uncontrolled observation rather
+than a performance comparison. The initial run, preserved as
+`execute-gnu89-contended`, had seven native compilation timeouts while the
+full test build linked multiple LTO binaries. All seven arms pass in the
+final repeat, which ran after all Cargo checks and builds had finished.
+
+The compiler now selects GNU89 inline semantics before C99, including the
+C95 amendment, and C99 semantics from C99 onward. `-fgnu89-inline` and
+`-fno-gnu89-inline` override that default independently of `-std`; the last
+inline flag wins. An explicit C99-inline override is also accepted in a
+pre-C99 mode, a bcc extension beyond GCC's accepted flag combinations.
+The existing `gnu_inline`/`__gnu_inline__` attribute selects GNU semantics
+per function, and `__has_attribute(gnu_inline)` now reports 1. The predefined
+`__GNUC_GNU_INLINE__` or `__GNUC_STDC_INLINE__` follows the global mode:
+exactly one is defined, with value 1. Frozen target macro tables are unchanged.
+
+GNU plain inline definitions emit an external body; GNU extern-inline
+bodies remain inline-only even after an ordinary declaration. Those facts
+are retained per definition in semantic analysis and consumed by lowering,
+so interpreter and LLVM emission share one decision. C99 inline-only
+classification still considers all file-scope declarations; a declaration
+with extern or without inline makes the body external. Static inline remains
+internal. The existing Microsoft ABI behavior in C99 mode is retained.
+The emission rules cite C99 §6.7.4p6-7 (pp. 112-113; PDF pp. 124-125),
+§6.9p5 (p. 140; PDF p. 152), [GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html)
+and [GCC's inline option](https://gcc.gnu.org/onlinedocs/gcc/C-Dialect-Options.html#index-fgnu89-inline).
+
+IR inspection covers plain, extern and static inline, declarations before
+and after a body, block-scope declarations, attribute inheritance and
+replacement bodies. Semantic tests check mode-dependent body restrictions
+and duplicate definitions. CLI regressions run two-function programs through
+unoptimized/optimized interpretation and native O0, including function
+addresses, and check that inline-only calls remain external. Macro tests
+cover both overrides; bundled Clang O0/O2 and macro probes independently
+confirm the defaults and supported combinations.
+
+The runner parses unconditional `dg-options` and `dg-additional-options`,
+preserving order: the former replaces the base options, and the latter
+appends additional options. It applies the CLI's supported language,
+preprocessing and header-search flags, including `-f[no-]gnu89-inline`,
+supported `-std` aliases, `-w`, pedantic policy, hosted/freestanding and MSVC
+flags, definitions, undefinitions and forced includes. `-w` now suppresses
+warning rendering and counts without suppressing errors. Unknown flags
+remain recorded; target/effective-target selectors are deferred rather than
+evaluated, and backend/output controls cannot replace the fixed survey arms.
+Additional-source and target-skip behavior is unchanged. Applied flags,
+unsupported tokens and option directive decisions are recorded per source
+in both results and the manifest, beside each exact compiler command.
+
+102 sources receive supported options: 75 request GNU89, 13 request GNU17,
+12 request GNU89 inline, one requests C99 and one requests C89. These
+language selections cause no other status transitions. `p18298.c` is the
+twelfth inline-option source; it remains F/F/F/F because `stdlib.h` is not
+available under the survey's header-search configuration.
+
+Arm order is I0/I1/A0/A1. P = pass, T = interpreter trap, L = link error,
+U = lowering unsupported, W = wrong result, F = frontend error.
+
+| Source | Before | After | Reclassification |
+| --- | --- | --- | --- |
+| `20001121-1.c` | T/T/L/L | P/P/P/P | Resolved: GNU89 external inline body |
+| `20020107-1.c` | T/T/L/L | U/U/U/U | Lowering: inline assembly in the newly emitted body |
+| `930526-1.c` | T/T/L/L | P/P/P/P | Resolved: GNU89 external inline body |
+| `961223-1.c` | T/T/L/L | P/P/P/P | Resolved: GNU89 external inline body |
+| `980608-1.c` | T/T/L/L | U/U/U/U | Lowering: va_start in the newly emitted body |
+| `bcp-1.c` | T/T/L/L | W/W/W/W | Builtin semantics: constant_p rejects a string literal |
+| `loop-2c.c` | T/T/L/L | P/P/P/P | Resolved: GNU89 external inline body |
+| `restrict-1.c` | T/T/L/L | P/P/P/P | Resolved: GNU89 external inline body |
+| `unroll-1.c` | T/T/L/L | P/P/P/P | Resolved: GNU89 external inline body |
+| `va-arg-7.c` | T/T/L/L | U/U/U/U | Lowering: va_start in the newly emitted body |
+| `va-arg-8.c` | T/T/L/L | U/U/U/U | Lowering: va_start in the newly emitted body |
+| `p18298.c` | F/F/F/F | F/F/F/F | Unchanged: missing stdlib.h |
+| `pr7284-1.c` | T/T/P/P | T/T/P/P | Updated triage: missing C89 signed-shift policy |
+
+`20020107-1.c` now exposes its empty output/input-constraint asm at line 20;
+lowering reports unsupported inline assembly. The three varargs sources
+now expose unsupported `__builtin_va_start` in their emitted `debug` bodies:
+`980608-1.c:17`, `va-arg-7.c:16`, and `va-arg-8.c:20`. These are capability
+refusals, with valid source bodies retained and checked, rather than residual
+inline linkage failures.
+
+`bcp-1.c` now aborts in all four arms. Its `good1` requires
+`__builtin_constant_p("hi") == 1`; bcc currently folds only arithmetic
+constants and emits 0 for this string literal. A two-function reduction
+returns 1 in bcc's interpreter, while GCC 13.2.0 on PATH returns 0 at O0/O2.
+The complete unmodified source also passes GCC at O0/O2 with
+`-std=gnu17 -fgnu89-inline`. This is a demonstrated builtin semantic gap;
+no builtin tables were changed.
+
+`pr7284-1.c` remains T/T/P/P, but now receives its requested `-std=c89`.
+Its previous “unapplied option / undefined C99 shift” explanation no longer
+applies. The interpreter still observes poison for the signed shift in
+`f(128)`, so it is reclassified as a missing C89 signed-shift policy in
+lowering. C89 §3.3.7 (p. 49; PDF p. 63) specifies the bit shift without
+C99's signed representability condition. GCC 13.2.0 O0/O2 and both native
+bcc arms pass. The remaining native link errors are `941202-1.c`, which
+requires compiler stack-allocation lowering for `alloca`, and `alias-2.c`,
+`alias-3.c`, and `alias-4.c`, which require GNU symbol aliases. Those
+limitations are unchanged.
+
+Other adverse sources receiving standard options retain their existing
+diagnoses: `20051012-1.c`, `920501-1.c`, `921202-1.c`, `921208-2.c`, and
+`pr67037.c` have untyped-call/signature assumptions; `920730-1.c` overflows
+signed addition before its unsigned cast; `loop-3b.c` overflows signed
+multiplication; `20021127-1.c` expects builtin `llabs` folding despite its
+own aborting definition. None is repaired by selecting its requested
+standard, and signed addition/multiplication overflow remains undefined
+before C99 too. Their statuses are unchanged.
+
+| Check | Result |
+| --- | --- |
+| `cargo test --all-targets` | Passed: 1,732 tests across 20 targets; six existing ignored tests. |
+| `cargo test --features benchmarking-internals --test allocation_count` | Passed: 25 tests. |
+| `cargo +nightly fmt --check` | Passed, after cargo +nightly fmt. |
+| `cargo clippy --all-targets -- -D warnings` | Passed. |
+| `cargo clippy --release --all-targets -- -D warnings` | Passed. |
+| `cargo clippy --all-targets --features benchmarking-internals -- -D warnings` | Passed. |
+| `git diff --check` | Passed. |
+| `BCC_DIFFTEST_CASES=1000 cargo test --lib difftest` | Passed with BCC_DIFFTEST_CASES=1000: six checks; two existing ignored long sweeps. |
+| `python scripts/run.py --help` | Passed. |
+| `python -m unittest discover -s scripts -p test_run_gcc_torture*.py` | Passed: 26 tests. |
+| `cargo build --release --bin bcc-rust` | Passed. |
+| `cargo build --bin bcc-rust` | Passed. |
+
+All Cargo checks ran sequentially in the final validation pass. No
+benchmarking-internals build overlapped CLI integration tests. After the
+feature checks, `cargo build --bin bcc-rust` restored the plain CLI; the
+final handoff repeats that build and verifies `--print-default-passes` exits
+normally. The first development Clippy pass identified an independent-switch
+struct lint and a single-character test pattern; both were addressed before
+the complete final check pass. No test assertions or ignored-test settings
+were weakened.
+
+Evidence is retained in `target/compiler-corpus/execute-gnu89-after/`
+(manifest, summaries, source hashes, arm logs and `transitions.json`),
+`target/gnu89-checks.json`, `target/gnu89-final-*.log`,
+`target/gnu89-reference/clang.json` and `target/gnu89-triage/`. The source
+hash comparison and option/command checks were rerun against the final
+manifest. This remains an exploratory survey, not a passing DejaGnu profile.
+The whole-file commit plan is `target/commit-plan.md`. Nothing was staged
+or committed, and no Git metadata was modified.

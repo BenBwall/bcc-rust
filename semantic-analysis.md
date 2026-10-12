@@ -338,9 +338,17 @@ members, including array elements, prevent modification; bit-fields retain enoug
 information for promotion and address/sizeof constraints. Parentheses preserve
 the underlying category. Ordinary identifiers resolve through the declaration
 binding model. A function's `__func__` is modeled as a static const character array.
-Calls to undeclared names create an unprototyped int-returning function only in
-C89/C95 and GNU modes, using shared removed-feature policy. Strict C99 and later
-diagnose undeclared identifiers. Undeclared reserved `__builtin_*` names are GCC
+Calls to undeclared names are accepted only in C89/C95 and GNU modes, using
+shared removed-feature policy. Known standard library names receive the complete
+prototype from the existing 24-entry library-alias table, with target `size_t`,
+const input pointees and ellipsis. They also warn once per implicit binding,
+naming the function and type, as bundled Clang does. Other names keep the
+unprototyped int-returning type. Explicit declarations keep their written types;
+this path neither replaces them nor adds builtin folding or attributes. Strict
+C99 and later diagnose undeclared identifiers. This compatibility extension
+avoids mismatched calls under C99 §6.5.2.2p6,p9 (pp. 71-72; PDF pp. 83-84);
+§7.1.4p2 (p. 167; PDF p. 179) permits library declarations without headers.
+The C89 implicit declaration rule remains §3.3.2.2 (p. 41; PDF p. 55). Undeclared reserved `__builtin_*` names are GCC
 builtins in every mode: they are bound as opaque functions without a
 diagnostic, and calls to them have unknown results, except that
 `__builtin_constant_p` folds to whether its operand is an arithmetic constant.
@@ -614,7 +622,7 @@ known calls. Opaque results suppress dependent return-conversion errors.
   available, but statement constraints do not provide an executable control-flow
   graph or computed-goto target set.
 - GNU statement-expression result types, intrinsic signatures, local-label
-  nonlocal-jump mechanics, GNU89 inline semantics, attributes and calling-convention
+  nonlocal-jump mechanics, other attributes and calling-convention
   effects remain conservative. The five requested GNU statement forms retain
   parser-owned extension policy; accepted opaque constructs are not certified.
 - The existing parameter-inspection metadata still uses source provenance;
@@ -1193,6 +1201,19 @@ checked, and an ordinary replacement definition ends the redefinition
 permission. GNU inline bodies are excluded from the C99 inline-definition
 restrictions. This resolves MinGW's external `__cpuidex` followed by the
 resource `cpuid.h` static definition; Clang includes both definitions too.
+
+`CompilerConfiguration::gnu89_inline()` now owns the effective emission mode:
+GNU89 before C99, C99 from C99 on, overridden by `-f[no-]gnu89-inline`.
+GNU extern-inline bodies with external linkage are retained as
+`DefinitionKind::Inline` immediately, per body, so a later ordinary declaration
+cannot promote them to external definitions. Plain GNU inline bodies are
+`DefinitionKind::Function`. C99 inline-only classification still waits for all
+file-scope declarations; a declaration with `extern` or without `inline`
+provides the external body. The per-function `gnu_inline` attribute overrides
+the global mode. Lowering consumes these retained facts for both interpreter
+and LLVM emission; neither backend independently interprets syntax or flags.
+C99 §6.7.4p6-7 (pp. 112-113; PDF pp. 124-125) and §6.9p5 (p. 140;
+PDF p. 152); GNU extension: [GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html).
 
 `gnu_inline` is retained only from a declaration that itself specifies inline
 and precedes a unique function body, matching Clang's ignored-attribute rules.

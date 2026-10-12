@@ -27,7 +27,6 @@ use super::{
     },
 };
 use crate::{
-    configuration::CStandard,
     translation_phases::{
         SourceVectors,
         parsing::{
@@ -863,8 +862,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && self.has_gnu_inline(spec, declarator);
                 entity.can_redefine = spec.function_specifiers.is_inline
                     && spec.storage_class == Some(StorageClass::Extern)
-                    && (entity.gnu_inline
-                        || self.context.configuration.standard() == CStandard::C89);
+                    && (entity.gnu_inline || self.context.configuration.gnu89_inline());
                 entity.non_inline |= !spec.function_specifiers.is_inline
                     || spec.storage_class == Some(StorageClass::Extern);
             } else if binding.kind == BindingKind::Object {
@@ -968,7 +966,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 || !f.declaration_specifiers.function_specifiers.is_inline
                 || f.declaration_specifiers.storage_class == Some(StorageClass::Extern)
                 || entity.gnu_inline
-                || self.context.configuration.standard() == CStandard::C89)
+                || self.context.configuration.gnu89_inline())
         {
             entity.definition = entity.function_body.map(|body| match body {
                 | FunctionBody::Replaceable(source) | FunctionBody::Unique(source) => source,
@@ -976,9 +974,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             entity.non_inline = true;
         }
         _ = self.functions.entities.insert(b.name.name, entity);
+        // GNU extension: GCC manual, "Inline": extern inline supplies no
+        // external definition, even after an ordinary declaration. C99
+        // §6.7.4p6-7 instead considers all file-scope declarations.
         self.definitions.push(Definition {
             binding: index,
-            kind:    DefinitionKind::Function,
+            kind:    if entity.can_redefine && b.linkage == Linkage::External {
+                DefinitionKind::Inline
+            } else {
+                DefinitionKind::Function
+            },
         });
     }
 
@@ -1033,9 +1038,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .entities
                 .get(&self.bindings[binding].name.name)
                 .is_some_and(|e| {
-                    !e.non_inline
-                        && !e.gnu_inline
-                        && self.context.configuration.standard() != CStandard::C89
+                    !e.non_inline && !e.gnu_inline && !self.context.configuration.gnu89_inline()
                 })
     }
 

@@ -183,7 +183,7 @@ struct Cli {
         overrides_with = "standard")]
     standard: LanguageMode,
     /// GCC language flags: -pedantic, -Wpedantic, -pedantic-errors,
-    /// -ffreestanding, -fhosted, -fms-extensions, and
+    /// -ffreestanding, -fhosted, -f[no-]gnu89-inline, -fms-extensions, and
     /// -f[no-]ms-{declspec,int-types,calling-conventions,type-qualifiers,
     /// inline,seh,asm,pragma,anonymous-structs,va-args}.
     #[arg(long, hide = true)]
@@ -200,6 +200,9 @@ struct Cli {
     /// Suppress the `repeated-specifiers` quality warning group.
     #[clap(long)]
     no_repeated_specifier_warnings: bool,
+    /// Suppress all warning diagnostics (GCC -w).
+    #[arg(short = 'w', long)]
+    suppress_warnings: bool,
     /// Spell `__DATE__` and `__TIME__` from seconds since the Unix epoch, in
     /// UTC.
     ///

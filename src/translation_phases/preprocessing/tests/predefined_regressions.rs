@@ -376,6 +376,31 @@ fn version_strict_ansi_and_identity_macros_follow_every_mode() {
 }
 
 #[test]
+fn inline_macros_follow_overrides_and_gnu_inline_is_available() {
+    use crate::configuration::{
+        CStandard,
+        ExtensionPolicy,
+    };
+    for standard in [CStandard::C89, CStandard::C99, CStandard::C17] {
+        for enabled in [false, true] {
+            let config = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                .with_gnu89_inline(enabled);
+            let result = observe_with(
+                "#ifdef __GNUC_GNU_INLINE__\ngnu __GNUC_GNU_INLINE__\n#endif\n#ifdef \
+                 __GNUC_STDC_INLINE__\nstdc \
+                 __GNUC_STDC_INLINE__\n#endif\n__has_attribute(gnu_inline)\n",
+                config,
+            );
+            assert_eq!(
+                result.spellings,
+                [if enabled { "gnu" } else { "stdc" }, "1", "1"]
+            );
+            assert!(result.errors.is_empty(), "{:?}", result.errors);
+        }
+    }
+}
+
+#[test]
 fn msvc_identity_follows_the_umbrella_flag_and_identity_macros_can_be_undefined() {
     let source = "_MSC_VER _MSC_FULL_VER _MSC_BUILD _MSC_EXTENSIONS\n#undef __GNUC__\n#undef \
                   __bcc__\n#if defined __GNUC__ || defined __bcc__\nbad\n#endif\n";
