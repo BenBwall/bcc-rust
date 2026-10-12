@@ -7,6 +7,28 @@ use crate::backend::interpreter::{
 };
 
 #[test]
+fn generated_globals_skip_all_user_symbol_names() {
+    for source in [
+        "char *p=\"X\"; int a __asm__(\".str\")=42; int main(void){return a;}",
+        "int a __asm__(\".str\")=42; char *p=\"X\"; int main(void){return a;}",
+        "char *p=\"X\"; int main(void){static int a __asm__(\".str\")=42; return a;}",
+        "int main(void){{static int x=1;} static int a __asm__(\"main.x\")=42; return a;}",
+        "int main(void){static int a __asm__(\"main.x\")=42; {static int x=1;} return a;}",
+        "int main(void){char *p=\"X\"; static int a __asm__(\".str\")=42; return a;}",
+        "extern int a __asm__(\".str\"); char *p=\"X\"; int a=42; int main(void){return a;}",
+        "char *p=\"X\"; int a __asm__(\".str\")=42; int b __asm__(\".str.1\")=1; int \
+         main(void){return a;}",
+    ] {
+        let text = lowered(source);
+        assert_eq!(
+            run_text(&text, "main").result.unwrap().termination,
+            Termination::Returned(Some(RuntimeValue::Int(42))),
+            "{source}\n{text}"
+        );
+    }
+}
+
+#[test]
 fn nondefault_calling_conventions_are_refused() {
     for (target, attribute) in [
         (Target::LinuxGnu, "ms_abi"),

@@ -4,6 +4,26 @@
 use super::*;
 use crate::diagnostics::ToDiagnostic;
 
+#[test]
+fn asm_collision_keeps_checking_later_function_bodies() {
+    let errors = lower(
+        "int a __asm__(\"same\")=1; int b __asm__(\"same\")=2;\nint f(int n){{static int same; \
+         int *p=&same;}int a[n]; return 0;}\nint g(void){return ({ 1; });}",
+    )
+    .unwrap_err();
+    assert_eq!(errors.len(), 3, "{errors:?}");
+    for construct in [
+        "assembler labels",
+        "variable length arrays",
+        "statement expressions",
+    ] {
+        assert!(
+            errors.iter().any(|error| error.ends_with(construct)),
+            "{errors:?}"
+        );
+    }
+}
+
 /// The single error lowering reports for `source`.
 #[track_caller]
 fn refusal(source: &str) -> String {

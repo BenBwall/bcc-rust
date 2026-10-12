@@ -8,6 +8,50 @@ use crate::backend::interpreter::{
 };
 
 #[test]
+fn ten_thousand_static_locals_use_linear_name_storage() {
+    let source = format!(
+        "int reserved __asm__(\"main.x.1\"); int main(void){{{}return 0;}}",
+        "{static int x;}".repeat(10_000)
+    );
+    let tu = Bump::new();
+    let mut context = Context::new(&tu);
+    let syntax = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        tu.alloc_str(&source),
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &syntax);
+    assert!(sema.lowerable(&context));
+    let arena = Bump::new();
+    let tables = Bump::new();
+    let scratch = Bump::new();
+    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables);
+    let mut errors = ArenaVec::new_in(&arena);
+    unit.prepare_extensions(&mut errors);
+    let functions = unit.declare_items(&syntax, &mut errors);
+    let start = std::time::Instant::now();
+    for (record, function) in functions {
+        FunctionLowerer::lower(&mut unit, record, function.unwrap(), &scratch).unwrap();
+    }
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(unit.module.symbol("main.x").is_some());
+    for suffix in 2..=10_000 {
+        assert!(unit.module.symbol(&format!("main.x.{suffix}")).is_some());
+    }
+    assert!(
+        tables.high_water() < 16 * 1024 * 1024,
+        "static name tables retained {} bytes",
+        tables.high_water()
+    );
+    eprintln!(
+        "10,000 statics: {} table bytes, {:?}",
+        tables.high_water(),
+        start.elapsed()
+    );
+}
+
+#[test]
 fn thousands_of_string_symbols_use_linear_arena_space() {
     use std::fmt::Write as _;
 

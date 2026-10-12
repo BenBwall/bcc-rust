@@ -5,8 +5,9 @@
 //! Functions and objects with linkage are named by their identifier, so
 //! every declaration of one linked entity reaches the same symbol (C99
 //! §6.2.2 paragraph 2, p. 30; PDF p. 42). Static locals and string literals
-//! have no linkage and get internal names that cannot clash with a C
-//! identifier, such as `f.count` and `.str.1`.
+//! have no linkage and get internal names such as `f.count` and `.str.1`.
+//! All user symbol names, including GNU assembler labels, are reserved
+//! before generating those internal names.
 
 use super::{
     Construct,
@@ -119,6 +120,14 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     strings:                  ArenaMap<'a, LiteralId, GlobalId>,
     /// Next candidate for a string literal's internal symbol.
     next_string_suffix:       u64,
+    /// User names reserved before generating internal storage.
+    reserved_names:           ArenaSet<'a, &'a str>,
+    /// Internal storage cannot be reused by a linked object declaration.
+    generated_globals:        ArenaSet<'a, GlobalId>,
+    /// Conflicting definitions are isolated while later functions are checked.
+    conflicting_names:        ArenaSet<'a, &'a str>,
+    /// Each generated base probes a suffix at most once.
+    next_name_suffix:         ArenaMap<'a, &'a str, u64>,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -133,6 +142,23 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         syntax: &ParsedTranslationUnit<'tu>,
         errors: &mut ArenaVec<'_, LoweringError>,
     ) -> ArenaVec<'a, (&'tu FunctionRecord<'tu>, Option<FuncId>)> {
+        // Reserve every user spelling before any initializer or body creates
+        // internal storage (GNU labels extend C99 §6.2.2p2).
+        for (index, binding) in self.sema.bindings.iter().enumerate() {
+            let name = if binding.linkage == Linkage::None {
+                self.names.local(index)
+            } else {
+                Some(self.symbol_name(index))
+            };
+            if let Some(name) = name {
+                _ = self.reserved_names.insert(name);
+                if self.names.linked(binding.name.name).is_none()
+                    && let Some(runtime) = library_builtin_name(name)
+                {
+                    _ = self.reserved_names.insert(runtime);
+                }
+            }
+        }
         // Reserve an alias with its definition's completed layout even when
         // the alias's C identifier differs (GNU extension to C99 §6.2.2p2).
         for definition in self.sema.definitions {
@@ -152,7 +178,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                         Construct::AssemblerLabel,
                         binding.name.source_vectors,
                     ));
-                    return ArenaVec::new_in(self.tables);
+                    // Refuse these declarations without suppressing later
+                    // function diagnostics (C99 §5.1.1.3p1).
+                    _ = self
+                        .conflicting_names
+                        .insert(self.symbol_name(definition.binding));
                 }
             }
         }
@@ -197,6 +227,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             {
                 continue;
             }
+            if self
+                .conflicting_names
+                .contains(self.symbol_name(definition.binding))
+            {
+                continue;
+            }
             let initializer = initializers.get(&definition.binding).copied();
             if let Err(error) = self.define_object(definition.binding, None, initializer) {
                 errors.push(error);
@@ -238,7 +274,14 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     pub(super) fn function(&mut self, binding: usize) -> Result<FuncId, LoweringErrorKind> {
         let data = self.sema.bindings[binding];
         let name = self.symbol_name(binding);
-        let runtime = library_builtin_name(name);
+        // Builtin aliases describe the C binding, never the exact assembler
+        // label chosen by the user (GNU extension to C99 §6.2.2p2).
+        let runtime = self
+            .names
+            .linked(data.name.name)
+            .is_none()
+            .then(|| library_builtin_name(self.context.string_cache.at(data.name.name)))
+            .flatten();
         let name = runtime.unwrap_or(name);
         if let Some(Symbol::Function(func)) = self.module.symbol(name) {
             // An internal C function can use a library spelling without
@@ -393,8 +436,16 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             return Ok(self.function_name(binding, name));
         }
         let name = self.symbol_name(binding);
+        if self.conflicting_names.contains(name) {
+            return Err(LoweringErrorKind::Unsupported(Construct::AssemblerLabel));
+        }
         match self.module.symbol(name) {
-            | Some(Symbol::Global(global)) => Ok(global),
+            | Some(Symbol::Global(global)) => {
+                if self.generated_globals.contains(&global) {
+                    return Err(LoweringErrorKind::Unsupported(Construct::AssemblerLabel));
+                }
+                Ok(global)
+            },
             | Some(Symbol::Function(_)) =>
                 Err(LoweringErrorKind::Unsupported(Construct::AssemblerLabel)),
             | None => {
@@ -432,7 +483,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     self.context.string_cache.at(data.name.name)
                 );
                 let name = if let Some(name) = self.names.local(binding) {
-                    if self.module.symbol(name).is_some() {
+                    if self.module.symbol(name).is_some() || self.conflicting_names.contains(name) {
                         return Err(LoweringError::unsupported(
                             Construct::AssemblerLabel,
                             source,
@@ -446,6 +497,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     .global_declaration(data, IrLinkage::Internal)
                     .map_err(|kind| at(kind, source))?;
                 let global = self.module.declare_global(name, declaration);
+                if self.names.local(binding).is_none() {
+                    _ = self.generated_globals.insert(global);
+                }
                 _ = self.statics.insert(binding, global);
                 global
             },
@@ -529,6 +583,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             },
         );
         _ = self.statics.insert(binding, global);
+        _ = self.generated_globals.insert(global);
         global
     }
 
@@ -579,6 +634,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 relocations: &[],
             },
         );
+        _ = self.generated_globals.insert(global);
         _ = self.strings.insert(id, global);
         Ok(global)
     }
@@ -605,31 +661,39 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// Identical literals may share storage, but different contents must keep
     /// their own arrays. C99: §6.4.5 paragraph 6, p. 63; PDF p. 75.
     fn string_name(&mut self) -> &'a str {
-        if self.module.symbol(".str").is_none() {
+        if self.name_available(".str") {
             return ".str";
         }
         loop {
             let suffix = self.next_string_suffix;
             self.next_string_suffix += 1;
             let name = format_in!(self.tables, ".str.{suffix}");
-            if self.module.symbol(name).is_none() {
+            if self.name_available(name) {
                 return name;
             }
         }
     }
 
-    /// `base`, or `base.N` for the first `N` that no symbol has.
-    fn unique_name(&self, base: &'a str) -> &'a str {
-        if self.module.symbol(base).is_none() {
+    /// Internal storage must not take a later user's symbol.
+    /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42 (GNU label extension).
+    fn name_available(&self, name: &str) -> bool {
+        !self.reserved_names.contains(name) && self.module.symbol(name).is_none()
+    }
+
+    /// `base`, or the next unoccupied `base.N`, probing each suffix once.
+    /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42 (distinct unlinked objects).
+    fn unique_name(&mut self, base: &'a str) -> &'a str {
+        if self.name_available(base) {
             return base;
         }
-        let mut suffix = 1_u32;
         loop {
+            let next = self.next_name_suffix.entry(base).or_insert(1);
+            let suffix = *next;
+            *next += 1;
             let name = format_in!(self.tables, "{base}.{suffix}");
-            if self.module.symbol(name).is_none() {
+            if self.name_available(name) {
                 return name;
             }
-            suffix += 1;
         }
     }
 
@@ -1075,6 +1139,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             statics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             strings: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             next_string_suffix: 1,
+            reserved_names: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            generated_globals: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            conflicting_names: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            next_name_suffix: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
         }
     }
 }

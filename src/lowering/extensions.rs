@@ -250,4 +250,8 @@ impl<'a> SymbolNames<'a> {
     pub(super) fn local(&self, binding: usize) -> Option<&'a str> {
         self.locals.get(&binding).copied()
     }
+
+    pub(super) fn linked(&self, name: StringCacheId) -> Option<&'a str> {
+        self.linked.get(&name).copied()
+    }
 }

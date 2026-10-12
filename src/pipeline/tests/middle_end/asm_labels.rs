@@ -1,6 +1,50 @@
 //! Assembler names must agree through the interpreter, LLVM and Clang.
 use super::*;
 
+#[test]
+fn builtin_spelling_in_asm_label_is_exact() {
+    let source = "int renamed(int) __asm__(\"__builtin_abs\");\nint renamed(int x) { return x + \
+                  100; }\nextern int abs(int);\nint main(void) { return renamed(1) + abs(-42); }\n";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        for (optimize, profile) in STAGES {
+            with_module(source, target, optimize, profile, |module, target| {
+                assert!(module.symbol("__builtin_abs").is_some(), "{module}");
+                assert_eq!(interpret(module, target), (143, String::new()));
+            });
+        }
+    }
+    let Some(target) = host() else {
+        return;
+    };
+    let directory = TempDir::new("builtin-asm-label");
+    let input = directory.join("input.c");
+    std::fs::write(&input, source).unwrap();
+    let toolchain = Toolchain::bundled(target).unwrap();
+    for opt in [OptLevel::O0, OptLevel::O2] {
+        let options = LlvmOptions {
+            target,
+            opt: Some(opt),
+            disable_llvm_passes: false,
+            kind: OutputKind::Executable,
+        };
+        let clang = directory.join(format!("clang-{opt:?}.exe"));
+        let output = toolchain.command(&input, &clang, options).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(run_native(&clang), (143, String::new()));
+        for optimize in [false, true] {
+            let executable = directory.join(format!("bcc-{opt:?}-{optimize}.exe"));
+            with_module(source, target, optimize, Profile::PostAbi, |module, _| {
+                compile_module(module, &executable, options).unwrap();
+            });
+            assert_eq!(run_native(&executable), (143, String::new()));
+        }
+    }
+}
+
 const PROGRAMS: &[&str] = &[
     "extern int f(void) __asm__(\"g\"); int g(void){return 42;} int main(void){return f();}\n",
     "int f(void) __asm__(\"g\"); int f(void){return 42;} int main(void){return f();}\n",
