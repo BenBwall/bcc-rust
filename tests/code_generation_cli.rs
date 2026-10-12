@@ -662,6 +662,39 @@ mod tests {
         assert_output_preserves_input(false, true);
     }
 
+    /// The same-file check must not open the output to read its identity:
+    /// opening a FIFO for reading blocks until a writer appears.
+    #[cfg(unix)]
+    #[test]
+    fn object_output_to_a_fifo_does_not_block() {
+        let source = temporary("fifo.c");
+        let fifo = temporary("fifo.o");
+        std::fs::write(&source, SUM).unwrap();
+        let made = Command::new("mkfifo").arg(&fifo).status().unwrap();
+        assert!(made.success(), "mkfifo failed");
+        let mut reader = Command::new("cat")
+            .arg(&fifo)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let result = run_native_with_timeout(
+            Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .arg(&source)
+                .args(["-c", "-o"])
+                .arg(&fifo),
+            std::time::Duration::from_secs(60),
+        );
+        if result.is_err() {
+            _ = reader.kill();
+        }
+        let reader_status = reader.wait().unwrap();
+        std::fs::remove_file(&source).unwrap();
+        std::fs::remove_file(&fifo).unwrap();
+        let output = result.unwrap();
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        assert!(reader_status.success());
+    }
+
     fn assert_output_preserves_input(object: bool, hard_link: bool) {
         let source = temporary("preserve.c");
         let alias = temporary("alias.c");

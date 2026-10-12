@@ -2,28 +2,41 @@
 //! File identities include hard links and followed symbolic links, unlike
 //! path spelling comparisons. This is a host CLI policy, not a C constraint.
 
+#[cfg(windows)]
+use std::fs::File;
 use std::{
-    fs::File,
+    fs,
     io,
     path::Path,
 };
 
 /// Whether an existing output identifies the input. A new output is allowed;
 /// other inspection errors stop compilation rather than risk truncating input.
+/// Only regular files can be compared: opening a FIFO or device to read its
+/// identity could block, and writing to one cannot truncate the source.
 pub(super) fn is_input(input: &Path, output: &Path) -> io::Result<bool> {
-    let output_file = match File::open(output) {
-        | Ok(file) => file,
+    let output_metadata = match fs::metadata(output) {
+        | Ok(metadata) => metadata,
         | Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         | Err(error) => return Err(error),
     };
-    let input_file = File::open(input)?;
-    #[cfg(any(unix, windows))]
+    let input_metadata = fs::metadata(input)?;
+    if !output_metadata.is_file() || !input_metadata.is_file() {
+        return Ok(false);
+    }
+    #[cfg(unix)]
     {
-        Ok(identity(&input_file)? == identity(&output_file)?)
+        use std::os::unix::fs::MetadataExt as _;
+
+        Ok((input_metadata.dev(), input_metadata.ino())
+            == (output_metadata.dev(), output_metadata.ino()))
+    }
+    #[cfg(windows)]
+    {
+        Ok(identity(&File::open(input)?)? == identity(&File::open(output)?)?)
     }
     #[cfg(not(any(unix, windows)))]
     {
-        drop((input_file, output_file));
         Ok(input.canonicalize()? == output.canonicalize()?)
     }
 }
@@ -54,13 +67,4 @@ fn identity(file: &File) -> io::Result<(u64, u64)> {
         u64::from(info.dwVolumeSerialNumber),
         (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
     ))
-}
-
-/// Unix identifies an open file by its device and inode.
-#[cfg(unix)]
-fn identity(file: &File) -> io::Result<(u64, u64)> {
-    use std::os::unix::fs::MetadataExt as _;
-
-    let metadata = file.metadata()?;
-    Ok((metadata.dev(), metadata.ino()))
 }
