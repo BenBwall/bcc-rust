@@ -13,7 +13,10 @@
 //!    blocks it dominates may use them, and a threaded edge would reach those
 //!    blocks without defining them. An edge is left alone when redirecting it
 //!    would give one terminator two edges to a block with different arguments,
-//!    which the verifier forbids.
+//!    which the verifier forbids. Block-indexed visit stamps detect cycles; a
+//!    per-round cache composes argument mappings backwards along each path.
+//!    Each forwarding block is resolved once, independently of block layout or
+//!    incoming edge count.
 //! 2. **Form selects** for single-entry cheap diamond/triangle arms using
 //!    `select.rs`. Each differing join argument is one bisectable rewrite. Each
 //!    arm costs at most four units; loads, stores, calls, division and
@@ -82,13 +85,14 @@ fn thread_jumps(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> b
     // Threading only redirects edges, so it never adds a use of a forwarding
     // block's parameter outside that block; counts taken now stay safe.
     let uses = draft.use_counts();
+    let targets = forwarding_targets(draft, &uses, &reachable);
     for index in 0..draft.blocks.len() {
         let block = Block::new(index);
         if !draft.block(block).alive || !reachable[index] {
             continue;
         }
         for edge_index in 0..draft.block(block).term.edges().count() {
-            let Some((target, args)) = threaded(draft, &uses, block, edge_index) else {
+            let Some((target, args)) = threaded(draft, &targets, block, edge_index) else {
                 continue;
             };
             if !report.allow() {
@@ -108,67 +112,134 @@ fn thread_jumps(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> b
     changed
 }
 
+/// Resolves forwarding paths without mutating the draft, so bisecting still
+/// applies one edge rewrite at a time. Cached arguments are expressed in the
+/// starting block's parameters or values defined above it. A cycle, and any
+/// path entering it, stays unchanged.
+/// C99: §5.1.2.3p5, pp. 13-14; PDF pp. 25-26 (preserve observable behaviour).
+fn forwarding_targets<'s>(
+    draft: &Draft<'_, 's>,
+    uses: &[u32],
+    reachable: &[bool],
+) -> ArenaVec<'s, ForwardingTarget<'s>> {
+    let mut targets = ArenaVec::with_capacity_in(draft.blocks.len(), draft.scratch);
+    targets.resize(draft.blocks.len(), ForwardingTarget::Unknown);
+    let mut visits = ArenaVec::with_capacity_in(draft.blocks.len(), draft.scratch);
+    visits.resize(draft.blocks.len(), 0_usize);
+    let mut path = ArenaVec::new_in(draft.scratch);
+    for index in 0..draft.blocks.len() {
+        if !reachable[index] || !matches!(targets[index], ForwardingTarget::Unknown) {
+            continue;
+        }
+        path.clear();
+        let stamp = index + 1;
+        let mut target = Block::new(index);
+        while matches!(targets[target.index()], ForwardingTarget::Unknown) {
+            if visits[target.index()] == stamp {
+                targets[target.index()] = ForwardingTarget::Cycle;
+                break;
+            }
+            visits[target.index()] = stamp;
+            let forwarder = draft.block(target);
+            let Term::Jump(next) = &forwarder.term else {
+                targets[target.index()] = ForwardingTarget::Stop;
+                break;
+            };
+            let own_uses = |param: Value| {
+                next.args
+                    .iter()
+                    .filter(|&&arg| draft.resolve(arg) == param)
+                    .count()
+            };
+            if !forwarder.alive
+                || target == Draft::entry()
+                || !forwarder.insts.is_empty()
+                || forwarder
+                    .params
+                    .iter()
+                    .any(|&param| uses[param.index()] as usize != own_uses(param))
+            {
+                targets[target.index()] = ForwardingTarget::Stop;
+                break;
+            }
+            path.push((target, next));
+            target = next.target;
+        }
+        // Compress the whole path, including parameter substitutions. Each
+        // cached mapping is reused by every later path and incoming edge.
+        for &(block, next) in path.iter().rev() {
+            let resolved = match &targets[next.target.index()] {
+                | ForwardingTarget::Stop => {
+                    let mut args = ArenaVec::with_capacity_in(next.args.len(), draft.scratch);
+                    args.extend(next.args.iter().map(|&arg| draft.resolve(arg)));
+                    ForwardingTarget::Resolved(Edge {
+                        target: next.target,
+                        args,
+                    })
+                },
+                | ForwardingTarget::Resolved(destination) => {
+                    let params = &draft.block(next.target).params;
+                    let mut args =
+                        ArenaVec::with_capacity_in(destination.args.len(), draft.scratch);
+                    for &arg in &destination.args {
+                        args.push(
+                            params
+                                .iter()
+                                .position(|&param| param == arg)
+                                .map_or(arg, |position| draft.resolve(next.args[position])),
+                        );
+                    }
+                    ForwardingTarget::Resolved(Edge {
+                        target: destination.target,
+                        args,
+                    })
+                },
+                | ForwardingTarget::Cycle | ForwardingTarget::Unknown => ForwardingTarget::Cycle,
+            };
+            targets[block.index()] = resolved;
+        }
+    }
+    targets
+}
+
+/// One block's cached forwarding destination and argument mapping.
+#[derive(Clone)]
+enum ForwardingTarget<'s> {
+    Unknown,
+    Stop,
+    Cycle,
+    Resolved(Edge<'s>),
+}
+
 /// Where the `edge_index`th edge of `block` would lead if it skipped every
 /// forwarding block on its way, with the arguments it would pass. `None` if
 /// it would not move, or if moving would give the terminator two edges to a
-/// block with different arguments. `uses` are the draft's use counts.
+/// block with different arguments. `targets` caches the round's forwarding
+/// destinations and parameter substitutions.
 fn threaded<'s>(
     draft: &Draft<'_, 's>,
-    uses: &[u32],
+    targets: &[ForwardingTarget<'s>],
     block: Block,
     edge_index: usize,
 ) -> Option<(Block, ArenaVec<'s, Value>)> {
     let term = &draft.block(block).term;
     let edge = term.edges().nth(edge_index)?;
-    let mut target = edge.target;
-    let mut args = ArenaVec::with_capacity_in(edge.args.len(), draft.scratch);
-    args.extend(edge.args.iter().map(|&arg| draft.resolve(arg)));
-    // The blocks passed through. A cycle of forwarding blocks is an empty
-    // infinite loop; threading around it would only rotate its entry, so the
-    // edge stays.
-    let mut visited = ArenaVec::new_in(draft.scratch);
-    visited.push(target);
-    loop {
-        let forwarder = draft.block(target);
-        let Term::Jump(next) = &forwarder.term else {
-            break;
-        };
-        if !forwarder.alive || target == Draft::entry() || !forwarder.insts.is_empty() {
-            break;
-        }
-        if visited.contains(&next.target) {
-            return None;
-        }
-        let own_uses = |param: Value| {
-            next.args
-                .iter()
-                .filter(|&&arg| draft.resolve(arg) == param)
-                .count()
-        };
-        if forwarder
-            .params
-            .iter()
-            .any(|&param| uses[param.index()] as usize != own_uses(param))
-        {
-            break;
-        }
-        let mut next_args = ArenaVec::with_capacity_in(next.args.len(), draft.scratch);
-        for &arg in &next.args {
-            let arg = draft.resolve(arg);
-            next_args.push(
-                forwarder
-                    .params
-                    .iter()
-                    .position(|&param| param == arg)
-                    .map_or(arg, |position| args[position]),
-            );
-        }
-        visited.push(next.target);
-        target = next.target;
-        args = next_args;
-    }
+    let ForwardingTarget::Resolved(destination) = &targets[edge.target.index()] else {
+        return None;
+    };
+    let target = destination.target;
     if target == edge.target {
         return None;
+    }
+    let params = &draft.block(edge.target).params;
+    let mut args = ArenaVec::with_capacity_in(destination.args.len(), draft.scratch);
+    for &arg in &destination.args {
+        args.push(
+            params
+                .iter()
+                .position(|&param| param == arg)
+                .map_or(arg, |position| draft.resolve(edge.args[position])),
+        );
     }
     let agrees = term.edges().enumerate().all(|(other_index, other)| {
         other_index == edge_index

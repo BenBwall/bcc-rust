@@ -4,6 +4,122 @@
 use super::*;
 
 #[test]
+fn twenty_thousand_forwarding_blocks_optimize_quickly() {
+    use std::{
+        fmt::Write,
+        sync::mpsc,
+        thread,
+        time::Duration,
+    };
+
+    let (sender, receiver) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        for backwards in [false, true] {
+            let mut input = String::from(
+                "function @f(i32) -> i32 external {\nblock0(v0: i32):\n    jump block1(v0)\n",
+            );
+            for position in 1..=20_000 {
+                let block = if backwards {
+                    20_001 - position
+                } else {
+                    position
+                };
+                writeln!(
+                    input,
+                    "block{block}(v{block}: i32):\n    jump block{}(v{block})",
+                    block + 1
+                )
+                .unwrap();
+            }
+            input.push_str("block20001(v20001: i32):\n    return v20001\n}\n");
+            let (optimized, report) = optimize_text(&input, &only(&[Pass::SimplifyCfg]));
+            assert_eq!(
+                optimized,
+                "function @f(i32) -> i32 external {\nblock0(v0: i32):\n    return v0\n}\n"
+            );
+            assert_eq!(
+                equivalence::returned(
+                    &optimized,
+                    "f",
+                    &[crate::backend::interpreter::RuntimeValue::Int(9)]
+                ),
+                crate::backend::interpreter::RuntimeValue::Int(9),
+            );
+            eprintln!(
+                "20,000 forwarding blocks, backwards={backwards}: {:?}",
+                report.stats(Pass::SimplifyCfg).time
+            );
+        }
+        sender.send(()).unwrap();
+    });
+    // A detached worker on failure lets the test process exit instead of
+    // spending minutes finishing a regressed traversal. Include verification
+    // in the generous deadline so this exercises the optimizer's public seam.
+    receiver
+        .recv_timeout(Duration::from_secs(10))
+        .expect("20,000-block chains must optimize within ten seconds");
+    worker.join().unwrap();
+}
+
+#[test]
+fn a_forwarding_cycle_with_permuted_arguments_is_left_alone() {
+    let input = "function @f(i32, i32, i1) internal {
+block0(v0: i32, v1: i32, v2: i1):
+    brif v2, block1(v0, v1), block2(v1, v0)
+block1(v3: i32, v4: i32):
+    jump block2(v4, v3)
+block2(v5: i32, v6: i32):
+    jump block1(v6, v5)
+}
+";
+    assert_pass_leaves(Pass::SimplifyCfg, input);
+}
+
+#[test]
+fn threading_bisect_prefixes_keep_argument_mappings_valid() {
+    use crate::backend::interpreter::RuntimeValue;
+
+    let input = "function @f(i32, i32, i1) -> i32 external {
+block0(v0: i32, v1: i32, v2: i1):
+    brif v2, block1(v0, v1), block3(v0, v1)
+block1(v3: i32, v4: i32):
+    jump block2(v4, v3)
+block2(v5: i32, v6: i32):
+    jump block4(v6, v5)
+block3(v7: i32, v8: i32):
+    jump block4(v8, v7)
+block4(v9: i32, v10: i32):
+    v11 = isub.i32 v9, v10
+    return v11
+}
+";
+    let options = only(&[Pass::SimplifyCfg]);
+    let (_, full) = optimize_text(input, &options);
+    for limit in 0..=full.transformations() {
+        let (optimized, report) = optimize_text(
+            input,
+            &OptimizerOptions {
+                bisect_limit: Some(limit),
+                ..options
+            },
+        );
+        assert_eq!(report.transformations(), limit);
+        for condition in [0, 1] {
+            let args = [
+                RuntimeValue::Int(10),
+                RuntimeValue::Int(1),
+                RuntimeValue::Int(condition),
+            ];
+            assert_eq!(
+                equivalence::returned(&optimized, "f", &args),
+                equivalence::returned(input, "f", &args),
+                "bisect limit {limit}"
+            );
+        }
+    }
+}
+
+#[test]
 fn unreachable_blocks_are_removed() {
     let input = "\
 function @f() -> i32 external {
