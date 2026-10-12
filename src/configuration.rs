@@ -57,6 +57,10 @@ impl CompilerConfiguration {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Language, hosted execution and diagnostic switches are independent compiler options."
+)]
 pub(crate) struct CompilerConfiguration {
     target: crate::target::Target,
     standard: CStandard,
@@ -70,6 +74,8 @@ pub(crate) struct CompilerConfiguration {
     repeated_specifier_warnings: bool,
     source_date_epoch: Option<i64>,
     hosted: bool,
+    gnu89_inline: Option<bool>,
+    suppress_warnings: bool,
 }
 
 // Tests

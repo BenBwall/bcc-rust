@@ -125,6 +125,31 @@ impl CompilerConfiguration {
         self
     }
 
+    /// Overrides the dialect default, like GCC's `-f[no-]gnu89-inline`.
+    /// GNU extension: <https://gcc.gnu.org/onlinedocs/gcc/Inline.html>.
+    pub(crate) const fn with_gnu89_inline(mut self, enabled: bool) -> Self {
+        self.gnu89_inline = Some(enabled);
+        self
+    }
+
+    /// GNU89 reverses external inline emission relative to C99.
+    /// C99: §6.7.4p6-7, pp. 112-113; PDF pp. 124-125.
+    pub(crate) const fn gnu89_inline(self) -> bool {
+        match self.gnu89_inline {
+            | Some(enabled) => enabled,
+            | None => (self.standard as u8) < CStandard::C99 as u8,
+        }
+    }
+
+    pub(crate) const fn with_suppress_warnings(mut self, enabled: bool) -> Self {
+        self.suppress_warnings = enabled;
+        self
+    }
+
+    pub(crate) const fn suppress_warnings(self) -> bool {
+        self.suppress_warnings
+    }
+
     pub(crate) const fn standard(self) -> CStandard {
         self.standard
     }
@@ -196,6 +221,8 @@ impl CompilerConfiguration {
             repeated_specifier_warnings: true,
             source_date_epoch: None,
             hosted: true,
+            gnu89_inline: None,
+            suppress_warnings: false,
         }
         .derive_features()
     }

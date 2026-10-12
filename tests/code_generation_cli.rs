@@ -40,6 +40,131 @@ mod tests {
                        i;\n  return s;\n}\n";
 
     #[test]
+    fn inline_modes_emit_bodies_and_run_in_both_back_ends() {
+        let Some(target) = host() else {
+            return;
+        };
+        let target = format!("--target={target}");
+        for (flags, definition) in [
+            (
+                vec!["-std=gnu17", "-fgnu89-inline"],
+                "inline int f(int x) { return x + 1; }",
+            ),
+            (vec!["-std=gnu89"], "inline int f(int x) { return x + 1; }"),
+            (
+                vec!["-std=c89"],
+                "__inline__ int f(int x) { return x + 1; }",
+            ),
+            (
+                vec!["-std=c90"],
+                "__inline__ int f(int x) { return x + 1; }",
+            ),
+            (
+                vec!["-std=gnu17", "-fgnu89-inline", "-fno-gnu89-inline"],
+                "extern inline int f(int x) { return x + 1; }",
+            ),
+            (
+                vec!["-std=gnu89", "-fno-gnu89-inline"],
+                "extern inline int f(int x) { return x + 1; }",
+            ),
+            (
+                vec!["-std=c99"],
+                "extern inline int f(int x) { return x + 1; }",
+            ),
+            (
+                vec!["-std=c99"],
+                "inline int f(int x) { return x + 1; } extern int f(int);",
+            ),
+            (
+                vec!["-std=c99"],
+                "inline __attribute__((gnu_inline)) int f(int x) { return x + 1; }",
+            ),
+            (
+                vec!["-std=c99"],
+                "extern inline __attribute__((gnu_inline)) int f(int x) { return 99; } int f(int \
+                 x) { return x + 1; }",
+            ),
+            (
+                vec!["-std=c99"],
+                "static inline int f(int x) { return x + 1; }",
+            ),
+            (
+                vec!["-std=c99", "-fgnu89-inline"],
+                "static inline int f(int x) { return x + 1; }",
+            ),
+        ] {
+            // Taking the address also verifies that a real callable body
+            // exists.
+            let source =
+                format!("{definition} int main(void) {{ int (*p)(int) = f; return p(6) != 7; }}");
+            let executable = temporary("inline.exe");
+            let path = executable.to_str().unwrap();
+            for opt in ["--opt=none", "--opt=bcc"] {
+                let mut common = flags.clone();
+                common.extend([&target, opt]);
+                let mut interpret = common.clone();
+                interpret.push("--interpret");
+                let output = bcc(&source, &interpret);
+                assert!(
+                    output.status.success(),
+                    "{flags:?}: {}",
+                    text(&output.stderr)
+                );
+                common.extend(["--llvm-opt=O0", "-o", path]);
+                let output = bcc(&source, &common);
+                assert!(
+                    output.status.success(),
+                    "{flags:?}: {}",
+                    text(&output.stderr)
+                );
+                let output = run_native(&mut Command::new(&executable)).unwrap();
+                assert!(output.status.success(), "{flags:?}: {output:?}");
+            }
+            std::fs::remove_file(executable).unwrap();
+        }
+    }
+
+    #[test]
+    fn inline_only_calls_stay_external_and_w_suppresses_only_warnings() {
+        for (flags, definition) in [
+            (vec!["-std=c99"], "inline int f(void) { return 99; }"),
+            (
+                vec!["-std=c99", "-fgnu89-inline"],
+                "extern inline int f(void) { return 99; }",
+            ),
+            (
+                vec!["-std=c99"],
+                "extern inline __attribute__((gnu_inline)) int f(void) { return 99; }",
+            ),
+        ] {
+            let source = format!("{definition} int main(void) {{ return f(); }}");
+            for opt in ["--opt=none", "--opt=bcc"] {
+                let mut args = flags.clone();
+                args.extend([opt, "--emit=llvm"]);
+                let output = bcc(&source, &args);
+                assert!(output.status.success(), "{}", text(&output.stderr));
+                assert!(
+                    text(&output.stdout).contains("declare i32 @f("),
+                    "{}",
+                    text(&output.stdout)
+                );
+                _ = args.pop();
+                args.push("--interpret");
+                let output = bcc(&source, &args);
+                assert_eq!(output.status.code(), Some(70), "{}", text(&output.stderr));
+            }
+        }
+        let source = "int main(void) { exit(0); }";
+        assert!(text(&bcc(source, &["--interpret"]).stderr).contains("warning:"));
+        let output = bcc(source, &["--interpret", "-w"]);
+        assert!(output.status.success());
+        assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
+        let output = bcc("int main(void) { return missing; }", &["--interpret", "-w"]);
+        assert!(!output.status.success());
+        assert!(text(&output.stderr).contains("error:"));
+    }
+
+    #[test]
     fn fold_finishes_many_noundef_parameters_and_volatile_bit_field_writes() {
         use std::fmt::Write as _;
 

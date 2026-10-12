@@ -26,7 +26,6 @@ use super::{
 };
 use crate::{
     configuration::{
-        CStandard,
         CompilerConfiguration,
         Feature,
         FeatureOrigin,
@@ -235,7 +234,8 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                         | (
                             "__has_attribute",
                             "unused" | "deprecated" | "aligned" | "packed" | "noreturn" | "weak"
-                            | "section" | "visibility" | "format" | "always_inline" | "noinline",
+                            | "section" | "visibility" | "format" | "always_inline" | "noinline"
+                            | "gnu_inline",
                         ) => 1,
                         | _ => 0,
                     }
@@ -968,8 +968,8 @@ pub(super) fn with_identity_macros<'a>(
         env!("CARGO_PKG_VERSION"),
     );
     out.push_str("#define __GNUC__ 4\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 1\n");
-    // GNU89 inline semantics before C99, C99 semantics from it on.
-    out.push_str(if configuration.standard() < CStandard::C99 {
+    // Identity follows the effective inline mode, including flag overrides.
+    out.push_str(if configuration.gnu89_inline() {
         "#define __GNUC_GNU_INLINE__ 1\n"
     } else {
         "#define __GNUC_STDC_INLINE__ 1\n"
