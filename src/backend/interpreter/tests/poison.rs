@@ -74,6 +74,39 @@ fn noundef_traps_entry_and_returns_including_partial_memory_poison() {
 }
 
 #[test]
+fn noundef_checks_poison_in_the_second_return_register_even_when_unused() {
+    let text = "\
+abi lowered
+function @f(ptr registers(i64, i64, align 8)) -> noundef internal {
+block0(v0: ptr):
+    v1 = iconst.i64 7
+    store.i64 v1, v0, align 8
+    v2 = iconst.i64 8
+    v3 = ptr_add inbounds v0, v2
+    store.i64 v1, v3, align 8
+    v4 = iconst.i64 15
+    v5 = ptr_add inbounds v0, v4
+    v6 = poison.i8
+    store.i8 v6, v5, align 1
+    return
+}
+function @main() -> i32 external {
+    slot0 = stack_slot 16, align 8
+block0:
+    v0 = stack_addr slot0
+    call @f(v0)
+    v1 = iconst.i32 0
+    return v1
+}
+";
+    assert_eq!(undefined(text, "main"), UbKind::Noundef);
+    let initialized = text.replace("poison.i8", "iconst.i8 9");
+    assert_eq!(returned(&initialized, "main"), int(0));
+    let unmarked = text.replace(" -> noundef", "");
+    assert_eq!(returned(&unmarked, "main"), int(0));
+}
+
+#[test]
 fn violated_wrap_flags_produce_poison() {
     let cases = [
         ("iadd.i8 nsw", 0x7F, 1, POISON),

@@ -28,6 +28,7 @@ pub(super) const GOLDENS: &[Golden] = &[
     VARARGS,
     AGGREGATES,
     POISON_REGISTER_RETURN,
+    NOUNDEF_PAIR_RETURN,
     EXTENSIONS,
 ];
 
@@ -691,6 +692,73 @@ block0:
   %v1 = load i8, ptr %slot0, align 1
   %v2 = zext i8 %v1 to i32
   ret i32 %v2
+}
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 4, !"PIC Level", i32 2}
+!1 = !{i32 4, !"PIE Level", i32 2}
+"#,
+};
+
+/// Both return registers carry byte poison without freezing when marked
+/// noundef.
+const NOUNDEF_PAIR_RETURN: Golden = Golden {
+    name:     "noundef-pair-return",
+    input:    "\
+abi lowered
+function @f(ptr registers(i64, i64, align 8)) -> noundef internal {
+block0(v0: ptr):
+    v1 = iconst.i64 7
+    store.i64 v1, v0, align 8
+    v2 = iconst.i64 8
+    v3 = ptr_add inbounds v0, v2
+    store.i64 v1, v3, align 8
+    v4 = iconst.i64 15
+    v5 = ptr_add inbounds v0, v4
+    v6 = poison.i8
+    store.i8 v6, v5, align 1
+    return
+}
+function @main() -> i32 external {
+    slot0 = stack_slot 16, align 8
+block0:
+    v0 = stack_addr slot0
+    call @f(v0)
+    v1 = iconst.i32 0
+    return v1
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define internal noundef { i64, i64 } @f() {
+block0:
+  %v0 = alloca [16 x i8], align 8
+  store i64 7, ptr %v0, align 8
+  %v3 = getelementptr inbounds i8, ptr %v0, i64 8
+  store i64 7, ptr %v3, align 8
+  %v5 = getelementptr inbounds i8, ptr %v0, i64 15
+  store i8 poison, ptr %v5, align 1
+  %0 = load <8 x i8>, ptr %v0, align 8
+  %1 = bitcast <8 x i8> %0 to i64
+  %2 = insertvalue { i64, i64 } poison, i64 %1, 0
+  %3 = getelementptr inbounds i8, ptr %v0, i64 8
+  %4 = load <8 x i8>, ptr %3, align 8
+  %5 = bitcast <8 x i8> %4 to i64
+  %inst9.ret = insertvalue { i64, i64 } %2, i64 %5, 1
+  ret { i64, i64 } %inst9.ret
+}
+
+define i32 @main() {
+block0:
+  %slot0 = alloca [16 x i8], align 8
+  %inst1.ret = call noundef { i64, i64 } @f()
+  store { i64, i64 } %inst1.ret, ptr %slot0, align 8
+  ret i32 0
 }
 
 !llvm.module.flags = !{!0, !1}
