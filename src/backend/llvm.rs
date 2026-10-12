@@ -62,10 +62,11 @@ pub(crate) fn emit_module<'m>(
     out: &mut dyn fmt::Write,
 ) -> Result<(), EmitError<'m>> {
     let arena = Bump::new();
-    let api = Session::new(&arena, target);
-    build_module(module, target, &api, &arena)?;
-    out.write_str(api.print().text())?;
-    Ok(())
+    Session::with(&arena, target, |api| {
+        build_module(module, target, api, &arena)?;
+        out.write_str(api.print().text())?;
+        Ok(())
+    })
 }
 
 /// Validates the IR references before inspecting or emitting call signatures.
@@ -139,12 +140,12 @@ fn build_module<'m>(
     Ok(())
 }
 
-struct Emitter<'a, 'm, 'ir> {
+struct Emitter<'a, 'id, 'm, 'ir> {
     module:    &'m Module<'ir>,
-    api:       &'a Session<'a>,
+    api:       &'a Session<'id>,
     arena:     &'a Bump,
-    functions: &'a [Val<'a>],
-    globals:   &'a [Val<'a>],
+    functions: &'a [Val<'id>],
+    globals:   &'a [Val<'id>],
 }
 
 fn uses_pre_abi_signature(module: &Module<'_>) -> bool {

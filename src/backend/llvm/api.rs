@@ -1,10 +1,9 @@
-//! Safe, scoped ownership of LLVM-C objects. Handles borrow the session;
+//! Safe, scoped ownership of LLVM-C objects. Handles carry a session brand;
 //! LLVM owns their storage on its C++ heap, outside Rust's global allocator.
 //! No LLVM owner is stored in an arena. Only this module calls llvm-sys.
-//! The back end passes handles only to their originating session: this is a
-//! module invariant, asserted in debug builds. Transparent handle slices are
-//! borrowed directly by LLVM-C, whose array inputs are read-only despite
-//! `*mut`.
+//! Invariant lifetime brands enforce handle ownership in the type system.
+//! Transparent handle slices are borrowed directly by LLVM-C, whose array
+//! inputs are read-only despite `*mut`.
 
 use std::{
     ffi::{
@@ -164,72 +163,51 @@ use crate::{
 };
 
 /// A session owns a context, module and builder in disposal order.
-pub(super) struct Session<'s> {
+///
+/// `with` introduces a fresh invariant brand: nested sessions cannot exchange
+/// types, values or blocks, and neither a session nor its handles can escape
+/// the closure. Its arena is reborrowed for that brand's scope, so no separate
+/// arena lifetime is needed. Owned text, object buffers and errors are
+/// unbranded.
+pub(super) struct Session<'id> {
     builder: LLVMBuilderRef,
     module:  LLVMModuleRef,
     context: LLVMContextRef,
-    arena:   &'s Bump,
+    arena:   &'id Bump,
+    _brand:  PhantomData<fn(&'id ()) -> &'id ()>,
 }
 
 #[derive(Clone, Copy)]
 // ABI-identical to the LLVMTypeRef it wraps, including in slices.
 #[repr(transparent)]
-pub(super) struct Ty<'a>(LLVMTypeRef, PhantomData<&'a Session<'a>>);
+pub(super) struct Ty<'id>(LLVMTypeRef, PhantomData<fn(&'id ()) -> &'id ()>);
 #[derive(Clone, Copy)]
 // ABI-identical to the LLVMValueRef it wraps, including in slices.
 #[repr(transparent)]
-pub(super) struct Val<'a>(LLVMValueRef, PhantomData<&'a Session<'a>>);
+pub(super) struct Val<'id>(LLVMValueRef, PhantomData<fn(&'id ()) -> &'id ()>);
 #[derive(Clone, Copy)]
 // ABI-identical to the LLVMBasicBlockRef it wraps, including in slices.
 #[repr(transparent)]
-pub(super) struct Block<'a>(LLVMBasicBlockRef, PhantomData<&'a Session<'a>>);
+pub(super) struct Block<'id>(LLVMBasicBlockRef, PhantomData<fn(&'id ()) -> &'id ()>);
 
-#[cfg_attr(
-    not(debug_assertions),
-    expect(
-        clippy::unused_self,
-        reason = "The session receiver binds handle lifetimes and ownership; validation is \
-                  debug-only."
-    )
-)]
-impl<'s> Session<'s> {
-    #[cfg(debug_assertions)]
-    fn check_type(&self, ty: Ty<'_>) {
-        // SAFETY: Type handles borrow a live session and cannot be forged.
-        let context = unsafe { llvm_sys::core::LLVMGetTypeContext(ty.0) };
-        assert_eq!(
-            context, self.context,
-            "LLVM handle belongs to another session"
-        );
-    }
-
-    #[cfg(debug_assertions)]
-    fn check_value(&self, value: Val<'_>) {
-        // SAFETY: Value handles borrow a live session and cannot be forged.
-        let ty = unsafe { LLVMTypeOf(value.0) };
-        self.check_type(Ty(ty, PhantomData));
-    }
-
-    #[cfg(debug_assertions)]
-    fn check_block(&self, block: Block<'_>) {
-        // SAFETY: Every block handle was appended to a live function in a
-        // session.
-        let function = unsafe { llvm_sys::core::LLVMGetBasicBlockParent(block.0) };
-        self.check_value(Val(function, PhantomData));
-    }
-
-    pub(super) fn new(arena: &'s Bump, target: Target) -> Self {
+impl Session<'_> {
+    pub(super) fn with<R>(
+        arena: &Bump,
+        target: Target,
+        body: impl for<'id> FnOnce(&Session<'id>) -> R,
+    ) -> R {
         // SAFETY: Creates a new independently owned LLVM context.
         let context = unsafe { LLVMContextCreate() };
         // SAFETY: The context is live and the module name is NUL terminated.
         let module = unsafe { LLVMModuleCreateWithNameInContext(c"bcc".as_ptr(), context) };
         // SAFETY: The context is live.
         let builder = unsafe { LLVMCreateBuilderInContext(context) };
-        let session = Self {
+        let session = Session {
             builder,
             module,
             context,
             arena,
+            _brand: PhantomData,
         };
         let triple = session.name(target.triple());
         // SAFETY: Module and terminated triple are live for the call; LLVM
@@ -266,9 +244,15 @@ impl<'s> Session<'s> {
                 }
             }
         }
-        session
+        body(&session)
     }
+}
 
+#[expect(
+    clippy::unused_self,
+    reason = "The receiver binds handle types to this session's invariant brand."
+)]
+impl<'id> Session<'id> {
     pub(super) fn name(&self, name: &str) -> &CStr {
         debug_assert!(!name.as_bytes().contains(&0), "IR names contain no NUL");
         let bytes = self
@@ -279,7 +263,7 @@ impl<'s> Session<'s> {
         unsafe { CStr::from_bytes_with_nul_unchecked(bytes) }
     }
 
-    pub(super) fn ty(&self, ty: Type) -> Ty<'_> {
+    pub(super) fn ty(&self, ty: Type) -> Ty<'id> {
         let raw = match ty {
             // SAFETY: The session owns the live context.
             | Type::I1 => unsafe { LLVMInt1TypeInContext(self.context) },
@@ -307,39 +291,31 @@ impl<'s> Session<'s> {
         Ty(raw, PhantomData)
     }
 
-    pub(super) fn void(&self) -> Ty<'_> {
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn void(&self) -> Ty<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMVoidTypeInContext(self.context) };
         Ty(raw, PhantomData)
     }
 
-    pub(super) fn array(&self, ty: Ty<'_>, size: u64) -> Ty<'_> {
-        #[cfg(debug_assertions)]
-        self.check_type(ty);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn array(&self, ty: Ty<'id>, size: u64) -> Ty<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMArrayType2(ty.0, size) };
         Ty(raw, PhantomData)
     }
 
-    pub(super) fn vector(&self, ty: Ty<'_>, size: u32) -> Ty<'_> {
-        #[cfg(debug_assertions)]
-        self.check_type(ty);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn vector(&self, ty: Ty<'id>, size: u32) -> Ty<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMVectorType(ty.0, size) };
         Ty(raw, PhantomData)
     }
 
-    pub(super) fn structure(&self, types: &[Ty<'_>], packed: bool) -> Ty<'_> {
-        #[cfg(debug_assertions)]
-        for &ty in types {
-            self.check_type(ty);
-        }
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds. Ty is ABI-identical to LLVMTypeRef; LLVM
-        // only reads the counted array despite its *mut parameter.
+    pub(super) fn structure(&self, types: &[Ty<'id>], packed: bool) -> Ty<'id> {
+        // SAFETY: The type system ties handles to this live session. Ty is
+        // ABI-identical to LLVMTypeRef; LLVM only reads the counted
+        // array despite its *mut parameter.
         let raw = unsafe {
             LLVMStructTypeInContext(
                 self.context,
@@ -351,16 +327,10 @@ impl<'s> Session<'s> {
         Ty(raw, PhantomData)
     }
 
-    pub(super) fn signature(&self, result: Ty<'_>, types: &[Ty<'_>], variadic: bool) -> Ty<'_> {
-        #[cfg(debug_assertions)]
-        self.check_type(result);
-        #[cfg(debug_assertions)]
-        for &ty in types {
-            self.check_type(ty);
-        }
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds. Ty is ABI-identical to LLVMTypeRef; LLVM
-        // only reads the counted array despite its *mut parameter.
+    pub(super) fn signature(&self, result: Ty<'id>, types: &[Ty<'id>], variadic: bool) -> Ty<'id> {
+        // SAFETY: The type system ties handles to this live session. Ty is
+        // ABI-identical to LLVMTypeRef; LLVM only reads the counted
+        // array despite its *mut parameter.
         let raw = unsafe {
             LLVMFunctionType(
                 result.0,
@@ -372,73 +342,59 @@ impl<'s> Session<'s> {
         Ty(raw, PhantomData)
     }
 
-    pub(super) fn function(&self, name: &CStr, ty: Ty<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_type(ty);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn function(&self, name: &CStr, ty: Ty<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMAddFunction(self.module, name.as_ptr(), ty.0) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn global(&self, name: &CStr, ty: Ty<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_type(ty);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn global(&self, name: &CStr, ty: Ty<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMAddGlobal(self.module, ty.0, name.as_ptr()) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn block(&self, function: Val<'_>, name: &CStr) -> Block<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(function);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn block(&self, function: Val<'id>, name: &CStr) -> Block<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMAppendBasicBlockInContext(self.context, function.0, name.as_ptr()) };
         Block(raw, PhantomData)
     }
 
-    pub(super) fn position(&self, block: Block<'_>) {
-        #[cfg(debug_assertions)]
-        self.check_block(block);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn position(&self, block: Block<'id>) {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         unsafe {
             LLVMPositionBuilderAtEnd(self.builder, block.0);
         }
     }
 
-    pub(super) fn param(&self, function: Val<'_>, index: u32) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(function);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn param(&self, function: Val<'id>, index: u32) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMGetParam(function.0, index) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn set_name(&self, value: Val<'_>, name: &str) {
-        #[cfg(debug_assertions)]
-        self.check_value(value);
-        // SAFETY: Value belongs to this live session by module invariant,
-        // asserted in debug builds; globals and scalar constants must keep
+    pub(super) fn set_name(&self, value: Val<'id>, name: &str) {
+        // SAFETY: The type system ties the value to this live session;
+        // globals and scalar constants must keep
         // their identity.
         if !unsafe { llvm_sys::core::LLVMIsAConstant(value.0) }.is_null() {
             return;
         }
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         unsafe {
             LLVMSetValueName2(value.0, name.as_ptr().cast(), name.len());
         }
     }
 
-    pub(super) fn alignment(&self, value: Val<'_>, align: u64) {
-        #[cfg(debug_assertions)]
-        self.check_value(value);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn alignment(&self, value: Val<'id>, align: u64) {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         unsafe {
             LLVMSetAlignment(
                 value.0,
@@ -447,67 +403,53 @@ impl<'s> Session<'s> {
         }
     }
 
-    pub(super) fn volatile(&self, value: Val<'_>, volatile: bool) {
-        #[cfg(debug_assertions)]
-        self.check_value(value);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn volatile(&self, value: Val<'id>, volatile: bool) {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         unsafe {
             LLVMSetVolatile(value.0, i32::from(volatile));
         }
     }
 
-    pub(super) fn initializer(&self, global: Val<'_>, value: Val<'_>) {
-        #[cfg(debug_assertions)]
-        self.check_value(global);
-        #[cfg(debug_assertions)]
-        self.check_value(value);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn initializer(&self, global: Val<'id>, value: Val<'id>) {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         unsafe {
             LLVMSetInitializer(global.0, value.0);
         }
     }
 
-    pub(super) fn constant_global(&self, global: Val<'_>, constant: bool) {
-        #[cfg(debug_assertions)]
-        self.check_value(global);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn constant_global(&self, global: Val<'id>, constant: bool) {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         unsafe {
             LLVMSetGlobalConstant(global.0, i32::from(constant));
         }
     }
 
-    pub(super) fn internal(&self, value: Val<'_>) {
-        #[cfg(debug_assertions)]
-        self.check_value(value);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn internal(&self, value: Val<'id>) {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         unsafe {
             LLVMSetLinkage(value.0, LLVMLinkage::LLVMInternalLinkage);
         }
     }
 
-    pub(super) fn null(&self, ty: Ty<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_type(ty);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn null(&self, ty: Ty<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMConstNull(ty.0) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn poison(&self, ty: Ty<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_type(ty);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn poison(&self, ty: Ty<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMGetPoison(ty.0) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn bits(&self, ty: Type, bits: u128) -> Val<'_> {
+    pub(super) fn bits(&self, ty: Type, bits: u128) -> Val<'id> {
         let words = [
             u64::try_from(bits & u128::from(u64::MAX)).unwrap(),
             u64::try_from(bits >> 64).unwrap(),
@@ -548,7 +490,7 @@ impl<'s> Session<'s> {
         }
     }
 
-    pub(super) fn bytes(&self, bytes: &[u8]) -> Val<'_> {
+    pub(super) fn bytes(&self, bytes: &[u8]) -> Val<'id> {
         // SAFETY: LLVM copies the counted bytes, with no implicit terminator.
         Val(
             unsafe {
@@ -558,15 +500,11 @@ impl<'s> Session<'s> {
         )
     }
 
-    pub(super) fn const_structure(&self, values: &[Val<'_>]) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        for &value in values {
-            self.check_value(value);
-        }
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds. Val is ABI-identical to LLVMValueRef;
-        // constants have the verified IR types. LLVM only reads the counted
-        // array despite its *mut parameter.
+    pub(super) fn const_structure(&self, values: &[Val<'id>]) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session. Val is
+        // ABI-identical to LLVMValueRef; constants have the verified IR
+        // types. LLVM only reads the counted array despite its *mut
+        // parameter.
         Val(
             unsafe {
                 LLVMConstStructInContext(
@@ -580,14 +518,12 @@ impl<'s> Session<'s> {
         )
     }
 
-    pub(super) fn const_gep(&self, base: Val<'_>, offset: i64) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(base);
+    pub(super) fn const_gep(&self, base: Val<'id>, offset: i64) -> Val<'id> {
         let index = self.bits(Type::I64, offset as u128);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds. A single byte offset indexes the opaque
-        // pointer constant. Val is ABI-identical to LLVMValueRef; LLVM only
-        // reads the index array despite its *mut parameter.
+        // SAFETY: The type system ties handles to this live session. A single
+        // byte offset indexes the opaque pointer constant. Val is
+        // ABI-identical to LLVMValueRef; LLVM only reads the index
+        // array despite its *mut parameter.
         Val(
             unsafe {
                 LLVMConstGEP2(
@@ -601,211 +537,149 @@ impl<'s> Session<'s> {
         )
     }
 
-    pub(super) fn alloca(&self, ty: Ty<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_type(ty);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn alloca(&self, ty: Ty<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMBuildAlloca(self.builder, ty.0, c"".as_ptr()) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn phi(&self, ty: Ty<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_type(ty);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn phi(&self, ty: Ty<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMBuildPhi(self.builder, ty.0, c"".as_ptr()) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn binary(&self, opcode: LLVMOpcode, a: Val<'_>, b: Val<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(a);
-        #[cfg(debug_assertions)]
-        self.check_value(b);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn binary(&self, opcode: LLVMOpcode, a: Val<'id>, b: Val<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = self.unfolded(a.0, |operand| unsafe {
             LLVMBuildBinOp(self.builder, opcode, operand, b.0, c"".as_ptr())
         });
         Val(raw, PhantomData)
     }
 
-    pub(super) fn cast(&self, opcode: LLVMOpcode, value: Val<'_>, ty: Ty<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(value);
-        #[cfg(debug_assertions)]
-        self.check_type(ty);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn cast(&self, opcode: LLVMOpcode, value: Val<'id>, ty: Ty<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = self.unfolded(value.0, |operand| unsafe {
             LLVMBuildCast(self.builder, opcode, operand, ty.0, c"".as_ptr())
         });
         Val(raw, PhantomData)
     }
 
-    pub(super) fn fneg(&self, value: Val<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(value);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn fneg(&self, value: Val<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = self.unfolded(value.0, |operand| unsafe {
             LLVMBuildFNeg(self.builder, operand, c"".as_ptr())
         });
         Val(raw, PhantomData)
     }
 
-    pub(super) fn freeze(&self, value: Val<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(value);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn freeze(&self, value: Val<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = self.unfolded(value.0, |operand| unsafe {
             LLVMBuildFreeze(self.builder, operand, c"".as_ptr())
         });
         Val(raw, PhantomData)
     }
 
-    pub(super) fn va_arg(&self, value: Val<'_>, ty: Ty<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(value);
-        #[cfg(debug_assertions)]
-        self.check_type(ty);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn va_arg(&self, value: Val<'id>, ty: Ty<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMBuildVAArg(self.builder, value.0, ty.0, c"".as_ptr()) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn icmp(&self, cond: LLVMIntPredicate, a: Val<'_>, b: Val<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(a);
-        #[cfg(debug_assertions)]
-        self.check_value(b);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn icmp(&self, cond: LLVMIntPredicate, a: Val<'id>, b: Val<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = self.unfolded(a.0, |operand| unsafe {
             LLVMBuildICmp(self.builder, cond, operand, b.0, c"".as_ptr())
         });
         Val(raw, PhantomData)
     }
 
-    pub(super) fn fcmp(&self, cond: LLVMRealPredicate, a: Val<'_>, b: Val<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(a);
-        #[cfg(debug_assertions)]
-        self.check_value(b);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn fcmp(&self, cond: LLVMRealPredicate, a: Val<'id>, b: Val<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = self.unfolded(a.0, |operand| unsafe {
             LLVMBuildFCmp(self.builder, cond, operand, b.0, c"".as_ptr())
         });
         Val(raw, PhantomData)
     }
 
-    pub(super) fn select(&self, cond: Val<'_>, a: Val<'_>, b: Val<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(cond);
-        #[cfg(debug_assertions)]
-        self.check_value(a);
-        #[cfg(debug_assertions)]
-        self.check_value(b);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn select(&self, cond: Val<'id>, a: Val<'id>, b: Val<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = self.unfolded(cond.0, |operand| unsafe {
             LLVMBuildSelect(self.builder, operand, a.0, b.0, c"".as_ptr())
         });
         Val(raw, PhantomData)
     }
 
-    pub(super) fn load(&self, ty: Ty<'_>, addr: Val<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_type(ty);
-        #[cfg(debug_assertions)]
-        self.check_value(addr);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn load(&self, ty: Ty<'id>, addr: Val<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMBuildLoad2(self.builder, ty.0, addr.0, c"".as_ptr()) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn store(&self, value: Val<'_>, addr: Val<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(value);
-        #[cfg(debug_assertions)]
-        self.check_value(addr);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn store(&self, value: Val<'id>, addr: Val<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMBuildStore(self.builder, value.0, addr.0) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn jump(&self, block: Block<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_block(block);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn jump(&self, block: Block<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMBuildBr(self.builder, block.0) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn branch(&self, cond: Val<'_>, then: Block<'_>, other: Block<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(cond);
-        #[cfg(debug_assertions)]
-        self.check_block(then);
-        #[cfg(debug_assertions)]
-        self.check_block(other);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn branch(&self, cond: Val<'id>, then: Block<'id>, other: Block<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMBuildCondBr(self.builder, cond.0, then.0, other.0) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn switch(&self, value: Val<'_>, default: Block<'_>, cases: u32) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(value);
-        #[cfg(debug_assertions)]
-        self.check_block(default);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn switch(&self, value: Val<'id>, default: Block<'id>, cases: u32) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMBuildSwitch(self.builder, value.0, default.0, cases) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn ret(&self, value: Val<'_>) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(value);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn ret(&self, value: Val<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMBuildRet(self.builder, value.0) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn ret_void(&self) -> Val<'_> {
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn ret_void(&self) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMBuildRetVoid(self.builder) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn unreachable(&self) -> Val<'_> {
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn unreachable(&self) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         let raw = unsafe { LLVMBuildUnreachable(self.builder) };
         Val(raw, PhantomData)
     }
 
-    pub(super) fn add_case(&self, switch: Val<'_>, value: Val<'_>, block: Block<'_>) {
-        #[cfg(debug_assertions)]
-        self.check_value(switch);
-        #[cfg(debug_assertions)]
-        self.check_value(value);
-        #[cfg(debug_assertions)]
-        self.check_block(block);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds; operands have the verified IR types.
+    pub(super) fn add_case(&self, switch: Val<'id>, value: Val<'id>, block: Block<'id>) {
+        // SAFETY: The type system ties handles to this live session;
+        // operands have the verified IR types.
         unsafe {
             LLVMAddCase(switch.0, value.0, block.0);
         }
@@ -818,8 +692,8 @@ impl<'s> Session<'s> {
         input: LLVMValueRef,
         build: impl FnOnce(LLVMValueRef) -> LLVMValueRef,
     ) -> LLVMValueRef {
-        // SAFETY: Input belongs to this context by module invariant, asserted
-        // by callers in debug builds, and has a first-class type.
+        // SAFETY: Callers supply a branded value from this context with a
+        // first-class type; ownership is enforced by the type system.
         let ty = unsafe { LLVMTypeOf(input) };
         // SAFETY: A live insertion block and first-class type; this temporary
         // phi is never verified.
@@ -845,16 +719,10 @@ impl<'s> Session<'s> {
         result
     }
 
-    pub(super) fn incoming(&self, phi: Val<'_>, value: Val<'_>, block: Block<'_>) {
-        #[cfg(debug_assertions)]
-        self.check_value(phi);
-        #[cfg(debug_assertions)]
-        self.check_value(value);
-        #[cfg(debug_assertions)]
-        self.check_block(block);
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds. The phi and incoming value have matching
-        // types. Val/Block are ABI-identical to LLVMValueRef/LLVMBasicBlockRef;
+    pub(super) fn incoming(&self, phi: Val<'id>, value: Val<'id>, block: Block<'id>) {
+        // SAFETY: The type system ties handles to this live session. The phi
+        // and incoming value have matching types. Val/Block are
+        // ABI-identical to LLVMValueRef/LLVMBasicBlockRef;
         // LLVM only reads both one-element arrays despite *mut parameters.
         unsafe {
             LLVMAddIncoming(
@@ -866,26 +734,22 @@ impl<'s> Session<'s> {
         }
     }
 
-    pub(super) fn gep(&self, base: Val<'_>, offset: Val<'_>, inbounds: bool) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_value(base);
-        #[cfg(debug_assertions)]
-        self.check_value(offset);
+    pub(super) fn gep(&self, base: Val<'id>, offset: Val<'id>, inbounds: bool) -> Val<'id> {
         let index = ptr::from_ref(&offset).cast::<LLVMValueRef>().cast_mut();
         let ty = self.ty(Type::I8).0;
         let raw = if inbounds {
-            // SAFETY: Handles belong to this live session by module invariant,
-            // asserted in debug builds. One integer index addresses bytes at
-            // an opaque pointer. Val is ABI-identical to LLVMValueRef; LLVM
-            // only reads the index array despite its *mut parameter.
+            // SAFETY: The type system ties handles to this live session. One
+            // integer index addresses bytes at an opaque pointer.
+            // Val is ABI-identical to LLVMValueRef; LLVM only reads
+            // the index array despite its *mut parameter.
             self.unfolded(base.0, |operand| unsafe {
                 LLVMBuildInBoundsGEP2(self.builder, ty, operand, index, 1, c"".as_ptr())
             })
         } else {
-            // SAFETY: Handles belong to this live session by module invariant,
-            // asserted in debug builds. One integer index addresses bytes at
-            // an opaque pointer. Val is ABI-identical to LLVMValueRef; LLVM
-            // only reads the index array despite its *mut parameter.
+            // SAFETY: The type system ties handles to this live session. One
+            // integer index addresses bytes at an opaque pointer.
+            // Val is ABI-identical to LLVMValueRef; LLVM only reads
+            // the index array despite its *mut parameter.
             self.unfolded(base.0, |operand| unsafe {
                 LLVMBuildGEP2(self.builder, ty, operand, index, 1, c"".as_ptr())
             })
@@ -893,28 +757,26 @@ impl<'s> Session<'s> {
         Val(raw, PhantomData)
     }
 
-    pub(super) fn flags(&self, value: Val<'_>, flags: InstFlags) {
-        #[cfg(debug_assertions)]
-        self.check_value(value);
+    pub(super) fn flags(&self, value: Val<'id>, flags: InstFlags) {
         if flags.contains(InstFlags::NUW) {
-            // SAFETY: Value belongs to this live session by module invariant,
-            // asserted in debug builds. Verified IR allows NUW only on
+            // SAFETY: The type system ties the value to this live session.
+            // Verified IR allows NUW only on
             // overflowing arithmetic instructions.
             unsafe {
                 LLVMSetNUW(value.0, 1);
             }
         }
         if flags.contains(InstFlags::NSW) {
-            // SAFETY: Value belongs to this live session by module invariant,
-            // asserted in debug builds. Verified IR allows NSW only on
+            // SAFETY: The type system ties the value to this live session.
+            // Verified IR allows NSW only on
             // overflowing arithmetic instructions.
             unsafe {
                 LLVMSetNSW(value.0, 1);
             }
         }
         if flags.contains(InstFlags::EXACT) {
-            // SAFETY: Value belongs to this live session by module invariant,
-            // asserted in debug builds. Verified IR allows EXACT only on
+            // SAFETY: The type system ties the value to this live session.
+            // Verified IR allows EXACT only on
             // divisions and right shifts.
             unsafe {
                 LLVMSetExact(value.0, 1);
@@ -922,18 +784,10 @@ impl<'s> Session<'s> {
         }
     }
 
-    pub(super) fn call(&self, ty: Ty<'_>, function: Val<'_>, args: &[Val<'_>]) -> Val<'_> {
-        #[cfg(debug_assertions)]
-        self.check_type(ty);
-        #[cfg(debug_assertions)]
-        self.check_value(function);
-        #[cfg(debug_assertions)]
-        for &value in args {
-            self.check_value(value);
-        }
-        // SAFETY: Handles belong to this live session by module invariant,
-        // asserted in debug builds. The callee's ABI type matches the counted
-        // arguments. Val is ABI-identical to LLVMValueRef; LLVM only reads the
+    pub(super) fn call(&self, ty: Ty<'id>, function: Val<'id>, args: &[Val<'id>]) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session. The
+        // callee's ABI type matches the counted arguments. Val is
+        // ABI-identical to LLVMValueRef; LLVM only reads the
         // array despite its *mut parameter.
         Val(
             unsafe {
@@ -950,45 +804,37 @@ impl<'s> Session<'s> {
         )
     }
 
-    pub(super) fn intrinsic(&self, name: &str, overloads: &[Ty<'_>]) -> (Val<'_>, Ty<'_>) {
+    pub(super) fn intrinsic(&self, name: &str, overloads: &[Ty<'id>]) -> (Val<'id>, Ty<'id>) {
         // SAFETY: The intrinsic lookup reads the counted name.
         let id = unsafe { LLVMLookupIntrinsicID(name.as_ptr().cast(), name.len()) };
-        #[cfg(debug_assertions)]
-        for &ty in overloads {
-            self.check_type(ty);
-        }
         let types = overloads.as_ptr().cast::<LLVMTypeRef>().cast_mut();
         // SAFETY: Known intrinsic ID and correct overload types; handles belong
-        // to this live session by module invariant, asserted in debug builds.
+        // to this live session by the type system.
         // Ty is ABI-identical to LLVMTypeRef; LLVM only reads the counted array
         // despite its *mut parameter.
         let function =
             unsafe { LLVMGetIntrinsicDeclaration(self.module, id, types, overloads.len()) };
         // SAFETY: Same live-session invariant and ABI-identical overload list
-        // as above, asserted in debug builds; LLVM only reads the array despite
-        // its *mut parameter.
+        // as above, enforced by the type system; LLVM only reads the array
+        // despite its *mut parameter.
         let ty = unsafe { LLVMIntrinsicGetType(self.context, id, types, overloads.len()) };
         (Val(function, PhantomData), Ty(ty, PhantomData))
     }
 
     pub(super) fn attribute(
         &self,
-        value: Val<'_>,
+        value: Val<'id>,
         index: u32,
         name: &str,
         number: u64,
-        ty: Option<Ty<'_>>,
+        ty: Option<Ty<'id>>,
         call: bool,
     ) {
-        #[cfg(debug_assertions)]
-        self.check_value(value);
         // SAFETY: The counted attribute name is valid during lookup.
         let kind = unsafe { LLVMGetEnumAttributeKindForName(name.as_ptr().cast(), name.len()) };
         let attribute = if let Some(ty) = ty {
-            #[cfg(debug_assertions)]
-            self.check_type(ty);
             // SAFETY: The attribute kind is byval/sret and the type belongs to
-            // this context by module invariant, asserted in debug builds.
+            // this context by the type system.
             unsafe { LLVMCreateTypeAttribute(self.context, kind, ty.0) }
         } else {
             // SAFETY: Known enum attribute with its appropriate integer
@@ -996,16 +842,14 @@ impl<'s> Session<'s> {
             unsafe { LLVMCreateEnumAttribute(self.context, kind, number) }
         };
         if call {
-            // SAFETY: A call instruction in this live session by module
-            // invariant, asserted in debug builds, with a valid ABI
-            // argument/result index.
+            // SAFETY: A call instruction in this live session by the type
+            // system, with a valid ABI argument/result index.
             unsafe {
                 LLVMAddCallSiteAttribute(value.0, index, attribute);
             }
         } else {
-            // SAFETY: A function in this live session by module invariant,
-            // asserted in debug builds, with a valid ABI parameter/result
-            // index.
+            // SAFETY: The type system ties the function to this live session,
+            // with a valid ABI parameter/result index.
             unsafe {
                 LLVMAddAttributeAtIndex(value.0, index, attribute);
             }

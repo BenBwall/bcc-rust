@@ -767,29 +767,30 @@ fn uninterned_function_signatures_are_invalid_ir() {
 #[test]
 fn names_and_constants_are_spelled_for_llvm() {
     let arena = Bump::new();
-    let api = Session::new(&arena, Target::LinuxGnu);
-    for (name, expected) in [
-        ("main", "@main"),
-        ("$x.y-z", r#"@"$x.y-z""#),
-        ("9lives", "@\"9lives\""),
-        ("a b\"c\\", r#"@"a b\22c\\""#),
-    ] {
-        _ = api.function(api.name(name), api.signature(api.void(), &[], false));
-        assert!(
-            api.print().text().contains(expected),
-            "{name}: {}",
-            api.print()
-        );
-    }
-    for (name, ty, bits, expected) in [
-        ("nan", Type::F32, 0x7FC0_0001, "+nan(0x1)"),
-        ("inf", Type::F32, 0xFF80_0000, "-inf"),
-        ("tiny", Type::F32, 0x8000_0001, "-1.401300e-45"),
-        ("minus", Type::I128, u128::MAX, "i128 -1"),
-    ] {
-        let global = api.global(api.name(name), api.ty(ty));
-        api.initializer(global, api.bits(ty, bits));
-        assert!(api.print().text().contains(expected), "{}", api.print());
-    }
-    api.verify().unwrap();
+    Session::with(&arena, Target::LinuxGnu, |api| {
+        for (name, expected) in [
+            ("main", "@main"),
+            ("$x.y-z", r#"@"$x.y-z""#),
+            ("9lives", "@\"9lives\""),
+            ("a b\"c\\", r#"@"a b\22c\\""#),
+        ] {
+            _ = api.function(api.name(name), api.signature(api.void(), &[], false));
+            assert!(
+                api.print().text().contains(expected),
+                "{name}: {}",
+                api.print()
+            );
+        }
+        for (name, ty, bits, expected) in [
+            ("nan", Type::F32, 0x7FC0_0001, "+nan(0x1)"),
+            ("inf", Type::F32, 0xFF80_0000, "-inf"),
+            ("tiny", Type::F32, 0x8000_0001, "-1.401300e-45"),
+            ("minus", Type::I128, u128::MAX, "i128 -1"),
+        ] {
+            let global = api.global(api.name(name), api.ty(ty));
+            api.initializer(global, api.bits(ty, bits));
+            assert!(api.print().text().contains(expected), "{}", api.print());
+        }
+        api.verify().unwrap();
+    });
 }

@@ -23,11 +23,11 @@ use crate::{
     },
 };
 
-pub(super) fn global_type<'a, 'm>(
-    api: &'a Session<'a>,
+pub(super) fn global_type<'id, 'm>(
+    api: &Session<'id>,
     global: &'m Global<'_>,
-    arena: &'a Bump,
-) -> Result<Ty<'a>, EmitError<'m>> {
+    arena: &Bump,
+) -> Result<Ty<'id>, EmitError<'m>> {
     let Some(GlobalInit::Bytes { bytes, relocations }) = global.init else {
         return Ok(api.array(api.ty(Type::I8), global.size));
     };
@@ -44,7 +44,7 @@ pub(super) fn global_type<'a, 'm>(
     Ok(api.structure(&fields, true))
 }
 
-impl<'m> Emitter<'_, 'm, '_> {
+impl<'m> Emitter<'_, '_, 'm, '_> {
     pub(super) fn global(&self, id: GlobalId) -> Result<(), EmitError<'m>> {
         let global = self.module.global(id);
         let Some(init) = global.init else {

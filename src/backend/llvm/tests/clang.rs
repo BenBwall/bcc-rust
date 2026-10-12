@@ -495,22 +495,23 @@ fn objects_and_assembly_are_emitted_in_memory() {
         .unwrap();
         for assembly in [false, true] {
             let scratch = Bump::new();
-            let api = Session::new(&scratch, target);
-            build_module(&module, target, &api, &scratch).unwrap();
-            let buffer = api
-                .emit(target, Some(OptLevel::O2), true, assembly)
-                .unwrap();
-            if assembly {
-                assert!(
-                    std::str::from_utf8(buffer.bytes())
-                        .unwrap()
-                        .contains("answer")
-                );
-            } else if target == Target::LinuxGnu {
-                assert!(buffer.bytes().starts_with(b"\x7fELF"));
-            } else {
-                assert!(buffer.bytes().starts_with(&[0x64, 0x86]));
-            }
+            Session::with(&scratch, target, |api| {
+                build_module(&module, target, api, &scratch).unwrap();
+                let buffer = api
+                    .emit(target, Some(OptLevel::O2), true, assembly)
+                    .unwrap();
+                if assembly {
+                    assert!(
+                        std::str::from_utf8(buffer.bytes())
+                            .unwrap()
+                            .contains("answer")
+                    );
+                } else if target == Target::LinuxGnu {
+                    assert!(buffer.bytes().starts_with(b"\x7fELF"));
+                } else {
+                    assert!(buffer.bytes().starts_with(&[0x64, 0x86]));
+                }
+            });
         }
     }
 }

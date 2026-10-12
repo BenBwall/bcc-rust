@@ -47,7 +47,7 @@ use crate::{
     },
 };
 
-impl<'m> Emitter<'_, 'm, '_> {
+impl<'m> Emitter<'_, '_, 'm, '_> {
     pub(super) fn function(&self, id: FuncId) -> Result<(), EmitError<'m>> {
         let function = self.module.function(id);
         let Some(body) = &function.body else {
@@ -144,11 +144,11 @@ impl<'m> Emitter<'_, 'm, '_> {
     }
 }
 
-pub(super) fn signature_type<'a>(
-    api: &'a Session<'a>,
+pub(super) fn signature_type<'id>(
+    api: &Session<'id>,
     signature: Signature<'_>,
-    arena: &'a Bump,
-) -> Ty<'a> {
+    arena: &Bump,
+) -> Ty<'id> {
     let mut types = ArenaVec::with_capacity_in(signature.params.len(), arena);
     for (index, &ty) in signature.params.iter().enumerate() {
         if passed(signature, index) {
@@ -158,14 +158,14 @@ pub(super) fn signature_type<'a>(
     api.signature(result_type(api, signature), &types, signature.variadic)
 }
 
-fn result_type<'a>(api: &'a Session<'a>, signature: Signature<'_>) -> Ty<'a> {
+fn result_type<'id>(api: &Session<'id>, signature: Signature<'_>) -> Ty<'id> {
     match signature.result_param() {
         | Some(ParamAbi::Registers(registers)) => registers_type(api, registers),
         | _ => signature.result.map_or_else(|| api.void(), |ty| api.ty(ty)),
     }
 }
 
-fn registers_type<'a>(api: &'a Session<'a>, registers: ResultRegisters) -> Ty<'a> {
+fn registers_type<'id>(api: &Session<'id>, registers: ResultRegisters) -> Ty<'id> {
     // The verifier enforces the shared return-area layout, so an unpacked
     // LLVM structure places the second part at ResultRegisters::SECOND_OFFSET.
     debug_assert!(registers.valid_layout(), "verified register return layout");
@@ -180,7 +180,12 @@ fn passed(signature: Signature<'_>, index: usize) -> bool {
     !matches!(signature.param_abi(index), Some(ParamAbi::Registers(_)))
 }
 
-pub(super) fn attributes(api: &Session<'_>, value: Val<'_>, signature: Signature<'_>, call: bool) {
+pub(super) fn attributes<'id>(
+    api: &Session<'id>,
+    value: Val<'id>,
+    signature: Signature<'_>,
+    call: bool,
+) {
     extension(api, value, 0, signature.result_extension, call);
     let mut llvm_index = 1;
     for index in 0..signature.params.len() {
@@ -220,9 +225,9 @@ pub(super) fn attributes(api: &Session<'_>, value: Val<'_>, signature: Signature
 /// Maps the register extension only; poison remains legal at calls and returns.
 /// C99: §6.2.5 paragraphs 2-6, p. 33; PDF p. 45 (integer types);
 /// the extension convention and poison semantics are additional IR contracts.
-fn extension(
-    api: &Session<'_>,
-    value: Val<'_>,
+fn extension<'id>(
+    api: &Session<'id>,
+    value: Val<'id>,
     index: u32,
     extension: Option<Extension>,
     call: bool,
@@ -235,17 +240,17 @@ fn extension(
     api.attribute(value, index, name, 0, None, call);
 }
 
-struct BodyBuilder<'a, 'm, 'ir> {
-    emitter:   &'a Emitter<'a, 'm, 'ir>,
+struct BodyBuilder<'a, 'id, 'm, 'ir> {
+    emitter:   &'a Emitter<'a, 'id, 'm, 'ir>,
     body:      &'m Body<'ir>,
     signature: Signature<'ir>,
-    blocks:    &'a [Option<api::Block<'a>>],
-    slots:     &'a [Val<'a>],
-    values:    ArenaVec<'a, Option<Val<'a>>>,
+    blocks:    &'a [Option<api::Block<'id>>],
+    slots:     &'a [Val<'id>],
+    values:    ArenaVec<'a, Option<Val<'id>>>,
 }
 
-impl<'a, 'm> BodyBuilder<'a, 'm, '_> {
-    fn value(&self, value: Value) -> Result<Val<'a>, EmitError<'m>> {
+impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
+    fn value(&self, value: Value) -> Result<Val<'id>, EmitError<'m>> {
         if let Some(value) = self.values[value.index()] {
             return Ok(value);
         }
@@ -259,7 +264,7 @@ impl<'a, 'm> BodyBuilder<'a, 'm, '_> {
             .ok_or_else(|| std::fmt::Error.into())
     }
 
-    fn constant(&self, data: &InstData) -> Option<Val<'a>> {
+    fn constant(&self, data: &InstData) -> Option<Val<'id>> {
         let api = self.emitter.api;
         Some(match *data {
             | InstData::Const { ty, .. } | InstData::WideConst { ty, .. } =>
@@ -276,11 +281,11 @@ impl<'a, 'm> BodyBuilder<'a, 'm, '_> {
         })
     }
 
-    fn destination(&self, call: BlockCall) -> Result<api::Block<'a>, EmitError<'m>> {
+    fn destination(&self, call: BlockCall) -> Result<api::Block<'id>, EmitError<'m>> {
         self.blocks[self.body.block_call(call).0.index()].ok_or_else(|| std::fmt::Error.into())
     }
 
-    fn inst(&self, inst: Inst) -> Result<Option<Val<'a>>, EmitError<'m>> {
+    fn inst(&self, inst: Inst) -> Result<Option<Val<'id>>, EmitError<'m>> {
         let data = self.body.inst(inst);
         if folds(data) {
             return Ok(self.constant(data));
@@ -456,7 +461,7 @@ impl<'a, 'm> BodyBuilder<'a, 'm, '_> {
         Ok(Some(value))
     }
 
-    fn intrinsic(&self, name: &str, args: &[Val<'_>], overloads: &[Ty<'_>]) -> Val<'a> {
+    fn intrinsic(&self, name: &str, args: &[Val<'id>], overloads: &[Ty<'id>]) -> Val<'id> {
         let api = self.emitter.api;
         let (function, ty) = api.intrinsic(name, overloads);
         api.call(ty, function, args)
@@ -465,10 +470,10 @@ impl<'a, 'm> BodyBuilder<'a, 'm, '_> {
     fn call(
         &self,
         inst: Inst,
-        function: Val<'_>,
+        function: Val<'id>,
         signature: Signature<'_>,
         args: &[Value],
-    ) -> Result<Val<'a>, EmitError<'m>> {
+    ) -> Result<Val<'id>, EmitError<'m>> {
         let api = self.emitter.api;
         let mut arguments = ArenaVec::with_capacity_in(args.len(), self.emitter.arena);
         for (index, &arg) in args.iter().enumerate() {

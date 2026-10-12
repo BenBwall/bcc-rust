@@ -31,17 +31,17 @@ pub(crate) fn compile_module(
     options: LlvmOptions,
 ) -> io::Result<()> {
     let arena = crate::util::bump::Bump::new();
-    let api = super::api::Session::new(&arena, options.target);
-    super::build_module(module, options.target, &api, &arena)
-        .map_err(|error| io::Error::other(error.to_string()))?;
-    let buffer = api
-        .emit(
+    let buffer = super::api::Session::with(&arena, options.target, |api| {
+        super::build_module(module, options.target, api, &arena)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        api.emit(
             options.target,
             options.opt,
             options.disable_llvm_passes,
             false,
         )
-        .map_err(|error| io::Error::other(error.to_string()))?;
+        .map_err(|error| io::Error::other(error.to_string()))
+    })?;
     if options.kind == OutputKind::Object {
         return std::fs::write(out_path, buffer.bytes());
     }
