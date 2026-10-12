@@ -8,6 +8,64 @@ use crate::backend::interpreter::{
 };
 
 #[test]
+fn twenty_thousand_union_switches_lower_quickly_with_bounded_arena_use() {
+    use std::fmt::Write as _;
+
+    let mut source = String::from(
+        "union U { long long old; struct { int x, y; } next; }; int main(void) { union U a[20000] \
+         = {",
+    );
+    for index in 0..20_000 {
+        write!(source, "[{index}].old = -1, [{index}].next.x = 1,").unwrap();
+    }
+    source.push_str(
+        "}; return a[0].next.x != 1 || a[0].next.y || a[9999].next.x != 1 || a[9999].next.y || \
+         a[19999].next.x != 1 || a[19999].next.y; }",
+    );
+    let tu = Bump::new();
+    let mut context = Context::new(&tu);
+    let syntax = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        tu.alloc_str(&source),
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &syntax);
+    assert!(sema.lowerable(&context));
+    let arena = Bump::new();
+    let mut scratch = Bump::new();
+    let start = std::time::Instant::now();
+    let module = lower_translation_unit(
+        &context,
+        &syntax,
+        &sema,
+        Target::LinuxGnu,
+        &arena,
+        &mut scratch,
+    )
+    .unwrap();
+    let elapsed = start.elapsed();
+    eprintln!(
+        "20,000 union switches: {elapsed:?}, {} IR bytes, {} scratch bytes",
+        arena.high_water(),
+        scratch.high_water()
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "lowering took {elapsed:?}"
+    );
+    assert!(arena.high_water() < 128 * 1024 * 1024);
+    assert!(scratch.high_water() < 128 * 1024 * 1024);
+    let execution = Bump::new();
+    let mut host = crate::backend::interpreter::DefaultHost::new_in(&execution);
+    let outcome = crate::backend::interpreter::run(&module, "main", &[], &mut host).unwrap();
+    assert_eq!(
+        outcome.termination,
+        Termination::Returned(Some(RuntimeValue::Int(0)))
+    );
+}
+
+#[test]
 fn ten_thousand_static_locals_use_linear_name_storage() {
     let source = format!(
         "int reserved __asm__(\"main.x.1\"); int main(void){{{}return 0;}}",

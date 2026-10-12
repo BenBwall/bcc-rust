@@ -14,6 +14,10 @@
 //!
 //! C99: §6.7.8 paragraphs 12-22, pp. 126-127; PDF pp. 138-139.
 
+mod coverage;
+
+use coverage::CoverageIndex;
+
 use super::{
     Construct,
     FunctionLowerer,
@@ -86,6 +90,8 @@ pub(super) enum Leaf<'tu> {
         /// Exclusive end of a braced scope; `usize::MAX` for a union switch,
         /// whose selection ends at the next switch or enclosing brace.
         end:    usize,
+        /// Zero leaf of the enclosing brace pair (self for a braced scope).
+        scope:  usize,
     },
     /// A scalar subobject and the expression whose converted value it
     /// gets.
@@ -159,13 +165,14 @@ pub(super) fn leaves<'tu, 's>(
         size,
         ty,
         end: usize::MAX,
+        scope: 0,
     });
     frames.push(Frame {
         ty,
         offset: 0,
         next: 0,
         list: Some((list.elements.as_slice(), 0)),
-        zero: Some(0),
+        zero: 0,
     });
     // The element whose designation has moved the frames, so that brace
     // elision retrying the element does not move them again.
@@ -178,9 +185,7 @@ pub(super) fn leaves<'tu, 's>(
         let (elements, position) = frames[owner].list.expect("the owner has a list");
         let Some(element) = elements.get(position) else {
             let length = leaves.len();
-            if let Some(zero) = frames[owner].zero
-                && let Leaf::Zero { end, .. } = &mut leaves[zero]
-            {
+            if let Leaf::Zero { end, .. } = &mut leaves[frames[owner].zero] {
                 *end = length;
             }
             frames.truncate(owner);
@@ -241,13 +246,14 @@ pub(super) fn leaves<'tu, 's>(
                         size,
                         ty: subobject.ty,
                         end: usize::MAX,
+                        scope: leaves.len(),
                     });
                     frames.push(Frame {
                         ty: subobject.ty,
                         offset,
                         next: 0,
                         list: Some((inner.elements.as_slice(), 0)),
-                        zero: Some(leaves.len() - 1),
+                        zero: leaves.len() - 1,
                     });
                 }
             },
@@ -277,7 +283,7 @@ pub(super) fn leaves<'tu, 's>(
                             offset,
                             next: 0,
                             list: None,
-                            zero: None,
+                            zero: frame.zero,
                         });
                     },
                 },
@@ -320,7 +326,9 @@ struct Frame<'tu> {
     /// The braced list this frame takes elements from, and the position of
     /// its next element; `None` for a frame opened by brace elision.
     list:   Option<(&'tu [InitializerElement<'tu>], usize)>,
-    zero:   Option<usize>,
+    /// Zero leaf of the innermost enclosing brace pair, also for elision
+    /// and designator frames, so member resets never search for their scope.
+    zero:   usize,
 }
 
 /// The subobject an element initializes.
@@ -549,7 +557,7 @@ impl<'tu> Walker<'_, 'tu, '_> {
             offset: frame.offset + subobject.offset,
             next:   0,
             list:   None,
-            zero:   None,
+            zero:   frame.zero,
         });
         Ok(())
     }
@@ -591,6 +599,7 @@ impl<'tu> Walker<'_, 'tu, '_> {
                 size,
                 ty: frame.ty,
                 end: usize::MAX,
+                scope: frame.zero,
             });
         }
         Ok(())
@@ -634,6 +643,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         initializer: &'tu Initializer<'tu>,
     ) -> Result<(), LoweringError> {
         let leaves = leaves(self.unit.sema, ty, initializer, self.scratch)?;
+        let coverage = CoverageIndex::new(
+            &leaves,
+            self.unit.sema,
+            initializer.source_vectors,
+            self.scratch,
+        )?;
+        let mut candidates = ArenaVec::new_in(self.scratch);
+        let mut covered = ArenaVec::new_in(self.scratch);
+        let mut search = ArenaVec::new_in(self.scratch);
         let mut tasks = ArenaVec::with_capacity_in(2 * leaves.len(), self.scratch);
         for (index, &leaf) in leaves.iter().enumerate() {
             match leaf {
@@ -642,84 +660,73 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     size,
                     ty,
                     end,
+                    scope,
                 } => {
                     let union_reset = end == usize::MAX;
                     let end = if union_reset {
-                        leaves[..index]
-                            .iter()
-                            .rev()
-                            .find_map(|leaf| match *leaf {
-                                | Leaf::Zero { end, .. } if end != usize::MAX && end > index =>
-                                    Some(end),
-                                | _ => None,
-                            })
-                            .unwrap_or(leaves.len())
+                        #[cfg(debug_assertions)]
+                        debug_assert!(
+                            matches!(leaves[scope], Leaf::Zero { .. }),
+                            "a brace scope starts with a zero leaf"
+                        );
+                        if let Leaf::Zero { end, .. } = leaves[scope] {
+                            end
+                        } else {
+                            leaves.len()
+                        }
                     } else {
                         end
                     };
-                    let mut covered = ArenaVec::new_in(self.scratch);
-                    let mut next = index + 1;
-                    while next < end {
-                        let leaf = leaves[next];
-                        let (start, stop, covered_ty) = match leaf {
-                            | Leaf::Zero {
-                                offset: at,
-                                size: length,
-                                end: scope,
-                                ty: covered_ty,
-                            } => {
-                                // A subsequent reset of this union ends this
-                                // selection's coverage; nested braces own their
-                                // own omissions and can be skipped as one
-                                // range.
-                                if union_reset
-                                    && scope == usize::MAX
-                                    && at <= offset
-                                    && at + length >= offset + size
-                                {
-                                    break;
-                                }
-                                if scope != usize::MAX {
-                                    next = scope - 1;
-                                }
-                                (8 * at, 8 * (at + length), covered_ty)
-                            },
-                            | Leaf::Scalar {
-                                offset,
-                                ty,
-                                bit_field,
-                                ..
-                            } =>
-                                if let Some(bits) = bit_field {
-                                    let start = 8 * offset + u64::from(bits.bit_offset);
-                                    (start, start + u64::from(bits.width), ty)
-                                } else {
-                                    let size = types::layout(&self.unit.sema.types, ty)
-                                        .map_err(|kind| at(kind, initializer.source_vectors))?
-                                        .size;
-                                    (8 * offset, 8 * (offset + size), ty)
-                                },
-                            | Leaf::String {
-                                offset, size, ty, ..
-                            } => (8 * offset, 8 * (offset + size), ty),
-                            | Leaf::Copy { offset, ty, .. } => {
-                                let size = types::layout(&self.unit.sema.types, ty)
-                                    .map_err(|kind| at(kind, initializer.source_vectors))?
-                                    .size;
-                                (8 * offset, 8 * (offset + size), ty)
-                            },
-                        };
-                        let start = start.max(8 * offset);
-                        let stop = stop.min(8 * (offset + size));
-                        if start < stop {
-                            covered.push((start, stop, covered_ty));
+                    // C99 §6.7.8p19: only this subobject's following
+                    // initializers can preserve its explicit bytes. Search
+                    // overlapping ranges, then keep source-order scope rules.
+                    coverage.overlapping(
+                        8 * offset,
+                        8 * (offset + size),
+                        &mut candidates,
+                        &mut search,
+                    );
+                    covered.clear();
+                    let mut skip_until = index + 1;
+                    for &candidate in &candidates {
+                        let next = candidate.index;
+                        if next < skip_until {
+                            continue;
                         }
-                        next += 1;
+                        if next >= end {
+                            break;
+                        }
+                        if let Leaf::Zero {
+                            offset: at,
+                            size: length,
+                            end: scope,
+                            ..
+                        } = leaves[next]
+                        {
+                            // A subsequent reset of this union ends this
+                            // selection's coverage; nested braces own their
+                            // own omissions and can be skipped as one range.
+                            if union_reset
+                                && scope == usize::MAX
+                                && at <= offset
+                                && at + length >= offset + size
+                            {
+                                break;
+                            }
+                            if scope != usize::MAX {
+                                skip_until = scope;
+                            }
+                        }
+                        let start = candidate.start.max(8 * offset);
+                        let stop = candidate.stop.min(8 * (offset + size));
+                        if start < stop {
+                            covered.push((start, stop, candidate.ty));
+                        }
                     }
                     covered.sort_unstable_by_key(|&(start, stop, _)| (start, stop));
                     let mut cursor = 8 * offset;
                     let mut cursor_ty = ty;
-                    for (start, stop, covered_ty) in covered {
+                    for &(start, stop, covered_ty) in &covered {
                         if cursor < start {
                             zero_gap(
                                 &mut tasks,
