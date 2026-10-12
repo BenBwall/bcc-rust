@@ -41,6 +41,12 @@ impl Analyzer<'_, '_, '_> {
         &mut self,
         name: Identifier,
     ) -> Option<TypeId> {
+        // Freestanding ordinary names retain C89 implicit int. Reserved
+        // __builtin_ aliases keep their explicit GCC contract in either mode.
+        // C99: §5.1.2.1p1, p. 11; PDF p. 23.
+        if !self.context.configuration.hosted() {
+            return None;
+        }
         let (_, signature, variadic) = library_function(self.context.string_cache.at(name.name))?;
         let ty = self.library_prototype(signature, variadic);
         let mut spelling = crate::util::bump::ArenaString::new_in(self.scratch);

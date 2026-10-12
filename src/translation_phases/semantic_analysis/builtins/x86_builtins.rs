@@ -116,6 +116,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(binding) = function.binding else {
             return;
         };
+        if !self.bindings[binding].builtin {
+            return;
+        }
         let name = self
             .context
             .string_cache

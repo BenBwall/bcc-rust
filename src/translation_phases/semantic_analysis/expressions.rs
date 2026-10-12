@@ -319,7 +319,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 while let ExpressionType::Parenthesized { expression } = vector_callee.kind {
                     vector_callee = expression;
                 }
-                info = if let ExpressionType::Identifier(name) = vector_callee.kind
+                let intrinsic = self
+                    .expression_info(vector_callee)
+                    .binding
+                    .is_some_and(|id| self.bindings[id].builtin);
+                info = if !intrinsic {
+                    self.type_call(e, self.expression_info(function_expression), arguments)
+                } else if let ExpressionType::Identifier(name) = vector_callee.kind
                     && super::vectors::named_builtin(self.context.string_cache.at(name.name))
                 {
                     self.context.report_extension(

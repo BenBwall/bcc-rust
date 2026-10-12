@@ -30,13 +30,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         expression: &'tu Expression<'tu>,
         read: bool,
     ) -> Result<(), LoweringError> {
-        let pure = |e| {
-            crate::translation_phases::semantic_analysis::overflow_type_operand_is_pure(
-                e,
-                |e| self.unit.sema.expression_info(e).copied(),
-                self.scratch,
-            )
-        };
         if self.info(expression)?.ice {
             return Ok(());
         }
@@ -51,6 +44,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             self.tasks.push(Task::Evaluate(expression));
             return Ok(());
         }
+        let sema = self.unit.sema;
+        let mut pure = |e| {
+            self.effect_summaries
+                .pure(e, true, |e| sema.expression_info(e).copied(), self.scratch)
+        };
         match expression.kind {
             | E::Parenthesized { expression }
             | E::Cast {

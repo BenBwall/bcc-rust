@@ -85,6 +85,9 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
 /// C99: §6.7p3-4, p. 97; PDF p. 109.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Binding {
+    /// Introduced by intrinsic lookup, rather than a user declaration.
+    /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42 (shadowing).
+    pub(crate) builtin:  bool,
     pub(crate) name:     Identifier,
     pub(crate) ty:       TypeId,
     pub(crate) scope:    usize,

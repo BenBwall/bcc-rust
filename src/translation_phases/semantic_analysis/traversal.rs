@@ -100,7 +100,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::IndirectMember {
                 base_expression, ..
             } => self.work.push(Work::Expression(base_expression)),
-            | E::StatementExpression(s) => self.work.push(Work::Statement(s, true)),
+            | E::StatementExpression(s) => {
+                self.enter_statement_expression(e.source_vectors);
+                self.work.push(Work::Statement(s, true));
+            },
             | E::Generic(g) => {
                 for association in g.associations.iter().rev() {
                     self.work.push(Work::Expression(association.expression));

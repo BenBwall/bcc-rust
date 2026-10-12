@@ -10,6 +10,48 @@ use crate::{
     translation_phases::TranslationError,
 };
 
+#[test]
+fn gnu89_inline_emission_follows_the_target_and_explicit_attribute() {
+    use crate::target::Target;
+    for target in [Target::WindowsMsvc, Target::WindowsGnu, Target::LinuxGnu] {
+        for standard in [CStandard::C89, CStandard::C99] {
+            for attribute in [false, true] {
+                let config = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                    .with_gnu_extensions(true)
+                    .with_gnu89_inline(true)
+                    .with_target(target);
+                let source = format!(
+                    "extern inline {}int f(void){{return 7;}} int main(void){{return f()!=7;}}",
+                    if attribute {
+                        "__attribute__((gnu_inline)) "
+                    } else {
+                        ""
+                    }
+                );
+                with_configuration(&source, config, |context, unit| {
+                    assert_eq!(unit.errors, 0, "{:?}", context.take_pending_errors());
+                    let definition = unit
+                        .definitions
+                        .iter()
+                        .find(|d| {
+                            context.string_cache.at(unit.bindings[d.binding].name.name) == "f"
+                        })
+                        .unwrap();
+                    assert_eq!(
+                        definition.kind,
+                        if target == Target::WindowsMsvc && !attribute {
+                            DefinitionKind::Function
+                        } else {
+                            DefinitionKind::Inline
+                        },
+                        "{target:?} {standard:?} attribute={attribute}"
+                    );
+                });
+            }
+        }
+    }
+}
+
 fn kinds(source: &str, configuration: CompilerConfiguration) -> Vec<SemanticErrorKind> {
     let mut kinds = Vec::new();
     with_configuration(source, configuration, |context, _| {

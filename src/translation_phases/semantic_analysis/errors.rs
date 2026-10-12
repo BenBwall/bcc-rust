@@ -111,6 +111,13 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "Local Labels".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html>
     UndefinedLocalLabel,
+    /// GNU extension: GCC "Statement Exprs" forbids jumping into expressions.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+    /// C99: §6.8.6.1p1, p. 137; PDF p. 149 (extended goto constraint).
+    JumpIntoStatementExpression,
+    /// GNU extension to switch dispatch, C99 §6.8.4.2p5, p. 134; PDF p. 146.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+    SwitchIntoStatementExpression,
     /// C99: §6.8.6.1p1, p. 137; PDF p. 149.
     JumpIntoVariableScope,
     /// C99: §6.8.4.2p2, p. 134; PDF p. 146.
@@ -394,6 +401,8 @@ impl SemanticErrorKind {
             | Self::UndefinedLocalLabel => "local label is never defined",
             | Self::JumpIntoVariableScope | Self::SwitchIntoVariableScope =>
                 "jumps into a variably modified scope",
+            | Self::JumpIntoStatementExpression | Self::SwitchIntoStatementExpression =>
+                "jumps into a statement expression",
             | Self::CaseOutsideSwitch => "not in a switch statement",
             | Self::EmptyCaseRange => "empty case range",
             | Self::BreakOutsideLoopOrSwitch => "not in a loop or switch",
@@ -598,6 +607,7 @@ impl SemanticErrorKind {
                 "GNU local-label declarations require a definition even without a goto; C99 \
                  §6.2.1p3 declares ordinary labels by their definitions",
             ),
+            | Self::JumpIntoStatementExpression | Self::SwitchIntoStatementExpression => Self::statement_expression_explanation(self == Self::JumpIntoStatementExpression),
             | Self::JumpIntoVariableScope => (
                 "goto enters the scope of a variably modified identifier",
                 "C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified \
@@ -909,6 +919,22 @@ impl SemanticErrorKind {
             ),
         }
     }
+
+    fn statement_expression_explanation(goto: bool) -> (&'static str, &'static str) {
+        if goto {
+            (
+                "goto jumps into a statement expression",
+                "GCC Statement Exprs: jumping into a statement expression is not permitted; jumps \
+                 within or out of one are permitted",
+            )
+        } else {
+            (
+                "switch dispatch jumps into a statement expression",
+                "GCC Statement Exprs: an outer switch cannot dispatch to a case or default label \
+                 inside a statement expression",
+            )
+        }
+    }
 }
 
 impl ToDiagnostic for SemanticError {
@@ -946,6 +972,9 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::JumpIntoVariableScope
                 | SemanticErrorKind::SwitchIntoVariableScope =>
                     "variably modified identifier is declared here",
+                | SemanticErrorKind::JumpIntoStatementExpression
+                | SemanticErrorKind::SwitchIntoStatementExpression =>
+                    "statement expression begins here",
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);

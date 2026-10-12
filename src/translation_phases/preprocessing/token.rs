@@ -674,6 +674,15 @@ impl KeywordTokenType {
     ) -> Option<KeywordClassification> {
         let index = id.to_u32().checked_sub(1)? as usize;
         if let Some(&kind) = Self::ALL.get(index) {
+            // These take only expression operands and may name user bindings.
+            // C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42. `va_arg` keeps
+            // its reserved type-operand grammar, as in GCC and Clang.
+            if matches!(
+                kind,
+                Self::BuiltinVaStart | Self::BuiltinVaEnd | Self::BuiltinVaCopy
+            ) {
+                return None;
+            }
             // The reserved GNU alias overlaps MSVC's statement introducer.
             // With MS assembly enabled, its grammar owner selects the origin.
             if kind == Self::MsAsm {

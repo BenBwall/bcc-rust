@@ -177,18 +177,32 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let Some(builtin) = common_builtin(self.unit.context.string_cache.at(name.name)) else {
             return false;
         };
-        if self.unit.context.string_cache.at(name.name) == "alloca"
-            && self.info(callee).is_ok_and(|info| {
-                info.binding.is_some_and(|id| {
-                    let binding = self.unit.sema.bindings[id];
-                    binding.kind
-                        != crate::translation_phases::semantic_analysis::BindingKind::Function
-                        || binding.linkage
-                            != crate::translation_phases::semantic_analysis::Linkage::External
-                })
-            })
-        {
+        if !self.info(callee).is_ok_and(|info| {
+            info.binding
+                .is_some_and(|id| self.unit.sema.bindings[id].builtin)
+        }) {
             return false;
+        }
+        if let CommonBuiltin::Varargs(keyword) = builtin {
+            let b = crate::translation_phases::semantic_analysis::keyword_call(
+                self.unit.context.tu_arena(),
+                e,
+                keyword,
+                args,
+            );
+            // This recognized variant cannot fail keyword scheduling.
+            self.tasks.push(Task::FinishKeyword(e, b));
+            let count = if keyword
+                == crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaCopy
+            {
+                2
+            } else {
+                1
+            };
+            for &arg in args.iter().take(count).rev() {
+                self.tasks.push(Task::EvaluateRaw(arg));
+            }
+            return true;
         }
         self.tasks.push(Task::FinishBuiltin(e, builtin));
         // GCC object_size and constant_p discard even operand side effects.
@@ -238,6 +252,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         self.operands.truncate(start);
         let source = e.source_vectors;
         let result = match builtin {
+            | CommonBuiltin::Varargs(_) =>
+                return Err(LoweringError::missing(
+                    "varargs must use keyword scheduling",
+                    source,
+                )),
             | CommonBuiltin::Constant => {
                 let value =
                     self.iconst(Type::I32, info.integer.expect("typed constant query").value);

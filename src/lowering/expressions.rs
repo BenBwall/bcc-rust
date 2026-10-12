@@ -1341,7 +1341,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     }
                     // A typed compiler builtin is an operation, not a symbol
                     // to call.
-                    if (text.starts_with("__builtin_") || named_builtin(text))
+                    if self.unit.sema.bindings[binding].builtin
+                        && (text.starts_with("__builtin_") || named_builtin(text))
                         && library_builtin_name(text).is_none()
                     {
                         return Err(LoweringError::unsupported(

@@ -18,6 +18,7 @@ use std::{
 
 mod asm_labels;
 mod braced_strings;
+mod builtin_bindings;
 mod compound_assignments;
 mod declaration_initializers;
 mod runtime_calls;

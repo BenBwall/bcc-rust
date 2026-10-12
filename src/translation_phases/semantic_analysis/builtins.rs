@@ -14,6 +14,8 @@
 //! - Header intrinsics: `intrinsics.rs` handles varargs, type operands and
 //!   member offsets; `names.rs` joins the named-call recognition queries.
 //!   `library.rs` provides prototypes and runtime names for library aliases.
+//!   `common.rs` checks scalar calls; `effects.rs` summarizes overflow type
+//!   operands with an explicit postorder stack and an arena-backed cache.
 //! - Atomic calls: `atomics.rs` classifies and checks atomic operands.
 //! - Target calls: `x86_builtins.rs` decodes signatures and checks operands;
 //!   `x86_builtin_table.rs` holds the generated signature and immediate table.
@@ -26,6 +28,7 @@
 
 // Header intrinsics and recognition
 mod common;
+mod effects;
 mod intrinsics;
 mod library;
 mod names;
@@ -42,6 +45,10 @@ pub(crate) use common::{
     CommonBuiltin,
     OverflowOperation,
     common_builtin,
+    keyword_call,
+};
+pub(crate) use effects::{
+    EffectSummaries,
     overflow_type_operand_is_pure,
 };
 pub(crate) use library::library_builtin_name;

@@ -9,6 +9,7 @@
 //! <https://gcc.gnu.org/onlinedocs/gcc/Stack-Allocation.html>
 //! C99: §6.5.2.2 paragraphs 2 and 7, pp. 71-72; PDF pp. 83-84.
 
+use super::overflow_type_operand_is_pure;
 use crate::{
     configuration::Feature,
     translation_phases::{
@@ -90,7 +91,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let pointer = self.types.intern(TypeKind::Pointer(integer));
                 parameters.extend_from_slice(&[integer, integer, pointer]);
             },
-            | CommonBuiltin::Constant | CommonBuiltin::Overflow(..) => prototype = false,
+            | CommonBuiltin::Constant | CommonBuiltin::Overflow(..) | CommonBuiltin::Varargs(_) =>
+                prototype = false,
             | CommonBuiltin::Unreachable | CommonBuiltin::Trap => {},
         }
         Some(self.types.intern(TypeKind::Function {
@@ -123,15 +125,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .tu_arena()
             .alloc_str(self.context.string_cache.at(name.name));
         let builtin = common_builtin(spelling)?;
-        if spelling == "alloca"
-            && self.expression_info(callee).binding.is_some_and(|id| {
-                let binding = self.bindings[id];
-                binding.kind != crate::translation_phases::semantic_analysis::BindingKind::Function
-                    || binding.linkage
-                        != crate::translation_phases::semantic_analysis::Linkage::External
-            })
+        if !self
+            .expression_info(callee)
+            .binding
+            .is_some_and(|id| self.bindings[id].builtin)
         {
             return None;
+        }
+        if let CommonBuiltin::Varargs(keyword) = builtin {
+            let count = if keyword
+                == crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaEnd
+            {
+                1
+            } else {
+                2
+            };
+            if arguments.len() != count {
+                self.error(
+                    SemanticErrorKind::InvalidArgumentCount,
+                    e.source_vectors,
+                    None,
+                    None,
+                );
+                return Some(Self::expression_result(e, self.types.unknown()));
+            }
+            let b = keyword_call(self.types.tu, e, keyword, arguments);
+            return Some(self.type_builtin(e, b));
         }
         self.context
             .report_extension(Feature::GnuBuiltins, spelling, name.source_vectors);
@@ -160,7 +179,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let TypeKind::Function { result: r, .. } = self.types.nodes[result.index] {
             result = r;
         }
-        // Explicit user prototypes do not change the intrinsic's signature.
+        // Intrinsic bindings retain the implementation's signature.
         let intrinsic_type = self.common_builtin_type(name)?;
         if let TypeKind::Function { result: r, .. } = self.types.nodes[intrinsic_type.index] {
             result = r;
@@ -351,7 +370,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     }
                 }
             },
-            | CommonBuiltin::Unreachable | CommonBuiltin::Trap => {},
+            | CommonBuiltin::Unreachable | CommonBuiltin::Trap | CommonBuiltin::Varargs(_) => {},
         }
         Some(info)
     }
@@ -390,8 +409,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 /// The operations whose GCC names share one documented signature family.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum CommonBuiltin {
+    Varargs(crate::translation_phases::preprocessing::KeywordTokenType),
     Bit(BitOperation, Scalar),
     Bswap(u32),
     Expect(bool),
@@ -426,9 +446,17 @@ pub(crate) enum OverflowOperation {
 /// GNU extension: GCC manuals linked in this module's documentation.
 pub(crate) fn common_builtin(name: &str) -> Option<CommonBuiltin> {
     use CommonBuiltin as B;
+
+    use crate::translation_phases::preprocessing::KeywordTokenType as K;
     let name = name
         .strip_prefix("__builtin_")
         .or_else(|| (name == "alloca").then_some("alloca"))?;
+    match name {
+        | "va_start" => return Some(B::Varargs(K::BuiltinVaStart)),
+        | "va_end" => return Some(B::Varargs(K::BuiltinVaEnd)),
+        | "va_copy" => return Some(B::Varargs(K::BuiltinVaCopy)),
+        | _ => {},
+    }
     for (prefix, op) in [
         ("clz", BitOperation::Clz),
         ("ctz", BitOperation::Ctz),
@@ -550,87 +578,23 @@ fn constant_overflow(
     carry || value > limit || (!signed && negative && value != 0)
 }
 
-/// Overflow predicates inspect a third operand's type, ignoring its value
-/// except for observable effects. Pure nonvolatile reads need no evaluation
-/// and do not prevent an otherwise constant predicate from being an ICE.
-/// GNU extension: GCC "Integer Overflow Builtins".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html>
-pub(crate) fn overflow_type_operand_is_pure<'tu>(
+/// Expression-only varargs calls share the header intrinsic operand checker.
+/// C99: §7.15.1, pp. 249-251; PDF pp. 261-263.
+pub(crate) fn keyword_call<'tu>(
+    arena: &'tu crate::util::bump::Bump,
     expression: &'tu Expression<'tu>,
-    info: impl Fn(&'tu Expression<'tu>) -> Option<ExpressionInfo<'tu>>,
-    scratch: &crate::util::bump::Bump,
-) -> bool {
-    use ExpressionType as E;
-
-    use crate::translation_phases::parsing::syntax::{
-        BinaryOperator as B,
-        UnaryOperator as U,
-    };
-    let mut pending = crate::util::bump::ArenaVec::new_in(scratch);
-    pending.push((expression, true));
-    while let Some((e, read)) = pending.pop() {
-        let Some(result) = info(e) else {
-            return false;
-        };
-        if read && result.ty.qualifiers.contains(TypeQualifiers::VOLATILE) {
-            return false;
-        }
-        if result.ice && result.integer.is_some() {
-            continue;
-        }
-        match e.kind {
-            | E::Identifier(_) | E::Constant(_) | E::StringLiteral(_) => {},
-            | E::SizeofExpr(_) | E::SizeofType(_) | E::AlignofExpr(_) | E::AlignofType(_)
-                if result.ice => {},
-            | E::Parenthesized { expression }
-            | E::Cast {
-                operand_expression: expression,
-                ..
-            } => pending.push((expression, read)),
-            | E::Unary {
-                operator: U::PreIncrement | U::PreDecrement | U::PostIncrement | U::PostDecrement,
-                ..
-            }
-            | E::Binary {
-                operator:
-                    B::Assignment
-                    | B::MultiplicationAssignment
-                    | B::DivisionAssignment
-                    | B::ModuloAssignment
-                    | B::AdditionAssignment
-                    | B::SubtractionAssignment
-                    | B::LeftShiftAssignment
-                    | B::RightShiftAssignment
-                    | B::BitwiseAndAssignment
-                    | B::BitwiseXorAssignment
-                    | B::BitwiseOrAssignment,
-                ..
-            } => return false,
-            | E::Unary {
-                operator,
-                operand_expression,
-            } => pending.push((operand_expression, operator != U::AddressOf)),
-            | E::Binary {
-                left_expression,
-                right_expression,
-                ..
-            } => {
-                pending.push((right_expression, true));
-                pending.push((left_expression, true));
-            },
-            | E::Conditional(c) | E::OmittedConditional(c) => {
-                pending.push((c.condition_expression, true));
-                pending.push((c.then_expression, true));
-                pending.push((c.else_expression, true));
-            },
-            | E::DirectMember {
-                base_expression, ..
-            } => pending.push((base_expression, false)),
-            | E::IndirectMember {
-                base_expression, ..
-            } => pending.push((base_expression, true)),
-            | _ => return false,
-        }
+    keyword: crate::translation_phases::preprocessing::KeywordTokenType,
+    arguments: ArenaList<'tu, &'tu Expression<'tu>>,
+) -> &'tu crate::translation_phases::parsing::Builtin<'tu> {
+    let mut operands = crate::util::bump::ArenaVec::new_in(arena);
+    for &arg in arguments {
+        operands.push(crate::translation_phases::parsing::SyntaxOperand::Expression(arg));
     }
-    true
+    arena.alloc(crate::translation_phases::parsing::Builtin {
+        keyword,
+        operands: ArenaList::copy_from_slice(arena, &operands),
+        members: ArenaList::empty(),
+        source_vectors: expression.source_vectors,
+        recovered: false,
+    })
 }

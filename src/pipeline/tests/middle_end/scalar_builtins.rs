@@ -24,6 +24,21 @@ fn with_module<R>(
 
 const PROGRAMS: &[(&str, &str)] = &[
     (
+        "builtin_binding",
+        r"
+int f(unsigned x){return 7;}
+int main(void){
+ if(__builtin_clz(1u)!=31)return 1;
+ {int (*__builtin_clz)(unsigned)=f;if((__builtin_clz)(1)!=7)return 2;}
+ {int (*__builtin_add_overflow)(unsigned)=f;if(__builtin_add_overflow(1)!=7)return 3;}
+ {int (*__builtin_expect)(unsigned)=f;if(__builtin_expect(1)!=7)return 4;}
+ {int (*__builtin_strlen)(unsigned)=f;if(__builtin_strlen(1)!=7)return 5;}
+ {int (*__builtin_va_end)(unsigned)=f;if(__builtin_va_end(1)!=7)return 6;}
+ return 0;
+}
+",
+    ),
+    (
         "bit_operations",
         r"
 int f(unsigned x) { return __builtin_clz(x); }
@@ -105,7 +120,6 @@ int main(void) {int values[]={-32768,-129,-128,-127,-1,0,1,127,128,255,32767};fo
     (
         "dynamic_stack",
         r"
-void *alloca(__SIZE_TYPE__);
 static int f(unsigned n) {int *p[3];for(int i=0;i<3;i++) { p[i]=__builtin_alloca(n*sizeof(int)); p[i][n-1]=i+1;} int *q=alloca(n*sizeof(int));q[n-1]=7;return p[0][n-1]+p[1][n-1]+p[2][n-1]+q[n-1];}
 int main(void) {for(int i=0;i<30;i++) if(f(i+1)!=13) return 1;return 0;} ",
     ),
@@ -163,6 +177,32 @@ fn gcc_scalar_builtins_execute_in_all_stages() {
             }
         }
     }
+}
+
+#[test]
+fn overflow_predicate_effect_analysis_has_linear_work() {
+    const DEPTH: usize = 2048;
+    let source = format!(
+        "int main(void){{int x=1,i=0;int r=__builtin_add_overflow_p(1,2,{}++i{});return r||i!=1;}}",
+        "x&&(".repeat(DEPTH),
+        ")".repeat(DEPTH)
+    );
+    crate::test_support::OVERFLOW_EFFECT_VISITS.with(|visits| visits.set(0));
+    with_module(
+        &source,
+        Target::LinuxGnu,
+        false,
+        Profile::PreAbi,
+        |module, target| {
+            let visits = crate::test_support::OVERFLOW_EFFECT_VISITS.with(std::cell::Cell::get);
+            eprintln!("overflow effect analysis: {visits} visits for depth {DEPTH}");
+            assert!(
+                visits <= 16 * DEPTH,
+                "effect analysis visited {visits} expressions for a {DEPTH}-deep chain"
+            );
+            assert_eq!(interpret(module, target).0, 0);
+        },
+    );
 }
 
 #[test]

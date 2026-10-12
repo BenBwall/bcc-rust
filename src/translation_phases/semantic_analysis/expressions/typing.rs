@@ -1448,6 +1448,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     variadic: false,
                 })
             };
+            let index = self.bindings.len();
             self.bind(
                 name,
                 ty,
@@ -1456,6 +1457,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Duration::None,
                 None,
             );
+            self.bindings[index].builtin = true;
             return;
         }
         if let ExpressionType::Identifier(name) = e.kind

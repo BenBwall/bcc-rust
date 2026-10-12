@@ -137,9 +137,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return None;
         };
         // C99 §6.5.2.2p1: a shadowing declaration uses ordinary call typing.
-        if self.expression_info(function).binding.is_some_and(|id| {
-            !matches!(self.types.nodes[self.bindings[id].ty.index], TypeKind::Function { result, .. } if result == self.types.unknown())
-        }) {
+        if !self
+            .expression_info(function)
+            .binding
+            .is_some_and(|id| self.bindings[id].builtin)
+        {
             return None;
         }
         let (scalar, count, nan, operation) = match self.context.string_cache.at(name.name) {
@@ -209,7 +211,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             function = expression;
         }
         matches!(function.kind, E::Identifier(name) if named_builtin(self.context.string_cache.at(name.name)))
-            && self.expression_info(function).binding.is_none_or(|id| matches!(self.types.nodes[self.bindings[id].ty.index], TypeKind::Function { result, .. } if result == self.types.unknown()))
+            && self
+                .expression_info(function)
+                .binding
+                .is_some_and(|id| self.bindings[id].builtin)
     }
 
     pub(super) fn binary128_type(&self, ty: TypeId) -> bool {

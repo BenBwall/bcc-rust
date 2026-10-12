@@ -761,6 +761,9 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             name,
             draft,
             scratch,
+            effect_summaries: crate::translation_phases::semantic_analysis::EffectSummaries::new(
+                scratch,
+            ),
             tasks: ArenaVec::new_in(scratch),
             operands: ArenaVec::new_in(scratch),
             locals: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),

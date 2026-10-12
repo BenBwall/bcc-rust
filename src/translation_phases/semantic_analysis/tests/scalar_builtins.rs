@@ -2,6 +2,47 @@
 use super::*;
 
 #[test]
+fn scalar_builtin_dispatch_preserves_user_bindings() {
+    with_source(
+        &crate::test_support::builtin_binding_program(),
+        |context, unit| {
+            assert_eq!(unit.errors, 0, "{:?}", context.take_pending_errors());
+            assert!(
+                unit.expressions
+                    .iter()
+                    .filter(|i| matches!(i.expression.kind, ExpressionType::Call { .. }))
+                    .all(|i| unit.types.nodes[i.ty.index] == TypeKind::Scalar(Scalar::Int))
+            );
+        },
+    );
+    for name in [
+        "__builtin_clz",
+        "__builtin_add_overflow",
+        "__builtin_expect",
+        "__builtin_strlen",
+        "__sync_fetch_and_add",
+        "__builtin_popcount",
+        "__builtin_va_start",
+        "__builtin_va_copy",
+        "__builtin_va_end",
+    ] {
+        let source = format!(
+            "int f(unsigned x){{return 7;}} int main(void){{int (*{name})(unsigned)=f;return \
+             ({name})(1)!=7;}}"
+        );
+        with_source(&source, |context, s| {
+            assert_eq!(s.errors, 0, "{name}: {:?}", context.take_pending_errors());
+            let call = s
+                .expressions
+                .iter()
+                .find(|i| matches!(i.expression.kind, ExpressionType::Call { .. }))
+                .unwrap();
+            assert_eq!(s.types.nodes[call.ty.index], TypeKind::Scalar(Scalar::Int));
+        });
+    }
+}
+
+#[test]
 fn gcc_scalar_builtin_types_follow_the_target() {
     for target in [
         crate::target::Target::LinuxGnu,
@@ -192,6 +233,71 @@ fn gcc_scalar_builtin_policy_uses_the_shared_extension_gate() {
         ),
         |context, _| {
             assert!(context.pending_error_count() > 0);
+        },
+    );
+}
+
+#[test]
+fn user_alloca_declarations_keep_their_type_in_strict_and_gnu_modes() {
+    for gnu in [false, true] {
+        let config = crate::configuration::CompilerConfiguration::new(
+            CStandard::C99,
+            crate::configuration::ExtensionPolicy::Allow,
+        )
+        .with_gnu_extensions(gnu);
+        for source in [
+            "int alloca(int x){return x+1;} int main(void){return alloca(1)!=2;}",
+            "int calls; void *alloca(__SIZE_TYPE__) __asm__(\"my_alloca\"); void \
+             *alloca(__SIZE_TYPE__ n){++calls;return &calls;} int main(void){return \
+             alloca(7)!=&calls||calls!=1;}",
+        ] {
+            with_configuration(source, config, |context, unit| {
+                assert_eq!(unit.errors, 0, "{:?}", context.take_pending_errors());
+                let callee = unit.expressions.iter().find(|i| matches!(i.expression.kind,ExpressionType::Identifier(name) if context.string_cache.at(name.name)=="alloca")).unwrap();
+                assert!(!unit.bindings[callee.binding.unwrap()].builtin);
+            });
+        }
+    }
+}
+
+#[test]
+fn builtin_spellings_respect_function_typedef_and_enumerator_bindings() {
+    with_source(
+        "int __builtin_trap(int); int f(void){return __builtin_trap(7);}",
+        |context, unit| {
+            assert_eq!(unit.errors, 0, "{:?}", context.take_pending_errors());
+            let call = unit
+                .expressions
+                .iter()
+                .find(|i| matches!(i.expression.kind, ExpressionType::Call { .. }))
+                .unwrap();
+            assert_eq!(
+                unit.types.nodes[call.ty.index],
+                TypeKind::Scalar(Scalar::Int)
+            );
+        },
+    );
+    with_source(
+        "enum E {__builtin_clz=0}; int f(void){return __builtin_clz(1);}",
+        |context, _| {
+            assert!(context.take_pending_errors().iter().any(|e| matches!(
+                e,
+                TranslationError::Semantic(SemanticError {
+                    kind: SemanticErrorKind::InvalidCall,
+                    ..
+                })
+            )));
+        },
+    );
+    with_source(
+        "typedef int __builtin_clz; int f(void){return __builtin_clz(1);}",
+        |_, unit| {
+            let call = unit
+                .expressions
+                .iter()
+                .find(|i| matches!(i.expression.kind, ExpressionType::Call { .. }))
+                .unwrap();
+            assert!(unit.types.unanalyzed(call.ty));
         },
     );
 }
