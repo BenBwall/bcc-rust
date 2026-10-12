@@ -3,6 +3,57 @@
 use super::*;
 
 #[test]
+fn statement_expression_ancestry_has_linear_work() {
+    for depth in [128, 2048, 32_768] {
+        // Exercise both repeated deepest-source queries and a distinct source
+        // at every nesting level, all targeting an enclosing expression.
+        for repeated in [false, true] {
+            let mut source = String::from("int main(void){return ({out:;");
+            for _ in 0..depth {
+                source.push_str(if repeated { "({" } else { "({goto out;" });
+            }
+            if repeated {
+                source.push_str(&"goto out;".repeat(depth));
+            }
+            source.push_str(&"0;});".repeat(depth));
+            source.push_str("0;});}\n");
+
+            let tu = Bump::new();
+            let scratch = Bump::new();
+            let mut context = Context::new(&tu);
+            let unit = crate::pipeline::parse_translation_unit(
+                &mut context,
+                Path::new("<input>"),
+                tu.alloc_str(&source),
+                crate::headers::HeaderSearch::default(),
+            );
+            let mut analyzer = Analyzer::new(&mut context, &scratch);
+            for &root in unit.external_declarations().iter().rev() {
+                analyzer.work.push(Work::Root(root));
+            }
+            while let Some(work) = analyzer.work.pop() {
+                analyzer.step(work);
+            }
+            analyzer.finish_translation_unit();
+            assert_eq!(
+                analyzer.context.error_count(),
+                0,
+                "{:?}",
+                analyzer.context.take_pending_errors()
+            );
+            let steps = analyzer.statements.ancestry_steps.get();
+            eprintln!(
+                "statement-expression ancestry: depth={depth} repeated={repeated} steps={steps}"
+            );
+            assert!(
+                steps <= 2 * depth,
+                "{steps} ancestry checks at depth {depth}"
+            );
+        }
+    }
+}
+
+#[test]
 fn jumps_into_statement_expressions_are_semantic_errors() {
     for (source, expected) in [
         (
@@ -23,6 +74,10 @@ fn jumps_into_statement_expressions_are_semantic_errors() {
         ),
         (
             "int main(void){({goto a;0;});return ({a:;0;});}",
+            SemanticErrorKind::JumpIntoStatementExpression,
+        ),
+        (
+            "int main(void){({a:;0;});return ({goto a;0;});}",
             SemanticErrorKind::JumpIntoStatementExpression,
         ),
         (

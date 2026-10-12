@@ -55,8 +55,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.8.6.4 paragraphs 1-3, p. 139; PDF p. 151.
     pub(super) fn statement_work(&mut self, work: StatementWork<'tu>) {
         match work {
-            | StatementWork::RestoreStatementExpression(previous) =>
-                self.statements.statement_expression = previous,
+            | StatementWork::RestoreStatementExpression { index, previous } => {
+                self.statements.statement_expressions[index].end =
+                    self.statements.statement_expressions.len();
+                self.statements.statement_expression = previous;
+            },
             | StatementWork::Substatement(statement) => {
                 self.enter(ScopeKind::Block);
                 self.work.push(Work::PopScope);
@@ -222,31 +225,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let index = self.statements.statement_expressions.len();
         self.statements
             .statement_expressions
-            .push((previous, source));
+            .push(StatementExpression {
+                source,
+                end: usize::MAX,
+            });
         self.statements.statement_expression = Some(index);
         self.work.push(Work::StatementWork(
-            StatementWork::RestoreStatementExpression(previous),
+            StatementWork::RestoreStatementExpression { index, previous },
         ));
     }
 
     /// A target inside an expression is legal only when that expression
-    /// already encloses the jump. Comparing ancestry permits outward jumps
-    /// and distinguishes sibling expressions at the same nesting depth.
+    /// already encloses the jump. Preorder subtree intervals make each query
+    /// constant-time, permitting outward jumps and distinguishing siblings.
+    /// An open expression's end is unbounded until its restore continuation;
+    /// switch labels can therefore query it during body traversal too.
     /// GNU extension: GCC "Statement Exprs"; C99: §6.8.6.1p1, p. 137;
     /// PDF p. 149; §6.8.4.2p5, p. 134; PDF p. 146.
     fn entered_statement_expression(
         &self,
-        mut from: Option<usize>,
+        from: Option<usize>,
         to: Option<usize>,
     ) -> Option<SourceVectors> {
         let target = to?;
-        while let Some(index) = from {
-            if index == target {
-                return None;
-            }
-            from = self.statements.statement_expressions[index].0;
+        #[cfg(test)]
+        self.statements
+            .ancestry_steps
+            .set(self.statements.ancestry_steps.get() + 1);
+        let expression = &self.statements.statement_expressions[target];
+        if from.is_some_and(|index| target <= index && index < expression.end) {
+            return None;
         }
-        Some(self.statements.statement_expressions[target].1)
+        Some(expression.source)
     }
 
     /// Records unique label definitions and goto uses in the current function.
@@ -628,7 +638,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 /// C99: §6.8.6.4 paragraphs 1-3, p. 139; PDF p. 151.
 #[derive(Clone, Copy)]
 pub(super) enum StatementWork<'tu> {
-    RestoreStatementExpression(Option<usize>),
+    RestoreStatementExpression {
+        index:    usize,
+        previous: Option<usize>,
+    },
     /// C99: §6.8.4p3, p. 133; PDF p. 145; §6.8.5p5, p. 135;
     /// PDF p. 147. Associated substatements are blocks, including expressions.
     Substatement(&'tu Statement<'tu>),
@@ -642,6 +655,14 @@ pub(super) enum StatementWork<'tu> {
         SourceVectors,
     ),
     ReturnDone(Option<ExpressionSlot<'tu>>, SourceVectors),
+}
+
+/// A preorder subtree interval, finalized when its expression body closes.
+/// GNU extension: GCC "Statement Exprs"; C99: §6.8.6.1p1, p. 137;
+/// PDF p. 149 (extended goto constraint).
+struct StatementExpression {
+    source: SourceVectors,
+    end:    usize,
 }
 
 /// A persistent declaration-scope path; forward labels can retain it after
@@ -704,8 +725,10 @@ struct Switch<'s> {
 }
 
 pub(super) struct State<'s> {
+    #[cfg(test)]
+    pub(super) ancestry_steps: std::cell::Cell<usize>,
     pub(super) statement_expression: Option<usize>,
-    statement_expressions: ArenaVec<'s, (Option<usize>, SourceVectors)>,
+    statement_expressions: ArenaVec<'s, StatementExpression>,
     pub(super) loops: usize,
     pub(super) switch: Option<usize>,
     pub(super) vm: Option<usize>,
@@ -724,6 +747,8 @@ impl<'s> State<'s> {
         let mut scope_vm = ArenaVec::new_in(scratch);
         scope_vm.push(None);
         Self {
+            #[cfg(test)]
+            ancestry_steps: std::cell::Cell::new(0),
             statement_expression: None,
             statement_expressions: ArenaVec::new_in(scratch),
             loops: 0,
