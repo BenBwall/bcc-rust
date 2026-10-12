@@ -27,6 +27,24 @@ use crate::{
 pub(super) fn find<'a>(sema: &SemanticTranslationUnit<'_>, arena: &'a Bump) -> ArenaSet<'a, usize> {
     let mut taken = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena);
     for info in sema.expressions {
+        if let ExpressionType::Builtin(b) = info.expression.kind {
+            use crate::translation_phases::{
+                parsing::SyntaxOperand,
+                preprocessing::KeywordTokenType as K,
+            };
+            if matches!(
+                b.keyword,
+                K::BuiltinVaStart | K::BuiltinVaArg | K::BuiltinVaCopy | K::BuiltinVaEnd
+            ) {
+                for &operand in b.operands {
+                    if let SyntaxOperand::Expression(e) = operand
+                        && let Some(binding) = sema.expression_info(e).and_then(|info| info.binding)
+                    {
+                        _ = taken.insert(binding);
+                    }
+                }
+            }
+        }
         let ExpressionType::Unary {
             operator: UnaryOperator::AddressOf,
             mut operand_expression,
@@ -41,7 +59,9 @@ pub(super) fn find<'a>(sema: &SemanticTranslationUnit<'_>, arena: &'a Bump) -> A
                     operator: UnaryOperator::Extension,
                     operand_expression: expression,
                 } => operand_expression = expression,
-                | ExpressionType::Generic(_) => {
+                | ExpressionType::Generic(_)
+                | ExpressionType::Builtin(_)
+                | ExpressionType::StatementExpression(_) => {
                     match sema
                         .expression_info(operand_expression)
                         .and_then(|operand| operand.selected_expression)

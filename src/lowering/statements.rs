@@ -392,8 +392,18 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | S::Declaration(declaration) => self.tasks.push(Task::Declaration(declaration)),
             | S::Attributed(attributed) => self.tasks.push(Task::Statement(attributed.statement)),
             | S::Null => {},
-            | S::CaseRange(_) =>
-                return Err(LoweringError::unsupported(Construct::CaseRange, source)),
+            | S::CaseRange(range) => {
+                let block = self
+                    .cases
+                    .get(&std::ptr::from_ref(statement).addr())
+                    .copied()
+                    .ok_or_else(|| {
+                        LoweringError::missing("a case range is outside a switch", source)
+                    })?;
+                self.draft.jump(block, &[]);
+                self.draft.switch_to(block);
+                self.tasks.push(Task::Statement(range.statement));
+            },
             | S::Asm(_) | S::MsAsm(_) =>
                 return Err(LoweringError::unsupported(
                     Construct::InlineAssembly,
@@ -436,6 +446,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let start = self.switch_blocks.len();
         let mut default = None;
         let mut cases = ArenaVec::new_in(self.scratch);
+        let mut ranges = ArenaVec::new_in(self.scratch);
         let mut pending = ArenaVec::new_in(self.scratch);
         pending.push(body);
         while let Some(statement) = pending.pop() {
@@ -462,11 +473,43 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     default = Some(self.case_block(statement));
                     pending.push(inner);
                 },
-                | StatementType::CaseRange(_) =>
-                    return Err(LoweringError::unsupported(
-                        Construct::CaseRange,
-                        statement.source_vectors,
-                    )),
+                | StatementType::CaseRange(range) => {
+                    let (
+                        ConstantExpressionSlot::Parsed(lower),
+                        ConstantExpressionSlot::Parsed(upper),
+                    ) = (range.lower, range.upper)
+                    else {
+                        return Err(LoweringError::missing(
+                            "case range bounds are absent",
+                            statement.source_vectors,
+                        ));
+                    };
+                    let lower = self
+                        .info(lower.expression())?
+                        .integer
+                        .ok_or_else(|| {
+                            LoweringError::missing(
+                                "case range bound is not constant",
+                                statement.source_vectors,
+                            )
+                        })?
+                        .cast(ty.bits(), signed);
+                    let upper = self
+                        .info(upper.expression())?
+                        .integer
+                        .ok_or_else(|| {
+                            LoweringError::missing(
+                                "case range bound is not constant",
+                                statement.source_vectors,
+                            )
+                        })?
+                        .cast(ty.bits(), signed);
+                    let block = self.case_block(statement);
+                    if lower.order_key() <= upper.order_key() {
+                        ranges.push((lower.value, upper.value, block));
+                    }
+                    pending.push(range.statement);
+                },
                 | StatementType::Compound { items } =>
                     for item in items.iter().rev() {
                         if let BlockItem::Statement(statement) = *item {
@@ -490,12 +533,41 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 | _ => {},
             }
         }
-        let default = self.draft.edge(default.unwrap_or(exit), &[]);
-        self.draft.terminate_and_continue_dead(Terminator::Switch {
-            value,
-            default,
-            cases,
-        });
+        // GNU inclusive ranges use one unsigned interval comparison each,
+        // never an expansion proportional to the number of covered values.
+        // GNU extension: <https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html>.
+        let default = default.unwrap_or(exit);
+        if ranges.is_empty() {
+            let default = self.draft.edge(default, &[]);
+            self.draft.terminate_and_continue_dead(Terminator::Switch {
+                value,
+                default,
+                cases,
+            });
+        } else {
+            let first = self.draft.create_block(&[]);
+            let edge = self.draft.edge(first, &[]);
+            self.draft.terminate(Terminator::Switch {
+                value,
+                default: edge,
+                cases,
+            });
+            self.draft.seal(first);
+            self.draft.switch_to(first);
+            for (lower, upper, target) in ranges {
+                let next = self.draft.create_block(&[]);
+                let low = self.iconst(ty, lower);
+                let span = self.iconst(ty, upper.wrapping_sub(lower));
+                let offset = self.binary_inst(Opcode::Isub, InstFlags::empty(), value, low);
+                let condition = self.icmp(crate::ir::IntCC::Ule, offset, span);
+                self.draft.brif(condition, target, next);
+                self.draft.seal(next);
+                self.draft.switch_to(next);
+            }
+            let edge = self.draft.edge(default, &[]);
+            self.draft
+                .terminate_and_continue_dead(Terminator::Jump(edge));
+        }
         self.switch_starts.push(start);
         self.jumps.push(JumpTargets {
             break_to:    exit,
