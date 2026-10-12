@@ -10,6 +10,8 @@
 //! eight cells are the fragments of one pointer in order gives that pointer
 //! back with its provenance; loading it from other bytes treats them as an
 //! integer address, as `inttoptr` does.
+//! Unresolved globals retain their declared bounds for pointer arithmetic,
+//! but have no backing cells; any data access reports the missing symbol.
 //!
 //! A [`Pointer`] is an address with an optional [`ObjectRef`]. An access
 //! through it checks, in order: that it has provenance (null and wild
@@ -46,6 +48,7 @@ use crate::{
     ir::{
         Align,
         FuncId,
+        GlobalId,
         Type,
     },
     util::bump::{
@@ -90,6 +93,9 @@ pub(crate) enum ObjectKind {
     Stack,
     /// A global that the program may write.
     Global,
+    /// A declared object with no definition. Its address has provenance,
+    /// but it has no backing cells and every data access faults.
+    UnresolvedGlobal(GlobalId),
     /// A `constant` global, such as a string literal; writing it is
     /// undefined.
     ConstantGlobal,
@@ -373,6 +379,7 @@ impl<'a> Memory<'a> {
             .live_object(provenance)
             .ok_or(UbKind::DanglingPointer)?;
         match object.kind {
+            | ObjectKind::UnresolvedGlobal(global) => return Err(Fault::UnknownGlobal(global)),
             | ObjectKind::Function(_) | ObjectKind::VaCursor => return Err(UbKind::NotData.into()),
             | ObjectKind::ConstantGlobal if write => return Err(UbKind::WriteToConstant.into()),
             | _ => {},
@@ -439,6 +446,7 @@ impl Memory<'_> {
     /// Allocates an object of `size` poison bytes and returns a pointer to
     /// its start. Freed storage is reused by capacity class, while logical
     /// bounds, addresses and generations describe this allocation alone.
+    /// Unresolved globals reserve only an address range and object record.
     /// C99: §7.20.3.3 paragraph 2, p. 314; PDF p. 326 (indeterminate bytes);
     /// §6.2.4 paragraph 2, p. 32; PDF p. 44 (object lifetime).
     pub(crate) fn allocate(
@@ -451,7 +459,7 @@ impl Memory<'_> {
             return Err(Fault::Unsupported(Unsupported::ObjectSize));
         }
         let len = usize::try_from(size).map_err(|_| Fault::Unsupported(Unsupported::ObjectSize))?;
-        let capacity = if len == 0 {
+        let capacity = if len == 0 || matches!(kind, ObjectKind::UnresolvedGlobal(_)) {
             0
         } else {
             len.checked_next_power_of_two()

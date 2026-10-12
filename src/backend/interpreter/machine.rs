@@ -338,6 +338,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             | Fault::Ub(kind) => Trap::UndefinedBehavior(kind, location),
             | Fault::Unsupported(what) => Trap::Unsupported(what, location),
             | Fault::StackDepthLimit => Trap::StackDepthLimit(location),
+            | Fault::UnknownGlobal(global) => Trap::UnknownGlobal(global, location),
             | Fault::UnknownFunction => {
                 let body = self.body(location.func);
                 let callee = match *body.inst(location.inst) {
@@ -384,8 +385,11 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
 
 impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
     /// Loads `module` into fresh memory in `arena`: an object for each
-    /// function and global, with the globals' initializers and relocations
-    /// written.
+    /// function and global, with definitions' initializers and relocations
+    /// written. Declarations retain only an unresolved address, never storage.
+    /// C99: §6.9 paragraph 5, p. 140; PDF p. 152 (external definitions);
+    /// §6.9.2 paragraph 2, p. 143; PDF p. 155 (zero-initialized tentative
+    /// definitions).
     pub(super) fn load(
         module: &'m Module<'ir>,
         arena: &'a Bump,
@@ -400,8 +404,10 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
             functions.push(pointer);
         }
         let mut globals = ArenaVec::new_in(arena);
-        for (_, global) in module.globals() {
-            let kind = if global.constant {
+        for (id, global) in module.globals() {
+            let kind = if global.init.is_none() {
+                ObjectKind::UnresolvedGlobal(id)
+            } else if global.constant {
                 ObjectKind::ConstantGlobal
             } else {
                 ObjectKind::Global
@@ -412,6 +418,9 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
             globals.push(pointer);
         }
         for ((_, global), &pointer) in module.globals().zip(&globals) {
+            if global.init.is_none() {
+                continue;
+            }
             let Some(GlobalInit::Bytes { bytes, relocations }) = global.init else {
                 memory.initialize(pointer, &[]);
                 continue;

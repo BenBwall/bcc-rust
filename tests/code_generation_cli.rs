@@ -40,6 +40,55 @@ mod tests {
                        i;\n  return s;\n}\n";
 
     #[test]
+    fn unresolved_external_objects_trap_on_access() {
+        for source in [
+            "extern int shared; int main(void){ return shared != 7; }",
+            "extern int shared; int main(void){ shared = 7; return 0; }",
+            "extern int shared; int main(void){ int *p = &shared; return *p; }",
+            "extern int shared; int *p = &shared; int main(void){ return *p; }",
+            "extern int shared[2]; int *p = shared; int main(void){ return p[1]; }",
+        ] {
+            for opt in ["--opt=none", "--opt=bcc"] {
+                let output = bcc(&format!("{source}\n"), &["--interpret", opt]);
+                assert_eq!(
+                    output.status.code(),
+                    Some(70),
+                    "{source}: {}",
+                    text(&output.stderr)
+                );
+                assert!(
+                    text(&output.stderr).contains("unresolved external object @shared"),
+                    "{source}: {}",
+                    text(&output.stderr)
+                );
+                assert_eq!(output.stdout.as_slice(), b"");
+            }
+        }
+    }
+
+    #[test]
+    fn tentative_object_definitions_remain_zero_initialized() {
+        for source in [
+            "int shared; int main(void){ return shared; }",
+            "extern int shared; int shared; int main(void){ return shared; }",
+            "int shared; int *p = &shared; int main(void){ return *p; }",
+            "extern int shared; int shared = 7; int main(void){ return shared != 7; }",
+            "extern int shared; int main(void){ return 0; }",
+        ] {
+            for opt in ["--opt=none", "--opt=bcc"] {
+                let output = bcc(&format!("{source}\n"), &["--interpret", opt]);
+                assert_eq!(
+                    output.status.code(),
+                    Some(0),
+                    "{source}: {}",
+                    text(&output.stderr)
+                );
+                assert_eq!(output.stderr.as_slice(), b"");
+            }
+        }
+    }
+
+    #[test]
     fn incompatible_host_signatures_trap_before_execution() {
         for source in [
             "double malloc(unsigned long); int main(void){return (int)malloc(1);}",

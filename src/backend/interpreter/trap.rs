@@ -9,6 +9,7 @@ use std::fmt;
 
 use crate::ir::{
     FuncId,
+    GlobalId,
     Inst,
     Module,
 };
@@ -24,6 +25,8 @@ pub(crate) enum Trap {
     /// The program called a declared function that neither the module nor
     /// the host defines.
     UnknownFunction(FuncId, Location),
+    /// The program accessed an object declared but not defined by the module.
+    UnknownGlobal(GlobalId, Location),
     /// The program ran more instructions than the step limit allows.
     StepLimit,
     /// The program nested more calls than the stack-depth limit allows.
@@ -58,6 +61,14 @@ impl Trap {
                     f.write_str("the call stack exceeded its depth limit")?;
                     location
                 },
+                | Self::UnknownGlobal(global, location) => {
+                    write!(
+                        f,
+                        "unresolved external object @{}",
+                        module.global(global).name
+                    )?;
+                    location
+                },
                 | Self::StepLimit | Self::BadEntry(_) => return write!(f, "{self}"),
             };
             write!(
@@ -80,6 +91,8 @@ impl fmt::Display for Trap {
             | Self::UnknownFunction(callee, location) =>
                 write!(f, "call to {callee}, which has no definition ({location})"),
             | Self::StepLimit => f.write_str("the program exceeded its step limit"),
+            | Self::UnknownGlobal(global, location) =>
+                write!(f, "unresolved external object {global} ({location})"),
             | Self::StackDepthLimit(location) =>
                 write!(f, "the call stack exceeded its depth limit ({location})"),
             | Self::BadEntry(error) => write!(f, "cannot run the entry function: {error}"),
@@ -253,11 +266,17 @@ impl fmt::Display for EntryError {
 /// A trap before the main loop knows where it happened; `Machine::trap`
 /// adds the location.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[expect(
+    variant_size_differences,
+    reason = "An unresolved-object fault carries the global ID needed to name its symbol."
+)]
 pub(crate) enum Fault {
     Ub(UbKind),
     Unsupported(Unsupported),
     /// The host does not provide the function the instruction calls.
     UnknownFunction,
+    /// The module declares the object but supplies no storage for it.
+    UnknownGlobal(GlobalId),
     StackDepthLimit,
 }
 

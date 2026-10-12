@@ -46,7 +46,9 @@
 //! representations support constants, loads, stores, freeze and bitcasts.
 //! `inttoptr` maps an address to the live object containing it, a deterministic
 //! stand-in for a full provenance model. Declared globals without an
-//! initializer are zero-filled objects of their declared size.
+//! initializer have unresolved addresses; accessing their data traps.
+//! Zero-initialized definitions, including tentative C definitions, have
+//! storage.
 
 // Execution
 mod execute;
