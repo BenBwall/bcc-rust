@@ -19,7 +19,16 @@ impl Golden {
 }
 
 pub(super) const GOLDENS: &[Golden] = &[
-    ARITHMETIC, LOOP, MEMORY, CALLS, SWITCH, GLOBALS, VARARGS, AGGREGATES, EXTENSIONS,
+    ARITHMETIC,
+    LOOP,
+    MEMORY,
+    CALLS,
+    SWITCH,
+    GLOBALS,
+    VARARGS,
+    AGGREGATES,
+    POISON_REGISTER_RETURN,
+    EXTENSIONS,
 ];
 
 const ARITHMETIC: Golden = Golden {
@@ -575,7 +584,15 @@ block0:
   %v3 = getelementptr inbounds i8, ptr %v0, i64 8
   %v4 = sitofp i64 %v1 to double
   store double %v4, ptr %v3, align 8
-  %inst5.ret = load { i64, double }, ptr %v0, align 8
+  %0 = load <8 x i8>, ptr %v0, align 8
+  %1 = freeze <8 x i8> %0
+  %2 = bitcast <8 x i8> %1 to i64
+  %3 = insertvalue { i64, double } poison, i64 %2, 0
+  %4 = getelementptr inbounds i8, ptr %v0, i64 8
+  %5 = load <8 x i8>, ptr %4, align 8
+  %6 = freeze <8 x i8> %5
+  %7 = bitcast <8 x i8> %6 to double
+  %inst5.ret = insertvalue { i64, double } %3, double %7, 1
   ret { i64, double } %inst5.ret
 }
 
@@ -583,7 +600,9 @@ define internal i32 @small() {
 block0:
   %v0 = alloca [16 x i8], align 8
   store i32 7, ptr %v0, align 4
-  %inst2.ret = load i32, ptr %v0, align 8
+  %0 = load <4 x i8>, ptr %v0, align 8
+  %1 = freeze <4 x i8> %0
+  %inst2.ret = bitcast <4 x i8> %1 to i32
   ret i32 %inst2.ret
 }
 
@@ -600,6 +619,65 @@ block0:
   store i32 %inst9.ret, ptr %slot3, align 4
   %v7 = load i64, ptr %slot2, align 8
   ret i64 %v7
+}
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 4, !"PIC Level", i32 2}
+!1 = !{i32 4, !"PIE Level", i32 2}
+"#,
+};
+
+/// Byte poison must be frozen before packing a memory-backed scalar result.
+const POISON_REGISTER_RETURN: Golden = Golden {
+    name:     "poison-register-return",
+    input:    "abi lowered
+function @f(ptr registers(i16, align 1)) internal {
+block0(v0: ptr):
+    v1 = iconst.i8 42
+    store.i8 v1, v0, align 1
+    v2 = iconst.i64 1
+    v3 = ptr_add inbounds v0, v2
+    v4 = poison.i8
+    store.i8 v4, v3, align 1
+    return
+}
+function @main() -> i32 external {
+    slot0 = stack_slot 2, align 1
+block0:
+    v0 = stack_addr slot0
+    call @f(v0)
+    v1 = load.i8 v0, align 1
+    v2 = zext.i32 v1
+    return v2
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define internal i16 @f() {
+block0:
+  %v0 = alloca [16 x i8], align 8
+  store i8 42, ptr %v0, align 1
+  %v3 = getelementptr inbounds i8, ptr %v0, i64 1
+  store i8 poison, ptr %v3, align 1
+  %0 = load <2 x i8>, ptr %v0, align 8
+  %1 = freeze <2 x i8> %0
+  %inst6.ret = bitcast <2 x i8> %1 to i16
+  ret i16 %inst6.ret
+}
+
+define i32 @main() {
+block0:
+  %slot0 = alloca [2 x i8], align 1
+  %inst1.ret = call i16 @f()
+  store i16 %inst1.ret, ptr %slot0, align 1
+  %v1 = load i8, ptr %slot0, align 1
+  %v2 = zext i8 %v1 to i32
+  ret i32 %v2
 }
 
 !llvm.module.flags = !{!0, !1}

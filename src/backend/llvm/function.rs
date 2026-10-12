@@ -447,8 +447,7 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                         .block_params(entry)
                         .first()
                         .ok_or(std::fmt::Error)?;
-                    let value = api.load(registers_type(api, registers), self.value(area)?);
-                    api.alignment(value, registers.align.bytes().max(8));
+                    let value = self.register_return(registers, self.value(area)?);
                     api.set_name(value, &return_name(inst, self.emitter.arena));
                     api.ret(value)
                 } else {
@@ -459,6 +458,50 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
             | _ => return Err(std::fmt::Error.into()),
         };
         Ok(Some(value))
+    }
+
+    /// Packs the same bytes `interpreter::return_from` copies independently.
+    /// A scalar load would spread one poison byte over its defined neighbors.
+    /// Byte-vector loads retain lane poison, and vector freeze freezes each
+    /// byte separately before the bitcast combines them into a register.
+    /// C99: §6.2.6.1 paragraph 4, p. 37; PDF p. 49 (object representation);
+    /// register packing and poison refinement are additional IR contracts.
+    fn register_return(&self, registers: ResultRegisters, area: Val<'id>) -> Val<'id> {
+        let api = self.emitter.api;
+        let result_ty = registers_type(api, registers);
+        let mut result = api.poison(result_ty);
+        for ((offset, ty), index) in registers.parts().zip(0_u32..) {
+            let addr = if offset == 0 {
+                area
+            } else {
+                api.gep(area, api.bits(Type::I64, u128::from(offset)), true)
+            };
+            let bytes = api.load(api.vector(api.ty(Type::I8), ty.bytes()), addr);
+            // The private return area is at least eight-byte aligned; the
+            // optional second part starts at byte eight.
+            let align = registers.align.bytes().max(8);
+            api.alignment(
+                bytes,
+                if offset == 0 {
+                    align
+                } else {
+                    align.min(offset)
+                },
+            );
+            let frozen = api.freeze(bytes);
+            let part_ty = if registers.second.is_some() {
+                api.ty(ty)
+            } else {
+                result_ty
+            };
+            let part = api.cast(LLVMOpcode::LLVMBitCast, frozen, part_ty);
+            result = if registers.second.is_some() {
+                api.insert_value(result, part, index)
+            } else {
+                part
+            };
+        }
+        result
     }
 
     fn intrinsic(&self, name: &str, args: &[Val<'id>], overloads: &[Ty<'id>]) -> Val<'id> {

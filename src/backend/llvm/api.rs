@@ -46,6 +46,7 @@ use llvm_sys::{
         LLVMBuildGEP2,
         LLVMBuildICmp,
         LLVMBuildInBoundsGEP2,
+        LLVMBuildInsertValue,
         LLVMBuildLoad2,
         LLVMBuildPhi,
         LLVMBuildRet,
@@ -632,6 +633,20 @@ impl<'id> Session<'id> {
         // SAFETY: The type system ties handles to this live session;
         // operands have the verified IR types.
         let raw = unsafe { LLVMBuildStore(self.builder, value.0, addr.0) };
+        Val(raw, PhantomData)
+    }
+
+    pub(super) fn insert_value(
+        &self,
+        aggregate: Val<'id>,
+        value: Val<'id>,
+        index: u32,
+    ) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session. The field
+        // index and type agree with the verified register-return structure.
+        let raw = unsafe {
+            LLVMBuildInsertValue(self.builder, aggregate.0, value.0, index, c"".as_ptr())
+        };
         Val(raw, PhantomData)
     }
 

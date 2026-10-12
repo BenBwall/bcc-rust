@@ -652,6 +652,9 @@ last, including duplicate terminator edges. Stack slots become entry allocas,
 construction, and memory/varargs operations use overloaded LLVM intrinsics.
 Calls and declarations share byval, sret, alignment and narrow integer
 extension attributes. Register aggregate returns retain their return areas.
+Each return part is loaded as a byte vector and frozen lane by lane before
+bitcasting to its ABI type, preserving defined bytes beside poison bytes.
+Paired returns assemble these parts independently at the shared byte offsets.
 Globals with relocations use packed structures with exact byte offsets.
 
 Windows GNU needs a separate GNU-ABI static library build in `target/llvm-libs`:

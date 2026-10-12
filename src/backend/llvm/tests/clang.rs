@@ -132,6 +132,150 @@ block0:
 }
 
 #[test]
+fn partially_poison_register_returns_preserve_defined_bytes() {
+    use crate::backend::interpreter::{
+        RuntimeValue,
+        Termination,
+        run_text,
+    };
+
+    let reproducer = GOLDENS
+        .iter()
+        .find(|golden| golden.name == "poison-register-return")
+        .unwrap();
+    assert_eq!(
+        run_text(reproducer.input, "main")
+            .result
+            .unwrap()
+            .termination,
+        Termination::Returned(Some(RuntimeValue::Int(42)))
+    );
+    assert_runs("round-16-reproducer", reproducer.input, 42, "");
+
+    // Exercise each return representation, both register parts, each end of
+    // a part, and direct/indirect unpacking into a caller-owned return area.
+    for (registers, bytes, start) in [
+        ("i16", 2, 0),
+        ("i32", 4, 0),
+        ("i64", 8, 0),
+        ("f32", 4, 0),
+        ("f64", 8, 0),
+        ("f128", 16, 0),
+        ("i128", 16, 0),
+        ("i32, i64", 8, 8),
+        ("i64, f64", 8, 8),
+    ] {
+        for defined in [start, start + bytes - 1] {
+            let poisoned = if defined == start {
+                defined + 1
+            } else {
+                defined - 1
+            };
+            for indirect in [false, true] {
+                let call = if indirect {
+                    format!("call_indirect v1(v0) : (ptr registers({registers}, align 1))")
+                } else {
+                    "call @f(v0)".to_string()
+                };
+                let program = format!(
+                    "abi lowered
+function @f(ptr registers({registers}, align 1)) internal {{
+block0(v0: ptr):
+ v1 = iconst.i64 {defined}
+ v2 = ptr_add inbounds v0, v1
+ v3 = iconst.i8 42
+ store.i8 v3, v2, align 1
+ v4 = iconst.i64 {poisoned}
+ v5 = ptr_add inbounds v0, v4
+ v6 = poison.i8
+ store.i8 v6, v5, align 1
+ return
+}}
+function @main() -> i32 external {{
+ slot0 = stack_slot 16, align 1
+block0:
+ v0 = stack_addr slot0
+ v1 = func_addr @f
+ {call}
+ v2 = iconst.i64 {defined}
+ v3 = ptr_add inbounds v0, v2
+ v4 = load.i8 v3, align 1
+ v5 = zext.i32 v4
+ return v5
+}}
+"
+                );
+                let result = run_text(&program, "main").result.unwrap();
+                assert_eq!(
+                    result.termination,
+                    Termination::Returned(Some(RuntimeValue::Int(42))),
+                    "{program}"
+                );
+                assert_runs("partially-poison-return", &program, 42, "");
+                // Exercise O2 for both ABI profiles even when this host has
+                // no runner for the other target's native executables.
+                for target in [Target::LinuxGnu, Target::WindowsGnu] {
+                    let arena = Bump::new();
+                    let module = parse_module(&arena, &program).unwrap();
+                    Session::with(&arena, target, |api| {
+                        build_module(&module, target, api, &arena).unwrap();
+                        let _buffer = api.emit(target, Some(OptLevel::O2), false, true).unwrap();
+                        let optimized = api.print();
+                        let main = optimized.text().split("@main(").nth(1).unwrap();
+                        assert!(
+                            main.contains("ret i32 42"),
+                            "{target:?}: {}",
+                            optimized.text()
+                        );
+                    });
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn partially_poison_x87_return_preserves_defined_mantissa_bytes() {
+    let program = "abi lowered
+function @f(ptr registers(f80, align 16)) internal {
+block0(v0: ptr):
+ v1 = iconst.i64 -9223372036854775808
+ store.i64 v1, v0, align 16
+ v2 = iconst.i64 8
+ v3 = ptr_add inbounds v0, v2
+ v4 = iconst.i16 16383
+ store.i16 v4, v3, align 8
+ v5 = iconst.i8 42
+ store.i8 v5, v0, align 1
+ v6 = iconst.i64 1
+ v7 = ptr_add inbounds v0, v6
+ v8 = poison.i8
+ store.i8 v8, v7, align 1
+ return
+}
+function @main() -> i32 external {
+ slot0 = stack_slot 16, align 16
+block0:
+ v0 = stack_addr slot0
+ call @f(v0)
+ v1 = load.i8 v0, align 1
+ v2 = zext.i32 v1
+ return v2
+}
+";
+    let result = crate::backend::interpreter::run_text(program, "main")
+        .result
+        .unwrap();
+    assert_eq!(
+        result.termination,
+        crate::backend::interpreter::Termination::Returned(Some(
+            crate::backend::interpreter::RuntimeValue::Int(42)
+        ))
+    );
+    assert_runs("poison-x87-return", program, 42, "");
+}
+
+#[test]
 fn register_pair_return_areas_agree_with_the_interpreter() {
     let program = "abi lowered
 function @pair(ptr registers(i32, i64, align 4)) internal {
