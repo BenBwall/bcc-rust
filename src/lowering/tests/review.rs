@@ -276,8 +276,8 @@ fn volatile_aggregate_initialization_preserves_all_destination_accesses() {
          {1, {2}, \"hi\"}; volatile struct S y = x; }",
     ) {
         // Bit-field and array-element stores; string, source-read and
-        // destination copies; zeroing x, its array member and y.
-        assert_volatile_accesses(&text, "store.", 2);
+        // destination copies; omitted ranges and a masked bit-field byte.
+        assert_volatile_accesses(&text, "store.", 3);
         assert_volatile_accesses(&text, "copy ", 3);
         assert_volatile_accesses(&text, "fill ", 3);
     }
@@ -289,10 +289,10 @@ fn volatile_members_and_compound_literals_keep_initialization_qualifiers() {
         "struct S { volatile int x; volatile unsigned b:3; }; void f(void) { struct S s = {1, 2}; \
          (volatile struct S){3, 4}; }",
     ) {
-        assert_volatile_accesses(&text, "store.", 4);
+        assert_volatile_accesses(&text, "store.", 6);
         assert_volatile_accesses(&text, "copy ", 1);
-        // The unqualified object's whole-object fill is not volatile;
-        // the compound literal's whole-object fill must be observable.
+        // Only omitted padding gets range fills; shared bit-field bytes
+        // use masked volatile accesses on both objects.
         assert_eq!(
             text.lines()
                 .filter(|line| line.trim_start().starts_with("fill "))
@@ -331,7 +331,7 @@ fn volatile_array_initialization_keeps_range_accesses() {
     ) {
         assert_volatile_accesses(&text, "store.", 2);
         assert_volatile_accesses(&text, "copy ", 1);
-        assert_volatile_accesses(&text, "fill ", 4);
+        assert_volatile_accesses(&text, "fill ", 2);
     }
 }
 
@@ -346,4 +346,12 @@ fn assert_volatile_accesses(text: &str, prefix: &str, expected: usize) {
     for line in accesses {
         assert!(line.contains("volatile"), "{line}\n{text}");
     }
+}
+
+#[test]
+fn aggregate_reinitialization_preserves_explicit_bit_fields() {
+    check(
+        "struct S { unsigned x:3, y:5; }; int main(void) { int n = 0; again:; struct S a = {.x = \
+         n ? a.x + 1 : 1}; if (!n++) goto again; return a.x != 2 || a.y != 0; }",
+    );
 }

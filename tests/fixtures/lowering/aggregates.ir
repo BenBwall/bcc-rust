@@ -19,21 +19,17 @@ function @bump(ptr result(size 16, align 8, [0: i64, 8: f64]), ptr aggregate(siz
     slot0 = stack_slot 16, align 8
 block0(v0: ptr, v1: ptr):
     v2 = stack_addr slot0
-    v3 = iconst.i8 0
-    v4 = iconst.i64 16
-    fill v2, v3, v4, align 8
-    v5 = stack_addr slot0
-    v6 = iconst.i64 16
-    copy may_overlap v5, v1, v6, align 8
-    v7 = stack_addr slot0
-    v8 = load.i64 v1, align 8
-    v9 = iconst.i32 1
-    v10 = iconst.i64 1
-    v11 = iadd.i64 nsw v8, v10
-    store.i64 v11, v7, align 8
-    v12 = stack_addr slot0
-    v13 = iconst.i64 16
-    copy v0, v12, v13, align 8
+    v3 = iconst.i64 16
+    copy may_overlap v2, v1, v3, align 8
+    v4 = stack_addr slot0
+    v5 = load.i64 v1, align 8
+    v6 = iconst.i32 1
+    v7 = iconst.i64 1
+    v8 = iadd.i64 nsw v5, v7
+    store.i64 v8, v4, align 8
+    v9 = stack_addr slot0
+    v10 = iconst.i64 16
+    copy v0, v9, v10, align 8
     return
 }
 
@@ -63,79 +59,65 @@ function @use(ptr aggregate(size 16, align 8, [0: i64, 8: f64])) -> i64 external
     slot9 = stack_slot 16, align 8
     slot10 = stack_slot 16, align 8
 block0(v0: ptr):
-    v1 = stack_addr slot0
-    v2 = iconst.i8 0
-    v3 = iconst.i64 16
-    fill v1, v2, v3, align 8
-    v4 = stack_addr slot1
+    v1 = stack_addr slot1
+    v2 = iconst.i64 16
+    copy v1, v0, v2, align 8
+    v3 = stack_addr slot2
+    call @bump(v3, v1)
+    v4 = stack_addr slot3
     v5 = iconst.i64 16
-    copy v4, v0, v5, align 8
-    v6 = stack_addr slot2
+    copy v4, v3, v5, align 8
+    v6 = stack_addr slot4
     call @bump(v6, v4)
-    v7 = stack_addr slot3
+    v7 = stack_addr slot0
     v8 = iconst.i64 16
-    copy v7, v6, v8, align 8
-    v9 = stack_addr slot4
-    call @bump(v9, v7)
-    v10 = stack_addr slot0
-    v11 = iconst.i64 16
-    copy may_overlap v10, v9, v11, align 8
-    v12 = stack_addr slot5
-    v13 = iconst.i8 0
-    v14 = iconst.i64 40
-    fill v12, v13, v14, align 4
+    copy may_overlap v7, v6, v8, align 8
+    v9 = stack_addr slot5
+    v10 = iconst.i64 4
+    v11 = ptr_add inbounds v9, v10
+    v12 = iconst.i8 0
+    v13 = iconst.i64 36
+    fill v11, v12, v13, align 1
+    v14 = iconst.i32 3
     v15 = stack_addr slot5
-    v16 = iconst.i8 0
-    v17 = iconst.i64 40
-    fill v15, v16, v17, align 1
-    v18 = iconst.i32 3
-    v19 = stack_addr slot5
-    store.i32 v18, v19, align 4
-    v20 = stack_addr slot6
-    v21 = iconst.i8 0
-    v22 = iconst.i64 3
-    fill v20, v21, v22, align 1
-    v23 = stack_addr slot6
-    v24 = iconst.i8 0
-    v25 = iconst.i64 3
-    fill v23, v24, v25, align 1
-    v26 = iconst.i32 1
-    v27 = iconst.i8 1
-    v28 = stack_addr slot6
-    store.i8 v27, v28, align 1
-    v29 = iconst.i32 2
-    v30 = iconst.i8 2
+    store.i32 v14, v15, align 4
+    v16 = iconst.i32 1
+    v17 = iconst.i8 1
+    v18 = stack_addr slot6
+    store.i8 v17, v18, align 1
+    v19 = iconst.i32 2
+    v20 = iconst.i8 2
+    v21 = stack_addr slot6
+    v22 = iconst.i64 1
+    v23 = ptr_add inbounds v21, v22
+    store.i8 v20, v23, align 1
+    v24 = iconst.i32 3
+    v25 = iconst.i8 3
+    v26 = stack_addr slot6
+    v27 = iconst.i64 2
+    v28 = ptr_add inbounds v26, v27
+    store.i8 v25, v28, align 1
+    v29 = stack_addr slot0
+    v30 = load.i64 v29, align 8
     v31 = stack_addr slot6
-    v32 = iconst.i64 1
-    v33 = ptr_add inbounds v31, v32
-    store.i8 v30, v33, align 1
-    v34 = iconst.i32 3
-    v35 = iconst.i8 3
-    v36 = stack_addr slot6
-    v37 = iconst.i64 2
-    v38 = ptr_add inbounds v36, v37
-    store.i8 v35, v38, align 1
-    v39 = stack_addr slot0
-    v40 = load.i64 v39, align 8
-    v41 = stack_addr slot6
-    v42 = stack_addr slot7
-    v43 = iconst.i64 3
-    copy v42, v41, v43, align 1
-    v44 = stack_addr slot5
-    v45 = stack_addr slot8
-    v46 = iconst.i64 40
-    copy v45, v44, v46, align 4
-    v47 = call @first(v42, v45)
-    v48 = sext.i64 v47
-    v49 = iadd.i64 nsw v40, v48
-    v50 = stack_addr slot9
-    v51 = iconst.i64 16
-    copy v50, v0, v51, align 8
-    v52 = stack_addr slot10
-    call @bump(v52, v50)
-    v53 = load.i64 v52, align 8
-    v54 = iadd.i64 nsw v49, v53
-    return v54
+    v32 = stack_addr slot7
+    v33 = iconst.i64 3
+    copy v32, v31, v33, align 1
+    v34 = stack_addr slot5
+    v35 = stack_addr slot8
+    v36 = iconst.i64 40
+    copy v35, v34, v36, align 4
+    v37 = call @first(v32, v35)
+    v38 = sext.i64 v37
+    v39 = iadd.i64 nsw v30, v38
+    v40 = stack_addr slot9
+    v41 = iconst.i64 16
+    copy v40, v0, v41, align 8
+    v42 = stack_addr slot10
+    call @bump(v42, v40)
+    v43 = load.i64 v42, align 8
+    v44 = iadd.i64 nsw v39, v43
+    return v44
 }
 
 function @pass(ptr result(size 4, align 4, [0: f32, 0: i32, 0: i8, 1: i8, 2: i8]), ptr aggregate(size 4, align 4, [0: f32, 0: i32, 0: i8, 1: i8, 2: i8])) external {

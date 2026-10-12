@@ -25,44 +25,42 @@ function @read() -> f64 external {
     slot0 = stack_slot 16, align 8
     slot1 = stack_slot 16, align 8
 block0:
-    v0 = stack_addr slot0
-    v1 = iconst.i8 0
-    v2 = iconst.i64 16
-    fill v0, v1, v2, align 8
-    v3 = iconst.i32 1
-    v4 = fconst.f64 0x3FF0000000000000
-    v5 = stack_addr slot0
-    store.f64 v4, v5, align 8
-    v6 = fconst.f64 0x4004000000000000
-    v7 = stack_addr slot0
-    v8 = iconst.i64 8
-    v9 = ptr_add inbounds v7, v8
-    store.f64 v6, v9, align 8
-    v10 = fconst.f32 0x3DCCCCCD
-    v11 = stack_addr slot1
-    v12 = iconst.i8 0
-    v13 = iconst.i64 16
-    fill v11, v12, v13, align 8
-    v14 = stack_addr slot1
-    store.f32 v10, v14, align 4
-    v15 = stack_addr slot0
-    v16 = iconst.i32 1
-    v17 = iconst.i64 8
-    v18 = ptr_add inbounds v15, v17
-    v19 = load.f64 v18, align 8
-    v20 = stack_addr slot1
-    v21 = iconst.i64 8
-    v22 = ptr_add inbounds v20, v21
-    store.f64 v19, v22, align 8
-    v23 = stack_addr slot0
-    v24 = iconst.i32 0
-    v25 = load.f64 v23, align 8
-    v26 = fpext.f64 v10
-    v27 = fadd.f64 v25, v26
-    v28 = stack_addr slot1
-    v29 = iconst.i64 8
-    v30 = ptr_add inbounds v28, v29
-    v31 = load.f64 v30, align 8
-    v32 = fadd.f64 v27, v31
-    return v32
+    v0 = iconst.i32 1
+    v1 = fconst.f64 0x3FF0000000000000
+    v2 = stack_addr slot0
+    store.f64 v1, v2, align 8
+    v3 = fconst.f64 0x4004000000000000
+    v4 = stack_addr slot0
+    v5 = iconst.i64 8
+    v6 = ptr_add inbounds v4, v5
+    store.f64 v3, v6, align 8
+    v7 = fconst.f32 0x3DCCCCCD
+    v8 = stack_addr slot1
+    v9 = iconst.i64 4
+    v10 = ptr_add inbounds v8, v9
+    v11 = iconst.i8 0
+    v12 = iconst.i64 4
+    fill v10, v11, v12, align 1
+    v13 = stack_addr slot1
+    store.f32 v7, v13, align 4
+    v14 = stack_addr slot0
+    v15 = iconst.i32 1
+    v16 = iconst.i64 8
+    v17 = ptr_add inbounds v14, v16
+    v18 = load.f64 v17, align 8
+    v19 = stack_addr slot1
+    v20 = iconst.i64 8
+    v21 = ptr_add inbounds v19, v20
+    store.f64 v18, v21, align 8
+    v22 = stack_addr slot0
+    v23 = iconst.i32 0
+    v24 = load.f64 v22, align 8
+    v25 = fpext.f64 v7
+    v26 = fadd.f64 v24, v25
+    v27 = stack_addr slot1
+    v28 = iconst.i64 8
+    v29 = ptr_add inbounds v27, v28
+    v30 = load.f64 v29, align 8
+    v31 = fadd.f64 v26, v30
+    return v31
 }

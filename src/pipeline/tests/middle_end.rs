@@ -162,6 +162,124 @@ const STAGES: [(bool, Profile); 4] = [
     (true, Profile::PostAbi),
 ];
 
+const REINITIALIZATION_PROGRAMS: &[(&str, &str, i32)] = &[
+    (
+        "repeated_braces",
+        "int main(void) { int n = 0; again:; int a[1][2] = {[0] = {n ? a[0][0] + 1 : 1}}; if \
+         (!n++) goto again; return a[0][0] + a[0][1]; }",
+        2,
+    ),
+    (
+        "union_read",
+        "union U { int old; struct { int x, y; } next; }; int main(void) { int n = 0; again:; \
+         union U a = {.next = {n ? a.next.x + 1 : 1}}; if (!n++) goto again; return a.next.x + \
+         a.next.y; }",
+        2,
+    ),
+    (
+        "array",
+        "int main(void) { int n = 0; again:; int a[1] = {n ? a[0] + 1 : 1}; if (!n++) goto again; \
+         return a[0]; }",
+        2,
+    ),
+    (
+        "struct",
+        "struct S { int x, y; }; int main(void) { int n = 0; again:; struct S a = {n ? a.x + 1 : \
+         1}; if (!n++) goto again; return a.x + a.y; }",
+        2,
+    ),
+    (
+        "nested",
+        "struct S { int x[2]; int y; }; int main(void) { int n = 0; again:; struct S a = {{n ? \
+         a.x[0] + 1 : 1}}; if (!n++) goto again; return a.x[0] + a.x[1] + a.y; }",
+        2,
+    ),
+    (
+        "designated",
+        "int main(void) { int n = 0; again:; int a[4] = {[2] = n ? a[2] + 1 : 1, [0] = n ? a[0] + \
+         2 : 3}; if (!n++) goto again; return a[0] + a[1] + a[2] + a[3]; }",
+        7,
+    ),
+    (
+        "declarator_order",
+        "int main(void) { int *p = 0; int n = 0; again:; int a = p ? *p : 0, b[1] = {9}; p = b; \
+         if (!n++) goto again; return a; }",
+        9,
+    ),
+    (
+        "union_switch",
+        "union U { int old; struct { int x, y; } next; }; int main(void) { union U a = {.old = \
+         -1, .next.x = 1}; return a.next.x + a.next.y; }",
+        1,
+    ),
+    (
+        "string_replacement",
+        "int main(void) { char a[2][4] = {[0] = \"abc\", [0] = \"x\"}; return a[0][2]; }",
+        0,
+    ),
+];
+
+#[test]
+fn aggregate_reinitialization_preserves_explicit_bytes() {
+    for &(name, source, expected) in REINITIALIZATION_PROGRAMS {
+        for target in [Target::LinuxGnu, Target::WindowsGnu] {
+            for (optimize, profile) in STAGES {
+                let actual = with_module(source, target, optimize, profile, interpret);
+                assert_eq!(
+                    actual.0, expected,
+                    "{name} {target:?} {optimize} {profile:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn aggregate_reinitialization_matches_native_arms_and_clang() {
+    let Some(target) = host() else { return };
+    let toolchain = Toolchain::bundled(target).unwrap();
+    let directory = TempDir::new("aggregate-reinitialization");
+    for &(name, source, expected) in REINITIALIZATION_PROGRAMS {
+        for arm in ARMS {
+            let executable = directory.join(format!("{name}-{}.exe", arm.name));
+            with_module(source, target, arm.bcc, Profile::PostAbi, |module, _| {
+                compile_module(
+                    module,
+                    &executable,
+                    LlvmOptions {
+                        opt: Some(arm.opt),
+                        disable_llvm_passes: arm.disable_llvm_passes,
+                        target,
+                        kind: OutputKind::Executable,
+                    },
+                )
+                .unwrap();
+            });
+            assert_eq!(run_native(&executable).0, expected, "{name} {}", arm.name);
+        }
+        let input = directory.join(format!("{name}.c"));
+        std::fs::write(&input, source).unwrap();
+        for opt in [OptLevel::O0, OptLevel::O2] {
+            let executable = directory.join(format!("{name}-clang{opt:?}.exe"));
+            let output = toolchain
+                .command(
+                    &input,
+                    &executable,
+                    LlvmOptions {
+                        opt: Some(opt),
+                        disable_llvm_passes: false,
+                        target,
+                        kind: OutputKind::Executable,
+                    },
+                )
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(run_native(&executable).0, expected, "{name} clang {opt:?}");
+        }
+    }
+}
+
 #[test]
 fn inline_handles_nested_calls_address_taken_locals_and_multiple_returns() {
     let source = "

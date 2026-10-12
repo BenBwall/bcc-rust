@@ -309,6 +309,13 @@ int f(int a) {
 }
 
 #[test]
+fn a_large_omitted_array_tail_uses_one_range_fill() {
+    let ir = lower("int main(void) { int a[100000] = {7}; return a[0] + a[99999]; }").unwrap();
+    assert_eq!(ir.matches("fill ").count(), 1, "{ir}");
+    assert!(ir.contains("399996"), "{ir}");
+}
+
+#[test]
 fn structures_pass_and_return_through_described_pointers() {
     golden(
         "aggregates",

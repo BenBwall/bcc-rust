@@ -26,144 +26,136 @@ function @f(i32) -> i32 external {
     slot6 = stack_slot 12, align 4
 block0(v0: i32):
     v1 = stack_addr slot0
-    v2 = iconst.i8 0
-    v3 = iconst.i64 20
-    fill v1, v2, v3, align 4
-    v4 = iconst.i32 1
-    v5 = stack_addr slot0
-    store.i32 v4, v5, align 4
-    v6 = stack_addr slot0
-    v7 = iconst.i64 4
-    v8 = ptr_add inbounds v6, v7
-    store.i32 v0, v8, align 4
-    v9 = iconst.i32 3
-    v10 = stack_addr slot0
-    v11 = iconst.i64 8
-    v12 = ptr_add inbounds v10, v11
-    store.i32 v9, v12, align 4
-    v13 = stack_addr slot1
-    v14 = iconst.i8 0
-    v15 = iconst.i64 8
-    fill v13, v14, v15, align 4
-    v16 = stack_addr slot1
-    store.i32 v0, v16, align 4
-    v17 = stack_addr slot2
+    v2 = iconst.i64 12
+    v3 = ptr_add inbounds v1, v2
+    v4 = iconst.i8 0
+    v5 = iconst.i64 8
+    fill v3, v4, v5, align 1
+    v6 = iconst.i32 1
+    v7 = stack_addr slot0
+    store.i32 v6, v7, align 4
+    v8 = stack_addr slot0
+    v9 = iconst.i64 4
+    v10 = ptr_add inbounds v8, v9
+    store.i32 v0, v10, align 4
+    v11 = iconst.i32 3
+    v12 = stack_addr slot0
+    v13 = iconst.i64 8
+    v14 = ptr_add inbounds v12, v13
+    store.i32 v11, v14, align 4
+    v15 = stack_addr slot1
+    v16 = iconst.i64 4
+    v17 = ptr_add inbounds v15, v16
     v18 = iconst.i8 0
-    v19 = iconst.i64 16
-    fill v17, v18, v19, align 4
-    v20 = iconst.i32 1
-    v21 = stack_addr slot2
-    store.i32 v20, v21, align 4
-    v22 = iconst.i32 2
-    v23 = stack_addr slot2
-    v24 = iconst.i64 4
-    v25 = ptr_add inbounds v23, v24
-    store.i32 v22, v25, align 4
-    v26 = stack_addr slot2
-    v27 = iconst.i64 8
-    v28 = ptr_add inbounds v26, v27
-    v29 = iconst.i8 0
-    v30 = iconst.i64 8
-    fill v28, v29, v30, align 1
+    v19 = iconst.i64 4
+    fill v17, v18, v19, align 1
+    v20 = stack_addr slot1
+    store.i32 v0, v20, align 4
+    v21 = iconst.i32 1
+    v22 = stack_addr slot2
+    store.i32 v21, v22, align 4
+    v23 = iconst.i32 2
+    v24 = stack_addr slot2
+    v25 = iconst.i64 4
+    v26 = ptr_add inbounds v24, v25
+    store.i32 v23, v26, align 4
+    v27 = stack_addr slot2
+    v28 = iconst.i64 8
+    v29 = ptr_add inbounds v27, v28
+    store.i32 v0, v29, align 4
+    v30 = iconst.i32 4
     v31 = stack_addr slot2
-    v32 = iconst.i64 8
+    v32 = iconst.i64 12
     v33 = ptr_add inbounds v31, v32
-    store.i32 v0, v33, align 4
-    v34 = iconst.i32 4
-    v35 = stack_addr slot2
-    v36 = iconst.i64 12
-    v37 = ptr_add inbounds v35, v36
-    store.i32 v34, v37, align 4
-    v38 = stack_addr slot3
+    store.i32 v30, v33, align 4
+    v34 = stack_addr slot3
+    v35 = global_addr @.str
+    v36 = iconst.i64 5
+    copy v34, v35, v36, align 1
+    v37 = iconst.i64 5
+    v38 = ptr_add inbounds v34, v37
     v39 = iconst.i8 0
-    v40 = iconst.i64 8
+    v40 = iconst.i64 3
     fill v38, v39, v40, align 1
-    v41 = stack_addr slot3
-    v42 = global_addr @.str
-    v43 = iconst.i64 5
-    copy v41, v42, v43, align 1
-    v44 = iconst.i64 5
-    v45 = ptr_add inbounds v41, v44
-    v46 = iconst.i8 0
-    v47 = iconst.i64 3
-    fill v45, v46, v47, align 1
-    v48 = stack_addr slot4
-    v49 = iconst.i8 0
-    v50 = iconst.i64 20
-    fill v48, v49, v50, align 4
-    v51 = stack_addr slot4
-    v52 = iconst.i64 12
-    v53 = ptr_add inbounds v51, v52
-    store.i32 v0, v53, align 4
-    v54 = iconst.i32 9
-    v55 = stack_addr slot4
-    v56 = iconst.i64 16
-    v57 = ptr_add inbounds v55, v56
-    store.i32 v54, v57, align 4
-    v58 = iconst.i32 1
-    v59 = stack_addr slot4
-    store.i32 v58, v59, align 4
-    v60 = stack_addr slot5
-    v61 = iconst.i8 0
-    v62 = iconst.i64 8
-    fill v60, v61, v62, align 4
-    v63 = stack_addr slot5
-    v64 = iconst.i64 4
-    v65 = ptr_add inbounds v63, v64
-    store.i32 v0, v65, align 4
-    v66 = stack_addr slot6
-    v67 = iconst.i8 0
-    v68 = iconst.i64 12
-    fill v66, v67, v68, align 4
-    v69 = iconst.i32 2
-    v70 = stack_addr slot6
-    v71 = iconst.i64 4
-    v72 = ptr_add inbounds v70, v71
-    store.i32 v69, v72, align 4
-    v73 = iconst.i32 3
-    v74 = stack_addr slot6
-    v75 = iconst.i64 8
-    v76 = ptr_add inbounds v74, v75
-    store.i32 v73, v76, align 4
-    v77 = stack_addr slot6
-    v78 = iconst.i64 8
-    v79 = ptr_add inbounds v77, v78
-    store.i32 v0, v79, align 4
-    v80 = stack_addr slot0
-    v81 = iconst.i32 1
-    v82 = iconst.i64 4
-    v83 = ptr_add inbounds v80, v82
-    v84 = load.i32 v83, align 4
-    v85 = stack_addr slot1
-    v86 = load.i32 v85, align 4
-    v87 = iadd.i32 nsw v84, v86
-    v88 = stack_addr slot2
-    v89 = iconst.i32 1
-    v90 = iconst.i64 8
-    v91 = ptr_add inbounds v88, v90
-    v92 = load.i32 v91, align 4
-    v93 = iadd.i32 nsw v87, v92
-    v94 = stack_addr slot3
-    v95 = iconst.i32 0
-    v96 = load.i8 v94, align 1
-    v97 = sext.i32 v96
-    v98 = iadd.i32 nsw v93, v97
-    v99 = iadd.i32 nsw v98, v0
-    v100 = stack_addr slot4
-    v101 = iconst.i32 4
-    v102 = iconst.i64 16
-    v103 = ptr_add inbounds v100, v102
+    v41 = stack_addr slot4
+    v42 = iconst.i64 4
+    v43 = ptr_add inbounds v41, v42
+    v44 = iconst.i8 0
+    v45 = iconst.i64 8
+    fill v43, v44, v45, align 1
+    v46 = stack_addr slot4
+    v47 = iconst.i64 12
+    v48 = ptr_add inbounds v46, v47
+    store.i32 v0, v48, align 4
+    v49 = iconst.i32 9
+    v50 = stack_addr slot4
+    v51 = iconst.i64 16
+    v52 = ptr_add inbounds v50, v51
+    store.i32 v49, v52, align 4
+    v53 = iconst.i32 1
+    v54 = stack_addr slot4
+    store.i32 v53, v54, align 4
+    v55 = stack_addr slot5
+    v56 = iconst.i8 0
+    v57 = iconst.i64 4
+    fill v55, v56, v57, align 1
+    v58 = stack_addr slot5
+    v59 = iconst.i64 4
+    v60 = ptr_add inbounds v58, v59
+    store.i32 v0, v60, align 4
+    v61 = stack_addr slot6
+    v62 = iconst.i8 0
+    v63 = iconst.i64 4
+    fill v61, v62, v63, align 1
+    v64 = iconst.i32 2
+    v65 = stack_addr slot6
+    v66 = iconst.i64 4
+    v67 = ptr_add inbounds v65, v66
+    store.i32 v64, v67, align 4
+    v68 = iconst.i32 3
+    v69 = stack_addr slot6
+    v70 = iconst.i64 8
+    v71 = ptr_add inbounds v69, v70
+    store.i32 v68, v71, align 4
+    v72 = stack_addr slot6
+    v73 = iconst.i64 8
+    v74 = ptr_add inbounds v72, v73
+    store.i32 v0, v74, align 4
+    v75 = stack_addr slot0
+    v76 = iconst.i32 1
+    v77 = iconst.i64 4
+    v78 = ptr_add inbounds v75, v77
+    v79 = load.i32 v78, align 4
+    v80 = stack_addr slot1
+    v81 = load.i32 v80, align 4
+    v82 = iadd.i32 nsw v79, v81
+    v83 = stack_addr slot2
+    v84 = iconst.i32 1
+    v85 = iconst.i64 8
+    v86 = ptr_add inbounds v83, v85
+    v87 = load.i32 v86, align 4
+    v88 = iadd.i32 nsw v82, v87
+    v89 = stack_addr slot3
+    v90 = iconst.i32 0
+    v91 = load.i8 v89, align 1
+    v92 = sext.i32 v91
+    v93 = iadd.i32 nsw v88, v92
+    v94 = iadd.i32 nsw v93, v0
+    v95 = stack_addr slot4
+    v96 = iconst.i32 4
+    v97 = iconst.i64 16
+    v98 = ptr_add inbounds v95, v97
+    v99 = load.i32 v98, align 4
+    v100 = iadd.i32 nsw v94, v99
+    v101 = stack_addr slot5
+    v102 = iconst.i64 4
+    v103 = ptr_add inbounds v101, v102
     v104 = load.i32 v103, align 4
-    v105 = iadd.i32 nsw v99, v104
-    v106 = stack_addr slot5
-    v107 = iconst.i64 4
+    v105 = iadd.i32 nsw v100, v104
+    v106 = stack_addr slot6
+    v107 = iconst.i64 8
     v108 = ptr_add inbounds v106, v107
     v109 = load.i32 v108, align 4
     v110 = iadd.i32 nsw v105, v109
-    v111 = stack_addr slot6
-    v112 = iconst.i64 8
-    v113 = ptr_add inbounds v111, v112
-    v114 = load.i32 v113, align 4
-    v115 = iadd.i32 nsw v110, v114
-    return v115
+    return v110
 }

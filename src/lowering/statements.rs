@@ -624,7 +624,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 }
                 continue;
             }
-            let local = self.local(binding, source)?;
+            _ = self.local(binding, source)?;
             let Some(initializer) = init_declarator.initializer else {
                 continue;
             };
@@ -642,16 +642,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     });
                 },
                 | _ => {
-                    if let Local::Slot(slot) = local {
-                        // C99 §6.8p3: even implicit zeroes follow all earlier
-                        // declarators' initializers when this declaration is
-                        // reached.
-                        tasks.push(Task::ZeroFill {
-                            slot,
-                            ty: data.ty,
-                            source,
-                        });
-                    }
                     tasks.push(Task::InitializeAggregate {
                         object,
                         ty: data.ty,

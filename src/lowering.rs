@@ -257,7 +257,8 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 offset,
                 size,
                 ty,
-            } => self.initialize_zero(object, offset, size, ty),
+                mask,
+            } => self.initialize_zero(object, offset, size, ty, mask),
             | Task::InitializeString {
                 object,
                 offset,
@@ -265,7 +266,6 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 literal,
                 ty,
             } => self.initialize_string(object, offset, size, literal, ty),
-            | Task::ZeroFill { slot, ty, source } => self.zero_fill(slot, ty, source),
             | Task::InitializeAggregate {
                 object,
                 ty,

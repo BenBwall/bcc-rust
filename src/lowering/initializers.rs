@@ -44,7 +44,6 @@ use crate::{
         InstData,
         InstFlags,
         Opcode,
-        StackSlot,
         Type,
     },
     translation_phases::{
@@ -84,6 +83,9 @@ pub(super) enum Leaf<'tu> {
         offset: u64,
         size:   u64,
         ty:     TypeId,
+        /// Exclusive end of a braced scope; `usize::MAX` for a union switch,
+        /// whose selection ends at the next switch or enclosing brace.
+        end:    usize,
     },
     /// A scalar subobject and the expression whose converted value it
     /// gets.
@@ -149,11 +151,21 @@ pub(super) fn leaves<'tu, 's>(
         return Ok(leaves);
     }
     let mut frames = ArenaVec::new_in(arena);
+    let size = types::layout(&sema.types, ty)
+        .map_err(|kind| at(kind, initializer.source_vectors))?
+        .size;
+    leaves.push(Leaf::Zero {
+        offset: 0,
+        size,
+        ty,
+        end: usize::MAX,
+    });
     frames.push(Frame {
         ty,
         offset: 0,
         next: 0,
         list: Some((list.elements.as_slice(), 0)),
+        zero: Some(0),
     });
     // The element whose designation has moved the frames, so that brace
     // elision retrying the element does not move them again.
@@ -165,6 +177,12 @@ pub(super) fn leaves<'tu, 's>(
             .expect("the outermost frame owns a list");
         let (elements, position) = frames[owner].list.expect("the owner has a list");
         let Some(element) = elements.get(position) else {
+            let length = leaves.len();
+            if let Some(zero) = frames[owner].zero
+                && let Leaf::Zero { end, .. } = &mut leaves[zero]
+            {
+                *end = length;
+            }
             frames.truncate(owner);
             continue;
         };
@@ -222,12 +240,14 @@ pub(super) fn leaves<'tu, 's>(
                         offset,
                         size,
                         ty: subobject.ty,
+                        end: usize::MAX,
                     });
                     frames.push(Frame {
                         ty: subobject.ty,
                         offset,
                         next: 0,
                         list: Some((inner.elements.as_slice(), 0)),
+                        zero: Some(leaves.len() - 1),
                     });
                 }
             },
@@ -257,6 +277,7 @@ pub(super) fn leaves<'tu, 's>(
                             offset,
                             next: 0,
                             list: None,
+                            zero: None,
                         });
                     },
                 },
@@ -299,6 +320,7 @@ struct Frame<'tu> {
     /// The braced list this frame takes elements from, and the position of
     /// its next element; `None` for a frame opened by brace elision.
     list:   Option<(&'tu [InitializerElement<'tu>], usize)>,
+    zero:   Option<usize>,
 }
 
 /// The subobject an element initializes.
@@ -527,6 +549,7 @@ impl<'tu> Walker<'_, 'tu, '_> {
             offset: frame.offset + subobject.offset,
             next:   0,
             list:   None,
+            zero:   None,
         });
         Ok(())
     }
@@ -567,6 +590,7 @@ impl<'tu> Walker<'_, 'tu, '_> {
                 offset: frame.offset,
                 size,
                 ty: frame.ty,
+                end: usize::MAX,
             });
         }
         Ok(())
@@ -599,8 +623,10 @@ impl<'tu> Walker<'_, 'tu, '_> {
 
 impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// Schedules the leaves of a braced or aggregate initializer: each
-    /// scalar is evaluated and stored, a string literal copied, and the
-    /// rest of the object was already zeroed (§6.7.8p21).
+    /// scalar is evaluated before its bytes are stored. Only omitted ranges
+    /// are zeroed, including resets of later complete subobject initializers.
+    /// C99: §6.2.4p5, p. 32; PDF p. 44; §6.7.8 paragraphs 19 and 21,
+    /// p. 127; PDF p. 139.
     pub(super) fn initialize_aggregate(
         &mut self,
         object: Object,
@@ -609,14 +635,117 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     ) -> Result<(), LoweringError> {
         let leaves = leaves(self.unit.sema, ty, initializer, self.scratch)?;
         let mut tasks = ArenaVec::with_capacity_in(2 * leaves.len(), self.scratch);
-        for leaf in leaves {
+        for (index, &leaf) in leaves.iter().enumerate() {
             match leaf {
-                | Leaf::Zero { offset, size, ty } => tasks.push(Task::InitializeZero {
-                    object,
+                | Leaf::Zero {
                     offset,
                     size,
                     ty,
-                }),
+                    end,
+                } => {
+                    let union_reset = end == usize::MAX;
+                    let end = if union_reset {
+                        leaves[..index]
+                            .iter()
+                            .rev()
+                            .find_map(|leaf| match *leaf {
+                                | Leaf::Zero { end, .. } if end != usize::MAX && end > index =>
+                                    Some(end),
+                                | _ => None,
+                            })
+                            .unwrap_or(leaves.len())
+                    } else {
+                        end
+                    };
+                    let mut covered = ArenaVec::new_in(self.scratch);
+                    let mut next = index + 1;
+                    while next < end {
+                        let leaf = leaves[next];
+                        let (start, stop, covered_ty) = match leaf {
+                            | Leaf::Zero {
+                                offset: at,
+                                size: length,
+                                end: scope,
+                                ty: covered_ty,
+                            } => {
+                                // A subsequent reset of this union ends this
+                                // selection's coverage; nested braces own their
+                                // own omissions and can be skipped as one
+                                // range.
+                                if union_reset
+                                    && scope == usize::MAX
+                                    && at <= offset
+                                    && at + length >= offset + size
+                                {
+                                    break;
+                                }
+                                if scope != usize::MAX {
+                                    next = scope - 1;
+                                }
+                                (8 * at, 8 * (at + length), covered_ty)
+                            },
+                            | Leaf::Scalar {
+                                offset,
+                                ty,
+                                bit_field,
+                                ..
+                            } =>
+                                if let Some(bits) = bit_field {
+                                    let start = 8 * offset + u64::from(bits.bit_offset);
+                                    (start, start + u64::from(bits.width), ty)
+                                } else {
+                                    let size = types::layout(&self.unit.sema.types, ty)
+                                        .map_err(|kind| at(kind, initializer.source_vectors))?
+                                        .size;
+                                    (8 * offset, 8 * (offset + size), ty)
+                                },
+                            | Leaf::String {
+                                offset, size, ty, ..
+                            } => (8 * offset, 8 * (offset + size), ty),
+                            | Leaf::Copy { offset, ty, .. } => {
+                                let size = types::layout(&self.unit.sema.types, ty)
+                                    .map_err(|kind| at(kind, initializer.source_vectors))?
+                                    .size;
+                                (8 * offset, 8 * (offset + size), ty)
+                            },
+                        };
+                        let start = start.max(8 * offset);
+                        let stop = stop.min(8 * (offset + size));
+                        if start < stop {
+                            covered.push((start, stop, covered_ty));
+                        }
+                        next += 1;
+                    }
+                    covered.sort_unstable_by_key(|&(start, stop, _)| (start, stop));
+                    let mut cursor = 8 * offset;
+                    let mut cursor_ty = ty;
+                    for (start, stop, covered_ty) in covered {
+                        if cursor < start {
+                            zero_gap(
+                                &mut tasks,
+                                object,
+                                ty,
+                                cursor,
+                                start,
+                                (cursor_ty, covered_ty),
+                            );
+                        }
+                        if stop > cursor {
+                            cursor = stop;
+                            cursor_ty = covered_ty;
+                        }
+                    }
+                    if cursor < 8 * (offset + size) {
+                        zero_gap(
+                            &mut tasks,
+                            object,
+                            ty,
+                            cursor,
+                            8 * (offset + size),
+                            (cursor_ty, ty),
+                        );
+                    }
+                },
                 | Leaf::Scalar {
                     offset,
                     ty,
@@ -672,6 +801,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         offset: u64,
         size: u64,
         ty: TypeId,
+        mask: u8,
     ) -> Result<(), LoweringError> {
         let base = match object {
             | Object::Slot(slot) => self.inst(InstData::StackAddr { slot }, Type::Ptr),
@@ -689,6 +819,33 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
         };
         let address = self.offset_address(base, offset);
+        if mask != u8::MAX {
+            let flags = self.initialization_flags(ty);
+            let old = self.inst(
+                InstData::Load {
+                    ty: Type::I8,
+                    flags,
+                    align: Align::BYTE,
+                    tag: None,
+                    addr: address,
+                },
+                Type::I8,
+            );
+            let old = self.convert(Opcode::Freeze, Type::I8, old);
+            let keep = self.iconst(Type::I8, i128::from(!mask));
+            let value = self.binary_inst(Opcode::And, InstFlags::empty(), old, keep);
+            _ = self.draft.push(
+                Op::Inst(InstData::Store {
+                    ty: Type::I8,
+                    flags,
+                    align: Align::BYTE,
+                    tag: None,
+                    args: [value, address],
+                }),
+                None,
+            );
+            return Ok(());
+        }
         let zero = self.iconst(Type::I8, 0);
         let size = self.iconst(Type::I64, i128::from(size));
         _ = self.draft.push(
@@ -806,31 +963,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         Ok(())
     }
 
-    /// Sets every byte of an automatic object of type `ty` to zero, as the
-    /// members an initializer leaves out are initialized (§6.7.8p21).
-    pub(super) fn zero_fill(
-        &mut self,
-        slot: StackSlot,
-        ty: TypeId,
-        source: SourceVectors,
-    ) -> Result<(), LoweringError> {
-        let layout = types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
-        let address = self.inst(InstData::StackAddr { slot }, Type::Ptr);
-        let zero = self.iconst(Type::I8, 0);
-        let size = self.iconst(Type::I64, i128::from(layout.size));
-        let flags = self.initialization_flags(ty);
-        _ = self.draft.push(
-            Op::Inst(InstData::MemoryRange {
-                opcode: Opcode::Fill,
-                flags,
-                align: types::align(layout),
-                args: [address, zero, size],
-            }),
-            None,
-        );
-        Ok(())
-    }
-
     /// Range writes retain qualifiers on the object or its array elements.
     /// C99: §6.7.3 paragraphs 6 and 8, p. 109; PDF p. 121.
     fn initialization_flags(&self, mut ty: TypeId) -> InstFlags {
@@ -860,10 +992,53 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             LoweringError::missing("a compound literal is larger than 4 GiB", source)
         })?;
         let slot = self.draft.create_slot(size, types::align(layout));
-        if self.repr(ty, source)? == Repr::Aggregate {
-            self.zero_fill(slot, ty, source)?;
-        }
         self.tasks.push(Task::PushSlot { slot, ty });
         self.initialize_aggregate(Object::Slot(slot), ty, initializer)
+    }
+}
+
+/// Emits a fill for the whole bytes of an omitted bit range, with at most
+/// two masked writes for bytes shared with explicit bit-field initializers.
+/// C99: §6.7.8 paragraphs 19 and 21, p. 127; PDF p. 139.
+fn zero_gap(
+    tasks: &mut ArenaVec<'_, Task<'_>>,
+    object: Object,
+    ty: TypeId,
+    mut start: u64,
+    end: u64,
+    boundaries: (TypeId, TypeId),
+) {
+    let shared_ty = ty.qualified(boundaries.0.qualifiers | boundaries.1.qualifiers);
+    if !start.is_multiple_of(8) {
+        let stop = end.min(start.next_multiple_of(8));
+        let mask = (u8::MAX >> (8 - (stop - start))) << (start % 8);
+        tasks.push(Task::InitializeZero {
+            object,
+            ty: shared_ty,
+            offset: start / 8,
+            size: 1,
+            mask,
+        });
+        start = stop;
+    }
+    let whole_end = end / 8 * 8;
+    if start < whole_end {
+        tasks.push(Task::InitializeZero {
+            object,
+            ty,
+            offset: start / 8,
+            size: (whole_end - start) / 8,
+            mask: u8::MAX,
+        });
+        start = whole_end;
+    }
+    if start < end {
+        tasks.push(Task::InitializeZero {
+            object,
+            ty: shared_ty,
+            offset: start / 8,
+            size: 1,
+            mask: u8::MAX >> (8 - (end - start)),
+        });
     }
 }
