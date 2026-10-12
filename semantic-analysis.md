@@ -1293,3 +1293,45 @@ outward jumps. Function entry resets this state for nested functions.
 The constraint comes from [GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html),
 extending C99 6.8.6.1p1 (printed p. 137, PDF p. 149) and 6.8.4.2p5
 (printed p. 134, PDF p. 146).
+
+### PR #41 round-2 corrections (2026-10-13)
+
+Statement-expression ancestry uses preorder subtree intervals in the semantic
+scratch arena. Entering an expression assigns its index; its restore
+continuation records the first index outside its subtree. Open intervals have
+an unbounded end, so case/default checks during traversal use the same query
+as resolved gotos. Testing whether the destination encloses the source now
+costs O(1), without recursion or a cache whose cost depends on repeated pairs.
+Function-local jump filtering and expression-source diagnostic labels retain
+the round-1 contract. The generated regression checks both repeated deepest
+sources and distinct sources at each nesting level, up to 32,768 expressions.
+A test-only work counter replaces noisy timing assertions; the original walk
+failed at depth 128 with 8,384 checks against a bound of 256.
+The interval query performs exactly one check per goto: 32,768 checks for
+each depth-32,768 pattern. Existing rejected-entry and legal-jump tests pass.
+
+The scalar builtin execution table now covers conversion-changing operands
+for all 18 fixed-signature overflow builtins: signed/unsigned add, subtract
+and multiply at int, long and long-long widths. Volatile inputs keep runtime
+conversion paths observable, while a literal uadd case checks truncation of
+0x100000000ULL to unsigned int before adding one. Long-width probes adapt to
+LP64 and LLP64. Each assertion checks the overflow flag and stored value.
+The contract is [GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).
+
+A mixed switch combines ordinary labels, an inclusive 10 ... 20 range and
+default, checking both endpoints, adjacent values, an ordinary case falling
+through into the range body, and another falling through into default.
+Both coverage programs share the existing pre/post-ABI interpreter stages,
+bcc optimization settings and four native LLVM arms, including the optional
+Linux native runner. Bundled Clang independently accepts and executes both
+programs at -O0 and -O2.
+The new cases also pass in all interpreter stages on Linux GNU and Windows
+GNU and all four Windows native arms; no overflow or switch implementation
+change was needed. Linux native execution was skipped because WSL is
+unavailable in this environment.
+
+Validation passed: all-target tests, feature-enabled allocation counting
+(26 tests), nightly format checking, all-target Clippy in debug, release and
+benchmarking-internals configurations with -D warnings, and git diff --check.
+The final all-target run includes the backward jump into a closed sibling
+expression regression. The plain CLI was rebuilt after feature-enabled checks.
