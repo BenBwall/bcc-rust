@@ -174,10 +174,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     self.tasks.push(Task::EvaluateRaw(left_expression));
                 },
                 | operator if compound_operator(operator).is_some() => {
+                    // Choose RHS-first evaluation, then evaluate and update
+                    // the lvalue once. In particular, do not retain its old
+                    // value across a call that can modify the object.
+                    // C99 §6.5.16.2p3 (p. 93; PDF p. 105) permits this order;
+                    // C11 §6.5.16.2p3 (pp. 103-104; PDF pp. 121-122) requires
+                    // the update to be one evaluation relative to such a call.
                     self.tasks.push(Task::Finish(expression));
-                    self.tasks.push(Task::Evaluate(right_expression));
                     self.tasks.push(Task::ReadForUpdate(left_expression));
                     self.tasks.push(Task::EvaluateRaw(left_expression));
+                    self.tasks.push(Task::Evaluate(right_expression));
                 },
                 | _ => {
                     self.tasks.push(Task::Finish(expression));
@@ -294,9 +300,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.push_item(result.operand, info.ty);
             },
             | E::Binary { operator, .. } if let Some(operation) = compound_operator(operator) => {
-                let right = self.pop();
                 let left = self.pop();
                 let place = self.pop();
+                let right = self.pop();
                 let operation_type = info.operation_type.ok_or_else(|| {
                     LoweringError::missing("a compound assignment has no type", source)
                 })?;
