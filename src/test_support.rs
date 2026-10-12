@@ -8,10 +8,13 @@ pub(crate) mod native;
 std::thread_local! {
     /// Counts expression visits in overflow operand effect analysis, scoped
     /// to the compiling test thread so parallel tests cannot affect the bound.
-#[expect(
-    clippy::missing_const_for_thread_local,
-    reason = "The initializer is already const; this toolchain diagnoses the std macro expansion."
-)]
+    #[cfg_attr(
+        windows,
+        expect(
+            clippy::missing_const_for_thread_local,
+            reason = "The const initializer still trips the lint in the Windows std expansion."
+        )
+    )]
     pub(crate) static OVERFLOW_EFFECT_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
