@@ -232,7 +232,8 @@ These are legacy/GCC call assumptions, not defined C99 calls
 (C99 §6.5.2.2p6,p9, pp. 71-72; PDF pp. 83-84). One source, `loop-3b.c`, also
 overflows signed multiplication before passing a scalar argument; its I0
 trap occurs there before I1 reaches its incompatible `exit` call. Host
-signature checks and `noundef` checks were retained.
+signature checks and `noundef` checks were retained. The implicit-prototype
+follow-up below resolves the implicit library types while preserving those checks.
 
 The fixes are:
 
@@ -353,19 +354,188 @@ classified rather than hidden by refusing more inputs or altering survey
 options. GCC-specific expected behavior, unavailable options and actual
 undefined operations likewise remain visible in the raw counts.
 
+### Implicit library prototypes: 2026-10-12
+
+This update starts at `bdc88ada` on `claude/torture-correctness` and compares
+against `execute-correctness-after`, the preceding correctness baseline above.
+It reruns the same 1,677 unchanged sources with eight workers, ten-second
+deadlines, GNU17 and the same four Windows GNU arms. Every source SHA-512
+matches. Both shared LLVM junctions were preserved.
+
+```powershell
+cargo build --release --bin bcc-rust
+python scripts/run_gcc_torture_execute.py --source C:\Users\benbw\Documents\GitRepo\bcc-rust\target\compiler-corpus\gcc-15.2.0 --output target/compiler-corpus/execute-implicit-after --jobs 8 --timeout 10
+```
+
+The survey returns 1 because adverse sources remain. Its 518.243
+seconds and the baseline's 488.608 seconds are uncontrolled elapsed times,
+not a performance comparison.
+
+| Class | I0 before | after | I1 before | after | A0 before | after | A1 before | after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| pass | 1064 | 1145 | 1068 | 1150 | 1200 | 1200 | 1190 | 1190 |
+| frontend-error | 139 | 139 | 139 | 139 | 139 | 139 | 139 | 139 |
+| lowering-unsupported | 307 | 307 | 307 | 307 | 307 | 307 | 307 | 307 |
+| abi-unsupported | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| compiler-crash | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| interpreter-trap | 153 | 72 | 148 | 66 | 0 | 0 | 0 | 0 |
+| wrong-result | 14 | 14 | 15 | 15 | 16 | 16 | 26 | 26 |
+| timeout | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| link-error | 0 | 0 | 0 | 0 | 15 | 15 | 15 | 15 |
+
+There are **168 -> 87 adverse sources** and **154 -> 73 disagreements**.
+All 163 changed arms, across 82 sources, change from interpreter trap to pass;
+no passing source/arm regresses. Native counts, frontend errors, unsupported
+lowering, wrong results and link errors are unchanged. There are zero compiler
+crashes and zero timeouts. All 81 sources previously classified as
+`GCC/legacy call assumption` now pass all four arms. `loop-3b.c` additionally
+passes I1; its I0 signed-overflow trap remains, so its existing undefined-test
+classification is retained.
+
+Semantic analysis now gives permitted implicit declarations the library
+prototype, with target `size_t`, const input pointees and variadic parameters,
+and emits a structured warning naming the function and complete type. Unknown
+names keep `int ()`; explicit declarations keep the user's type. Strict C99
+and later retain their undeclared-identifier error. The existing extension
+policy still diagnoses the removed implicit-declaration feature. No host
+signature or defined-value checks were relaxed, and builtin folding, attributes
+and unsupported-intrinsic handling were not expanded.
+
+Captured failing instructions name `exit` (81) and `strlen` (one). Bundled
+Clang's diagnostics across the 88 signature-evidence sources additionally
+identify implicit `abort` in 79 sources, `exit` in
+85 and `strlen` in 1. All are covered by the existing
+24 complete library-alias prototypes, so no additional prototype entries are
+needed. The ordinary-name lookup shares that table; a mechanical comparison
+confirms all 24 alias symbols, signature codes and variadic flags are unchanged.
+
+Bundled Clang `-std=gnu17 -Wno-error=implicit-function-declaration -S -emit-llvm`
+confirms real types for `exit`, `abort`, `memcpy`, `strcmp`, `printf` and `strlen`.
+The warning option is needed because this Clang promotes undeclared calls to
+errors by default in GNU17. An explicit `int exit()` control retains an
+`i32 @exit(...)` declaration and call despite Clang's incompatible-library
+warning. The live regression compares scalar LLVM types, fixed/variadic
+arguments and `noundef` at declarations and calls on Linux GNU, Windows GNU
+and Windows MSVC. Clang rewrites direct `memcpy` to an intrinsic; its retained
+C declaration and indirect call provide the corresponding C ABI comparison.
+Return `noundef` remains absent, and scalar arguments retain their contracts.
+
+The semantic regression checks retained types, repeated-call warning count,
+full diagnostic type spelling, C89/GNU17, extension policies and LP64/LLP64.
+The diagnostic golden renders six library warnings without truncating types.
+Headerless `int main(void) { exit(0); }` and memory/string reductions return
+0 through optimized/unoptimized interpretation before/after ABI lowering on
+Linux GNU and Windows GNU, and through native A0/A1/A2/A3 on this host.
+The existing lowering regression now expects `putchar(int)` while explicitly
+checking that the unknown `exit2` remains open. User-written incompatible and
+open declarations retain their existing behavior and mismatch checks.
+
+This is a Clang-compatible extension to C89's implicit declaration rule
+(ANSI C89 §3.3.2.2, p. 41; PDF p. 55), not permission for undeclared
+C99 calls. C99 §6.5.2.2p6,p9 (pp. 71-72; PDF pp. 83-84) governs call
+compatibility; §7.1.4p2 (p. 167; PDF p. 179) permits a suitable library
+declaration without its associated header.
+
+Every changed source is reclassified below. The following adverse-source
+table reflects the new 87-source result; the full transition records, corpus
+hashes, manifests and arm logs remain under `target/`.
+
+| Source | Before | After | Reclassification |
+| --- | --- | --- | --- |
+| `20000412-3.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `20000717-3.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `20020819-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `20031211-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920409-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920411-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920428-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920520-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920603-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920721-3.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920728-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920731-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920812-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920908-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `920909-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `921013-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `921110-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `921123-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `921124-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `921207-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `921218-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `921218-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930106-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930111-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930208-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930429-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930513-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930518-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930527-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930603-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930603-3.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930621-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930622-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930630-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930702-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930713-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930718-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930719-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930818-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930916-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930921-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930929-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `930930-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931009-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931012-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931017-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931018-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931031-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931102-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931102-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931208-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `931228-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `940115-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `940122-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `941101-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `941110-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `950322-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `950426-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `950512-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `950605-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `950621-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `960218-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `960402-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `960830-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `961112-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `990106-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `cmpdi-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `cmpsf-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `cmpsi-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `cmpsi-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `dbra-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `divmod-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `inst-check.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `int-compare.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `loop-2.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `loop-2d.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `loop-3.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `loop-3b.c` | T/T/P/P | T/P/P/P | Signed overflow remains in I0; I1 now passes |
+| `loop-3c.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `mod-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `pr55875.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+| `tstdi-1.c` | T/T/P/P | P/P/P/P | Resolved: implicit library prototype |
+
 The table below covers every remaining source with a wrong result, link
 error, interpreter trap, or arm disagreement. P/T/W/L mean
-pass/trap/wrong-result/link-error. There are 168 sources; the two fixed
-sources are described above. Categories distinguish valid C99 lowering gaps,
+pass/trap/wrong-result/link-error. There are now 87 sources after the
+implicit-prototype follow-up; its 81 resolved sources are listed above. Categories distinguish valid C99 lowering gaps,
 interpreter capability gaps, GNU extensions and test/runtime assumptions.
 The full before/after per-source classifications are also in
-`target/compiler-corpus/execute-correctness-after/triage.json`.
+`target/compiler-corpus/execute-implicit-after/triage.json`.
 
 | Source | I0/I1/A0/A1 | Classification | Cause |
 | --- | --- | --- | --- |
 | `20000227-1.c` | W/W/W/W | GCC/source assumption | Expects a Latin-1 source byte to become one execution byte; bcc uses UTF-8. |
-| `20000412-3.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `20000717-3.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `20001101.c` | T/T/P/P | Test: undefined C operation | Old-style pointer parameter receives integer zero without prototype conversion (C99 6.5.2.2p6). |
 | `20001121-1.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
 | `20010904-1.c` | W/W/W/W | GNU feature | Typedef-level aligned attribute is not modeled; requires aligned type layout through arrays and containing records. |
@@ -375,13 +545,11 @@ The full before/after per-source classifications are also in
 | `20020413-1.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
 | `20020508-2.c` | T/T/P/W | Test: undefined C operation | Signed left shift of a negative value or an unrepresentable positive result (C99 6.5.7p4). |
 | `20020508-3.c` | T/T/P/W | Test: undefined C operation | Signed left shift of a negative value or an unrepresentable positive result (C99 6.5.7p4). |
-| `20020819-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `20021127-1.c` | W/W/W/W | GCC/library assumption | Expects builtin llabs folding to override its own aborting llabs definition; bcc calls the provided body. |
 | `20030316-1.c` | T/T/P/P | Test: undefined C operation | Addition overflows 32-bit Windows long; would not overflow an LP64 long (C99 6.5p5). |
 | `20030404-1.c` | T/P/P/P | Test: indeterminate input | Reads an uninitialized automatic value; optimization can eliminate the poison use (C99 6.7.8p10). |
 | `20030914-1.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
 | `20031003-1.c` | T/T/W/W | Test: undefined C operation | Converts 2147483648.0 to 32-bit int, outside its range (C99 6.3.1.4p1). |
-| `20031211-2.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `20040208-1.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
 | `20040409-1w.c` | T/T/P/W | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
 | `20040409-2w.c` | T/T/P/W | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
@@ -391,87 +559,25 @@ The full before/after per-source classifications are also in
 | `20090527-1.c` | T/T/P/P | Test: indeterminate input | Reads an uninitialized automatic value; optimization can eliminate the poison use (C99 6.7.8p10). |
 | `20230630-2.c` | W/W/W/W | GNU feature | scalar_storage_order attribute needs reversed scalar/bit-field representation and access lowering. |
 | `20230630-4.c` | W/W/W/W | GNU feature | scalar_storage_order attribute needs reversed scalar/bit-field representation and access lowering. |
-| `920409-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `920411-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `920428-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `920501-1.c` | T/T/P/P | GCC/untyped call assumption | Arguments do not match the old-style definition; some explicitly require untyped_assembly (C99 6.5.2.2p6). |
-| `920520-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `920603-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `920612-1.c` | T/T/P/P | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
 | `920711-1.c` | T/T/P/P | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
-| `920721-3.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `920728-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `920730-1.c` | T/T/P/P | Test: undefined C operation | INT_MAX + 2 overflows before the cast to unsigned (C99 6.5p5). |
-| `920731-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `920812-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `920908-2.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `920909-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `920922-1.c` | T/T/P/P | Test: undefined C operation | Forms a pointer beyond the object and its one-past position (C99 6.5.6p8). |
-| `921013-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `921110-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `921123-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `921124-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `921202-1.c` | T/T/P/P | GCC/untyped call assumption | Arguments do not match the old-style definition; some explicitly require untyped_assembly (C99 6.5.2.2p6). |
-| `921207-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `921208-2.c` | T/T/P/P | GCC/untyped call assumption | Arguments do not match the old-style definition; some explicitly require untyped_assembly (C99 6.5.2.2p6). |
-| `921218-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `921218-2.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930106-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930111-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930208-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930429-2.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930513-2.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930518-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `930526-1.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
-| `930527-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `930529-1.c` | T/T/P/P | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
-| `930603-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930603-3.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930621-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930622-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `930622-2.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
-| `930630-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930702-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930713-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930718-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930719-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930818-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930916-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930921-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930929-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `930930-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `931009-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `931012-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `931017-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `931018-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `931031-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `931102-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `931102-2.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `931208-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `931228-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `940115-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `940122-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `941101-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `941110-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `941202-1.c` | T/T/L/L | GNU runtime / missing symbol | Requires compiler stack-allocation lowering; MinGW has no external alloca symbol. Dynamic allocation and lifetime support are not implemented. |
-| `950322-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `950426-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning strlen declaration conflicts with host i64 size_t result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `950512-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `950605-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `950621-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `950704-1.c` | T/T/P/W | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
 | `960215-1.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
-| `960218-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `960402-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `960405-1.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
 | `960513-1.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
-| `960830-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `961112-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `961223-1.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
 | `970217-1.c` | W/W/W/W | Lowering: large feature | Valid C99 parameter VLA bound side effects are not evaluated on function entry (6.9.1p10); needs retained runtime bounds and entry evaluation. |
 | `980526-2.c` | T/T/P/P | Test: undefined C operation | Signed major << 22 produces an unrepresentable int (C99 6.5.7p4). |
 | `980608-1.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
-| `990106-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `991014-1.c` | T/T/P/P | Test: pointer assumption | GNU null-based member-offset idiom; runtime inbounds arithmetic on null traps. Use __builtin_offsetof for supported C99 code. |
 | `alias-2.c` | T/T/L/L | GNU feature / missing symbol | GNU alias attributes need an IR/backend alias model; native links lack the alias. Interpreter correctly rejects the unresolved external object. |
 | `alias-3.c` | T/T/L/L | GNU feature / missing symbol | GNU alias attributes need an IR/backend alias model; native links lack the alias. Interpreter correctly rejects the unresolved external object. |
@@ -483,24 +589,11 @@ The full before/after per-source classifications are also in
 | `bf-sign-2.c` | W/W/W/W | GNU feature | Requires promotions of implementation-defined long/long-long bit-fields by declared bit width. |
 | `bitfld-3.c` | W/W/W/W | GNU feature | Requires GNU arithmetic at extended bit-field precision, including 33/40/41-bit operations. |
 | `bswap-2.c` | T/T/P/P | Test: undefined C operation | Integer promotions make the sign-bit left shift signed int; its result is unrepresentable in C99 (6.5.7p4). |
-| `cmpdi-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `cmpsf-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `cmpsi-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `cmpsi-2.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `conversion.c` | T/T/P/P | Interpreter: large feature | Needs full f80/f128 values, arithmetic and conversions; native arms pass. |
-| `dbra-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `divmod-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `eeprof-1.c` | W/W/W/W | GCC/runtime assumption | Requires unapplied -finstrument-functions and the associated entry/exit instrumentation. |
-| `inst-check.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `int-compare.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `loop-2.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `loop-2c.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
-| `loop-2d.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `loop-2e.c` | T/T/P/P | Test: pointer assumption | Arithmetic/member addressing on a forged integer pointer with no backing object; outside the interpreter object model (C99 6.5.6p8). |
-| `loop-3.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `loop-3b.c` | T/T/P/P | Test: signed overflow | i * 4 overflows signed int before a scalar noundef call argument; 6.5p5. I1 later reaches its implicit-int exit declaration. |
-| `loop-3c.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
-| `mod-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
+| `loop-3b.c` | T/P/P/P | Test: signed overflow | i * 4 overflows signed int before a scalar noundef call argument; C99 6.5p5. I1 now passes with the corrected exit prototype. |
 | `pr101188.c` | T/T/P/P | Test: indeterminate input | Passes uninitialized s.a to an indirect scalar noundef parameter; native Clang also emits noundef for it. Existing documented Clang-compatible indeterminate-argument policy applies. |
 | `pr103255.c` | T/T/P/P | Test: pointer assumption | Arithmetic/member addressing on a forged integer pointer with no backing object; outside the interpreter object model (C99 6.5.6p8). |
 | `pr22493-1.c` | T/T/P/W | Test: undefined C operation | Requires dg-options -fwrapv, which this survey records without applying; signed overflow/negation is undefined under the chosen mode. |
@@ -513,7 +606,6 @@ The full before/after per-source classifications are also in
 | `pr36339.c` | P/P/W/W | Target assumption | Truncates a 64-bit stack pointer through 32-bit unsigned long on LLP64; GCC and Clang fault at both O0/O2 on this host. |
 | `pr40386.c` | T/T/P/W | Test: undefined C operation | Signed left shift of a negative value or an unrepresentable positive result (C99 6.5.7p4). |
 | `pr43629.c` | T/W/P/W | Test: indeterminate input | Reads an uninitialized automatic value; optimization can eliminate the poison use (C99 6.7.8p10). |
-| `pr55875.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `pr56051.c` | T/T/P/P | Test: undefined C operation | Integer promotions make the sign-bit left shift signed int; its result is unrepresentable in C99 (6.5.7p4). |
 | `pr57124.c` | T/T/P/P | Test: undefined C operation | Requires -fno-strict-overflow; promoted unsigned-short multiplication overflows signed int. |
 | `pr67037.c` | T/T/P/P | GCC/untyped call assumption | Arguments do not match the old-style definition; some explicitly require untyped_assembly (C99 6.5.2.2p6). |
@@ -527,13 +619,13 @@ The full before/after per-source classifications are also in
 | `return-addr.c` | T/T/P/P | Test: undefined C operation | Forms before-object pointers and compares unrelated objects; source comments acknowledge undefined behavior. |
 | `shiftdi-2.c` | T/T/P/P | Test: undefined C operation | Signed left shift of a negative value or an unrepresentable positive result (C99 6.5.7p4). |
 | `string-opt-18.c` | T/T/P/P | Test: indeterminate input | Overlapping memcpy/strcpy on an uninitialized buffer (C99 7.21.2.1p2). |
-| `tstdi-1.c` | T/T/P/P | GCC/legacy call assumption | Implicit int-returning exit declaration conflicts with host void result (6.5.2.2p9); exact failing call retained in signature evidence. |
 | `unroll-1.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
 | `va-arg-7.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
 | `va-arg-8.c` | T/T/L/L | GCC/options assumption | Requires dg-options -fgnu89-inline; under GNU17 this inline definition does not provide the external body. |
 
 
-Evidence is retained under `target/`: both survey manifests, summaries,
+Evidence is retained under `target/`: the correctness and implicit-prototype
+survey manifests, summaries,
 source hashes and per-arm logs; `compiler-corpus/execute-correctness-reference/results.json`
 contains exact reference compiler commands and exit statuses;
 `torture-signature-evidence.json` names every failing signature instruction
@@ -541,12 +633,12 @@ and declaration, with emitted IR beside its baseline log. The scratch
 reference/triage drivers never write the corpus. These files are local
 evidence artifacts, not new source inputs or waived tests.
 
-All eight requested gates passed, with source changes complete before the
-final checks:
+All eight requested gates passed for the implicit-prototype update, with
+compiler changes complete before the final checks:
 
 | Check | Result |
 | --- | --- |
-| `cargo test --all-targets` | Passed: 1,720 tests across 20 targets; six existing ignored tests. |
+| `cargo test --all-targets` | Passed: 1,724 tests across 20 targets; six existing ignored tests. |
 | `cargo test --features benchmarking-internals --test allocation_count` | Passed: 25 tests. |
 | `cargo +nightly fmt --check` | Passed, after running `cargo +nightly fmt`. |
 | `cargo clippy --all-targets -- -D warnings` | Passed. |
@@ -557,11 +649,14 @@ final checks:
 
 The full test run finished before the feature allocation build, and all
 subsequent Cargo checks ran sequentially. Logs and exact command exit statuses
-are `target/correctness-checks-all.json`, `target/correctness-checks-rest.json`
-and `target/correctness-check-*.log`. The reduced failures and intended golden
-instruction-order mismatches were observed during development, then resolved;
-no behavioral assertions, survey classifications or ignored-test settings were
-weakened. The whole corpus remains an exploratory run with recorded unsupported
+for this update are `target/implicit-checks.json` and
+`target/implicit-check-*.log`; the original correctness logs remain in
+`target/correctness-checks-all.json`, `target/correctness-checks-rest.json` and
+`target/correctness-check-*.log`. During development the intended prototype
+change required updating the existing implicit `putchar` assertion, while
+adding an explicit check for the unknown-name open signature. The warning
+golden now renders the complete library type. No behavioral assertions,
+survey classifications or ignored-test settings were weakened. The whole corpus remains an exploratory run with recorded unsupported
 features, not a passing DejaGnu profile or completed Stage 6 acceptance criterion.
 
 Finally, `cargo build --bin bcc-rust` passed and restored the ordinary debug
