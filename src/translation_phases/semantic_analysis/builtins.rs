@@ -25,6 +25,7 @@
 //! C99: §6.5.2.2, pp. 71-72; PDF pp. 83-84 (extended function calls).
 
 // Header intrinsics and recognition
+mod common;
 mod intrinsics;
 mod library;
 mod names;
@@ -36,14 +37,18 @@ pub(super) mod atomics;
 mod x86_builtin_table;
 mod x86_builtins;
 
+pub(crate) use common::{
+    BitOperation,
+    CommonBuiltin,
+    OverflowOperation,
+    common_builtin,
+    overflow_type_operand_is_pure,
+};
 pub(crate) use library::library_builtin_name;
 pub(crate) use modeled as implemented_builtin;
 pub(crate) use names::named_builtin;
 
-use super::{
-    expressions,
-    integer::Integer,
-};
+use super::expressions;
 use crate::{
     translation_phases::{
         parsing::syntax::{

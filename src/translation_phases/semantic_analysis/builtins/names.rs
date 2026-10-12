@@ -15,7 +15,8 @@ use crate::translation_phases::semantic_analysis::{
 /// Builtins parsed as ordinary calls, queried by the preprocessor.
 /// GCC/Clang extensions to C99 §6.5.2.2, pp. 71-72; PDF pp. 83-84.
 pub(crate) fn named_builtin(name: &str) -> bool {
-    super::library::library_builtin_name(name).is_some()
+    (name.starts_with("__builtin_") && super::common_builtin(name).is_some())
+        || super::library::library_builtin_name(name).is_some()
         || type_generic::named_builtin(name)
         || vectors::named_builtin(name)
         || atomic_builtin(name)
