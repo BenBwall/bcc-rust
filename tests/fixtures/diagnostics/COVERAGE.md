@@ -824,3 +824,12 @@ unknown-name `int ()` fallback and strict C99 rejection. The pipeline regression
 run headerless termination and memory/string calls before/after ABI lowering,
 with/without bcc optimization, and through all four native arms. A live Clang
 comparison checks LLVM scalar types and `noundef` at declarations and call sites.
+
+### Statement-expression entry
+
+`semantic-statement-expression-goto.c`, `semantic-statement-expression-switch.c`
+and `semantic-statement-expression-prior-call.c` pin semantic diagnostics for
+entering a GNU statement expression. Primary labels identify the goto or switch
+label; secondary labels identify the expression. These prevent the previous
+lowering/SSA internal errors from becoming user diagnostics. Semantic and
+pipeline tests also preserve legal internal jumps and exits.

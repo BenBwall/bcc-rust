@@ -1,0 +1,11 @@
+error: switch dispatch jumps into a statement expression
+ --> semantic-statement-expression-switch.c:1:35
+  |
+1 | int main(void){switch(0){return ({case 0:;0;});}}
+  |                                 --^^^^^^^^---- jumps into a statement expression
+  |                                 |
+  |                                 statement expression begins here
+  |
+  = note: GCC Statement Exprs: an outer switch cannot dispatch to a case or default label inside a statement expression
+
+1 error generated.

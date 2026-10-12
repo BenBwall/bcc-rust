@@ -1,0 +1,11 @@
+error: goto jumps into a statement expression: `a`
+ --> semantic-statement-expression-prior-call.c:1:44
+  |
+1 | int f(void){return 7;} int main(void){goto a;return f()+({a:;0;});}
+  |                                            ^            --------- statement expression begins here
+  |                                            |
+  |                                            jumps into a statement expression
+  |
+  = note: GCC Statement Exprs: jumping into a statement expression is not permitted; jumps within or out of one are permitted
+
+1 error generated.
