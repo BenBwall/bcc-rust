@@ -684,7 +684,9 @@ mod tests {
                 .arg(&fifo),
             std::time::Duration::from_secs(60),
         );
-        if result.is_err() {
+        // A failed compile may never open the FIFO, leaving the reader
+        // blocked in its own open; only a successful write ends it.
+        if !result.as_ref().is_ok_and(|output| output.status.success()) {
             drop(reader.kill());
         }
         let reader_status = reader.wait().unwrap();
