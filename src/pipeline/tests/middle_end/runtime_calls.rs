@@ -177,3 +177,54 @@ fn torture_runtime_calls_match_native_arms() {
         }
     }
 }
+
+const SOURCE: &str = r#"
+int sprintf(char *, const char *, ...);
+int strcmp(const char *, const char *);
+int main(void) {
+    char buf[64];
+    if (sprintf(buf, "%#hho/%#hhx/%#hhX", 0, 0, 0) != 5
+        || strcmp(buf, "0/0/0")) return 1;
+    if (sprintf(buf, "%#hho/%#hhx/%#hhX", 127, 127, 127) != 14
+        || strcmp(buf, "0177/0x7f/0X7F")) return 2;
+    if (sprintf(buf, "[%#08x][%#06o][%-#6X]", 1, 1, 1) != 26
+        || strcmp(buf, "[0x000001][000001][0X1   ]")) return 3;
+    if (sprintf(buf, "%#hho/%#hhx", 256, 257) != 5
+        || strcmp(buf, "0/0x1")) return 4;
+    return 0;
+}
+"#;
+
+#[test]
+fn alternate_integer_formats_match_in_all_stages() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        for (optimize, profile) in STAGES {
+            let actual = with_module(SOURCE, target, optimize, profile, interpret);
+            assert_eq!(actual.0, 0, "{target:?} {optimize} {profile:?}");
+            assert!(actual.1.is_empty(), "sprintf must not write stdout");
+        }
+    }
+}
+
+#[test]
+fn alternate_integer_formats_match_native_arms() {
+    let Some(target) = host() else { return };
+    let directory = TempDir::new("alternate-integer-formats");
+    for arm in ARMS {
+        let exe = directory.join(format!("{}.exe", arm.name));
+        with_module(SOURCE, target, arm.bcc, Profile::PostAbi, |module, _| {
+            compile_module(
+                module,
+                &exe,
+                LlvmOptions {
+                    opt: Some(arm.opt),
+                    disable_llvm_passes: arm.disable_llvm_passes,
+                    target,
+                    kind: OutputKind::Executable,
+                },
+            )
+            .expect("compile the formatted output regression");
+        });
+        assert_eq!(run_native(&exe).0, 0, "{}", arm.name);
+    }
+}
