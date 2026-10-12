@@ -8,6 +8,89 @@ use crate::backend::interpreter::{
 };
 
 #[test]
+fn nested_overlapping_unions_lower_with_bounded_arena_use() {
+    // The modest case fails the resource budget safely before a regressed
+    // implementation can attempt the full review reproducer's 2^35 leaves.
+    for depth in [12, 34, 128] {
+        assert_nested_union_resources(depth);
+    }
+}
+
+fn assert_nested_union_resources(depth: usize) {
+    use std::fmt::Write as _;
+
+    let mut source =
+        String::from("#define U(n,p) union U##n { union U##p a, b; };\nunion U0 { int a, b; };\n");
+    for level in 1..=depth {
+        writeln!(source, "U({level},{})", level - 1).unwrap();
+    }
+    writeln!(
+        source,
+        "typedef char size_check[sizeof(union U{depth}) == 4 ? 1 : -1];\nint f(union U{depth} x) \
+         {{ return 0; }}\nint main(void) {{ union U{depth} x = {{ 7 }}; return f(x); }}",
+    )
+    .unwrap();
+    let tu = Bump::new();
+    let mut context = Context::new(&tu);
+    let syntax = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        tu.alloc_str(&source),
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &syntax);
+    assert!(sema.lowerable(&context));
+    let arena = Bump::new();
+    let mut scratch = Bump::new();
+    let start = std::time::Instant::now();
+    let module = lower_translation_unit(
+        &context,
+        &syntax,
+        &sema,
+        Target::LinuxGnu,
+        &arena,
+        &mut scratch,
+    )
+    .unwrap();
+    eprintln!(
+        "nested unions ({depth} levels): {:?}, {} IR bytes, {} scratch bytes",
+        start.elapsed(),
+        arena.high_water(),
+        scratch.high_water()
+    );
+    assert!(arena.high_water() < 64 * 1024);
+    assert!(scratch.high_water() < 64 * 1024);
+    assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    assert!(
+        module
+            .to_string()
+            .contains("aggregate(size 4, align 4, [0: i32])")
+    );
+    let execution = Bump::new();
+    let mut host = crate::backend::interpreter::DefaultHost::new_in(&execution);
+    let outcome = crate::backend::interpreter::run(&module, "main", &[], &mut host).unwrap();
+    assert_eq!(
+        outcome.termination,
+        Termination::Returned(Some(RuntimeValue::Int(0)))
+    );
+}
+
+#[test]
+fn aggregate_flattening_preserves_overlapping_scalar_types_and_offsets() {
+    let module = lowered(
+        "union U { float f; int i; }; union V { union U a, b; };\nstruct S { union V items[2]; \
+         };\nint f(struct S x) { return x.items[0].a.i + x.items[1].b.i; }\nint main(void) { \
+         struct S x = { .items[0].a.i = 7, .items[1].b.i = 11 };\nreturn f(x); }",
+    );
+    assert!(module.contains("aggregate(size 8, align 4, [0: f32, 0: i32, 4: f32, 4: i32])"));
+    let outcome = run_text(&module, "main").result.unwrap();
+    assert_eq!(
+        outcome.termination,
+        Termination::Returned(Some(RuntimeValue::Int(18)))
+    );
+}
+
+#[test]
 fn twenty_thousand_union_switches_lower_quickly_with_bounded_arena_use() {
     assert_array_union_switch_resources(false);
 }

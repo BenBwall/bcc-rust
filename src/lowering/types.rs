@@ -31,6 +31,7 @@ use crate::{
         },
     },
     util::bump::{
+        ArenaSet,
         ArenaVec,
         Bump,
     },
@@ -219,6 +220,10 @@ pub(super) fn is_volatile(ty: TypeId) -> bool {
 /// nesting, which is how Clang applies the System V rule for unaligned
 /// fields. A named bit-field contributes one `i8` scalar for each byte its
 /// bits reach.
+/// Equivalent (type, offset) visits are expanded only once: nested unions
+/// may reach the same subobject through exponentially many member paths.
+/// Different types at the same offset and the same type at different offsets
+/// remain separate because they can contribute different ABI classes.
 /// C99: §6.2.5 paragraph 20, pp. 35-36; PDF pp. 47-48 (structures, unions
 /// and arrays); §6.7.2.1 paragraphs 12-16, pp. 102-103; PDF pp. 114-115
 /// (member offsets, unions and flexible array members).
@@ -237,8 +242,16 @@ pub(super) fn aggregate_layout<'s>(
         // Pending (type, offset) pairs, pushed in reverse so that they pop
         // in member order and the scalars come out by offset.
         let mut work = ArenaVec::new_in(scratch);
+        let mut visited = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, scratch);
         work.push((ty, 0_u64));
         while let Some((ty, offset)) = work.pop() {
+            // C99 §6.7.2.1p14: union members share their object's address.
+            // Check before scheduling children so repeated member paths do
+            // not multiply the remaining traversal. Qualifiers do not affect
+            // layout or ABI classes.
+            if !visited.insert((ty.unqualified(), offset)) {
+                continue;
+            }
             if types
                 .layout(ty)
                 .is_some_and(|layout| layout.align > 0 && offset % layout.align != 0)

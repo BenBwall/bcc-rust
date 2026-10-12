@@ -40,6 +40,61 @@ mod tests {
                        i;\n  return s;\n}\n";
 
     #[test]
+    fn nested_overlapping_unions_finish_and_match_the_simple_union_abi() {
+        let source = include_str!("fixtures/lowering/nested_overlapping_unions.c");
+        for target in [
+            "--target=x86_64-unknown-linux-gnu",
+            "--target=x86_64-w64-windows-gnu",
+            "--target=x86_64-pc-windows-msvc",
+        ] {
+            for opt in ["--opt=none", "--opt=bcc"] {
+                for mode in ["--emit=ir", "--emit=ir-abi", "--emit=llvm", "--interpret"] {
+                    let output = run_native_with_timeout(
+                        Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                            .args([mode, target, opt, "--input", source])
+                            .env("NO_COLOR", "1")
+                            .env_remove("CLICOLOR_FORCE"),
+                        std::time::Duration::from_secs(10),
+                    )
+                    .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{mode} {target} {opt}: {}",
+                        text(&output.stderr)
+                    );
+                    assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
+                    let ir = text(&output.stdout);
+                    match mode {
+                        | "--emit=ir" =>
+                            for name in ["f", "simple"] {
+                                assert!(
+                                    ir.contains(&format!(
+                                        "function @{name}(ptr aggregate(size 4, align 4, [0: \
+                                         i32])) -> i32"
+                                    )),
+                                    "{ir}"
+                                );
+                            },
+                        | "--emit=ir-abi" =>
+                            for name in ["f", "simple"] {
+                                assert!(
+                                    ir.contains(&format!("function @{name}(i32) -> i32")),
+                                    "{ir}"
+                                );
+                            },
+                        | "--emit=llvm" =>
+                            for name in ["f", "simple"] {
+                                assert!(ir.contains(&format!("define i32 @{name}(i32 %")), "{ir}");
+                            },
+                        | "--interpret" => assert!(ir.is_empty(), "{ir}"),
+                        | _ => unreachable!("all tested modes are covered"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn unresolved_external_objects_trap_on_access() {
         for source in [
             "extern int shared; int main(void){ return shared != 7; }",
