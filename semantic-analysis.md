@@ -1255,3 +1255,41 @@ semantic tests exercise signatures, rejected arities and types, ICE overflow
 predicates, and denied-extension diagnostics. See the GCC intrinsic contract
 section in [middle-end.md](middle-end.md) for conservative decisions and IR
 semantics. Unmodeled names still retain opaque types and bounded refusal.
+
+### PR #41 round-1 corrections (2026-10-13)
+
+Intrinsic typing now uses the resolved binding's implementation-origin flag.
+Every user object, function, typedef or enumerator declaration suppresses named
+intrinsic dispatch; implementation-created intrinsic bindings remain distinct
+from C89 implicit ordinary function declarations. This also covers vector,
+atomic, binary128 and x86 immediate checks. Expression-only varargs spellings
+(`__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`) are ordinary
+identifier calls and share the header operand checker. `__builtin_va_arg`
+retains its reserved type-operand grammar, matching the bundled Clang probe.
+C99 6.2.1p4 (printed pp. 29-30, PDF pp. 41-42) governs shadowing.
+
+Unbound plain `alloca` is recognized only in GNU modes. Every user declaration
+of that name, including a compatible prototype, definition or assembler label,
+uses the ordinary-call path. The reserved `__builtin_alloca` remains available
+in strict modes when unshadowed. Hosted mode alone enables implicit ordinary
+library prototypes; explicit `__builtin_` library aliases keep their GCC
+contract in freestanding mode too. C99 5.1.2.1p1 (printed p. 11, PDF p. 23)
+and [GCC Library Builtins](https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html)
+bound these environment and naming choices.
+
+Mode-selected GNU89 extern-inline bodies use the existing target emission rule:
+MSVC retains them; Windows GNU and Linux omit them. Explicit `gnu_inline`
+still omits them on all three targets, as independently checked against Clang
+for GNU89 and C99 with `-fgnu89-inline`. The MSVC body uses the same IR emission
+contract already used for that target's C99 inline functions. See
+[GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html) and C99 6.7.4p6
+(printed pp. 112-113, PDF pp. 124-125).
+
+Labels, gotos and switch contexts retain statement-expression ancestry.
+Semantic analysis rejects entering an expression from outside or from a
+sibling expression, with a primary jump/case diagnostic and a secondary label
+at the expression. Internal and outward jumps remain legal, including nested
+outward jumps. Function entry resets this state for nested functions.
+The constraint comes from [GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html),
+extending C99 6.8.6.1p1 (printed p. 137, PDF p. 149) and 6.8.4.2p5
+(printed p. 134, PDF p. 146).

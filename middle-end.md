@@ -963,3 +963,28 @@ Contracts: [GCC bit operations](https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation
 C99 §6.5.2.2p2,7, pp. 71-72; PDF pp. 83-84 governs fixed call conversions;
 §6.5.15p4, p. 90; PDF p. 102 governs conditional sequencing; §7.15.1,
 pp. 249-251; PDF pp. 261-263 governs the header varargs contracts.
+
+### PR #41 round-1 lowering corrections (2026-10-13)
+
+Builtin dispatch and library-symbol aliasing consume semantic binding origin;
+user calls retain their declared types and assembler labels. All user `alloca`
+declarations use ordinary calls, including compatible unlabeled definitions.
+Clang substitutes compatible unlabeled definitions even in strict mode by
+default, so that particular native reference uses `-fno-builtin-alloca` to test
+the requested ordinary-call contract. Incompatible definitions and assembler
+labels compare against Clang's default behavior. Paired intrinsic/pointer
+shadow programs cover all scalar, overflow, hint, expression-only varargs and
+supported library name families through semantics, interpretation and native
+O0/O2 comparisons.
+
+Overflow predicate type operands now have cached effect summaries keyed by
+expression identity and whether its value is read. An explicit postorder
+stack computes child summaries once, and a function-local arena-backed cache
+reuses them during short-circuit scheduling. Volatile reads and address-only
+operands retain their previous distinctions. A 2,048-deep chain regression
+counts expression visits through the public pipeline: the pre-fix code visited
+6,298,625 expressions; the fixed code visits 20,479, within the regression's
+32,768-visit bound. Existing
+short-circuit, volatile, call and increment tests preserve effect behavior.
+The contract remains [GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html)
+and C99 6.7.3p6 (printed p. 109, PDF p. 121).

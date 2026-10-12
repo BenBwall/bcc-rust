@@ -1105,3 +1105,17 @@ ordinary local/internal names. GNU syntax for case ranges, omitted conditional
 operands and statement expressions continues to use its existing parser gates;
 C2y case ranges retain their ISO gate. The lowering/backend contracts and
 conservative query choices are documented in [middle-end.md](middle-end.md).
+
+### PR #41 round-1 mode corrections (2026-10-13)
+
+Plain `alloca` requires a GNU mode and an unshadowed implementation binding;
+user declarations and definitions remain ordinary calls in every mode.
+`__builtin_alloca` is available in strict modes when unshadowed. Freestanding
+compilation keeps C89 implicit `int ()` for ordinary library spellings, while
+explicit reserved library aliases retain their prototypes. The expression-only
+varargs spellings are ordinary identifiers with binding-aware intrinsic
+checking; `__builtin_va_arg` keeps its reserved type-operand syntax. GNU89
+extern-inline mode follows the MSVC body's existing target rule unless an
+explicit `gnu_inline` attribute requests GNU omission. Semantic diagnostics
+now enforce the GCC prohibition on entering statement expressions while
+preserving internal and outward jumps.
