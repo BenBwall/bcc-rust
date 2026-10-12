@@ -20,6 +20,7 @@ mod asm_labels;
 mod braced_strings;
 mod declaration_initializers;
 mod runtime_calls;
+mod scalar_builtins;
 mod union_initializers;
 
 use crate::{
@@ -73,9 +74,26 @@ fn with_module<R>(
     profile: Profile,
     then: impl FnOnce(&Module<'_>, Target) -> R,
 ) -> R {
+    with_configured_module(
+        source,
+        target,
+        CompilerConfiguration::default().with_target(target),
+        optimize,
+        profile,
+        then,
+    )
+}
+
+fn with_configured_module<R>(
+    source: &str,
+    target: Target,
+    configuration: CompilerConfiguration,
+    optimize: bool,
+    profile: Profile,
+    then: impl FnOnce(&Module<'_>, Target) -> R,
+) -> R {
     let tu = Bump::new();
     let source = tu.alloc_str(source);
-    let configuration = CompilerConfiguration::default().with_target(target);
     let mut context = Context::with_configuration(&tu, configuration);
     let unit = parse_translation_unit(
         &mut context,
@@ -84,7 +102,11 @@ fn with_module<R>(
         HeaderSearch::default(),
     );
     let sema = analyze_translation_unit(&mut context, &unit);
-    assert!(sema.lowerable(&context), "the front end accepts\n{source}");
+    assert!(
+        sema.lowerable(&context),
+        "the front end accepts\n{source}\n{:?}",
+        context.take_pending_errors()
+    );
     let ir = Bump::new();
     let options = OptimizerOptions::default();
     let module = lower_translation_unit(
