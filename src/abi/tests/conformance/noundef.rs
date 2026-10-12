@@ -22,8 +22,10 @@ int indirect(int (*f)(int, ...)) { return f(1, 2, 3.0); }
 #[test]
 fn c_noundef_signatures_and_calls_match_bundled_clang() {
     for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
-        let toolchain =
-            Toolchain::bundled(target).expect("bundled Clang is required for this comparison");
+        // Emitting LLVM IR for an explicit target needs only the clang
+        // binary, not the Windows GNU sysroot that linking would.
+        let toolchain = Toolchain::bundled(Target::LinuxGnu)
+            .expect("bundled Clang is required for this comparison");
         let directory = TempDir::new("noundef-signatures");
         let source = directory.join("signatures.c");
         std::fs::write(&source, SOURCE).unwrap();
