@@ -15,6 +15,7 @@ use crate::{
         Value,
     },
     translation_phases::{
+        SourceVectors,
         parsing::{
             declaration_syntax::{
                 Declaration,
@@ -62,6 +63,13 @@ pub(super) enum Task<'tu> {
     EndSwitch {
         statement: &'tu Statement<'tu>,
         exit:      Block,
+    },
+    /// Zero an object's storage at its declarator's initialization point.
+    /// C99: §6.8p3, p. 131; PDF p. 143; §6.2.4p5, p. 32; PDF p. 44.
+    ZeroFill {
+        slot:   StackSlot,
+        ty:     TypeId,
+        source: SourceVectors,
     },
     /// Store the initializer value on top of the stack into an object being
     /// initialized, at `offset` bytes from its start.

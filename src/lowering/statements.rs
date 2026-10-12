@@ -599,7 +599,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// schedules their initializers in declaration order. A static local is
     /// a global initialized before the program starts.
     /// C99: §6.7.8 paragraphs 9-10, p. 126; PDF p. 138; §6.8 paragraph 3,
-    /// p. 131; PDF p. 143.
+    /// p. 131; PDF p. 143; §6.2.4 paragraph 5, p. 32; PDF p. 44.
     pub(super) fn declaration(
         &mut self,
         declaration: &'tu Declaration<'tu>,
@@ -643,7 +643,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 },
                 | _ => {
                     if let Local::Slot(slot) = local {
-                        self.zero_fill(slot, data.ty, source)?;
+                        // C99 §6.8p3: even implicit zeroes follow all earlier
+                        // declarators' initializers when this declaration is
+                        // reached.
+                        tasks.push(Task::ZeroFill {
+                            slot,
+                            ty: data.ty,
+                            source,
+                        });
                     }
                     tasks.push(Task::InitializeAggregate {
                         object,
