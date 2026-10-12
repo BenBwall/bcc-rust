@@ -40,6 +40,20 @@ mod tests {
                        i;\n  return s;\n}\n";
 
     #[test]
+    fn noundef_scalar_argument_reports_ub_with_status_70() {
+        let source =
+            "static int ignore(int x) { return 0; } int main(void) { int x; return ignore(x); }";
+        for target in [
+            "--target=x86_64-unknown-linux-gnu",
+            "--target=x86_64-w64-windows-gnu",
+        ] {
+            let output = bcc(source, &["--interpret", "--opt=none", target]);
+            assert_eq!(output.status.code(), Some(70), "{}", text(&output.stderr));
+            assert!(text(&output.stderr).contains("poison reached a noundef"));
+        }
+    }
+
+    #[test]
     fn nested_overlapping_unions_finish_and_match_the_simple_union_abi() {
         let source = include_str!("fixtures/lowering/nested_overlapping_unions.c");
         for target in [
@@ -70,7 +84,7 @@ mod tests {
                                 assert!(
                                     ir.contains(&format!(
                                         "function @{name}(ptr aggregate(size 4, align 4, [0: \
-                                         i32])) -> i32"
+                                         i32]) noundef) -> i32"
                                     )),
                                     "{ir}"
                                 );
@@ -525,7 +539,10 @@ mod tests {
             "{stdout}"
         );
         assert!(stdout.contains("define i32 @main()"), "{stdout}");
-        assert!(stdout.contains("declare i32 @printf(ptr, ...)"), "{stdout}");
+        assert!(
+            stdout.contains("declare i32 @printf(ptr noundef, ...)"),
+            "{stdout}"
+        );
     }
 
     #[test]
@@ -538,7 +555,7 @@ mod tests {
         assert!(
             pre.contains(
                 "function @swap(ptr result(size 16, align 8, [0: i64, 8: i64]), ptr \
-                 aggregate(size 16, align 8, [0: i64, 8: i64])) external"
+                 aggregate(size 16, align 8, [0: i64, 8: i64]) noundef) external"
             ),
             "{pre}"
         );
@@ -554,7 +571,7 @@ mod tests {
         let win64 = bcc(PAIR, &["--emit=ir-abi", "--target=x86_64-w64-windows-gnu"]);
         let win64 = text(&win64.stdout);
         assert!(
-            win64.contains("function @swap(ptr sret(size 16, align 8), ptr) external"),
+            win64.contains("function @swap(ptr sret(size 16, align 8), ptr noundef) external"),
             "{win64}"
         );
 

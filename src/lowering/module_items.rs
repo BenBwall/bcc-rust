@@ -371,6 +371,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let mut params = ArenaVec::new_in(scratch);
         let mut aggregates = ArenaVec::new_in(scratch);
         let mut extensions = ArenaVec::new_in(scratch);
+        let mut noundef = ArenaVec::new_in(scratch);
         let result_representation = repr(types, result)?;
         let result = match result_representation {
             | Repr::Void => None,
@@ -389,6 +390,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 | Repr::Aggregate => {
                     let index = u32::try_from(params.len())
                         .map_err(|_| LoweringErrorKind::MissingFact("too many parameters"))?;
+                    // Only the pointer to the caller-owned copy is defined.
+                    noundef.push(index);
                     params.push(Type::Ptr);
                     aggregates.push(AggregateParam {
                         index,
@@ -398,6 +401,14 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     });
                 },
                 | representation => {
+                    // Clang's scalar-argument model: evaluating an
+                    // indeterminate scalar argument is UB. C99 §6.2.6.1p5
+                    // covers trap reads; §6.3.2.1p2 is lvalue conversion.
+                    // The broader assumption is documented in middle-end.md.
+                    noundef.push(
+                        u32::try_from(params.len())
+                            .map_err(|_| LoweringErrorKind::MissingFact("too many parameters"))?,
+                    );
                     if let Some(extension) = representation.extension() {
                         let index = u32::try_from(params.len())
                             .map_err(|_| LoweringErrorKind::MissingFact("too many parameters"))?;
@@ -416,6 +427,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             aggregates: scratch.alloc_slice_copy(&aggregates),
             extensions: scratch.alloc_slice_copy(&extensions),
             result_extension: result_representation.extension(),
+            noundef: scratch.alloc_slice_copy(&noundef),
+            // Bundled Clang emits no C return noundef at -O0.
+            result_noundef: false,
+            variadic_noundef: variadic,
         })
     }
 

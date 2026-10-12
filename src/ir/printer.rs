@@ -359,6 +359,9 @@ fn display_signature(signature: Signature<'_>) -> impl fmt::Display + '_ {
             if let Some(extension) = signature.param_extension(index) {
                 write!(f, " {}", extension.keyword())?;
             }
+            if signature.param_noundef(index) {
+                f.write_str(" noundef")?;
+            }
         }
         if signature.variadic {
             f.write_str(if signature.params.is_empty() {
@@ -366,6 +369,9 @@ fn display_signature(signature: Signature<'_>) -> impl fmt::Display + '_ {
             } else {
                 ", ..."
             })?;
+            if signature.variadic_noundef {
+                f.write_str(" noundef")?;
+            }
         }
         f.write_char(')')?;
         if let Some(result) = signature.result {
@@ -373,7 +379,15 @@ fn display_signature(signature: Signature<'_>) -> impl fmt::Display + '_ {
         }
         signature
             .result_extension
-            .map_or(Ok(()), |extension| write!(f, " {}", extension.keyword()))
+            .map_or(Ok(()), |extension| write!(f, " {}", extension.keyword()))?;
+        if signature.result_noundef {
+            f.write_str(if signature.result.is_some() {
+                " noundef"
+            } else {
+                " -> noundef"
+            })?;
+        }
+        Ok(())
     })
 }
 

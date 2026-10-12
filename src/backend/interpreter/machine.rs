@@ -41,6 +41,7 @@ use crate::{
         InstData,
         Module,
         ParamAbi,
+        Signature,
         Symbol,
         Type,
         Value,
@@ -152,6 +153,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             self.arguments.push(value);
             self.argument_types.push(body.value_type(arg));
         }
+        self.check_arguments(self.module.function_signature(func))?;
         let callee = self.module.function(func);
         if callee.body.is_some() {
             self.push_frame(func, result)?;
@@ -175,6 +177,11 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
                 if !compatible {
                     return Err(UbKind::SignatureMismatch.into());
                 }
+                if self.module.function_signature(func).result_noundef
+                    && value.is_some_and(RuntimeValue::is_poison)
+                {
+                    return Err(UbKind::Noundef.into());
+                }
                 if let (Some(result), Some(value)) = (result, value) {
                     self.set(result, value);
                 }
@@ -186,12 +193,25 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
         }
     }
 
+    /// Enforces the signature's value contract before entering any callee,
+    /// including host functions and unused parameters. Pointer attributes
+    /// constrain only the address, not the pointed-to object bytes.
+    fn check_arguments(&self, signature: Signature<'_>) -> Result<(), Fault> {
+        for (index, &arg) in self.arguments.iter().enumerate() {
+            if signature.param_noundef(index) && arg.is_poison() {
+                return Err(UbKind::Noundef.into());
+            }
+        }
+        Ok(())
+    }
+
     /// Pushes a frame for the defined function `func`, binding the entry
     /// block's parameters to the fixed arguments, keeping the rest as
     /// variadic arguments, and allocating its stack slots and private byval
     /// copies. C99: §6.5.2.2 paragraph 4, p. 71; PDF p. 83 (parameter
     /// assignment).
     fn push_frame(&mut self, func: FuncId, caller_value: Option<Value>) -> Result<(), Fault> {
+        self.check_arguments(self.module.function_signature(func))?;
         if self.frames.len() >= self.limits.stack_depth {
             return Err(Fault::StackDepthLimit);
         }
@@ -277,6 +297,10 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
         value: Option<RuntimeValue>,
     ) -> Result<Option<Termination>, Fault> {
         let frame = self.frame();
+        let signature = self.module.function_signature(frame.func);
+        if signature.result_noundef && value.is_some_and(RuntimeValue::is_poison) {
+            return Err(UbKind::Noundef.into());
+        }
         if let Some((destination, area)) = frame.register_result
             && let Some(ParamAbi::Registers(registers)) =
                 self.module.function_signature(frame.func).result_param()
@@ -291,6 +315,22 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
                 let offset = RuntimeValue::Int(u128::from(offset));
                 let to = self.memory.ptr_add(destination, offset, false);
                 let from = self.memory.ptr_add(RuntimeValue::Ptr(area), offset, false);
+                if signature.result_noundef {
+                    // Check each byte before packing; a poison byte in any
+                    // register makes returning the value immediate UB.
+                    for byte in 0..ty.bytes() {
+                        let addr =
+                            self.memory
+                                .ptr_add(from, RuntimeValue::Int(u128::from(byte)), false);
+                        if self
+                            .memory
+                            .load(Type::I8, addr, Align::from_bytes(1).unwrap())?
+                            .is_poison()
+                        {
+                            return Err(UbKind::Noundef.into());
+                        }
+                    }
+                }
                 self.memory.copy(
                     to,
                     from,

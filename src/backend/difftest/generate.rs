@@ -45,9 +45,11 @@ pub(super) fn generate(seed: u64, probe: bool) -> String {
         let main = index == count;
         let signature = if main {
             Signature {
-                params:    Vec::new(),
-                result:    Ty::I32,
-                recursive: false,
+                params:         Vec::new(),
+                result:         Ty::I32,
+                recursive:      false,
+                noundef:        false,
+                result_noundef: false,
             }
         } else {
             Signature::random(&mut rng)
@@ -760,6 +762,8 @@ impl FunctionGen<'_> {
         let params = signature.params.clone();
         let result = signature.result;
         let recursive = signature.recursive;
+        let types = signature.parameter_text();
+        let return_text = signature.return_text();
         let mut args = Vec::new();
         for (position, &ty) in params.iter().enumerate() {
             let arg = if recursive && position == 0 {
@@ -793,12 +797,11 @@ impl FunctionGen<'_> {
                     format_args!("func_addr @f{callee}"),
                 )
             };
-            let types: Vec<&str> = params.iter().map(|ty| ty.name()).collect();
             let _ = self.def(
                 result,
                 Range::full(result),
                 format_args!(
-                    "call_indirect v{}({args}) : ({}) -> {result}",
+                    "call_indirect v{}({args}) : ({}) -> {return_text}",
                     callee_address.id,
                     types.join(", ")
                 ),
@@ -1408,13 +1411,13 @@ impl FunctionGen<'_> {
         } else {
             format!("f{}", self.index)
         };
-        let params: Vec<&str> = signature.params.iter().map(|ty| ty.name()).collect();
+        let params = signature.parameter_text();
         let linkage = if main { "external" } else { "internal" };
         let _ = writeln!(
             out,
             "function @{name}({}) -> {} {linkage} {{",
             params.join(", "),
-            signature.result
+            signature.return_text()
         );
         for (slot, size) in self.slots.iter().enumerate() {
             let _ = writeln!(out, "    slot{slot} = stack_slot {size}, align 8");
@@ -1531,12 +1534,29 @@ fn block_call(block: usize, args: &[Val]) -> String {
 /// parameter is its depth.
 #[derive(Clone, Debug)]
 struct Signature {
-    params:    Vec<Ty>,
-    result:    Ty,
-    recursive: bool,
+    params:         Vec<Ty>,
+    result:         Ty,
+    recursive:      bool,
+    noundef:        bool,
+    result_noundef: bool,
 }
 
 impl Signature {
+    fn parameter_text(&self) -> Vec<String> {
+        self.params
+            .iter()
+            .map(|ty| format!("{ty}{}", if self.noundef { " noundef" } else { "" }))
+            .collect()
+    }
+
+    fn return_text(&self) -> String {
+        format!(
+            "{}{}",
+            self.result,
+            if self.result_noundef { " noundef" } else { "" }
+        )
+    }
+
     fn random(rng: &mut Rng) -> Self {
         let recursive = rng.chance(30);
         let mut params = Vec::new();
@@ -1551,6 +1571,8 @@ impl Signature {
             params,
             result,
             recursive,
+            noundef: rng.chance(50),
+            result_noundef: rng.chance(50),
         }
     }
 }

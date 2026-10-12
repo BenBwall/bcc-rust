@@ -87,6 +87,9 @@ impl<'ir> Module<'ir> {
             aggregates: &[],
             extensions: &[],
             result_extension: None,
+            noundef: &[],
+            result_noundef: false,
+            variadic_noundef: false,
         })
     }
 
@@ -110,6 +113,9 @@ impl<'ir> Module<'ir> {
             aggregates,
             extensions: arena.alloc_slice_copy(signature.extensions),
             result_extension: signature.result_extension,
+            noundef: arena.alloc_slice_copy(signature.noundef),
+            result_noundef: signature.result_noundef,
+            variadic_noundef: signature.variadic_noundef,
         };
         let id = self.signatures.push(signature);
         _ = self.signature_ids.insert(signature, id);
@@ -318,9 +324,27 @@ pub(crate) struct Signature<'ir> {
     pub(crate) extensions:       &'ir [ExtendedParam],
     /// The [`Extension`] of an `i8` or `i16` result.
     pub(crate) result_extension: Option<Extension>,
+    /// Increasing indices of parameters requiring a fully defined value.
+    /// This constrains the pointer itself for aggregate memory parameters,
+    /// never the bytes it addresses. Available in both profiles.
+    pub(crate) noundef:          &'ir [u32],
+    /// Poison in any bit of the returned value is immediate UB. For a
+    /// post-ABI register result this includes every byte of each register.
+    pub(crate) result_noundef:   bool,
+    /// Every argument after the fixed parameters requires a defined value.
+    pub(crate) variadic_noundef: bool,
 }
 
 impl<'ir> Signature<'ir> {
+    /// Whether passing poison at this argument position is immediate UB.
+    pub(crate) fn param_noundef(&self, index: usize) -> bool {
+        if index >= self.params.len() {
+            self.variadic_noundef
+        } else {
+            self.noundef.iter().any(|&param| param as usize == index)
+        }
+    }
+
     /// The extension of parameter `index`, if it has one.
     pub(crate) fn param_extension(&self, index: usize) -> Option<Extension> {
         self.extensions

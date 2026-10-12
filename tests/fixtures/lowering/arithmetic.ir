@@ -7,7 +7,7 @@
 target triple = "x86_64-unknown-linux-gnu"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 
-function @add(i32, i32) -> i32 external {
+function @add(i32 noundef, i32 noundef) -> i32 external {
 block0(v0: i32, v1: i32):
     v2 = iconst.i32 3
     v3 = imul.i32 nsw v1, v2
@@ -18,7 +18,7 @@ block0(v0: i32, v1: i32):
     return v7
 }
 
-function @wrap(i32, i32) -> i32 external {
+function @wrap(i32 noundef, i32 noundef) -> i32 external {
 block0(v0: i32, v1: i32):
     v2 = imul.i32 v0, v1
     v3 = iconst.i32 1
@@ -31,7 +31,7 @@ block0(v0: i32, v1: i32):
     return v9
 }
 
-function @divide(i32, i32) -> i32 external {
+function @divide(i32 noundef, i32 noundef) -> i32 external {
 block0(v0: i32, v1: i32):
     v2 = sdiv.i32 v0, v1
     v3 = srem.i32 v0, v1
@@ -50,7 +50,7 @@ block0(v0: i32, v1: i32):
     return v15
 }
 
-function @widen(i32, i32, i8 signed, i16 signed) -> i64 external {
+function @widen(i32 noundef, i32 noundef, i8 signed noundef, i16 signed noundef) -> i64 external {
 block0(v0: i32, v1: i32, v2: i8, v3: i16):
     v4 = iadd.i32 v0, v1
     v5 = sext.i32 v2
@@ -63,7 +63,7 @@ block0(v0: i32, v1: i32, v2: i8, v3: i16):
     return v11
 }
 
-function @narrow(i64) -> i8 signed external {
+function @narrow(i64 noundef) -> i8 signed external {
 block0(v0: i64):
     v1 = trunc.i8 v0
     v2 = sext.i32 v1

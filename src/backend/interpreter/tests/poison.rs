@@ -10,6 +10,70 @@ use super::{
 const POISON: RuntimeValue = RuntimeValue::Poison;
 
 #[test]
+fn noundef_byval_pointer_does_not_require_defined_object_bytes() {
+    let text = "abi lowered\nfunction @ignore(ptr byval(size 8, align 8) noundef) -> i32 internal \
+                {\nblock0(v0: ptr):\n    v1 = iconst.i32 0\n    return v1\n}\nfunction @main() -> \
+                i32 external {\n    slot0 = stack_slot 8, align 8\nblock0:\n    v0 = stack_addr \
+                slot0\n    v1 = call @ignore(v0)\n    return v1\n}\n";
+    assert_eq!(returned(text, "main"), int(0));
+    let poison_pointer = text.replace("v0 = stack_addr slot0", "v0 = poison.ptr");
+    assert_eq!(undefined(&poison_pointer, "main"), UbKind::Noundef);
+}
+
+#[test]
+fn noundef_traps_unused_direct_indirect_and_variadic_arguments() {
+    for (signature, call) in [
+        ("i8 noundef", "call @ignore(v0)"),
+        ("i8 noundef", "call_indirect v1(v0) : (i8 noundef) -> i32"),
+        ("... noundef", "call @ignore(v0)"),
+        ("... noundef", "call_indirect v1(v0) : (... noundef) -> i32"),
+    ] {
+        let entry = if signature.starts_with("...") {
+            "block0:"
+        } else {
+            "block0(v0: i8):"
+        };
+        let zero = if signature.starts_with("...") {
+            "v0"
+        } else {
+            "v1"
+        };
+        let text = format!(
+            "function @ignore({signature}) -> i32 internal {{\n{entry}\n    {zero} = iconst.i32 \
+             0\n    return {zero}\n}}\nfunction @main() -> i32 external {{\nblock0:\n    v0 = \
+             poison.i8\n    v1 = func_addr @ignore\n    v2 = {call}\n    return v2\n}}\n"
+        );
+        assert_eq!(undefined(&text, "main"), UbKind::Noundef);
+    }
+}
+
+#[test]
+fn noundef_traps_entry_and_returns_including_partial_memory_poison() {
+    let entry = "function @f(i32 noundef) -> i32 external {\nblock0(v0: i32):\n    v1 = \
+                 iconst.i32 0\n    return v1\n}\n";
+    let run = run_text_with(entry, "f", &[POISON], Limits::default());
+    assert!(matches!(
+        run.result,
+        Err(Trap::UndefinedBehavior(UbKind::Noundef, _))
+    ));
+    let returned = "function @f() -> i32 noundef internal {\nblock0:\n    v0 = poison.i32\n    \
+                    return v0\n}\nfunction @main() -> i32 external {\nblock0:\n    v0 = call \
+                    @f()\n    v1 = iconst.i32 0\n    return v1\n}\n";
+    assert_eq!(undefined(returned, "f"), UbKind::Noundef);
+    assert_eq!(undefined(returned, "main"), UbKind::Noundef);
+    let loaded = "function @f() -> i32 noundef external {\n    slot0 = stack_slot 4, align \
+                  4\nblock0:\n    v0 = stack_addr slot0\n    v1 = iconst.i8 1\n    store.i8 v1, \
+                  v0, align 1\n    v2 = load.i32 v0, align 4\n    return v2\n}\n";
+    assert_eq!(undefined(loaded, "f"), UbKind::Noundef);
+    let registers =
+        "abi lowered\nfunction @f(ptr registers(i64, align 8)) -> noundef internal {\nblock0(v0: \
+         ptr):\n    v1 = iconst.i32 1\n    store.i32 v1, v0, align 4\n    return\n}\nfunction \
+         @main() -> i32 external {\n    slot0 = stack_slot 8, align 8\nblock0:\n    v0 = \
+         stack_addr slot0\n    call @f(v0)\n    v1 = iconst.i32 0\n    return v1\n}\n";
+    assert_eq!(undefined(registers, "main"), UbKind::Noundef);
+}
+
+#[test]
 fn violated_wrap_flags_produce_poison() {
     let cases = [
         ("iadd.i8 nsw", 0x7F, 1, POISON),

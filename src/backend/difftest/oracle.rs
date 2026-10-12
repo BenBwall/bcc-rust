@@ -97,6 +97,8 @@ pub(super) fn check_optimizer(seed: u64) -> Verdict {
     assert_verifies(seed, &text);
     assert_verifies(seed, &probe);
     match observe_text(&probe).result {
+        // Includes poison at noundef parameters/returns; every native arm
+        // is unconstrained on these executions, just like other immediate UB.
         | Err(Trap::UndefinedBehavior(..)) => return Verdict::Discarded("undefined behaviour"),
         | Err(Trap::StepLimit) => return Verdict::Discarded("step limit"),
         | Err(trap) => panic!("seed {seed:#x}: the probe run trapped: {trap}\n{probe}"),

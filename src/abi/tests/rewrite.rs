@@ -18,6 +18,47 @@ use crate::{
 };
 
 #[test]
+fn noundef_return_area_pointer_survives_memory_abi_lowering() {
+    let text = "function @memory(ptr result(size 24, align 8) noundef) external\n";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        assert_eq!(
+            lowered_signatures(text, target),
+            "@memory(ptr sret(size 24, align 8) noundef)"
+        );
+    }
+}
+
+#[test]
+fn noundef_contracts_follow_abi_indices_and_explicit_register_returns() {
+    let text = "function @mixed(ptr result(size 16, align 8, [0: i64, 8: i64]), ptr \
+                aggregate(size 16, align 8, [0: i64, 8: i64]) noundef, i8 signed noundef) \
+                external\nfunction @wide(i128 noundef) -> i128 noundef external\n";
+    let sysv = lowered_signatures(text, Target::LinuxGnu);
+    assert!(
+        sysv.contains("@mixed(ptr registers(i64, i64, align 8), i64, i64, i8 signext noundef)"),
+        "{sysv}"
+    );
+    assert!(
+        sysv.contains("@wide(i128 noundef) -> i128 noundef"),
+        "{sysv}"
+    );
+    let win = lowered_signatures(text, Target::WindowsGnu);
+    assert!(
+        win.contains("@mixed(ptr sret(size 16, align 8), ptr noundef, i8 noundef)"),
+        "{win}"
+    );
+    assert!(
+        win.contains("@wide(ptr registers(i128, align 16), ptr noundef) -> noundef"),
+        "{win}"
+    );
+    let plain = lower_text(
+        "function @plain(ptr aggregate(size 24, align 8)) external\n",
+        Target::LinuxGnu,
+    );
+    assert!(!plain.contains("noundef"), "{plain}");
+}
+
+#[test]
 fn oversized_aggregate_is_refused_without_mutation_sysv() {
     check_oversized_aggregate(Target::LinuxGnu);
 }

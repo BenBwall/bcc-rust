@@ -11,25 +11,25 @@
 target triple = "x86_64-unknown-linux-gnu"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 
-function @truncate(f64) -> i32 external {
+function @truncate(f64 noundef) -> i32 external {
 block0(v0: f64):
     v1 = fptosi.i32 v0
     return v1
 }
 
-function @to_unsigned(f32) -> i64 external {
+function @to_unsigned(f32 noundef) -> i64 external {
 block0(v0: f32):
     v1 = fptoui.i64 v0
     return v1
 }
 
-function @to_char(f64) -> i8 signed external {
+function @to_char(f64 noundef) -> i8 signed external {
 block0(v0: f64):
     v1 = fptosi.i8 v0
     return v1
 }
 
-function @from_signed(i32, i64) -> f64 external {
+function @from_signed(i32 noundef, i64 noundef) -> f64 external {
 block0(v0: i32, v1: i64):
     v2 = sitofp.f64 v0
     v3 = sitofp.f64 v1
@@ -37,7 +37,7 @@ block0(v0: i32, v1: i64):
     return v4
 }
 
-function @from_unsigned(i32, i64) -> f64 external {
+function @from_unsigned(i32 noundef, i64 noundef) -> f64 external {
 block0(v0: i32, v1: i64):
     v2 = uitofp.f64 v0
     v3 = uitofp.f64 v1
@@ -45,7 +45,7 @@ block0(v0: i32, v1: i64):
     return v4
 }
 
-function @to_float(i64, i8 bool) -> f32 external {
+function @to_float(i64 noundef, i8 bool noundef) -> f32 external {
 block0(v0: i64, v1: i8):
     v2 = zext.i64 v1
     v3 = iadd.i64 nsw v0, v2
@@ -53,13 +53,13 @@ block0(v0: i64, v1: i8):
     return v4
 }
 
-function @widen(f32) -> f64 external {
+function @widen(f32 noundef) -> f64 external {
 block0(v0: f32):
     v1 = fpext.f64 v0
     return v1
 }
 
-function @truth(f64) -> i8 bool external {
+function @truth(f64 noundef) -> i8 bool external {
 block0(v0: f64):
     v1 = fconst.f64 0x0000000000000000
     v2 = fcmp.f64 une v0, v1

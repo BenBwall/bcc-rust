@@ -7,6 +7,7 @@ mod calls;
 mod control;
 mod host;
 mod memory;
+mod noundef_boundary;
 mod poison;
 
 use std::fmt::Write as _;

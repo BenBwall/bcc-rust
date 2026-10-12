@@ -174,6 +174,7 @@ impl Machine<'_, '_, '_> {
                     && actual.params.is_empty()
                     && actual.result == expected.result
                     && actual.result_extension == expected.result_extension;
+                let open_host = open_host && actual.result_noundef == expected.result_noundef;
                 // An open call site can also resolve to a prototype (for
                 // example after a builtin declares the same host symbol).
                 // Lowering already applied default argument promotions;
@@ -185,6 +186,7 @@ impl Machine<'_, '_, '_> {
                     && !actual.variadic
                     && actual.result == expected.result
                     && actual.result_extension == expected.result_extension
+                    && actual.result_noundef == expected.result_noundef
                     && actual.aggregates == expected.aggregates
                     && actual.extensions == expected.extensions
                     && actual.params.len() == args.len()
@@ -195,6 +197,11 @@ impl Machine<'_, '_, '_> {
                         .all(|(&param, &arg)| param == body.value_type(arg));
                 if actual != expected && !open_host && !compatible_open_call {
                     return Err(UbKind::SignatureMismatch.into());
+                }
+                for (index, &arg) in args.iter().enumerate() {
+                    if expected.param_noundef(index) && self.value(arg).is_poison() {
+                        return Err(UbKind::Noundef.into());
+                    }
                 }
                 return self.call(body, func, args, result, host);
             },

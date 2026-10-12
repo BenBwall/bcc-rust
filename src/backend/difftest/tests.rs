@@ -174,8 +174,20 @@ block1:
     v1 = iconst.i32 5
     return v1
 }
+
 ",
     );
     assert!(matches!(trap.result, Err(Trap::UndefinedBehavior(..))));
     assert!(trap.refines(&five).is_err());
+}
+
+#[test]
+fn noundef_poison_uses_the_existing_ub_oracle_rule() {
+    let defined = observe_text(&program('a', "5"));
+    let poison_return = program('a', "poison")
+        .replace("function @main() -> i32", "function @main() -> i32 noundef");
+    let trapped = observe_text(&poison_return);
+    assert!(matches!(trapped.result, Err(Trap::UndefinedBehavior(..))));
+    assert!(trapped.refines(&defined).is_err());
+    assert!((0..50).any(|seed| generate(seed, false).contains(" noundef")));
 }

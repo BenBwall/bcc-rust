@@ -241,6 +241,7 @@ pub(super) fn lowered_signature<'s>(
     let mut params = ArenaVec::with_capacity_in(signature.params.len() + 1, scratch);
     let mut aggregates = ArenaVec::new_in(scratch);
     let mut extensions = ArenaVec::new_in(scratch);
+    let mut noundef = ArenaVec::new_in(scratch);
     let mut describe = |params: &ArenaVec<'_, Type>, abi| {
         let index = parameter_count(params.len()).expect("ABI planning checked parameter counts");
         aggregates.push(AggregateParam { index, abi });
@@ -259,6 +260,11 @@ pub(super) fn lowered_signature<'s>(
             params.push(Type::Ptr);
         },
         | ResultPlan::Memory(layout) => {
+            // This is still the original return-area address. C lowering
+            // leaves it unmarked, but explicit IR pointer contracts survive.
+            if signature.param_noundef(0) {
+                noundef.push(0);
+            }
             describe(&params, ParamAbi::Sret(without_scalars(layout)));
             params.push(Type::Ptr);
         },
@@ -274,6 +280,12 @@ pub(super) fn lowered_signature<'s>(
     for ((index, &ty), plan) in signature.params.iter().enumerate().skip(first).zip(args) {
         match *plan {
             | ArgPlan::Keep => {
+                if signature.param_noundef(index) {
+                    noundef.push(
+                        parameter_count(params.len())
+                            .expect("ABI planning checked parameter counts"),
+                    );
+                }
                 if let Some(extension) = signature
                     .param_extension(index)
                     .and_then(|extension| convention.extension(extension))
@@ -286,9 +298,25 @@ pub(super) fn lowered_signature<'s>(
                 }
                 params.push(ty);
             },
-            | ArgPlan::IndirectI128 => params.push(Type::Ptr),
+            | ArgPlan::IndirectI128 => {
+                if signature.param_noundef(index) {
+                    noundef.push(
+                        parameter_count(params.len())
+                            .expect("ABI planning checked parameter counts"),
+                    );
+                }
+                params.push(Type::Ptr);
+            },
             | ArgPlan::Registers { parts, .. } => params.extend_from_slice(parts.types()),
             | ArgPlan::Stack { layout, align } => {
+                // Clang marks the byval pointer, not its object bytes.
+                // C99 §6.5.2.2p4: parameters receive argument values.
+                if signature.param_noundef(index) {
+                    noundef.push(
+                        parameter_count(params.len())
+                            .expect("ABI planning checked parameter counts"),
+                    );
+                }
                 describe(
                     &params,
                     ParamAbi::ByVal(raised(without_scalars(layout), align)),
@@ -311,6 +339,9 @@ pub(super) fn lowered_signature<'s>(
         result_extension: signature
             .result_extension
             .and_then(|extension| convention.extension(extension)),
+        noundef:          scratch.alloc_slice_copy(&noundef),
+        result_noundef:   signature.result_noundef,
+        variadic_noundef: signature.variadic_noundef,
     }
 }
 

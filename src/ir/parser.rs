@@ -991,6 +991,8 @@ impl<'t> Cursor<'_, 't> {
         let mut aggregates = ArenaVec::new_in(scratch);
         let mut extensions = ArenaVec::new_in(scratch);
         let mut variadic = false;
+        let mut noundef = ArenaVec::new_in(scratch);
+        let mut variadic_noundef = false;
         while !self.eat(TokenKind::RParen) {
             if variadic {
                 return Err(self.peek().expected("`)` after `...`"));
@@ -1000,6 +1002,7 @@ impl<'t> Cursor<'_, 't> {
             }
             if self.eat(TokenKind::Ellipsis) {
                 variadic = true;
+                variadic_noundef = self.eat(TokenKind::Ident("noundef"));
             } else {
                 params.push(self.ty()?);
                 let index = u32::try_from(params.len() - 1)
@@ -1009,12 +1012,23 @@ impl<'t> Cursor<'_, 't> {
                 } else if let Some(extension) = self.extension() {
                     extensions.push(ExtendedParam { index, extension });
                 }
+                if self.eat(TokenKind::Ident("noundef")) {
+                    noundef.push(index);
+                }
             }
         }
-        let (result, result_extension) = if self.eat(TokenKind::Arrow) {
-            (Some(self.ty()?), self.extension())
+        let (result, result_extension, result_noundef) = if self.eat(TokenKind::Arrow) {
+            if self.eat(TokenKind::Ident("noundef")) {
+                (None, None, true)
+            } else {
+                (
+                    Some(self.ty()?),
+                    self.extension(),
+                    self.eat(TokenKind::Ident("noundef")),
+                )
+            }
         } else {
-            (None, None)
+            (None, None, false)
         };
         Ok(Signature {
             params: scratch.alloc_slice_copy(&params),
@@ -1023,6 +1037,9 @@ impl<'t> Cursor<'_, 't> {
             aggregates: scratch.alloc_slice_copy(&aggregates),
             extensions: scratch.alloc_slice_copy(&extensions),
             result_extension,
+            noundef: scratch.alloc_slice_copy(&noundef),
+            result_noundef,
+            variadic_noundef,
         })
     }
 

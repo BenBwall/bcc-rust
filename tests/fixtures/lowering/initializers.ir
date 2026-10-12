@@ -16,7 +16,7 @@ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:
 
 global @.str internal constant size 5, align 1 = bytes "7465787400"
 
-function @f(i32) -> i32 external {
+function @f(i32 noundef) -> i32 external {
     slot0 = stack_slot 20, align 4
     slot1 = stack_slot 8, align 4
     slot2 = stack_slot 16, align 4

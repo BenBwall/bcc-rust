@@ -51,21 +51,27 @@ use super::{
 };
 use crate::ir::{
     Block,
+    Entity,
     Inst,
     InstData,
     InstFlags,
     Opcode,
+    Signature,
     Type,
     Value,
 };
 
 /// Folds one function. Returns whether it rewrote anything.
-pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> bool {
+pub(super) fn run(
+    draft: &mut Draft<'_, '_>,
+    signature: Signature<'_>,
+    report: &mut OptimizationReport,
+) -> bool {
     let mut changed = false;
     for block in draft.reverse_post_order() {
         for index in 0..draft.block(block).insts.len() {
             let inst = draft.block(block).insts[index];
-            let Some(outcome) = fold_inst(draft, inst) else {
+            let Some(outcome) = fold_inst(draft, inst, signature) else {
                 continue;
             };
             if !report.allow() {
@@ -107,12 +113,25 @@ fn apply(draft: &mut Draft<'_, '_>, inst: Inst, outcome: Outcome) {
 }
 
 /// What `inst` folds to, if anything.
-fn fold_inst(draft: &Draft<'_, '_>, inst: Inst) -> Option<Outcome> {
+fn fold_inst(draft: &Draft<'_, '_>, inst: Inst, signature: Signature<'_>) -> Option<Outcome> {
     if draft.is_removed(inst) || draft.inst_constant(inst).is_some() {
         return None;
     }
     _ = draft.inst_result(inst)?;
     match *draft.inst(inst) {
+        | InstData::Unary {
+            opcode: Opcode::Freeze,
+            arg,
+            ..
+        } if draft
+            .body
+            .block_params(Block::new(0))
+            .iter()
+            .enumerate()
+            .any(|(index, &param)| {
+                signature.param_noundef(index) && param == draft.resolve(arg)
+            }) =>
+            Some(Outcome::Value(draft.resolve(arg))),
         | InstData::Binary {
             opcode: Opcode::PtrAdd,
             args: [base, offset],

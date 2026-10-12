@@ -267,7 +267,7 @@ fn run_pass(
     let start = Instant::now();
     let changed = match pass {
         | Pass::Inline => inline::run(draft, module, graph, report),
-        | Pass::Fold => fold::run(draft, report),
+        | Pass::Fold => fold::run(draft, module.function_signature(func), report),
         | Pass::Dce => dce::run(draft, report),
         | Pass::SimplifyCfg => simplify_cfg::run(draft, report),
         | Pass::Gvn => gvn::run(draft, report),

@@ -21,7 +21,7 @@
 target triple = "x86_64-unknown-linux-gnu"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 
-function @read_a(ptr) -> i32 external {
+function @read_a(ptr noundef) -> i32 external {
 block0(v0: ptr):
     v1 = load.i8 v0, align 1
     v2 = iconst.i8 7
@@ -30,7 +30,7 @@ block0(v0: ptr):
     return v4
 }
 
-function @read_b(ptr) -> i32 external {
+function @read_b(ptr noundef) -> i32 external {
 block0(v0: ptr):
     v1 = load.i8 v0, align 1
     v2 = iconst.i8 3
@@ -39,7 +39,7 @@ block0(v0: ptr):
     return v4
 }
 
-function @read_d(ptr) -> i32 external {
+function @read_d(ptr noundef) -> i32 external {
 block0(v0: ptr):
     v1 = iconst.i64 2
     v2 = ptr_add inbounds v0, v1
@@ -57,7 +57,7 @@ block0(v0: ptr):
     return v13
 }
 
-function @read_wide(ptr) -> i64 external {
+function @read_wide(ptr noundef) -> i64 external {
 block0(v0: ptr):
     v1 = iconst.i64 8
     v2 = ptr_add inbounds v0, v1
@@ -77,7 +77,7 @@ block0(v0: ptr):
     return v15
 }
 
-function @write(ptr, i32) -> i32 external {
+function @write(ptr noundef, i32 noundef) -> i32 external {
 block0(v0: ptr, v1: i32):
     v2 = trunc.i8 v1
     v3 = iconst.i8 7

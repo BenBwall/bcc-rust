@@ -272,7 +272,7 @@ fn implicit_declarations_call_unprototyped_functions() {
     .expect("C89 declares called names implicitly");
     assert!(
         ir.contains(
-            "function @putchar(...) -> i32 external
+            "function @putchar(... noundef) -> i32 external
 "
         ),
         "{ir}"
@@ -344,13 +344,16 @@ fn the_target_sets_type_widths_and_the_data_layout() {
         linux.starts_with("target triple = \"x86_64-unknown-linux-gnu\""),
         "{linux}"
     );
-    assert!(linux.contains("function @f(i64) -> i64"), "{linux}");
+    assert!(linux.contains("function @f(i64 noundef) -> i64"), "{linux}");
     assert!(
         windows.starts_with("target triple = \"x86_64-pc-windows-msvc\""),
         "{windows}"
     );
     assert!(windows.contains("e-m:w-"), "{windows}");
-    assert!(windows.contains("function @f(i32) -> i32"), "{windows}");
+    assert!(
+        windows.contains("function @f(i32 noundef) -> i32"),
+        "{windows}"
+    );
 }
 
 #[test]

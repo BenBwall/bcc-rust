@@ -2,6 +2,16 @@
 
 use super::*;
 
+#[test]
+fn freeze_of_noundef_entry_parameter_folds_only_with_the_contract() {
+    let text =
+        "function @f(i32 noundef, i32) -> i32 noundef external {\nblock0(v0: i32, v1: i32):\n    \
+         v2 = freeze.i32 v0\n    v3 = freeze.i32 v1\n    v4 = iadd.i32 v2, v3\n    return v4\n}\n";
+    let expected = "function @f(i32 noundef, i32) -> i32 noundef external {\nblock0(v0: i32, v1: \
+                    i32):\n    v2 = freeze.i32 v1\n    v3 = iadd.i32 v0, v2\n    return v3\n}\n";
+    assert_pass(Pass::Fold, text, expected);
+}
+
 /// A function `@f` with `body` and the signature `() -> i32`.
 fn nullary(body: &str) -> String {
     format!("function @f() -> i32 external {{\nblock0:\n{body}}}\n")

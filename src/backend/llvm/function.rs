@@ -187,6 +187,9 @@ pub(super) fn attributes<'id>(
     call: bool,
 ) {
     extension(api, value, 0, signature.result_extension, call);
+    if signature.result_noundef {
+        api.attribute(value, 0, "noundef", 0, None, call);
+    }
     let mut llvm_index = 1;
     for index in 0..signature.params.len() {
         if !passed(signature, index) {
@@ -218,6 +221,9 @@ pub(super) fn attributes<'id>(
             signature.param_extension(index),
             call,
         );
+        if signature.param_noundef(index) {
+            api.attribute(value, llvm_index, "noundef", 0, None, call);
+        }
         llvm_index += 1;
     }
 }
@@ -488,7 +494,11 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     align.min(offset)
                 },
             );
-            let frozen = api.freeze(bytes);
+            let frozen = if self.signature.result_noundef {
+                bytes
+            } else {
+                api.freeze(bytes)
+            };
             let part_ty = if registers.second.is_some() {
                 api.ty(ty)
             } else {
@@ -530,6 +540,24 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
             &arguments,
         );
         attributes(api, call, signature, true);
+        if signature.variadic_noundef {
+            let fixed = signature
+                .params
+                .iter()
+                .enumerate()
+                .filter(|&(index, _)| passed(signature, index))
+                .count();
+            for index in 0..args.len().saturating_sub(signature.params.len()) {
+                api.attribute(
+                    call,
+                    u32::try_from(fixed + index + 1).map_err(|_| std::fmt::Error)?,
+                    "noundef",
+                    0,
+                    None,
+                    true,
+                );
+            }
+        }
         if let Some(ParamAbi::Registers(registers)) = signature.result_param() {
             api.set_name(call, &return_name(inst, self.emitter.arena));
             if let Some(&area) = args.first() {

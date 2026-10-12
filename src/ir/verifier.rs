@@ -155,6 +155,34 @@ fn verify_signature(
 ) {
     verify_extensions(signature, profile, &mut report);
     let mut previous = None;
+    for &index in signature.noundef {
+        if previous.is_some_and(|previous| index <= previous)
+            || index as usize >= signature.params.len()
+            || matches!(
+                signature.param_abi(index as usize),
+                Some(ParamAbi::Registers(_))
+            )
+        {
+            report(VerifierErrorKind::Noundef(
+                "parameter indices must be ordered, unique and passed",
+            ));
+        }
+        previous = Some(index);
+    }
+    if signature.variadic_noundef && !signature.variadic {
+        report(VerifierErrorKind::Noundef(
+            "variadic noundef requires a variadic signature",
+        ));
+    }
+    if signature.result_noundef
+        && signature.result.is_none()
+        && !matches!(signature.result_param(), Some(ParamAbi::Registers(_)))
+    {
+        report(VerifierErrorKind::Noundef(
+            "return noundef requires a returned value",
+        ));
+    }
+    let mut previous = None;
     for param in signature.aggregates {
         let index = param.index;
         let problem = if previous.is_some_and(|previous| index <= previous) {
@@ -899,6 +927,8 @@ pub(crate) enum Location {
 /// What the verifier found wrong.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum VerifierErrorKind {
+    /// A defined-value contract describes a position that does not exist.
+    Noundef(&'static str),
     /// LLVM and the native symbol interfaces require NUL-free names.
     NulSymbolName,
     /// A defined function has no blocks.
@@ -1071,6 +1101,7 @@ impl fmt::Display for VerifierErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let optional = |ty: Option<Type>| ty.map_or("nothing", Type::name);
         match *self {
+            | Self::Noundef(problem) => write!(f, "invalid noundef: {problem}"),
             | Self::NulSymbolName => f.write_str("a symbol name contains NUL"),
             | Self::NoBlocks => f.write_str("a defined function has no blocks"),
             | Self::EmptyBlock => f.write_str("the block is empty"),

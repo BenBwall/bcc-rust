@@ -7,7 +7,7 @@
 target triple = "x86_64-unknown-linux-gnu"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 
-function @mix(f64, f32, i32) -> f64 external {
+function @mix(f64 noundef, f32 noundef, i32 noundef) -> f64 external {
 block0(v0: f64, v1: f32, v2: i32):
     v3 = fpext.f64 v1
     v4 = fmul.f64 v0, v3
@@ -19,7 +19,7 @@ block0(v0: f64, v1: f32, v2: i32):
     return v9
 }
 
-function @narrow(f64) -> f32 external {
+function @narrow(f64 noundef) -> f32 external {
 block0(v0: f64):
     v1 = fptrunc.f32 v0
     v2 = fconst.f32 0x3FC00000
@@ -27,7 +27,7 @@ block0(v0: f64):
     return v3
 }
 
-function @negate(f64) -> f64 external {
+function @negate(f64 noundef) -> f64 external {
 block0(v0: f64):
     v1 = fneg.f64 v0
     v2 = fadd.f64 v1, v0
@@ -40,7 +40,7 @@ block0:
     return v0
 }
 
-function @wide(f80, f64) -> f80 external {
+function @wide(f80 noundef, f64 noundef) -> f80 external {
 block0(v0: f80, v1: f64):
     v2 = fpext.f80 v1
     v3 = fmul.f80 v0, v2

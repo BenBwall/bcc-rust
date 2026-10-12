@@ -116,6 +116,8 @@ impl fmt::Display for Location {
 /// A kind of undefined behaviour the interpreter detects.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum UbKind {
+    /// Poison in a parameter or return position requiring a defined value.
+    Noundef,
     /// `brif` on a poison condition.
     BranchOnPoison,
     /// `switch` on a poison value.
@@ -175,6 +177,7 @@ pub(crate) enum UbKind {
 impl fmt::Display for UbKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            | Self::Noundef => "poison reached a noundef parameter or return",
             | Self::BranchOnPoison => "branch on poison",
             | Self::SwitchOnPoison => "switch on poison",
             | Self::DivisionByZero => "division by zero",

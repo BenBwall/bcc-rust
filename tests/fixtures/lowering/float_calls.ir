@@ -13,7 +13,7 @@ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:
 
 global @.str internal constant size 10, align 1 = bytes "25662025662025640a00"
 
-function @f(f32, f80, i8 signed) -> f64 external {
+function @f(f32 noundef, f80 noundef, i8 signed noundef) -> f64 external {
 block0(v0: f32, v1: f80, v2: i8):
     v3 = global_addr @.str
     v4 = fpext.f64 v0
@@ -34,10 +34,10 @@ block0(v0: f32, v1: f80, v2: i8):
     return v18
 }
 
-function @printf(ptr, ...) -> i32 external
+function @printf(ptr noundef, ... noundef) -> i32 external
 
-function @old(...) -> i32 external
+function @old(... noundef) -> i32 external
 
-function @sqrt(f64) -> f64 external
+function @sqrt(f64 noundef) -> f64 external
 
-function @scale(f32, f64) -> f32 external
+function @scale(f32 noundef, f64 noundef) -> f32 external
