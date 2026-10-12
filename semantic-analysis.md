@@ -80,6 +80,10 @@ One explicit `Work` stack composes specifier resolution, declarator construction
 parameter lists, nested record/enum definitions, integer evaluation, initializers
 and statement discovery. Parenthesized declarators never recurse in Rust.
 Expression discovery/evaluation and scope traversal are also iterative.
+String initialization retains the destination element type by expression syntax
+identity, so lowering shares the whole-array classification for narrow and wide
+literals, including optional braces and arrays completed from the string
+(C99 §6.7.8p14-15, printed p. 126, PDF p. 138).
 Compatibility/composite construction and type inspection have their own explicit
 postorder stacks. Parameter/member lists accumulate in scratch cons cells, then
 copy once into retained storage. Ordinary/tag lookup is expected O(1) per lookup;

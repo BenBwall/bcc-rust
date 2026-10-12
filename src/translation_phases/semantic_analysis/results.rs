@@ -46,36 +46,39 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     /// Declarators with vendor modifiers visited by the explicit type stack,
     /// including abstract declarators, retained for the lowering gate.
     /// C99: §6.7.5-6.7.6, pp. 114-122; PDF pp. 126-134 (extensions).
-    pub(crate) declarators:        &'tu [Declarator<'tu>],
+    pub(crate) declarators:         &'tu [Declarator<'tu>],
     /// Specifier extension chains, including those on type names and
     /// parameters. C99: §6.7, p. 97; PDF p. 109 (vendor extensions).
-    pub(crate) spec_extensions:    &'tu [&'tu SpecifierExtension<'tu>],
-    pub(crate) types:              Types<'tu>,
-    pub(crate) bindings:           &'tu [Binding],
-    pub(crate) definitions:        &'tu [Definition],
+    pub(crate) spec_extensions:     &'tu [&'tu SpecifierExtension<'tu>],
+    pub(crate) types:               Types<'tu>,
+    pub(crate) bindings:            &'tu [Binding],
+    pub(crate) definitions:         &'tu [Definition],
     /// Every function definition in traversal order, nested GNU definitions
     /// included, with its binding, body and parameter bindings.
-    pub(crate) functions:          &'tu [FunctionRecord<'tu>],
-    pub(crate) scopes:             &'tu [Scope],
-    pub(crate) type_names:         &'tu [(SourceVectors, TypeId)],
-    pub(crate) parameters:         &'tu [(SourceVectors, &'tu [Parameter])],
+    pub(crate) functions:           &'tu [FunctionRecord<'tu>],
+    pub(crate) scopes:              &'tu [Scope],
+    pub(crate) type_names:          &'tu [(SourceVectors, TypeId)],
+    pub(crate) parameters:          &'tu [(SourceVectors, &'tu [Parameter])],
     /// Typed results in child-before-parent order; an expression's ordinal
     /// is its index here.
-    pub(crate) expressions:        &'tu [ExpressionInfo<'tu>],
+    pub(crate) expressions:         &'tu [ExpressionInfo<'tu>],
     /// Syntax identity (the node's address) to its ordinal in
     /// `expressions`; see [`Self::expression_index`].
-    pub(super) expression_indices: ArenaMap<'tu, usize, usize>,
+    pub(super) expression_indices:  ArenaMap<'tu, usize, usize>,
+    /// String initializer syntax to its destination element type, independent
+    /// of array completion. C99: §6.7.8p14-15, p. 126; PDF p. 138.
+    pub(super) string_initializers: ArenaMap<'tu, usize, TypeId>,
     /// Conversion records grouped by expression ordinal, each run in the
     /// order its conversions were applied; see [`Self::conversions_of`].
-    pub(crate) conversions:        &'tu [Conversion<'tu>],
+    pub(crate) conversions:         &'tu [Conversion<'tu>],
     /// `conversions[conversion_starts[i]..conversion_starts[i + 1]]` is the
     /// run of expression `i`. Records for an operand without a retained
     /// result follow the last run.
-    pub(super) conversion_starts:  &'tu [usize],
-    pub(crate) tag_declarations:   &'tu [(usize, usize)],
+    pub(super) conversion_starts:   &'tu [usize],
+    pub(crate) tag_declarations:    &'tu [(usize, usize)],
     /// Error-severity diagnostics semantic analysis reported; warnings and
     /// diagnostics suppressed inside recovered syntax are not counted.
-    pub(crate) errors:             usize,
+    pub(crate) errors:              usize,
 }
 
 /// A resolved declaration occurrence, retained in lexical traversal order.
@@ -195,6 +198,18 @@ pub(crate) struct Definition {
 }
 
 impl<'tu> SemanticTranslationUnit<'tu> {
+    /// Whether analysis classified this expression as initializing the whole
+    /// array, including braced literals and arrays completed from the string.
+    /// C99: §6.7.8p14-15, p. 126; PDF p. 138.
+    pub(crate) fn string_initializes(&self, expression: &Expression<'tu>, ty: TypeId) -> bool {
+        let TypeKind::Array(element, _) = self.types.kind(ty) else {
+            return false;
+        };
+        self.string_initializers
+            .get(&std::ptr::from_ref(expression).addr())
+            == Some(&element.unqualified())
+    }
+
     /// The ordinal of an expression's record, in expected O(1). Parentheses
     /// have their own record, a copy of the inner one; an expression that
     /// analysis never typed, such as one inside unmodeled syntax, has none.

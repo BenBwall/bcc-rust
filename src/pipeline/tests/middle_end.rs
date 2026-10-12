@@ -17,6 +17,7 @@ use std::{
 };
 
 mod asm_labels;
+mod braced_strings;
 mod runtime_calls;
 mod union_initializers;
 

@@ -70,6 +70,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             integer_models: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             expressions: ArenaVec::new_in(tu),
             expression_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            string_initializers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             conversions: ArenaVec::new_in(scratch),
             const_members: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             register_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),

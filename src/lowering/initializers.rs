@@ -57,10 +57,7 @@ use crate::{
                 InitializerElement,
                 InitializerType,
             },
-            syntax::{
-                Expression,
-                ExpressionType,
-            },
+            syntax::Expression,
         },
         semantic_analysis::{
             ArrayBound,
@@ -98,7 +95,7 @@ pub(super) enum Leaf<'tu> {
         bit_field:  Option<BitFieldBits>,
     },
     /// A character array of `size` bytes initialized by a string literal
-    /// (§6.7.8p14).
+    /// (§6.7.8p14-15).
     String {
         ty:      TypeId,
         offset:  u64,
@@ -115,7 +112,7 @@ pub(super) enum Leaf<'tu> {
 }
 
 /// The stores of `initializer` for an object of type `ty`, in source order.
-/// C99: §6.7.8 paragraphs 17-19, pp. 126-127; PDF pp. 138-139.
+/// C99: §6.7.8 paragraphs 14-19, pp. 126-127; PDF pp. 138-139.
 pub(super) fn leaves<'tu, 's>(
     sema: &SemanticTranslationUnit<'tu>,
     ty: TypeId,
@@ -127,6 +124,10 @@ pub(super) fn leaves<'tu, 's>(
         selected_unions: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
     };
     let mut leaves = ArenaVec::new_in(arena);
+    if let Some(leaf) = walker.braced_string(ty, 0, initializer)? {
+        leaves.push(leaf);
+        return Ok(leaves);
+    }
     let list = match initializer.kind {
         | InitializerType::AssignmentExpression(expression) => {
             let leaf = walker.leaf(ty, 0, expression)?.ok_or_else(|| {
@@ -199,7 +200,11 @@ pub(super) fn leaves<'tu, 's>(
             | InitializerType::InitializerList(inner) => {
                 consume(&mut frames);
                 designated = None;
-                if walker.scalar(subobject.ty, element.source_vectors)? {
+                if let Some(leaf) =
+                    walker.braced_string(subobject.ty, offset, element.initializer)?
+                {
+                    leaves.push(leaf);
+                } else if walker.scalar(subobject.ty, element.source_vectors)? {
                     let expression = braced_scalar(element.initializer)?;
                     leaves.push(Leaf::Scalar {
                         offset,
@@ -316,6 +321,26 @@ struct Walker<'a, 'tu, 's> {
 }
 
 impl<'tu> Walker<'_, 'tu, '_> {
+    /// Uses semantic analysis's whole-array classification before descending
+    /// into an explicitly braced array's first character.
+    /// C99: §6.7.8p14-15, p. 126; PDF p. 138.
+    fn braced_string(
+        &self,
+        ty: TypeId,
+        offset: u64,
+        initializer: &'tu Initializer<'tu>,
+    ) -> Result<Option<Leaf<'tu>>, LoweringError> {
+        if let InitializerType::InitializerList(list) = initializer.kind
+            && let [element] = list.elements.as_slice()
+            && element.designation.is_none()
+            && let InitializerType::AssignmentExpression(expression) = element.initializer.kind
+            && self.sema.string_initializes(expression, ty)
+        {
+            return self.leaf(ty, offset, expression);
+        }
+        Ok(None)
+    }
+
     /// What a non-braced initializer `expression` stores into a subobject
     /// of type `ty`, or `None` if it initializes the subobject's first
     /// member instead.
@@ -335,10 +360,8 @@ impl<'tu> Walker<'_, 'tu, '_> {
             }));
         }
         let types = &self.sema.types;
-        if let TypeKind::Array(element, _) = types.kind(ty)
-            && matches!(peel(expression).kind, ExpressionType::StringLiteral(_))
-            && types.layout(element).is_some_and(|layout| layout.size == 1)
-        {
+        // C99 §6.7.8p14-15: use the retained narrow/wide string classification.
+        if self.sema.string_initializes(expression, ty) {
             let size = types
                 .layout(ty)
                 .ok_or_else(|| LoweringError::missing("an array has no size", source))?
@@ -726,7 +749,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 
     /// Copies a string literal's bytes into a character array; a literal
     /// one longer than an exactly sized array loses its null character.
-    /// C99: §6.7.8 paragraph 14, p. 126; PDF p. 138.
+    /// C99: §6.7.8 paragraphs 14-15, p. 126; PDF p. 138.
     /// C99: §6.7.8 paragraphs 19 and 21, p. 127; PDF p. 139 (replacement
     /// includes the implicitly zero-initialized remainder of the array).
     /// C99: §6.7.3 paragraph 6, p. 109; PDF p. 121.

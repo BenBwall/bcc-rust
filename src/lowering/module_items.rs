@@ -117,7 +117,7 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     pub(super) address_taken: ArenaSet<'a, usize>,
     /// Globals of static locals and `__func__`, which have no linkage.
     statics:                  ArenaMap<'a, usize, GlobalId>,
-    strings:                  ArenaMap<'a, LiteralId, GlobalId>,
+    strings:                  ArenaMap<'a, (LiteralId, bool), GlobalId>,
     /// Next candidate for a string literal's internal symbol.
     next_string_suffix:       u64,
     /// User names reserved before generating internal storage.
@@ -587,7 +587,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         global
     }
 
-    /// The internal constant global holding a narrow string literal's
+    /// The internal constant global holding a string literal's
     /// array, shared by identical literals as C99 permits (§6.4.5
     /// paragraph 6, p. 63; PDF p. 75).
     pub(super) fn string(
@@ -600,30 +600,26 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 expression.source_vectors,
             ));
         };
-        let id = match literal {
-            | StringTokenType::String(id) => id,
-            | StringTokenType::WideString(_) =>
-                return Err(LoweringError::unsupported(
-                    Construct::WideString,
-                    expression.source_vectors,
-                )),
+        let key = match literal {
+            | StringTokenType::String(id) => (id, false),
+            | StringTokenType::WideString(id) => (id, true),
             | StringTokenType::EncodedString(..) =>
                 return Err(LoweringError::unsupported(
                     Construct::EncodedString,
                     expression.source_vectors,
                 )),
         };
-        if let Some(&global) = self.strings.get(&id) {
+        if let Some(&global) = self.strings.get(&key) {
             return Ok(global);
         }
-        let bytes = self.string_bytes(id);
+        let (bytes, align) = self.literal_bytes(expression)?;
         let name = self.string_name();
         let global = self.module.declare_global(
             name,
             GlobalDecl {
-                linkage:  IrLinkage::Internal,
-                size:     bytes.len() as u64,
-                align:    Align::BYTE,
+                linkage: IrLinkage::Internal,
+                size: bytes.len() as u64,
+                align,
                 constant: true,
             },
         );
@@ -635,8 +631,40 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             },
         );
         _ = self.generated_globals.insert(global);
-        _ = self.strings.insert(id, global);
+        _ = self.strings.insert(key, global);
         Ok(global)
+    }
+
+    /// Encodes a literal and its terminator in the target's character units.
+    /// C99: §6.4.5p5, pp. 62-63; PDF pp. 74-75;
+    /// §6.7.8p14-15, p. 126; PDF p. 138.
+    fn literal_bytes(
+        &self,
+        expression: &'tu Expression<'tu>,
+    ) -> Result<(ArenaVec<'a, u8>, Align), LoweringError> {
+        match peel(expression).kind {
+            | ExpressionType::StringLiteral(StringTokenType::String(id)) =>
+                Ok((self.string_bytes(id), Align::BYTE)),
+            | ExpressionType::StringLiteral(StringTokenType::WideString(id)) => {
+                let layout = self.target.layout();
+                let character = layout
+                    .scalar(layout.wchar_t)
+                    .expect("wchar_t has a scalar layout");
+                let width = usize::try_from(character.size).expect("wchar_t fits usize");
+                let mut bytes = ArenaVec::new_in(self.tables);
+                for unit in self.context.wide_literal_units(id).chain([0]) {
+                    bytes.extend_from_slice(&unit.to_le_bytes()[..width]);
+                }
+                Ok((
+                    bytes,
+                    Align::from_bytes(character.align).expect("wchar_t alignment"),
+                ))
+            },
+            | _ => Err(LoweringError::unsupported(
+                Construct::EncodedString,
+                expression.source_vectors,
+            )),
+        }
     }
 
     /// The execution bytes of a narrow string literal and its null
@@ -766,15 +794,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     literal,
                     ..
                 } => {
-                    let ExpressionType::StringLiteral(StringTokenType::String(id)) =
-                        peel(literal).kind
-                    else {
-                        return Err(LoweringError::unsupported(
-                            Construct::WideString,
-                            literal.source_vectors,
-                        ));
-                    };
-                    let string = self.string_bytes(id);
+                    let (string, _) = self.literal_bytes(literal)?;
                     let (start, size) = (index(offset, literal)?, index(size, literal)?);
                     let count = string.len().min(size);
                     bytes[start..start + size].fill(0);
