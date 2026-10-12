@@ -357,6 +357,55 @@ block0:
 }
 
 #[test]
+fn custom_host_integer_results_must_fit_the_declared_width() {
+    struct IntegerHost(u128);
+    impl Host for IntegerHost {
+        fn call(&mut self, _: HostCall<'_>, _: &mut Memory<'_>) -> Result<HostReturn, Fault> {
+            Ok(HostReturn::Value(Some(RuntimeValue::Int(self.0))))
+        }
+    }
+
+    for ty in [
+        Type::I8,
+        Type::I1,
+        Type::I16,
+        Type::I32,
+        Type::I64,
+        Type::I128,
+    ] {
+        let text = format!(
+            "function @answer() -> {ty} external\nfunction @main() -> i32 external \
+             {{\nblock0:\nv0 = call @answer()\nv1 = iconst.{ty} 0\nv2 = icmp.{ty} eq v0, v1\nv3 = \
+             zext.i32 v2\nreturn v3\n}}\n"
+        );
+        let arena = Bump::new();
+        let module = parse_module(&arena, &text).unwrap();
+        if ty != Type::I128 {
+            // In particular, @answer() -> i8 returning 256 must trap before
+            // the comparison can consume an unnormalized SSA value.
+            for bits in [ty.mask() + 1, u128::MAX] {
+                assert!(
+                    matches!(
+                        run(&module, "main", &[], &mut IntegerHost(bits)),
+                        Err(Trap::UndefinedBehavior(UbKind::SignatureMismatch, _))
+                    ),
+                    "{ty}: {bits}"
+                );
+            }
+        }
+        for (bits, expected) in [(0, 1), (ty.mask(), 0)] {
+            assert_eq!(
+                run(&module, "main", &[], &mut IntegerHost(bits))
+                    .unwrap()
+                    .termination,
+                Termination::Returned(Some(int(expected))),
+                "{ty}: {bits}"
+            );
+        }
+    }
+}
+
+#[test]
 fn custom_host_results_are_checked_before_entering_typed_slots() {
     // AnswerHost always returns a pointer; both declarations are incompatible.
     for result in [" -> f64", ""] {
