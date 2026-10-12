@@ -253,12 +253,72 @@ native back end's extension instructions, depend on the decision.
 Extensions describe register bits only: they do not require an argument or
 result to be defined. Poison may reach an unused parameter or be returned to
 a caller that ignores it, with the same semantics in the interpreter and LLVM.
-The IR does not yet model `noundef`, and the LLVM back end emits no `noundef`
-parameter, argument or return attributes. Clang's scalar C signatures carry
-that additional promise, so optimizer comparisons do not yet have identical
-defined-value attributes. Explicit support is deferred until C lowering,
-aggregate ABI conversion, interpreter checks and optimizer rewrites can all
-preserve the promise; inferring it from `signext` or `zeroext` is unsound.
+`noundef` is an independent signature attribute available in both profiles:
+
+```text
+function @f(i8 signed noundef, ptr noundef, ... noundef) -> i32 noundef external
+```
+
+Passing or returning poison in **any bit or byte of a value** at a `noundef`
+position is immediate undefined behaviour, even when the callee ignores the
+argument or the caller ignores the result. The interpreter reports the existing
+UB trap (CLI status 70). `... noundef` applies this promise to every extra
+variadic argument; LLVM emission places it on those call-site arguments, since
+LLVM declarations have no attribute position for the ellipsis. Unmarked
+positions retain the poison semantics above. An attribute on a memory parameter
+(`aggregate`, `result`, `byval` or `sret`) constrains the pointer value only,
+not the bytes it addresses. A synthetic `registers` return-area parameter cannot
+be marked as an argument because it is not passed; `-> noundef` instead marks
+the actual returned registers and checks every byte of every register. Its LLVM
+packing does not freeze those bytes. Ordinary unmarked register returns retain
+the existing bytewise freeze refinement.
+
+Both profiles carry the attribute so optimization can see C scalar argument
+facts before ABI lowering. The verifier requires sorted, unique, in-range
+parameter indices, a real returned value for a return attribute (a scalar or
+post-ABI registers), and a variadic signature for `... noundef`. It deliberately
+does not reject a poison operand statically: reaching the position at runtime
+is UB. Signature interning and indirect calls include these contracts.
+
+C lowering follows **bundled Clang 23.1.1 at `-O0 -S -emit-llvm`** on System V
+and both Win64 targets. Scalar parameters (including pointers, `_Bool` and
+`__int128`) and scalar variadic arguments carry `noundef`. Aggregate register
+coercions carry none, including a struct containing a single scalar. `byval`
+pointers and Win64 indirect aggregate/`__int128` pointers carry it; hidden
+`sret` pointers do not. Pre-ABI C aggregate arguments mark the pointer to the
+caller-owned copy; register expansion removes this pointer contract rather
+than applying it to the object's potentially poisonous bytes. Explicit IR
+contracts on return-area pointers survive when the address becomes `sret`.
+Ordinary scalar contracts retain their positions through aggregate expansion.
+Win64 `__int128` arguments become pointer-only contracts on caller-owned storage;
+this coercion can refine executions already undefined in the pre-ABI form, but
+never imposes a defined-byte promise on the pointed-to storage. Explicit scalar
+return contracts survive Win64 `__int128` register coercion. **Clang's C return values
+have no `noundef` at `-O0` in the tested signatures**, so C lowering leaves
+return attributes absent; hand-written IR can mark returns explicitly.
+This also preserves C99 §6.9.1p12 (printed p. 142; PDF p. 154): reaching the
+closing brace of a non-void function is undefined only if the caller uses the
+call's value. An unused result from falling off a non-void function does not
+acquire an immediate UB contract merely by crossing the return boundary.
+`src/abi/tests/conformance/noundef.rs` compares this policy with live bundled
+Clang output, including direct and indirect variadic call sites.
+
+This adopts Clang's practical assumption that evaluating an indeterminate
+scalar as a C argument is UB. C99 §6.2.6.1p5 (printed pp. 37-38; PDF pp. 49-50)
+makes non-character reads of trap representations UB; §6.3.2.1p2 (printed p. 46;
+PDF p. 58) specifies lvalue conversion. Those clauses **do not prove the broader
+assumption for every indeterminate non-trapping or character representation**;
+the broader rule is an explicit lowering policy, not a claim about all C99
+indeterminate values. Aggregate padding remains outside that assumption.
+
+Optimizations may use a marked entry parameter as non-poison: `fold` removes
+`freeze` of that parameter. They must preserve defined executions: speculation
+must not introduce poison into marked arguments or returns, and a freeze of an
+otherwise possibly poisonous value must remain. Inlining can refine executions
+already undefined at a removed call boundary, as with other immediate UB.
+The differential generator produces parameter and return contracts; the
+interpreter oracle discards their UB cases before comparing LLVM arms and
+rejects any optimization that introduces a UB trap into a defined execution.
 
 Terminators end every block and nothing else does:
 
@@ -627,8 +687,10 @@ a memory return area; the interpreter transports the same 128 bits.
 widened (`zeroext`), as Clang does; other narrow integers leave their upper bits
 unspecified.
 
-The LLVM back end prints the decision as Clang does: `i8 noundef signext` on a
-parameter or argument and `signext i8` before a result.
+The LLVM back end emits register extension and `noundef` independently and
+exactly as the signature records them, on declarations, definitions and both
+kinds of call. A C `signed char` parameter on System V becomes
+`i8 noundef signext`; its result remains `signext i8`.
 
 **Known gaps:** aggregates in the variable part of a call and `va_arg` of
 aggregates are unsupported; packed structures do not reach ABI lowering yet,
