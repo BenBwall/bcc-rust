@@ -98,6 +98,44 @@ int main(void) {
 } ",
     ),
     (
+        "typed_overflow_conversions",
+        r"
+static int check(unsigned long long wide, unsigned negative, unsigned __int128 long_wide, unsigned __int128 ll_wide) {
+  unsigned u; int s; unsigned long ul; long sl; unsigned long long ull; long long sll;
+  if(__builtin_uadd_overflow(wide,1u,&u) || u!=1) return 1;
+  if(!__builtin_uadd_overflow(-1,1u,&u) || u!=0) return 2;
+  if(__builtin_sadd_overflow(negative,1,&s) || s!=0) return 3;
+  if(!__builtin_sadd_overflow(wide+2147483647u,1,&s) || s!=(-2147483647-1)) return 4;
+  if(!__builtin_usub_overflow(wide,1u,&u) || u!=~0u) return 5;
+  if(__builtin_ssub_overflow(negative,1,&s) || s!=-2) return 6;
+  if(__builtin_umul_overflow(2u,wide+1,&u) || u!=2) return 7;
+  if(__builtin_smul_overflow(2,negative,&s) || s!=-2) return 8;
+  if(__builtin_uaddl_overflow(long_wide,1ul,&ul) || ul!=1) return 9;
+  if(__builtin_saddl_overflow(~0ul,1l,&sl) || sl!=0) return 10;
+  if(!__builtin_usubl_overflow(long_wide,1ul,&ul) || ul!=~0ul) return 11;
+  if(__builtin_ssubl_overflow(~0ul,1l,&sl) || sl!=-2) return 12;
+  if(__builtin_umull_overflow(2ul,long_wide+1,&ul) || ul!=2) return 13;
+  if(__builtin_smull_overflow(2l,~0ul,&sl) || sl!=-2) return 14;
+  if(__builtin_uaddll_overflow(ll_wide,1ull,&ull) || ull!=1) return 15;
+  if(__builtin_saddll_overflow(~0ull,1ll,&sll) || sll!=0) return 16;
+  if(!__builtin_usubll_overflow(ll_wide,1ull,&ull) || ull!=~0ull) return 17;
+  if(__builtin_ssubll_overflow(~0ull,1ll,&sll) || sll!=-2) return 18;
+  if(__builtin_umulll_overflow(2ull,ll_wide+1,&ull) || ull!=2) return 19;
+  if(__builtin_smulll_overflow(2ll,~0ull,&sll) || sll!=-2) return 20;
+  return 0;
+}
+int main(void) {
+  unsigned r;
+  if(__builtin_uadd_overflow(0x100000000ULL,1u,&r) || r!=1) return 21;
+  volatile unsigned long long wide=0x100000000ULL;
+  volatile unsigned negative=~0u;
+  volatile unsigned __int128 long_wide=(unsigned __int128)1<<(sizeof(long)*8);
+  volatile unsigned __int128 ll_wide=(unsigned __int128)1<<64;
+  return check(wide,negative,long_wide,ll_wide);
+}
+",
+    ),
+    (
         "overflow_boundaries",
         r"
 static int check(int a,int b) {
@@ -145,6 +183,28 @@ int main(void) {
   int y=1; __builtin_choose_expr(1,y,++y)=4; if(y!=4) return 6; int *q=&__builtin_choose_expr(1,y,++y); *q=5; if(y!=5) return 9;
   return 0;
 } ",
+    ),
+    (
+        "mixed_case_ranges",
+        r"
+static int classify(int x) {
+  int result=0;
+  switch(x) {
+    case 1: result=1;
+    case 10 ... 20: result+=10; break;
+    case 30: result=30;
+    default: result+=100; break;
+  }
+  return result;
+}
+int main(void) {
+  int inputs[]={1,10,20,9,21,0,30};
+  int expected[]={11,10,10,100,100,100,130};
+  for(unsigned i=0;i<sizeof(inputs)/sizeof(inputs[0]);i++)
+    if(classify(inputs[i])!=expected[i]) return i+1;
+  return 0;
+}
+",
     ),
     (
         "keyword_varargs",
