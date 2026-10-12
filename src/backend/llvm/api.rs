@@ -35,11 +35,13 @@ use llvm_sys::{
         LLVMAppendBasicBlockInContext,
         LLVMArrayType2,
         LLVMBuildAlloca,
+        LLVMBuildArrayAlloca,
         LLVMBuildBinOp,
         LLVMBuildBr,
         LLVMBuildCall2,
         LLVMBuildCast,
         LLVMBuildCondBr,
+        LLVMBuildExtractValue,
         LLVMBuildFCmp,
         LLVMBuildFNeg,
         LLVMBuildFreeze,
@@ -543,6 +545,22 @@ impl<'id> Session<'id> {
         // operands have the verified IR types.
         let raw = unsafe { LLVMBuildAlloca(self.builder, ty.0, c"".as_ptr()) };
         Val(raw, PhantomData)
+    }
+
+    pub(super) fn array_alloca(&self, ty: Ty<'id>, size: Val<'id>) -> Val<'id> {
+        // SAFETY: Both handles belong to this session; size has integer type.
+        Val(
+            unsafe { LLVMBuildArrayAlloca(self.builder, ty.0, size.0, c"".as_ptr()) },
+            PhantomData,
+        )
+    }
+
+    pub(super) fn extract_value(&self, aggregate: Val<'id>, index: u32) -> Val<'id> {
+        // SAFETY: Callers supply an in-range index of a verified structure.
+        Val(
+            unsafe { LLVMBuildExtractValue(self.builder, aggregate.0, index, c"".as_ptr()) },
+            PhantomData,
+        )
     }
 
     pub(super) fn phi(&self, ty: Ty<'id>) -> Val<'id> {

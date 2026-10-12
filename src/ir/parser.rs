@@ -489,7 +489,10 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                     args,
                 }
             },
-            | _ if opcode.is_int_binary() || opcode.is_float_binary() || opcode == Opcode::PtrAdd =>
+            | _ if opcode.is_int_binary()
+                || opcode.is_overflow()
+                || opcode.is_float_binary()
+                || opcode == Opcode::PtrAdd =>
             {
                 let flags = self.cursor.flags();
                 InstData::Binary {
@@ -500,6 +503,8 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                 }
             },
             | _ if opcode.is_conversion()
+                || opcode.is_bit_unary()
+                || opcode == Opcode::DynAlloca
                 || matches!(
                     opcode,
                     Opcode::Fneg | Opcode::Freeze | Opcode::VaArg | Opcode::VaStart | Opcode::VaEnd
@@ -554,7 +559,7 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                 self.builder.constant(opcode, ty, bits)
             },
             | Opcode::Poison => InstData::Nullary { opcode, ty },
-            | Opcode::Null => InstData::Nullary {
+            | Opcode::Null | Opcode::Trap => InstData::Nullary {
                 opcode,
                 ty: Type::Ptr,
             },

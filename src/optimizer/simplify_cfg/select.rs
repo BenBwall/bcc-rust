@@ -245,7 +245,10 @@ fn cheap_arm(draft: &Draft<'_, '_>, block: Block) -> bool {
             } => 1,
             | InstData::Const { .. }
             | InstData::WideConst { .. }
-            | InstData::Nullary { .. }
+            | InstData::Nullary {
+                opcode: Opcode::Poison | Opcode::Null,
+                ..
+            }
             | InstData::StackAddr { .. }
             | InstData::GlobalAddr { .. }
             | InstData::FuncAddr { .. } => 0,

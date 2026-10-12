@@ -170,7 +170,7 @@ fn has_side_effects(data: &InstData) -> bool {
         | InstData::Call { .. }
         | InstData::CallIndirect { .. }
         | InstData::Unary {
-            opcode: Opcode::VaStart | Opcode::VaArg | Opcode::VaEnd,
+            opcode: Opcode::VaStart | Opcode::VaArg | Opcode::VaEnd | Opcode::DynAlloca,
             ..
         }
         | InstData::Binary {
