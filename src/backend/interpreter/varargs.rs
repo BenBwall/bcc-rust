@@ -11,12 +11,12 @@
 //!
 //! A post-ABI module has no `va_arg`: ABI lowering expanded it into loads
 //! from the target's `va_list`. There `va_start` lays out the variadic
-//! arguments as the target's calling convention leaves them, in objects
-//! that live until the function returns: for System V, a register save area
-//! holding the arguments that went in registers and an overflow area
-//! holding the rest, with the `va_list` fields pointing into them; for
-//! Win64, one 8-byte slot per argument and a `va_list` pointing to the
-//! first. `va_copy` copies the `va_list`'s bytes and `va_end` does nothing.
+//! arguments once per activation as the target's calling convention leaves
+//! them, in objects that live until the function returns: for System V, a
+//! register save area holding the arguments that went in registers and an
+//! overflow area holding the rest, with the `va_list` fields pointing into
+//! them; for Win64, one 8-byte slot per argument and a `va_list` pointing to
+//! the first. `va_copy` copies the `va_list`'s bytes and `va_end` does nothing.
 //!
 //! C99: §7.15.1, pp. 249-251; PDF pp. 261-263.
 
@@ -164,14 +164,65 @@ impl Machine<'_, '_, '_> {
         Ok(())
     }
 
-    /// `va_start` in a post-ABI module: lays out the executing frame's
-    /// variadic arguments as the target passes them and points the
-    /// `va_list` at `list` to them.
+    /// Restarts a list's own cursor while reusing argument areas owned by its
+    /// activation. They are laid out once, lazily, and freed with frame slots.
+    /// C99: §7.15.1.4p3, p. 251; PDF p. 263; §7.15.1.2, p. 250; PDF p. 262.
     fn va_start_for_target(
         &mut self,
         list: RuntimeValue,
         signature: Signature<'_>,
     ) -> Result<(), Fault> {
+        let backing = if let Some(backing) = self.frame().va_backing {
+            backing
+        } else {
+            let backing = self.prepare_target_varargs(signature)?;
+            if let Some(frame) = self.frames.last_mut() {
+                frame.va_backing = Some(backing);
+            }
+            backing
+        };
+        match backing {
+            | VaBacking::SystemV { save, overflow } => {
+                let fixed = ArgumentRegisters::after_fixed(signature);
+                let base = list.as_pointer().ok_or(Fault::Ub(UbKind::InvalidVaList))?;
+                let field = |at| RuntimeValue::Ptr(offset(base, at));
+                let gp_offset = 8 * u128::from(fixed.gp);
+                let fp_offset = u128::from(va_list::GP_AREA_SIZE) + 16 * u128::from(fixed.sse);
+                self.memory.store(
+                    Type::I32,
+                    RuntimeValue::int(Type::I32, gp_offset),
+                    field(va_list::GP_OFFSET),
+                    Align::BYTE,
+                )?;
+                self.memory.store(
+                    Type::I32,
+                    RuntimeValue::int(Type::I32, fp_offset),
+                    field(va_list::FP_OFFSET),
+                    Align::BYTE,
+                )?;
+                self.memory.store(
+                    Type::Ptr,
+                    RuntimeValue::Ptr(overflow),
+                    field(va_list::OVERFLOW_ARG_AREA),
+                    Align::BYTE,
+                )?;
+                self.memory.store(
+                    Type::Ptr,
+                    RuntimeValue::Ptr(save),
+                    field(va_list::REG_SAVE_AREA),
+                    Align::BYTE,
+                )
+            },
+            | VaBacking::Win64(slots) =>
+                self.memory
+                    .store(Type::Ptr, RuntimeValue::Ptr(slots), list, Align::BYTE),
+        }
+    }
+
+    /// Materializes the target's incoming variadic argument areas once.
+    /// C99: §7.15.1.4p3, p. 251; PDF p. 263 (restarts reuse incoming
+    /// arguments).
+    fn prepare_target_varargs(&mut self, signature: Signature<'_>) -> Result<VaBacking, Fault> {
         let frame = *self.frame();
         let start = frame.varargs;
         let end = start + frame.varargs_len;
@@ -211,34 +262,7 @@ impl Machine<'_, '_, '_> {
                     self.memory
                         .store(ty, value, RuntimeValue::Ptr(address), Align::BYTE)?;
                 }
-                let base = list.as_pointer().ok_or(Fault::Ub(UbKind::InvalidVaList))?;
-                let field = |at| RuntimeValue::Ptr(offset(base, at));
-                let gp_offset = 8 * u128::from(fixed.gp);
-                let fp_offset = u128::from(va_list::GP_AREA_SIZE) + 16 * u128::from(fixed.sse);
-                self.memory.store(
-                    Type::I32,
-                    RuntimeValue::int(Type::I32, gp_offset),
-                    field(va_list::GP_OFFSET),
-                    Align::BYTE,
-                )?;
-                self.memory.store(
-                    Type::I32,
-                    RuntimeValue::int(Type::I32, fp_offset),
-                    field(va_list::FP_OFFSET),
-                    Align::BYTE,
-                )?;
-                self.memory.store(
-                    Type::Ptr,
-                    RuntimeValue::Ptr(overflow),
-                    field(va_list::OVERFLOW_ARG_AREA),
-                    Align::BYTE,
-                )?;
-                self.memory.store(
-                    Type::Ptr,
-                    RuntimeValue::Ptr(save),
-                    field(va_list::REG_SAVE_AREA),
-                    Align::BYTE,
-                )
+                Ok(VaBacking::SystemV { save, overflow })
             },
             | Convention::Win64 => {
                 // Microsoft x64, "Varargs": one 8-byte slot per argument.
@@ -255,8 +279,7 @@ impl Machine<'_, '_, '_> {
                         Align::BYTE,
                     )?;
                 }
-                self.memory
-                    .store(Type::Ptr, RuntimeValue::Ptr(slots), list, Align::BYTE)
+                Ok(VaBacking::Win64(slots))
             },
         }
     }
@@ -312,4 +335,14 @@ impl Machine<'_, '_, '_> {
             Err(invalid())
         }
     }
+}
+
+/// Incoming argument storage shared by this activation's independent lists.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum VaBacking {
+    SystemV {
+        save:     Pointer,
+        overflow: Pointer,
+    },
+    Win64(Pointer),
 }

@@ -443,6 +443,11 @@ impl<'a> Memory<'a> {
 }
 
 impl Memory<'_> {
+    #[cfg(test)]
+    pub(super) fn backing_cells(&self) -> usize {
+        self.objects.iter().map(|object| object.cells.len()).sum()
+    }
+
     /// Allocates an object of `size` poison bytes and returns a pointer to
     /// its start. Freed storage is reused by capacity class, while logical
     /// bounds, addresses and generations describe this allocation alone.

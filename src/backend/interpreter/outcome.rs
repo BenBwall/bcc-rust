@@ -5,9 +5,13 @@ use super::value::RuntimeValue;
 /// A run that finished without trapping.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct Outcome {
-    pub(crate) termination: Termination,
+    pub(crate) termination:  Termination,
     /// The instructions executed.
-    pub(crate) steps:       u64,
+    pub(crate) steps:        u64,
+    /// Retained byte-cell capacity, including freed objects available for
+    /// reuse.
+    #[cfg(test)]
+    pub(crate) memory_cells: usize,
 }
 
 /// How a program ended.

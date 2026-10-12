@@ -183,6 +183,8 @@ impl Machine<'_, '_, '_> {
                     return Ok(Outcome {
                         termination,
                         steps: self.steps,
+                        #[cfg(test)]
+                        memory_cells: self.memory.backing_cells(),
                     }),
                 | Err(fault) => return Err(self.trap(fault, location)),
             }

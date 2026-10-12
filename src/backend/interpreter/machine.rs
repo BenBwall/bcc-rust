@@ -65,6 +65,8 @@ pub(super) struct Frame {
     /// Where this frame's variadic arguments start, and how many there are.
     pub(super) varargs:         usize,
     pub(super) varargs_len:     usize,
+    /// Lazily prepared incoming argument areas, owned by this frame.
+    pub(super) va_backing:      Option<super::varargs::VaBacking>,
     /// A number no other activation shares, so a `va_list` cursor can tell
     /// whether its frame is still the one that made it.
     pub(super) activation:      u64,
@@ -256,6 +258,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             slots,
             varargs,
             varargs_len: self.varargs.len() - varargs,
+            va_backing: None,
             activation: self.activations,
             caller_value,
             register_result,

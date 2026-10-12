@@ -10,6 +10,76 @@ use super::{
 };
 use crate::test_support::assert_snapshot;
 
+#[test]
+fn repeated_va_start_keeps_backing_memory_bounded_and_lists_independent() {
+    let program = "function @restart(i32, ...) -> i32 internal {
+    slot0 = stack_slot 24, align 8
+    slot1 = stack_slot 24, align 8
+    slot2 = stack_slot 24, align 8
+block0(v0: i32):
+    v1 = stack_addr slot0
+    v2 = stack_addr slot1
+    v3 = stack_addr slot2
+    v4 = iconst.i32 0
+    v5 = iconst.i32 1
+    jump block1(v4, v4)
+block1(v6: i32, v7: i32):
+    va_start v1
+    va_start v2
+    v8 = va_arg.i32 v1
+    va_copy v3, v1
+    v9 = va_arg.i32 v1
+    v10 = va_arg.i32 v2
+    v11 = va_arg.i32 v3
+    va_end v1
+    va_end v2
+    va_end v3
+    v12 = iadd.i32 v8, v9
+    v13 = iadd.i32 v12, v10
+    v14 = iadd.i32 v13, v11
+    v15 = iadd.i32 v7, v14
+    v16 = iadd.i32 v6, v5
+    v17 = icmp.i32 slt v16, v0
+    brif v17, block1(v16, v15), block2
+block2:
+    return v15
+}
+function @main() -> i32 external {
+block0:
+    v0 = iconst.i32 100000
+    v1 = iconst.i32 3
+    v2 = iconst.i32 7
+    v3 = call @restart(v0, v1, v2, v1, v2, v1, v2, v1, v2)
+    return v3
+}
+";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let text = format!("target triple = \"{}\"\n{program}", target.triple());
+        let text = lower_text(&text, target);
+        let ir = Bump::new();
+        let module = parse_module(&ir, &text).unwrap();
+        let arena = Bump::new();
+        let mut host = crate::backend::interpreter::DefaultHost::for_target(&arena, target);
+        let outcome = crate::backend::interpreter::run(&module, "main", &[], &mut host).unwrap();
+        assert_eq!(
+            outcome.termination,
+            crate::backend::interpreter::Termination::Returned(Some(
+                crate::backend::interpreter::RuntimeValue::Int(2_000_000)
+            )),
+            "{target:?}"
+        );
+        eprintln!(
+            "{target:?}: {} retained cells after 100,000 restarts",
+            outcome.memory_cells
+        );
+        assert!(
+            outcome.memory_cells < 1024,
+            "{target:?}: {} retained cells",
+            outcome.memory_cells
+        );
+    }
+}
+
 /// `@sum` adds `n` variadic `i64`s; `@mixed` reads an `i32`, a `double`, a
 /// pointer and an `i64` repeatedly, through a copy of its `va_list` for the
 /// second half; `@main` passes enough of each that both register classes
