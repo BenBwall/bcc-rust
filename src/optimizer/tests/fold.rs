@@ -3,12 +3,112 @@
 use super::*;
 
 #[test]
+fn freeze_lookup_stays_fast_with_many_noundef_parameters_and_bit_field_writes() {
+    use std::{
+        fmt::Write as _,
+        path::Path,
+        time::Duration,
+    };
+
+    use crate::{
+        configuration::CompilerConfiguration,
+        headers::HeaderSearch,
+        ir::Entity,
+        lowering::lower_translation_unit,
+        pipeline::{
+            analyze_translation_unit,
+            parse_translation_unit,
+        },
+        target::Target,
+        translation_phases::Context,
+    };
+
+    let mut source = String::from("struct B { unsigned b:1; }; void f(");
+    for index in 0..1023 {
+        write!(source, "int p{index}, ").unwrap();
+    }
+    source.push_str("volatile struct B *q) {\n");
+    for _ in 0..1024 {
+        source.push_str("q->b = p0;\n");
+    }
+    source.push_str("}\n");
+    let tu = Bump::new();
+    let mut context = Context::with_configuration(
+        &tu,
+        CompilerConfiguration::default().with_target(Target::LinuxGnu),
+    );
+    let unit = parse_translation_unit(
+        &mut context,
+        Path::new("<fold-scaling>"),
+        tu.alloc_str(&source),
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &unit);
+    let arena = Bump::new();
+    let mut scratch = Bump::new();
+    let mut module = lower_translation_unit(
+        &context,
+        &unit,
+        &sema,
+        Target::LinuxGnu,
+        &arena,
+        &mut scratch,
+    )
+    .unwrap();
+    assert_verifies(&module, "the lowered C");
+    assert_eq!(
+        module.function_signature(FuncId::new(0)).noundef.len(),
+        1024
+    );
+    assert_eq!(module.to_string().matches("freeze.").count(), 1024);
+    let report = optimize(&mut module, &only(&[Pass::Fold]), &scratch);
+    // Measure only fold, excluding parsing, lowering, lifting and verification.
+    // Bound the former ~537M comparisons, allowing 250 ms for an instruction
+    // walk whose expected time is only a few milliseconds.
+    let elapsed = report.stats(Pass::Fold).time;
+    eprintln!("fold scaling: {elapsed:?}");
+    assert!(
+        elapsed < Duration::from_millis(250),
+        "fold took {elapsed:?}"
+    );
+    assert_verifies(&module, "the folded C");
+    assert_eq!(module.to_string().matches("freeze.").count(), 1024);
+}
+
+#[test]
 fn freeze_of_noundef_entry_parameter_folds_only_with_the_contract() {
     let text =
         "function @f(i32 noundef, i32) -> i32 noundef external {\nblock0(v0: i32, v1: i32):\n    \
          v2 = freeze.i32 v0\n    v3 = freeze.i32 v1\n    v4 = iadd.i32 v2, v3\n    return v4\n}\n";
     let expected = "function @f(i32 noundef, i32) -> i32 noundef external {\nblock0(v0: i32, v1: \
                     i32):\n    v2 = freeze.i32 v1\n    v3 = iadd.i32 v0, v2\n    return v3\n}\n";
+    assert_pass(Pass::Fold, text, expected);
+}
+
+#[test]
+fn freeze_resolves_entry_parameter_replacements_but_keeps_other_block_parameters() {
+    let text = "\
+function @f(i32 noundef) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    v2 = iadd.i32 v0, v1
+    v3 = freeze.i32 v2
+    jump block1(v3)
+block1(v4: i32):
+    v5 = freeze.i32 v4
+    return v5
+}
+";
+    let expected = "\
+function @f(i32 noundef) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    jump block1(v0)
+block1(v2: i32):
+    v3 = freeze.i32 v2
+    return v3
+}
+";
     assert_pass(Pass::Fold, text, expected);
 }
 

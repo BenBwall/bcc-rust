@@ -59,6 +59,7 @@ use crate::ir::{
     Signature,
     Type,
     Value,
+    ValueDef,
 };
 
 /// Folds one function. Returns whether it rewrote anything.
@@ -121,17 +122,21 @@ fn fold_inst(draft: &Draft<'_, '_>, inst: Inst, signature: Signature<'_>) -> Opt
     match *draft.inst(inst) {
         | InstData::Unary {
             opcode: Opcode::Freeze,
+            ty,
             arg,
-            ..
-        } if draft
-            .body
-            .block_params(Block::new(0))
-            .iter()
-            .enumerate()
-            .any(|(index, &param)| {
-                signature.param_noundef(index) && param == draft.resolve(arg)
-            }) =>
-            Some(Outcome::Value(draft.resolve(arg))),
+        } => {
+            let arg = draft.resolve(arg);
+            // Only an entry parameter has a signature contract. Loads and
+            // other block parameters need no attribute lookup at all.
+            if let ValueDef::Param(block, index) = draft.value_def(arg)
+                && block == Block::new(0)
+                && signature.param_noundef(index as usize)
+            {
+                Some(Outcome::Value(arg))
+            } else {
+                fold_unary(draft, Opcode::Freeze, ty, arg)
+            }
+        },
         | InstData::Binary {
             opcode: Opcode::PtrAdd,
             args: [base, offset],

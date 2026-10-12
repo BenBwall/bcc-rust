@@ -40,6 +40,37 @@ mod tests {
                        i;\n  return s;\n}\n";
 
     #[test]
+    fn fold_finishes_many_noundef_parameters_and_volatile_bit_field_writes() {
+        use std::fmt::Write as _;
+
+        let mut source = String::from("struct B { unsigned b:1; }; void f(");
+        for index in 0..1023 {
+            write!(source, "int p{index}, ").unwrap();
+        }
+        source.push_str("volatile struct B *q) {\n");
+        for _ in 0..1024 {
+            source.push_str("q->b = p0;\n");
+        }
+        source.push_str("}\n");
+        // The old nested parameter/attribute scans performed ~537M comparisons.
+        // Allow ample process and front-end time while bounding that
+        // regression.
+        let output = run_native_with_timeout(
+            Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args(["--emit=ir", "--passes=fold", "--input", &source])
+                .env("NO_COLOR", "1")
+                .env_remove("CLICOLOR_FORCE"),
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap();
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
+        let ir = text(&output.stdout);
+        assert_eq!(ir.matches(" noundef").count(), 1024);
+        assert_eq!(ir.matches("freeze.").count(), 1024);
+    }
+
+    #[test]
     fn noundef_scalar_argument_reports_ub_with_status_70() {
         let source =
             "static int ignore(int x) { return 0; } int main(void) { int x; return ignore(x); }";

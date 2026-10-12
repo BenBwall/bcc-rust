@@ -337,11 +337,15 @@ pub(crate) struct Signature<'ir> {
 
 impl<'ir> Signature<'ir> {
     /// Whether passing poison at this argument position is immediate UB.
+    /// Verified signatures keep the marked indices sorted, so lookups in
+    /// per-parameter loops take logarithmic time rather than a full scan.
     pub(crate) fn param_noundef(&self, index: usize) -> bool {
         if index >= self.params.len() {
             self.variadic_noundef
         } else {
-            self.noundef.iter().any(|&param| param as usize == index)
+            self.noundef
+                .binary_search_by_key(&index, |&param| param as usize)
+                .is_ok()
         }
     }
 

@@ -154,14 +154,29 @@ fn verify_signature(
     mut report: impl FnMut(VerifierErrorKind),
 ) {
     verify_extensions(signature, profile, &mut report);
+    // A noundef check must not scan every aggregate for each marked index.
+    // Preserve the existing diagnostics for malformed, unordered attributes;
+    // verified signatures use one order check followed by binary searches.
+    let aggregates_ordered = signature
+        .aggregates
+        .windows(2)
+        .all(|pair| pair[0].index < pair[1].index);
+    let param_abi = |index: u32| {
+        if aggregates_ordered {
+            signature
+                .aggregates
+                .binary_search_by_key(&index, |param| param.index)
+                .ok()
+                .map(|position| signature.aggregates[position].abi)
+        } else {
+            signature.param_abi(index as usize)
+        }
+    };
     let mut previous = None;
     for &index in signature.noundef {
         if previous.is_some_and(|previous| index <= previous)
             || index as usize >= signature.params.len()
-            || matches!(
-                signature.param_abi(index as usize),
-                Some(ParamAbi::Registers(_))
-            )
+            || matches!(param_abi(index), Some(ParamAbi::Registers(_)))
         {
             report(VerifierErrorKind::Noundef(
                 "parameter indices must be ordered, unique and passed",

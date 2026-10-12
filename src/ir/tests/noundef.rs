@@ -32,6 +32,69 @@ fn noundef_signatures_round_trip_in_both_profiles() {
 }
 
 #[test]
+fn noundef_lookup_handles_sparse_fixed_and_variadic_positions() {
+    let arena = Bump::new();
+    let module = parse(
+        &arena,
+        "function @f(i32, i32 noundef, i32, i32 noundef, ... noundef) external\n",
+    );
+    let signature = module.function_signature(FuncId::new(0));
+    for (index, expected) in [
+        (0, false),
+        (1, true),
+        (2, false),
+        (3, true),
+        (4, true),
+        (usize::MAX, true),
+    ] {
+        assert_eq!(signature.param_noundef(index), expected, "index {index}");
+    }
+    let plain_variadic = Signature {
+        variadic_noundef: false,
+        ..signature
+    };
+    assert!(!plain_variadic.param_noundef(4));
+    assert!(!plain_variadic.param_noundef(usize::MAX));
+    let unmarked = Signature {
+        noundef: &[],
+        ..signature
+    };
+    assert!(!unmarked.param_noundef(0));
+    assert!(unmarked.param_noundef(4));
+}
+
+#[test]
+fn noundef_verifier_preserves_register_diagnostics_with_unordered_aggregates() {
+    let arena = Bump::new();
+    let mut module = parse(
+        &arena,
+        "abi lowered\nfunction @f(ptr registers(i64, align 8), ptr byval(size 8, align 8)) \
+         external\n",
+    );
+    let signature = module.function_signature(FuncId::new(0));
+    let attributes = [signature.aggregates[1], signature.aggregates[0]];
+    let signature = module.intern(Signature {
+        aggregates: &attributes,
+        noundef: &[0],
+        ..signature
+    });
+    let function = module.declare_function("unordered", signature, Linkage::External);
+    let scratch = Bump::new();
+    let errors = verify_function(&module, function, Profile::PostAbi, &scratch);
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(
+        errors
+            .iter()
+            .any(|error| matches!(error.kind, VerifierErrorKind::Noundef(_)))
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| matches!(error.kind, VerifierErrorKind::ParamAbi { index: 0, .. }))
+    );
+}
+
+#[test]
 fn noundef_verifier_rejects_missing_and_unpassed_positions() {
     let arena = Bump::new();
     let mut module = Module::new(&arena);
