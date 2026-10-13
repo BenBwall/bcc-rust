@@ -123,4 +123,3 @@ benchmarking-internals configurations, `git diff --check`, and
 last. The invalid-header `--emit=ir` probe reports twelve ordinary constraints
 and exits with status 1, without an internal lowering error. Shared LLVM trees
 were preserved; no staging or commits were performed.
-
