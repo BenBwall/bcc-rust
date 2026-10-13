@@ -211,6 +211,22 @@ extension that GCC and Clang provide, take the type of their value, and are
 reported through the extension policy. A set of members that no 64-bit type
 holds is diagnosed.
 
+### Storage, natural and member-place alignment
+
+`Types::layout` retains typedef/declaration storage alignment for placement and
+accesses. `Types::natural_alignment` ignores those overrides through array and
+atomic derivations while preserving nominal record packing. The ABI projection
+uses this canonical boundary for System V's unaligned-field classification.
+Microsoft record placement retains at least the natural boundary unless packed.
+
+Member typing retains `ExpressionInfo::place_alignment` from the containing
+place and resolved offset, including nested packed aggregate members. Contextual
+conversions describe destination types; they do not strengthen this source
+storage guarantee. Lowering carries the backing address and guarantee together
+for aggregate values. C99 §6.7.2.1p12 (p. 103; PDF p. 115), GNU
+[aligned/packed attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html),
+and System V AMD64 ABI §3.2.3 define the layout/ABI boundary.
+
 ## Binding, scope, linkage and recovery
 
 Ordinary identifiers and tags have separate visible maps. An entry remembers its

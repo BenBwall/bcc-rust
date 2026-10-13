@@ -339,6 +339,17 @@ checks it.
 
 ### Memory facts
 
+Aggregate operands retain their backing address and actual alignment guarantee
+independently of their converted C type. A copy uses the weaker source and
+destination guarantee; argument snapshots and call results retain their newly
+allocated storage guarantee. Control joins conservatively retain byte alignment.
+Member accesses consume semantic place alignment and any weaker backing-storage
+guarantee. A GNU union cast stores through the union temporary's guarantee,
+including packed unions whose selected member has stronger nominal alignment.
+These rules apply to initialization, assignment, argument passing, return and
+compound literals (C99 §6.3.2.1p2, p. 46; PDF p. 58; §6.5.16.1p2-3,
+p. 92; PDF p. 104; GNU [Cast to Union](https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html)).
+
 Every memory operation records its access type, alignment and `volatile`.
 Strict aliasing becomes an *access tag*: an index into a per-module table of
 type descriptors shaped like LLVM's struct-path TBAA, built once from sema's
@@ -1039,7 +1050,10 @@ A call-site signature can retain typed arguments after its ellipsis, for example
 LLVM's function type. Function declarations and definitions cannot carry typed
 variadic tails. The tail describes argument ABI attributes and classification,
 including `byval` on MEMORY arguments. Scalar-only calls keep the usual compact
-signature. The printer and parser preserve the ellipsis and every tail attribute.
+signature. ABI projection materializes a described tail's inherited `noundef`
+promises on the scalar and memory-pointer positions, leaving aggregate register
+parts unmarked. Scalars appended beyond that description retain their inherited
+promise through an extended projected call-site signature. The printer and parser preserve the ellipsis and every tail attribute.
 
 `va_arg_aggregate list : (ptr aggregate(...))` returns the address of a fresh
 copy of the next aggregate. Its signature is a layout descriptor with exactly
