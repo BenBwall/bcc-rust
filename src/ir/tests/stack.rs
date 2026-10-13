@@ -50,6 +50,53 @@ block0(v0: ptr, v1: ptr, v2: ptr):
 }
 
 #[test]
+fn aggregate_fetch_descriptor_properties_are_verified_at_the_fetch() {
+    let aggregate = "ptr aggregate(size 4, align 4, [0: i32])";
+    for (property, descriptor) in [
+        ("missing aggregate metadata", "(ptr)".to_owned()),
+        ("extra parameter", format!("({aggregate}, i32)")),
+        ("variadic descriptor", format!("({aggregate}, ...)")),
+        ("returned value", format!("({aggregate}) -> i32")),
+        (
+            "wrong pointee",
+            "(i32 aggregate(size 4, align 4, [0: i32]))".to_owned(),
+        ),
+    ] {
+        let text = format!(
+            "function @f(ptr) external {{\nblock0(v0: ptr):\n    v1 = va_arg_aggregate v0 : \
+             {descriptor}\n    return\n}}\n"
+        );
+        let arena = Bump::new();
+        let module = parse(&arena, &text);
+        let (_, function) = module.functions().next().unwrap();
+        let body = function.body.as_ref().unwrap();
+        let fetch = body.block_insts(body.blocks().next().unwrap())[0];
+        let scratch = Bump::new();
+        let errors = verify_module(&module, Profile::PreAbi, &scratch);
+        assert!(
+            !errors.is_empty(),
+            "{property} reached the interpreter: {text}"
+        );
+        assert!(
+            errors
+                .iter()
+                .all(|error| error.item == "f" && error.location == Location::Inst(fetch)),
+            "{property}: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| matches!(
+                error.kind,
+                VerifierErrorKind::InstructionType {
+                    opcode: Opcode::VaArgAggregate,
+                    ..
+                }
+            )),
+            "{property}: {errors:?}"
+        );
+    }
+}
+
+#[test]
 fn dynamic_stack_alignment_survives_text_and_llvm_emission() {
     for alignment in [1, 16, 32, 64] {
         let text = format!(
