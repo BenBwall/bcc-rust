@@ -1133,14 +1133,25 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
 /// the little-endian bytes from `start`, keeping the other bits. `None` if the
 /// field lies outside `bytes`.
 fn merge_bit_field(bytes: &mut [u8], start: usize, field: BitFieldBits, value: i128) -> Option<()> {
+    if field.width == 0 || field.width > 128 || field.bit_offset >= 8 {
+        return None;
+    }
     let span = usize::try_from((field.bit_offset + field.width).div_ceil(8)).ok()?;
     let target = bytes.get_mut(start..start + span)?;
-    let mut word = [0_u8; 16];
-    word.get_mut(..span)?.copy_from_slice(target);
-    let mut word = u128::from_le_bytes(word);
-    let mask = (u128::MAX >> (128 - field.width)) << field.bit_offset;
-    word = (word & !mask) | ((value as u128) << field.bit_offset & mask);
-    target.copy_from_slice(&word.to_le_bytes()[..span]);
+    // GNU packed fields can touch seventeen bytes even though their value
+    // fits in 128 bits. Merge in value coordinates, retaining neighbor bits.
+    // C99: §6.7.8p19, p. 127; PDF p. 139.
+    // <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html> (packed).
+    for bit in 0..field.width {
+        let position = usize::try_from(field.bit_offset + bit).ok()?;
+        let mask = 1_u8 << (position % 8);
+        let byte = &mut target[position / 8];
+        if (value as u128) & (1_u128 << bit) == 0 {
+            *byte &= !mask;
+        } else {
+            *byte |= mask;
+        }
+    }
     Some(())
 }
 

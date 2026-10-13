@@ -413,7 +413,7 @@ int main(void) {
 /// Lowers `source` for `target` and runs `main` in the interpreter,
 /// returning its status.
 #[track_caller]
-fn run_main(name: &str, source: &str, target: Target) -> i32 {
+pub(super) fn run_main(name: &str, source: &str, target: Target) -> i32 {
     let ir = lower_for(source, target)
         .unwrap_or_else(|errors| panic!("{name} failed to lower for {target:?}: {errors:?}"));
     let run = run_text(&ir, "main");
@@ -479,7 +479,7 @@ fn numeric_program_names_are_distinct() {
 }
 
 /// The target the tests run natively on, if the back end supports it.
-fn host() -> Option<Target> {
+pub(super) fn host() -> Option<Target> {
     if cfg!(all(windows, target_env = "gnu")) {
         Some(Target::WindowsGnu)
     } else if cfg!(all(windows, target_env = "msvc")) {
@@ -495,7 +495,7 @@ fn host() -> Option<Target> {
 
 /// Compiles the program for the host through LLVM at `-O2` and with LLVM's
 /// passes disabled, runs both, and returns their exit statuses.
-fn run_through_llvm(
+pub(super) fn run_through_llvm(
     _toolchain: &Toolchain,
     directory: &crate::test_support::TempDir,
     program: &Program,

@@ -443,6 +443,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.values.push(ty);
             },
             | Work::VectorAttributes(chain, storage_alignment) => {
+                self.work
+                    .push(Work::VectorAttributesDone(chain, storage_alignment));
+                self.attribute_chain_operands(chain);
+            },
+            | Work::VectorAttributesDone(chain, storage_alignment) => {
                 let base = self.take_type();
                 let ty = self.vector_attribute_chain(base, chain, storage_alignment);
                 self.values.push(ty);
@@ -477,7 +482,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.values.push(ty);
             },
-            | Work::Spec(s, q, source, force) => self.resolve_spec(s, q, source, force),
+            | Work::Spec(s, q, source, force) => {
+                self.work.push(Work::SpecDone(s, q, source, force));
+                let attributes = match s {
+                    | TypeSpecifiers::StructOrUnion(record) => record.attributes,
+                    | TypeSpecifiers::Enum(enumeration) => enumeration.attributes,
+                    | _ => None,
+                };
+                self.attribute_chain_operands(attributes);
+            },
+            | Work::SpecDone(s, q, source, force) => self.resolve_spec(s, q, source, force),
             | Work::Atomic(source) => {
                 let value = self.take_type();
                 let ty = self.atomic_type(value, source, true);
@@ -549,7 +563,18 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.type_names.push((source, ty));
                     _ = self.resolved_type_names.insert(source, ty);
                 },
-            | Work::Declarator(d, mut base, parameter) => {
+            | Work::Declarator(d, base, parameter) => {
+                self.work.push(Work::DeclaratorDone(d, base, parameter));
+                for level in d.pointer.levels {
+                    self.attribute_chain_operands(level.attributes);
+                }
+                for direct in d.kind {
+                    if let DirectDeclarator::Attributes(attribute) = direct {
+                        self.attribute_operands(attribute);
+                    }
+                }
+            },
+            | Work::DeclaratorDone(d, mut base, parameter) => {
                 if d.pointer
                     .levels
                     .iter()
@@ -869,6 +894,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
             },
             | Work::MemberBase(tag, d, base, extensions, spec_packed, members) => {
+                self.work.push(Work::MemberBaseDone(
+                    tag,
+                    d,
+                    base,
+                    extensions,
+                    spec_packed,
+                    members,
+                ));
+                self.attribute_chain_operands(d.attributes);
+            },
+            | Work::MemberBaseDone(tag, d, base, extensions, spec_packed, members) => {
                 let packed = spec_packed
                     || self.layout_attribute_chain(d.attributes).packed
                     || d.declarator
@@ -1327,14 +1363,17 @@ enum Work<'tu, 's> {
     OldSignature(&'tu FunctionDefinition<'tu>),
     DiscardType,
     VectorAttributes(Option<&'tu SpecifierExtension<'tu>>, bool),
+    VectorAttributesDone(Option<&'tu SpecifierExtension<'tu>>, bool),
     VectorDeclaratorAttributes(ArenaList<'tu, DirectDeclarator<'tu>>),
     UnknownType,
     Spec(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
+    SpecDone(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
     Qualify(TypeQualifiers, SourceVectors),
     TypeName(&'tu TypeName<'tu>),
     TypeNameBase(&'tu TypeName<'tu>),
     TypeNameDone(SourceVectors),
     Declarator(Declarator<'tu>, TypeId, bool),
+    DeclaratorDone(Declarator<'tu>, TypeId, bool),
     Direct(&'tu DirectDeclarator<'tu>, SourceVectors, bool),
     ArrayDone(
         TypeId,
@@ -1362,6 +1401,14 @@ enum Work<'tu, 's> {
     ),
     RecordMemberBase(usize, StructDeclaration<'tu>, &'s Collection<'s, Member>),
     MemberBase(
+        usize,
+        StructDeclarator<'tu>,
+        TypeId,
+        Option<&'tu SpecifierExtension<'tu>>,
+        bool,
+        &'s Collection<'s, Member>,
+    ),
+    MemberBaseDone(
         usize,
         StructDeclarator<'tu>,
         TypeId,

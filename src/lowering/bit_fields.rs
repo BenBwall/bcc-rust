@@ -24,6 +24,8 @@
 //!
 //! C99: §6.7.2.1 paragraphs 3-4 and 10-11, pp. 101-102; PDF pp. 113-114.
 //! §6.5.16 paragraph 3, p. 91; PDF p. 103.
+//! GNU extension: GCC Common Attributes, packed permits straddling fields.
+//! <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html>
 
 use super::{
     FunctionLowerer,
@@ -75,13 +77,19 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             ));
         }
         let declared = types::layout(types, ty).map_err(|kind| at(kind, source))?;
-        let end = bits.bit_offset + bits.width;
-        if bits.width == 0 || u64::from(end) > declared.size * 8 || end > 128 {
+        // The width fits the declared type; GNU packed placement may make
+        // its storage span wider, up to 135 bits for a 128-bit field.
+        if bits.width == 0
+            || u64::from(bits.width) > declared.size * 8
+            || bits.width > 128
+            || bits.bit_offset >= 8
+        {
             return Err(LoweringError::missing(
                 "a bit-field does not fit its declared type",
                 source,
             ));
         }
+        let end = bits.bit_offset + bits.width;
         let aligned = if offset == 0 {
             declared.align
         } else {
@@ -106,6 +114,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         volatile: bool,
         result: Type,
     ) -> Value {
+        if field.shift + field.width > 128 {
+            return self.load_spanning_bit_field(address, field, volatile, result);
+        }
         let working = working_type(field);
         let mut joined: Option<Value> = None;
         let mut position = 0;
@@ -128,6 +139,32 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         }
         let joined = joined.expect("a bit-field spans a byte");
         self.extract_bit_field(joined, field, result)
+    }
+
+    /// Assemble a packed field that touches seventeen bytes into its 128-bit
+    /// value. Shift each byte into value coordinates before joining, so the
+    /// neighboring bits outside the value never require a wider IR integer.
+    /// C99: §6.7.2.1p10-11, p. 102; PDF p. 114 (implementation choice).
+    fn load_spanning_bit_field(
+        &mut self,
+        address: Value,
+        field: BitField,
+        volatile: bool,
+        result: Type,
+    ) -> Value {
+        let mut joined = self.iconst(Type::I128, 0);
+        for position in 0..field.span {
+            let at_byte = self.offset_address(address, u64::from(position));
+            let byte = self.load_piece(at_byte, Type::I8, field, position, volatile);
+            let mut part = self.extend(byte, false, Type::I128);
+            part = if position == 0 {
+                self.shift_by(Opcode::Lshr, part, field.shift)
+            } else {
+                self.shift_by(Opcode::Shl, part, position * 8 - field.shift)
+            };
+            joined = self.binary_inst(Opcode::Or, InstFlags::empty(), joined, part);
+        }
+        self.extract_bit_field(joined, BitField { shift: 0, ..field }, result)
     }
 
     /// The value of the field in `joined`, the integer its bytes make, as
@@ -196,7 +233,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 while position < stop {
                     let size = piece(stop - position);
                     let piece_type = types::int_type(size * 8);
-                    let part = self.piece_of(placed, position, piece_type);
+                    let part = self.field_piece(low, placed, field, position, piece_type);
                     let at_piece = self.offset_address(address, u64::from(position));
                     self.store_piece(at_piece, part, field, position, volatile);
                     position += size;
@@ -204,7 +241,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             } else {
                 // A partly covered byte keeps the bits the field does not
                 // own.
-                let part = self.piece_of(placed, position, Type::I8);
+                let part = self.field_piece(low, placed, field, position, Type::I8);
                 let at_byte = self.offset_address(address, u64::from(position));
                 let old = self.load_piece(at_byte, Type::I8, field, position, volatile);
                 let old = self.convert(Opcode::Freeze, Type::I8, old);
@@ -222,6 +259,24 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             self.extract_bit_field(low, readable, result)
         } else {
             self.extend(low, false, result)
+        }
+    }
+
+    /// A storage piece of the field. A seventeen-byte span is shifted from
+    /// the value directly, avoiding loss of its high bits in `placed`.
+    fn field_piece(
+        &mut self,
+        low: Value,
+        placed: Value,
+        field: BitField,
+        position: u32,
+        piece_type: Type,
+    ) -> Value {
+        if field.shift + field.width > 128 && position != 0 {
+            let part = self.shift_by(Opcode::Lshr, low, position * 8 - field.shift);
+            self.extend(part, false, piece_type)
+        } else {
+            self.piece_of(placed, position, piece_type)
         }
     }
 
@@ -292,7 +347,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
 
 /// The integer type that holds all the bytes of a field.
 fn working_type(field: BitField) -> Type {
-    types::int_type(field.span.next_power_of_two() * 8)
+    types::int_type(field.span.min(16).next_power_of_two() * 8)
 }
 
 /// The size in bytes of the largest natural access within `remaining`

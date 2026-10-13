@@ -1171,12 +1171,11 @@ signatures so replacing intrin0.h preserves the native C17 stdatomic.h path.
 The prefetch builtin checks its pointer and optional constant operands.
 
 Known boundaries: AVX-512, AMX, newer x86 instruction families, _Float16/bfloat
-vector typedefs and ext_vector_type are not shipped. Attribute arguments have
+vector typedefs and ext_vector_type are not shipped. `vector_size` arguments have
 an iterative integer-literal/enum/arithmetic reducer rather than general C ICE
-syntax (sizeof and casts in attribute arguments are not implemented).
-Alignment-only attributes on non-vector declared types, including vector-derived
-pointers and arrays, remain unanalyzed; they do not change the pointee or element
-vector.
+syntax (`sizeof` and casts in `vector_size` operands are not implemented).
+GNU alignment operands use semantic constant evaluation; declaration alignment
+on pointers and arrays does not change their pointee or element type.
 sizeof/alignof vectors and constant scalar lane initializers evaluate normally;
 vector arithmetic/shuffles/casts do not retain lane constants, so their results
 are not folded in static initializers or subsequent subscripting. This is a
@@ -1558,3 +1557,38 @@ four require backend/interpreter control or ABI subsystems; aggregate varargs
 and VLA lowering remain owned by the separate worktree. The dated corpus report
 in `docs/research/gcc-torture-execute-results.md` contains the exact inventory,
 counts, implementation references and validation evidence.
+
+### PR #42 round-1 layout and alignment repairs (2026-10-13)
+
+System V packed bit-fields honor explicit member alignment, including a
+one-byte request that starts a new byte. Packed union bit-fields occupy only
+the bytes their bits require. Microsoft allocation units remain unchanged;
+bundled Clang gives the aligned packed example size/alignment 4/4 on MinGW
+and 4/1 on MSVC, which ignores that member alignment. The Linux result is 8/4.
+These choices follow the [GCC packed and aligned attribute sections](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html)
+and C99 §6.7.2.1p10 (printed p. 102; PDF p. 114).
+
+Packed fields may straddle their declared storage slot. Lowering accesses
+exactly their occupied bytes and uses a sufficiently wide integer for their
+values; a 128-bit field reaching a seventeenth byte is assembled in value
+coordinates. Static initializers merge those bits without discarding neighboring
+fields, as required by C99 §6.7.8p19 (printed p. 127; PDF p. 139).
+
+Recognized `aligned` operands retain parsed expression syntax and use semantic
+ICE evaluation for `sizeof`, alignment queries, enum constants, casts and
+arithmetic (C99 §6.6p6, printed p. 95; PDF p. 107). Raw attribute tokens and
+provenance remain available; expression syntax and frame pools use arenas.
+`vector_size` keeps its existing token reducer. Multiple `_Alignas` specifiers
+combine into the strictest request before comparison with the original natural
+alignment. That comparison, and type operands, use size-independent array
+alignment for VLAs and VLA typedefs (C11 §6.7.5p4,p6, printed p. 127;
+PDF p. 145).
+
+Regressions in `src/lowering/tests/layout.rs` cover layout queries, interpreter
+execution on all four targets and native LLVM execution with and without its
+optimization passes. Semantic tests cover weakened VLA alignment, constraint
+diagnostics, following-declaration recovery and deeply nested alignment operands.
+Each reported finding was reproduced by a failing regression before its repair.
+Bundled Clang checked all four target triples. GCC 13.2 with
+`-mno-ms-bitfields` checked System V record rules at O0/O2 on the Windows host;
+Linux-native GCC execution was unavailable because WSL access was denied.

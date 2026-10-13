@@ -1138,3 +1138,13 @@ ISO constraints and arithmetic/address constant classification remain those of
 C99 §6.6 and §6.7.8; standard alignment follows C11 §6.7.5. GNU range expressions
 execute once for the entire selected range. Vector and complex execution, inline
 assembly, nested functions and label relocations remain outside this change.
+
+PR #42 round-1 repairs complete explicit alignment of packed System V
+bit-fields, occupied-bit sizing of packed unions and lowering/static packing
+of fields spanning more than their declared slot. Microsoft bit-field units
+follow bundled Clang, including its MinGW/MSVC alignment difference.
+GNU `aligned` uses semantic integer constant evaluation; `vector_size` retains
+its token reducer. C11 §6.7.5p4,p6 combines multiple `_Alignas` requests before
+checking natural alignment, including runtime-sized arrays and VLA typedefs.
+See [the semantic repair record](semantic-analysis.md#pr-42-round-1-layout-and-alignment-repairs-2026-10-13)
+and [GCC's packed/aligned sections](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html).
