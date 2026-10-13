@@ -245,15 +245,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             } => {
                 self.tasks.push(Task::Finish(expression));
                 self.tasks.push(Task::Evaluate(base_expression));
-                if let E::Cast { target_type, .. } = expression.kind {
-                    let site = self.unit.sema.type_name_site(target_type).ok_or_else(|| {
-                        LoweringError::missing("cast type-site facts are not retained", source)
-                    })?;
-                    let mut tasks = ArenaVec::new_in(self.scratch);
-                    Self::prepare_site_tasks(site, &mut tasks);
-                    self.prepare_type_tasks(site.ty, &mut tasks);
-                    self.push_all(&tasks);
-                }
             },
             | E::Conditional(conditional) => {
                 let then = self.draft.create_block(&[]);
@@ -281,7 +272,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.tasks.push(Task::Sizeof(object, info.ty, source));
                 let mut tasks = ArenaVec::new_in(self.scratch);
                 Self::prepare_site_tasks(site, &mut tasks);
-                self.prepare_type_tasks(object, &mut tasks);
+                self.prepare_bound_tasks(site.bounds, &mut tasks);
                 self.push_all(&tasks);
             },
             | E::SizeofExpr(operand) => {
@@ -311,13 +302,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.tasks.push(Task::EvaluateRaw(c.condition_expression));
             },
             | E::StatementExpression(statement) =>
-                self.statement_expression(statement, info.ty, super::StatementMode::Value),
+                self.statement_expression(statement, info.ty, super::StatementMode::Value)?,
             | E::LabelAddress(_) | E::Countof(_) | E::Boolean(_) | E::Nullptr | E::Error =>
                 return Err(LoweringError::missing(
                     "an expression was not parsed",
                     source,
                 )),
         }
+        self.prepare_expression_actions(expression)?;
         Ok(())
     }
 

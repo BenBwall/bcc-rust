@@ -54,7 +54,6 @@ use crate::{
             },
             syntax::{
                 BlockItem,
-                ConstantExpressionSlot,
                 Expression,
                 ExpressionSlot,
                 ForInitializer,
@@ -64,9 +63,12 @@ use crate::{
         },
         semantic_analysis::{
             BindingKind,
+            ControlTarget,
             Duration,
             FunctionRecord,
+            LabelId,
             Linkage,
+            Transition,
             TypeKind,
         },
     },
@@ -86,6 +88,22 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     ) -> Result<(), LoweringError> {
         use StatementType as S;
         let source = statement.source_vectors;
+        let control = self
+            .unit
+            .sema
+            .control
+            .statement(statement)
+            .copied()
+            .ok_or_else(|| {
+                LoweringError::missing("statement control facts are not retained", source)
+            })?;
+        if !matches!(statement.kind, S::For(_)) || !self.transition_has_cleanup(control.exit) {
+            self.tasks.push(Task::CleanupNormal(statement));
+        }
+        debug_assert!(
+            std::ptr::eq(control.syntax, statement),
+            "statement lookup preserves syntax identity"
+        );
         // C99 §6.8.1p4, p. 132; PDF p. 144: labels preserve their statement.
         // GNU statement-expression tails enter the same targets without
         // discarding the final expression's converted value. Overflow type
@@ -105,8 +123,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             }
         };
         match statement.kind {
-            | S::Compound { items } => {
-                self.enter_scope(statement);
+            | S::Compound { items } =>
                 for item in items.iter().rev() {
                     self.tasks.push(match *item {
                         | BlockItem::Statement(statement) => child(statement),
@@ -117,8 +134,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                                 definition.source_vectors,
                             )),
                     });
-                }
-            },
+                },
             | S::Expression(slot) => {
                 let expression = expression(slot, source)?;
                 if mode == StatementMode::Effects {
@@ -200,6 +216,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let header = self.draft.create_block(&[]);
                 let body = self.draft.create_block(&[]);
                 let exit = self.draft.create_block(&[]);
+                _ = self.targets.insert(
+                    control.id,
+                    JumpTargets {
+                        break_to:    exit,
+                        continue_to: Some(header),
+                    },
+                );
                 self.push_all(&[
                     Task::JumpTo {
                         block: header,
@@ -218,12 +241,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         block: body,
                         seal:  true,
                     },
-                    Task::PushTargets(JumpTargets {
-                        break_to:    exit,
-                        continue_to: Some(header),
-                    }),
                     child(body_statement),
-                    Task::PopTargets,
                     Task::JumpTo {
                         block: header,
                         seal:  true,
@@ -242,6 +260,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let body = self.draft.create_block(&[]);
                 let test = self.draft.create_block(&[]);
                 let exit = self.draft.create_block(&[]);
+                _ = self.targets.insert(
+                    control.id,
+                    JumpTargets {
+                        break_to:    exit,
+                        continue_to: Some(test),
+                    },
+                );
                 self.push_all(&[
                     Task::JumpTo {
                         block: body,
@@ -251,12 +276,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         block: body,
                         seal:  false,
                     },
-                    Task::PushTargets(JumpTargets {
-                        break_to:    exit,
-                        continue_to: Some(test),
-                    }),
                     child(body_statement),
-                    Task::PopTargets,
                     Task::JumpTo {
                         block: test,
                         seal:  true,
@@ -278,11 +298,23 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 ]);
             },
             | S::For(clauses) => {
-                self.enter_scope(statement);
                 let header = self.draft.create_block(&[]);
                 let body = self.draft.create_block(&[]);
                 let step = self.draft.create_block(&[]);
                 let exit = self.draft.create_block(&[]);
+                let cleanup_exit = self.transition_has_cleanup(control.exit);
+                let break_exit = if cleanup_exit {
+                    self.draft.create_block(&[])
+                } else {
+                    exit
+                };
+                _ = self.targets.insert(
+                    control.id,
+                    JumpTargets {
+                        break_to:    break_exit,
+                        continue_to: Some(step),
+                    },
+                );
                 let mut tasks = ArenaVec::with_capacity_in(16, self.scratch);
                 match clauses.initializer {
                     | Some(ForInitializer::Expression(slot)) => {
@@ -318,12 +350,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         block: body,
                         seal:  true,
                     },
-                    Task::PushTargets(JumpTargets {
-                        break_to:    exit,
-                        continue_to: Some(step),
-                    }),
                     child(clauses.body_statement),
-                    Task::PopTargets,
                     Task::JumpTo {
                         block: step,
                         seal:  true,
@@ -347,6 +374,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         seal:  true,
                     },
                 ]);
+                if cleanup_exit {
+                    tasks.push(Task::CleanupNormal(statement));
+                    tasks.push(Task::JumpTo {
+                        block: break_exit,
+                        seal:  true,
+                    });
+                    tasks.push(Task::Enter {
+                        block: break_exit,
+                        seal:  false,
+                    });
+                }
                 self.push_all(&tasks);
             },
             | S::Return(None) => {
@@ -356,57 +394,59 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     | Some(ty) => Some(self.draft.poison(ty)),
                     | None => None,
                 };
-                self.cleanup_to(0);
+                _ = self.cleanup_jump(statement)?;
                 self.draft
                     .terminate_and_continue_dead(Terminator::Return(value));
             },
             | S::Return(Some(slot)) => {
-                self.tasks.push(Task::Return);
+                self.tasks.push(Task::Return(statement));
                 self.tasks.push(Task::Evaluate(expression(slot, source)?));
             },
-            | S::Break => {
-                let target = self
-                    .jumps
-                    .last()
-                    .ok_or_else(|| LoweringError::missing("break outside a loop", source))?
-                    .break_to;
-                self.jump_away(target);
+            | S::Break | S::Continue | S::Goto(_) => {
+                let target = self.cleanup_jump(statement)?;
+                let block = match target {
+                    | ControlTarget::Label(label) => self.label_block(label),
+                    | ControlTarget::LoopBreak(id) | ControlTarget::SwitchBreak(id) => self
+                        .targets
+                        .get(&id)
+                        .map(|targets| targets.break_to)
+                        .ok_or_else(|| {
+                            LoweringError::missing("resolved break target has no IR block", source)
+                        })?,
+                    | ControlTarget::LoopContinue(id) => self
+                        .targets
+                        .get(&id)
+                        .and_then(|targets| targets.continue_to)
+                        .ok_or_else(|| {
+                            LoweringError::missing(
+                                "resolved continue target has no IR block",
+                                source,
+                            )
+                        })?,
+                    | ControlTarget::FunctionExit(_) =>
+                        return Err(LoweringError::missing(
+                            "goto resolves to a function exit",
+                            source,
+                        )),
+                };
+                self.jump_away(block);
             },
-            | S::Continue => {
-                let target = self
-                    .jumps
-                    .iter()
-                    .rev()
-                    .find_map(|targets| targets.continue_to)
-                    .ok_or_else(|| LoweringError::missing("continue outside a loop", source))?;
-                self.jump_away(target);
-            },
-            | S::Goto(label) => {
-                debug_assert!(
-                    self.label_scopes.contains_key(&label.name),
-                    "every goto label has an indexed lexical scope"
-                );
-                let scope = self.label_scopes.get(&label.name).copied().ok_or_else(|| {
-                    LoweringError::missing("a goto label has no indexed lexical scope", source)
+            | S::Label(_, statement) => {
+                let label = control.label.ok_or_else(|| {
+                    LoweringError::missing("label identity is not retained", source)
                 })?;
-                let target = self.label_block(label.name);
-                _ = self.block_scopes.insert(target, scope);
-                self.jump_away(target);
-            },
-            | S::Label(label, statement) => {
-                let block = self.label_block(label.name);
+                let block = self.label_block(label);
                 self.draft.jump(block, &[]);
                 self.draft.switch_to(block);
                 self.tasks.push(labeled_child(statement));
             },
             | S::Case(_, inner) | S::Default(inner) => {
-                let block = self
-                    .cases
-                    .get(&std::ptr::from_ref(statement).addr())
-                    .copied()
-                    .ok_or_else(|| {
-                        LoweringError::missing("a case label is outside a switch", source)
-                    })?;
+                let label = control.label.ok_or_else(|| {
+                    LoweringError::missing("case identity is not retained", source)
+                })?;
+                let block = self.labels.get(&label).copied().ok_or_else(|| {
+                    LoweringError::missing("a case label has no dispatch block", source)
+                })?;
                 self.draft.jump(block, &[]);
                 self.draft.switch_to(block);
                 self.tasks.push(labeled_child(inner));
@@ -416,13 +456,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 body_statement,
             } => {
                 let exit = self.draft.create_block(&[]);
+                _ = self.targets.insert(
+                    control.id,
+                    JumpTargets {
+                        break_to:    exit,
+                        continue_to: None,
+                    },
+                );
                 self.push_all(&[
                     Task::Evaluate(expression(condition_expression, source)?),
-                    Task::Switch {
-                        statement,
-                        body: body_statement,
-                        exit,
-                    },
+                    Task::Switch { statement, exit },
                     child(body_statement),
                     Task::EndSwitch { statement, exit },
                 ]);
@@ -431,13 +474,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | S::Attributed(attributed) => self.tasks.push(labeled_child(attributed.statement)),
             | S::Null => {},
             | S::CaseRange(range) => {
-                let block = self
-                    .cases
-                    .get(&std::ptr::from_ref(statement).addr())
-                    .copied()
-                    .ok_or_else(|| {
-                        LoweringError::missing("a case range is outside a switch", source)
-                    })?;
+                let label = control.label.ok_or_else(|| {
+                    LoweringError::missing("case range identity is not retained", source)
+                })?;
+                let block = self.labels.get(&label).copied().ok_or_else(|| {
+                    LoweringError::missing("a case range has no dispatch block", source)
+                })?;
                 self.draft.jump(block, &[]);
                 self.draft.switch_to(block);
                 self.tasks.push(labeled_child(range.statement));
@@ -469,13 +511,22 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     pub(super) fn switch(
         &mut self,
         statement: &'tu Statement<'tu>,
-        body: &'tu Statement<'tu>,
         exit: Block,
     ) -> Result<(), LoweringError> {
         let source = statement.source_vectors;
         let item = self.pop();
         let value = self.value(item, source)?;
-        let Repr::Int { ty, signed } = self.repr(item.ty, source)? else {
+        let facts = self
+            .unit
+            .sema
+            .control
+            .statement(statement)
+            .and_then(|s| s.switch)
+            .map(|id| self.unit.sema.control.switches[id.0])
+            .ok_or_else(|| {
+                LoweringError::missing("switch dispatch facts are not retained", source)
+            })?;
+        let Repr::Int { ty, .. } = self.repr(facts.ty, source)? else {
             return Err(LoweringError::missing(
                 "a switch value is not an integer",
                 source,
@@ -485,96 +536,49 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let mut default = None;
         let mut cases = ArenaVec::new_in(self.scratch);
         let mut ranges = ArenaVec::new_in(self.scratch);
-        let mut pending = ArenaVec::new_in(self.scratch);
-        pending.push(body);
-        while let Some(statement) = pending.pop() {
-            match statement.kind {
-                | StatementType::Case(label, inner) => {
-                    let ConstantExpressionSlot::Parsed(constant) = label else {
-                        return Err(LoweringError::missing(
-                            "a case has no value",
-                            statement.source_vectors,
-                        ));
-                    };
-                    let case = self
-                        .info(constant.expression())?
-                        .integer
-                        .ok_or_else(|| {
-                            LoweringError::missing("a case has no value", statement.source_vectors)
-                        })?
-                        .cast(ty.bits(), signed);
-                    let block = self.case_block(statement);
-                    cases.push((case.value, self.draft.edge(block, &[])));
-                    pending.push(inner);
-                },
-                | StatementType::Default(inner) => {
-                    default = Some(self.case_block(statement));
-                    pending.push(inner);
-                },
-                | StatementType::CaseRange(range) => {
-                    let (
-                        ConstantExpressionSlot::Parsed(lower),
-                        ConstantExpressionSlot::Parsed(upper),
-                    ) = (range.lower, range.upper)
-                    else {
-                        return Err(LoweringError::missing(
-                            "case range bounds are absent",
-                            statement.source_vectors,
-                        ));
-                    };
-                    let lower = self
-                        .info(lower.expression())?
-                        .integer
-                        .ok_or_else(|| {
-                            LoweringError::missing(
-                                "case range bound is not constant",
-                                statement.source_vectors,
-                            )
-                        })?
-                        .cast(ty.bits(), signed);
-                    let upper = self
-                        .info(upper.expression())?
-                        .integer
-                        .ok_or_else(|| {
-                            LoweringError::missing(
-                                "case range bound is not constant",
-                                statement.source_vectors,
-                            )
-                        })?
-                        .cast(ty.bits(), signed);
-                    let block = self.case_block(statement);
-                    if lower.order_key() <= upper.order_key() {
-                        ranges.push((lower.value, upper.value, block));
-                    }
-                    pending.push(range.statement);
-                },
-                | StatementType::Compound { items } =>
-                    for item in items.iter().rev() {
-                        if let BlockItem::Statement(statement) = *item {
-                            pending.push(statement);
-                        }
-                    },
-                | StatementType::If {
-                    then_statement,
-                    else_statement,
-                    ..
-                } => {
-                    pending.extend(else_statement);
-                    pending.push(then_statement);
-                },
-                | StatementType::While { body_statement, .. }
-                | StatementType::DoWhile { body_statement, .. } => pending.push(body_statement),
-                | StatementType::For(clauses) => pending.push(clauses.body_statement),
-                | StatementType::Label(_, inner) => pending.push(inner),
-                | StatementType::Attributed(attributed) => pending.push(attributed.statement),
-                // A nested switch owns its labels.
-                | _ => {},
+        for (ordinal, case) in facts.cases.iter().enumerate() {
+            debug_assert_eq!(case.ordinal, ordinal, "case facts retain source order");
+            if let Some(label) = facts.default
+                && label.0 < case.label.0
+                && default.is_none()
+            {
+                let block = self.case_block(label);
+                default = Some(self.dispatch_target(
+                    block,
+                    facts.default_dispatch.ok_or_else(|| {
+                        LoweringError::missing("default transition is not retained", source)
+                    })?,
+                    source,
+                )?);
             }
+            let block = self.case_block(case.label);
+            let target =
+                self.dispatch_target(block, case.dispatch, case.statement.source_vectors)?;
+            if case.range {
+                ranges.push((case.lower.value, case.upper.value, target));
+            } else {
+                cases.push((case.lower.value, self.draft.edge(target, &[])));
+            }
+        }
+        if let Some(label) = facts.default
+            && default.is_none()
+        {
+            let block = self.case_block(label);
+            default = Some(self.dispatch_target(
+                block,
+                facts.default_dispatch.ok_or_else(|| {
+                    LoweringError::missing("default transition is not retained", source)
+                })?,
+                source,
+            )?);
+        }
+        if default.is_none() {
+            default = Some(self.dispatch_target(exit, facts.no_match, source)?);
         }
         // GNU inclusive ranges use one unsigned interval comparison each,
         // never an expansion proportional to the number of covered values.
         // GNU extension: <https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html>.
-        let default = default.unwrap_or(exit);
+        let default = default.expect("default or no-match transition has a block");
         if ranges.is_empty() {
             let default = self.draft.edge(default, &[]);
             self.draft.terminate_and_continue_dead(Terminator::Switch {
@@ -607,11 +611,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 .terminate_and_continue_dead(Terminator::Jump(edge));
         }
         self.switch_starts.push(start);
-        self.remember_target(exit);
-        self.jumps.push(JumpTargets {
-            break_to:    exit,
-            continue_to: None,
-        });
         Ok(())
     }
 
@@ -619,7 +618,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// whose predecessors are now all known.
     pub(super) fn end_switch(&mut self, _statement: &'tu Statement<'tu>, exit: Block) {
         self.draft.jump(exit, &[]);
-        _ = self.jumps.pop();
         let start = self.switch_starts.pop().expect("a switch is open");
         for index in start..self.switch_blocks.len() {
             let block = self.switch_blocks[index];
@@ -630,20 +628,38 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         self.draft.switch_to(exit);
     }
 
-    fn case_block(&mut self, statement: &'tu Statement<'tu>) -> Block {
-        let block = self.draft.create_block(&[]);
-        _ = self
-            .cases
-            .insert(std::ptr::from_ref(statement).addr(), block);
+    fn case_block(&mut self, label: LabelId) -> Block {
+        let block = self.label_block(label);
         self.switch_blocks.push(block);
         block
+    }
+
+    fn dispatch_target(
+        &mut self,
+        target: Block,
+        transition: Transition,
+        source: SourceVectors,
+    ) -> Result<Block, LoweringError> {
+        if !self.transition_has_cleanup(transition) {
+            return Ok(target);
+        }
+        let current = self.draft.current();
+        let trampoline = self.draft.create_block(&[]);
+        self.draft.switch_to(trampoline);
+        self.cleanup_transition(transition, source)?;
+        self.draft.jump(target, &[]);
+        self.draft.switch_to(current);
+        Ok(trampoline)
     }
 
     /// Pops the returned value, converted to the result type, and returns.
     /// A structure or union result is copied into the object the caller
     /// passed as parameter 0.
     /// C99: §6.8.6.4 paragraph 3, p. 139; PDF p. 151.
-    pub(super) fn return_value(&mut self) -> Result<(), LoweringError> {
+    pub(super) fn return_value(
+        &mut self,
+        statement: &'tu Statement<'tu>,
+    ) -> Result<(), LoweringError> {
         let item = self.pop();
         let source = self.record.syntax.source_vectors;
         let value = match self.repr(self.result, source)? {
@@ -676,7 +692,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | _ => Some(self.value(item, source)?),
         };
-        self.cleanup_to(0);
+        _ = self.cleanup_jump(statement)?;
         self.draft
             .terminate_and_continue_dead(Terminator::Return(value));
         Ok(())
@@ -684,17 +700,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 
     /// Jumps to `target`; what follows is unreachable until a label.
     fn jump_away(&mut self, target: Block) {
-        let scope = self.block_scopes.get(&target).copied().unwrap_or(0);
-        self.cleanup_to(scope);
         let edge = self.draft.edge(target, &[]);
         self.draft
             .terminate_and_continue_dead(Terminator::Jump(edge));
     }
 
-    fn label_block(&mut self, label: crate::util::string_cache::StringCacheId) -> Block {
+    fn label_block(&mut self, label: LabelId) -> Block {
         if let Some(&block) = self.labels.get(&label) {
             return block;
         }
+        let facts = &self.unit.sema.control.labels[label.0];
+        debug_assert_eq!(facts.id, label, "label lookup preserves resolved identity");
+        debug_assert_eq!(
+            facts.function, self.record.control.id,
+            "ordinary labels stay within their function"
+        );
         let block = self.draft.create_block(&[]);
         _ = self.labels.insert(label, block);
         block
@@ -730,13 +750,24 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 )
             })?;
         Self::prepare_site_tasks(site, &mut tasks);
+        self.prepare_bound_tasks(site.bounds, &mut tasks);
         for init in declaration.init_declarators {
             let Some(binding) = self.unit.declarator_binding(init.declarator) else {
                 continue;
             };
             let data = self.unit.sema.bindings[binding];
             if data.kind == BindingKind::Typedef || data.duration == Duration::Automatic {
-                self.prepare_type_tasks(data.ty, &mut tasks);
+                let bounds = self
+                    .unit
+                    .sema
+                    .binding_bound_actions(binding)
+                    .ok_or_else(|| {
+                        LoweringError::missing(
+                            "declaration bound actions are not retained",
+                            init.declarator.source_vectors,
+                        )
+                    })?;
+                self.prepare_bound_tasks(bounds, &mut tasks);
             }
             tasks.push(Task::DeclareBinding(
                 binding,
@@ -829,24 +860,17 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             name,
             draft,
             scratch,
-            effect_summaries: crate::translation_phases::semantic_analysis::EffectSummaries::new(
-                scratch,
-            ),
             tasks: ArenaVec::new_in(scratch),
             operands: ArenaVec::new_in(scratch),
             initializer_values: ArenaVec::new_in(scratch),
             locals: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             labels: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
-            cases: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
-            jumps: ArenaVec::new_in(scratch),
+            targets: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             switch_blocks: ArenaVec::new_in(scratch),
             switch_starts: ArenaVec::new_in(scratch),
             result: record.result.unqualified(),
             bounds: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
-            scopes: ArenaVec::new_in(scratch),
-            label_scopes: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
-            block_scopes: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
-            scope_parents: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
+            vla_tokens: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
         };
         let entry = Draft::entry();
         for (index, &parameter) in record.parameters.iter().enumerate() {
@@ -892,17 +916,11 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 _ = lowerer.locals.insert(prototype, local);
             }
         }
-        lowerer.index_vla_scopes();
         lowerer.tasks.push(Task::Statement(record.syntax.body));
         let mut bound_tasks = ArenaVec::new_in(scratch);
-        for &parameter in record.parameters {
-            if let Some(binding) = parameter {
-                lowerer
-                    .prepare_type_tasks(lowerer.unit.sema.bindings[binding].ty, &mut bound_tasks);
-            }
-        }
-        for &ty in record.parameter_types {
-            lowerer.prepare_type_tasks(ty, &mut bound_tasks);
+        for &site in record.parameter_sites {
+            Self::prepare_site_tasks(site, &mut bound_tasks);
+            lowerer.prepare_bound_tasks(site.bounds, &mut bound_tasks);
         }
         lowerer.push_all(&bound_tasks);
         Ok(lowerer)
@@ -929,7 +947,6 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                     })
                 },
             };
-        self.cleanup_to(0);
         self.draft
             .terminate_and_continue_dead(Terminator::Return(value));
         for index in 0..self.draft.blocks.len() {

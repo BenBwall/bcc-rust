@@ -42,9 +42,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return Ok(());
         }
         let sema = self.unit.sema;
-        let mut pure = |e| {
-            self.effect_summaries
-                .pure(e, true, |e| sema.expression_info(e).copied(), self.scratch)
+        let pure = |e: &'tu Expression<'tu>| {
+            sema.effect_pure(e, true).ok_or_else(|| {
+                LoweringError::missing(
+                    "expression effect summary is not retained",
+                    e.source_vectors,
+                )
+            })
         };
         match expression.kind {
             | E::Parenthesized { expression }
@@ -87,7 +91,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 left_expression,
                 right_expression,
             } =>
-                if pure(right_expression) {
+                if pure(right_expression)? {
                     self.tasks.push(Task::BuiltinEffects(left_expression, true));
                 } else {
                     let right = self.draft.create_block(&[]);
@@ -128,7 +132,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | E::Conditional(c) | E::OmittedConditional(c) => {
                 let omitted = matches!(expression.kind, E::OmittedConditional(_));
-                if (omitted || pure(c.then_expression)) && pure(c.else_expression) {
+                if (omitted || pure(c.then_expression)?) && pure(c.else_expression)? {
                     self.tasks
                         .push(Task::BuiltinEffects(c.condition_expression, true));
                 } else {
@@ -181,7 +185,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     block,
                     self.info(expression)?.ty,
                     super::StatementMode::Effects,
-                );
+                )?;
             },
             | E::Builtin(_) | E::Generic(_) => {
                 if let Some(selected) = self.info(expression)?.selected_expression {
@@ -197,6 +201,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.tasks.push(Task::Evaluate(expression));
             },
         }
+        self.prepare_expression_actions(expression)?;
         Ok(())
     }
 }

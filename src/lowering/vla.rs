@@ -12,7 +12,6 @@ use super::{
 };
 use crate::{
     ir::{
-        Block,
         InstData,
         InstFlags,
         Opcode,
@@ -21,35 +20,16 @@ use crate::{
     },
     translation_phases::{
         SourceVectors,
-        parsing::{
-            SyntaxOperand,
-            declaration_syntax::{
-                Declaration,
-                Declarator,
-                DirectDeclarator,
-                Initializer,
-                InitializerType,
-            },
-            syntax::{
-                BlockItem,
-                Expression,
-                ExpressionSlot,
-                ExpressionType,
-                ForInitializer,
-                Statement,
-                StatementType,
-            },
-        },
+        parsing::syntax::Statement,
         semantic_analysis::{
             ArrayBound,
+            ControlTarget,
+            Transition,
             TypeId,
             TypeKind,
         },
     },
-    util::bump::{
-        ArenaSet,
-        ArenaVec,
-    },
+    util::bump::ArenaVec,
 };
 
 impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
@@ -65,27 +45,38 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
     }
 
-    /// C99: §6.7.5.2p5, pp. 116-117; PDF pp. 128-129.
-    pub(super) fn prepare_type_tasks(
+    pub(super) fn prepare_expression_actions(
         &mut self,
-        mut ty: TypeId,
+        expression: &'tu crate::translation_phases::parsing::syntax::Expression<'tu>,
+    ) -> Result<(), LoweringError> {
+        if let Some(site) = self.unit.sema.expression_actions(expression) {
+            let mut tasks = ArenaVec::new_in(self.scratch);
+            Self::prepare_site_tasks(site, &mut tasks);
+            self.prepare_bound_tasks(site.bounds, &mut tasks);
+            self.push_all(&tasks);
+        } else if matches!(
+            expression.kind,
+            crate::translation_phases::parsing::syntax::ExpressionType::Cast { .. }
+        ) {
+            return Err(LoweringError::missing(
+                "expression type-site actions are not retained",
+                expression.source_vectors,
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn prepare_bound_tasks(
+        &mut self,
+        bounds: &[usize],
         tasks: &mut ArenaVec<'_, Task<'tu>>,
     ) {
-        loop {
-            match self.unit.sema.types.kind(ty) {
-                | TypeKind::Array(element, bound) => {
-                    if let ArrayBound::Variable(index) = bound
-                        && !self.bounds.contains_key(&index)
-                    {
-                        let var = self.draft.declare_var(Type::I64);
-                        _ = self.bounds.insert(index, var);
-                        tasks.push(Task::Evaluate(self.unit.sema.types.runtime_bounds[index]));
-                        tasks.push(Task::FinishBound(index));
-                    }
-                    ty = element;
-                },
-                | TypeKind::Pointer(element) => ty = element,
-                | _ => break,
+        for &index in bounds {
+            if !self.bounds.contains_key(&index) {
+                let var = self.draft.declare_var(Type::I64);
+                _ = self.bounds.insert(index, var);
+                tasks.push(Task::Evaluate(self.unit.sema.types.runtime_bounds[index]));
+                tasks.push(Task::FinishBound(index));
             }
         }
     }
@@ -141,41 +132,105 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         Ok(size)
     }
 
-    pub(super) fn enter_scope(&mut self, statement: &'tu Statement<'tu>) {
-        let id = std::ptr::from_ref(statement).addr();
-        self.scopes.push(Scope {
-            id,
-            save: None,
-            marker: true,
-        });
-        self.tasks.push(Task::ExitScope);
-    }
-
-    /// The lifetime starts at the declaration, including backward goto
-    /// cleanup to a label before it in the same compound statement.
+    /// Stack tokens are lowering SSA variables keyed by semantic region.
     /// C99: §6.2.4p6, p. 32; PDF p. 44.
-    pub(super) fn enter_vla(&mut self, binding: usize) {
-        let id = binding + 1;
-        let parent = self.scopes.last().map_or(0, |scope| scope.id);
-        _ = self.scope_parents.insert(id, parent);
+    pub(super) fn enter_vla(
+        &mut self,
+        binding: usize,
+        source: SourceVectors,
+    ) -> Result<(), LoweringError> {
+        let region =
+            self.unit.sema.control.vla_region(binding).ok_or_else(|| {
+                LoweringError::missing("VLA lifetime region is not retained", source)
+            })?;
         let save = self.nullary(Opcode::StackSave);
-        self.scopes.push(Scope {
-            id,
-            save: Some(save),
-            marker: false,
-        });
+        let var = self.draft.declare_var(Type::Ptr);
+        self.draft.def_var(var, save);
+        _ = self.vla_tokens.insert(region, var);
+        Ok(())
     }
 
-    pub(super) fn exit_scope(&mut self) {
-        loop {
-            let scope = self.scopes.pop().expect("lexical scope is open");
-            if let Some(save) = scope.save {
-                self.restore_stack(save);
-            }
-            if scope.marker {
+    pub(super) fn cleanup_transition(
+        &mut self,
+        transition: Transition,
+        source: SourceVectors,
+    ) -> Result<(), LoweringError> {
+        let regions = self.unit.sema.control.regions;
+        let mut cleanup = regions[transition.left.first.0].nearest_cleanup;
+        let common = regions[transition.left.stop_before.0];
+        while let Some(region) = cleanup {
+            let fact = regions[region.0];
+            debug_assert!(
+                matches!(
+                    fact.cleanup,
+                    crate::translation_phases::semantic_analysis::CleanupKind::AutomaticVla(_)
+                ),
+                "cleanup links select automatic VLA regions"
+            );
+            if fact.preorder <= common.preorder {
                 break;
             }
+            let token =
+                self.vla_tokens.get(&region).copied().ok_or_else(|| {
+                    LoweringError::missing("VLA region has no stack token", source)
+                })?;
+            let save = self.draft.use_var(token);
+            self.restore_stack(save);
+            let parent = fact.parent.ok_or_else(|| {
+                LoweringError::missing("transition leaves its function root", source)
+            })?;
+            cleanup = regions[parent.0].nearest_cleanup;
         }
+        Ok(())
+    }
+
+    pub(super) fn cleanup_normal(
+        &mut self,
+        statement: &Statement<'_>,
+    ) -> Result<(), LoweringError> {
+        let transition = self
+            .unit
+            .sema
+            .control
+            .statement(statement)
+            .ok_or_else(|| {
+                LoweringError::missing(
+                    "statement control facts are not retained",
+                    statement.source_vectors,
+                )
+            })?
+            .exit;
+        self.cleanup_transition(transition, statement.source_vectors)
+    }
+
+    pub(super) fn cleanup_jump(
+        &mut self,
+        statement: &Statement<'_>,
+    ) -> Result<ControlTarget, LoweringError> {
+        let facts = self
+            .unit
+            .sema
+            .control
+            .statement(statement)
+            .and_then(|s| s.jump)
+            .map(|id| self.unit.sema.control.jumps[id.0])
+            .ok_or_else(|| {
+                LoweringError::missing(
+                    "jump control facts are not retained",
+                    statement.source_vectors,
+                )
+            })?;
+        self.cleanup_transition(facts.transition, facts.provenance)?;
+        Ok(facts.target)
+    }
+
+    pub(super) fn transition_has_cleanup(&self, transition: Transition) -> bool {
+        let regions = self.unit.sema.control.regions;
+        regions[transition.left.first.0]
+            .nearest_cleanup
+            .is_some_and(|cleanup| {
+                regions[cleanup.0].preorder > regions[transition.left.stop_before.0].preorder
+            })
     }
 
     fn restore_stack(&mut self, save: Value) {
@@ -187,322 +242,5 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             }),
             None,
         );
-    }
-
-    pub(super) fn cleanup_to(&mut self, target: usize) {
-        let mut keep = self.scopes.len();
-        while keep > 0 && !self.is_scope_ancestor(self.scopes[keep - 1].id, target) {
-            keep -= 1;
-        }
-        for index in (keep..self.scopes.len()).rev() {
-            if let Some(save) = self.scopes[index].save {
-                self.restore_stack(save);
-            }
-        }
-    }
-
-    pub(super) fn remember_target(&mut self, block: Block) {
-        _ = self
-            .block_scopes
-            .insert(block, self.scopes.last().map_or(0, |scope| scope.id));
-    }
-
-    fn is_scope_ancestor(&self, ancestor: usize, mut target: usize) -> bool {
-        while target != 0 {
-            if ancestor == target {
-                return true;
-            }
-            target = self.scope_parents.get(&target).copied().unwrap_or(0);
-        }
-        false
-    }
-
-    /// Labels retain their lexical path, including statement-expression blocks
-    /// in operands, bounds and initializers. The work stack carries the parent
-    /// at the syntax site, before later declarations extend its VLA lifetime.
-    /// C99: §6.2.4p6, p. 32; PDF p. 44; §6.8.6.1p2, p. 137; PDF p. 149.
-    /// GNU extension: GCC "Statement Exprs".
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
-    pub(super) fn index_vla_scopes(&mut self) {
-        let mut pending = ArenaVec::new_in(self.scratch);
-        let mut expressions = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.scratch);
-        let mut types = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.scratch);
-        pending.push((ScopeNode::Statement(self.record.syntax.body), 0));
-        while let Some((node, mut parent)) = pending.pop() {
-            match node {
-                | ScopeNode::Expression(expression) => {
-                    if !expressions.insert(std::ptr::from_ref(expression).addr()) {
-                        continue;
-                    }
-                    let mut push = |e| pending.push((ScopeNode::Expression(e), parent));
-                    match expression.kind {
-                        | ExpressionType::StatementExpression(s) =>
-                            pending.push((ScopeNode::Statement(s), parent)),
-                        | ExpressionType::Parenthesized { expression }
-                        | ExpressionType::Unary {
-                            operand_expression: expression,
-                            ..
-                        }
-                        | ExpressionType::Cast {
-                            operand_expression: expression,
-                            ..
-                        }
-                        | ExpressionType::SizeofExpr(expression)
-                        | ExpressionType::AlignofExpr(expression)
-                        | ExpressionType::DirectMember {
-                            base_expression: expression,
-                            ..
-                        }
-                        | ExpressionType::IndirectMember {
-                            base_expression: expression,
-                            ..
-                        } => push(expression),
-                        | ExpressionType::Binary {
-                            left_expression,
-                            right_expression,
-                            ..
-                        } => {
-                            push(left_expression);
-                            push(right_expression);
-                        },
-                        | ExpressionType::Conditional(c)
-                        | ExpressionType::OmittedConditional(c) => {
-                            push(c.condition_expression);
-                            push(c.then_expression);
-                            push(c.else_expression);
-                        },
-                        | ExpressionType::Call {
-                            function_expression,
-                            arguments,
-                        } => {
-                            push(function_expression);
-                            for &argument in arguments {
-                                push(argument);
-                            }
-                        },
-                        | ExpressionType::CompoundLiteral { initializer, .. } =>
-                            pending.push((ScopeNode::Initializer(initializer), parent)),
-                        | ExpressionType::Generic(g) => {
-                            for association in g.associations {
-                                push(association.expression);
-                            }
-                            if let SyntaxOperand::Expression(e) = g.controlling {
-                                push(e);
-                            }
-                        },
-                        | ExpressionType::Builtin(b) => {
-                            for &operand in b.operands {
-                                if let SyntaxOperand::Expression(e) = operand {
-                                    push(e);
-                                }
-                            }
-                            for &member in b.members {
-                                if let crate::translation_phases::parsing::OffsetMember::Index(e) =
-                                    member
-                                {
-                                    push(e);
-                                }
-                            }
-                        },
-                        | _ => {},
-                    }
-                    // Type operands can contain evaluated VLA bounds too.
-                    let name = match expression.kind {
-                        | ExpressionType::SizeofType(name)
-                        | ExpressionType::AlignofType(name)
-                        | ExpressionType::Cast {
-                            target_type: name, ..
-                        }
-                        | ExpressionType::CompoundLiteral {
-                            type_name: name, ..
-                        } => Some(name),
-                        | _ => None,
-                    };
-                    if let Some(name) = name
-                        && let Some(declarator) = name.declarator
-                    {
-                        pending.push((ScopeNode::Declarator(declarator), parent));
-                    }
-                },
-                | ScopeNode::Declarator(declarator) =>
-                    for direct in declarator.kind {
-                        match *direct {
-                            | DirectDeclarator::Array {
-                                assignment_expression: Some(e),
-                                ..
-                            } => pending.push((ScopeNode::Expression(e), parent)),
-                            | DirectDeclarator::Parenthesized(d) =>
-                                pending.push((ScopeNode::Declarator(d.declarator), parent)),
-                            | _ => {},
-                        }
-                    },
-                | ScopeNode::Initializer(initializer) => match initializer.kind {
-                    | InitializerType::AssignmentExpression(e) =>
-                        pending.push((ScopeNode::Expression(e), parent)),
-                    | InitializerType::InitializerList(list) =>
-                        for element in list.elements {
-                            pending.push((ScopeNode::Initializer(element.initializer), parent));
-                        },
-                },
-                | ScopeNode::Type(ty) => {
-                    if !types.insert(ty) {
-                        continue;
-                    }
-                    match self.unit.sema.types.kind(ty) {
-                        | TypeKind::Array(element, bound) => {
-                            pending.push((ScopeNode::Type(element), parent));
-                            if let ArrayBound::Variable(index) = bound {
-                                pending.push((
-                                    ScopeNode::Expression(
-                                        self.unit.sema.types.runtime_bounds[index],
-                                    ),
-                                    parent,
-                                ));
-                            }
-                        },
-                        | TypeKind::Pointer(element) =>
-                            pending.push((ScopeNode::Type(element), parent)),
-                        | _ => {},
-                    }
-                },
-                | ScopeNode::Statement(statement) => {
-                    if matches!(
-                        statement.kind,
-                        StatementType::Compound { .. } | StatementType::For(_)
-                    ) {
-                        let id = std::ptr::from_ref(statement).addr();
-                        _ = self.scope_parents.insert(id, parent);
-                        parent = id;
-                    }
-                    match statement.kind {
-                        | StatementType::Compound { items } => {
-                            let start = pending.len();
-                            for item in items {
-                                match *item {
-                                    | BlockItem::Statement(s) =>
-                                        pending.push((ScopeNode::Statement(s), parent)),
-                                    | BlockItem::Declaration(d) =>
-                                        parent = self.index_declaration(d, parent, &mut pending),
-                                    | _ => {},
-                                }
-                            }
-                            // Visit declarations before subsequent uses of a
-                            // typedef's shared bound expression.
-                            pending[start..].reverse();
-                        },
-                        | StatementType::Label(label, inner) => {
-                            _ = self.label_scopes.insert(label.name, parent);
-                            pending.push((ScopeNode::Statement(inner), parent));
-                        },
-                        | StatementType::If {
-                            condition_expression,
-                            then_statement,
-                            else_statement,
-                        } => {
-                            push_slot(&mut pending, condition_expression, parent);
-                            pending.push((ScopeNode::Statement(then_statement), parent));
-                            if let Some(s) = else_statement {
-                                pending.push((ScopeNode::Statement(s), parent));
-                            }
-                        },
-                        | StatementType::While {
-                            condition_expression,
-                            body_statement,
-                        }
-                        | StatementType::DoWhile {
-                            condition_expression,
-                            body_statement,
-                        }
-                        | StatementType::Switch {
-                            condition_expression,
-                            body_statement,
-                        } => {
-                            push_slot(&mut pending, condition_expression, parent);
-                            pending.push((ScopeNode::Statement(body_statement), parent));
-                        },
-                        | StatementType::For(clauses) => {
-                            match clauses.initializer {
-                                | Some(ForInitializer::Declaration(d)) =>
-                                    parent = self.index_declaration(d, parent, &mut pending),
-                                | Some(ForInitializer::Expression(e)) =>
-                                    push_slot(&mut pending, e, parent),
-                                | None => {},
-                            }
-                            for slot in [clauses.condition_expression, clauses.iteration_expression]
-                                .into_iter()
-                                .flatten()
-                            {
-                                push_slot(&mut pending, slot, parent);
-                            }
-                            pending.push((ScopeNode::Statement(clauses.body_statement), parent));
-                        },
-                        | StatementType::Case(_, inner) | StatementType::Default(inner) =>
-                            pending.push((ScopeNode::Statement(inner), parent)),
-                        | StatementType::CaseRange(range) =>
-                            pending.push((ScopeNode::Statement(range.statement), parent)),
-                        | StatementType::Attributed(a) =>
-                            pending.push((ScopeNode::Statement(a.statement), parent)),
-                        | StatementType::Expression(e) | StatementType::Return(Some(e)) =>
-                            push_slot(&mut pending, e, parent),
-                        | StatementType::Declaration(d) => {
-                            _ = self.index_declaration(d, parent, &mut pending);
-                        },
-                        | _ => {},
-                    }
-                },
-            }
-        }
-    }
-
-    fn index_declaration(
-        &mut self,
-        declaration: &'tu Declaration<'tu>,
-        mut parent: usize,
-        pending: &mut ArenaVec<'_, (ScopeNode<'tu>, usize)>,
-    ) -> usize {
-        for init in declaration.init_declarators {
-            let Some(binding) = self.unit.declarator_binding(init.declarator) else {
-                continue;
-            };
-            let data = self.unit.sema.bindings[binding];
-            pending.push((ScopeNode::Type(data.ty), parent));
-            if data.duration == crate::translation_phases::semantic_analysis::Duration::Automatic
-                && matches!(self.unit.sema.types.kind(data.ty), TypeKind::Array(..))
-                && self.unit.sema.types.layout(data.ty).is_none()
-            {
-                let id = binding + 1;
-                _ = self.scope_parents.insert(id, parent);
-                parent = id;
-            }
-            if let Some(initializer) = init.initializer {
-                pending.push((ScopeNode::Initializer(initializer), parent));
-            }
-        }
-        parent
-    }
-}
-
-pub(super) struct Scope {
-    pub(super) id: usize,
-    save:          Option<Value>,
-    marker:        bool,
-}
-
-/// Syntax and retained bound types share one nonrecursive scope-index stack.
-enum ScopeNode<'tu> {
-    Statement(&'tu Statement<'tu>),
-    Expression(&'tu Expression<'tu>),
-    Initializer(&'tu Initializer<'tu>),
-    Type(TypeId),
-    Declarator(Declarator<'tu>),
-}
-
-fn push_slot<'tu>(
-    pending: &mut ArenaVec<'_, (ScopeNode<'tu>, usize)>,
-    slot: ExpressionSlot<'tu>,
-    parent: usize,
-) {
-    if let ExpressionSlot::Parsed(e) = slot {
-        pending.push((ScopeNode::Expression(e), parent));
     }
 }

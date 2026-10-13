@@ -117,17 +117,17 @@ use crate::{
         },
         semantic_analysis::{
             FunctionRecord,
+            LabelId,
+            RegionId,
             SemanticTranslationUnit,
+            StatementId,
             TypeId,
         },
     },
-    util::{
-        bump::{
-            ArenaMap,
-            ArenaVec,
-            Bump,
-        },
-        string_cache::StringCacheId,
+    util::bump::{
+        ArenaMap,
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -229,10 +229,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.push_item(Operand::Value(size), result);
                 Ok(())
             },
-            | Task::ExitScope => {
-                self.exit_scope();
-                Ok(())
-            },
+            | Task::CleanupNormal(statement) => self.cleanup_normal(statement),
             | Task::Enter { block, seal } => {
                 if seal {
                     self.draft.seal(block);
@@ -251,24 +248,8 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.draft.seal(block);
                 Ok(())
             },
-            | Task::PushTargets(targets) => {
-                self.remember_target(targets.break_to);
-                if let Some(target) = targets.continue_to {
-                    self.remember_target(target);
-                }
-                self.jumps.push(targets);
-                Ok(())
-            },
-            | Task::PopTargets => {
-                _ = self.jumps.pop();
-                Ok(())
-            },
-            | Task::Return => self.return_value(),
-            | Task::Switch {
-                statement,
-                body,
-                exit,
-            } => self.switch(statement, body, exit),
+            | Task::Return(statement) => self.return_value(statement),
+            | Task::Switch { statement, exit } => self.switch(statement, exit),
             | Task::EndSwitch { statement, exit } => {
                 self.end_switch(statement, exit);
                 Ok(())
@@ -385,18 +366,14 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     name:               &'a str,
     draft:              Draft<'s>,
     scratch:            &'s Bump,
-    /// Cached type-operand effects, reused across short-circuit scheduling.
-    effect_summaries:   crate::translation_phases::semantic_analysis::EffectSummaries<'s>,
     tasks:              ArenaVec<'s, Task<'tu>>,
     operands:           ArenaVec<'s, Item>,
     initializer_values: ArenaVec<'s, Item>,
     /// The storage of each automatic object, by binding.
     locals:             ArenaMap<'s, usize, Local>,
     /// The block of each label, created at its first `goto` or definition.
-    labels:             ArenaMap<'s, StringCacheId, Block>,
-    /// The block of each `case` or `default` statement, by its address.
-    cases:              ArenaMap<'s, usize, Block>,
-    jumps:              ArenaVec<'s, JumpTargets>,
+    labels:             ArenaMap<'s, LabelId, Block>,
+    targets:            ArenaMap<'s, StatementId, JumpTargets>,
     /// The case blocks of the open switches, sealed when each ends.
     switch_blocks:      ArenaVec<'s, Block>,
     /// Where each open switch's blocks start in `switch_blocks`.
@@ -404,10 +381,7 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     /// The unqualified result type that `return` converts to.
     result:             TypeId,
     bounds:             ArenaMap<'s, usize, ssa::Var>,
-    scopes:             ArenaVec<'s, vla::Scope>,
-    label_scopes:       ArenaMap<'s, StringCacheId, usize>,
-    block_scopes:       ArenaMap<'s, Block, usize>,
-    scope_parents:      ArenaMap<'s, usize, usize>,
+    vla_tokens:         ArenaMap<'s, RegionId, ssa::Var>,
 }
 
 // Tests

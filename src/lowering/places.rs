@@ -118,7 +118,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 && matches!(self.unit.sema.types.kind(ty), TypeKind::Array(..)) =>
             {
                 let size = self.runtime_size(ty, source)?;
-                self.enter_vla(binding);
+                self.enter_vla(binding, source)?;
                 // C11 §6.7.5p6, p. 127; PDF p. 145: retain the completed
                 // declaration's alignment as well as the element alignment.
                 let mut element = ty;
