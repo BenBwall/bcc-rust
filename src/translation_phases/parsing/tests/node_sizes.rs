@@ -89,7 +89,7 @@ fn syntax_nodes_keep_their_sizes() {
         SyntaxOperand<'_> => 16,
         ExtendedType<'_> => 24,
         SpecifierExtension<'_> => 32,
-        AttributeSpecifier<'_> => 32,
+        AttributeSpecifier<'_> => 40,
         AttributeArgument<'_> => 16,
         GenericSelection<'_> => 40,
         GenericAssociation<'_> => 16,

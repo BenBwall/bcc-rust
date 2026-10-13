@@ -120,7 +120,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         index: usize,
     ) -> Option<u64> {
         if a.tokens
-            .as_slice()
             .get(index + 1)
             .is_some_and(|token| self.context.string_cache.at(token.contents) == "(")
         {
@@ -228,7 +227,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if name != "mode" {
                 continue;
             }
-            let mode = a.tokens.as_slice().get(index + 2).map(|token| {
+            let mode = a.tokens.get(index + 2).map(|token| {
                 self.context
                     .string_cache
                     .at(token.contents)
