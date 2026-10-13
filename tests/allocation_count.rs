@@ -867,6 +867,28 @@ int labeled(void) {return ({int x=3;goto out;x=4;out:x;});}
     }
 
     #[test]
+    fn semantic_control_regions_and_type_actions_allocate_only_from_arenas() {
+        for (source, diagnostics) in [
+            (
+                "int f(int n,int (*p)[n],__typeof__((n++,p)) q){int a[n];a[0]=0;({goto \
+                 L;L:;0;});switch(n){case 1:break;default:;}return ((__typeof__(p++))q)!=p;}\n",
+                0,
+            ),
+            (
+                "void f(int n){goto L;typedef int T[n];int (*p)[n];L:;}\n",
+                1,
+            ),
+        ] {
+            let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+            assert_eq!(
+                allocations.calls, 0,
+                "control/lifetime semantic facts: {source}"
+            );
+            assert_eq!(summary.diagnostics, diagnostics, "{source}");
+        }
+    }
+
+    #[test]
     fn compiling_pedantic_suppression_allocates_only_from_arenas() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/diagnostics/language-extension-suppression.c");

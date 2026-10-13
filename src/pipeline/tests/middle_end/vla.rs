@@ -100,6 +100,9 @@ fn vla_native_arms_match_clang() {
     let Some(target) = host() else { return };
     let toolchain = Toolchain::bundled(target).unwrap();
     let directory = TempDir::new("vla");
+    let gcc_available =
+        crate::test_support::native::run_native(Command::new("gcc").arg("--version"))
+            .is_ok_and(|output| output.status.success());
     for (index, source) in [
         program("vla_extents_and_typedefs").source,
         program("vla_block_lifetime").source,
@@ -118,6 +121,8 @@ fn vla_native_arms_match_clang() {
             .filter_map(|source| (!source.contains("k=0")).then_some(*source)),
     )
     .chain(SWITCH_VLAS.iter().copied())
+    .chain(M1_REPRODUCERS.iter().copied())
+    .chain(M1_LIFETIMES.iter().copied())
     .enumerate()
     {
         // Clang O0 on Win64 retains repeated allocations after an earlier
@@ -131,6 +136,21 @@ fn vla_native_arms_match_clang() {
         };
         let input = directory.join(format!("case-{index}.c"));
         std::fs::write(&input, &source).unwrap();
+        // Clang 23.1.1 does not implement GCC's overflow-p builtins. These
+        // cases discard the predicate result: an explicit effects control
+        // checks the same type-site action with Clang, and GCC checks the
+        // original source when available.
+        let oracle_input = if source.contains("__builtin_add_overflow_p") {
+            let control = directory.join(format!("clang-control-{index}.c"));
+            std::fs::write(
+                &control,
+                format!("#define __builtin_add_overflow_p(a,b,c) ((void)(c),0)\n{source}"),
+            )
+            .unwrap();
+            control
+        } else {
+            input.clone()
+        };
         for opt in [OptLevel::O0, OptLevel::O2] {
             let options = LlvmOptions {
                 target,
@@ -139,7 +159,10 @@ fn vla_native_arms_match_clang() {
                 kind: OutputKind::Executable,
             };
             let clang = directory.join(format!("clang-{index}-{opt:?}.exe"));
-            let output = toolchain.command(&input, &clang, options).output().unwrap();
+            let output = toolchain
+                .command(&oracle_input, &clang, options)
+                .output()
+                .unwrap();
             assert!(
                 output.status.success(),
                 "{}",
@@ -147,15 +170,144 @@ fn vla_native_arms_match_clang() {
             );
             let expected = run_native(&clang);
             assert_eq!(expected.0, 0, "Clang case {index}");
+            if source.contains("__builtin_add_overflow_p") {
+                if gcc_available {
+                    let gcc = directory.join(format!("gcc-{index}-{opt:?}.exe"));
+                    let output = crate::test_support::native::run_native(
+                        Command::new("gcc")
+                            .args([
+                                "-std=gnu99",
+                                if opt == OptLevel::O0 { "-O0" } else { "-O2" },
+                            ])
+                            .arg(&input)
+                            .arg("-o")
+                            .arg(&gcc),
+                    )
+                    .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    assert_eq!(run_native(&gcc), expected, "GCC original case {index}");
+                } else {
+                    eprintln!(
+                        "GCC original overflow-p reference unavailable; Clang effects control and \
+                         bcc native arms remain tested"
+                    );
+                }
+            }
             for optimize in [false, true] {
                 let executable = directory.join(format!("bcc-{index}-{opt:?}-{optimize}.exe"));
-                with_module(&source, target, optimize, Profile::PostAbi, |module, _| {
-                    compile_module(module, &executable, options).unwrap();
-                });
+                with_configured_module(
+                    &source,
+                    target,
+                    optimize,
+                    Profile::PostAbi,
+                    CompilerConfiguration::default()
+                        .with_target(target)
+                        .with_gnu_extensions(true)
+                        .with_extension_policy(crate::configuration::ExtensionPolicy::Allow),
+                    |module, _| {
+                        compile_module(module, &executable, options).unwrap();
+                    },
+                );
                 assert_eq!(
                     run_native(&executable),
                     expected,
                     "case {index} {opt:?} {optimize}"
+                );
+            }
+        }
+    }
+}
+
+const M1_REPRODUCERS: &[&str] = &[
+    "int main(void){ int n=3, a[n][n], (*p)[n]=a; __typeof__(*({ goto L; L:; p++; })) b; return \
+     p!=a+1 || sizeof b!=12; }",
+    "int main(void){ int n=2, a[n]; __typeof__(({ goto L; L: &a; })) p = &a; return p != &a; }",
+    "int main(void){ int n=2; __typeof__(({ again:; int a[n]; if (n==2){ n=1; goto again; } &a; \
+     })) p; return n-1; }",
+    "int main(void){ int n=2, a[n][n], (*p)[n]=a; a[0][0]=0; (void)__builtin_add_overflow_p(0, 0, \
+     ((__typeof__(p++))a)[0][0]); return p != a+1; }",
+    "int f(int n, int (*p)[n], __typeof__((n++,p)) q){ return n!=4; } int main(void){ int \
+     a[3][3]; return f(3,a,a); }",
+];
+
+#[test]
+fn m1_control_and_type_site_regressions() {
+    for source in M1_REPRODUCERS {
+        for target in [Target::LinuxGnu, Target::WindowsGnu] {
+            for (optimize, profile) in STAGES {
+                with_module(source, target, optimize, profile, |module, target| {
+                    assert_eq!(interpret(module, target).0, 0, "{source}");
+                });
+            }
+        }
+    }
+}
+
+const M1_LIFETIMES: &[&str] = &[
+    "int main(void){int n=2;__typeof__(int[n++]) a;return n!=3 || sizeof a!=8;}",
+    "int f(int n,__typeof__(int[n++]) a){return n!=4;}int main(void){int a[3];return f(3,a);}",
+    "int main(void){int n=2;(void)(__typeof__(({int a[n];goto L;L:;&a;})))0;return 0;}",
+    "int main(void){int n=2;(void)(__typeof__(int (*)[n++]))0;return n!=3;}",
+    "int main(void){int n=128,total=0; left:{int a[n]; a[0]=++total; if(total<5)goto right;} goto \
+     done; right:{int b[n]; b[0]=++total; if(total<5)goto left;} done:return total!=5;}",
+    "int main(void){int n=128,i=0; int a[n]; a[0]=42; again:; typedef int T[n]; T *p=&a; int \
+     b[n]; b[0]=++i; if(i<1000)goto again; return a[0]!=42 || p!=&a || b[0]!=1000;}",
+    "int main(void){int n=128,i=0; while(i<1000){typedef int T[n]; T *p; int a[n]; p=&a; \
+     a[0]=++i; if((*p)[0]!=i)return 1;}return 0;}",
+    "struct S{int x;}; int main(void){int n=3; struct S value=({struct S a[n];a[0].x=42;a[0];}); \
+     return value.x!=42;}",
+    "int main(void){int n=128,i=0,total=0; while(i<1000){int a[n];a[0]=++i;switch(i%3){case 0: \
+     switch(i%2){case 0:total++;break;default:total++;}break;case 1 ... \
+     2:total++;break;default:return 2;}if(a[0]!=i)return 1;}return total!=1000;}",
+    "int main(void){int n=128,total=0;for(int i=0;i<1000;i++){int a[n];a[0]=i;int \
+     *p=__builtin_alloca(4);*p=7;total+=a[0]+*p;}return total!=506500;}",
+    "int main(void){int n=2,a[n];a[0]=42;int r=sizeof(int[({goto L; L:; a[0]!=42?1:3;})]);return \
+     r!=12 || a[0]!=42;}",
+    "int main(void){int n=2,a[n];a[0]=42;int x=({goto L;L:;a[0];});return x!=42 || a[0]!=42;}",
+    "int main(void){int n=2,a[n];a[0]=42;switch(({goto L;L:;a[0];})){case 42:return \
+     a[0]!=42;default:return 1;}}",
+    "int main(void){int n=128,total=0;for(int i=0;i<1000;i++){for(int \
+     a[n];total<500;){a[0]=++total;break;}for(int b[n];total<1000;){b[0]=++total;}}return \
+     total!=1000;}",
+    "int f(int n,int (*p)[n++],__typeof__((n++,p)) q,int (*r)[n++]){return n!=6;}int \
+     main(void){int a[3][3],b[5][5];return f(3,a,a,b);}",
+    "int main(void){int n=2,a[n][n],(*p)[n]=a;a[0][0]=0;(void)__builtin_add_overflow_p(0,0,0 && \
+     ((__typeof__(p++))a)[0][0]);return p!=a;}",
+];
+
+#[test]
+fn m1_transitions_preserve_values_and_bound_stack_growth() {
+    for source in M1_LIFETIMES {
+        for target in [Target::LinuxGnu, Target::WindowsGnu] {
+            for (optimize, profile) in STAGES {
+                with_configured_module(
+                    source,
+                    target,
+                    optimize,
+                    profile,
+                    CompilerConfiguration::default()
+                        .with_target(target)
+                        .with_gnu_extensions(true)
+                        .with_extension_policy(crate::configuration::ExtensionPolicy::Allow),
+                    |module, target| {
+                        let arena = Bump::new();
+                        let mut host = DefaultHost::for_target(&arena, target);
+                        let outcome = interpreter::run(module, "main", &[], &mut host).unwrap();
+                        assert_eq!(
+                            outcome.termination,
+                            Termination::Returned(Some(RuntimeValue::Int(0))),
+                            "{source}"
+                        );
+                        assert!(
+                            outcome.memory_cells < 100_000,
+                            "{} cells: {source}",
+                            outcome.memory_cells
+                        );
+                    },
                 );
             }
         }
