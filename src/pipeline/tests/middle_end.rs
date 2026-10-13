@@ -16,6 +16,7 @@ use std::{
     thread,
 };
 
+mod aggregate_varargs;
 mod asm_labels;
 mod braced_strings;
 mod builtin_bindings;

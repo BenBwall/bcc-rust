@@ -4,6 +4,18 @@ use super::*;
 #[test]
 fn aggregates_cross_variadic_boundaries() {
     let shapes = [
+        (
+            "struct __attribute__((aligned(32))) S { long long x[4]; };",
+            "struct S",
+            "{{7,8,9,11}}",
+            "x.x[0]==7 && x.x[3]==11",
+        ),
+        (
+            "struct __attribute__((aligned(64))) S { long long x[4]; };",
+            "struct S",
+            "{{7,8,9,11}}",
+            "x.x[0]==7 && x.x[3]==11",
+        ),
         ("struct S { int x; };", "struct S", "{7}", "x.x==7"),
         (
             "struct S { int x; float y; };",
@@ -160,6 +172,71 @@ int main(void) { struct P p={7,123456}; return b_call() || b_take(0,p); }";
             }
             lower_abi(&mut module, target, &Bump::new()).unwrap();
             assert_conforms("packed-aggregate-varargs", target, &module, clang);
+        }
+    }
+}
+
+#[test]
+fn mixed_varargs_fall_back_without_consuming_the_other_register_class() {
+    let decl = "struct S { long long i; double d; };";
+    let body = "int b_take(int gp, ...) { __builtin_va_list ap; __builtin_va_start(ap,gp);
+if(gp) { for(int j=1;j<=5;j++) if(__builtin_va_arg(ap,long long)!=j)return 1; }
+else { for(int j=1;j<=8;j++) if(__builtin_va_arg(ap,double)!=j)return 2; }
+struct S x=__builtin_va_arg(ap,struct S); if(x.i!=7 || x.d!=2.5)return 3;
+if(gp) { if(__builtin_va_arg(ap,double)!=12.5)return 4; }
+else { if(__builtin_va_arg(ap,int)!=123)return 5; }
+__builtin_va_end(ap); return 0; }";
+    let calls = "struct S x={7,2.5}; return c_take(0,1.,2.,3.,4.,5.,6.,7.,8.,x,123) || \
+                 c_take(1,1LL,2LL,3LL,4LL,5LL,x,12.5);";
+    let bcc = format!("{decl}{body} int c_take(int,...); int b_call(void){{{calls}}}");
+    let clang = format!(
+        "{decl}{} int b_take(int,...); int b_call(void); int main(void){{ if(b_call())return 6; \
+         {} }}",
+        body.replace("b_take", "c_take"),
+        calls.replace("c_take", "b_take")
+    );
+    for optimized in [false, true] {
+        let tu = Bump::new();
+        let arena = Bump::new();
+        let mut module = lower_c(&tu, &arena, &bcc, Target::LinuxGnu);
+        if optimized {
+            _ = optimize(&mut module, &OptimizerOptions::default(), &Bump::new());
+        }
+        lower_abi(&mut module, Target::LinuxGnu, &Bump::new()).unwrap();
+        assert_conforms(
+            "mixed-varargs-one-class-exhausted",
+            Target::LinuxGnu,
+            &module,
+            &clang,
+        );
+        // Both definitions are present for interpreter calls in each direction.
+        let source = format!(
+            "{bcc} {} int main(void) {{ if(b_call())return 6; {} }}",
+            body.replace("b_take", "c_take"),
+            calls.replace("c_take", "b_take")
+        );
+        for profile in [Profile::PreAbi, Profile::PostAbi] {
+            let arena = Bump::new();
+            let mut module = lower_c(&tu, &arena, &source, Target::LinuxGnu);
+            if optimized {
+                _ = optimize(&mut module, &OptimizerOptions::default(), &Bump::new());
+            }
+            if profile == Profile::PostAbi {
+                lower_abi(&mut module, Target::LinuxGnu, &Bump::new()).unwrap();
+            }
+            assert_verified(&module, profile, &module.to_string());
+            let execution = Bump::new();
+            let mut host =
+                crate::backend::interpreter::DefaultHost::for_target(&execution, Target::LinuxGnu);
+            let outcome =
+                crate::backend::interpreter::run(&module, "main", &[], &mut host).unwrap();
+            assert_eq!(
+                outcome.termination,
+                crate::backend::interpreter::Termination::Returned(Some(
+                    crate::backend::interpreter::RuntimeValue::Int(0)
+                )),
+                "{optimized} {profile:?}"
+            );
         }
     }
 }
