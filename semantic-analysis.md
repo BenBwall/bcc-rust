@@ -1509,3 +1509,32 @@ fixtures returned zero with GCC and Clang at O0/O2. Linux native execution
 was unavailable because WSL returned access denied. Shared LLVM junctions
 were preserved, and nothing was staged or committed. The whole-file commit
 plan is `target/commit-plan.md`; check logs are under `target/round6/`.
+
+## 2026-10-13: Torture representation types and constant forms
+
+GNU `packed`, `aligned` and scalar `mode` now retain concrete types and layouts.
+Packed enums select the smallest compatible integer representation. Alignment
+belongs to the completed declarator, including arrays and pointers; aligned
+typedefs can weaken their alignment, while ordinary object declarations cannot.
+Record and member packing retain the original member types for ABI classification
+and lower the guaranteed alignment of member accesses and initializer stores.
+`_Alignas` operands are analyzed before declaration completion, with C11
+§6.7.5p2-6 constraints (printed p. 127; PDF p. 145). GNU forms continue to obey
+the existing extension policy, including `Deny` in GNU dialects.
+
+GNU union casts require an exactly compatible member type and produce a union
+rvalue. GNU range designators require ordered nonnegative integer constant
+endpoints within bounds, infer incomplete array bounds from the upper endpoint,
+and retain once-only expression evaluation. Existing `typeof`, type compatibility
+and `offsetof` queries consume these retained types without a separate feature
+implementation. Floating sign, infinity and sign-copy builtins retain signatures,
+operand constraints and constant results, preserving signed zero and NaN payloads.
+
+Decisions: use explicit arena-backed work stacks and retained type-handle
+alignment, existing scalar/memory IR, and the shared byte/relocation initializer
+representation. Do not add stack introspection, nonlocal jumps, argument replay,
+label relocation, inline assembly, vector or complex lowering here. The first
+four require backend/interpreter control or ABI subsystems; aggregate varargs
+and VLA lowering remain owned by the separate worktree. The dated corpus report
+in `docs/research/gcc-torture-execute-results.md` contains the exact inventory,
+counts, implementation references and validation evidence.

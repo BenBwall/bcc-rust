@@ -1139,3 +1139,197 @@ The whole-file plan is `target/commit-plan.md`: five focused Conventional Commit
 with no file split across commits. Shared dispatch/task/opcode files require
 family changes to be grouped by compiler seam. No files are staged and no commits
 have been created. The shared prebuilt LLVM junctions are preserved.
+
+## 2026-10-13: torture type representations and static initializers
+
+Branch `claude/torture2-sema`, based on PR #41 head `a5670e79`. Both release
+surveys read the GCC 15.2.0 corpus from the sibling checkout without modifying
+it. They use all 1,677 execute sources, eight jobs and a ten-second arm timeout.
+The compiler and generated programs run through `scripts/cargo_runner.py`.
+Shared `target/llvm` and `target/llvm-libs` junctions remain unchanged.
+
+Evidence: `target/compiler-corpus/execute-torture2-sema-before/results.json`,
+`target/compiler-corpus/execute-torture2-sema-after/results.json`,
+`target/torture2-final-inventory.json`, and `target/torture2-check-*.log`.
+Source SHA-512 values match for every source. No previously passing source
+regresses in any surveyed arm; there are no compiler crashes.
+
+### Before and after
+
+| Arm | Pass | Frontend refusal | Lowering refusal | ABI refusal | Trap | Wrong | Timeout | Link |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| interpret | 1231 → 1277 | 138 → 137 | 225 → 176 | 4 → 4 | 63 → 68 | 16 → 15 | 0 → 0 | 0 → 0 |
+| interpret-bcc | 1236 → 1283 | 138 → 137 | 225 → 176 | 4 → 4 | 57 → 61 | 17 → 16 | 0 → 0 | 0 → 0 |
+| A0 | 1289 → 1340 | 138 → 137 | 225 → 176 | 4 → 4 | 0 → 0 | 16 → 15 | 1 → 1 | 4 → 4 |
+| A1 | 1279 → 1330 | 138 → 137 | 225 → 176 | 4 → 4 | 0 → 0 | 26 → 25 | 1 → 1 | 4 → 4 |
+
+The two named refusal groups shrink from **66 to 10 unanalyzed types** and
+**10 to 7 static initializers**. Representation analysis clears 56 original
+type refusals; static emission clears three original initializer refusals.
+Nine type sources reveal other unsupported constructs (six assembly, two
+vector, one complex), and one static source reveals assembly. Thus 49 of the
+original 76 sources become native passes. Two additional packed-layout sources,
+`20010904-1.c` and `20010904-2.c`, change from wrong results to native passes.
+
+### Exact inventory of the original 66 type sources
+
+Counts below are distinct sources within each row, after removing comments
+and following local quoted includes. Rows overlap: six aligned sources also
+use packed, and `misalign.c` uses packed, mode and ranges. Representation
+attributes account for 50 distinct sources. In nonoverlapping priority order:
+29 packed, seven additional aligned, 13 additional scalar mode, one `_Alignas`.
+The remaining 16 consist of ten deferred control/stack forms, one union cast,
+four floating builtins and one snprintf builtin. Implementation followed this
+source-count order. Vector and complex rows identify latent blockers.
+
+| Construct | Original type sources | Native passes among them | Exact sources |
+| --- | ---: | ---: | --- |
+| packed | 29 | 27 | `20010518-2.c`, `20020227-1.c`, `20030224-2.c`, `20040625-1.c`, `20040709-2.c`, `20040709-3.c`, `20051113-1.c`, `20100430-1.c`, `20111212-1.c`, `20120105-1.c`, `20170401-1.c`, `20190820-1.c`, `960117-1.c`, `bf-pack-1.c`, `misalign.c`, `packed-1.c`, `packed-2.c`, `packed-aligned.c`, `pr29006.c`, `pr45070.c`, `pr52979-1.c`, `pr52979-2.c`, `pr70602.c`, `pr71083.c`, `strct-pack-1.c`, `strct-pack-2.c`, `strct-pack-3.c`, `strct-pack-4.c`, `struct-ret-2.c` |
+| aligned | 13 | 13 | `20190820-1.c`, `960117-1.c`, `alloca-1.c`, `packed-aligned.c`, `pr108064.c`, `pr22141-2.c`, `pr23467.c`, `pr65369.c`, `pr77718.c`, `strct-pack-1.c`, `strct-pack-2.c`, `strct-pack-3.c`, `struct-cpy-1.c` |
+| scalar mode | 14 | 6 | `20020108-1.c`, `20050107-1.c`, `20050119-1.c`, `20050119-2.c`, `cbrt.c`, `memclr.c`, `memcpy-a1.c`, `memcpy-a2.c`, `memcpy-a4.c`, `memcpy-a8.c`, `misalign.c`, `pr23135.c`, `simd-1.c`, `zerolen-2.c` |
+| _Alignas | 1 | 1 | `pr68532.c` |
+| return/frame address | 4 | 0 | `20010122-1.c`, `20030323-1.c`, `20030811-1.c`, `frame-address.c` |
+| setjmp/longjmp | 4 | 0 | `built-in-setjmp.c`, `pr60003.c`, `pr64242.c`, `pr84521.c` |
+| signbit | 2 | 2 | `20080502-1.c`, `pr35456.c` |
+| scalar-to-union cast | 1 | 1 | `960416-1.c` |
+| label addresses | 1 | 0 | `990208-1.c` |
+| isinf | 1 | 1 | `pr39228.c` |
+| copysign | 1 | 1 | `pr44683.c` |
+| apply/argument replay | 1 | 0 | `pr47237.c` |
+| snprintf | 1 | 1 | `pr78622.c` |
+| range designators | 6 | 0 | `memclr.c`, `memcpy-a1.c`, `memcpy-a2.c`, `memcpy-a4.c`, `memcpy-a8.c`, `misalign.c` |
+| vector forms | 2 | 0 | `pr23135.c`, `simd-1.c` |
+| _Complex | 1 | 0 | `20020227-1.c` |
+
+There are **zero independent typeof, types-compatible or offsetof blockers**
+in these 66 sources. Their existing implementations now consume retained
+representation types; focused tests include qualified/nested member types,
+type compatibility, expression alignment and array-member offsetof.
+
+### The original ten static initializer sources
+
+| Form | Sources | Result |
+| --- | --- | --- |
+| Nested file-scope compound literals and their addresses | `20050929-1.c` | Pass in all four surveyed arms |
+| Integer constant cast to pointer | `pr23324.c`, `pr84478.c` | Both emit constants; pr23324 passes, pr84478 reaches assembly refusal |
+| Label addresses | `20040302-1.c`, `20041214-1.c`, `20071210-1.c`, `20071220-1.c`, `20071220-2.c`, `920501-4.c` | Deferred code-label relocation/control-flow subsystem |
+| Label differences in integer static arrays | `pr70460.c` | Deferred label-difference relocation |
+
+### Implemented contracts and decisions
+
+GNU object/member/type attributes retain packed layouts, scalar machine modes,
+explicit alignment and packed enum representations. Completed declarators keep
+array/pointer storage alignment separate from element/pointee alignment. Typedef
+alignment may weaken the natural alignment; ordinary variables may not. Packed
+member accesses and initializer stores use guaranteed alignment while ABI
+classification retains natural member types. C99 §6.7.2.1p10 (printed p. 102;
+PDF p. 114) permits implementation-defined allocation details; standard alignment
+uses C11 §6.7.5p2-6 (printed p. 127; PDF p. 145). GCC contracts are in
+[Common Attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html).
+
+[Union casts](https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html) select an
+exactly compatible member and create a union rvalue. Both scalar and aggregate
+members lower through ordinary temporaries and stores.
+[GNU ranges](https://gcc.gnu.org/onlinedocs/gcc/Designated-Inits.html) use inclusive
+integer constant endpoints, infer incomplete bounds, check bounds and preserve
+evaluation once across every selected subobject. Nested ranges use iterative
+Cartesian cursors and arena-held value snapshots, without recursive syntax walks.
+All six original range sources still need inline assembly, so their standalone
+corpus pass gain is zero.
+
+Floating classification/sign-copy builtins analyze generic and f/l operands,
+diagnose arity/types, fold allowed constants and preserve signed zero/NaN signs.
+They lower to existing scalar/memory IR; no new interpreter floating subsystem
+is introduced. See [Other Builtins](https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html),
+C99 §7.12.3.3 (printed p. 217; PDF p. 229), §7.12.3.6 (printed p. 218;
+PDF p. 230), §7.12.11.1 (printed p. 236; PDF p. 248), and §6.6p10
+(printed p. 96; PDF p. 108) for additional constant expressions.
+The binding-aware snprintf signature and interpreter formatter implement
+truncation, n==0, terminators and the untruncated return count, per C99
+§7.19.6.5p2-3 (printed p. 290; PDF p. 302).
+
+Static compound literals become memoized internal globals, populated by an
+iterative queue. Integer pointer constants emit bytes; compound/array-member
+addresses, selected GNU/C11 expressions and `&*` forms emit existing relocations.
+Both back ends use the same byte/relocation representation. C99 §6.6p7-9
+(printed pp. 95-96; PDF pp. 107-108) and §6.7.8p4 (printed p. 125;
+PDF p. 137) govern these constant initializers. Extension diagnostics continue
+to use the existing policy; GNU mode does not suppress `Deny`.
+
+### Newly reached failures and deferred work
+
+The remaining ten opaque sources require stack introspection (four return/frame
+address sources), nonlocal execution (four setjmp/longjmp sources), ABI argument
+replay (pr47237), or code-label identity (990208-1). These cannot be implemented
+as scalar signatures alone: they need interpreter frame/control support and
+native stack/ABI or code-label representations. Label-address/difference static
+initializers share the latter subsystem. Inline assembly, nested functions,
+vectors and complex arithmetic remain deferred. Aggregate varargs and VLA
+lowering are intentionally left to the separate worktree.
+
+Native passes that still encounter interpreter limitations are listed in the
+machine-readable inventory. `20040709-2.c`, `20040709-3.c`, `20080502-1.c` and
+`pr39228.c` reach the existing f80/f128 interpreter refusal. `20100430-1.c`
+reaches a poison/noundef failure before bcc optimization and passes afterward.
+Function `aligned` code placement is outside the original type/static refusal
+inventory and remains unrepresented in IR: `align-3.c` now reaches its failing
+function-alignment query instead of an incompatible redeclaration diagnostic.
+This is a newly exposed failure, not a regression of a previously passing source.
+
+### Remaining lowering inventory
+
+Distinct source counts per construct may overlap:
+
+| Construct | Sources | Exact remaining inventory |
+| --- | ---: | --- |
+| nested functions | 29 | `20000822-1.c`, `20010209-1.c`, `20010605-1.c`, `20030501-1.c`, `20040520-1.c`, `20061220-1.c`, `20090219-1.c`, `920415-1.c`, `920428-2.c`, `920501-7.c`, `920612-2.c`, `920721-4.c`, `921017-1.c`, `921215-1.c`, `931002-1.c`, `comp-goto-2.c`, `nest-align-1.c`, `nest-stdar-1.c`, `nestfunc-1.c`, `nestfunc-2.c`, `nestfunc-3.c`, `nestfunc-5.c`, `nestfunc-6.c`, `nestfunc-7.c`, `pr103405.c`, `pr22061-3.c`, `pr22061-4.c`, `pr24135.c`, `pr71494.c` |
+| inline assembly | 68 | `20001009-2.c`, `20020107-1.c`, `20030222-1.c`, `20061031-1.c`, `20071211-1.c`, `20071220-1.c`, `20071220-2.c`, `20080122-1.c`, `960312-1.c`, `990130-1.c`, `990413-2.c`, `bitfld-5.c`, `memclr.c`, `memcpy-a1.c`, `memcpy-a2.c`, `memcpy-a4.c`, `memcpy-a8.c`, `misalign.c`, `pr103376.c`, `pr108498-1.c`, `pr110252-2.c`, `pr114552.c`, `pr38533.c`, `pr40022.c`, `pr40657.c`, `pr41239.c`, `pr43385.c`, `pr43560.c`, `pr44852.c`, `pr45695.c`, `pr47925.c`, `pr49218.c`, `pr49279.c`, `pr49390.c`, `pr51581-1.c`, `pr51581-2.c`, `pr51877.c`, `pr51933.c`, `pr52286.c`, `pr56205.c`, `pr56866.c`, `pr57344-1.c`, `pr57344-2.c`, `pr57344-3.c`, `pr57344-4.c`, `pr58277-1.c`, `pr58419.c`, `pr63641.c`, `pr65053-1.c`, `pr65053-2.c`, `pr65648.c`, `pr65956.c`, `pr68328.c`, `pr69691.c`, `pr78438.c`, `pr78726.c`, `pr79354.c`, `pr79737-2.c`, `pr80421.c`, `pr81588.c`, `pr82954.c`, `pr84478.c`, `pr84524.c`, `pr85156.c`, `pr85756.c`, `pr88904.c`, `pr93945.c`, `pr94130.c` |
+| type not analyzed by semantic analysis | 10 | `20010122-1.c`, `20030323-1.c`, `20030811-1.c`, `990208-1.c`, `built-in-setjmp.c`, `frame-address.c`, `pr47237.c`, `pr60003.c`, `pr64242.c`, `pr84521.c` |
+| complex arithmetic | 13 | `20010605-2.c`, `20020227-1.c`, `20020411-1.c`, `20030910-1.c`, `960512-1.c`, `complex-1.c`, `complex-2.c`, `complex-4.c`, `complex-5.c`, `complex-7.c`, `pr38969.c`, `pr42248.c`, `pr49644.c` |
+| this static initializer | 7 | `20040302-1.c`, `20041214-1.c`, `20071210-1.c`, `20071220-1.c`, `20071220-2.c`, `920501-4.c`, `pr70460.c` |
+| variable length arrays | 7 | `20040411-1.c`, `20040811-1.c`, `920721-2.c`, `920929-1.c`, `pr22061-1.c`, `pr43220.c`, `vla-dealloc-1.c` |
+| vector types | 22 | `20050316-1.c`, `20050316-2.c`, `20050316-3.c`, `20050604-1.c`, `20050607-1.c`, `20060420-1.c`, `pr105613.c`, `pr109040.c`, `pr110817-1.c`, `pr110817-2.c`, `pr23135.c`, `pr60960.c`, `pr70903.c`, `pr85169.c`, `pr94524-1.c`, `pr94524-2.c`, `pr94591.c`, `simd-1.c`, `simd-2.c`, `simd-4.c`, `simd-5.c`, `simd-6.c` |
+| structures and unions passed as variable arguments | 17 | `20180921-1.c`, `920625-1.c`, `920908-1.c`, `931004-10.c`, `931004-12.c`, `931004-14.c`, `931004-2.c`, `931004-4.c`, `931004-6.c`, `931004-8.c`, `pr44575.c`, `pr92904.c`, `stdarg-3.c`, `strct-stdarg-1.c`, `strct-varg-1.c`, `va-arg-22.c`, `va-arg-pack-1.c` |
+| computed goto | 1 | `920501-3.c` |
+| label addresses | 1 | `920501-5.c` |
+| this builtin | 1 | `921007-1.c` |
+| local labels | 2 | `930406-1.c`, `980526-1.c` |
+
+### Validation
+
+Focused semantic tests cover retained representations, completion order,
+diagnostics/recovery, constants and extension policy. Six execution programs
+cover layouts (including packed 64-bit initializer stores), scalar/aggregate union
+casts, nested static addresses and absolute/null pointers, nested ranges with
+side effects, floating queries/sign-copy and snprintf truncation/zero size.
+They execute in every interpreter stage on both targets and in five native arms
+against bundled Clang. Native floating probes include long double; interpreter
+probes use double equivalents because f80 transport remains unsupported.
+Clang needs an explicit C99 once-evaluated oracle for nonconstant GNU ranges and
+generic isinf in place of GCC f/l aliases. Independent GCC O0/O2 executions use
+all six original programs, including actual ranges and aliases: 12 passes in
+`target/torture2-gcc-oracles.json`. LLVM emission checks cover both target triples;
+native execution in these focused tests covers the Windows host only.
+
+All required checks pass on the final source revision. Feature builds were
+sequential and began after all-target CLI integration tests exited. Nightly
+formatting ran before its check, and the ordinary CLI was rebuilt last.
+
+| Check | Result |
+| --- | --- |
+| `cargo test --all-targets` | Pass: 1,787 passed, six existing ignores across 20 suites |
+| `cargo test --features benchmarking-internals --test allocation_count` | Pass: 26 tests |
+| `cargo +nightly fmt --check` | Pass, after `cargo +nightly fmt` |
+| `cargo clippy --all-targets -- -D warnings` | Pass |
+| `cargo clippy --release --all-targets -- -D warnings` | Pass |
+| `cargo clippy --all-targets --features benchmarking-internals -- -D warnings` | Pass |
+| `BCC_DIFFTEST_CASES=1000 cargo test --lib difftest` | Pass: six tests, two existing ignores |
+| `git diff --check` | Pass |
+| `cargo build --bin bcc-rust` | Pass: plain CLI restored |
+
+The final survey release executable's SHA-512 matches the recorded digest.
+Both surveys retain all 1,677 source hashes; the final after survey completes
+in 338.149 seconds. The whole-file plan is `target/commit-plan.md`: seven
+commits, with every changed file listed exactly once. Shared compiler dispatch
+and type files require semantic families to remain together. Nothing is staged
+or committed, and neither shared LLVM junction was modified.
