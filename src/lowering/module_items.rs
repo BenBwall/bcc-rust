@@ -425,6 +425,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             params: scratch.alloc_slice_copy(&params),
             result,
             variadic,
+            variadic_fixed: None,
             aggregates: scratch.alloc_slice_copy(&aggregates),
             extensions: scratch.alloc_slice_copy(&extensions),
             result_extension: result_representation.extension(),

@@ -116,6 +116,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             }
             return;
         };
+        self.enter_scope(statement);
         let tail =
             crate::translation_phases::semantic_analysis::statement_expression_tail(statement);
         if let Some((tail, _)) = tail {

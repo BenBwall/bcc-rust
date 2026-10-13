@@ -40,6 +40,15 @@ pub(super) enum Task<'tu> {
     /// Keep statement effects and label targets without reading unused values.
     StatementEffects(&'tu Statement<'tu>),
     Declaration(&'tu Declaration<'tu>),
+    DeclareBinding(
+        usize,
+        Option<&'tu Initializer<'tu>>,
+        crate::translation_phases::SourceVectors,
+    ),
+    FinishBound(usize),
+    Sizeof(TypeId, TypeId, crate::translation_phases::SourceVectors),
+    ExitScope,
+
     /// Enter `block`: it is sealed if all its predecessors are known.
     Enter {
         block: Block,

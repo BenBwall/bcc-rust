@@ -105,7 +105,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             }
         };
         match statement.kind {
-            | S::Compound { items } =>
+            | S::Compound { items } => {
+                self.enter_scope(statement);
                 for item in items.iter().rev() {
                     self.tasks.push(match *item {
                         | BlockItem::Statement(statement) => child(statement),
@@ -116,7 +117,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                                 definition.source_vectors,
                             )),
                     });
-                },
+                }
+            },
             | S::Expression(slot) => {
                 let expression = expression(slot, source)?;
                 if mode == StatementMode::Effects {
@@ -276,6 +278,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 ]);
             },
             | S::For(clauses) => {
+                self.enter_scope(statement);
                 let header = self.draft.create_block(&[]);
                 let body = self.draft.create_block(&[]);
                 let step = self.draft.create_block(&[]);
@@ -353,6 +356,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     | Some(ty) => Some(self.draft.poison(ty)),
                     | None => None,
                 };
+                self.cleanup_to(0);
                 self.draft
                     .terminate_and_continue_dead(Terminator::Return(value));
             },
@@ -378,7 +382,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.jump_away(target);
             },
             | S::Goto(label) => {
+                let scope = self.label_scopes.get(&label.name).copied().unwrap_or(0);
                 let target = self.label_block(label.name);
+                _ = self.block_scopes.insert(target, scope);
                 self.jump_away(target);
             },
             | S::Label(label, statement) => {
@@ -595,6 +601,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 .terminate_and_continue_dead(Terminator::Jump(edge));
         }
         self.switch_starts.push(start);
+        self.remember_target(exit);
         self.jumps.push(JumpTargets {
             break_to:    exit,
             continue_to: None,
@@ -663,6 +670,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | _ => Some(self.value(item, source)?),
         };
+        self.cleanup_to(0);
         self.draft
             .terminate_and_continue_dead(Terminator::Return(value));
         Ok(())
@@ -670,6 +678,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 
     /// Jumps to `target`; what follows is unreachable until a label.
     fn jump_away(&mut self, target: Block) {
+        let scope = self.block_scopes.get(&target).copied().unwrap_or(0);
+        self.cleanup_to(scope);
         let edge = self.draft.edge(target, &[]);
         self.draft
             .terminate_and_continue_dead(Terminator::Jump(edge));
@@ -685,7 +695,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     }
 
     /// Pushes `tasks` so that they run in slice order.
-    fn push_all(&mut self, tasks: &[Task<'tu>]) {
+    pub(super) fn push_all(&mut self, tasks: &[Task<'tu>]) {
         self.tasks.extend(tasks.iter().rev().copied());
     }
 }
@@ -698,57 +708,68 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// a global initialized before the program starts.
     /// C99: §6.7.8 paragraphs 9-10, p. 126; PDF p. 138; §6.8 paragraph 3,
     /// p. 131; PDF p. 143; §6.2.4 paragraph 5, p. 32; PDF p. 44.
-    pub(super) fn declaration(
-        &mut self,
-        declaration: &'tu Declaration<'tu>,
-    ) -> Result<(), LoweringError> {
+    pub(super) fn declaration(&mut self, declaration: &'tu Declaration<'tu>) {
         let mut tasks = ArenaVec::new_in(self.scratch);
-        for init_declarator in declaration.init_declarators {
-            let source = init_declarator.source_vectors;
-            let Some(binding) = self.unit.declarator_binding(init_declarator.declarator) else {
+        for init in declaration.init_declarators {
+            let Some(binding) = self.unit.declarator_binding(init.declarator) else {
                 continue;
             };
             let data = self.unit.sema.bindings[binding];
-            if data.kind != BindingKind::Object {
-                continue;
+            if data.kind == BindingKind::Typedef || data.duration == Duration::Automatic {
+                self.prepare_type_tasks(data.ty, &mut tasks);
             }
-            if data.duration == Duration::Static {
-                if data.linkage == Linkage::None {
-                    _ = self.unit.define_object(
-                        binding,
-                        Some(self.name),
-                        init_declarator.initializer,
-                    )?;
-                }
-                continue;
-            }
-            _ = self.local(binding, source)?;
-            let Some(initializer) = init_declarator.initializer else {
-                continue;
-            };
-            let object = Object::Local(binding);
-            match initializer.kind {
-                | InitializerType::AssignmentExpression(expression)
-                    if self.repr(data.ty, source)?.is_scalar() =>
-                {
-                    tasks.push(Task::Evaluate(expression));
-                    tasks.push(Task::Initialize {
-                        object,
-                        offset: 0,
-                        ty: data.ty,
-                        bit_field: None,
-                    });
-                },
-                | _ => {
-                    tasks.push(Task::InitializeAggregate {
-                        object,
-                        ty: data.ty,
-                        initializer,
-                    });
-                },
-            }
+            tasks.push(Task::DeclareBinding(
+                binding,
+                init.initializer,
+                init.source_vectors,
+            ));
         }
         self.push_all(&tasks);
+    }
+
+    pub(super) fn declare_binding(
+        &mut self,
+        binding: usize,
+        initializer: Option<
+            &'tu crate::translation_phases::parsing::declaration_syntax::Initializer<'tu>,
+        >,
+        source: SourceVectors,
+    ) -> Result<(), LoweringError> {
+        let data = self.unit.sema.bindings[binding];
+        if data.kind != BindingKind::Object {
+            return Ok(());
+        }
+        if data.duration == Duration::Static {
+            if data.linkage == Linkage::None {
+                _ = self
+                    .unit
+                    .define_object(binding, Some(self.name), initializer)?;
+            }
+            return Ok(());
+        }
+        _ = self.local(binding, source)?;
+        let Some(initializer) = initializer else {
+            return Ok(());
+        };
+        let object = Object::Local(binding);
+        match initializer.kind {
+            | InitializerType::AssignmentExpression(expression)
+                if self.repr(data.ty, source)?.is_scalar() =>
+            {
+                self.tasks.push(Task::Initialize {
+                    object,
+                    offset: 0,
+                    ty: data.ty,
+                    bit_field: None,
+                });
+                self.tasks.push(Task::Evaluate(expression));
+            },
+            | _ => self.tasks.push(Task::InitializeAggregate {
+                object,
+                ty: data.ty,
+                initializer,
+            }),
+        }
         Ok(())
     }
 }
@@ -799,6 +820,11 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             switch_blocks: ArenaVec::new_in(scratch),
             switch_starts: ArenaVec::new_in(scratch),
             result: record.result.unqualified(),
+            bounds: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
+            scopes: ArenaVec::new_in(scratch),
+            label_scopes: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
+            block_scopes: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
+            scope_parents: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
         };
         let entry = Draft::entry();
         for (index, &parameter) in record.parameters.iter().enumerate() {
@@ -831,7 +857,39 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             lowerer.operands.push(converted);
             lowerer.initialize(Object::Local(parameter), 0, declared, None)?;
         }
+        // Definition parameters have body bindings distinct from the
+        // prototype bindings referenced by their retained bound expressions.
+        // C99: §6.9.1p10, p. 142; PDF p. 154.
+        let mut parameter_sources = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch);
+        for &parameter in record.parameters {
+            if let Some(binding) = parameter {
+                _ = parameter_sources.insert(
+                    lowerer.unit.sema.bindings[binding].name.source_vectors,
+                    binding,
+                );
+            }
+        }
+        for (index, data) in lowerer.unit.sema.bindings.iter().enumerate() {
+            if data.kind == BindingKind::Parameter
+                && let Some(&binding) = parameter_sources.get(&data.name.source_vectors)
+                && let Some(&local) = lowerer.locals.get(&binding)
+            {
+                _ = lowerer.locals.insert(index, local);
+            }
+        }
+        lowerer.index_vla_scopes();
         lowerer.tasks.push(Task::Statement(record.syntax.body));
+        let mut bound_tasks = ArenaVec::new_in(scratch);
+        for &parameter in record.parameters {
+            if let Some(binding) = parameter {
+                lowerer
+                    .prepare_type_tasks(lowerer.unit.sema.bindings[binding].ty, &mut bound_tasks);
+            }
+        }
+        for &ty in record.parameter_types {
+            lowerer.prepare_type_tasks(ty, &mut bound_tasks);
+        }
+        lowerer.push_all(&bound_tasks);
         Ok(lowerer)
     }
 
@@ -856,6 +914,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                     })
                 },
             };
+        self.cleanup_to(0);
         self.draft
             .terminate_and_continue_dead(Terminator::Return(value));
         for index in 0..self.draft.blocks.len() {

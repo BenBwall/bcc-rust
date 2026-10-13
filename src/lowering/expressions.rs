@@ -245,6 +245,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             } => {
                 self.tasks.push(Task::Finish(expression));
                 self.tasks.push(Task::Evaluate(base_expression));
+                if matches!(expression.kind, E::Cast { .. }) {
+                    let mut tasks = ArenaVec::new_in(self.scratch);
+                    self.prepare_type_tasks(info.ty, &mut tasks);
+                    self.push_all(&tasks);
+                }
             },
             | E::Conditional(conditional) => {
                 let then = self.draft.create_block(&[]);
@@ -264,7 +269,27 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     otherwise,
                 });
             },
-            | E::SizeofType(_) | E::SizeofExpr(_) | E::AlignofType(_) | E::AlignofExpr(_) =>
+            | E::SizeofType(name) => {
+                let object = self
+                    .unit
+                    .sema
+                    .type_names
+                    .iter()
+                    .find(|(source, _)| *source == name.source_vectors)
+                    .map(|&(_, ty)| ty)
+                    .ok_or_else(|| LoweringError::missing("sizeof type is not retained", source))?;
+                self.tasks.push(Task::Sizeof(object, info.ty, source));
+                let mut tasks = ArenaVec::new_in(self.scratch);
+                self.prepare_type_tasks(object, &mut tasks);
+                self.push_all(&tasks);
+            },
+            | E::SizeofExpr(operand) => {
+                let object = self.info(operand)?.ty;
+                self.tasks.push(Task::Sizeof(object, info.ty, source));
+                self.tasks.push(Task::Discard);
+                self.tasks.push(Task::EvaluateRaw(operand));
+            },
+            | E::AlignofType(_) | E::AlignofExpr(_) =>
                 return Err(LoweringError::unsupported(
                     Construct::VariableLengthArray,
                     source,
@@ -869,9 +894,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let b = self.value(right, source)?;
                 let b = self.convert(Opcode::Ptrtoint, Type::I64, b);
                 let mut difference = self.binary_inst(Opcode::Isub, InstFlags::empty(), a, b);
-                let size = self.element_size(left.ty, source)?;
-                if size != 1 {
-                    let size = self.iconst(Type::I64, i128::from(size));
+                if self.static_element_size(left.ty) != Some(1) {
+                    let size = self.element_size(left.ty, source)?;
                     difference = self.binary_inst(Opcode::Sdiv, InstFlags::EXACT, difference, size);
                 }
                 let result_ty = self.value_type(ty, source)?;
@@ -1069,15 +1093,24 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 Operand::Value(self.binary_inst(Opcode::Xor, InstFlags::empty(), value, one))
             },
             | Repr::Pointer => {
-                let size = self.element_size(item.ty, source)?;
-                let offset = self.iconst(
-                    Type::I64,
+                let offset = if let Some(size) = self.static_element_size(item.ty) {
+                    self.iconst(
+                        Type::I64,
+                        if increment {
+                            i128::from(size)
+                        } else {
+                            -i128::from(size)
+                        },
+                    )
+                } else {
+                    let size = self.element_size(item.ty, source)?;
                     if increment {
-                        i128::from(size)
+                        size
                     } else {
-                        -i128::from(size)
-                    },
-                );
+                        let zero = self.iconst(Type::I64, 0);
+                        self.binary_inst(Opcode::Isub, InstFlags::empty(), zero, size)
+                    }
+                };
                 Operand::Value(self.ptr_add(value, offset))
             },
             | Repr::Float { ty } => {
@@ -1195,23 +1228,27 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             items.len()
         };
         let variadic = open_external || (prototype && variadic);
-        for item in &items[fixed..] {
-            if self.repr(item.ty, source)? == Repr::Aggregate {
-                return Err(LoweringError::unsupported(
-                    Construct::VariadicAggregate,
-                    source,
-                ));
-            }
-        }
-        let signature = self
+        let described = items[fixed..]
+            .iter()
+            .any(|item| repr(&self.unit.sema.types, item.ty) == Ok(Repr::Aggregate));
+        let mut signature = self
             .unit
             .signature_of(
-                items[..fixed].iter().map(|item| item.ty),
+                items[..if described { items.len() } else { fixed }]
+                    .iter()
+                    .map(|item| item.ty),
                 result,
                 variadic,
                 self.scratch,
             )
             .map_err(|kind| at(kind, source))?;
+        if described {
+            signature.variadic_fixed = Some(
+                u32::try_from(fixed + usize::from(signature.result_param().is_some()))
+                    .map_err(|_| LoweringError::missing("too many call arguments", source))?,
+            );
+            signature.variadic_noundef = false;
+        }
         let sig = self.unit.module.intern(signature);
         let mut args = ArenaVec::with_capacity_in(count + 1, self.scratch);
         let mut result_object = None;
@@ -1368,35 +1405,47 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         source: SourceVectors,
     ) -> Result<Value, LoweringError> {
         let base = self.value(pointer, source)?;
-        let size = i128::from(self.element_size(pointer.ty, source)?);
         let signed = self.repr(index.ty, source)?.signed();
         let index = self.value(index, source)?;
-        let offset = if let Some(constant) = self.draft.constant(index) {
-            let constant =
-                self.cast_constant(constant, self.draft.value_type(index), signed, Type::I64);
-            let scaled = if subtract {
-                -constant * size
+        if let Some(size) = self.static_element_size(pointer.ty) {
+            let size = i128::from(size);
+            let offset = if let Some(constant) = self.draft.constant(index) {
+                let constant =
+                    self.cast_constant(constant, self.draft.value_type(index), signed, Type::I64);
+                let scaled = if subtract {
+                    -constant * size
+                } else {
+                    constant * size
+                };
+                if scaled == 0 {
+                    return Ok(base);
+                }
+                self.iconst(Type::I64, scaled)
             } else {
-                constant * size
+                let wide = self.extend(index, signed, Type::I64);
+                let scaled = if size == 1 {
+                    wide
+                } else {
+                    let size = self.iconst(Type::I64, size);
+                    self.binary_inst(Opcode::Imul, InstFlags::NSW, wide, size)
+                };
+                if subtract {
+                    let zero = self.iconst(Type::I64, 0);
+                    self.binary_inst(Opcode::Isub, InstFlags::NSW, zero, scaled)
+                } else {
+                    scaled
+                }
             };
-            if scaled == 0 {
-                return Ok(base);
-            }
-            self.iconst(Type::I64, scaled)
+            return Ok(self.ptr_add(base, offset));
+        }
+        let size = self.element_size(pointer.ty, source)?;
+        let wide = self.extend(index, signed, Type::I64);
+        let scaled = self.binary_inst(Opcode::Imul, InstFlags::NSW, wide, size);
+        let offset = if subtract {
+            let zero = self.iconst(Type::I64, 0);
+            self.binary_inst(Opcode::Isub, InstFlags::NSW, zero, scaled)
         } else {
-            let wide = self.extend(index, signed, Type::I64);
-            let scaled = if size == 1 {
-                wide
-            } else {
-                let size = self.iconst(Type::I64, size);
-                self.binary_inst(Opcode::Imul, InstFlags::NSW, wide, size)
-            };
-            if subtract {
-                let zero = self.iconst(Type::I64, 0);
-                self.binary_inst(Opcode::Isub, InstFlags::NSW, zero, scaled)
-            } else {
-                scaled
-            }
+            scaled
         };
         Ok(self.ptr_add(base, offset))
     }
@@ -1426,13 +1475,24 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     }
 
     /// The size of the element a pointer or array type designates.
-    fn element_size(&self, pointer: TypeId, source: SourceVectors) -> Result<u64, LoweringError> {
-        let types = &self.unit.sema.types;
-        let element = types::target_type(types, pointer)
+    fn static_element_size(&self, pointer: TypeId) -> Option<u64> {
+        let element = types::target_type(&self.unit.sema.types, pointer)?;
+        self.unit
+            .sema
+            .types
+            .layout(element)
+            .map(|layout| layout.size)
+    }
+
+    /// The saved runtime stride for a variably modified pointer or array.
+    fn element_size(
+        &mut self,
+        pointer: TypeId,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let element = types::target_type(&self.unit.sema.types, pointer)
             .ok_or_else(|| LoweringError::missing("pointer arithmetic on a non-pointer", source))?;
-        Ok(types::layout(types, element)
-            .map_err(|kind| at(kind, source))?
-            .size)
+        self.runtime_size(element, source)
     }
 
     fn merge_params(

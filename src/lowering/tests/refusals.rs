@@ -11,12 +11,8 @@ fn asm_collision_keeps_checking_later_function_bodies() {
          int *p=&same;}int a[n]; return 0;}\nint g(void){__asm__(\"nop\");return 1;}",
     )
     .unwrap_err();
-    assert_eq!(errors.len(), 3, "{errors:?}");
-    for construct in [
-        "assembler labels",
-        "variable length arrays",
-        "inline assembly",
-    ] {
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    for construct in ["assembler labels", "inline assembly"] {
         assert!(
             errors.iter().any(|error| error.ends_with(construct)),
             "{errors:?}"
@@ -53,14 +49,6 @@ fn unsupported_constructs_name_themselves() {
             "__float128 f(__float128 x) { return x; }",
             "binary128 floating-point types",
         ),
-        (
-            "int f(int n) { int a[n]; a[0] = 1; return a[0]; }",
-            "variable length arrays",
-        ),
-        (
-            "struct s { int a; }; int f(int n, ...); int g(struct s v) { return f(1, v); }",
-            "structures and unions passed as variable arguments",
-        ),
         ("void f(void) { __asm__(\"nop\"); }", "inline assembly"),
         ("_Atomic int a; int f(void) { return a; }", "atomic types"),
         (
@@ -86,7 +74,7 @@ fn every_failing_function_is_reported() {
     let errors = lower(
         "__float128 f(__float128 x) { return x; }
 int ok(int a) { return a; }
-int g(int n) { int a[n]; return a[0]; }",
+int g(int n) { __asm__(\"nop\"); return n; }",
     )
     .expect_err("two functions are unsupported");
     assert_eq!(errors.len(), 2, "{errors:?}");
@@ -95,7 +83,7 @@ int g(int n) { int a[n]; return a[0]; }",
 #[test]
 fn errors_point_at_their_syntax_and_render() {
     let tu = Bump::new();
-    let source = tu.alloc_str("int f(int n) {\n  int a[n];\n  return 0;\n}\n");
+    let source = tu.alloc_str("int f(int n) {\n  __asm__(\"nop\");\n  return 0;\n}\n");
     let mut context = Context::new(&tu);
     let unit = parse_translation_unit(
         &mut context,
@@ -114,16 +102,16 @@ fn errors_point_at_their_syntax_and_render() {
         &arena,
         &mut scratch,
     )
-    .expect_err("a variable length array is unsupported");
+    .expect_err("inline assembly is unsupported");
     let error = errors.errors[0];
     assert_eq!(
         error.kind,
-        LoweringErrorKind::Unsupported(Construct::VariableLengthArray)
+        LoweringErrorKind::Unsupported(Construct::InlineAssembly)
     );
     let span = error.source.expect("the error has a source");
     let diagnostic = error.to_diagnostic(&context, span);
     assert_eq!(
         diagnostic.message,
-        "not yet supported by lowering: variable length arrays"
+        "not yet supported by lowering: inline assembly"
     );
 }

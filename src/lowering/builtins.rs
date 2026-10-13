@@ -100,10 +100,23 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let ty = self.info(e)?.ty;
         let operand = if b.keyword == K::BuiltinVaArg {
             if types::repr(&self.unit.sema.types, ty).is_ok_and(|r| r == types::Repr::Aggregate) {
-                return Err(LoweringError::unsupported(
-                    super::Construct::VariadicAggregate,
-                    source,
-                ));
+                let signature = self
+                    .unit
+                    .signature_of([ty], ty, false, self.scratch)
+                    .map_err(|kind| super::module_items::at(kind, source))?;
+                let signature = crate::ir::Signature {
+                    params: &signature.params[1..],
+                    aggregates: &[crate::ir::AggregateParam {
+                        index: 0,
+                        abi:   signature.param_abi(1).expect("aggregate argument"),
+                    }],
+                    noundef: &[],
+                    ..signature
+                };
+                let sig = self.unit.module.intern(signature);
+                let address = self.inst(InstData::VaArgAggregate { sig, list: first }, Type::Ptr);
+                self.push_item(Operand::Aggregate(address), ty);
+                return Ok(());
             }
             let result_type = self.value_type(ty, source)?;
             Operand::Value(self.convert(Opcode::VaArg, result_type, first))

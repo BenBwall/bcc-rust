@@ -114,6 +114,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Some(value_type)
                 if !types::is_volatile(ty) && !self.unit.address_taken.contains(&binding) =>
                 Local::Variable(self.draft.declare_var(value_type)),
+            | _ if self.unit.sema.types.layout(ty).is_none()
+                && matches!(self.unit.sema.types.kind(ty), TypeKind::Array(..)) =>
+            {
+                let size = self.runtime_size(ty, source)?;
+                self.enter_vla(binding);
+                Local::Address(self.inst(
+                    InstData::Unary {
+                        opcode: Opcode::DynAlloca,
+                        ty:     Type::I64,
+                        arg:    size,
+                    },
+                    Type::Ptr,
+                ))
+            },
             | _ => {
                 let layout =
                     types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;

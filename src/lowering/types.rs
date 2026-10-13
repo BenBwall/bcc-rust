@@ -191,7 +191,7 @@ pub(super) fn layout(types: &Types<'_>, ty: TypeId) -> Result<Layout, LoweringEr
     types.layout(ty).ok_or_else(|| {
         let mut element = ty;
         while let TypeKind::Array(inner, bound) = types.kind(element) {
-            if bound == ArrayBound::Variable {
+            if matches!(bound, ArrayBound::Variable(_)) {
                 return LoweringErrorKind::Unsupported(Construct::VariableLengthArray);
             }
             element = inner;
@@ -266,7 +266,7 @@ pub(super) fn aggregate_layout<'s>(
                     let count = match bound {
                         | ArrayBound::Constant(count) => count,
                         | ArrayBound::Incomplete => 0,
-                        | ArrayBound::Variable | ArrayBound::Star =>
+                        | ArrayBound::Variable(_) | ArrayBound::Star =>
                             return Err(LoweringErrorKind::Unsupported(
                                 Construct::VariableLengthArray,
                             )),

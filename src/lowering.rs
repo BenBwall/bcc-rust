@@ -39,7 +39,8 @@
 //!   lowers statements and declarations; `expressions.rs` operators, calls and
 //!   conversions, including the floating ones; `places.rs` lvalues, loads and
 //!   stores; `bit_fields.rs` bit-field reads and writes; `initializers.rs`
-//!   walks braced initializers.
+//!   walks braced initializers; `vla.rs` evaluates saved array extents and
+//!   restores dynamic stack storage when declaration lifetimes end.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
 //!   to IR types; `floats.rs` turns folded floating constants into IR bits.
@@ -65,6 +66,7 @@ mod gnu;
 mod initializers;
 mod places;
 mod statements;
+mod vla;
 mod work;
 
 // Construction
@@ -216,7 +218,24 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             | Task::StatementValue(statement) => self.statement(statement, StatementMode::Value),
             | Task::StatementEffects(statement) =>
                 self.statement(statement, StatementMode::Effects),
-            | Task::Declaration(declaration) => self.declaration(declaration),
+            | Task::Declaration(declaration) => {
+                self.declaration(declaration);
+                Ok(())
+            },
+            | Task::DeclareBinding(binding, initializer, source) =>
+                self.declare_binding(binding, initializer, source),
+            | Task::FinishBound(index) => self.finish_bound(index),
+            | Task::Sizeof(object, result, source) => {
+                let size = self.runtime_size(object, source)?;
+                let ty = self.value_type(result, source)?;
+                let size = self.extend(size, false, ty);
+                self.push_item(Operand::Value(size), result);
+                Ok(())
+            },
+            | Task::ExitScope => {
+                self.exit_scope();
+                Ok(())
+            },
             | Task::Enter { block, seal } => {
                 if seal {
                     self.draft.seal(block);
@@ -236,6 +255,10 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 Ok(())
             },
             | Task::PushTargets(targets) => {
+                self.remember_target(targets.break_to);
+                if let Some(target) = targets.continue_to {
+                    self.remember_target(target);
+                }
                 self.jumps.push(targets);
                 Ok(())
             },
@@ -371,6 +394,11 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     switch_starts:    ArenaVec<'s, usize>,
     /// The unqualified result type that `return` converts to.
     result:           TypeId,
+    bounds:           ArenaMap<'s, usize, ssa::Var>,
+    scopes:           ArenaVec<'s, vla::Scope>,
+    label_scopes:     ArenaMap<'s, StringCacheId, usize>,
+    block_scopes:     ArenaMap<'s, Block, usize>,
+    scope_parents:    ArenaMap<'s, usize, usize>,
 }
 
 // Tests
