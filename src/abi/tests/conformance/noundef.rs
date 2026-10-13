@@ -114,3 +114,68 @@ fn mask(line: &str, marker: &str) -> Vec<bool> {
         .map(|param| param.contains("noundef"))
         .collect()
 }
+
+#[test]
+fn mixed_aggregate_variadic_attribute_masks_match_clang() {
+    let source = "struct S { int x,y; }; struct B { long long x,y,z; }; int take(int,...); int \
+                  direct(struct S s, struct B b) { return take(0,s,123,b,456); } int indirect(int \
+                  (*p)(int,...),struct S s,struct B b) { return p(0,s,123,b,456); }";
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        let toolchain = Toolchain::bundled(Target::LinuxGnu).expect("bundled Clang");
+        let directory = TempDir::new("mixed-tail-noundef");
+        let path = directory.join("source.c");
+        std::fs::write(&path, source).unwrap();
+        let clang = crate::test_support::native::run_native(
+            Command::new("python")
+                .arg("scripts/cargo_runner.py")
+                .arg(toolchain.clang())
+                .args(["-O0", "-S", "-emit-llvm", "-o", "-"])
+                .arg(format!("--target={}", target.triple()))
+                .arg(&path),
+        )
+        .unwrap();
+        assert!(
+            clang.status.success(),
+            "{}",
+            String::from_utf8_lossy(&clang.stderr)
+        );
+        let clang = String::from_utf8(clang.stdout).unwrap();
+        let tu = Bump::new();
+        let arena = Bump::new();
+        let mut module = lower_c(&tu, &arena, source, target);
+        lower_abi(&mut module, target, &Bump::new()).unwrap();
+        let mut bcc = String::new();
+        emit_module(&module, target, &mut bcc).unwrap();
+        for indirect in [false, true] {
+            let call = |text: &str| {
+                text.lines()
+                    .find(|line| {
+                        line.contains("call ")
+                            && if indirect {
+                                !line.contains('@')
+                            } else {
+                                line.contains("@take(")
+                            }
+                    })
+                    .unwrap()
+                    .to_owned()
+            };
+            let (ours, reference) = (call(&bcc), call(&clang));
+            let attributes = |line: &str| {
+                let call = line.split_once("call ").unwrap().1;
+                let callee = call.find(['@', '%']).unwrap();
+                let args = call[callee..].split_once('(').unwrap().1;
+                let end = args.rfind(')').unwrap();
+                args[..end]
+                    .split(',')
+                    .map(|arg| arg.contains("noundef"))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                attributes(&ours),
+                attributes(&reference),
+                "{target:?} {indirect}\nbcc: {bcc}\nclang: {clang}"
+            );
+        }
+    }
+}

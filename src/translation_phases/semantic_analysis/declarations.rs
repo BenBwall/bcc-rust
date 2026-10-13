@@ -808,6 +808,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     )
                 };
             }
+            // Microsoft x64 record placement retains the canonical boundary
+            // when a typedef reduces alignment; explicit packing may lower it.
+            // C99 §6.7.2.1p12: member alignment is implementation-defined.
+            if ms && !packed {
+                layout.align = layout
+                    .align
+                    .max(self.types.natural_alignment(member.ty).unwrap_or(1));
+            }
             // The System V ABI ignores unnamed bit-fields when aligning a
             // structure or union; in a union one still occupies its bytes.
             let unnamed_bit_field = member.name.is_none() && member.width.is_some();

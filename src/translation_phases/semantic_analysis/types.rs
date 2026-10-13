@@ -263,7 +263,13 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
 
     /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
     pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
-        layout(&self.nodes, &self.tags, &self.target, ty)
+        layout(&self.nodes, &self.tags, &self.target, ty, false)
+    }
+
+    /// Canonical alignment for Microsoft record placement before storage
+    /// overrides. C99: §6.7.2.1p12, p. 103; PDF p. 115.
+    pub(crate) fn natural_alignment(&self, ty: TypeId) -> Option<u64> {
+        layout(&self.nodes, &self.tags, &self.target, ty, true).map(|layout| layout.align)
     }
 
     /// Array alignment depends on the element, regardless of its extent.
@@ -594,6 +600,7 @@ fn layout(
     tags: &[&Tag<'_>],
     target: &TargetLayout,
     mut ty: TypeId,
+    natural: bool,
 ) -> Option<Layout> {
     let mut count = 1_u64;
     let mut atomic = false;
@@ -645,7 +652,7 @@ fn layout(
     };
     Some(Layout {
         size:  layout.size.checked_mul(count)?,
-        align: if alignment == 0 {
+        align: if natural || alignment == 0 {
             layout.align
         } else {
             u64::from(alignment)
@@ -717,7 +724,16 @@ impl<'tu> FieldPath<'tu> {
 impl<'tu> Types<'tu> {
     /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
     pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
-        layout(self.nodes, self.tags, &self.target, ty)
+        layout(self.nodes, self.tags, &self.target, ty, false)
+    }
+
+    /// Canonical alignment before typedef/declaration storage overrides.
+    /// Record packing remains part of the nominal record layout. System V
+    /// AMD64 ABI section 3.2.3 classifies unaligned fields using this boundary,
+    /// even when GNU `aligned` lowers the field's storage alignment.
+    /// C99: §6.7.2.1p12, p. 103; PDF p. 115 (implementation-defined alignment).
+    pub(crate) fn natural_alignment(&self, ty: TypeId) -> Option<u64> {
+        layout(self.nodes, self.tags, &self.target, ty, true).map(|layout| layout.align)
     }
 
     /// The nominal record's value layout, independent of alignment requested

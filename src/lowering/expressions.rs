@@ -377,22 +377,33 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let field = self.unit.sema.selected_field(expression).ok_or_else(|| {
                     LoweringError::missing("a member access has no field", source)
                 })?;
-                let (base, rvalue) = match base.operand {
+                let (base, rvalue, backing_align) = match base.operand {
                     | Operand::Place(Place::Memory(address)) | Operand::Value(address) =>
-                        (address, false),
-                    | Operand::Aggregate(address) => (address, true),
+                        (address, false, None),
+                    | Operand::Aggregate(address, guaranteed) => (address, true, Some(guaranteed)),
                     | _ =>
                         return Err(LoweringError::missing(
                             "a member base has no address",
                             source,
                         )),
                 };
+                let guaranteed = info.place_alignment().ok_or_else(|| {
+                    LoweringError::missing("a member access has no place alignment", source)
+                })?;
+                let mut access_ty = info.ty.with_alignment(guaranteed);
+                if let Some(guaranteed) = backing_align {
+                    let layout = types::layout(&self.unit.sema.types, access_ty)
+                        .map_err(|kind| at(kind, source))?;
+                    access_ty = access_ty.with_alignment(
+                        u32::try_from(layout.align.min(guaranteed.bytes())).unwrap_or(1),
+                    );
+                }
                 let place = if let Some(width) = field.width {
                     let bits = BitFieldBits {
                         bit_offset: field.bit_offset,
                         width,
                     };
-                    let bit_field = self.bit_field(field.ty, field.offset, bits, source)?;
+                    let bit_field = self.bit_field(access_ty, field.offset, bits, source)?;
                     Place::BitField(self.offset_address(base, field.offset), bit_field)
                 } else {
                     Place::Memory(self.offset_address(base, field.offset))
@@ -400,10 +411,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 if rvalue {
                     // A member of a structure rvalue is not an lvalue
                     // (§6.5.2.3p3), so it is read at once.
-                    let item = self.read(place, info.ty, info.ty.unqualified(), source)?;
+                    let item = self.read(place, access_ty, info.ty.unqualified(), source)?;
                     self.operands.push(item);
                 } else {
-                    self.push_item(Operand::Place(place), info.ty);
+                    self.push_item(Operand::Place(place), access_ty);
                 }
             },
             | E::Cast { .. } => {
@@ -412,15 +423,19 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     let layout = types::layout(&self.unit.sema.types, info.ty)
                         .map_err(|kind| at(kind, source))?;
                     let address = self.fresh_object(layout.size, types::align(layout), source)?;
+                    // GCC Cast-to-Union: this place is backed by the union
+                    // temporary, whose guarantee may be weaker than the
+                    // member's. <https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html>
                     _ = self.write(
                         Item {
                             operand: Operand::Place(Place::Memory(address)),
-                            ty:      member,
+                            ty:      member
+                                .with_alignment(u32::try_from(layout.align).unwrap_or(1)),
                         },
                         item,
                         source,
                     )?;
-                    self.push_item(Operand::Aggregate(address), info.ty);
+                    self.push_item(Operand::Aggregate(address, types::align(layout)), info.ty);
                     return Ok(());
                 }
                 let operand = if repr(&self.unit.sema.types, info.ty)
@@ -466,7 +481,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 | ConversionKind::ArrayDecay | ConversionKind::FunctionDecay => {
                     let address = match item.operand {
                         | Operand::Place(Place::Memory(address))
-                        | Operand::Aggregate(address)
+                        | Operand::Aggregate(address, _)
                         | Operand::Value(address) => address,
                         | Operand::Place(Place::Function(func)) =>
                             self.inst(InstData::FuncAddr { func }, Type::Ptr),
@@ -511,7 +526,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
         let operand = match (item.operand, target) {
             | (_, Repr::Void) => Operand::Void,
-            | (Operand::Aggregate(_), Repr::Aggregate) => item.operand,
+            | (Operand::Aggregate(_, _), Repr::Aggregate) => item.operand,
             | (Operand::Value(_) | Operand::Truth(_), Repr::Bool) => {
                 let truth = self.truth(item, source)?;
                 Operand::Value(self.extend(truth, false, Type::I8))
@@ -781,7 +796,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | 0 => None,
             | _ if truth => Some(self.truth(item, source)?),
             | _ => Some(match item.operand {
-                | Operand::Aggregate(address) => address,
+                | Operand::Aggregate(address, _) => address,
                 | _ => self.value(item, source)?,
             }),
         };
@@ -799,7 +814,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Some(&param)
                 if self.draft.value_type(param) == Type::Ptr
                     && repr(&self.unit.sema.types, ty) == Ok(Repr::Aggregate) =>
-                Operand::Aggregate(param),
+            // Control joins may select storage with different guarantees.
+                Operand::Aggregate(param, Align::BYTE),
             | Some(&param) => Operand::Value(param),
         };
         self.push_item(operand, ty);
@@ -1172,7 +1188,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let source = expression.source_vectors;
         let item = self.pop();
         let operand = if self.repr(item.ty, source)? == Repr::Aggregate {
-            Operand::Aggregate(self.copy_argument(item, source)?)
+            self.copy_argument(item, source)?
         } else {
             item.operand
         };
@@ -1263,10 +1279,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         if let Some(ParamAbi::Result(layout)) = signature.result_param() {
             let object = self.fresh_object(layout.size, layout.align, source)?;
             args.push(object);
-            result_object = Some(object);
+            result_object = Some((object, layout.align));
         }
         for &item in &items {
-            let value = if let Operand::Aggregate(copy) = item.operand {
+            let value = if let Operand::Aggregate(copy, _) = item.operand {
                 copy
             } else {
                 self.value(item, source)?
@@ -1295,7 +1311,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | (None, None) => unreachable!("an indirect callee was popped"),
         };
         let operand = match (result_object, value) {
-            | (Some(object), _) => Operand::Aggregate(object),
+            | (Some((object, align)), _) => Operand::Aggregate(object, align),
             | (None, Some(value)) => Operand::Value(value),
             | (None, None) => Operand::Void,
         };
@@ -1306,30 +1322,39 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// A copy of the structure or union argument `item` in a fresh slot,
     /// which the callee receives as its parameter object.
     /// C99: §6.9.1 paragraph 10, p. 142; PDF p. 154.
-    fn copy_argument(&mut self, item: Item, source: SourceVectors) -> Result<Value, LoweringError> {
-        let (Operand::Aggregate(from) | Operand::Place(Place::Memory(from)) | Operand::Value(from)) =
-            item.operand
-        else {
-            return Err(LoweringError::missing(
-                "a structure argument has no address",
-                source,
-            ));
-        };
+    fn copy_argument(
+        &mut self,
+        item: Item,
+        source: SourceVectors,
+    ) -> Result<Operand, LoweringError> {
         let layout =
             types::layout(&self.unit.sema.types, item.ty).map_err(|kind| at(kind, source))?;
         let align = types::align(layout);
+        let (from, source_align) = match item.operand {
+            | Operand::Aggregate(from, guaranteed) => (from, guaranteed),
+            | Operand::Place(Place::Memory(from)) | Operand::Value(from) => (from, align),
+            | _ =>
+                return Err(LoweringError::missing(
+                    "a structure argument has no address",
+                    source,
+                )),
+        };
         let copy = self.fresh_object(layout.size, align, source)?;
         let size = self.iconst(Type::I64, i128::from(layout.size));
         _ = self.draft.push(
             Op::Inst(InstData::MemoryRange {
                 opcode: Opcode::Copy,
-                flags: InstFlags::empty(),
-                align,
-                args: [copy, from, size],
+                flags:  InstFlags::empty(),
+                align:  if source_align.bytes() < align.bytes() {
+                    source_align
+                } else {
+                    align
+                },
+                args:   [copy, from, size],
             }),
             None,
         );
-        Ok(copy)
+        Ok(Operand::Aggregate(copy, align))
     }
 
     /// The address of a fresh stack slot of `size` bytes.

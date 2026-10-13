@@ -174,10 +174,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 Operand::Value(self.load_bit_field(address, field, types::is_volatile(ty), result))
             },
             | (Place::Memory(address), Repr::Aggregate) => {
+                let layout =
+                    types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
+                let guaranteed = types::align(layout);
                 let address = if types::is_volatile(ty) {
-                    let layout = types::layout(&self.unit.sema.types, ty)
-                        .map_err(|kind| at(kind, source))?;
-                    let align = types::align(layout);
+                    let align = guaranteed;
                     let copy = self.fresh_object(layout.size, align, source)?;
                     let size = self.iconst(Type::I64, i128::from(layout.size));
                     _ = self.draft.push(
@@ -193,7 +194,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 } else {
                     address
                 };
-                Operand::Aggregate(address)
+                Operand::Aggregate(address, guaranteed)
             },
             | (Place::Variable(var), _) => Operand::Value(self.draft.use_var(var)),
             | (Place::Memory(address), representation) => {
@@ -237,7 +238,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             ));
         };
         let stored = match (target, value.operand) {
-            | (Place::Memory(address), Operand::Aggregate(from)) => {
+            | (Place::Memory(address), Operand::Aggregate(from, from_align)) => {
                 // C99 §6.5.16.1p3: the objects may overlap only exactly.
                 let layout =
                     types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
@@ -251,12 +252,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     Op::Inst(InstData::MemoryRange {
                         opcode: Opcode::Copy,
                         flags,
-                        align: types::align(layout),
+                        align: if from_align.bytes() < layout.align {
+                            from_align
+                        } else {
+                            types::align(layout)
+                        },
                         args: [address, from, size],
                     }),
                     None,
                 );
-                Operand::Aggregate(address)
+                Operand::Aggregate(address, types::align(layout))
             },
             | (Place::Variable(var), _) => {
                 let value = self.value(value, source)?;

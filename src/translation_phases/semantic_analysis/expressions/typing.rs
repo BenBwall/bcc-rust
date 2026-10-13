@@ -5,7 +5,10 @@
 //! C99: §6.3, pp. 42-48; PDF pp. 54-60;
 //! §6.5, pp. 67-94; PDF pp. 79-106.
 
-use std::num::NonZeroU32;
+use std::num::{
+    NonZeroU8,
+    NonZeroU32,
+};
 
 use rustc_hash::FxBuildHasher;
 
@@ -728,7 +731,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut field_ty = field.ty;
         // C99 §6.7.2.1p12, GNU packed: a member cannot promise more
         // alignment than its containing object and byte offset guarantee.
-        let base_alignment = self.types.layout(ty).map_or(1, |layout| layout.align);
+        let base_alignment = if indirect {
+            self.types.layout(ty).map_or(1, |layout| layout.align)
+        } else {
+            base.place_alignment().map_or_else(
+                || self.types.layout(ty).map_or(1, |layout| layout.align),
+                u64::from,
+            )
+        };
         let offset_alignment = if field.offset == 0 {
             base_alignment
         } else {
@@ -777,6 +787,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             info.category = self.object_category(field_ty);
         }
+        info.place_alignment = u8::try_from(alignment.trailing_zeros() + 1)
+            .ok()
+            .and_then(NonZeroU8::new);
         info.bit_field = field.width;
         info.field = u32::try_from(index + 1).ok().and_then(NonZeroU32::new);
         info.register = !indirect && base.register;
@@ -1077,6 +1090,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ExpressionInfo {
             expression: e,
             selected_expression: None,
+            place_alignment: None,
             ty,
             operation_type: None,
             category: ValueCategory::Rvalue,
