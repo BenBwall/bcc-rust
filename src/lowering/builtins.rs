@@ -263,13 +263,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 Operand::Value(value)
             },
             | CommonBuiltin::ObjectSize(_) => {
-                let mode = self
-                    .info(arguments[1])?
-                    .integer
-                    .and_then(crate::translation_phases::semantic_analysis::Integer::to_u64)
-                    .unwrap_or(0);
+                // Sema folded the query using the converted int mode.
+                // C99 §6.5.2.2p7, p. 72; PDF p. 84.
+                let value = info.integer.ok_or_else(|| {
+                    LoweringError::missing("object size query has no folded value", source)
+                })?;
                 let ty = self.value_type(info.ty, source)?;
-                Operand::Value(self.iconst(ty, if mode >= 2 { 0 } else { -1 }))
+                Operand::Value(self.iconst(ty, value.value))
             },
             | CommonBuiltin::Expect(_) | CommonBuiltin::Aligned => items[0].operand,
             | CommonBuiltin::Prefetch => Operand::Void,

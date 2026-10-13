@@ -3,6 +3,7 @@
 //! GNU extension: GCC "Other Builtins", "Bit Operation Builtins",
 //! "Byte-Swapping Builtins", "Integer Overflow Builtins", and "Stack
 //! Allocation". <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+//! <https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html>
 //! <https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html>
 //! <https://gcc.gnu.org/onlinedocs/gcc/Byte-Swapping-Builtins.html>
 //! <https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html>
@@ -248,8 +249,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.common_argument(args[0], ptr);
                 let int = self.types.scalar(Scalar::Int);
                 self.common_argument(args[1], int);
-                let mode = self.expression_info(args[1]);
-                let value = mode.integer.filter(|_| mode.ice).and_then(Integer::to_u64);
+                let value = self
+                    .common_integer_constant(args[1], int)
+                    .and_then(Integer::to_u64);
                 if value.is_none_or(|v| v > 3) {
                     self.error(
                         SemanticErrorKind::InvalidArgumentType,
@@ -284,10 +286,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let ty = self.types.scalar(scalar);
                     self.common_argument(arg, ty);
                     let operand = self.expression_info(arg);
-                    let value = operand
-                        .integer
-                        .filter(|_| operand.ice)
-                        .and_then(Integer::to_u64);
+                    let value = if builtin == CommonBuiltin::Aligned {
+                        self.common_integer_constant(arg, ty)
+                    } else {
+                        // GCC prefetch's optional ICEs follow `...`, so they
+                        // have no fixed int parameter to narrow them first.
+                        // C99 §6.5.2.2p7, p. 72; PDF p. 84.
+                        operand.integer.filter(|_| operand.ice)
+                    }
+                    .and_then(Integer::to_u64);
                     let valid = if builtin == CommonBuiltin::Aligned {
                         i == 2 || value.is_some_and(u64::is_power_of_two)
                     } else {
@@ -407,6 +414,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         _ = self.converted(info);
         self.convert(e, ty, ConversionKind::Assignment);
+    }
+
+    /// Checks fixed-parameter immediates after the target's integer conversion.
+    /// Signed narrowing uses the implementation's truncation/sign extension.
+    /// C99: §6.5.2.2p7, p. 72; PDF p. 84; §6.3.1.3p1-3, p. 43;
+    /// PDF p. 55. GNU extension: GCC manuals linked above.
+    fn common_integer_constant(&self, e: &'tu Expression<'tu>, ty: TypeId) -> Option<Integer> {
+        let info = self.expression_info(e);
+        let value = info.integer.filter(|_| info.ice)?;
+        let (bits, signed) = self.integer_type(ty)?;
+        Some(value.cast(bits, signed))
     }
 }
 

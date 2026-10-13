@@ -137,6 +137,155 @@ int main(void) {int r; a=__builtin_bswap16(1);b=__builtin_bswap32(1);c=__builtin
 }
 
 #[test]
+fn object_size_modes_check_and_fold_the_converted_int() {
+    for target in [
+        crate::target::Target::LinuxGnu,
+        crate::target::Target::LinuxMusl,
+        crate::target::Target::WindowsGnu,
+        crate::target::Target::WindowsMsvc,
+    ] {
+        for builtin in ["object_size", "dynamic_object_size"] {
+            for (mode, expected) in [
+                ("4294967296ULL", Some(-1)),
+                ("4294967297ULL", Some(-1)),
+                ("4294967298ULL", Some(0)),
+                ("4294967299ULL", Some(0)),
+                ("-4294967296LL", Some(-1)),
+                ("((unsigned __int128)1 << 127) + 2", Some(0)),
+                ("4294967300ULL", None),
+                ("4294967295ULL", None),
+                ("-1", None),
+                ("4", None),
+                ("n", None),
+            ] {
+                let source = format!(
+                    "__SIZE_TYPE__ f(void *p,int n){{return __builtin_{builtin}(p,{mode});}}"
+                );
+                with_configuration(
+                    &source,
+                    crate::configuration::CompilerConfiguration::default().with_target(target),
+                    |context, unit| {
+                        let errors = context.take_pending_errors();
+                        assert_eq!(
+                            unit.errors,
+                            usize::from(expected.is_none()),
+                            "{target:?} {source}: {errors:?}"
+                        );
+                        if let Some(expected) = expected {
+                            let call = unit
+                                .expressions
+                                .iter()
+                                .find(|i| matches!(i.expression.kind, ExpressionType::Call { .. }))
+                                .unwrap();
+                            assert_eq!(
+                                call.integer.and_then(Integer::to_u64),
+                                Some(if expected == 0 { 0 } else { u64::MAX }),
+                                "{target:?} {source}"
+                            );
+                        } else {
+                            assert!(
+                                matches!(
+                                    errors.as_slice(),
+                                    [TranslationError::Semantic(SemanticError {
+                                        kind: SemanticErrorKind::InvalidArgumentType,
+                                        ..
+                                    })]
+                                ),
+                                "{target:?} {source}: {errors:?}"
+                            );
+                        }
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn alignment_checks_the_converted_size_t() {
+    for target in [
+        crate::target::Target::LinuxGnu,
+        crate::target::Target::LinuxMusl,
+        crate::target::Target::WindowsGnu,
+        crate::target::Target::WindowsMsvc,
+    ] {
+        for (alignment, accepted) in [
+            ("((unsigned __int128)1 << 64) + 16", true),
+            ("((unsigned __int128)1 << 127) + 16", true),
+            ("-((__int128)1 << 64) + 16", true),
+            ("(unsigned __int128)1 << 64", false),
+            ("((unsigned __int128)1 << 64) + 3", false),
+            ("-1", false),
+            ("n", false),
+        ] {
+            let source = format!(
+                "void *f(void *p,int n){{return __builtin_assume_aligned(p,{alignment},n);}}"
+            );
+            with_configuration(
+                &source,
+                crate::configuration::CompilerConfiguration::default().with_target(target),
+                |context, unit| {
+                    let errors = context.take_pending_errors();
+                    assert_eq!(
+                        unit.errors,
+                        usize::from(!accepted),
+                        "{target:?} {source}: {errors:?}"
+                    );
+                    if !accepted {
+                        assert!(
+                            matches!(
+                                errors.as_slice(),
+                                [TranslationError::Semantic(SemanticError {
+                                    kind: SemanticErrorKind::InvalidArgumentType,
+                                    ..
+                                })]
+                            ),
+                            "{target:?} {source}: {errors:?}"
+                        );
+                    }
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn variadic_and_type_generic_builtin_constants_keep_their_width() {
+    for call in [
+        "__builtin_prefetch(p,4294967296ULL,3)",
+        "__builtin_prefetch(p,0,4294967299ULL)",
+    ] {
+        with_source(&format!("void f(void *p){{{call};}}"), |context, unit| {
+            assert_eq!(unit.errors, 1, "{call}");
+            let errors = context.take_pending_errors();
+            assert!(
+                matches!(
+                    errors.as_slice(),
+                    [TranslationError::Semantic(SemanticError {
+                        kind: SemanticErrorKind::InvalidImmediate,
+                        ..
+                    })]
+                ),
+                "{call}: {errors:?}"
+            );
+        });
+    }
+    with_source(
+        r#"
+_Static_assert(__builtin_choose_expr(4294967296ULL,7,9)==7,"wide condition");
+_Static_assert(__builtin_choose_expr((unsigned __int128)1<<127,7,9)==7,"unsigned condition");
+_Static_assert(__builtin_constant_p(4294967296ULL),"wide ICE");
+_Static_assert(!__builtin_add_overflow_p(4294967296ULL,1,0ULL),"wide destination");
+_Static_assert(__builtin_add_overflow_p(4294967296ULL,1,0u),"narrow destination");
+void f(void *p,int n) { __builtin_assume_aligned(p,16,n); __builtin_prefetch(p,0ULL,3ULL); }
+"#,
+        |context, unit| {
+            assert_eq!(unit.errors, 0, "{:?}", context.take_pending_errors());
+        },
+    );
+}
+
+#[test]
 fn expect_probability_checks_the_converted_double_endpoints() {
     // Float-to-double promotion is exact: these float and double cases
     // round at source precision, whereas long double rounds at the call.

@@ -81,6 +81,34 @@ int main(void) {
 } ",
     ),
     (
+        "converted_object_size_modes",
+        r"
+static int calls;
+void *unknown(void) { ++calls; return (void*)0; }
+int main(void) {
+  if(__builtin_object_size(unknown(),4294967296ULL)!=(__SIZE_TYPE__)-1) return 1;
+  if(__builtin_object_size(unknown(),4294967297ULL)!=(__SIZE_TYPE__)-1) return 2;
+  if(__builtin_object_size(unknown(),4294967298ULL)!=0) return 3;
+  if(__builtin_object_size(unknown(),4294967299ULL)!=0) return 4;
+  if(__builtin_dynamic_object_size((void*)0,4294967296ULL)!=(__SIZE_TYPE__)-1) return 5;
+  if(__builtin_dynamic_object_size((void*)0,4294967297ULL)!=(__SIZE_TYPE__)-1) return 6;
+  if(__builtin_dynamic_object_size((void*)0,4294967298ULL)!=0) return 7;
+  if(__builtin_dynamic_object_size((void*)0,4294967299ULL)!=0) return 8;
+  return calls!=0;
+} ",
+    ),
+    (
+        "converted_alignment",
+        r"
+static int calls;
+void *bump(void *p) { ++calls; return p; }
+int main(void) {
+  char a[32]; volatile int offset=0;
+  void *p=__builtin_assume_aligned(bump(a),((unsigned __int128)1<<64)+16,offset);
+  return p!=a || calls!=1;
+} ",
+    ),
+    (
         "overflow",
         r"
 struct Bits { unsigned a:3; signed b:4; };
