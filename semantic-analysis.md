@@ -1382,3 +1382,72 @@ benchmarking-internals configurations, `git diff --check`, and
 last. The invalid-header `--emit=ir` probe reports twelve ordinary constraints
 and exits with status 1, without an internal lowering error. Shared LLVM trees
 were preserved; no staging or commits were performed.
+### PR #41 round-5 constant-argument audit (2026-10-13)
+
+Object-size modes now convert their ICE value to the target's `int` before
+checking 0 through 3. Both object-size spellings fold from that converted
+mode; lowering consumes the retained folded result instead of inspecting the
+original argument again. Signed narrowing uses the existing target integer
+truncation/sign-extension rule. The red semantic regression rejected
+4294967296ULL before this repair. Accepted and rejected wide constants are
+covered on all four targets, including unsigned 128-bit high-half values.
+The execution table covers all four converted modes in both spellings before
+and after optimization/ABI lowering and in the native arms. The reference
+program passes bundled Clang at O0/O2, with its expected conversion warnings.
+See [GCC Object Size Checking](https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html)
+and C99 6.5.2.2p7 (printed p. 72, PDF p. 84), 6.3.1.3p1-3
+(printed p. 43, PDF p. 55).
+
+The audit also found the fixed `size_t` alignment parameter was checked before
+conversion. It now shares the converted-integer checker: 128-bit values that
+convert to 16 are valid; values that convert to zero or three remain invalid.
+Its optional offset accepts runtime values and has no immediate range check;
+lowering already evaluates its recorded conversion and effects. Installed GCC
+accepts and executes the wide-alignment program at O0/O2. Bundled Clang instead
+checks the original alignment and rejects it; this repair follows the task's
+specified parameter-conversion rule and the fixed GCC signature. See
+[GCC Other Builtins](https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html).
+
+The remaining audited paths need no narrowing repair:
+
+- Prefetch rw/locality follow `...`, with no fixed `int` parameter. Checking
+  their original wide ICE value is intentional; implicit narrowing would
+  wrongly accept 4294967296ULL as rw or 4294967299ULL as locality. Bundled
+  Clang rejects both. New audit regressions retain those constraints.
+- Expect-with-probability already rounds to the parameter's `double` before
+  checking its endpoints. Expect's other operands and fixed-signature bit,
+  byte-swap, allocation and overflow inputs use recorded parameter conversions.
+- Choose-expr tests ICE truth without an `int` parameter conversion; constant-p
+  tests constantness without evaluating its operand. Wide nonzero conditions
+  and wide constant queries are pinned by new audit assertions.
+- Generic overflow operands retain their own types; overflow-p's third operand
+  supplies a type/bit-field width, not a converted value. Existing fixed-signature
+  overflow execution coverage checks conversions at int/long/long-long widths;
+  new audit assertions distinguish wide and narrow predicate destinations.
+- Va-start/end/copy validate list storage and va-arg validates a type operand;
+  none has an integer/floating constant parameter. Offsetof indices and shuffle
+  lanes have their own integer-expression constraints, not fixed `int` formals.
+- X86 immediates already cast to the prototype parameter before range checking.
+  Atomic lock-free size queries already cast to target `size_t` before folding.
+
+The alloca coverage now pairs undeclared strict C99 rejection with GNU99
+intrinsic lowering and strict C99 acceptance of reserved __builtin_alloca.
+The strict test asserts the undeclared-identifier diagnostic and the pipeline's
+UnitHasErrors refusal, on Linux GNU and Windows GNU targets. No binding change
+was necessary. Bundled Clang rejects strict plain alloca and accepts the
+reserved spelling; its GNU99 mode lowers plain alloca when the modern
+implicit-function-declaration diagnostic is disabled.
+
+Validation passed: `cargo test --all-targets` (1,604 library tests passed,
+three existing ignores, and every integration target passed),
+`cargo test --features benchmarking-internals --test allocation_count`
+(26 tests), nightly formatting and format checking, all-target Clippy with
+warnings denied in debug, release and benchmarking-internals configurations,
+and `git diff --check`. Object-size and alignment regressions each failed
+before their corresponding fix. A missing final newline in the new alloca
+fixture was corrected before the successful full-suite rerun.
+Linux native execution was skipped because WSL returned access denied; all
+four target semantic checks and all interpreter stages on both targets passed.
+The plain CLI was rebuilt after all feature-enabled checks. Shared LLVM
+junctions were preserved, and nothing was staged or committed. Whole-file
+commit groups are recorded in `target/commit-plan.md`.
