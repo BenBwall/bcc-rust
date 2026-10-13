@@ -37,6 +37,8 @@ pub(super) enum Task<'tu> {
     Statement(&'tu Statement<'tu>),
     /// Preserve the final expression's value while entering its label blocks.
     StatementValue(&'tu Statement<'tu>),
+    /// Keep statement effects and label targets without reading unused values.
+    StatementEffects(&'tu Statement<'tu>),
     Declaration(&'tu Declaration<'tu>),
     /// Enter `block`: it is sealed if all its predecessors are known.
     Enter {
@@ -179,6 +181,16 @@ pub(super) enum Task<'tu> {
         merge:       Block,
         ty:          TypeId,
     },
+}
+
+/// How expression statements are consumed while retaining their control flow.
+/// C99: §6.8.1p4, p. 132; PDF p. 144.
+/// GNU extension: GCC "Integer Overflow Builtins" and "Statement Exprs".
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum StatementMode {
+    Discard,
+    Value,
+    Effects,
 }
 
 /// A value on the operand stack with its C type.

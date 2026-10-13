@@ -46,16 +46,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(in crate::translation_phases::semantic_analysis) fn atomic_call(
         &mut self,
         e: &'tu Expression<'tu>,
-        mut callee: &'tu Expression<'tu>,
+        callee: &'tu Expression<'tu>,
         arguments: ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> Option<ExpressionInfo<'tu>> {
         use Operation as O;
-        while let ExpressionType::Parenthesized { expression } = callee.kind {
-            callee = expression;
-        }
+        let callee = super::super::selected_designator(callee, |e| Some(self.expression_info(e)));
         let ExpressionType::Identifier(name) = callee.kind else {
             return None;
         };
+        // C99 §6.5.2.2p1: shadowing bindings use ordinary call typing.
+        if !self
+            .expression_info(callee)
+            .binding
+            .is_some_and(|id| self.bindings[id].builtin)
+        {
+            return None;
+        }
         let builtin = intrinsic(self.context.string_cache.at(name.name))?;
         let operation = builtin.operation;
         let args = arguments.as_slice();

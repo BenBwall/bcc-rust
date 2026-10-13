@@ -19,6 +19,7 @@ use crate::{
             CommonBuiltin,
             SemanticTranslationUnit,
             common_builtin,
+            selected_designator,
         },
     },
     util::bump::{
@@ -37,13 +38,11 @@ pub(super) fn find<'a>(
     let mut taken = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena);
     for info in sema.expressions {
         if let ExpressionType::Call {
-            function_expression: mut callee,
+            function_expression: callee,
             arguments,
         } = info.expression.kind
         {
-            while let ExpressionType::Parenthesized { expression } = callee.kind {
-                callee = expression;
-            }
+            let callee = selected_designator(callee, |e| sema.expression_info(e).copied());
             if let ExpressionType::Identifier(name) = callee.kind
                 && sema
                     .expression_info(callee)
@@ -91,40 +90,16 @@ pub(super) fn find<'a>(
         }
         let ExpressionType::Unary {
             operator: UnaryOperator::AddressOf,
-            mut operand_expression,
+            operand_expression,
         } = info.expression.kind
         else {
             continue;
         };
-        loop {
-            match operand_expression.kind {
-                | ExpressionType::Parenthesized { expression }
-                | ExpressionType::Unary {
-                    operator: UnaryOperator::Extension,
-                    operand_expression: expression,
-                } => operand_expression = expression,
-                | ExpressionType::Generic(_)
-                | ExpressionType::Builtin(_)
-                | ExpressionType::StatementExpression(_) => {
-                    match sema
-                        .expression_info(operand_expression)
-                        .and_then(|operand| operand.selected_expression)
-                    {
-                        | Some(selected) => operand_expression = selected,
-                        | None => break,
-                    }
-                },
-                | ExpressionType::Identifier(_) => {
-                    if let Some(binding) = sema
-                        .expression_info(operand_expression)
-                        .and_then(|operand| operand.binding)
-                    {
-                        _ = taken.insert(binding);
-                    }
-                    break;
-                },
-                | _ => break,
-            }
+        let operand = selected_designator(operand_expression, |e| sema.expression_info(e).copied());
+        if matches!(operand.kind, ExpressionType::Identifier(_))
+            && let Some(binding) = sema.expression_info(operand).and_then(|info| info.binding)
+        {
+            _ = taken.insert(binding);
         }
     }
     taken

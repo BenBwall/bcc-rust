@@ -36,15 +36,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> Option<(AddressBase<'tu>, i128)> {
         let mut offset = 0_i128;
         loop {
-            if let ExpressionType::Parenthesized { expression } = e.kind {
-                e = expression;
-                continue;
-            }
+            e = super::selected_designator(e, |e| Some(self.expression_info(e)));
             let info = self.expression_info(e);
-            if let Some(selected) = info.selected_expression {
-                e = selected;
-                continue;
-            }
             if !lvalue {
                 if matches!(
                     self.types.nodes[info.ty.index],

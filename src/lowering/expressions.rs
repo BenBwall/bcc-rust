@@ -284,7 +284,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 });
                 self.tasks.push(Task::EvaluateRaw(c.condition_expression));
             },
-            | E::StatementExpression(statement) => self.statement_expression(statement, info.ty),
+            | E::StatementExpression(statement) =>
+                self.statement_expression(statement, info.ty, super::StatementMode::Value),
             | E::LabelAddress(_) | E::Countof(_) | E::Boolean(_) | E::Nullptr | E::Error =>
                 return Err(LoweringError::missing(
                     "an expression was not parsed",
@@ -1309,61 +1310,51 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         if conversions.len() != 1 || conversions[0].kind != ConversionKind::FunctionDecay {
             return Ok(None);
         }
-        let mut inner = callee;
-        loop {
-            match inner.kind {
-                | ExpressionType::Parenthesized { expression }
-                | ExpressionType::Unary {
-                    operator: UnaryOperator::Extension,
-                    operand_expression: expression,
-                } => {
-                    if !self.conversions(expression).is_empty() {
-                        return Ok(None);
-                    }
-                    inner = expression;
-                },
-                | ExpressionType::Identifier(name) => {
-                    let Some(binding) = self.info(inner)?.binding else {
-                        return Ok(None);
-                    };
-                    if self.unit.sema.bindings[binding].kind != BindingKind::Function {
-                        return Ok(None);
-                    }
-                    // A function that returns twice needs facts the IR does
-                    // not carry yet (C99 §7.13).
-                    let text = self.unit.context.string_cache.at(name.name);
-                    if matches!(
-                        text,
-                        "setjmp" | "_setjmp" | "sigsetjmp" | "__sigsetjmp" | "vfork"
-                    ) {
-                        return Err(LoweringError::unsupported(
-                            Construct::Setjmp,
-                            callee.source_vectors,
-                        ));
-                    }
-                    // A typed compiler builtin is an operation, not a symbol
-                    // to call.
-                    if self.unit.sema.bindings[binding].builtin
-                        && (text.starts_with("__builtin_") || named_builtin(text))
-                        && library_builtin_name(text).is_none()
-                    {
-                        return Err(LoweringError::unsupported(
-                            Construct::Builtin,
-                            callee.source_vectors,
-                        ));
-                    }
-                    return Ok(Some(binding));
-                },
-                | _ => {
-                    let Some(selected) = self.info(inner)?.selected_expression else {
-                        return Ok(None);
-                    };
-                    if !self.conversions(selected).is_empty() {
-                        return Ok(None);
-                    }
-                    inner = selected;
-                },
-            }
+        let mut converted_child = false;
+        let inner =
+            crate::translation_phases::semantic_analysis::selected_designator(callee, |e| {
+                if !std::ptr::eq(e, callee) && !self.conversions(e).is_empty() {
+                    converted_child = true;
+                }
+                self.info(e).ok().copied()
+            });
+        if converted_child {
+            return Ok(None);
+        }
+        match inner.kind {
+            | ExpressionType::Identifier(name) => {
+                let Some(binding) = self.info(inner)?.binding else {
+                    return Ok(None);
+                };
+                if self.unit.sema.bindings[binding].kind != BindingKind::Function {
+                    return Ok(None);
+                }
+                // A function that returns twice needs facts the IR does
+                // not carry yet (C99 §7.13).
+                let text = self.unit.context.string_cache.at(name.name);
+                if matches!(
+                    text,
+                    "setjmp" | "_setjmp" | "sigsetjmp" | "__sigsetjmp" | "vfork"
+                ) {
+                    return Err(LoweringError::unsupported(
+                        Construct::Setjmp,
+                        callee.source_vectors,
+                    ));
+                }
+                // A typed compiler builtin is an operation, not a symbol
+                // to call.
+                if self.unit.sema.bindings[binding].builtin
+                    && (text.starts_with("__builtin_") || named_builtin(text))
+                    && library_builtin_name(text).is_none()
+                {
+                    return Err(LoweringError::unsupported(
+                        Construct::Builtin,
+                        callee.source_vectors,
+                    ));
+                }
+                Ok(Some(binding))
+            },
+            | _ => Ok(None),
         }
     }
 

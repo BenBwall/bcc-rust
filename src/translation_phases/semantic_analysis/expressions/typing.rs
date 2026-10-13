@@ -1428,14 +1428,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.5.1 paragraph 2, p. 69; PDF p. 81.
     pub(in crate::translation_phases::semantic_analysis) fn implicit_function(
         &mut self,
-        mut e: &'tu Expression<'tu>,
+        e: &'tu Expression<'tu>,
     ) {
         if self.tainted {
             return;
         }
-        while let ExpressionType::Parenthesized { expression } = e.kind {
-            e = expression;
-        }
+        let e = super::selected_designator(e, |e| Some(self.expression_info(e)));
         if let ExpressionType::Identifier(name) = e.kind
             && self.lookup(Namespace::Ordinary, name.name).is_none()
             && self.builtin_name(name)

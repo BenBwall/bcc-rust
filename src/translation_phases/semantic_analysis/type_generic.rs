@@ -126,13 +126,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn math128_builtin(
         &mut self,
         e: &'tu Expression<'tu>,
-        mut function: &'tu Expression<'tu>,
+        function: &'tu Expression<'tu>,
         arguments: &[&'tu Expression<'tu>],
     ) -> Option<ExpressionInfo<'tu>> {
         use super::ExpressionType as E;
-        while let E::Parenthesized { expression } = function.kind {
-            function = expression;
-        }
+        let function = super::selected_designator(function, |e| Some(self.expression_info(e)));
         let E::Identifier(name) = function.kind else {
             return None;
         };
@@ -205,11 +203,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(result)
     }
 
-    pub(super) fn classify_type_callee(&self, mut function: &'tu Expression<'tu>) -> bool {
+    pub(super) fn classify_type_callee(&self, function: &'tu Expression<'tu>) -> bool {
         use super::ExpressionType as E;
-        while let E::Parenthesized { expression } = function.kind {
-            function = expression;
-        }
+        let function = super::selected_designator(function, |e| Some(self.expression_info(e)));
         matches!(function.kind, E::Identifier(name) if named_builtin(self.context.string_cache.at(name.name)))
             && self
                 .expression_info(function)

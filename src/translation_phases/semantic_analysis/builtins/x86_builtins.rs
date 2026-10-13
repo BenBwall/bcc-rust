@@ -166,9 +166,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         function: &'tu Expression<'tu>,
         args: super::ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> Option<ExpressionInfo<'tu>> {
+        let function =
+            super::super::selected_designator(function, |e| Some(self.expression_info(e)));
         let super::ExpressionType::Identifier(id) = function.kind else {
             return None;
         };
+        if !self
+            .expression_info(function)
+            .binding
+            .is_some_and(|id| self.bindings[id].builtin)
+        {
+            return None;
+        }
         let name = self.context.string_cache.at(id.name);
         let (arity, integer, floating) = match name {
             | "__builtin_elementwise_abs"

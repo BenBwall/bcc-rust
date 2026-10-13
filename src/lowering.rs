@@ -92,6 +92,7 @@ use work::{
     Local,
     Operand,
     Place,
+    StatementMode,
     Task,
 };
 
@@ -211,8 +212,10 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     /// Performs one task, pushing any that follow from it.
     fn step(&mut self, task: Task<'tu>) -> Result<(), LoweringError> {
         match task {
-            | Task::Statement(statement) => self.statement(statement, false),
-            | Task::StatementValue(statement) => self.statement(statement, true),
+            | Task::Statement(statement) => self.statement(statement, StatementMode::Discard),
+            | Task::StatementValue(statement) => self.statement(statement, StatementMode::Value),
+            | Task::StatementEffects(statement) =>
+                self.statement(statement, StatementMode::Effects),
             | Task::Declaration(declaration) => self.declaration(declaration),
             | Task::Enter { block, seal } => {
                 if seal {

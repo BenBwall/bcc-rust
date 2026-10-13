@@ -30,7 +30,6 @@ use crate::{
                 ExpressionType,
                 FunctionDefinition,
                 Identifier,
-                UnaryOperator,
             },
         },
     },
@@ -249,24 +248,17 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     /// selection.
     /// C99: §6.5.2.3 paragraphs 3-4, p. 73; PDF p. 85.
     /// C11: §6.7.2.1 paragraph 13, p. 115; PDF p. 133 (anonymous members).
-    pub(crate) fn selected_field(&self, mut member: &Expression<'tu>) -> Option<&'tu Field<'tu>> {
+    pub(crate) fn selected_field(&self, member: &'tu Expression<'tu>) -> Option<&'tu Field<'tu>> {
         let index = self.expression_info(member)?.field_index()?;
-        let (base, indirect) = loop {
-            match member.kind {
-                | ExpressionType::DirectMember {
-                    base_expression, ..
-                } => break (base_expression, false),
-                | ExpressionType::IndirectMember {
-                    base_expression, ..
-                } => break (base_expression, true),
-                | ExpressionType::Parenthesized { expression } => member = expression,
-                | ExpressionType::Unary {
-                    operator: UnaryOperator::Extension,
-                    operand_expression,
-                } => member = operand_expression,
-                // Each selection names a strict subexpression.
-                | _ => member = self.expression_info(member)?.selected_expression?,
-            }
+        let member = super::selected_designator(member, |e| self.expression_info(e).copied());
+        let (base, indirect) = match member.kind {
+            | ExpressionType::DirectMember {
+                base_expression, ..
+            } => (base_expression, false),
+            | ExpressionType::IndirectMember {
+                base_expression, ..
+            } => (base_expression, true),
+            | _ => return None,
         };
         let mut record = self.expression_info(base)?.ty;
         if indirect {

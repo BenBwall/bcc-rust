@@ -10,6 +10,7 @@ use super::{
     Item,
     LoweringError,
     Operand,
+    StatementMode,
     Task,
     ssa::Terminator,
 };
@@ -95,28 +96,35 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         Ok(())
     }
 
-    /// Executes a block and leaves only its final expression's value.
+    /// Executes a block for its final value or only for observable effects.
     /// Non-expression endings have void type. No recursive syntax walk.
     /// GNU extension: GCC "Statement Exprs".
     /// C99: §6.3.2.1p2-4, p. 46; PDF p. 58 (tail value conversions).
-    pub(super) fn statement_expression(&mut self, statement: &'tu Statement<'tu>, ty: TypeId) {
+    pub(super) fn statement_expression(
+        &mut self,
+        statement: &'tu Statement<'tu>,
+        ty: TypeId,
+        mode: StatementMode,
+    ) {
         let StatementType::Compound { items } = statement.kind else {
             self.tasks.push(Task::Statement(statement));
-            self.operands.push(Item {
-                operand: Operand::Void,
-                ty,
-            });
+            if mode == StatementMode::Value {
+                self.operands.push(Item {
+                    operand: Operand::Void,
+                    ty,
+                });
+            }
             return;
         };
-        let tail = items.last().and_then(|item| match item {
-            | BlockItem::Statement(s) =>
-                crate::translation_phases::semantic_analysis::statement_expression_tail(s)
-                    .map(|_| s),
-            | _ => None,
-        });
-        if let Some(tail) = tail {
-            self.tasks.push(Task::StatementValue(tail));
-        } else {
+        let tail =
+            crate::translation_phases::semantic_analysis::statement_expression_tail(statement);
+        if let Some((tail, _)) = tail {
+            self.tasks.push(if mode == StatementMode::Effects {
+                Task::StatementEffects(tail)
+            } else {
+                Task::StatementValue(tail)
+            });
+        } else if mode == StatementMode::Value {
             self.operands.push(Item {
                 operand: Operand::Void,
                 ty,
@@ -129,7 +137,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         };
         for item in prefix.iter().rev() {
             match *item {
-                | BlockItem::Statement(s) => self.tasks.push(Task::Statement(s)),
+                | BlockItem::Statement(s) => self.tasks.push(if mode == StatementMode::Effects {
+                    Task::StatementEffects(s)
+                } else {
+                    Task::Statement(s)
+                }),
                 | BlockItem::Declaration(d) => self.tasks.push(Task::Declaration(d)),
                 | BlockItem::FunctionDefinition(_) => {
                     self.tasks.push(Task::Statement(statement));

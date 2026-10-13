@@ -31,6 +31,7 @@ use super::{
         Local,
         Object,
         Operand,
+        StatementMode,
         Task,
     },
 };
@@ -81,16 +82,24 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     pub(super) fn statement(
         &mut self,
         statement: &'tu Statement<'tu>,
-        preserve_value: bool,
+        mode: StatementMode,
     ) -> Result<(), LoweringError> {
         use StatementType as S;
         let source = statement.source_vectors;
         // C99 §6.8.1p4, p. 132; PDF p. 144: labels preserve their statement.
         // GNU statement-expression tails enter the same targets without
-        // discarding the final expression's converted value.
-        let labeled_child = |inner| {
-            if preserve_value {
-                Task::StatementValue(inner)
+        // discarding the final expression's converted value. Overflow type
+        // operands carry effect-only evaluation through the same targets.
+        // GNU extension: GCC "Integer Overflow Builtins".
+        // <https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html>
+        let labeled_child = |inner| match mode {
+            | StatementMode::Value => Task::StatementValue(inner),
+            | StatementMode::Effects => Task::StatementEffects(inner),
+            | StatementMode::Discard => Task::Statement(inner),
+        };
+        let child = |inner| {
+            if mode == StatementMode::Effects {
+                Task::StatementEffects(inner)
             } else {
                 Task::Statement(inner)
             }
@@ -99,7 +108,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | S::Compound { items } =>
                 for item in items.iter().rev() {
                     self.tasks.push(match *item {
-                        | BlockItem::Statement(statement) => Task::Statement(statement),
+                        | BlockItem::Statement(statement) => child(statement),
                         | BlockItem::Declaration(declaration) => Task::Declaration(declaration),
                         | BlockItem::FunctionDefinition(definition) =>
                             return Err(LoweringError::unsupported(
@@ -110,10 +119,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 },
             | S::Expression(slot) => {
                 let expression = expression(slot, source)?;
-                if !preserve_value {
-                    self.tasks.push(Task::Discard);
+                if mode == StatementMode::Effects {
+                    self.tasks.push(Task::BuiltinEffects(expression, true));
+                } else {
+                    if mode == StatementMode::Discard {
+                        self.tasks.push(Task::Discard);
+                    }
+                    self.tasks.push(Task::Evaluate(expression));
                 }
-                self.tasks.push(Task::Evaluate(expression));
             },
             | S::If {
                 condition_expression,
@@ -135,7 +148,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                             block: then,
                             seal:  true,
                         },
-                        Task::Statement(then_statement),
+                        child(then_statement),
                         Task::JumpTo {
                             block: join,
                             seal:  false,
@@ -144,7 +157,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                             block: otherwise,
                             seal:  true,
                         },
-                        Task::Statement(else_statement),
+                        child(else_statement),
                         Task::JumpTo {
                             block: join,
                             seal:  true,
@@ -165,7 +178,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                             block: then,
                             seal:  true,
                         },
-                        Task::Statement(then_statement),
+                        child(then_statement),
                         Task::JumpTo {
                             block: join,
                             seal:  true,
@@ -207,7 +220,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         break_to:    exit,
                         continue_to: Some(header),
                     }),
-                    Task::Statement(body_statement),
+                    child(body_statement),
                     Task::PopTargets,
                     Task::JumpTo {
                         block: header,
@@ -240,7 +253,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         break_to:    exit,
                         continue_to: Some(test),
                     }),
-                    Task::Statement(body_statement),
+                    child(body_statement),
                     Task::PopTargets,
                     Task::JumpTo {
                         block: test,
@@ -306,7 +319,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         break_to:    exit,
                         continue_to: Some(step),
                     }),
-                    Task::Statement(clauses.body_statement),
+                    child(clauses.body_statement),
                     Task::PopTargets,
                     Task::JumpTo {
                         block: step,
@@ -398,7 +411,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         body: body_statement,
                         exit,
                     },
-                    Task::Statement(body_statement),
+                    child(body_statement),
                     Task::EndSwitch { statement, exit },
                 ]);
             },

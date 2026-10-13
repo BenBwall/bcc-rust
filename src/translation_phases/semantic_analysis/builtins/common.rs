@@ -112,12 +112,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(in crate::translation_phases::semantic_analysis) fn common_builtin_call(
         &mut self,
         e: &'tu Expression<'tu>,
-        mut callee: &'tu Expression<'tu>,
+        callee: &'tu Expression<'tu>,
         arguments: ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> Option<ExpressionInfo<'tu>> {
-        while let ExpressionType::Parenthesized { expression } = callee.kind {
-            callee = expression;
-        }
+        let callee = super::super::selected_designator(callee, |e| Some(self.expression_info(e)));
         let ExpressionType::Identifier(name) = callee.kind else {
             return None;
         };

@@ -7,6 +7,7 @@
 use super::ExpressionInfo;
 use crate::translation_phases::{
     parsing::syntax::{
+        BlockItem,
         Expression,
         ExpressionSlot,
         ExpressionType,
@@ -19,22 +20,25 @@ use crate::translation_phases::{
 
 /// Follows designation-preserving syntax and retained compile-time selections.
 /// Each step visits a strict child, without recursive syntax traversal.
+/// The callback observes every visited node, including transparent wrappers,
+/// so consumers can check conversions without duplicating the syntax walk.
 /// C99: §6.5.1p5, p. 69; PDF p. 81 (parentheses).
 /// C11: §6.5.1.1p4, p. 79; PDF p. 97 (generic selection).
 /// GNU extension: GCC "Other Builtins", `__builtin_choose_expr`.
 /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
 pub(crate) fn selected_designator<'tu>(
     mut expression: &'tu Expression<'tu>,
-    info: impl Fn(&'tu Expression<'tu>) -> Option<ExpressionInfo<'tu>>,
+    mut info: impl FnMut(&'tu Expression<'tu>) -> Option<ExpressionInfo<'tu>>,
 ) -> &'tu Expression<'tu> {
     loop {
+        let selected = info(expression).and_then(|i| i.selected_expression);
         expression = match expression.kind {
             | ExpressionType::Parenthesized { expression } => expression,
             | ExpressionType::Unary {
                 operator: UnaryOperator::Extension,
                 operand_expression,
             } => operand_expression,
-            | _ => match info(expression).and_then(|i| i.selected_expression) {
+            | _ => match selected {
                 | Some(selected) => selected,
                 | None => return expression,
             },
@@ -42,13 +46,23 @@ pub(crate) fn selected_designator<'tu>(
     }
 }
 
-/// Labels do not change a GNU statement expression's final value statement.
+/// Finds the final value statement of a GNU statement-expression block.
+/// Labels do not change its value. Return the outer statement too, so lowering
+/// enters every label target before scheduling the expression. A final nested
+/// compound statement has void type; only the owning block is unwrapped.
 /// C99: §6.8.1p4, p. 132; PDF p. 144 (labels preserve control flow).
 /// GNU extension: GCC "Statement Exprs".
 /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
 pub(crate) fn statement_expression_tail<'tu>(
-    mut statement: &'tu Statement<'tu>,
-) -> Option<&'tu Expression<'tu>> {
+    block: &'tu Statement<'tu>,
+) -> Option<(&'tu Statement<'tu>, &'tu Expression<'tu>)> {
+    let StatementType::Compound { items } = block.kind else {
+        return None;
+    };
+    let BlockItem::Statement(outer) = *items.last()? else {
+        return None;
+    };
+    let mut statement = outer;
     loop {
         statement = match statement.kind {
             | StatementType::Label(_, inner)
@@ -56,7 +70,7 @@ pub(crate) fn statement_expression_tail<'tu>(
             | StatementType::Default(inner) => inner,
             | StatementType::CaseRange(range) => range.statement,
             | StatementType::Attributed(attributed) => attributed.statement,
-            | StatementType::Expression(ExpressionSlot::Parsed(e)) => return Some(e),
+            | StatementType::Expression(ExpressionSlot::Parsed(e)) => return Some((outer, e)),
             | _ => return None,
         };
     }

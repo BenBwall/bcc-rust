@@ -11,11 +11,8 @@ use crate::translation_phases::parsing::{
     declaration_syntax::TypeQualifiers,
     syntax::{
         BinaryOperator as B,
-        BlockItem,
         Expression,
-        ExpressionSlot,
         ExpressionType as E,
-        StatementType,
         UnaryOperator as U,
     },
 };
@@ -180,25 +177,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 base_expression, ..
             } => self.tasks.push(Task::BuiltinEffects(base_expression, true)),
             | E::StatementExpression(block) => {
-                let StatementType::Compound { items } = block.kind else {
-                    self.tasks.push(Task::Statement(block));
-                    return Ok(());
-                };
-                for item in items.iter().rev() {
-                    match *item {
-                        | BlockItem::Declaration(d) => self.tasks.push(Task::Declaration(d)),
-                        | BlockItem::Statement(s) => match s.kind {
-                            | StatementType::Expression(ExpressionSlot::Parsed(e)) =>
-                                self.tasks.push(Task::BuiltinEffects(e, true)),
-                            | _ => self.tasks.push(Task::Statement(s)),
-                        },
-                        | BlockItem::FunctionDefinition(_) =>
-                            return Err(LoweringError::unsupported(
-                                super::Construct::NestedFunction,
-                                expression.source_vectors,
-                            )),
-                    }
-                }
+                self.statement_expression(
+                    block,
+                    self.info(expression)?.ty,
+                    super::StatementMode::Effects,
+                );
             },
             | E::Builtin(_) | E::Generic(_) => {
                 if let Some(selected) = self.info(expression)?.selected_expression {

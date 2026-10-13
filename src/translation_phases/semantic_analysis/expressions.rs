@@ -379,14 +379,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.static_address = self.scope == 0;
             },
             | E::StatementExpression(statement) => {
-                use crate::translation_phases::parsing::syntax::{
-                    BlockItem,
-                    StatementType,
-                };
-                if let StatementType::Compound { items } = statement.kind
-                    && let Some(BlockItem::Statement(last)) = items.last()
-                    && let Some(tail) = statement_expression_tail(last)
-                {
+                if let Some((_, tail)) = statement_expression_tail(statement) {
                     // GNU extension: GCC "Statement Exprs" returns the value
                     // of the final expression statement. Its ValueExpression
                     // work already recorded C99 §6.3.2.1p2-4 conversions
