@@ -172,10 +172,6 @@ def main():
     for variable in ("CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH", "OBJC_INCLUDE_PATH"):
         environment.pop(variable, None)
     environment["NO_COLOR"] = "1"
-    if os.name == "nt":
-        # Inherited by children: faults must terminate rather than open WER dialogs.
-        import ctypes
-        ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002)
     metadata = {
         "utc": datetime.now(timezone.utc).isoformat(), "gcc_release": VERSION,
         "source": str(execute), "recursive": args.recursive,
@@ -361,38 +357,23 @@ def invoke(command, timeout, environment, cwd):
 def windows_job(process):
     """A kill-on-close job also stops clang/linker descendants holding pipes.
 
+    The job replaces the crash_dialogs job as the child's innermost one, so it
+    repeats that job's limit (see crash_dialogs.py).
     https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects
     """
     import ctypes as c
     from ctypes import wintypes as w
 
-    class BasicLimits(c.Structure):
-        _fields_ = [("process_time", c.c_int64), ("job_time", c.c_int64),
-                    ("flags", w.DWORD), ("min_working_set", c.c_size_t),
-                    ("max_working_set", c.c_size_t), ("processes", w.DWORD),
-                    ("affinity", c.c_size_t), ("priority", w.DWORD), ("scheduling", w.DWORD)]
-
-    class ExtendedLimits(c.Structure):
-        _fields_ = [("basic", BasicLimits), ("io_counters", c.c_uint64 * 6),
-                    ("process_memory", c.c_size_t), ("job_memory", c.c_size_t),
-                    ("peak_process_memory", c.c_size_t), ("peak_job_memory", c.c_size_t)]
-
     kernel = c.WinDLL("kernel32", use_last_error=True)
-    kernel.CreateJobObjectW.argtypes = [c.c_void_p, w.LPCWSTR]
-    kernel.CreateJobObjectW.restype = w.HANDLE
-    kernel.SetInformationJobObject.argtypes = [w.HANDLE, c.c_int, c.c_void_p, w.DWORD]
     kernel.AssignProcessToJobObject.argtypes = [w.HANDLE, w.HANDLE]
     kernel.CloseHandle.argtypes = [w.HANDLE]
     if process.poll() is not None:
         return lambda: None
-    job = kernel.CreateJobObjectW(None, None)
-    limits = ExtendedLimits()
-    limits.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-    if not job or not kernel.SetInformationJobObject(job, 9, c.byref(limits), c.sizeof(limits)) or not (
-            kernel.AssignProcessToJobObject(job, int(process._handle))):
+    job = crash_dialogs.create_job(crash_dialogs.KILL_ON_JOB_CLOSE
+                                   | crash_dialogs.DIE_ON_UNHANDLED_EXCEPTION)
+    if not kernel.AssignProcessToJobObject(job, int(process._handle)):
         error = c.get_last_error()
-        if job:
-            kernel.CloseHandle(job)
+        kernel.CloseHandle(job)
         # Tiny native tests can finish between Popen and job assignment.
         # Their process handle is still valid, but Windows denies assignment
         # of an already terminated process. Preserve its completed evidence.
