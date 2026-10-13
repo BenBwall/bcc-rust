@@ -53,10 +53,7 @@ impl<'ir> Module<'ir> {
             | InstData::Switch { .. }
             | InstData::Return { .. }
             | InstData::Unreachable => None,
-            | InstData::Unary {
-                opcode: Opcode::DynAlloca,
-                ..
-            }
+            | InstData::DynAlloca { .. }
             | InstData::VaArgAggregate { .. }
             | InstData::StackAddr { .. }
             | InstData::GlobalAddr { .. }

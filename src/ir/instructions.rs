@@ -39,12 +39,20 @@ pub(crate) enum InstData {
         args:   [Value; 2],
     },
     /// Bit counts/swaps, `fneg`, `freeze`, conversions (type = result type),
-    /// `dyn_alloca` (`i64` byte count, result `ptr`), `va_arg`, and
+    /// `va_arg`, and
     /// `va_start` and `va_end` (type `ptr`, no result).
     Unary {
         opcode: Opcode,
         ty:     Type,
         arg:    Value,
+    },
+    /// Dynamic stack storage: an `i64` byte count, explicit alignment, and
+    /// a `ptr` result. Declaration alignment applies equally to VLAs.
+    /// C11: §6.7.5p6, p. 127; PDF p. 145.
+    DynAlloca {
+        ty:    Type,
+        size:  Value,
+        align: Align,
     },
     /// Fetches an aggregate into fresh storage. `sig` describes one
     /// `ptr aggregate(...)` parameter, retaining its target layout.
@@ -156,6 +164,7 @@ impl InstData {
             | Self::WideConst { opcode, .. }
             | Self::Nullary { opcode, .. }
             | Self::MemoryRange { opcode, .. } => opcode,
+            | Self::DynAlloca { .. } => Opcode::DynAlloca,
             | Self::VaArgAggregate { .. } => Opcode::VaArgAggregate,
             | Self::IntCompare { .. } => Opcode::Icmp,
             | Self::FloatCompare { .. } => Opcode::Fcmp,
@@ -192,6 +201,7 @@ impl InstData {
         match *self {
             | Self::Binary { ty, .. }
             | Self::Unary { ty, .. }
+            | Self::DynAlloca { ty, .. }
             | Self::IntCompare { ty, .. }
             | Self::FloatCompare { ty, .. }
             | Self::Select { ty, .. }

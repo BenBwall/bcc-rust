@@ -408,8 +408,16 @@ impl Definitions {
         let mut counts = [0_usize; 3];
         let mut header = false;
         for (index, token) in tokens.iter().enumerate() {
-            if token.line_start {
-                header = matches!(token.kind, TokenKind::Block(_));
+            // A parameter list may span lines; only its closing delimiter
+            // (or the colon of a parameterless header) ends the header.
+            if token.line_start && matches!(token.kind, TokenKind::Block(_)) {
+                header = true;
+            } else if token.kind == TokenKind::RParen
+                || (token.kind == TokenKind::Colon
+                    && index > 0
+                    && matches!(tokens[index - 1].kind, TokenKind::Block(_)))
+            {
+                header = false;
             }
             if let Some((kind, _)) = definition(index, header) {
                 counts[kind] += 1;
@@ -422,8 +430,16 @@ impl Definitions {
         });
         let mut header = false;
         for (index, &token) in tokens.iter().enumerate() {
-            if token.line_start {
-                header = matches!(token.kind, TokenKind::Block(_));
+            // A parameter list may span lines; only its closing delimiter
+            // (or the colon of a parameterless header) ends the header.
+            if token.line_start && matches!(token.kind, TokenKind::Block(_)) {
+                header = true;
+            } else if token.kind == TokenKind::RParen
+                || (token.kind == TokenKind::Colon
+                    && index > 0
+                    && matches!(tokens[index - 1].kind, TokenKind::Block(_)))
+            {
+                header = false;
             }
             let Some((kind, number)) = definition(index, header) else {
                 continue;
@@ -512,7 +528,6 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
             },
             | _ if opcode.is_conversion()
                 || opcode.is_bit_unary()
-                || opcode == Opcode::DynAlloca
                 || matches!(
                     opcode,
                     Opcode::Fneg
@@ -527,6 +542,16 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                     ty,
                     arg: self.value()?,
                 },
+            | Opcode::DynAlloca => {
+                let size = self.value()?;
+                let align = if self.cursor.eat(TokenKind::Comma) {
+                    self.cursor.align()?
+                } else {
+                    // Preserve legacy text's default stack alignment.
+                    Align::from_bytes(16).unwrap()
+                };
+                InstData::DynAlloca { ty, size, align }
+            },
             | Opcode::VaArgAggregate => {
                 let list = self.value()?;
                 self.cursor.expect(TokenKind::Colon, "`:`")?;
@@ -737,6 +762,9 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
         let TokenKind::Slot(number) = token.kind else {
             unreachable!("the caller saw a slot");
         };
+        if number as usize >= self.counts.slots {
+            return Err(token.error(ParseErrorKind::NotDense(token.text)));
+        }
         self.cursor.expect(TokenKind::Equals, "`=`")?;
         self.cursor
             .expect(TokenKind::Ident("stack_slot"), "`stack_slot`")?;
@@ -760,6 +788,9 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
         if !token.line_start {
             return Err(token.expected("a block header at the start of a line"));
         }
+        if number as usize >= self.counts.blocks {
+            return Err(token.error(ParseErrorKind::NotDense(token.text)));
+        }
         let block = Block::new(number as usize);
         if self.cursor.eat(TokenKind::LParen) {
             let mut first = true;
@@ -779,11 +810,13 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
         Ok(())
     }
 
-    /// The value a definition names; the scan guarantees it is in range.
+    /// Checks definition indices again at the untrusted-text boundary.
     fn defined_value(&mut self) -> Result<Value, ParseError<'t>> {
         let token = self.cursor.next();
         match token.kind {
-            | TokenKind::Value(number) => Ok(Value::new(number as usize)),
+            | TokenKind::Value(number) if (number as usize) < self.counts.values =>
+                Ok(Value::new(number as usize)),
+            | TokenKind::Value(_) => Err(token.error(ParseErrorKind::NotDense(token.text))),
             | _ => Err(token.expected("a value")),
         }
     }

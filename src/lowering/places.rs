@@ -119,11 +119,25 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             {
                 let size = self.runtime_size(ty, source)?;
                 self.enter_vla(binding);
+                // C11 §6.7.5p6, p. 127; PDF p. 145: retain the completed
+                // declaration's alignment as well as the element alignment.
+                let mut element = ty;
+                let mut alignment = u64::from(ty.alignment);
+                while let TypeKind::Array(next, _) = self.unit.sema.types.kind(element) {
+                    element = next;
+                    alignment = alignment.max(u64::from(element.alignment));
+                }
+                let layout = types::layout(&self.unit.sema.types, element)
+                    .map_err(|kind| at(kind, source))?;
+                let align =
+                    crate::ir::Align::from_bytes(alignment.max(layout.align)).ok_or_else(|| {
+                        LoweringError::missing("invalid dynamic object alignment", source)
+                    })?;
                 Local::Address(self.inst(
-                    InstData::Unary {
-                        opcode: Opcode::DynAlloca,
-                        ty:     Type::I64,
-                        arg:    size,
+                    InstData::DynAlloca {
+                        ty: Type::I64,
+                        size,
+                        align,
                     },
                     Type::Ptr,
                 ))

@@ -24,6 +24,7 @@ use super::{
 };
 use crate::{
     ir::{
+        Align,
         InstData,
         InstFlags,
         IntCC,
@@ -307,10 +308,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let size = self.value(items[0], source)?;
                 let size = self.extend(size, false, Type::I64);
                 Operand::Value(self.inst(
-                    InstData::Unary {
-                        opcode: Opcode::DynAlloca,
-                        ty:     Type::I64,
-                        arg:    size,
+                    InstData::DynAlloca {
+                        ty: Type::I64,
+                        size,
+                        align: Align::from_bytes(16).unwrap(),
                     },
                     Type::Ptr,
                 ))

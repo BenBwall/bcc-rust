@@ -6,7 +6,7 @@ fn stack_positions_round_trip_and_verify() {
     let text = "function @f(i64) -> i32 external {
 block0(v0: i64):
     v1 = stack_save
-    v2 = dyn_alloca.i64 v0
+    v2 = dyn_alloca.i64 v0, align 16
     v3 = iconst.i32 7
     store.i32 v3, v2, align 4
     v4 = load.i32 v2, align 4
@@ -47,4 +47,41 @@ block0(v0: ptr, v1: ptr, v2: ptr):
     );
     let malformed = text.replace("size 4", "size 1");
     assert_ne!(verify_text(&malformed), Vec::<String>::new());
+}
+
+#[test]
+fn dynamic_stack_alignment_survives_text_and_llvm_emission() {
+    for alignment in [1, 16, 32, 64] {
+        let text = format!(
+            "function @f(i64) -> ptr external {{\nblock0(v0: i64):\n    v1 = dyn_alloca.i64 v0, \
+             align {alignment}\n    return v1\n}}\n"
+        );
+        assert_round_trip(&text);
+        assert_eq!(verify_text(&text), Vec::<String>::new());
+        let arena = Bump::new();
+        let module = parse(&arena, &text);
+        let mut llvm = String::new();
+        crate::backend::llvm::emit_module(&module, crate::target::Target::WindowsGnu, &mut llvm)
+            .unwrap();
+        assert!(
+            llvm.lines()
+                .any(|line| line.contains("alloca i8")
+                    && line.contains(&format!("align {alignment}"))),
+            "{llvm}"
+        );
+    }
+    let legacy = "function @f(i64) -> ptr external {\nblock0(v0: i64):\n v1 = dyn_alloca.i64 v0\n \
+                  return v1\n}\n";
+    assert!(
+        parse(&Bump::new(), legacy)
+            .to_string()
+            .contains("dyn_alloca.i64 v0, align 16")
+    );
+    for alignment in ["0", "3", "4294967296"] {
+        let text = format!(
+            "function @f(i64) -> ptr external {{\nblock0(v0: i64):\n v1 = dyn_alloca.i64 v0, \
+             align {alignment}\n return v1\n}}\n"
+        );
+        let _error = parse_module(&Bump::new(), &text).unwrap_err();
+    }
 }

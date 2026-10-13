@@ -357,6 +357,11 @@ fn map_operands(
             sig,
             list: map(list)?,
         },
+        | InstData::DynAlloca { ty, size, align } => InstData::DynAlloca {
+            ty,
+            size: map(size)?,
+            align,
+        },
         | InstData::Unary { opcode, ty, arg } => InstData::Unary {
             opcode,
             ty,

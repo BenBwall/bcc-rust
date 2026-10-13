@@ -170,17 +170,13 @@ fn has_side_effects(data: &InstData) -> bool {
             ..
         }
         | InstData::VaArgAggregate { .. }
+        | InstData::DynAlloca { .. }
         | InstData::Store { .. }
         | InstData::MemoryRange { .. }
         | InstData::Call { .. }
         | InstData::CallIndirect { .. }
         | InstData::Unary {
-            opcode:
-                Opcode::VaStart
-                | Opcode::VaArg
-                | Opcode::VaEnd
-                | Opcode::DynAlloca
-                | Opcode::StackRestore,
+            opcode: Opcode::VaStart | Opcode::VaArg | Opcode::VaEnd | Opcode::StackRestore,
             ..
         }
         | InstData::Binary {

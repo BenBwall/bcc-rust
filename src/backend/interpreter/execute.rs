@@ -66,6 +66,18 @@ impl Machine<'_, '_, '_> {
                     | _ => float_binary(opcode, ty, a, b)?,
                 }
             },
+            | InstData::DynAlloca { size, align, .. } => {
+                let RuntimeValue::Int(size) = self.value(size) else {
+                    return Err(Fault::Ub(UbKind::PoisonAddress));
+                };
+                let pointer = self.memory.allocate(
+                    super::memory::ObjectKind::Stack,
+                    truncate_u64(size),
+                    align,
+                )?;
+                self.dynamic_slots.push(pointer);
+                RuntimeValue::Ptr(pointer)
+            },
             | InstData::Unary { opcode, ty, arg } => {
                 let value = self.value(arg);
                 match opcode {
@@ -73,18 +85,6 @@ impl Machine<'_, '_, '_> {
                         | RuntimeValue::Int(bits) => crate::ir::bit_unary(opcode, ty, bits)
                             .map_or(RuntimeValue::Poison, |bits| RuntimeValue::int(ty, bits)),
                         | _ => RuntimeValue::Poison,
-                    },
-                    | Opcode::DynAlloca => {
-                        let RuntimeValue::Int(size) = value else {
-                            return Err(Fault::Ub(UbKind::PoisonAddress));
-                        };
-                        let pointer = self.memory.allocate(
-                            super::memory::ObjectKind::Stack,
-                            truncate_u64(size),
-                            crate::ir::Align::from_bytes(16).expect("default stack alignment"),
-                        )?;
-                        self.dynamic_slots.push(pointer);
-                        RuntimeValue::Ptr(pointer)
                     },
                     | Opcode::StackRestore => {
                         let RuntimeValue::Ptr(mark) = value else {

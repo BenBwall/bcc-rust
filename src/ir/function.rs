@@ -198,7 +198,8 @@ impl<'ir> Body<'ir> {
                 args.into_iter().for_each(visit),
             | InstData::Unary { arg: value, .. }
             | InstData::Load { addr: value, .. }
-            | InstData::VaArgAggregate { list: value, .. } => visit(value),
+            | InstData::VaArgAggregate { list: value, .. }
+            | InstData::DynAlloca { size: value, .. } => visit(value),
             | InstData::Call { args, .. } | InstData::CallIndirect { args, .. } =>
                 self.value_list(args).iter().for_each(|&value| visit(value)),
             | InstData::Jump { dest } => edge(dest, &mut visit),

@@ -2,6 +2,34 @@
 
 use super::*;
 
+#[test]
+fn multiline_block_parameters_parse_and_verify() {
+    let text =
+        "function @f(i32, i32) -> i32 external {\nblock0(\nv0: i32,\nv1: i32\n):\n return v1\n}\n";
+    let arena = Bump::new();
+    let module = parse_module(&arena, text).unwrap();
+    assert_eq!(verify(&module, Profile::PreAbi), Vec::<String>::new());
+    assert_round_trip(&module.to_string());
+}
+
+#[test]
+fn out_of_range_definitions_are_parse_errors() {
+    for text in [
+        "function @f(i32) external {\nblock0(\nv99: i32):\n return\n}\n",
+        "function @f() external {\nblock0:\n v99 = iconst.i32 0\n return\n}\n",
+        "function @f() external {\nblock99:\n return\n}\n",
+        "function @f() external {\n slot99 = stack_slot 4, align 4\nblock0:\n return\n}\n",
+    ] {
+        assert!(
+            matches!(
+                parse_module(&Bump::new(), text).unwrap_err().kind,
+                ParseErrorKind::NotDense(_)
+            ),
+            "{text}"
+        );
+    }
+}
+
 /// The two examples of `middle-end.md`, "Textual form".
 pub(super) const PLAN_EXAMPLES: &str = "\
 function @add(i32, i32) -> i32 external {
