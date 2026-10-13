@@ -117,15 +117,33 @@ impl Host for DefaultHost<'_> {
                 self.printf(arg(0), args.get(1..).unwrap_or_default(), memory)?;
                 RuntimeValue::Int((self.output.len() - before) as u128)
             },
-            | "sprintf" => {
+            | "sprintf" | "snprintf" => {
                 // C99 §7.19.6.6: format into the destination, including the
                 // terminating null, and exclude that null from the count.
                 let before = self.output.len();
-                let result = self.printf(arg(1), args.get(2..).unwrap_or_default(), memory);
+                // C99 §7.19.6.5p2-3, p. 290; PDF p. 302: snprintf
+                // writes at most n-1 bytes plus a null, and returns the full
+                // untruncated length; n=0 need not designate any storage.
+                let bounded = call.name == "snprintf";
+                let limit = if bounded { integer(arg(1))? } else { u128::MAX };
+                let format = if bounded { 2 } else { 1 };
+                let result = self.printf(
+                    arg(format),
+                    args.get(format + 1..).unwrap_or_default(),
+                    memory,
+                );
                 let count = self.output.len() - before;
                 let result = result.and_then(|()| {
-                    for (offset, byte) in
-                        self.output[before..].iter().copied().chain([0]).enumerate()
+                    let written = if limit == 0 {
+                        0
+                    } else {
+                        count.min(usize::try_from(limit - 1).unwrap_or(usize::MAX))
+                    };
+                    for (offset, byte) in self.output[before..before + written]
+                        .iter()
+                        .copied()
+                        .chain((limit != 0).then_some(0))
+                        .enumerate()
                     {
                         let address =
                             memory.ptr_add(arg(0), RuntimeValue::Int(offset as u128), true);
@@ -296,6 +314,7 @@ fn check_signature(call: HostCall<'_>) -> Result<(), Fault> {
         | "puts" => (&[Ptr], Some(I32), false),
         | "printf" => (&[Ptr], Some(I32), true),
         | "sprintf" => (&[Ptr, Ptr], Some(I32), true),
+        | "snprintf" => (&[Ptr, I64, Ptr], Some(I32), true),
         | "malloc" => (&[I64], Some(Ptr), false),
         | "calloc" => (&[I64, I64], Some(Ptr), false),
         | "free" => (&[Ptr], None, false),
