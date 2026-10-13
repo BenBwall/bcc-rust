@@ -287,6 +287,25 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
         let data = *old.inst(inst);
         let result = old.inst_result(inst);
         match data {
+            | InstData::VaArgAggregate { sig, list } => {
+                let layout = self
+                    .builder
+                    .signature(sig)
+                    .param_abi(0)
+                    .and_then(crate::ir::ParamAbi::layout)
+                    .expect("verified aggregate descriptor");
+                let address = self.aggregate_va_arg(layout, list);
+                let zero = self.builder.iconst(Type::I64, 0);
+                _ = self.builder.insert_with_result(
+                    InstData::Binary {
+                        opcode: Opcode::PtrAdd,
+                        ty:     Type::Ptr,
+                        flags:  InstFlags::empty(),
+                        args:   [address, zero],
+                    },
+                    result,
+                );
+            },
             | InstData::Return { value: Some(value) } if self.wide_result.is_some() => {
                 self.builder.store(
                     value,
@@ -695,6 +714,115 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
         let next = self.builder.ptr_add(InstFlags::empty(), slot, size);
         self.builder.store(next, list, pointer_align);
         slot
+    }
+
+    /// Reconstructs the object, since SSE save slots are sixteen bytes apart
+    /// and mixed classes occupy independent register areas.
+    /// C99: §7.15.1.1, pp. 249-250; PDF pp. 261-262; psABI §3.5.7.
+    fn aggregate_va_arg(&mut self, layout: AggregateLayout<'_>, list: Value) -> Value {
+        let object = self.temporary(layout.size.max(16), layout.align);
+        if self.convention == Convention::Win64 {
+            let slot = self.win64_va_arg(list);
+            let address = match win64::argument(layout) {
+                | ArgPlan::Registers { .. } => slot,
+                | _ =>
+                    self.builder
+                        .load(Type::Ptr, slot, MemFlags::aligned(natural_align(Type::Ptr))),
+            };
+            self.copy(object, address, layout.size, at_most(layout.align, 8));
+            return object;
+        }
+        let stack_class = sysv::VaArgClass {
+            gp:             0,
+            sse:            false,
+            overflow_size:  layout.size.next_multiple_of(8),
+            overflow_align: layout.align.bytes().max(8),
+        };
+        let arg = sysv::argument(layout, &mut sysv::ArgumentRegisters::default())
+            .expect("aggregate descriptor preflight");
+        let ArgPlan::Registers { parts, .. } = arg else {
+            if !matches!(arg, ArgPlan::Ignore(_)) {
+                let address = self.overflow_arg(list, stack_class);
+                self.copy(object, address, layout.size, layout.align);
+            }
+            return object;
+        };
+        let gp = parts.types().iter().filter(|t| !t.is_float()).count() as u64;
+        let sse = parts.types().iter().filter(|t| t.is_float()).count() as u64;
+        let gp_field = self.offset(list, va_list::GP_OFFSET);
+        let fp_field = self.offset(list, va_list::FP_OFFSET);
+        let mem32 = MemFlags::aligned(natural_align(Type::I32));
+        let gp_offset = self.builder.load(Type::I32, gp_field, mem32);
+        let fp_offset = self.builder.load(Type::I32, fp_field, mem32);
+        let gp_limit = self
+            .builder
+            .iconst(Type::I32, i128::from(va_list::GP_AREA_SIZE - 8 * gp));
+        let fp_limit = self
+            .builder
+            .iconst(Type::I32, i128::from(va_list::SAVE_AREA_SIZE - 16 * sse));
+        let gp_fits = self.builder.icmp(IntCC::Ule, gp_offset, gp_limit);
+        let fp_fits = self.builder.icmp(IntCC::Ule, fp_offset, fp_limit);
+        let fits = if gp == 0 {
+            fp_fits
+        } else if sse == 0 {
+            gp_fits
+        } else {
+            self.builder
+                .binary(Opcode::And, InstFlags::empty(), gp_fits, fp_fits)
+        };
+        let registers = self.builder.create_block();
+        let stack = self.builder.create_block();
+        let join = self.builder.create_block();
+        self.builder.brif(fits, (registers, &[]), (stack, &[]));
+        self.builder.switch_to_block(registers);
+        let save_field = self.offset(list, va_list::REG_SAVE_AREA);
+        let save = self.builder.load(
+            Type::Ptr,
+            save_field,
+            MemFlags::aligned(natural_align(Type::Ptr)),
+        );
+        let mut gp_cursor = gp_offset;
+        let mut fp_cursor = fp_offset;
+        for (index, &ty) in parts.types().iter().enumerate() {
+            let cursor = if ty.is_float() { fp_cursor } else { gp_cursor };
+            let offset = self.builder.convert(Opcode::Zext, Type::I64, cursor);
+            let address = self.builder.ptr_add(InstFlags::empty(), save, offset);
+            let value = self.builder.load(
+                ty,
+                address,
+                MemFlags::aligned(at_most(natural_align(ty), 8)),
+            );
+            let destination = self.offset(object, 8 * index as u64);
+            self.builder.store(
+                value,
+                destination,
+                MemFlags::aligned(at_most(layout.align, 8)),
+            );
+            let step = self
+                .builder
+                .iconst(Type::I32, if ty.is_float() { 16 } else { 8 });
+            let next = self
+                .builder
+                .binary(Opcode::Iadd, InstFlags::empty(), cursor, step);
+            if ty.is_float() {
+                fp_cursor = next;
+            } else {
+                gp_cursor = next;
+            }
+        }
+        if gp > 0 {
+            self.builder.store(gp_cursor, gp_field, mem32);
+        }
+        if sse > 0 {
+            self.builder.store(fp_cursor, fp_field, mem32);
+        }
+        self.builder.jump(join, &[]);
+        self.builder.switch_to_block(stack);
+        let address = self.overflow_arg(list, stack_class);
+        self.copy(object, address, layout.size, layout.align);
+        self.builder.jump(join, &[]);
+        self.builder.switch_to_block(join);
+        object
     }
 }
 
