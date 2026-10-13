@@ -165,12 +165,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     pub(super) fn schedule_builtin(
         &mut self,
         e: &'tu Expression<'tu>,
-        mut callee: &'tu Expression<'tu>,
+        callee: &'tu Expression<'tu>,
         args: ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> bool {
-        while let ExpressionType::Parenthesized { expression } = callee.kind {
-            callee = expression;
-        }
+        let callee =
+            crate::translation_phases::semantic_analysis::selected_designator(callee, |e| {
+                self.info(e).ok().copied()
+            });
         let ExpressionType::Identifier(name) = callee.kind else {
             return false;
         };

@@ -35,6 +35,10 @@ fn with_module<R>(
 
 const PROGRAMS: &[(&str, &str)] = &[
     (
+        "selected_callees",
+        include_str!("../../../../tests/fixtures/semantic/builtin-selected-callees.c"),
+    ),
+    (
         "builtin_binding",
         r"
 int f(unsigned x){return 7;}

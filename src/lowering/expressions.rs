@@ -1301,7 +1301,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     }
 
     /// The function binding a callee names directly, if it is an
-    /// identifier (in parentheses or not) that decays to its function.
+    /// identifier through transparent syntax or a compile-time selection
+    /// that decays to its function. GNU extension: GCC "Other Builtins".
+    /// C99: §6.5.1p5, p. 69; PDF p. 81 (parentheses).
     fn direct_callee(&self, callee: &'tu Expression<'tu>) -> Result<Option<usize>, LoweringError> {
         let conversions = self.conversions(callee);
         if conversions.len() != 1 || conversions[0].kind != ConversionKind::FunctionDecay {
@@ -1352,7 +1354,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     }
                     return Ok(Some(binding));
                 },
-                | _ => return Ok(None),
+                | _ => {
+                    let Some(selected) = self.info(inner)?.selected_expression else {
+                        return Ok(None);
+                    };
+                    if !self.conversions(selected).is_empty() {
+                        return Ok(None);
+                    }
+                    inner = selected;
+                },
             }
         }
     }

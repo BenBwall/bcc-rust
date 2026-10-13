@@ -211,7 +211,8 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     /// Performs one task, pushing any that follow from it.
     fn step(&mut self, task: Task<'tu>) -> Result<(), LoweringError> {
         match task {
-            | Task::Statement(statement) => self.statement(statement),
+            | Task::Statement(statement) => self.statement(statement, false),
+            | Task::StatementValue(statement) => self.statement(statement, true),
             | Task::Declaration(declaration) => self.declaration(declaration),
             | Task::Enter { block, seal } => {
                 if seal {

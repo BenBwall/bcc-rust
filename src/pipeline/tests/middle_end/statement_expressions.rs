@@ -7,6 +7,20 @@ const HEADERS: &str =
     include_str!("../../../../tests/fixtures/semantic/statement-expression-header-targets.c");
 const SIGNED_OVERFLOW: &str =
     include_str!("../../../../tests/fixtures/semantic/signed-overflow-boundaries.c");
+const LABELED: &str =
+    include_str!("../../../../tests/fixtures/semantic/statement-expression-labeled-tails.c");
+
+#[test]
+fn statement_expression_labeled_tails_execute() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        for (optimize, profile) in STAGES {
+            with_module(LABELED, target, optimize, profile, |module, target| {
+                assert_eq!(interpret(module, target).0, 0);
+            });
+        }
+    }
+    compare_native(LABELED);
+}
 
 #[test]
 fn statement_expression_values_interpret_correctly() {

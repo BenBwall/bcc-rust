@@ -20,7 +20,6 @@ use crate::{
             BlockItem,
             ConditionalExpression,
             Expression,
-            ExpressionSlot,
             Statement,
             StatementType,
         },
@@ -110,14 +109,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return;
         };
         let tail = items.last().and_then(|item| match item {
-            | BlockItem::Statement(s) => match s.kind {
-                | StatementType::Expression(ExpressionSlot::Parsed(e)) => Some(e),
-                | _ => None,
-            },
+            | BlockItem::Statement(s) =>
+                crate::translation_phases::semantic_analysis::statement_expression_tail(s)
+                    .map(|_| s),
             | _ => None,
         });
         if let Some(tail) = tail {
-            self.tasks.push(Task::Evaluate(tail));
+            self.tasks.push(Task::StatementValue(tail));
         } else {
             self.operands.push(Item {
                 operand: Operand::Void,

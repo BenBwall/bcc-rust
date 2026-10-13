@@ -35,6 +35,8 @@ use crate::{
 pub(super) enum Task<'tu> {
     // Statements
     Statement(&'tu Statement<'tu>),
+    /// Preserve the final expression's value while entering its label blocks.
+    StatementValue(&'tu Statement<'tu>),
     Declaration(&'tu Declaration<'tu>),
     /// Enter `block`: it is sealed if all its predecessors are known.
     Enter {

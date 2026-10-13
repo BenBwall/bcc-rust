@@ -81,9 +81,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     pub(super) fn statement(
         &mut self,
         statement: &'tu Statement<'tu>,
+        preserve_value: bool,
     ) -> Result<(), LoweringError> {
         use StatementType as S;
         let source = statement.source_vectors;
+        // C99 §6.8.1p4, p. 132; PDF p. 144: labels preserve their statement.
+        // GNU statement-expression tails enter the same targets without
+        // discarding the final expression's converted value.
+        let labeled_child = |inner| {
+            if preserve_value {
+                Task::StatementValue(inner)
+            } else {
+                Task::Statement(inner)
+            }
+        };
         match statement.kind {
             | S::Compound { items } =>
                 for item in items.iter().rev() {
@@ -99,7 +110,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 },
             | S::Expression(slot) => {
                 let expression = expression(slot, source)?;
-                self.tasks.push(Task::Discard);
+                if !preserve_value {
+                    self.tasks.push(Task::Discard);
+                }
                 self.tasks.push(Task::Evaluate(expression));
             },
             | S::If {
@@ -359,7 +372,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let block = self.label_block(label.name);
                 self.draft.jump(block, &[]);
                 self.draft.switch_to(block);
-                self.tasks.push(Task::Statement(statement));
+                self.tasks.push(labeled_child(statement));
             },
             | S::Case(_, inner) | S::Default(inner) => {
                 let block = self
@@ -371,7 +384,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     })?;
                 self.draft.jump(block, &[]);
                 self.draft.switch_to(block);
-                self.tasks.push(Task::Statement(inner));
+                self.tasks.push(labeled_child(inner));
             },
             | S::Switch {
                 condition_expression,
@@ -390,7 +403,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 ]);
             },
             | S::Declaration(declaration) => self.tasks.push(Task::Declaration(declaration)),
-            | S::Attributed(attributed) => self.tasks.push(Task::Statement(attributed.statement)),
+            | S::Attributed(attributed) => self.tasks.push(labeled_child(attributed.statement)),
             | S::Null => {},
             | S::CaseRange(range) => {
                 let block = self
@@ -402,7 +415,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     })?;
                 self.draft.jump(block, &[]);
                 self.draft.switch_to(block);
-                self.tasks.push(Task::Statement(range.statement));
+                self.tasks.push(labeled_child(range.statement));
             },
             | S::Asm(_) | S::MsAsm(_) =>
                 return Err(LoweringError::unsupported(
