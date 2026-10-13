@@ -13,6 +13,7 @@ mod layout;
 mod numeric_programs;
 pub(crate) mod programs;
 mod refusals;
+mod resolved;
 mod review;
 
 use std::path::Path;
