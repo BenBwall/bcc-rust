@@ -10,6 +10,7 @@
 //! run under WSL when it is available. A missing toolchain or WSL makes a
 //! test print why and pass.
 
+mod aggregate_varargs;
 mod noundef;
 mod poison_returns;
 mod wide_float_varargs;

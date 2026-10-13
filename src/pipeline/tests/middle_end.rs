@@ -25,6 +25,7 @@ mod runtime_calls;
 mod scalar_builtins;
 mod statement_expressions;
 mod union_initializers;
+mod vla;
 
 use crate::{
     abi::tests::programs::PROGRAMS as BY_VALUE_PROGRAMS,

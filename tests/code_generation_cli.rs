@@ -538,7 +538,7 @@ mod tests {
                 false,
             ),
             (
-                "int main(void){int n=2;int a[n];return 0;}",
+                "int main(void){__asm__(\"nop\");return 0;}",
                 vec!["--emit=ir"],
                 1,
                 false,
@@ -803,24 +803,24 @@ mod tests {
 
     #[test]
     fn unsupported_constructs_and_errors_fail_code_generation_only() {
-        let vla = "int main(void) {\n  int n = 3;\n  int a[n];\n  a[0] = 1;\n  return a[0];\n}\n";
+        let source = "int main(void) {\n  __asm__(\"nop\");\n  return 0;\n}\n";
         for flags in [
             &["--interpret"][..],
             &["--emit=ir"][..],
             &["--emit=llvm"][..],
         ] {
-            let output = bcc(vla, flags);
+            let output = bcc(source, flags);
             assert_eq!(output.status.code(), Some(1), "{flags:?}");
             assert!(output.stdout.is_empty(), "{flags:?}");
             let stderr = text(&output.stderr);
             assert!(
-                stderr.contains("error: not yet supported by lowering: variable length arrays"),
+                stderr.contains("error: not yet supported by lowering: inline assembly"),
                 "{stderr}"
             );
             assert!(stderr.contains("1 error generated."), "{stderr}");
         }
         // Without a back end, the program is valid C and nothing is lowered.
-        let output = bcc(vla, &[]);
+        let output = bcc(source, &[]);
         assert!(output.status.success());
         assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
 
