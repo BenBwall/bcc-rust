@@ -436,11 +436,12 @@ to the member path, the qualifiers of the anonymous members on that path and the
 byte/bit offset from the record's start. Member access and designators use it
 through a scratch index with expected O(1) lookup; const-member queries cache
 explicit postorder results rather than rescanning aggregate trees for every use.
-A `.` or `->` record retains the index of the field it selected
-(`ExpressionInfo::field_index`, in four bytes the record's padding already
-had), and `SemanticTranslationUnit::selected_field` returns that `Field`
-without a name search, through parentheses, `__extension__` and generic
-selections.
+`MemberFacts` retains the owning tag, field index, qualified access type,
+guaranteed place alignment and bit-field width. `member_facts` and
+`selected_field` use the normalized designation and expression indices;
+neither query peels wrappers or recovers the owning record from base syntax.
+Parentheses, `__extension__`, generic and choose-expr selections preserve the
+member identity. The former relative field index in `ExpressionInfo` is deleted.
 
 #### Constant expressions
 
@@ -1469,12 +1470,12 @@ commit groups are recorded in `target/commit-plan.md`.
 ### PR #41 round-6 review repairs (2026-10-13)
 
 Reserved builtin identifiers acquire their semantic binding before expression
-reduction, including inside compile-time selections. Shared iterative lookup
-follows parentheses, `__extension__`, `_Generic` and `__builtin_choose_expr`
-to the selected binding. Scalar intrinsic dispatch uses that binding in both
+reduction, including inside compile-time selections. Bottom-up designation facts
+retain the leaf and binding through parentheses, `__extension__`, `_Generic`
+and `__builtin_choose_expr`. Scalar intrinsic dispatch uses that binding in both
 semantic checking and lowering; user declarations and local function pointers
-keep ordinary-call behavior. Direct callee lookup also follows retained
-selections before falling back to an indirect call.
+keep ordinary-call behavior. `CallFacts` retains directness once at the call site,
+including all conservative indirect cases.
 
 Intrinsic-only builtin designators outside a call now report Clang's "builtin
 functions must be directly called" diagnostic instead of producing external
@@ -1485,9 +1486,9 @@ builtin aliases retain addressability. See
 and [Library Builtins](https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html);
 C99 6.5.1p5 (printed p. 69, PDF p. 81) preserves parenthesized designation.
 
-Statement-expression tail lookup iteratively strips ordinary, case/default,
-case-range and attributed labels. Lowering keeps the final statement on its
-task stack with a value-preserving flag: each label enters its usual jump
+Statement completion forwards the immediate ordinary, case/default, case-range
+or attributed child's value-tail result in constant work. Lowering keeps the
+retained outer tail statement on its task stack with a value-preserving flag: each label enters its usual jump
 target before the converted tail is evaluated. C99 6.8.1p4 (printed p. 132,
 PDF p. 144) and
 [GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html)
@@ -1575,6 +1576,54 @@ VM typedef/pointer protection does not allocate stack storage.
 C99 §6.7.5.2p5, p. 117 (PDF p. 129), §6.9.1p7,10, p. 142 (PDF p. 154),
 §6.5.3.4p2, p. 80 (PDF p. 92), and §6.5.6p8, p. 83 (PDF p. 95).
 Validation and corpus evidence: [M2 receipt](docs/research/semantic-facts-m2.md).
+
+## Retained resolved expressions, calls, tails and members
+
+**M3 is complete.** `ResolvedFacts` retains one `Designation` per expression
+ordinal and sparse call, member and statement-expression records. Expression
+completion copies one immediate selected child's leaf/binding and conversion
+summary. Parentheses, `__extension__`, `_Generic` and `__builtin_choose_expr`
+therefore cost O(1) per edge, without recursion or repeated chain walks.
+Conversions on the outer node remain separate from conversions on its selected
+children. Scratch conversion summaries track count, first kind and final type
+while the existing contextual conversion records are produced.
+
+`CallFacts` records `Callee::Direct` with entity and binding, `Indirect` with
+the callee expression ordinal, or `Builtin` with its existing binding and
+designation-preserving directness. It retains the point-of-use function type,
+fixed prefix, prototype/ellipsis status and each argument's expression ordinal
+and converted type. Argument ordinals reference the existing conversion runs;
+later composite binding types never replace the written call's type. Builtin
+descriptors, checked instances and name dispatch remain M4/M6 work. Overloaded
+builtins may lack an ordinary function type; ordinary lowerable calls require it.
+The existing known-definition/open-external ABI policy remains downstream until
+M7. Returns-twice and unsupported-builtin capability refusals are unchanged.
+
+GNU implicit function declarations still precede identifier typing. Discovery
+forwards callee context through immediate parentheses/extension children on the
+ordinary work stack; it does not walk a chain before every reduction. Compile-time
+selections reuse completed designation facts. Function pointers, casts, address
+and dereference operators, comma/conditional expressions, converted block values,
+extra outer conversions and conversion-changing children stay indirect.
+
+`StatementExpressionFacts` retains the block, outer labeled tail, optional value
+expression, prefix length and converted result type. Statement continuations
+forward one child's tail result; block reduction inspects only its last immediate
+item. Empty/declaration/nested-compound endings yield void. Labels execute before
+the converted tail value, and aggregate snapshots still precede lifetime cleanup.
+The existing retained expression-effects record describes the block's effects.
+
+Lowering's linear address-use scan and builtin dispatch read retained callee and
+designation records. Call scheduling and completion share `CallFacts`; member
+access reads `MemberFacts`; GNU block scheduling reads its retained tail/prefix.
+The old chain-walking helpers, repeated direct-callee checks and owning-record
+recovery are deleted. Constant-time selection/tail helpers are semantic-private.
+Missing required facts report `MissingFact` with the written node's provenance,
+including member references in static address initializers.
+C99 §6.5.1p5, p. 69 (PDF p. 81), §6.5.2.2p6-7, pp. 71-72
+(PDF pp. 83-84), §6.5.2.3p3-4, p. 73 (PDF p. 85), and §6.8.1p4,
+p. 132 (PDF p. 144); C11/GNU selections and GNU statement expressions.
+Validation and corpus evidence: [M3 receipt](docs/research/semantic-facts-m3.md).
 
 ## 2026-10-13: Torture representation types and constant forms
 
