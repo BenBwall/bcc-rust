@@ -31,7 +31,6 @@ use super::{
     FunctionLowerer,
     LoweringError,
     module_items::at,
-    ssa::Op,
     types::{
         self,
         Repr,
@@ -90,12 +89,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             ));
         }
         let end = bits.bit_offset + bits.width;
-        let aligned = if offset == 0 {
-            declared.align
-        } else {
-            (1_u64 << offset.trailing_zeros()).min(declared.align)
-        };
-        let align = Align::from_bytes(aligned).unwrap_or(Align::BYTE);
+        let align = super::alignment::at_offset(types::align(declared), u128::from(offset));
         Ok(BitField {
             span: end.div_ceil(8),
             shift: bits.bit_offset,
@@ -302,7 +296,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             InstData::Load {
                 ty:    piece_type,
                 flags: access_flags(volatile),
-                align: piece_align(field, position, piece_type),
+                align: piece_align(field, position),
                 tag:   None,
                 addr:  address,
             },
@@ -320,10 +314,10 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     ) {
         let ty = self.draft.value_type(value);
         _ = self.draft.push(
-            Op::Inst(InstData::Store {
+            self.memory_op(InstData::Store {
                 ty,
                 flags: access_flags(volatile),
-                align: piece_align(field, position, ty),
+                align: piece_align(field, position),
                 tag: None,
                 args: [value, address],
             }),
@@ -373,12 +367,8 @@ fn access_flags(volatile: bool) -> InstFlags {
     }
 }
 
-/// The alignment of the address `position` bytes into the field's place, at
-/// most the size of the `piece_type` accessed there.
-fn piece_align(field: BitField, position: u32, piece_type: Type) -> Align {
-    let mut log2 = u32::from(field.align.log2()).min(piece_type.bytes().ilog2());
-    if position != 0 {
-        log2 = log2.min(position.trailing_zeros());
-    }
-    Align::from_bytes(1 << log2).unwrap_or(Align::BYTE)
+/// The opaque-pointer default at `position` bytes into the field's place.
+/// Known backing storage overrides this default at the memory boundary.
+fn piece_align(field: BitField, position: u32) -> Align {
+    super::alignment::at_offset(field.align, u128::from(position))
 }

@@ -218,10 +218,10 @@ pub(super) enum Operand {
     Truth(Value),
     /// An lvalue or function designator.
     Place(Place),
-    /// A structure or union rvalue: its backing address and guaranteed
-    /// alignment. Converting its C type does not realign that storage.
+    /// A structure or union rvalue names its backing place. The alignment
+    /// owner retains that place's guarantee; C conversions do not change it.
     /// C99: §6.3.2.1p2, p. 46; PDF p. 58.
-    Aggregate(Value, Align),
+    Aggregate(Value),
 }
 
 /// Where an lvalue is.

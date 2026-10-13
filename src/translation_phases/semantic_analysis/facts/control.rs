@@ -236,7 +236,8 @@ pub(crate) struct CaseFacts<'tu> {
     pub(crate) upper:     Integer,
     pub(crate) range:     bool,
     pub(crate) ordinal:   usize,
-    pub(crate) dispatch:  Transition,
+    /// Empty GNU intervals retain their label without a dispatch transition.
+    pub(crate) dispatch:  Option<Transition>,
 }
 
 #[derive(Debug, Clone, Copy)]

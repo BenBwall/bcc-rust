@@ -706,7 +706,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         if lower.order_key() > upper.order_key() {
             self.error(SemanticErrorKind::EmptyCaseRange, source, None, None);
-            return;
+            // GNU Case Ranges: no dispatch edge, but retain the label for
+            // fallthrough. <https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html>
         }
         switch.cases.push(
             self.scratch,
@@ -731,7 +732,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .cases
             .finish(self.scratch, self.scratch);
         let mut cases = ArenaVec::new_in(self.scratch);
-        cases.extend_from_slice(list);
+        cases.extend(
+            list.iter()
+                .copied()
+                .filter(|case| case.lower.order_key() <= case.upper.order_key()),
+        );
         cases.sort_unstable_by_key(|c| (c.lower.order_key(), c.ordinal));
         let mut previous: Option<Case<'tu>> = None;
         if let Some(statement) = self
@@ -761,7 +766,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         upper: case.upper,
                         range: case.range,
                         ordinal: facts.len(),
-                        dispatch: Transition::empty(dispatch.region),
+                        dispatch: (case.lower.order_key() <= case.upper.order_key())
+                            .then(|| Transition::empty(dispatch.region)),
                     });
                 }
             }

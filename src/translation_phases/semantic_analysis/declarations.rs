@@ -843,9 +843,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     // same size and the unit has room.
                     let bits = layout.size * 8;
                     if width == 0 {
-                        if ms_unit.take().is_some() {
-                            alignment = alignment.max(layout.align);
-                            bytes = align_up(bytes, layout.align).unwrap_or(bytes);
+                        let unit = ms_unit.take();
+                        let msvc = self.context.configuration.target()
+                            == crate::target::Target::WindowsMsvc;
+                        if unit.is_some() || !msvc && member.explicit_alignment != 0 {
+                            // C99 §6.7.2.1p12, p. 103; PDF p. 115: target
+                            // placement. MSVC needs a preceding value field;
+                            // MinGW also honors an explicit inactive boundary.
+                            let boundary = if !msvc && unit.is_some() {
+                                self.types.natural_alignment(member.ty).unwrap_or(1)
+                            } else {
+                                layout.align
+                            };
+                            let boundary = boundary.max(u64::from(member.explicit_alignment));
+                            if !msvc && let Some((_, start, used)) = unit {
+                                bytes = start + used.div_ceil(8);
+                            }
+                            alignment = alignment.max(boundary);
+                            bytes = align_up(bytes, boundary).unwrap_or(bytes);
                         }
                         resolved.offset = bytes;
                     } else {
@@ -871,7 +886,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         let bits = layout.size.checked_mul(8)?;
                         let width = u64::from(width);
                         let start = if width == 0 {
-                            align_up(bit_end, bits)?
+                            align_up(
+                                bit_end,
+                                bits.max(u64::from(member.explicit_alignment).checked_mul(8)?),
+                            )?
                         } else if member.explicit_alignment != 0
                             || !packed && member.ty.alignment != 0
                         {

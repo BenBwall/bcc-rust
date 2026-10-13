@@ -26,7 +26,6 @@ use super::{
         at,
         peel,
     },
-    ssa::Op,
     types::{
         self,
         Repr,
@@ -477,7 +476,7 @@ impl<'tu> Walker<'_, 'tu, '_> {
                     .ok_or_else(|| LoweringError::missing("an array element has no size", source))?
                     .size;
                 Ok(Some(Subobject {
-                    ty:        self.subobject_type(ty, element, next as u64 * size),
+                    ty:        element.qualified(ty.qualifiers),
                     offset:    next as u64 * size,
                     bit_field: None,
                     next:      next + 1,
@@ -498,7 +497,7 @@ impl<'tu> Walker<'_, 'tu, '_> {
                     return Err(LoweringError::unsupported(Construct::Initializer, source));
                 }
                 Ok(Some(Subobject {
-                    ty:        self.subobject_type(ty, member.ty, member.offset),
+                    ty:        member.ty.qualified(ty.qualifiers),
                     offset:    member.offset,
                     bit_field: member.width.map(|width| BitFieldBits {
                         bit_offset: member.bit_offset,
@@ -512,27 +511,6 @@ impl<'tu> Walker<'_, 'tu, '_> {
                 }))
             },
             | _ => Ok(None),
-        }
-    }
-
-    /// A packed subobject's initializer uses the alignment guaranteed by its
-    /// containing object and offset, as member access does. GCC packed;
-    /// C99 §6.7.8p16-17, pp. 126-127; PDF pp. 138-139 (subobjects).
-    fn subobject_type(&self, parent: TypeId, child: TypeId, offset: u64) -> TypeId {
-        let types = &self.sema.types;
-        let parent_align = types.layout(parent).map_or(1, |layout| layout.align);
-        let offset_align = if offset == 0 {
-            parent_align
-        } else {
-            1_u64 << offset.trailing_zeros()
-        };
-        let child = child.qualified(parent.qualifiers);
-        let natural = types.layout(child).map_or(1, |layout| layout.align);
-        let alignment = natural.min(parent_align).min(offset_align);
-        if alignment < natural {
-            child.with_alignment(u32::try_from(alignment).unwrap_or(0))
-        } else {
-            child
         }
     }
 
@@ -978,7 +956,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             let keep = self.iconst(Type::I8, i128::from(!mask));
             let value = self.binary_inst(Opcode::And, InstFlags::empty(), old, keep);
             _ = self.draft.push(
-                Op::Inst(InstData::Store {
+                self.memory_op(InstData::Store {
                     ty: Type::I8,
                     flags,
                     align: Align::BYTE,
@@ -992,7 +970,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         let zero = self.iconst(Type::I8, 0);
         let size = self.iconst(Type::I64, i128::from(size));
         _ = self.draft.push(
-            Op::Inst(InstData::MemoryRange {
+            self.memory_op(InstData::MemoryRange {
                 opcode: Opcode::Fill,
                 flags:  self.initialization_flags(ty),
                 align:  Align::BYTE,
@@ -1081,7 +1059,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         let copied_length = self.iconst(Type::I64, i128::from(length));
         let flags = self.initialization_flags(ty);
         _ = self.draft.push(
-            Op::Inst(InstData::MemoryRange {
+            self.memory_op(InstData::MemoryRange {
                 opcode: Opcode::Copy,
                 flags,
                 align: Align::BYTE,
@@ -1094,7 +1072,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             let zero = self.iconst(Type::I8, 0);
             let remaining = self.iconst(Type::I64, i128::from(size - length));
             _ = self.draft.push(
-                Op::Inst(InstData::MemoryRange {
+                self.memory_op(InstData::MemoryRange {
                     opcode: Opcode::Fill,
                     flags,
                     align: Align::BYTE,
@@ -1134,7 +1112,11 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         let size = u32::try_from(layout.size).map_err(|_| {
             LoweringError::missing("a compound literal is larger than 4 GiB", source)
         })?;
-        let slot = self.draft.create_slot(size, types::align(layout));
+        let slot = self.object_slot(
+            size,
+            super::alignment::storage_alignment(&self.unit.sema.types, ty)
+                .map_err(|kind| at(kind, source))?,
+        );
         self.tasks.push(Task::PushSlot { slot, ty });
         self.initialize_aggregate(Object::Slot(slot), ty, initializer)
     }

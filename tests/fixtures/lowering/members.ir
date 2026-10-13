@@ -21,7 +21,7 @@ block0(v0: ptr, v1: i32):
     v6 = ptr_add inbounds v4, v5
     v7 = iconst.i64 8
     v8 = ptr_add inbounds v0, v7
-    v9 = load.i8 v8, align 1
+    v9 = load.i8 v8, align 8
     v10 = sext.i64 v9
     store.i64 v10, v6, align 8
     v11 = stack_addr slot0
@@ -47,7 +47,7 @@ block0(v0: ptr, v1: i32):
     v29 = iconst.i64 8
     v30 = ptr_add inbounds v28, v29
     v31 = load.i64 v30, align 8
-    v32 = load.i32 v0, align 4
+    v32 = load.i32 v0, align 8
     v33 = sext.i64 v32
     v34 = iadd.i64 nsw v31, v33
     return v34

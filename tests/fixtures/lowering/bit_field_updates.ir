@@ -13,7 +13,7 @@ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:
 
 function @f(ptr noundef, i32 noundef) -> i32 external {
 block0(v0: ptr, v1: i32):
-    v2 = load.i8 v0, align 1
+    v2 = load.i8 v0, align 4
     v3 = iconst.i8 15
     v4 = and.i8 v2, v3
     v5 = zext.i32 v4
@@ -21,15 +21,15 @@ block0(v0: ptr, v1: i32):
     v7 = trunc.i8 v6
     v8 = iconst.i8 15
     v9 = and.i8 v7, v8
-    v10 = load.i8 v0, align 1
+    v10 = load.i8 v0, align 4
     v11 = freeze.i8 v10
     v12 = iconst.i8 -16
     v13 = and.i8 v11, v12
     v14 = or.i8 v13, v9
-    store.i8 v14, v0, align 1
+    store.i8 v14, v0, align 4
     v15 = zext.i32 v9
     v16 = iconst.i32 3
-    v17 = load.i16 v0, align 2
+    v17 = load.i16 v0, align 4
     v18 = iconst.i16 6
     v19 = shl.i16 v17, v18
     v20 = iconst.i16 10
@@ -42,12 +42,12 @@ block0(v0: ptr, v1: i32):
     v27 = iconst.i16 4
     v28 = shl.i16 v26, v27
     v29 = trunc.i8 v28
-    v30 = load.i8 v0, align 1
+    v30 = load.i8 v0, align 4
     v31 = freeze.i8 v30
     v32 = iconst.i8 15
     v33 = and.i8 v31, v32
     v34 = or.i8 v33, v29
-    store.i8 v34, v0, align 1
+    store.i8 v34, v0, align 4
     v35 = iconst.i16 8
     v36 = lshr.i16 v28, v35
     v37 = trunc.i8 v36
@@ -96,7 +96,7 @@ block0(v0: ptr, v1: i32):
     v78 = iconst.i64 1
     v79 = ptr_add inbounds v51, v78
     store.i16 v77, v79, align 1
-    v80 = load.i8 v0, align 1
+    v80 = load.i8 v0, align 4
     v81 = iconst.i8 15
     v82 = and.i8 v80, v81
     v83 = zext.i32 v82
@@ -105,15 +105,15 @@ block0(v0: ptr, v1: i32):
     v86 = trunc.i8 v85
     v87 = iconst.i8 15
     v88 = and.i8 v86, v87
-    v89 = load.i8 v0, align 1
+    v89 = load.i8 v0, align 4
     v90 = freeze.i8 v89
     v91 = iconst.i8 -16
     v92 = and.i8 v90, v91
     v93 = or.i8 v92, v88
-    store.i8 v93, v0, align 1
+    store.i8 v93, v0, align 4
     v94 = zext.i32 v88
     v95 = iconst.i32 1
-    v96 = load.i16 v0, align 2
+    v96 = load.i16 v0, align 4
     v97 = iconst.i16 6
     v98 = shl.i16 v96, v97
     v99 = iconst.i16 10
@@ -126,12 +126,12 @@ block0(v0: ptr, v1: i32):
     v106 = iconst.i16 4
     v107 = shl.i16 v105, v106
     v108 = trunc.i8 v107
-    v109 = load.i8 v0, align 1
+    v109 = load.i8 v0, align 4
     v110 = freeze.i8 v109
     v111 = iconst.i8 15
     v112 = and.i8 v110, v111
     v113 = or.i8 v112, v108
-    store.i8 v113, v0, align 1
+    store.i8 v113, v0, align 4
     v114 = iconst.i16 8
     v115 = lshr.i16 v107, v114
     v116 = trunc.i8 v115
@@ -148,7 +148,7 @@ block0(v0: ptr, v1: i32):
     v126 = iconst.i16 10
     v127 = ashr.i16 v125, v126
     v128 = sext.i32 v127
-    v129 = load.i8 v0, align 1
+    v129 = load.i8 v0, align 4
     v130 = iconst.i8 15
     v131 = and.i8 v129, v130
     v132 = zext.i32 v131
@@ -157,14 +157,14 @@ block0(v0: ptr, v1: i32):
     v135 = trunc.i8 v134
     v136 = iconst.i8 15
     v137 = and.i8 v135, v136
-    v138 = load.i8 v0, align 1
+    v138 = load.i8 v0, align 4
     v139 = freeze.i8 v138
     v140 = iconst.i8 -16
     v141 = and.i8 v139, v140
     v142 = or.i8 v141, v137
-    store.i8 v142, v0, align 1
+    store.i8 v142, v0, align 4
     v143 = zext.i32 v137
-    v144 = load.i16 v0, align 2
+    v144 = load.i16 v0, align 4
     v145 = iconst.i16 6
     v146 = shl.i16 v144, v145
     v147 = iconst.i16 10
@@ -178,12 +178,12 @@ block0(v0: ptr, v1: i32):
     v155 = iconst.i16 4
     v156 = shl.i16 v154, v155
     v157 = trunc.i8 v156
-    v158 = load.i8 v0, align 1
+    v158 = load.i8 v0, align 4
     v159 = freeze.i8 v158
     v160 = iconst.i8 15
     v161 = and.i8 v159, v160
     v162 = or.i8 v161, v157
-    store.i8 v162, v0, align 1
+    store.i8 v162, v0, align 4
     v163 = iconst.i16 8
     v164 = lshr.i16 v156, v163
     v165 = trunc.i8 v164

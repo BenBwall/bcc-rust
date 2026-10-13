@@ -74,7 +74,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 let bits = self.plain(Opcode::Or, magnitude, sign);
                 let sign_address = self.offset_address(address, u64::from(ty.bits() / 8 - 1));
                 _ = self.draft.push(
-                    super::Op::Inst(InstData::Store {
+                    self.memory_op(InstData::Store {
                         ty:    Type::I8,
                         flags: InstFlags::default(),
                         align: Align::BYTE,
@@ -113,7 +113,12 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let ty = self.draft.value_type(value);
         let layout = types::layout(&self.unit.sema.types, operand)
             .map_err(|kind| super::super::module_items::at(kind, source))?;
-        let address = self.fresh_object(layout.size, types::align(layout), source)?;
+        let address = self.fresh_object(
+            layout.size,
+            super::super::alignment::storage_alignment(&self.unit.sema.types, operand)
+                .map_err(|kind| super::super::module_items::at(kind, source))?,
+            source,
+        )?;
         self.store(value, address, operand, source)?;
         let sign = self.offset_address(address, u64::from(ty.bits() / 8 - 1));
         let byte = self.inst(

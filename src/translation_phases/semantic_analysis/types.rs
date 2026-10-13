@@ -727,6 +727,32 @@ impl<'tu> Types<'tu> {
         layout(self.nodes, self.tags, &self.target, ty, false)
     }
 
+    /// Required object storage alignment, including declaration overrides on
+    /// variable array derivations whose size has no constant layout.
+    /// C11: §6.7.5p6, p. 127; PDF p. 145.
+    /// GNU typedef alignment can weaken the natural boundary and retains the
+    /// same outermost override precedence as fixed array layout.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    pub(crate) fn storage_alignment(&self, mut ty: TypeId) -> Option<u64> {
+        if let Some(layout) = self.layout(ty) {
+            return Some(layout.align);
+        }
+        let mut alignment = ty.alignment;
+        while let TypeKind::Array(element, _) = self.kind(ty) {
+            ty = element;
+            if alignment == 0 {
+                alignment = ty.alignment;
+            }
+        }
+        self.layout(ty).map(|layout| {
+            if alignment == 0 {
+                layout.align
+            } else {
+                u64::from(alignment)
+            }
+        })
+    }
+
     /// Canonical alignment before typedef/declaration storage overrides.
     /// Record packing remains part of the nominal record layout. System V
     /// AMD64 ABI section 3.2.3 classifies unaligned fields using this boundary,

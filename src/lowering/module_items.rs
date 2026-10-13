@@ -551,12 +551,15 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             return Err(LoweringErrorKind::UnanalyzedType);
         }
         let (size, align) = match types.layout(data.ty) {
-            | Some(layout) => (layout.size, types::align(layout)),
+            | Some(layout) => (
+                layout.size,
+                super::alignment::storage_alignment(types, data.ty)?,
+            ),
             | None => {
                 let element =
                     types::target_type(types, data.ty).and_then(|element| types.layout(element));
                 match element {
-                    | Some(layout) => (0, types::align(layout)),
+                    | Some(_) => (0, super::alignment::storage_alignment(types, data.ty)?),
                     | None =>
                         return Err(types::layout(types, data.ty).err().unwrap_or(
                             LoweringErrorKind::MissingFact("an object type has no layout"),
@@ -658,9 +661,17 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         &self,
         expression: &'tu Expression<'tu>,
     ) -> Result<(ArenaVec<'a, u8>, Align), LoweringError> {
+        let info = self.sema.expression_info(peel(expression)).ok_or_else(|| {
+            LoweringError::missing(
+                "a string literal has no semantic type",
+                expression.source_vectors,
+            )
+        })?;
+        let align = super::alignment::storage_alignment(&self.sema.types, info.ty)
+            .map_err(|kind| at(kind, expression.source_vectors))?;
         match peel(expression).kind {
             | ExpressionType::StringLiteral(StringTokenType::String(id)) =>
-                Ok((self.string_bytes(id), Align::BYTE)),
+                Ok((self.string_bytes(id), align)),
             | ExpressionType::StringLiteral(StringTokenType::WideString(id)) => {
                 let layout = self.target.layout();
                 let character = layout
@@ -671,10 +682,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 for unit in self.context.wide_literal_units(id).chain([0]) {
                     bytes.extend_from_slice(&unit.to_le_bytes()[..width]);
                 }
-                Ok((
-                    bytes,
-                    Align::from_bytes(character.align).expect("wchar_t alignment"),
-                ))
+                Ok((bytes, align))
             },
             | _ => Err(LoweringError::unsupported(
                 Construct::EncodedString,
@@ -800,7 +808,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             GlobalDecl {
                 linkage:  IrLinkage::Internal,
                 size:     layout.size,
-                align:    types::align(layout),
+                align:    super::alignment::storage_alignment(&self.sema.types, ty)
+                    .map_err(|kind| at(kind, expression.source_vectors))?,
                 constant: constant_object(&self.sema.types, ty),
             },
         );

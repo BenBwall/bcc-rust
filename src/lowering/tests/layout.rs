@@ -9,6 +9,30 @@ use super::{
 use crate::backend::llvm::Toolchain;
 
 #[test]
+fn round4_zero_width_explicit_alignment() {
+    check(
+        "round4_zero_width_explicit_alignment",
+        r#"
+struct __attribute__((packed)) S { char a; int :0 __attribute__((aligned(16))); char b; };
+struct __attribute__((packed)) T { char a; int bits:1; int :0 __attribute__((aligned(16))); char b; };
+#ifdef _WIN32
+#ifdef __MINGW32__
+_Static_assert(__builtin_offsetof(struct S,b)==16 && _Alignof(struct S)==16, "explicit zero width");
+_Static_assert(__builtin_offsetof(struct T,b)==16 && _Alignof(struct T)==16, "active zero width");
+#else
+_Static_assert(__builtin_offsetof(struct S,b)==1 && _Alignof(struct S)==1, "inactive zero width");
+_Static_assert(__builtin_offsetof(struct T,b)==16 && _Alignof(struct T)==16, "active zero width");
+#endif
+#else
+_Static_assert(__builtin_offsetof(struct S,b)==16 && _Alignof(struct S)==1, "zero width boundary");
+_Static_assert(__builtin_offsetof(struct T,b)==16 && _Alignof(struct T)==1, "active zero width");
+#endif
+int main(void) { struct S s={7,42}; struct T t={11,0,13}; return s.a!=7 || s.b!=42 || t.a!=11 || t.b!=13; }
+"#,
+    );
+}
+
+#[test]
 fn packed_bit_field_explicit_alignment() {
     check(
         "packed_bit_field_explicit_alignment",
@@ -169,12 +193,29 @@ int main(void) {
 
 #[track_caller]
 fn check(name: &'static str, source: &'static str) {
+    let directory = crate::test_support::TempDir::new(name);
+    let input = directory.join("reference.c");
+    std::fs::write(&input, source).unwrap();
+    // Syntax-only cross-target checks need no foreign linker/sysroot.
+    let reference = Toolchain::bundled(Target::LinuxGnu).unwrap();
     for target in [
         Target::LinuxGnu,
         Target::LinuxMusl,
         Target::WindowsGnu,
         Target::WindowsMsvc,
     ] {
+        let output = crate::test_support::native::run_native(
+            std::process::Command::new(reference.clang())
+                .args(["-std=gnu11", "-fsyntax-only"])
+                .arg(format!("--target={}", target.triple()))
+                .arg(&input),
+        )
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{name}: {target:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert_eq!(
             numeric_programs::run_main(name, source, target),
             0,

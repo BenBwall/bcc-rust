@@ -362,6 +362,24 @@ fn aggregate_value_layout_excludes_storage_alignment() {
                     align: 8,
                 })
             );
+            assert_eq!(sema.types.storage_alignment(binding.ty), Some(64));
+        },
+    );
+}
+
+#[test]
+fn variable_array_storage_preserves_typedef_alignment_overrides() {
+    with_source(
+        "void f(int n){typedef int Row[n] __attribute__((aligned(1))); Row a;}",
+        |context, sema| {
+            assert_eq!(context.error_count(), 0);
+            let binding = sema
+                .bindings
+                .iter()
+                .find(|b| context.string_cache.at(b.name.name) == "a")
+                .unwrap();
+            assert_eq!(sema.types.storage_alignment(binding.ty), Some(1));
+            assert_eq!(sema.types.layout(binding.ty), None);
         },
     );
 }

@@ -38,9 +38,11 @@
 //! - Function bodies: `work.rs` defines tasks and operands; `statements.rs`
 //!   lowers statements and declarations; `expressions.rs` operators, calls and
 //!   conversions, including the floating ones; `places.rs` lvalues, loads and
-//!   stores; `bit_fields.rs` bit-field reads and writes; `initializers.rs`
-//!   walks braced initializers; `vla.rs` evaluates saved array extents and
-//!   restores dynamic stack storage when declaration lifetimes end.
+//!   stores; `alignment.rs` owns backing-place guarantees and all memory and
+//!   allocation alignment; `bit_fields.rs` bit-field reads and writes;
+//!   `initializers.rs` walks braced initializers; `vla.rs` evaluates saved
+//!   array extents and restores dynamic stack storage when declaration
+//!   lifetimes end.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
 //!   to IR types; `floats.rs` turns folded floating constants into IR bits.
@@ -58,6 +60,7 @@ mod extensions;
 mod module_items;
 
 // Function bodies
+mod alignment;
 mod bit_fields;
 mod builtin_effects;
 mod builtins;
@@ -369,6 +372,8 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     tasks:              ArenaVec<'s, Task<'tu>>,
     operands:           ArenaVec<'s, Item>,
     initializer_values: ArenaVec<'s, Item>,
+    /// The guaranteed alignment of each known backing address.
+    alignments:         ArenaMap<'s, crate::ir::Value, crate::ir::Align>,
     /// The storage of each automatic object, by binding.
     locals:             ArenaMap<'s, usize, Local>,
     /// The block of each label, created at its first `goto` or definition.

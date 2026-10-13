@@ -65,6 +65,20 @@ const BETWEEN_ARRAYS: &str = "int main(void) { int n=8192, i=0; int a[n]; a[0]=4
 again: ; int b[n]; b[0]=i; b[n-1]=i+1; if(b[n-1]-b[0]!=1)return 1;
 if(++i<1000)goto again; return a[0]!=42; }";
 
+// GCC Statement Exprs: header break/continue targets the enclosing body.
+// The outer for-init VLA survives continue, while inner/header VLAs do not.
+const NESTED_HEADER_CONTINUE: &str = "int main(void){int n=128,i=0,total=0;
+for(int a[n];i<1000;i++){a[0]=i;
+for(int b[n];({int c[n];b[0]=a[0];c[0]=b[0];total+=c[0];continue;0;});)return 1;
+return 2;}return i!=1000 || total!=499500;}";
+
+// Reenter the two nested loops 1,000 times so a missed outer break cleanup
+// cannot hide as storage released only when main returns.
+const NESTED_HEADER_BREAK: &str = "int main(void){int n=128,total=0;
+for(int i=0;i<1000;i++){for(int a[n];;){a[0]=i;
+for(int b[n];1;({int c[n];c[0]=b[0];total+=c[0];break;0;})){b[0]=a[0];}
+return 1;}}return total!=499500;}";
+
 #[test]
 fn vla_stack_storage_is_bounded_and_extents_execute_in_all_stages() {
     for source in [
@@ -73,6 +87,8 @@ fn vla_stack_storage_is_bounded_and_extents_execute_in_all_stages() {
         VOLATILE_ESCAPE,
         INNER_LABEL,
         BETWEEN_ARRAYS,
+        NESTED_HEADER_CONTINUE,
+        NESTED_HEADER_BREAK,
     ] {
         for target in [Target::LinuxGnu, Target::WindowsGnu] {
             for (optimize, profile) in STAGES {
@@ -115,6 +131,7 @@ fn vla_native_arms_match_clang() {
     .into_iter()
     .chain(STATEMENT_EXPRESSION_JUMPS.iter().copied())
     .chain([ALIGNED_VLAS])
+    .chain([NESTED_HEADER_CONTINUE, NESTED_HEADER_BREAK])
     .chain(
         TYPEOF_EVALUATIONS
             .iter()
@@ -140,7 +157,29 @@ fn vla_native_arms_match_clang() {
         // cases discard the predicate result: an explicit effects control
         // checks the same type-site action with Clang, and GCC checks the
         // original source when available.
-        let oracle_input = if source.contains("__builtin_add_overflow_p") {
+        let header_jump = matches!(
+            source.as_str(),
+            NESTED_HEADER_CONTINUE | NESTED_HEADER_BREAK
+        );
+        let oracle_input = if header_jump {
+            // Bundled Clang O0 on Win64 loops indefinitely on continue in
+            // the nested condition. GCC Statement Exprs specifies the outer
+            // target. Use an explicit outward goto for Clang and retain the
+            // original in every bcc arm and the GCC reference below.
+            // <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+            let control = directory.join(format!("clang-header-control-{index}.c"));
+            let control_source = if source == NESTED_HEADER_CONTINUE {
+                source
+                    .replace("continue;0;", "goto outer_step;0;")
+                    .replace("return 2;}", "return 2;outer_step:;}")
+            } else {
+                source
+                    .replace("break;0;", "goto outer_exit;0;")
+                    .replace("return 1;}}", "return 1;}outer_exit:;}")
+            };
+            std::fs::write(&control, control_source).unwrap();
+            control
+        } else if source.contains("__builtin_add_overflow_p") {
             let control = directory.join(format!("clang-control-{index}.c"));
             std::fs::write(
                 &control,
@@ -170,7 +209,7 @@ fn vla_native_arms_match_clang() {
             );
             let expected = run_native(&clang);
             assert_eq!(expected.0, 0, "Clang case {index}");
-            if source.contains("__builtin_add_overflow_p") {
+            if source.contains("__builtin_add_overflow_p") || header_jump {
                 if gcc_available {
                     let gcc = directory.join(format!("gcc-{index}-{opt:?}.exe"));
                     let output = crate::test_support::native::run_native(
@@ -192,8 +231,8 @@ fn vla_native_arms_match_clang() {
                     assert_eq!(run_native(&gcc), expected, "GCC original case {index}");
                 } else {
                     eprintln!(
-                        "GCC original overflow-p reference unavailable; Clang effects control and \
-                         bcc native arms remain tested"
+                        "GCC original extension reference unavailable; Clang control and bcc \
+                         native arms remain tested"
                     );
                 }
             }

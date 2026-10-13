@@ -5,8 +5,8 @@
 //! other automatic object has a stack slot; a static-duration object is a
 //! global. A read of a variable is a [`Draft::use_var`](super::ssa::Draft)
 //! and a write a `def_var`; memory is read and written with `load` and
-//! `store` carrying the type's alignment and `volatile`, and a structure is
-//! copied with `copy`.
+//! `store` carrying the place's guaranteed alignment and `volatile`, and a
+//! structure is copied with `copy`.
 //! C99: §6.3.2.1 paragraphs 1-2, p. 46; PDF p. 58; §6.5.16.1 paragraph 2,
 //! p. 92; PDF p. 104.
 
@@ -119,28 +119,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             {
                 let size = self.runtime_size(ty, source)?;
                 self.enter_vla(binding, source)?;
-                // C11 §6.7.5p6, p. 127; PDF p. 145: retain the completed
-                // declaration's alignment as well as the element alignment.
-                let mut element = ty;
-                let mut alignment = u64::from(ty.alignment);
-                while let TypeKind::Array(next, _) = self.unit.sema.types.kind(element) {
-                    element = next;
-                    alignment = alignment.max(u64::from(element.alignment));
-                }
-                let layout = types::layout(&self.unit.sema.types, element)
+                let align = super::alignment::storage_alignment(&self.unit.sema.types, ty)
                     .map_err(|kind| at(kind, source))?;
-                let align =
-                    crate::ir::Align::from_bytes(alignment.max(layout.align)).ok_or_else(|| {
-                        LoweringError::missing("invalid dynamic object alignment", source)
-                    })?;
-                Local::Address(self.inst(
-                    InstData::DynAlloca {
-                        ty: Type::I64,
-                        size,
-                        align,
-                    },
-                    Type::Ptr,
-                ))
+                Local::Address(self.dynamic_object(size, Some(align)))
             },
             | _ => {
                 let layout =
@@ -148,7 +129,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let size = u32::try_from(layout.size).map_err(|_| {
                     LoweringError::missing("an automatic object is larger than 4 GiB", source)
                 })?;
-                Local::Slot(self.draft.create_slot(size, types::align(layout)))
+                Local::Slot(
+                    self.object_slot(
+                        size,
+                        super::alignment::storage_alignment(&self.unit.sema.types, ty)
+                            .map_err(|kind| at(kind, source))?,
+                    ),
+                )
             },
         };
         _ = self.locals.insert(binding, local);
@@ -176,13 +163,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | (Place::Memory(address), Repr::Aggregate) => {
                 let layout =
                     types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
-                let guaranteed = types::align(layout);
+                let guaranteed = self.place_alignment(address, types::align(layout));
+                self.retain_alignment(address, guaranteed);
                 let address = if types::is_volatile(ty) {
                     let align = guaranteed;
                     let copy = self.fresh_object(layout.size, align, source)?;
                     let size = self.iconst(Type::I64, i128::from(layout.size));
                     _ = self.draft.push(
-                        Op::Inst(InstData::MemoryRange {
+                        self.memory_op(InstData::MemoryRange {
                             opcode: Opcode::Copy,
                             flags: InstFlags::VOLATILE,
                             align,
@@ -194,7 +182,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 } else {
                     address
                 };
-                Operand::Aggregate(address, guaranteed)
+                Operand::Aggregate(address)
             },
             | (Place::Variable(var), _) => Operand::Value(self.draft.use_var(var)),
             | (Place::Memory(address), representation) => {
@@ -238,10 +226,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             ));
         };
         let stored = match (target, value.operand) {
-            | (Place::Memory(address), Operand::Aggregate(from, from_align)) => {
+            | (Place::Memory(address), Operand::Aggregate(from)) => {
                 // C99 §6.5.16.1p3: the objects may overlap only exactly.
                 let layout =
                     types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
+                let guaranteed = self.place_alignment(address, types::align(layout));
+                self.retain_alignment(address, guaranteed);
                 let size = self.iconst(Type::I64, i128::from(layout.size));
                 let flags = if types::is_volatile(ty) {
                     InstFlags::MAY_OVERLAP | InstFlags::VOLATILE
@@ -249,19 +239,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     InstFlags::MAY_OVERLAP
                 };
                 _ = self.draft.push(
-                    Op::Inst(InstData::MemoryRange {
+                    self.memory_op(InstData::MemoryRange {
                         opcode: Opcode::Copy,
                         flags,
-                        align: if from_align.bytes() < layout.align {
-                            from_align
-                        } else {
-                            types::align(layout)
-                        },
+                        align: self.place_alignment(from, crate::ir::Align::BYTE),
                         args: [address, from, size],
                     }),
                     None,
                 );
-                Operand::Aggregate(address, types::align(layout))
+                Operand::Aggregate(address)
             },
             | (Place::Variable(var), _) => {
                 let value = self.value(value, source)?;
@@ -299,7 +285,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let flags = self.mem_flags(ty, source)?;
         let value_type = self.draft.value_type(value);
         _ = self.draft.push(
-            Op::Inst(InstData::Store {
+            self.memory_op(InstData::Store {
                 ty:    value_type,
                 flags: volatile(flags),
                 align: flags.align,
@@ -314,11 +300,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// The access facts of an object of type `ty`: its alignment and
     /// whether it is volatile (§6.7.3p6).
     fn mem_flags(&self, ty: TypeId, source: SourceVectors) -> Result<MemFlags, LoweringError> {
-        let layout = types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
+        let align = super::alignment::storage_alignment(&self.unit.sema.types, ty)
+            .map_err(|kind| at(kind, source))?;
         Ok(MemFlags {
             volatile: types::is_volatile(ty),
-            align:    types::align(layout),
-            tag:      None,
+            align,
+            tag: None,
         })
     }
 
@@ -392,10 +379,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 
 impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// Appends an instruction with a result of type `ty`.
-    pub(super) fn inst(&mut self, inst: InstData, ty: Type) -> Value {
-        self.draft
+    pub(super) fn inst(&mut self, mut inst: InstData, ty: Type) -> Value {
+        self.align_memory(&mut inst);
+        let alignment = self.instruction_alignment(inst);
+        let value = self
+            .draft
             .push(Op::Inst(inst), Some(ty))
-            .expect("the instruction has a result")
+            .expect("the instruction has a result");
+        if let Some(align) = alignment {
+            self.retain_alignment(value, align);
+        }
+        value
     }
 
     pub(super) fn iconst(&mut self, ty: Type, value: i128) -> Value {

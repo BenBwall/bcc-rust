@@ -17,7 +17,6 @@ use super::{
     module_items::at,
     ssa::{
         Draft,
-        Op,
         Terminator,
     },
     types::{
@@ -552,8 +551,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 )?);
             }
             let block = self.case_block(case.label);
-            let target =
-                self.dispatch_target(block, case.dispatch, case.statement.source_vectors)?;
+            let Some(dispatch) = case.dispatch else {
+                continue;
+            };
+            let target = self.dispatch_target(block, dispatch, case.statement.source_vectors)?;
             if case.range {
                 ranges.push((case.lower.value, case.upper.value, target));
             } else {
@@ -665,7 +666,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let value = match self.repr(self.result, source)? {
             | Repr::Void => None,
             | Repr::Aggregate => {
-                let Operand::Aggregate(from, from_align) = item.operand else {
+                let Operand::Aggregate(from) = item.operand else {
                     return Err(LoweringError::missing(
                         "a returned structure has no address",
                         source,
@@ -680,14 +681,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     .map_err(|kind| at(kind, source))?;
                 let size = self.iconst(Type::I64, i128::from(layout.size));
                 _ = self.draft.push(
-                    Op::Inst(InstData::MemoryRange {
+                    self.memory_op(InstData::MemoryRange {
                         opcode: Opcode::Copy,
                         flags:  InstFlags::empty(),
-                        align:  if from_align.bytes() < layout.align {
-                            from_align
-                        } else {
-                            types::align(layout)
-                        },
+                        align:  self.place_alignment(from, crate::ir::Align::BYTE),
                         args:   [to, from, size],
                     }),
                     None,
@@ -867,6 +864,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             tasks: ArenaVec::new_in(scratch),
             operands: ArenaVec::new_in(scratch),
             initializer_values: ArenaVec::new_in(scratch),
+            alignments: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             locals: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             labels: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             targets: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
@@ -877,6 +875,14 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             vla_tokens: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
         };
         let entry = Draft::entry();
+        for (index, &value) in lowerer.draft.block_params(entry).iter().enumerate() {
+            if let Some(layout) = signature
+                .param_abi(index)
+                .and_then(crate::ir::ParamAbi::layout)
+            {
+                _ = lowerer.alignments.insert(value, layout.align);
+            }
+        }
         for (index, &parameter) in record.parameters.iter().enumerate() {
             let Some(parameter) = parameter else {
                 continue;
@@ -893,9 +899,31 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             let declared = lowerer.unit.sema.bindings[parameter].ty;
             let parameter_source = lowerer.unit.sema.bindings[parameter].name.source_vectors;
             if lowerer.repr(declared, parameter_source)? == Repr::Aggregate {
-                // The argument is a copy the callee owns: the parameter
-                // object itself.
-                _ = lowerer.locals.insert(parameter, Local::Address(value));
+                // C99 §6.9.1p10: the parameter object has its declared
+                // storage alignment, independently of its ABI representation.
+                let required =
+                    super::alignment::storage_alignment(&lowerer.unit.sema.types, declared)
+                        .map_err(|kind| at(kind, parameter_source))?;
+                let provided = lowerer.place_alignment(value, crate::ir::Align::BYTE);
+                let home = if provided.bytes() < required.bytes() {
+                    let layout = types::layout(&lowerer.unit.sema.types, declared)
+                        .map_err(|kind| at(kind, parameter_source))?;
+                    let home = lowerer.fresh_object(layout.size, required, parameter_source)?;
+                    let size = lowerer.iconst(Type::I64, i128::from(layout.size));
+                    _ = lowerer.draft.push(
+                        lowerer.memory_op(InstData::MemoryRange {
+                            opcode: Opcode::Copy,
+                            flags:  InstFlags::empty(),
+                            align:  provided,
+                            args:   [home, value, size],
+                        }),
+                        None,
+                    );
+                    home
+                } else {
+                    value
+                };
+                _ = lowerer.locals.insert(parameter, Local::Address(home));
                 continue;
             }
             let argument = Item {

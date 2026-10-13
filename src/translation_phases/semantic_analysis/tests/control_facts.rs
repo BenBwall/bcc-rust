@@ -179,12 +179,64 @@ fn m1_switch_cases_retain_converted_endpoints_order_and_owner() {
                     s.control.statement(case.statement).unwrap().label,
                     Some(case.label)
                 );
-                assert_eq!(case.dispatch.left.first, outer.dispatch.region);
-                assert_eq!(case.dispatch.entered.first, case.point.region);
+                assert_eq!(case.dispatch.unwrap().left.first, outer.dispatch.region);
+                assert_eq!(case.dispatch.unwrap().entered.first, case.point.region);
             }
             assert!(outer.default_dispatch.is_some());
         },
     );
+}
+
+#[test]
+fn round4_empty_case_ranges_retain_labels_without_dispatch_edges() {
+    with_configuration(
+        "void f(int n){switch(n){case 1:;case 9 ... 3:;case 2:;}}",
+        CompilerConfiguration::default().with_gnu_extensions(true),
+        |context, s| {
+            assert!(s.lowerable(context), "{:?}", context.take_pending_errors());
+            let switch = s.control.switches[0];
+            assert_eq!(switch.cases.len(), 3);
+            assert_eq!(switch.sorted, &[0, 2]);
+            let empty = switch.cases[1];
+            assert!(empty.dispatch.is_none());
+            assert_eq!(empty.lower.to_i128(), Some(9));
+            assert_eq!(empty.upper.to_i128(), Some(3));
+            assert_eq!(
+                s.control.statement(empty.statement).unwrap().label,
+                Some(empty.label)
+            );
+        },
+    );
+}
+
+#[test]
+fn round4_nested_header_jumps_release_inner_vlas_and_preserve_outer_continue() {
+    for jump in ["continue", "break"] {
+        let source = format!(
+            "void f(int n){{for(int a[n];; ){{for(int b[n];({{int c[n];{jump};0;}}); ){{}}}}}}"
+        );
+        with_source(&source, |context, s| {
+            assert_eq!(context.pending_error_count(), 0);
+            let outer = s.control.loops[0];
+            let fact = s.control.jumps[0];
+            assert_eq!(
+                fact.target,
+                if jump == "continue" {
+                    ControlTarget::LoopContinue(outer.statement)
+                } else {
+                    ControlTarget::LoopBreak(outer.statement)
+                }
+            );
+            let mut region = fact.transition.left.first;
+            let mut released = 0;
+            while region != fact.transition.left.stop_before {
+                let data = s.control.regions[region.0];
+                released += usize::from(matches!(data.cleanup, CleanupKind::AutomaticVla(_)));
+                region = data.parent.unwrap();
+            }
+            assert_eq!(released, if jump == "continue" { 2 } else { 3 });
+        });
+    }
 }
 
 #[test]

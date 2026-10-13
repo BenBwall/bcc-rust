@@ -291,8 +291,9 @@ impl<'tu, 's> Builder<'tu, 's> {
             let mut cases = ArenaVec::new_in(scratch);
             for &case in &self.cases[self.case_runs[index].clone()] {
                 let mut case = case;
-                case.dispatch =
-                    ancestry.transition(&self.regions, switch.dispatch.region, case.point.region);
+                case.dispatch = case.dispatch.map(|_| {
+                    ancestry.transition(&self.regions, switch.dispatch.region, case.point.region)
+                });
                 cases.push(case);
             }
             switch.cases = tu.alloc_slice_copy(&cases);
