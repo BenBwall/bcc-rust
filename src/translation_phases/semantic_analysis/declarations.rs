@@ -789,10 +789,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 output.push(member);
                 continue;
             };
-            // GCC packed caps member alignment, but an explicit aligned on
-            // the member can raise it again. The C type remains unchanged.
-            if tag.packed.get() || member.packed {
-                layout.align = u64::from(member.ty.alignment.max(1));
+            // GCC Common Attributes, packed/aligned: packing permits bit
+            // allocation, but explicit member alignment still places the
+            // field on that byte boundary. Clang's MSVC packed bit-fields
+            // ignore member alignment; MinGW retains it.
+            // <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html>
+            let packed = tag.packed.get() || member.packed;
+            let ignore_alignment = packed
+                && member.width.is_some()
+                && self.context.configuration.target() == crate::target::Target::WindowsMsvc;
+            if packed {
+                layout.align = if ignore_alignment {
+                    1
+                } else {
+                    u64::from(member.ty.alignment.max(1))
+                };
             }
             // The System V ABI ignores unnamed bit-fields when aligning a
             // structure or union; in a union one still occupies its bytes.
@@ -801,11 +812,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 alignment = alignment.max(layout.align);
             }
             let mut resolved = member;
+            if ignore_alignment {
+                resolved.ty = resolved.ty.with_alignment(1);
+            }
             if tag.kind == TagKind::Union {
                 bytes = bytes.max(match member.width {
                     | Some(0) if ms => 0,
                     | Some(_) if ms => layout.size,
-                    | Some(width) if unnamed_bit_field => u64::from(width).div_ceil(8),
+                    // GCC packed union fields occupy their bits, including
+                    // named fields. Microsoft allocation still reserves the
+                    // declared unit (handled above).
+                    | Some(width) if unnamed_bit_field || packed => u64::from(width).div_ceil(8),
                     | _ => layout.size,
                 });
             } else if let Some(width) = member.width {
@@ -844,7 +861,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         let width = u64::from(width);
                         let start = if width == 0 {
                             align_up(bit_end, bits)?
-                        } else if tag.packed.get() || member.packed {
+                        } else if member.ty.alignment != 0 {
+                            align_up(bit_end, layout.align.checked_mul(8)?)?
+                        } else if packed {
                             bit_end
                         } else {
                             let remaining = bits - bit_end.checked_rem(bits)?;

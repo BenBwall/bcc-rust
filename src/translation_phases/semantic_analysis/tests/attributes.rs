@@ -65,6 +65,84 @@ int declarations[__alignof__(minimum)==4 && __alignof__(inherited)==1 && __align
 }
 
 #[test]
+fn alignas_runtime_array_types_reject_weakened_alignment() {
+    for declaration in [
+        "_Alignas(1) int a[n];",
+        "_Alignas(4) double a[n];",
+        "typedef int Row[n]; _Alignas(2) Row a;",
+        "typedef double Row[n]; _Alignas(4) Row a;",
+        "typedef int Row[n]; _Alignas(1) Row a[2];",
+        "_Alignas(1) _Alignas(2) int a[n];",
+    ] {
+        for target in [
+            Target::LinuxGnu,
+            Target::LinuxMusl,
+            Target::WindowsGnu,
+            Target::WindowsMsvc,
+        ] {
+            let source = format!("void f(int n) {{ {declaration} int following; }}");
+            with_configuration(
+                &source,
+                CompilerConfiguration::default().with_target(target),
+                |context, sema| {
+                    let errors = context.take_pending_errors();
+                    assert_eq!(errors.iter().filter(|error| matches!(error, TranslationError::Semantic(error) if error.kind == SemanticErrorKind::InvalidStandardAlignment)).count(), 1, "{target:?}: {declaration}: {errors:?}");
+                    assert!(sema.bindings.iter().any(|binding| {
+                        context.string_cache.at(binding.name.name) == "following"
+                            && !sema.types.unanalyzed(binding.ty)
+                    }));
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn alignment_constant_expressions_keep_constraint_diagnostics() {
+    with_source(
+        "[[vendor::aligned(!; arbitrary, {tokens})]] int object; int following;",
+        |context, _| {
+            assert_eq!(
+                context.error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
+        },
+    );
+    for argument in ["sizeof(char)+2", "_Alignof(int)+1", "n"] {
+        let source = format!(
+            "void f(int n) {{ int a __attribute__((aligned({argument}))); int following; }}"
+        );
+        with_source(&source, |context, sema| {
+            let errors = context.take_pending_errors();
+            assert!(errors.iter().any(|error| matches!(error, TranslationError::Semantic(error) if error.kind == SemanticErrorKind::InvalidAlignmentAttribute)), "{argument}: {errors:?}");
+            assert!(
+                sema.bindings
+                    .iter()
+                    .any(
+                        |binding| context.string_cache.at(binding.name.name) == "following"
+                            && !sema.types.unanalyzed(binding.ty)
+                    )
+            );
+        });
+    }
+    let source = format!(
+        "typedef int T; int x __attribute__((aligned({}sizeof(T)*2{}))); int following;",
+        "(".repeat(2000),
+        ")".repeat(2000)
+    );
+    with_source(&source, |context, _| {
+        assert_eq!(
+            context.error_count(),
+            0,
+            "{:?}",
+            context.take_pending_errors()
+        );
+    });
+}
+
+#[test]
 fn added_gnu_forms_obey_the_existing_extension_policy() {
     use crate::configuration::{
         CStandard,

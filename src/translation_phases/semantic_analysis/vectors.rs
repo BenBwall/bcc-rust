@@ -282,10 +282,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .trim_end_matches('\0')
                         == "("
                 }) {
-                    // The parser retains attribute arguments as tokens. Resolve
-                    // integer literals and enum constants with a bounded
-                    // reducer.
-                    self.vector_attribute_integer(&tokens[i + 2..])
+                    if name == "aligned" {
+                        self.attribute_alignment(a, i)
+                    } else {
+                        // vector_size retains its bounded token reducer;
+                        // aligned shares semantic ICE evaluation.
+                        self.vector_attribute_integer(&tokens[i + 2..])
+                    }
                 } else if name == "aligned" {
                     Some(16)
                 } else {
@@ -770,7 +773,30 @@ pub(super) fn attribute_names<'a>(
                 depth = depth.saturating_sub(1);
                 None
             },
-            | _ if depth == level => Some((i, spelling.trim_matches('_'))),
+            | _ if depth == level => {
+                let tokens = a.tokens.as_slice();
+                let colon = |index: usize| {
+                    tokens
+                        .get(index)
+                        .is_some_and(|token| context.string_cache.at(token.contents) == ":")
+                };
+                // A namespace is not an attribute name. Unknown vendor
+                // attributes do not acquire GNU representation semantics.
+                if colon(i + 1)
+                    || i >= 3
+                        && colon(i - 1)
+                        && colon(i - 2)
+                        && context
+                            .string_cache
+                            .at(tokens[i - 3].contents)
+                            .trim_matches('_')
+                            != "gnu"
+                {
+                    None
+                } else {
+                    Some((i, spelling.trim_matches('_')))
+                }
+            },
             | _ => None,
         }
     })

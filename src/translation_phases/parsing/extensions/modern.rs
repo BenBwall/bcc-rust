@@ -417,6 +417,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                                 TokenType::Operator(OperatorTokenType::OpeningParenthesis)
                             ) =>
                         {
+                            self.start_attribute_argument(parser);
                             self.attribute_position = AfterArguments;
                             true
                         },
@@ -484,6 +485,17 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                 }
                 ParseAction::Consume
             },
+            | Phase::AttributeArgument => {
+                self.phase = Phase::AwaitAttributeArgument;
+                ParseAction::Push(ParseFrame::Expression(ExpressionFrame::new(
+                    parser.arena,
+                    ExpressionMode::ConstantExpression,
+                    ExpressionBoundary::Argument,
+                    parser.hard_error_count,
+                )))
+            },
+            | Phase::AwaitAttributeArgument =>
+                self.complete_attribute_argument(parser, token, returned),
             | Phase::Finish => {
                 let source_vectors = if self.kind == ModernKind::Attributes {
                     let mut sources = ArenaVec::new_in(parser.arena);
@@ -522,9 +534,11 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     },
                     | ModernKind::Attributes => {
                         let tokens = parser.alloc_syntax_list(&mut self.tokens);
+                        let arguments = parser.alloc_syntax_list(&mut self.arguments);
                         ModernValue::Attributes(parser.alloc_syntax(AttributeSpecifier {
                             syntax: self.attribute_syntax,
                             tokens,
+                            arguments,
                             source_vectors,
                             recovered,
                         }))
@@ -533,6 +547,117 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                 ParseAction::Reduce(ParseValue::Modern(value))
             },
         }
+    }
+
+    /// GCC aligned has a C integer constant expression operand. Keep unknown
+    /// vendor-prefixed attributes opaque, even if their name is `aligned`.
+    /// C99: §6.6p6, p. 95; PDF p. 107 (GNU attribute extension).
+    fn start_attribute_argument(&mut self, parser: &Parser<'_, 'tu, 'p>) {
+        if matches!(
+            self.attribute_position,
+            AttributePosition::AfterPrefixedName
+        ) && self
+            .tokens
+            .get(self.tokens.len().saturating_sub(4))
+            .is_none_or(|namespace| {
+                parser
+                    .context
+                    .string_cache
+                    .at(namespace.contents)
+                    .trim_matches('_')
+                    != "gnu"
+            })
+        {
+            return;
+        }
+        if self.tokens.last().is_some_and(|name| {
+            parser
+                .context
+                .string_cache
+                .at(name.contents)
+                .trim_matches('_')
+                == "aligned"
+        }) && Self::alignment_argument_closes(parser)
+        {
+            self.argument_index = self.tokens.len() - 1;
+            self.argument_start = parser.cursor.consumed + 1;
+            self.phase = Phase::AttributeArgument;
+        }
+    }
+
+    /// An unclosed operand keeps the attribute's original delimiter recovery.
+    /// Only complete operands enter the expression frame, so a missing inner
+    /// delimiter cannot replace the owning attribute's boundary diagnostic.
+    /// C99: §6.7, p. 97; PDF p. 109 (GNU attribute extension).
+    fn alignment_argument_closes(parser: &Parser<'_, 'tu, 'p>) -> bool {
+        let mut closing = ArenaVec::new_in(parser.arena);
+        closing.push(OperatorTokenType::ClosingParenthesis);
+        let mut offset = 0;
+        while let Some(token) = parser.cursor.lookahead(offset) {
+            offset += 1;
+            let TokenType::Operator(operator) = token.kind else {
+                continue;
+            };
+            match operator {
+                | OperatorTokenType::OpeningParenthesis =>
+                    closing.push(OperatorTokenType::ClosingParenthesis),
+                | OperatorTokenType::OpeningSquareBracket =>
+                    closing.push(OperatorTokenType::ClosingSquareBracket),
+                | OperatorTokenType::OpeningCurlyBrace =>
+                    closing.push(OperatorTokenType::ClosingCurlyBrace),
+                | OperatorTokenType::ClosingParenthesis
+                | OperatorTokenType::ClosingSquareBracket
+                | OperatorTokenType::ClosingCurlyBrace => {
+                    if closing.pop() != Some(operator) {
+                        return false;
+                    }
+                    if closing.is_empty() {
+                        return true;
+                    }
+                },
+                | OperatorTokenType::Semicolon
+                    if !closing.contains(&OperatorTokenType::ClosingCurlyBrace) =>
+                    return false,
+                | _ => {},
+            }
+        }
+        false
+    }
+
+    /// Preserve the operand's original tokens alongside its parsed expression.
+    /// C99: §6.6p6, p. 95; PDF p. 107 (GNU aligned operand).
+    fn complete_attribute_argument(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        token: Option<Token>,
+        returned: Option<ParseValue<'tu>>,
+    ) -> ParseAction<'tu, 'p> {
+        let expression = any_expression_value(returned);
+        self.tokens.extend(
+            parser
+                .cursor
+                .consumed_since(self.argument_start)
+                .iter()
+                .copied(),
+        );
+        self.arguments.push(AttributeArgument {
+            index: self.argument_index,
+            expression,
+        });
+        if !token.is_some_and(|token| {
+            matches!(
+                token.kind,
+                TokenType::Operator(OperatorTokenType::ClosingParenthesis)
+            )
+        }) {
+            self.attribute_expected(parser, token, self.closer_component());
+            if token.is_none_or(|token| self.caller_owns(parser, token)) {
+                self.phase = Phase::Finish;
+                return ParseAction::Continue;
+            }
+        }
+        self.phase = Phase::AttributeTokens;
+        ParseAction::Continue
     }
 }
 
@@ -559,6 +684,8 @@ enum Phase {
     Semicolon,
     Finish,
     AttributeTokens,
+    AttributeArgument,
+    AwaitAttributeArgument,
     GnuAttributeOpen,
     GnuAttributeInnerOpen,
 }
@@ -641,14 +768,25 @@ pub(crate) enum SpecifierExtensionKind<'tu> {
 
 /// Shared attribute syntax for ISO, GNU, and MSVC grammar owners.
 /// C23: §6.7.13.2 paragraph 1, pp. 142-143; PDF pp. 155-156.
-/// Balanced tokens retain spelling and provenance without interpreting vendor
-/// arguments.
+/// Balanced tokens retain spelling and provenance. Recognized GNU alignment
+/// operands also retain expression syntax for semantic constant evaluation.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct AttributeSpecifier<'tu> {
     pub(crate) syntax:         AttributeSyntax,
     pub(crate) tokens:         ArenaList<'tu, Token>,
+    /// Attribute-name token index and its parsed alignment operand.
+    pub(crate) arguments:      ArenaList<'tu, AttributeArgument<'tu>>,
     pub(crate) source_vectors: SourceVectors,
     pub(crate) recovered:      bool,
+}
+
+/// A recognized attribute's expression operand, associated with its name's
+/// position in the retained token list. GNU extension: GCC aligned uses an
+/// integer constant expression (C99 §6.6p6, p. 95; PDF p. 107).
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct AttributeArgument<'tu> {
+    pub(crate) index:      usize,
+    pub(crate) expression: &'tu Expression<'tu>,
 }
 
 /// ISO, GNU and Microsoft attribute introducer grammars.
@@ -742,6 +880,9 @@ pub(in crate::translation_phases::parsing) struct ModernFrame<'tu, 'p> {
     association_type: Option<&'tu TypeName<'tu>>,
     pub(in crate::translation_phases::parsing) associations: ArenaVec<'p, GenericAssociation<'tu>>,
     pub(in crate::translation_phases::parsing) tokens: ArenaVec<'p, Token>,
+    pub(in crate::translation_phases::parsing) arguments: ArenaVec<'p, AttributeArgument<'tu>>,
+    argument_start: usize,
+    argument_index: usize,
     delimiters: ArenaVec<'p, OperatorTokenType>,
     message: Option<Token>,
     starting_errors: usize,
@@ -763,6 +904,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
     ) {
         pools.modern_associations.lend(&mut self.associations);
         pools.opaque_tokens.lend(&mut self.tokens);
+        pools.attribute_arguments.lend(&mut self.arguments);
         pools.delimiters.lend(&mut self.delimiters);
     }
 
@@ -772,6 +914,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
     ) {
         pools.modern_associations.reclaim(&mut self.associations);
         pools.opaque_tokens.reclaim(&mut self.tokens);
+        pools.attribute_arguments.reclaim(&mut self.arguments);
         pools.delimiters.reclaim(&mut self.delimiters);
     }
 
@@ -947,6 +1090,9 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
             association_type: None,
             associations: ArenaVec::new_in(arena),
             tokens: ArenaVec::new_in(arena),
+            arguments: ArenaVec::new_in(arena),
+            argument_start: 0,
+            argument_index: 0,
             delimiters: ArenaVec::new_in(arena),
             message: None,
             starting_errors,
