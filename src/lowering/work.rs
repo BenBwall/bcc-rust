@@ -47,7 +47,7 @@ pub(super) enum Task<'tu> {
     ),
     FinishBound(usize),
     Sizeof(TypeId, TypeId, crate::translation_phases::SourceVectors),
-    ExitScope,
+    CleanupNormal(&'tu Statement<'tu>),
 
     /// Enter `block`: it is sealed if all its predecessors are known.
     Enter {
@@ -60,15 +60,11 @@ pub(super) enum Task<'tu> {
         seal:  bool,
     },
     Seal(Block),
-    /// Push break and continue targets.
-    PushTargets(JumpTargets),
-    PopTargets,
     /// Pop the operand and return it.
-    Return,
+    Return(&'tu Statement<'tu>),
     /// Pop the switch's controlling value and dispatch on it.
     Switch {
         statement: &'tu Statement<'tu>,
-        body:      &'tu Statement<'tu>,
         exit:      Block,
     },
     /// Close a switch: jump to its exit and seal its case blocks.
@@ -222,7 +218,9 @@ pub(super) enum Operand {
     Truth(Value),
     /// An lvalue or function designator.
     Place(Place),
-    /// A structure or union rvalue, by the address of an object holding it.
+    /// A structure or union rvalue names its backing place. The alignment
+    /// owner retains that place's guarantee; C conversions do not change it.
+    /// C99: §6.3.2.1p2, p. 46; PDF p. 58.
     Aggregate(Value),
 }
 

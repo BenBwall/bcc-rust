@@ -339,6 +339,39 @@ checks it.
 
 ### Memory facts
 
+`lowering/alignment.rs` owns each backing place's guaranteed alignment, indexed
+by its IR address in function scratch. Aggregate operands carry only that address;
+converting their C type cannot introduce another alignment fact. Stack/global
+addresses obtain their guarantee from the allocation, incoming aggregate and
+return-area pointers from the retained ABI descriptor, and aggregate `va_arg`
+fetches from their descriptor's backing allocation contract. A parameter whose
+declared storage alignment exceeds the incoming guarantee receives a fresh aligned
+home and a copy at the weaker guarantee.
+
+`Types::storage_alignment` supplies declared object requirements, including
+variable arrays. Lowering owns its fresh slots, call-result areas, snapshots and
+dynamic allocations. Constant offsets refine the base guarantee by their common
+power-of-two divisor; indexing uses the element stride. Runtime VLA strides
+retain the constant element-size factor, rather than an array typedef's storage
+alignment. Opaque dereferences use
+the retained pointee/member requirement as C's default. Resolved member offsets
+and packed guarantees come from semantic analysis. Control joins conservatively
+retain byte alignment.
+
+Every load, store, copy and fill crosses `align_memory`, through `inst` or
+`memory_op`. Copies use the weaker source/destination guarantee. Bit-field pieces,
+zero and string initialization, floating representation operations and overflow
+builtin stores use this same boundary. Fixed slots and dynamic allocations are
+created through the alignment owner, and static object/literal declarations use
+the same retained storage query. Initializer and member consumers no longer
+encode backing guarantees by rewriting C types.
+
+C99 6.3.2.3p7, pp. 47-48 (PDF pp. 59-60), 6.7.2.1p12, p. 103 (PDF p. 115),
+6.5.16.1p2-3, p. 92 (PDF p. 104); C11 6.7.5p6, p. 127 (PDF p. 145);
+GNU [aligned/packed](https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html)
+and [Cast to Union](https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html);
+System V AMD64 ABI 3.2.3/3.5.7 and Microsoft x64 parameter passing.
+
 Every memory operation records its access type, alignment and `volatile`.
 Strict aliasing becomes an *access tag*: an index into a per-module table of
 type descriptors shaped like LLVM's struct-path TBAA, built once from sema's
@@ -461,35 +494,27 @@ The interpreter and LLVM therefore share the same decision. See
 attribute. C99 §6.7.4p6-7 (pp. 112-113; PDF pp. 124-125), §6.9p5 (p. 140;
 PDF p. 152), and [GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html).
 
-### Front-end prerequisites (stage 0)
+### Retained semantic interfaces
 
-The audit lists gaps that block lowering. In order:
+Lowering consumes typed expressions and conversions, bindings and definitions,
+resolved members/types, function records and the M1 control/lifetime graph.
+Each function has an explicit semantic identity/root and parameter aliases.
+Each lowerable statement, label and jump must have its retained fact; a missing
+record produces a `MissingFact` internal error carrying source provenance.
 
-1. **Expose the semantic types to the crate.** `TypeKind`, `ConversionKind`,
-   `ExpressionInfo` and friends sit in private modules; lowering needs
-   `pub(crate)` re-exports from `semantic_analysis`.
-2. **Gate lowering on errors.** Keep the semantic error count and expose
-   `Context::error_count()` (errors only, not warnings). Lowering refuses a unit
-   with errors, and treats any `Unknown` type it meets as an internal error,
-   because some unmodeled extensions produce `Unknown` without a diagnostic.
-3. **Retain the expression index.** Keep the map from an expression node to its
-   `ExpressionInfo` and to its run of conversion records, instead of discarding
-   it after analysis.
-4. **Retain per-function records.** For each function definition: its binding,
-   its body, and the bindings of its parameters, so lowering does not match on
-   source positions.
-5. **Fix the `!` conversion record.** It records a conversion of the operand to
-   `int`; it should record no conversion (or a truth-value conversion), since
-   `!0.5` is 0.
-6. **Record the selected field.** Member access should store the field index
-   instead of making lowering search the record by name.
+**M1 is complete.** Semantic analysis produces execution regions and transitions;
+lowering maps semantic labels and loop/switch owner IDs to IR blocks and VLA region
+IDs to SSA stack tokens. It no longer indexes VLA scopes, reconstructs label/parent
+maps, invents pointer/binding region IDs, walks switch bodies to rediscover cases,
+or recasts case endpoints. Lexical name scopes and execution regions remain distinct.
 
-Later gaps (initializer placement plans, static address constants,
-builtin result types, bit-field storage units) are scheduled with the features
-that need them.
-
-Status: items 1-6 are done; [semantic-analysis.md](semantic-analysis.md)
-describes the retained interfaces.
+The required M2/M5 slices retain source-ordered parameter typeof/bound actions and
+one dual-context expression effect summary including cast type-site actions.
+Declaration occurrence plans, sparse effect recipes, initializer plans, symbolic
+constants, builtin descriptors and final symbol/function policies remain later
+migration work. Some consumers therefore still inspect syntax in those families.
+See [semantic-analysis.md](semantic-analysis.md) for producer/query contracts and
+the [M1 receipt](docs/research/semantic-facts-m1.md) for checks and corpus comparison.
 
 ### Algorithm
 
@@ -663,6 +688,13 @@ as aligned and large as the target needs, and drops ignored aggregates; each
 are reported before anything changes. The interpreter runs both profiles; in a
 post-ABI module its `va_start` lays the variadic arguments out as the target
 passes them.
+
+ABI refusal ownership includes indirect-call signatures and aggregate-fetch
+descriptors. C lowering retains the emitted function symbol and its semantic
+binding's source at the existing function projection, including assembler
+aliases. The pipeline carries that association into a refusal diagnostic;
+it does not rediscover functions from syntax or C spellings. Raw textual IR
+keeps its function owner without inventing a C source location.
 
 The storage preflight covers fixed aggregate parameters of variadic signatures
 as well as ordinary parameters, return areas and `byval` copies, whether a call
@@ -978,27 +1010,7 @@ shadow programs cover all scalar, overflow, hint, expression-only varargs and
 supported library name families through semantics, interpretation and native
 O0/O2 comparisons.
 
-Overflow predicate type operands now have cached effect summaries keyed by
-expression identity and whether its value is read. An explicit postorder
-stack computes child summaries once, and a function-local arena-backed cache
-reuses them during short-circuit scheduling. Volatile reads and address-only
-operands retain their previous distinctions. A 2,048-deep chain regression
-counts expression visits through the public pipeline: the pre-fix code visited
-6,298,625 expressions; the fixed code visits 20,479, within the regression's
-32,768-visit bound. Existing
-short-circuit, volatile, call and increment tests preserve effect behavior.
-The contract remains [GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html)
-and C99 6.7.3p6 (printed p. 109, PDF p. 121).
-
-### PR #41 round-3 scalar and block-expression coverage (2026-10-13)
-
-GNU block tails now consume the expression statement's recorded conversions,
-matching their retained semantic value types. Loop header jumps use outer body
-targets, with semantic rejection when none exists; switch controlling-expression
-context already matched lowering. See the round-3 semantic record and
-[GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html).
-C99 6.3.2.1p2-4 (printed p. 46, PDF p. 58) and 6.8.6.2p1/6.8.6.3p1
-(printed p. 138, PDF p. 150) govern the underlying conversions and constraints.
+### Scalar overflow execution coverage
 
 Textual IR now executes both `uadd_overflow` and `umul_overflow` at i8, i16,
 i32, i64 and i128. Each width has overflowing, adjacent non-overflowing and zero
@@ -1012,25 +1024,6 @@ separate C probes cover signed add/subtract/multiply destinations at 8, 16 and
 interpreter stages and native Clang comparisons. Contract:
 [GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).
 
-Native-reference limitation: bundled Clang 23.1.1 crashes for outer-switch
-breaks from for initializers and a nested switch controlling expression. It
-also selects the inner loop for jumps from while/do conditions and for
-conditions/increments, even when an outer body exists; continue can loop
-forever. `CLANG_HEADER_REFERENCE` excludes those 15 cases from Clang alone,
-retaining the six for-initializer and switch-header jumps to an outer loop.
-All 21 cases execute in bcc against literal results and, when GCC is available,
-an independent GCC O0/O2 reference. The installed GCC passes all 21 at both
-levels. No compiler or LLVM-tree change was made for these upstream failures.
-
-Validation passed: `cargo test --all-targets`, the 26 feature-enabled allocation
-tests, nightly formatting, Clippy with warnings denied in debug, release and
-benchmarking-internals configurations, `git diff --check`, and
-`BCC_DIFFTEST_CASES=1000 cargo test --lib difftest`. The plain CLI was rebuilt
-last. The invalid-header `--emit=ir` probe reports twelve ordinary constraints
-and exits with status 1, without an internal lowering error. Shared LLVM trees
-were preserved; no staging or commits were performed.
-
-
 ## Aggregate varargs and runtime arrays (2026-10-13)
 
 A call-site signature can retain typed arguments after its ellipsis, for example
@@ -1039,7 +1032,10 @@ A call-site signature can retain typed arguments after its ellipsis, for example
 LLVM's function type. Function declarations and definitions cannot carry typed
 variadic tails. The tail describes argument ABI attributes and classification,
 including `byval` on MEMORY arguments. Scalar-only calls keep the usual compact
-signature. The printer and parser preserve the ellipsis and every tail attribute.
+signature. ABI projection materializes a described tail's inherited `noundef`
+promises on the scalar and memory-pointer positions, leaving aggregate register
+parts unmarked. Scalars appended beyond that description retain their inherited
+promise through an extended projected call-site signature. The printer and parser preserve the ellipsis and every tail attribute.
 
 `va_arg_aggregate list : (ptr aggregate(...))` returns the address of a fresh
 copy of the next aggregate. Its signature is a layout descriptor with exactly
@@ -1059,27 +1055,68 @@ evaluates bounds on the explicit task stack, saves each extent in an SSA variabl
 and uses it for allocation, runtime `sizeof`, and multidimensional strides.
 Typedefs retain the declaration's extent. Function records also retain original
 parameter types, so array adjustment does not discard entry-time bound effects.
+Prototype/body parameter binding pairs are retained by semantic analysis;
+function entry visits only those pairs, without scanning unrelated bindings or
+matching source positions.
 C99 §6.7.5.2p5, pp. 116-117; PDF pp. 128-129; §6.5.3.4p2, p. 80;
 PDF p. 92; §6.9.1p10, p. 142; PDF p. 154.
 
-Each automatic VLA declaration saves the stack before its allocation. Lexical
-scope exits and jumps emit restores for the lifetime regions they leave,
-including a backward goto to before the declaration. A loop therefore reuses
-storage. Return expressions are evaluated before cleanup. Jumping into a
-variably modified identifier's scope remains a semantic constraint violation.
+Each automatic VLA declaration saves the stack into an SSA variable keyed by
+its semantic region. Lowering consumes retained normal-exit and jump transitions
+and follows only cleanup links to emit restores, taking work proportional to the
+number of released allocations. A backward goto to before a declaration therefore
+reuses storage; a goto within a statement expression preserves enclosing VLA regions.
+VM typedef/pointer regions protect entry without emitting stack operations.
+Return expressions and aggregate statement-expression tail copies execute before
+cleanup. For-init VLA normal exits and breaks meet after their separate restores.
+Switch dispatch uses retained converted cases/default/no-match transitions and
+resolved label identities. No semantic scope or case fact is reconstructed in IR.
 C99 §6.2.4p6, p. 32; PDF p. 44; §6.8p3, p. 131; PDF p. 143;
 §6.8.6.1p1, p. 137; PDF p. 149.
+
+Function entry executes retained parameter-site typeof and new-bound actions in
+source order after parameter initialization and alias installation. Saved bounds
+remain SSA extents. A bound owned by an evaluated typeof operand is scheduled by
+that operand's declaration, preventing premature reservation of its SSA variable.
+Both ordinary expression lowering and effects-only overflow operands consume the
+same normalized type-site actions and semantic dual-context purity summaries.
+Full M2 runtime-size formulas and M5 sparse effect recipes remain future steps.
 
 `stack_save` returns an opaque `ptr` token for the current dynamic stack position;
 `stack_restore` takes such a token from the current invocation and releases later
 dynamic objects. It leaves fixed slots and varargs backing storage live. These
 operations are effectful and cannot be merged or moved across allocations.
+A VLA restore also releases newer `__builtin_alloca` storage. This follows
+Clang's emitted `llvm.stackrestore` placement and the
+[GCC 4.2.1 Variable Length rule](https://gcc.gnu.org/onlinedocs/gcc-4.2.1/gcc/Variable-Length.html).
+Reading that storage afterward is undefined in this model, and the interpreter
+reports a dangling pointer. A native run returning the stored value does not
+establish lifetime: optimization or unreused physical stack bytes can hide the
+invalid access. Current GCC retains VLA storage when `alloca` occurs in its
+scope ([current manual](https://gcc.gnu.org/onlinedocs/gcc/Variable-Length.html));
+that is a different implementation policy. The regression pins bcc's restore
+semantics before and after optimization and ABI lowering.
+
 The verifier checks their result and operand types. LLVM emission uses
 `llvm.stacksave.p0` and `llvm.stackrestore.p0`; the interpreter validates activation
 and position, frees later objects, and reuses their memory. Text round-trip tests
 cover both operations and aggregate fetch descriptors; VLA execution tests cover
 both optimization settings, native Clang comparisons, and bounded interpreter
 memory across repeated allocations and jumps.
+
+Nested loop-header `continue` and `break` also target the enclosing loop, as
+specified by the [GCC statement-expression manual](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html).
+Their 1,000-iteration stage matrix checks both results and bounded storage.
+Bundled Clang 23.1.1 at O0 on Win64 times out on the nested-header
+`continue` source, so native Clang comparisons use an explicit outward `goto`
+control. Every bcc arm and the available GCC reference retain the original
+source; Clang's control is not evidence that Clang implements the header jump.
+
+`dyn_alloca.i64 size, align N` retains the completed declaration's required
+alignment through text, optimization, interpretation and LLVM allocation.
+Legacy text without `align` and `__builtin_alloca` retain alignment 16.
+VLA declarations retain their element and declaration alignment (C11
+§6.7.5p6, p. 127; PDF p. 145). The aligned alloca builtin remains unsupported.
 ## 2026-10-13: Representation attributes and static constants
 
 Packed member reads, writes and aggregate initializers use their guaranteed

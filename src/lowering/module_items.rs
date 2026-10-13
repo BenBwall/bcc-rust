@@ -95,43 +95,46 @@ use crate::{
 
 /// Translation-unit state shared by every function's lowering.
 pub(super) struct Unit<'a, 'tu, 'ir> {
-    pub(super) context:       &'a Context<'tu>,
-    pub(super) sema:          &'a SemanticTranslationUnit<'tu>,
-    pub(super) module:        Module<'ir>,
-    pub(super) tables:        &'a Bump,
-    pub(super) target:        Target,
-    pub(super) names:         SymbolNames<'a>,
+    /// Work spent associating retained parameter bindings (scaling regression).
+    #[cfg(test)]
+    pub(super) parameter_alias_visits: usize,
+    pub(super) context: &'a Context<'tu>,
+    pub(super) sema: &'a SemanticTranslationUnit<'tu>,
+    pub(super) module: Module<'ir>,
+    pub(super) tables: &'a Bump,
+    pub(super) target: Target,
+    pub(super) names: SymbolNames<'a>,
     /// Each binding by its declared identifier, so a declarator finds its
     /// binding without a search.
-    declarators:              ArenaMap<'a, (StringCacheId, SourceVectors), usize>,
-    definitions:              ArenaMap<'a, usize, DefinitionKind>,
+    declarators: ArenaMap<'a, (StringCacheId, SourceVectors), usize>,
+    definitions: ArenaMap<'a, usize, DefinitionKind>,
     /// Completed types of linked object definitions, including tentative ones,
     /// indexed by emitted symbol name after applying GNU assembler labels.
     /// C99: §6.2.7 paragraph 4, p. 40; PDF p. 52; §6.9.2 paragraph 2,
     /// p. 143; PDF p. 155.
-    defined_objects:          ArenaMap<'a, &'a str, usize>,
+    defined_objects: ArenaMap<'a, &'a str, usize>,
     /// Definitions share their linked name across separate semantic bindings.
     /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42.
-    defined_functions:        ArenaSet<'a, StringCacheId>,
+    defined_functions: ArenaSet<'a, StringCacheId>,
     /// Bindings whose address is taken, which therefore live in memory.
     pub(super) address_taken: ArenaSet<'a, usize>,
     /// Globals of static locals and `__func__`, which have no linkage.
-    statics:                  ArenaMap<'a, usize, GlobalId>,
-    strings:                  ArenaMap<'a, (LiteralId, bool), GlobalId>,
+    statics: ArenaMap<'a, usize, GlobalId>,
+    strings: ArenaMap<'a, (LiteralId, bool), GlobalId>,
     /// One static object per file-scope compound literal syntax node. New
     /// initializers join the explicit queue, never recursively lower syntax.
-    compound_literals:        ArenaMap<'a, usize, GlobalId>,
-    static_initializers:      ArenaVec<'a, (GlobalId, TypeId, &'tu Initializer<'tu>)>,
+    compound_literals: ArenaMap<'a, usize, GlobalId>,
+    static_initializers: ArenaVec<'a, (GlobalId, TypeId, &'tu Initializer<'tu>)>,
     /// Next candidate for a string literal's internal symbol.
-    next_string_suffix:       u64,
+    next_string_suffix: u64,
     /// User names reserved before generating internal storage.
-    reserved_names:           ArenaSet<'a, &'a str>,
+    reserved_names: ArenaSet<'a, &'a str>,
     /// Internal storage cannot be reused by a linked object declaration.
-    generated_globals:        ArenaSet<'a, GlobalId>,
+    generated_globals: ArenaSet<'a, GlobalId>,
     /// Conflicting definitions are isolated while later functions are checked.
-    conflicting_names:        ArenaSet<'a, &'a str>,
+    conflicting_names: ArenaSet<'a, &'a str>,
     /// Each generated base probes a suffix at most once.
-    next_name_suffix:         ArenaMap<'a, &'a str, u64>,
+    next_name_suffix: ArenaMap<'a, &'a str, u64>,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -548,12 +551,15 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             return Err(LoweringErrorKind::UnanalyzedType);
         }
         let (size, align) = match types.layout(data.ty) {
-            | Some(layout) => (layout.size, types::align(layout)),
+            | Some(layout) => (
+                layout.size,
+                super::alignment::storage_alignment(types, data.ty)?,
+            ),
             | None => {
                 let element =
                     types::target_type(types, data.ty).and_then(|element| types.layout(element));
                 match element {
-                    | Some(layout) => (0, types::align(layout)),
+                    | Some(_) => (0, super::alignment::storage_alignment(types, data.ty)?),
                     | None =>
                         return Err(types::layout(types, data.ty).err().unwrap_or(
                             LoweringErrorKind::MissingFact("an object type has no layout"),
@@ -655,9 +661,17 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         &self,
         expression: &'tu Expression<'tu>,
     ) -> Result<(ArenaVec<'a, u8>, Align), LoweringError> {
+        let info = self.sema.expression_info(peel(expression)).ok_or_else(|| {
+            LoweringError::missing(
+                "a string literal has no semantic type",
+                expression.source_vectors,
+            )
+        })?;
+        let align = super::alignment::storage_alignment(&self.sema.types, info.ty)
+            .map_err(|kind| at(kind, expression.source_vectors))?;
         match peel(expression).kind {
             | ExpressionType::StringLiteral(StringTokenType::String(id)) =>
-                Ok((self.string_bytes(id), Align::BYTE)),
+                Ok((self.string_bytes(id), align)),
             | ExpressionType::StringLiteral(StringTokenType::WideString(id)) => {
                 let layout = self.target.layout();
                 let character = layout
@@ -668,10 +682,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 for unit in self.context.wide_literal_units(id).chain([0]) {
                     bytes.extend_from_slice(&unit.to_le_bytes()[..width]);
                 }
-                Ok((
-                    bytes,
-                    Align::from_bytes(character.align).expect("wchar_t alignment"),
-                ))
+                Ok((bytes, align))
             },
             | _ => Err(LoweringError::unsupported(
                 Construct::EncodedString,
@@ -797,7 +808,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             GlobalDecl {
                 linkage:  IrLinkage::Internal,
                 size:     layout.size,
-                align:    types::align(layout),
+                align:    super::alignment::storage_alignment(&self.sema.types, ty)
+                    .map_err(|kind| at(kind, expression.source_vectors))?,
                 constant: constant_object(&self.sema.types, ty),
             },
         );
@@ -1130,14 +1142,25 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
 /// the little-endian bytes from `start`, keeping the other bits. `None` if the
 /// field lies outside `bytes`.
 fn merge_bit_field(bytes: &mut [u8], start: usize, field: BitFieldBits, value: i128) -> Option<()> {
+    if field.width == 0 || field.width > 128 || field.bit_offset >= 8 {
+        return None;
+    }
     let span = usize::try_from((field.bit_offset + field.width).div_ceil(8)).ok()?;
     let target = bytes.get_mut(start..start + span)?;
-    let mut word = [0_u8; 16];
-    word.get_mut(..span)?.copy_from_slice(target);
-    let mut word = u128::from_le_bytes(word);
-    let mask = (u128::MAX >> (128 - field.width)) << field.bit_offset;
-    word = (word & !mask) | ((value as u128) << field.bit_offset & mask);
-    target.copy_from_slice(&word.to_le_bytes()[..span]);
+    // GNU packed fields can touch seventeen bytes even though their value
+    // fits in 128 bits. Merge in value coordinates, retaining neighbor bits.
+    // C99: §6.7.8p19, p. 127; PDF p. 139.
+    // <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html> (packed).
+    for bit in 0..field.width {
+        let position = usize::try_from(field.bit_offset + bit).ok()?;
+        let mask = 1_u8 << (position % 8);
+        let byte = &mut target[position / 8];
+        if (value as u128) & (1_u128 << bit) == 0 {
+            *byte &= !mask;
+        } else {
+            *byte |= mask;
+        }
+    }
     Some(())
 }
 
@@ -1227,6 +1250,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             }
         }
         Self {
+            #[cfg(test)]
+            parameter_alias_visits: 0,
             context,
             sema,
             module,

@@ -13,6 +13,8 @@ use crate::translation_phases::TranslationError;
 
 mod atomics;
 mod attributes;
+mod bit_field_alignment;
+mod control_facts;
 mod float128;
 mod int128;
 mod library_modes;

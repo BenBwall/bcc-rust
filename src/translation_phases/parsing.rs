@@ -420,7 +420,7 @@ pub(crate) struct Parser<'c, 'tu, 'p> {
     /// translation unit ends.
     tree: &'tu Bump,
     /// Buffered parser-facing token stream.
-    cursor: TokenCursor,
+    cursor: TokenCursor<'tu, 'p>,
     /// Grammar control stack in the parse arena; the final element is
     /// active.
     frames: ArenaVec<'p, ParseFrame<'tu, 'p>>,

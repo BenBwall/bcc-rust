@@ -1,105 +1,88 @@
-//! Cached effect summaries for GCC overflow predicates' type operands.
-//! An explicit postorder stack visits each (expression, read) pair once;
-//! lowering retains the cache while scheduling short-circuit effects.
-//! GNU extension: GCC "Integer Overflow Builtins".
+//! Retained dual-context expression effect summaries, produced bottom-up.
+//! ICE eligibility remains independent from absence of observable effects.
+//! GNU extension: GCC Integer Overflow Builtins and Typeof.
 //! <https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html>
-//! C99: §6.7.3p6, p. 109; PDF p. 121 (volatile reads).
+//! <https://gcc.gnu.org/onlinedocs/gcc/Typeof.html>
+//! C99: §6.7.3p6, p. 109; PDF p. 121 (volatile accesses).
 
-use super::super::ExpressionInfo;
-use crate::{
-    translation_phases::parsing::{
-        declaration_syntax::TypeQualifiers,
-        syntax::{
-            BinaryOperator as B,
-            Expression,
-            ExpressionType as E,
-            UnaryOperator as U,
-        },
-    },
-    util::bump::{
-        ArenaMap,
-        ArenaVec,
-        Bump,
+use super::super::{
+    Analyzer,
+    ExpressionInfo,
+};
+use crate::translation_phases::parsing::{
+    declaration_syntax::TypeQualifiers,
+    syntax::{
+        BinaryOperator as B,
+        Expression,
+        ExpressionType as E,
+        UnaryOperator as U,
     },
 };
 
-/// The read flag distinguishes an object's value from its address. A volatile
-/// member's address can be pure even when reading that member is an effect.
-/// GNU extension: GCC "Integer Overflow Builtins"; C99: §6.7.3p6, p. 109;
-/// PDF p. 121.
-pub(crate) struct EffectSummaries<'s> {
-    pure: ArenaMap<'s, (usize, bool), bool>,
+/// One summary for both value reads and designation/effects-only evaluation.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ExpressionEffects {
+    pub(crate) value_pure:       bool,
+    pub(crate) designation_pure: bool,
 }
 
-impl<'s> EffectSummaries<'s> {
-    /// Postorder summaries are independent of scheduling order. Even an
-    /// effectful parent retains its children's summaries, preventing repeated
-    /// suffix walks when short-circuit tasks later inspect those children.
-    pub(crate) fn pure<'tu>(
-        &mut self,
-        expression: &'tu Expression<'tu>,
-        read: bool,
-        info: impl Fn(&'tu Expression<'tu>) -> Option<ExpressionInfo<'tu>>,
-        scratch: &'s Bump,
-    ) -> bool {
-        let key = |e: &Expression<'_>, read| (std::ptr::from_ref(e).addr(), read);
-        if let Some(&pure) = self.pure.get(&key(expression, read)) {
-            return pure;
-        }
-        let mut pending = ArenaVec::new_in(scratch);
-        pending.push((expression, read, false));
-        while let Some((e, read, done)) = pending.pop() {
+impl<'tu> Analyzer<'_, 'tu, '_> {
+    pub(in crate::translation_phases::semantic_analysis) fn summarize_effects(
+        &self,
+        result: ExpressionInfo<'tu>,
+    ) -> ExpressionEffects {
+        let summary = |read| {
             #[cfg(test)]
             crate::test_support::OVERFLOW_EFFECT_VISITS.with(|visits| visits.set(visits.get() + 1));
-            let key = key(e, read);
-            if self.pure.contains_key(&key) {
-                continue;
-            }
-            let pure = match dependencies(e, read, &info) {
+            let children = match dependencies(result.expression, read, &|e| {
+                Some(if std::ptr::eq(e, result.expression) {
+                    result
+                } else {
+                    self.expression_info(e)
+                })
+            }) {
                 | Rule::Known(pure) => pure,
-                | Rule::Children(children) if done =>
-                    children.into_iter().flatten().all(|(e, read)| {
-                        self.pure
-                            .get(&(std::ptr::from_ref(e).addr(), read))
-                            .copied()
-                            .unwrap_or(false)
-                    }),
-                | Rule::Children(children) => {
-                    pending.push((e, read, true));
-                    pending.extend(
-                        children
-                            .into_iter()
-                            .rev()
-                            .flatten()
-                            .map(|(e, read)| (e, read, false)),
-                    );
-                    continue;
-                },
+                | Rule::Children(children) => children
+                    .into_iter()
+                    .flatten()
+                    .all(|(e, read)| self.effect_pure(e, read)),
             };
-            _ = self.pure.insert(key, pure);
+            let actions = self
+                .expression_actions
+                .get(&std::ptr::from_ref(result.expression).addr());
+            children
+                && actions.is_none_or(|site| {
+                    site.operand_evaluations
+                        .iter()
+                        .all(|&e| self.effect_pure(e, true))
+                        && site
+                            .bounds
+                            .iter()
+                            .all(|&index| self.effect_pure(self.types.runtime_bounds[index], true))
+                })
+        };
+        ExpressionEffects {
+            value_pure:       summary(true),
+            designation_pure: summary(false),
         }
-        self.pure
-            .get(&key(expression, read))
-            .copied()
-            .unwrap_or(false)
     }
 
-    pub(crate) fn new(scratch: &'s Bump) -> Self {
-        Self {
-            pure: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
-        }
+    pub(in crate::translation_phases::semantic_analysis) fn effect_pure(
+        &self,
+        e: &Expression<'_>,
+        read: bool,
+    ) -> bool {
+        self.expression_indices
+            .get(&std::ptr::from_ref(e).addr())
+            .and_then(|&i| self.expression_effects.get(i))
+            .is_some_and(|effects| {
+                if read {
+                    effects.value_pure
+                } else {
+                    effects.designation_pure
+                }
+            })
     }
-}
-
-/// A single query used for semantic ICE classification; lowering retains an
-/// `EffectSummaries` for the function instead of rebuilding it per operator.
-/// GNU extension: GCC "Integer Overflow Builtins".
-pub(crate) fn overflow_type_operand_is_pure<'tu>(
-    expression: &'tu Expression<'tu>,
-    info: impl Fn(&'tu Expression<'tu>) -> Option<ExpressionInfo<'tu>>,
-    scratch: &Bump,
-) -> bool {
-    EffectSummaries::new(scratch).pure(expression, true, info, scratch)
 }
 
 enum Rule<'tu> {

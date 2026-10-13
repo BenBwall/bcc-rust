@@ -133,6 +133,8 @@ impl<'ir> Module<'ir> {
             match *data {
                 | InstData::Binary { args: [a, b], .. } => write!(f, " {a}, {b}"),
                 | InstData::Unary { arg, .. } => write!(f, " {arg}"),
+                | InstData::DynAlloca { size, align, .. } =>
+                    write!(f, " {size}, align {}", align.bytes()),
                 | InstData::VaArgAggregate { sig, list } =>
                     write!(f, " {list} : {}", self.display_signature(sig)),
                 | InstData::IntCompare {

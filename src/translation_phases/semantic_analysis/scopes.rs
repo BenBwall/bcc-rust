@@ -26,8 +26,22 @@ impl Analyzer<'_, '_, '_> {
         });
         self.scope_entries
             .push(self.scratch.alloc(Collection::new()));
-        self.statements.scope_vm.push(self.statements.vm);
+        self.control.scope_regions.push(self.control.current);
         self.scope = next;
+        if kind == ScopeKind::Block {
+            let source = self
+                .control
+                .point()
+                .map(|point| self.control.regions[point.region.0].source);
+            if let Some(source) = source {
+                _ = self.control.open(
+                    next,
+                    super::RegionKind::Lexical,
+                    super::CleanupKind::None,
+                    source,
+                );
+            }
+        }
     }
 
     /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42.
@@ -44,7 +58,8 @@ impl Analyzer<'_, '_, '_> {
                 _ = self.visible.remove(&(entry.namespace, entry.name.name));
             }
         }
-        self.statements.vm = self.statements.scope_vm[self.scope];
+        self.control
+            .close_to(self.control.scope_regions[self.scope]);
         self.scope = self.scopes[self.scope].parent.unwrap_or(0);
     }
 

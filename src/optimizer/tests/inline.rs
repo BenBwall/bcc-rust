@@ -36,7 +36,7 @@ fn dynamic_alloca_callee_in_a_loop_retains_its_call_and_bounded_storage() {
     let text = "\
 function @allocate(i64) -> i32 internal {
 block0(v0: i64):
-    v1 = dyn_alloca.i64 v0
+    v1 = dyn_alloca.i64 v0, align 16
     v2 = iconst.i32 7
     store.i32 v2, v1, align 4
     v3 = load.i32 v1, align 4

@@ -110,12 +110,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => None,
         };
         self.work.push(Work::Qualify(q, source));
-        if let S::Extended(super::ExtendedType::Typeof {
-            operand,
-            unqualified,
-        }) = spec
-        {
-            self.work.push(Work::TypeofDone(*operand, *unqualified));
+        if let S::Extended(syntax @ super::ExtendedType::Typeof { operand, .. }) = spec {
+            self.work.push(Work::TypeofDone(syntax));
             self.syntax_operand(*operand);
             return;
         }
@@ -789,10 +785,48 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 output.push(member);
                 continue;
             };
-            // GCC packed caps member alignment, but an explicit aligned on
-            // the member can raise it again. The C type remains unchanged.
-            if tag.packed.get() || member.packed {
-                layout.align = u64::from(member.ty.alignment.max(1));
+            // GCC Common Attributes, packed/aligned: packing permits bit
+            // allocation, but explicit member alignment still places the
+            // field on that byte boundary. Clang's MSVC packed bit-fields
+            // ignore member alignment; MinGW retains it.
+            // <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html>
+            let packed = tag.packed.get() || member.packed;
+            // MinGW's Microsoft bit-field layout ignores typedef alignment,
+            // but retains alignment written on the member. GCC Common Type
+            // Attributes (aligned); C99 §6.7.2.1p10, p. 102; PDF p. 114.
+            if member.width.is_some()
+                && self.context.configuration.target() == crate::target::Target::WindowsGnu
+            {
+                layout.align = self
+                    .types
+                    .natural_alignment(member.ty)
+                    .unwrap_or(1)
+                    .max(u64::from(member.explicit_alignment));
+            }
+            let ignore_alignment = packed
+                && member.width.is_some()
+                && self.context.configuration.target() == crate::target::Target::WindowsMsvc;
+            if packed {
+                layout.align = if ignore_alignment {
+                    1
+                } else {
+                    u64::from(
+                        if self.context.configuration.target() == crate::target::Target::WindowsMsvc
+                        {
+                            member.ty.alignment.max(1)
+                        } else {
+                            member.explicit_alignment.max(1)
+                        },
+                    )
+                };
+            }
+            // Microsoft x64 record placement retains the canonical boundary
+            // when a typedef reduces alignment; explicit packing may lower it.
+            // C99 §6.7.2.1p12: member alignment is implementation-defined.
+            if ms && !packed {
+                layout.align = layout
+                    .align
+                    .max(self.types.natural_alignment(member.ty).unwrap_or(1));
             }
             // The System V ABI ignores unnamed bit-fields when aligning a
             // structure or union; in a union one still occupies its bytes.
@@ -801,11 +835,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 alignment = alignment.max(layout.align);
             }
             let mut resolved = member;
+            if ignore_alignment {
+                resolved.ty = resolved.ty.with_alignment(1);
+            }
             if tag.kind == TagKind::Union {
                 bytes = bytes.max(match member.width {
                     | Some(0) if ms => 0,
                     | Some(_) if ms => layout.size,
-                    | Some(width) if unnamed_bit_field => u64::from(width).div_ceil(8),
+                    // GCC packed union fields occupy their bits, including
+                    // named fields. Microsoft allocation still reserves the
+                    // declared unit (handled above).
+                    | Some(width) if unnamed_bit_field || packed => u64::from(width).div_ceil(8),
                     | _ => layout.size,
                 });
             } else if let Some(width) = member.width {
@@ -815,9 +855,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     // same size and the unit has room.
                     let bits = layout.size * 8;
                     if width == 0 {
-                        if ms_unit.take().is_some() {
-                            alignment = alignment.max(layout.align);
-                            bytes = align_up(bytes, layout.align).unwrap_or(bytes);
+                        let unit = ms_unit.take();
+                        let msvc = self.context.configuration.target()
+                            == crate::target::Target::WindowsMsvc;
+                        if unit.is_some() || !msvc && member.explicit_alignment != 0 {
+                            // C99 §6.7.2.1p12, p. 103; PDF p. 115: target
+                            // placement. MSVC needs a preceding value field;
+                            // MinGW also honors an explicit inactive boundary.
+                            let boundary = if !msvc && unit.is_some() {
+                                self.types.natural_alignment(member.ty).unwrap_or(1)
+                            } else {
+                                layout.align
+                            };
+                            let boundary = boundary.max(u64::from(member.explicit_alignment));
+                            if !msvc && let Some((_, start, used)) = unit {
+                                bytes = start + used.div_ceil(8);
+                            }
+                            alignment = alignment.max(boundary);
+                            bytes = align_up(bytes, boundary).unwrap_or(bytes);
                         }
                         resolved.offset = bytes;
                     } else {
@@ -843,8 +898,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         let bits = layout.size.checked_mul(8)?;
                         let width = u64::from(width);
                         let start = if width == 0 {
-                            align_up(bit_end, bits)?
-                        } else if tag.packed.get() || member.packed {
+                            align_up(
+                                bit_end,
+                                bits.max(u64::from(member.explicit_alignment).checked_mul(8)?),
+                            )?
+                        } else if member.explicit_alignment != 0 {
+                            align_up(bit_end, layout.align.checked_mul(8)?)?
+                        } else if packed {
                             bit_end
                         } else {
                             let remaining = bits - bit_end.checked_rem(bits)?;
@@ -915,7 +975,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     ty: member
                         .ty
                         .with_alignment(if tag.packed.get() || member.packed {
-                            member.ty.alignment.max(1)
+                            if self.context.configuration.target()
+                                == crate::target::Target::WindowsMsvc
+                            {
+                                member.ty.alignment.max(1)
+                            } else {
+                                member.explicit_alignment.max(1)
+                            }
                         } else {
                             member.ty.alignment
                         }),
@@ -1242,15 +1308,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         Some(Member {
-            name:           None,
-            source_vectors: member.source_vectors,
-            invalid:        false,
-            ty:             base,
-            width:          None,
-            offset:         0,
-            bit_offset:     0,
-            anonymous:      true,
-            packed:         self.layout_attribute_chain(member.extensions).packed,
+            name:               None,
+            source_vectors:     member.source_vectors,
+            invalid:            false,
+            ty:                 base,
+            width:              None,
+            offset:             0,
+            bit_offset:         0,
+            anonymous:          true,
+            packed:             self.layout_attribute_chain(member.extensions).packed,
+            explicit_alignment: self.explicit_member_alignment(member.extensions, None, None),
         })
     }
 

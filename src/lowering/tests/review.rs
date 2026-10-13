@@ -537,3 +537,42 @@ fn aggregate_reinitialization_preserves_explicit_bit_fields() {
          n ? a.x + 1 : 1}; if (!n++) goto again; return a.x != 2 || a.y != 0; }",
     );
 }
+
+#[test]
+fn ten_thousand_functions_lower_with_linear_parameter_work() {
+    use std::fmt::Write as _;
+    let mut source = String::new();
+    for index in 0..10_000 {
+        writeln!(source, "int f{index}(int n, int a[n]) {{ return n; }}").unwrap();
+    }
+    let tu = Bump::new();
+    let mut context = Context::new(&tu);
+    let syntax = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        tu.alloc_str(&source),
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &syntax);
+    assert!(sema.lowerable(&context));
+    let arena = Bump::new();
+    let tables = Bump::new();
+    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables);
+    let mut errors = ArenaVec::new_in(&arena);
+    unit.prepare_extensions(&mut errors);
+    let functions = unit.declare_items(&syntax, &mut errors);
+    assert!(errors.is_empty());
+    assert_eq!(functions.len(), 10_000);
+    let mut scratch = Bump::new();
+    for &(record, function) in &functions {
+        scratch.reset();
+        FunctionLowerer::lower(&mut unit, record, function.unwrap(), &scratch).unwrap();
+        assert!(
+            unit.parameter_alias_visits <= 20_000,
+            "parameter work grows with unrelated bindings: {} visits",
+            unit.parameter_alias_visits
+        );
+    }
+    assert_eq!(unit.module.functions().count(), 10_000);
+    assert_eq!(unit.parameter_alias_visits, 20_000);
+}

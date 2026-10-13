@@ -155,6 +155,7 @@ impl ProcessTree {
 
         use windows_sys::Win32::System::JobObjects::{
             CreateJobObjectW,
+            JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
             JobObjectExtendedLimitInformation,
@@ -170,7 +171,12 @@ impl ProcessTree {
         // closes it exactly once, including configuration/assignment failure.
         let tree = Self(unsafe { OwnedHandle::from_raw_handle(handle) });
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // This job becomes the child's innermost one, and Windows applies only
+        // that job's limits, so it repeats the cargo runner's crash-dialog
+        // limit (scripts/crash_dialogs.py): an unhandled exception terminates
+        // the program instead of opening an error dialog.
+        limits.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
         let size = u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
             .expect("job information size fits DWORD");
         // SAFETY: the job handle is live and the pointer and length describe

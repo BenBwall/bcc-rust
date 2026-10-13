@@ -163,6 +163,17 @@ Function label and switch state have separate lifetimes from ordinary names.
 
 ### Recovery and validation
 
+Recognized GNU alignment operands use ordinary expression frames once. Attribute
+token lists are slices of one lazily retained phase-6 array, and their provenance
+shares the adjacent parser-token source ranges. One explicit-stack delimiter
+index answers subsequent operand-boundary queries in constant time, including
+semicolon, brace, mismatch and EOF recovery. Nested `aligned` operands inside
+either GNU attributes or `_Alignas` therefore retain linear parser work and
+storage without changing raw spelling or parsed constant-expression syntax.
+The attribute node uses eight additional bytes for its slice length; descendant
+token arrays are shared. The 1,024-level regression bounds token visits/copies
+and checks retained operands and provenance; semantic tests check their results.
+
 For each frame phase, specify its delimiters, accepted child values, unconsumed
 stop tokens, EOF result, synchronization policy, state restoration, returned
 syntax, and progress before reprocessing lookahead. A recovered child marks the

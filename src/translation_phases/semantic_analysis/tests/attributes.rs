@@ -65,6 +65,114 @@ int declarations[__alignof__(minimum)==4 && __alignof__(inherited)==1 && __align
 }
 
 #[test]
+fn alignas_runtime_array_types_reject_weakened_alignment() {
+    for declaration in [
+        "_Alignas(1) int a[n];",
+        "_Alignas(4) double a[n];",
+        "typedef int Row[n]; _Alignas(2) Row a;",
+        "typedef double Row[n]; _Alignas(4) Row a;",
+        "typedef int Row[n]; _Alignas(1) Row a[2];",
+        "_Alignas(1) _Alignas(2) int a[n];",
+    ] {
+        for target in [
+            Target::LinuxGnu,
+            Target::LinuxMusl,
+            Target::WindowsGnu,
+            Target::WindowsMsvc,
+        ] {
+            let source = format!("void f(int n) {{ {declaration} int following; }}");
+            with_configuration(
+                &source,
+                CompilerConfiguration::default().with_target(target),
+                |context, sema| {
+                    let errors = context.take_pending_errors();
+                    assert_eq!(errors.iter().filter(|error| matches!(error, TranslationError::Semantic(error) if error.kind == SemanticErrorKind::InvalidStandardAlignment)).count(), 1, "{target:?}: {declaration}: {errors:?}");
+                    assert!(sema.bindings.iter().any(|binding| {
+                        context.string_cache.at(binding.name.name) == "following"
+                            && !sema.types.unanalyzed(binding.ty)
+                    }));
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_alignment_operands_retain_their_constant_results() {
+    for depth in [32, 1024] {
+        let source = format!(
+            "int value __attribute__((aligned({}8{}))); int following;",
+            "sizeof(int __attribute__((aligned(".repeat(depth),
+            "))))".repeat(depth)
+        );
+        with_source(&source, |context, sema| {
+            assert_eq!(
+                context.error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
+            for name in ["value", "following"] {
+                let binding = sema
+                    .bindings
+                    .iter()
+                    .find(|binding| context.string_cache.at(binding.name.name) == name)
+                    .unwrap();
+                assert_eq!(
+                    sema.types.layout(binding.ty),
+                    Some(Layout { size: 4, align: 4 })
+                );
+            }
+        });
+    }
+}
+
+#[test]
+fn alignment_constant_expressions_keep_constraint_diagnostics() {
+    with_source(
+        "[[vendor::aligned(!; arbitrary, {tokens})]] int object; int following;",
+        |context, _| {
+            assert_eq!(
+                context.error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
+        },
+    );
+    for argument in ["sizeof(char)+2", "_Alignof(int)+1", "n"] {
+        let source = format!(
+            "void f(int n) {{ int a __attribute__((aligned({argument}))); int following; }}"
+        );
+        with_source(&source, |context, sema| {
+            let errors = context.take_pending_errors();
+            assert!(errors.iter().any(|error| matches!(error, TranslationError::Semantic(error) if error.kind == SemanticErrorKind::InvalidAlignmentAttribute)), "{argument}: {errors:?}");
+            assert!(
+                sema.bindings
+                    .iter()
+                    .any(
+                        |binding| context.string_cache.at(binding.name.name) == "following"
+                            && !sema.types.unanalyzed(binding.ty)
+                    )
+            );
+        });
+    }
+    let source = format!(
+        "typedef int T; int x __attribute__((aligned({}sizeof(T)*2{}))); int following;",
+        "(".repeat(2000),
+        ")".repeat(2000)
+    );
+    with_source(&source, |context, _| {
+        assert_eq!(
+            context.error_count(),
+            0,
+            "{:?}",
+            context.take_pending_errors()
+        );
+    });
+}
+
+#[test]
 fn added_gnu_forms_obey_the_existing_extension_policy() {
     use crate::configuration::{
         CStandard,
@@ -211,4 +319,151 @@ fn floating_builtins_retain_constants_and_reject_bad_operands() {
             assert_eq!(c.constant, ConstantClass::Arithmetic);
         },
     );
+}
+
+#[test]
+fn packed_members_distinguish_typedef_and_explicit_alignment() {
+    let source = "typedef int I __attribute__((aligned(4)));
+struct __attribute__((packed)) P { char c; I n; };
+struct __attribute__((packed)) A { char c; I n __attribute__((aligned(4))); };
+struct __attribute__((packed)) B { char c; _Alignas(4) I n; };";
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default().with_target(target),
+            |context, sema| {
+                assert_eq!(
+                    context.error_count(),
+                    0,
+                    "{:?}",
+                    context.take_pending_errors()
+                );
+                for (name, mut size, mut align, mut offset) in
+                    [("P", 5, 1, 1), ("A", 8, 4, 4), ("B", 8, 4, 4)]
+                {
+                    if target == Target::WindowsMsvc && name == "P" {
+                        size = 8;
+                        align = 4;
+                        offset = 4;
+                    }
+                    let tag = sema
+                        .types
+                        .tags
+                        .iter()
+                        .find(|tag| {
+                            tag.name
+                                .is_some_and(|id| context.string_cache.at(id) == name)
+                        })
+                        .unwrap();
+                    assert_eq!(
+                        tag.layout.get(),
+                        Some(Layout { size, align }),
+                        "{target:?} {name}"
+                    );
+                    assert_eq!(tag.members.get()[1].offset, offset);
+                }
+            },
+        );
+    }
+}
+
+#[test]
+fn aggregate_value_layout_excludes_storage_alignment() {
+    with_source(
+        "struct S {long a,b,c;}; struct S x __attribute__((aligned(64)));",
+        |context, sema| {
+            assert_eq!(context.error_count(), 0);
+            let binding = sema
+                .bindings
+                .iter()
+                .find(|b| context.string_cache.at(b.name.name) == "x")
+                .unwrap();
+            assert_eq!(
+                sema.types.layout(binding.ty),
+                Some(Layout {
+                    size:  24,
+                    align: 64,
+                })
+            );
+            assert_eq!(
+                sema.types.aggregate_value_layout(binding.ty),
+                Some(Layout {
+                    size:  24,
+                    align: 8,
+                })
+            );
+            assert_eq!(sema.types.storage_alignment(binding.ty), Some(64));
+        },
+    );
+}
+
+#[test]
+fn variable_array_storage_preserves_typedef_alignment_overrides() {
+    with_source(
+        "void f(int n){typedef int Row[n] __attribute__((aligned(1))); Row a;}",
+        |context, sema| {
+            assert_eq!(context.error_count(), 0);
+            let binding = sema
+                .bindings
+                .iter()
+                .find(|b| context.string_cache.at(b.name.name) == "a")
+                .unwrap();
+            assert_eq!(sema.types.storage_alignment(binding.ty), Some(1));
+            assert_eq!(sema.types.layout(binding.ty), None);
+        },
+    );
+}
+
+#[test]
+fn natural_and_member_place_alignment_are_distinct_retained_facts() {
+    let source = "typedef int I __attribute__((aligned(1))); struct R { char c; I x; }; struct S \
+                  { int x,y; }; struct __attribute__((packed)) P { char c; struct S s; }; int \
+                  f(struct P *p) { struct S s=p->s; return s.x; }";
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default().with_target(target),
+            |context, sema| {
+                assert_eq!(context.error_count(), 0);
+                let record = sema
+                    .types
+                    .tags
+                    .iter()
+                    .find(|tag| {
+                        tag.name
+                            .is_some_and(|name| context.string_cache.at(name) == "R")
+                    })
+                    .unwrap();
+                let member = record.members.get()[1];
+                assert_eq!(sema.types.layout(member.ty).unwrap().align, 1);
+                assert_eq!(sema.types.natural_alignment(member.ty), Some(4));
+                assert_eq!(
+                    member.offset,
+                    if target == Target::LinuxGnu { 1 } else { 4 }
+                );
+                let access = sema
+                    .expressions
+                    .iter()
+                    .find(|info| {
+                        info.place_alignment() == Some(1)
+                            && sema.types.tag(info.ty).is_some_and(|tag| {
+                                tag.name
+                                    .is_some_and(|name| context.string_cache.at(name) == "S")
+                            })
+                    })
+                    .unwrap();
+                assert_eq!(
+                    sema.types.aggregate_value_layout(access.ty).unwrap().align,
+                    4
+                );
+                assert_eq!(sema.types.natural_alignment(access.ty), Some(4));
+                let converted = sema
+                    .expression_conversions(access.expression)
+                    .last()
+                    .unwrap();
+                assert_eq!(sema.types.layout(converted.ty).unwrap().align, 4);
+                assert_eq!(access.place_alignment(), Some(1));
+            },
+        );
+    }
 }

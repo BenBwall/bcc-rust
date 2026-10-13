@@ -23,7 +23,7 @@ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:
 
 function @read_a(ptr noundef) -> i32 external {
 block0(v0: ptr):
-    v1 = load.i8 v0, align 1
+    v1 = load.i8 v0, align 8
     v2 = iconst.i8 7
     v3 = and.i8 v1, v2
     v4 = zext.i32 v3
@@ -32,7 +32,7 @@ block0(v0: ptr):
 
 function @read_b(ptr noundef) -> i32 external {
 block0(v0: ptr):
-    v1 = load.i8 v0, align 1
+    v1 = load.i8 v0, align 8
     v2 = iconst.i8 3
     v3 = ashr.i8 v1, v2
     v4 = sext.i32 v3
@@ -43,7 +43,7 @@ function @read_d(ptr noundef) -> i32 external {
 block0(v0: ptr):
     v1 = iconst.i64 2
     v2 = ptr_add inbounds v0, v1
-    v3 = load.i8 v2, align 1
+    v3 = load.i8 v2, align 2
     v4 = iconst.i8 4
     v5 = ashr.i8 v3, v4
     v6 = sext.i32 v5
@@ -61,11 +61,11 @@ function @read_wide(ptr noundef) -> i64 external {
 block0(v0: ptr):
     v1 = iconst.i64 8
     v2 = ptr_add inbounds v0, v1
-    v3 = load.i32 v2, align 4
+    v3 = load.i32 v2, align 8
     v4 = zext.i64 v3
     v5 = iconst.i64 4
     v6 = ptr_add inbounds v2, v5
-    v7 = load.i8 v6, align 1
+    v7 = load.i8 v6, align 4
     v8 = zext.i64 v7
     v9 = iconst.i64 32
     v10 = shl.i64 v8, v9
@@ -82,24 +82,24 @@ block0(v0: ptr, v1: i32):
     v2 = trunc.i8 v1
     v3 = iconst.i8 7
     v4 = and.i8 v2, v3
-    v5 = load.i8 v0, align 1
+    v5 = load.i8 v0, align 8
     v6 = freeze.i8 v5
     v7 = iconst.i8 -8
     v8 = and.i8 v6, v7
     v9 = or.i8 v8, v4
-    store.i8 v9, v0, align 1
+    store.i8 v9, v0, align 8
     v10 = zext.i32 v4
     v11 = trunc.i8 v1
     v12 = iconst.i8 31
     v13 = and.i8 v11, v12
     v14 = iconst.i8 3
     v15 = shl.i8 v13, v14
-    v16 = load.i8 v0, align 1
+    v16 = load.i8 v0, align 8
     v17 = freeze.i8 v16
     v18 = iconst.i8 7
     v19 = and.i8 v17, v18
     v20 = or.i8 v19, v15
-    store.i8 v20, v0, align 1
+    store.i8 v20, v0, align 8
     v21 = iconst.i8 3
     v22 = shl.i8 v13, v21
     v23 = iconst.i8 3
@@ -124,13 +124,13 @@ block0(v0: ptr, v1: i32):
     v41 = iconst.i64 1099511627775
     v42 = and.i64 v40, v41
     v43 = trunc.i32 v42
-    store.i32 v43, v39, align 4
+    store.i32 v43, v39, align 8
     v44 = iconst.i64 32
     v45 = lshr.i64 v42, v44
     v46 = trunc.i8 v45
     v47 = iconst.i64 4
     v48 = ptr_add inbounds v39, v47
-    store.i8 v46, v48, align 1
+    store.i8 v46, v48, align 4
     v49 = iconst.i64 24
     v50 = shl.i64 v42, v49
     v51 = iconst.i64 24
@@ -141,12 +141,12 @@ block0(v0: ptr, v1: i32):
     v56 = and.i8 v54, v55
     v57 = iconst.i8 3
     v58 = shl.i8 v56, v57
-    v59 = load.i8 v0, align 1
+    v59 = load.i8 v0, align 8
     v60 = freeze.i8 v59
     v61 = iconst.i8 7
     v62 = and.i8 v60, v61
     v63 = or.i8 v62, v58
-    store.i8 v63, v0, align 1
+    store.i8 v63, v0, align 8
     v64 = iconst.i8 3
     v65 = shl.i8 v56, v64
     v66 = iconst.i8 3

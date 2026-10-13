@@ -4,7 +4,7 @@
 //! each conversion becomes an instruction, each lvalue a load or an SSA
 //! read, each control structure blocks and branches.
 //!
-//! [`lower_translation_unit`] refuses a unit with errors, declares every
+//! [`lower_with_sources`] refuses a unit with errors, declares every
 //! defined function and file-scope object, and then lowers one function at a
 //! time with [`FunctionLowerer::run`]. That loop pops [`Task`]s from an
 //! explicit work stack, never recursing over syntax: a statement pushes its
@@ -25,7 +25,7 @@
 //! emits `iadd.i32 nsw` because signed overflow is undefined. The `return`
 //! applies the conversion to the result type and ends the block.
 //!
-//! Read [`lower_translation_unit`], [`FunctionLowerer::run`] and
+//! Read [`lower_with_sources`], [`FunctionLowerer::run`] and
 //! [`FunctionLowerer::step`], then `work.rs` for the task vocabulary,
 //! `ssa.rs` for the function under construction and `emit.rs` for how it
 //! becomes IR.
@@ -38,9 +38,11 @@
 //! - Function bodies: `work.rs` defines tasks and operands; `statements.rs`
 //!   lowers statements and declarations; `expressions.rs` operators, calls and
 //!   conversions, including the floating ones; `places.rs` lvalues, loads and
-//!   stores; `bit_fields.rs` bit-field reads and writes; `initializers.rs`
-//!   walks braced initializers; `vla.rs` evaluates saved array extents and
-//!   restores dynamic stack storage when declaration lifetimes end.
+//!   stores; `alignment.rs` owns backing-place guarantees and all memory and
+//!   allocation alignment; `bit_fields.rs` bit-field reads and writes;
+//!   `initializers.rs` walks braced initializers; `vla.rs` evaluates saved
+//!   array extents and restores dynamic stack storage when declaration
+//!   lifetimes end.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
 //!   to IR types; `floats.rs` turns folded floating constants into IR bits.
@@ -58,6 +60,7 @@ mod extensions;
 mod module_items;
 
 // Function bodies
+mod alignment;
 mod bit_fields;
 mod builtin_effects;
 mod builtins;
@@ -111,23 +114,24 @@ use crate::{
     target::Target,
     translation_phases::{
         Context,
+        SourceVectors,
         parsing::{
             ParsedTranslationUnit,
             syntax::ExpressionType,
         },
         semantic_analysis::{
             FunctionRecord,
+            LabelId,
+            RegionId,
             SemanticTranslationUnit,
+            StatementId,
             TypeId,
         },
     },
-    util::{
-        bump::{
-            ArenaMap,
-            ArenaVec,
-            Bump,
-        },
-        string_cache::StringCacheId,
+    util::bump::{
+        ArenaMap,
+        ArenaVec,
+        Bump,
     },
 };
 
@@ -137,14 +141,14 @@ use crate::{
 /// refused; any construct outside the supported subset is reported with its
 /// provenance, after every function has been attempted.
 /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
-pub(crate) fn lower_translation_unit<'tu, 'ir>(
+pub(crate) fn lower_with_sources<'tu, 'ir>(
     context: &Context<'tu>,
     syntax: &ParsedTranslationUnit<'tu>,
     sema: &SemanticTranslationUnit<'tu>,
     target: Target,
     arena: &'ir Bump,
     scratch: &mut Bump,
-) -> Result<Module<'ir>, LoweringErrors<'ir>> {
+) -> Result<LoweredUnit<'ir>, LoweringErrors<'ir>> {
     let mut errors = ArenaVec::new_in(arena);
     if !sema.lowerable(context) {
         errors.push(LoweringError {
@@ -159,22 +163,56 @@ pub(crate) fn lower_translation_unit<'tu, 'ir>(
     let mut unit = Unit::new(context, sema, target, arena, &tables);
     unit.prepare_extensions(&mut errors);
     let functions = unit.declare_items(syntax, &mut errors);
+    let mut function_sources = ArenaVec::new_in(arena);
     for record in functions {
         scratch.reset();
         let Some(func) = record.1 else {
             continue;
         };
+        // Record the binding-to-emitted-symbol association at its owner,
+        // including assembler aliases. ABI diagnostics need no syntax walk
+        // or spelling-based reconstruction. C99 §5.1.1.3p1, p. 11; PDF p. 23.
+        if let Some(binding) = record.0.binding {
+            function_sources.push((
+                unit.module.function(func).name,
+                sema.bindings[binding].name.source_vectors,
+            ));
+        }
         if let Err(error) = FunctionLowerer::lower(&mut unit, record.0, func, scratch) {
             errors.push(error);
         }
     }
     if errors.is_empty() {
-        Ok(unit.into_module())
+        Ok(LoweredUnit {
+            module:           unit.into_module(),
+            function_sources: arena.alloc_slice_copy(&function_sources),
+        })
     } else {
         Err(LoweringErrors {
             errors: arena.alloc_slice_copy(&errors),
         })
     }
+}
+
+/// IR and the source owners recorded while its function definitions are
+/// projected from semantic bindings. Raw textual IR remains source-free.
+/// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+pub(crate) struct LoweredUnit<'ir> {
+    pub(crate) module:           Module<'ir>,
+    pub(crate) function_sources: &'ir [(&'ir str, SourceVectors)],
+}
+
+/// Test adapter for the pre-ABI module seam.
+#[cfg(test)]
+pub(crate) fn lower_translation_unit<'tu, 'ir>(
+    context: &Context<'tu>,
+    syntax: &ParsedTranslationUnit<'tu>,
+    sema: &SemanticTranslationUnit<'tu>,
+    target: Target,
+    arena: &'ir Bump,
+    scratch: &mut Bump,
+) -> Result<Module<'ir>, LoweringErrors<'ir>> {
+    lower_with_sources(context, syntax, sema, target, arena, scratch).map(|unit| unit.module)
 }
 
 impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
@@ -218,10 +256,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             | Task::StatementValue(statement) => self.statement(statement, StatementMode::Value),
             | Task::StatementEffects(statement) =>
                 self.statement(statement, StatementMode::Effects),
-            | Task::Declaration(declaration) => {
-                self.declaration(declaration);
-                Ok(())
-            },
+            | Task::Declaration(declaration) => self.declaration(declaration),
             | Task::DeclareBinding(binding, initializer, source) =>
                 self.declare_binding(binding, initializer, source),
             | Task::FinishBound(index) => self.finish_bound(index),
@@ -232,10 +267,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.push_item(Operand::Value(size), result);
                 Ok(())
             },
-            | Task::ExitScope => {
-                self.exit_scope();
-                Ok(())
-            },
+            | Task::CleanupNormal(statement) => self.cleanup_normal(statement),
             | Task::Enter { block, seal } => {
                 if seal {
                     self.draft.seal(block);
@@ -254,24 +286,8 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.draft.seal(block);
                 Ok(())
             },
-            | Task::PushTargets(targets) => {
-                self.remember_target(targets.break_to);
-                if let Some(target) = targets.continue_to {
-                    self.remember_target(target);
-                }
-                self.jumps.push(targets);
-                Ok(())
-            },
-            | Task::PopTargets => {
-                _ = self.jumps.pop();
-                Ok(())
-            },
-            | Task::Return => self.return_value(),
-            | Task::Switch {
-                statement,
-                body,
-                exit,
-            } => self.switch(statement, body, exit),
+            | Task::Return(statement) => self.return_value(statement),
+            | Task::Switch { statement, exit } => self.switch(statement, exit),
             | Task::EndSwitch { statement, exit } => {
                 self.end_switch(statement, exit);
                 Ok(())
@@ -388,18 +404,16 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     name:               &'a str,
     draft:              Draft<'s>,
     scratch:            &'s Bump,
-    /// Cached type-operand effects, reused across short-circuit scheduling.
-    effect_summaries:   crate::translation_phases::semantic_analysis::EffectSummaries<'s>,
     tasks:              ArenaVec<'s, Task<'tu>>,
     operands:           ArenaVec<'s, Item>,
     initializer_values: ArenaVec<'s, Item>,
+    /// The guaranteed alignment of each known backing address.
+    alignments:         ArenaMap<'s, crate::ir::Value, crate::ir::Align>,
     /// The storage of each automatic object, by binding.
     locals:             ArenaMap<'s, usize, Local>,
     /// The block of each label, created at its first `goto` or definition.
-    labels:             ArenaMap<'s, StringCacheId, Block>,
-    /// The block of each `case` or `default` statement, by its address.
-    cases:              ArenaMap<'s, usize, Block>,
-    jumps:              ArenaVec<'s, JumpTargets>,
+    labels:             ArenaMap<'s, LabelId, Block>,
+    targets:            ArenaMap<'s, StatementId, JumpTargets>,
     /// The case blocks of the open switches, sealed when each ends.
     switch_blocks:      ArenaVec<'s, Block>,
     /// Where each open switch's blocks start in `switch_blocks`.
@@ -407,10 +421,7 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     /// The unqualified result type that `return` converts to.
     result:             TypeId,
     bounds:             ArenaMap<'s, usize, ssa::Var>,
-    scopes:             ArenaVec<'s, vla::Scope>,
-    label_scopes:       ArenaMap<'s, StringCacheId, usize>,
-    block_scopes:       ArenaMap<'s, Block, usize>,
-    scope_parents:      ArenaMap<'s, usize, usize>,
+    vla_tokens:         ArenaMap<'s, RegionId, ssa::Var>,
 }
 
 // Tests

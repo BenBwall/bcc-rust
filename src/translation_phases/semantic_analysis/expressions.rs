@@ -32,7 +32,10 @@ mod results;
 // Constant addresses
 mod address;
 
-use std::num::NonZeroU32;
+use std::num::{
+    NonZeroU8,
+    NonZeroU32,
+};
 
 pub(crate) use address::AddressBase;
 pub(crate) use results::{
@@ -81,6 +84,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.5.1-§6.5.17, pp. 69-94; PDF pp. 81-106.
     pub(super) fn expression_done(&mut self, e: &'tu Expression<'tu>) {
         use ExpressionType as E;
+        self.retain_expression_actions(e);
         let mut info = Self::expression_result(e, self.types.unknown());
         match e.kind {
             | E::Identifier(name) => {
@@ -275,6 +279,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .copied()
                     .unwrap_or_else(|| self.types.unknown());
                 info = self.type_sizeof(e, ty, None, matches!(e.kind, E::AlignofType(_)));
+                if matches!(e.kind, E::SizeofType(_))
+                    && let Some(site) = self.type_name_sites.get(&std::ptr::from_ref(name).addr())
+                {
+                    // C99 6.5.3.4p2: constant sizeof does not execute its
+                    // type operand, even when a pointer is VM through its
+                    // pointee. The declaration/cast site still retains
+                    // typeof's operand evaluation independently.
+                    _ = self.size_query_sites.insert(
+                        std::ptr::from_ref(e).addr(),
+                        super::BoundSiteFacts {
+                            bounds: if info.ice { &[] } else { site.bounds },
+                            ty,
+                            operand_evaluations: if info.ice {
+                                &[]
+                            } else {
+                                site.operand_evaluations
+                            },
+                        },
+                    );
+                }
             },
             | E::SizeofExpr(operand) | E::AlignofExpr(operand) => {
                 let operand = self.expression_info(operand);
@@ -498,6 +522,11 @@ pub(crate) struct ExpressionInfo<'tu> {
     pub(crate) ty: TypeId,
     /// Arithmetic type before the final compound-assignment conversion.
     pub(crate) operation_type: Option<TypeId>,
+    /// Alignment guaranteed by the containing place and resolved member offset.
+    /// It survives independently of contextual destination-type conversions.
+    /// C99: §6.7.2.1p12, p. 103; PDF p. 115; GNU packed extension.
+    /// Stored as log2(bytes) + 1, so the optional fact uses one byte.
+    pub(in crate::translation_phases::semantic_analysis) place_alignment: Option<NonZeroU8>,
     pub(crate) category: ValueCategory,
     pub(crate) binding: Option<usize>,
     pub(crate) bit_field: Option<u32>,

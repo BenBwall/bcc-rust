@@ -334,6 +334,13 @@ impl ParsedTranslationUnit<'_> {
                             options,
                         );
                     }
+                    for argument in attributes.arguments.iter().rev() {
+                        work.push(Work::Expression(
+                            argument.expression,
+                            indent + 1,
+                            "alignment",
+                        ));
+                    }
                 },
                 | Work::Assertion(assertion, indent) => {
                     Self::line(

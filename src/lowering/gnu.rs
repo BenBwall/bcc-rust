@@ -105,7 +105,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         statement: &'tu Statement<'tu>,
         ty: TypeId,
         mode: StatementMode,
-    ) {
+    ) -> Result<(), LoweringError> {
         let StatementType::Compound { items } = statement.kind else {
             self.tasks.push(Task::Statement(statement));
             if mode == StatementMode::Value {
@@ -114,12 +114,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     ty,
                 });
             }
-            return;
+            return Ok(());
         };
-        self.enter_scope(statement);
+        let facts = self.unit.sema.control.statement(statement).ok_or_else(|| {
+            LoweringError::missing(
+                "statement-expression control facts are not retained",
+                statement.source_vectors,
+            )
+        })?;
+        self.tasks.push(Task::CleanupNormal(statement));
         let tail =
             crate::translation_phases::semantic_analysis::statement_expression_tail(statement);
-        if let Some((tail, _)) = tail {
+        if let Some((tail, expression)) = tail {
+            if mode == StatementMode::Value && self.transition_has_cleanup(facts.exit) {
+                self.tasks.push(Task::SnapshotArgument(expression));
+            }
             self.tasks.push(if mode == StatementMode::Effects {
                 Task::StatementEffects(tail)
             } else {
@@ -150,5 +159,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 },
             }
         }
+        Ok(())
     }
 }

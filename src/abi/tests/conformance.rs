@@ -11,6 +11,7 @@
 //! test print why and pass.
 
 mod aggregate_varargs;
+mod layout_alignment;
 mod noundef;
 mod poison_returns;
 mod wide_float_varargs;

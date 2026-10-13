@@ -624,7 +624,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     ),
                 )
                 | ExpressionType::Countof(_)
-                | ExpressionType::StatementExpression(_)
                 | ExpressionType::Nullptr => return true,
                 | ExpressionType::Builtin(b) if !super::builtins::modeled(b.keyword) =>
                     return true,

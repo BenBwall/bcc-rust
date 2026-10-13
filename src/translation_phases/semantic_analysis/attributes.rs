@@ -1,5 +1,6 @@
 //! Phase-7 GNU representation attributes. Attribute names are read only at
-//! list depth; arguments use the arena-backed iterative integer reducer.
+//! list depth; alignment operands use the semantic constant evaluator after
+//! their expression syntax has been visited by the explicit work stack.
 //! C99: §6.7, p. 97; PDF p. 109; §6.7.2.1p10, p. 102; PDF p. 114.
 //! GNU extension: <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html>.
 
@@ -35,7 +36,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         while let Some(declarator) = work.pop() {
             for direct in declarator.kind {
                 match direct {
-                    | DirectDeclarator::Attributes(a) if self.layout_attributes(a).packed =>
+                    | DirectDeclarator::Attributes(a)
+                        if super::vectors::attribute_names(a, self.context)
+                            .any(|(_, name)| name == "packed") =>
                         return true,
                     | DirectDeclarator::Parenthesized(p) => work.push(p.declarator),
                     | _ => {},
@@ -43,6 +46,128 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         false
+    }
+
+    /// Alignment written on this member, separate from its typedef's type
+    /// alignment. Operands have already been checked during type construction;
+    /// this retention step must not issue their diagnostics a second time.
+    /// GCC Common Variable Attributes, packed; C11: §6.7.5p2-6,
+    /// p. 127; PDF p. 145 (explicit _Alignas).
+    pub(super) fn explicit_member_alignment(
+        &self,
+        extensions: Option<&'tu SpecifierExtension<'tu>>,
+        attributes: Option<&'tu SpecifierExtension<'tu>>,
+        declarator: Option<Declarator<'tu>>,
+    ) -> u32 {
+        let mut alignment = self
+            .written_alignment(extensions)
+            .max(self.written_alignment(attributes));
+        let mut work = ArenaVec::new_in(self.scratch);
+        if let Some(declarator) = declarator {
+            work.push(declarator);
+        }
+        while let Some(declarator) = work.pop() {
+            for direct in declarator.kind {
+                match direct {
+                    | DirectDeclarator::Attributes(a) =>
+                        alignment = alignment.max(self.written_attribute_alignment(a)),
+                    | DirectDeclarator::Parenthesized(p) => work.push(p.declarator),
+                    | _ => {},
+                }
+            }
+        }
+        alignment
+    }
+
+    fn written_alignment(&self, mut chain: Option<&'tu SpecifierExtension<'tu>>) -> u32 {
+        let mut alignment = 0;
+        while let Some(item) = chain {
+            let requested = match item.kind {
+                | SpecifierExtensionKind::Attributes(a) => self.written_attribute_alignment(a),
+                | SpecifierExtensionKind::Alignment(operand) => {
+                    let value = match operand {
+                        | super::SyntaxOperand::Expression(e) => self
+                            .expression_info(e)
+                            .integer
+                            .and_then(super::Integer::to_u64),
+                        | super::SyntaxOperand::Type(_) =>
+                            self.types.alignment(self.operand_type(operand)),
+                    };
+                    value
+                        .and_then(|value| u32::try_from(value).ok())
+                        .unwrap_or(0)
+                },
+                | _ => 0,
+            };
+            alignment = alignment.max(requested);
+            chain = item.next;
+        }
+        alignment
+    }
+
+    fn written_attribute_alignment(&self, a: &AttributeSpecifier<'tu>) -> u32 {
+        super::vectors::attribute_names(a, self.context)
+            .filter(|(_, name)| *name == "aligned")
+            .filter_map(|(index, _)| self.requested_attribute_alignment(a, index))
+            .filter_map(|value| u32::try_from(value).ok())
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn requested_attribute_alignment(
+        &self,
+        a: &AttributeSpecifier<'tu>,
+        index: usize,
+    ) -> Option<u64> {
+        if a.tokens
+            .get(index + 1)
+            .is_some_and(|token| self.context.string_cache.at(token.contents) == "(")
+        {
+            self.attribute_alignment(a, index)
+        } else {
+            Some(16)
+        }
+    }
+
+    /// Schedule parsed alignment operands before consuming representation
+    /// facts. C99: §6.6p6, p. 95; PDF p. 107 (GNU ICE operand extension).
+    pub(super) fn attribute_operands(&mut self, attribute: &AttributeSpecifier<'tu>) {
+        for argument in attribute.arguments.iter().rev() {
+            self.work.push(super::Work::Expression(argument.expression));
+        }
+    }
+
+    /// Attribute chains share the ordinary iterative expression/type-name
+    /// traversal, including sizeof, alignof, enum constants and arithmetic.
+    pub(super) fn attribute_chain_operands(
+        &mut self,
+        mut chain: Option<&'tu SpecifierExtension<'tu>>,
+    ) {
+        while let Some(item) = chain {
+            if let SpecifierExtensionKind::Attributes(attribute) = item.kind {
+                self.attribute_operands(attribute);
+            }
+            chain = item.next;
+        }
+    }
+
+    /// GNU aligned requires an integer constant expression; the caller also
+    /// checks the positive power-of-two and target-representability rules.
+    /// C99: §6.6p6, p. 95; PDF p. 107.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html> (aligned).
+    pub(super) fn attribute_alignment(
+        &self,
+        attribute: &AttributeSpecifier<'tu>,
+        index: usize,
+    ) -> Option<u64> {
+        let argument = attribute
+            .arguments
+            .iter()
+            .find(|argument| argument.index == index)?;
+        let info = self.expression_info(argument.expression);
+        info.integer
+            .filter(|_| info.ice)
+            .and_then(super::Integer::to_u64)
     }
 
     /// GCC packed is member/record layout; aligned is a power-of-two byte
@@ -54,15 +179,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if name == "packed" {
                 result.packed = true;
             } else if name == "aligned" {
-                let tokens = a.tokens.as_slice();
-                let argument = tokens
-                    .get(index + 1)
-                    .is_some_and(|token| self.context.string_cache.at(token.contents) == "(");
-                let value = if argument {
-                    self.vector_attribute_integer(&tokens[index + 2..])
-                } else {
-                    Some(16)
-                };
+                let value = self.requested_attribute_alignment(a, index);
                 if let Some(value) =
                     value.filter(|value| value.is_power_of_two() && *value <= 1 << 31)
                 {
@@ -110,7 +227,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if name != "mode" {
                 continue;
             }
-            let mode = a.tokens.as_slice().get(index + 2).map(|token| {
+            let mode = a.tokens.get(index + 2).map(|token| {
                 self.context
                     .string_cache
                     .at(token.contents)
@@ -227,9 +344,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// the natural requirement. Operands were typed by the explicit work stack.
     pub(super) fn standard_alignment(
         &mut self,
-        mut ty: TypeId,
+        ty: TypeId,
         mut chain: Option<&'tu SpecifierExtension<'tu>>,
     ) -> TypeId {
+        // C11 §6.7.5p4,p6: compare the combined request with the original
+        // requirement, not with the alignment strengthened by an earlier
+        // specifier. The effective request is independent of source order.
+        // Array alignment depends on the element type even when a VLA has
+        // no compile-time size; typedefs retain that same requirement.
+        let natural = self.types.alignment(ty);
+        let mut requested = 0;
+        let mut source = None;
         while let Some(item) = chain {
             if let SpecifierExtensionKind::Alignment(operand) = item.kind {
                 if matches!(self.types.nodes[ty.index], TypeKind::Function { .. }) {
@@ -248,21 +373,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .integer
                         .filter(|_| self.expression_info(expression).ice)
                         .and_then(super::Integer::to_u64),
-                    | super::SyntaxOperand::Type(_) => self
-                        .types
-                        .layout(self.operand_type(operand))
-                        .map(|layout| layout.align),
+                    | super::SyntaxOperand::Type(_) =>
+                        self.types.alignment(self.operand_type(operand)),
                 };
                 if value != Some(0) {
-                    if let Some(value) = value.filter(|value| {
-                        value.is_power_of_two()
-                            && *value <= 1 << 31
-                            && self
-                                .types
-                                .layout(ty)
-                                .is_none_or(|layout| *value >= layout.align)
-                    }) {
-                        ty = ty.with_alignment(ty.alignment.max(u32::try_from(value).unwrap_or(0)));
+                    if let Some(value) =
+                        value.filter(|value| value.is_power_of_two() && *value <= 1 << 31)
+                    {
+                        requested = requested.max(u32::try_from(value).unwrap_or(0));
+                        source = Some(item.source_vectors);
                     } else {
                         self.error(
                             SemanticErrorKind::InvalidStandardAlignment,
@@ -275,7 +394,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             chain = item.next;
         }
-        ty
+        if requested != 0 && natural.is_some_and(|natural| u64::from(requested) < natural) {
+            self.error(
+                SemanticErrorKind::InvalidStandardAlignment,
+                source.unwrap_or_default(),
+                None,
+                None,
+            );
+            ty
+        } else {
+            ty.with_alignment(ty.alignment.max(requested))
+        }
     }
 
     /// C11 §6.7.5p2, p. 127; PDF p. 145: alignment is an object

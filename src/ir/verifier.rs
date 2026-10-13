@@ -509,6 +509,10 @@ impl Verifier<'_, '_, '_, '_> {
                 };
                 checker.operands(&args, &operands);
             },
+            | InstData::DynAlloca { ty, size, .. } => {
+                checker.require(ty == Type::I64, ty);
+                checker.operand(0, size, Type::I64);
+            },
             | InstData::VaArgAggregate { sig, list } => {
                 checker.operand(0, list, Type::Ptr);
                 if let Some(signature) = checker.verifier.module.get_signature(sig) {
@@ -538,10 +542,6 @@ impl Verifier<'_, '_, '_, '_> {
                         ty,
                     );
                     checker.operand(0, arg, ty);
-                },
-                | Opcode::DynAlloca => {
-                    checker.require(ty == Type::I64, ty);
-                    checker.operand(0, arg, Type::I64);
                 },
                 | Opcode::Fneg => {
                     checker.require(ty.is_float(), ty);

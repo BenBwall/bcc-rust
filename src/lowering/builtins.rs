@@ -27,7 +27,6 @@ use crate::{
         InstData,
         InstFlags,
         IntCC,
-        MemFlags,
         Opcode,
         Type,
         Value,
@@ -306,14 +305,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | CommonBuiltin::Alloca => {
                 let size = self.value(items[0], source)?;
                 let size = self.extend(size, false, Type::I64);
-                Operand::Value(self.inst(
-                    InstData::Unary {
-                        opcode: Opcode::DynAlloca,
-                        ty:     Type::I64,
-                        arg:    size,
-                    },
-                    Type::Ptr,
-                ))
+                Operand::Value(self.dynamic_object(size, None))
             },
             | CommonBuiltin::Bswap(_) => {
                 let arg = self.value(items[0], source)?;
@@ -372,27 +364,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     self.overflow(op, items[0], items[1], destination, width, source)?;
                 if !predicate {
                     let address = self.value(items[2], source)?;
-                    let layout = types::layout(&self.unit.sema.types, destination)
-                        .map_err(|kind| super::module_items::at(kind, source))?;
-                    let volatile=destination.qualifiers.contains(crate::translation_phases::parsing::declaration_syntax::TypeQualifiers::VOLATILE);
-                    let mem = MemFlags {
-                        volatile,
-                        ..MemFlags::aligned(types::align(layout))
-                    };
-                    _ = self.draft.push(
-                        Op::Inst(InstData::Store {
-                            ty:    self.draft.value_type(result),
-                            flags: if mem.volatile {
-                                InstFlags::VOLATILE
-                            } else {
-                                InstFlags::empty()
-                            },
-                            align: mem.align,
-                            tag:   None,
-                            args:  [result, address],
-                        }),
-                        None,
-                    );
+                    self.store(result, address, destination, source)?;
                 }
                 Operand::Value(self.extend(overflow, false, Type::I8))
             },

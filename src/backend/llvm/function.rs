@@ -332,6 +332,11 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     },
                 }
             },
+            | InstData::DynAlloca { size, align, .. } => {
+                let value = api.array_alloca(api.ty(Type::I8), self.value(size)?);
+                api.alignment(value, align.bytes());
+                value
+            },
             | InstData::Unary { ty, arg, .. } => {
                 let arg = self.value(arg)?;
                 match opcode {
@@ -355,11 +360,6 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     },
                     | Opcode::Popcount => self.intrinsic("llvm.ctpop", &[arg], &[api.ty(ty)]),
                     | Opcode::Bswap => self.intrinsic("llvm.bswap", &[arg], &[api.ty(ty)]),
-                    | Opcode::DynAlloca => {
-                        let value = api.array_alloca(api.ty(Type::I8), arg);
-                        api.alignment(value, 16);
-                        value
-                    },
                     | Opcode::StackRestore =>
                         self.intrinsic("llvm.stackrestore", &[arg], &[api.ty(Type::Ptr)]),
                     | Opcode::Fneg => api.fneg(arg),
