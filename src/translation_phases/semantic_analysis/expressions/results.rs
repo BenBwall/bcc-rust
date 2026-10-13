@@ -6,9 +6,61 @@
 
 use super::ExpressionInfo;
 use crate::translation_phases::{
-    parsing::syntax::Expression,
+    parsing::syntax::{
+        Expression,
+        ExpressionSlot,
+        ExpressionType,
+        Statement,
+        StatementType,
+        UnaryOperator,
+    },
     semantic_analysis::types::TypeId,
 };
+
+/// Follows designation-preserving syntax and retained compile-time selections.
+/// Each step visits a strict child, without recursive syntax traversal.
+/// C99: §6.5.1p5, p. 69; PDF p. 81 (parentheses).
+/// C11: §6.5.1.1p4, p. 79; PDF p. 97 (generic selection).
+/// GNU extension: GCC "Other Builtins", `__builtin_choose_expr`.
+/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+pub(crate) fn selected_designator<'tu>(
+    mut expression: &'tu Expression<'tu>,
+    info: impl Fn(&'tu Expression<'tu>) -> Option<ExpressionInfo<'tu>>,
+) -> &'tu Expression<'tu> {
+    loop {
+        expression = match expression.kind {
+            | ExpressionType::Parenthesized { expression } => expression,
+            | ExpressionType::Unary {
+                operator: UnaryOperator::Extension,
+                operand_expression,
+            } => operand_expression,
+            | _ => match info(expression).and_then(|i| i.selected_expression) {
+                | Some(selected) => selected,
+                | None => return expression,
+            },
+        };
+    }
+}
+
+/// Labels do not change a GNU statement expression's final value statement.
+/// C99: §6.8.1p4, p. 132; PDF p. 144 (labels preserve control flow).
+/// GNU extension: GCC "Statement Exprs".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+pub(crate) fn statement_expression_tail<'tu>(
+    mut statement: &'tu Statement<'tu>,
+) -> Option<&'tu Expression<'tu>> {
+    loop {
+        statement = match statement.kind {
+            | StatementType::Label(_, inner)
+            | StatementType::Case(_, inner)
+            | StatementType::Default(inner) => inner,
+            | StatementType::CaseRange(range) => range.statement,
+            | StatementType::Attributed(attributed) => attributed.statement,
+            | StatementType::Expression(ExpressionSlot::Parsed(e)) => return Some(e),
+            | _ => return None,
+        };
+    }
+}
 
 /// One contextual conversion and its resulting type.
 /// C99: §6.3.2.1 paragraphs 2-4, p. 46; PDF p. 58.

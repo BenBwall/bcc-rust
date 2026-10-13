@@ -189,20 +189,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match builtin {
             | CommonBuiltin::Bit(_, scalar) => {
                 let ty = self.types.scalar(scalar);
-                self.common_argument(args[0], ty);
+                _ = self.common_argument(args[0], ty);
             },
             | CommonBuiltin::Bswap(bits) => {
                 let scalar = self.bswap_scalar(bits);
                 let ty = self.types.scalar(scalar);
-                self.common_argument(args[0], ty);
+                _ = self.common_argument(args[0], ty);
             },
             | CommonBuiltin::Expect(probability) => {
                 let ty = self.types.scalar(Scalar::Long);
-                self.common_argument(args[0], ty);
-                self.common_argument(args[1], ty);
+                _ = self.common_argument(args[0], ty);
+                _ = self.common_argument(args[1], ty);
                 if probability {
                     let ty = self.types.scalar(Scalar::Double);
-                    self.common_argument(args[2], ty);
+                    let compatible = self.common_argument(args[2], ty);
                     let p = self.expression_info(args[2]);
                     // GCC's probability parameter is double; check its
                     // converted value, including rounding
@@ -211,22 +211,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let value = self
                         .floating_value(p)
                         .and_then(|value| self.round_floating(value, ty));
-                    if p.constant != ConstantClass::Arithmetic
-                        || value.is_none_or(|v| {
-                            !matches!(
-                                v.real.compare(crate::float_parsing::LongDouble::ZERO),
-                                0 | 1
-                            ) || !matches!(
-                                v.real
-                                    .compare(crate::float_parsing::LongDouble::from_double(1.0)),
-                                -1 | 0
-                            )
-                        })
+                    if compatible
+                        && (p.constant != ConstantClass::Arithmetic
+                            || value.is_none_or(|v| {
+                                !matches!(
+                                    v.real.compare(crate::float_parsing::LongDouble::ZERO),
+                                    0 | 1
+                                ) || !matches!(
+                                    v.real
+                                        .compare(crate::float_parsing::LongDouble::from_double(
+                                            1.0
+                                        )),
+                                    -1 | 0
+                                )
+                            }))
                     {
                         self.error(
-                            SemanticErrorKind::InvalidArgumentType,
+                            SemanticErrorKind::InvalidBuiltinProbability,
                             args[2].source_vectors,
-                            None,
+                            Some(name.name),
                             None,
                         );
                     }
@@ -246,17 +249,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .scalar(Scalar::Void)
                     .qualified(TypeQualifiers::CONST);
                 let ptr = self.types.intern(TypeKind::Pointer(void));
-                self.common_argument(args[0], ptr);
+                _ = self.common_argument(args[0], ptr);
                 let int = self.types.scalar(Scalar::Int);
-                self.common_argument(args[1], int);
+                let compatible = self.common_argument(args[1], int);
                 let value = self
                     .common_integer_constant(args[1], int)
                     .and_then(Integer::to_u64);
-                if value.is_none_or(|v| v > 3) {
+                if compatible && value.is_none_or(|v| v > 3) {
                     self.error(
-                        SemanticErrorKind::InvalidArgumentType,
+                        SemanticErrorKind::InvalidObjectSizeMode,
                         args[1].source_vectors,
-                        None,
+                        Some(name.name),
                         None,
                     );
                 }
@@ -276,7 +279,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .scalar(Scalar::Void)
                     .qualified(TypeQualifiers::CONST);
                 let ptr = self.types.intern(TypeKind::Pointer(void));
-                self.common_argument(args[0], ptr);
+                _ = self.common_argument(args[0], ptr);
                 for (i, &arg) in args.iter().enumerate().skip(1) {
                     let scalar = if builtin == CommonBuiltin::Aligned {
                         self.types.target.size_t
@@ -284,7 +287,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         Scalar::Int
                     };
                     let ty = self.types.scalar(scalar);
-                    self.common_argument(arg, ty);
+                    let compatible = self.common_argument(arg, ty);
                     let operand = self.expression_info(arg);
                     let value = if builtin == CommonBuiltin::Aligned {
                         self.common_integer_constant(arg, ty)
@@ -300,15 +303,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     } else {
                         value.is_some_and(|v| v <= if i == 1 { 1 } else { 3 })
                     };
-                    if !valid {
+                    if compatible && !valid {
                         self.error(
-                            if builtin == CommonBuiltin::Prefetch {
-                                SemanticErrorKind::InvalidImmediate
+                            if builtin == CommonBuiltin::Aligned {
+                                SemanticErrorKind::InvalidBuiltinAlignment
+                            } else if i == 1 {
+                                SemanticErrorKind::InvalidPrefetchReadWrite
                             } else {
-                                SemanticErrorKind::InvalidArgumentType
+                                SemanticErrorKind::InvalidPrefetchLocality
                             },
                             arg.source_vectors,
-                            None,
+                            Some(name.name),
                             None,
                         );
                     }
@@ -316,13 +321,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | CommonBuiltin::Alloca => {
                 let ty = self.types.scalar(self.types.target.size_t);
-                self.common_argument(args[0], ty);
+                _ = self.common_argument(args[0], ty);
             },
             | CommonBuiltin::Overflow(operation, scalar, predicate) => {
                 for &arg in &args[..2] {
                     if let Some(scalar) = scalar {
                         let ty = self.types.scalar(scalar);
-                        self.common_argument(arg, ty);
+                        _ = self.common_argument(arg, ty);
                     } else {
                         let operand = self.expression_info(arg);
                         let ty = self.converted(operand);
@@ -402,9 +407,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    fn common_argument(&mut self, e: &'tu Expression<'tu>, ty: TypeId) {
+    /// Reports incompatible types before checking dependent value constraints.
+    /// C99: §6.5.2.2p2,p7, pp. 71-72; PDF pp. 83-84.
+    fn common_argument(&mut self, e: &'tu Expression<'tu>, ty: TypeId) -> bool {
         let info = self.expression_info(e);
-        if !self.types.unanalyzed(info.ty) && !self.assignment_compatible(ty, info) {
+        let compatible = !self.types.unanalyzed(info.ty) && self.assignment_compatible(ty, info);
+        if !self.types.unanalyzed(info.ty) && !compatible {
             self.error(
                 SemanticErrorKind::InvalidArgumentType,
                 e.source_vectors,
@@ -414,6 +422,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         _ = self.converted(info);
         self.convert(e, ty, ConversionKind::Assignment);
+        compatible
     }
 
     /// Checks fixed-parameter immediates after the target's integer conversion.

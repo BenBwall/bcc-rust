@@ -101,20 +101,14 @@ pub(crate) use errors::{
     SemanticError,
     SemanticErrorKind,
 };
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "The retained semantic vocabulary is the crate interface for lowering and \
-                  inspection."
-    )
-)]
 pub(crate) use expressions::{
     ConstantClass,
     Conversion,
     ConversionKind,
     ExpressionInfo,
     ValueCategory,
+    selected_designator,
+    statement_expression_tail,
 };
 pub(crate) use integer::Integer;
 pub(crate) use results::{
@@ -228,6 +222,7 @@ pub(crate) fn analyze<'tu>(
     }
     analyzer.assert_balanced();
     analyzer.finish_translation_unit();
+    analyzer.check_builtin_designators();
     let index = analyzer.retain_expression_index();
     SemanticTranslationUnit {
         declarators:         analyzer.declarators.leak(),

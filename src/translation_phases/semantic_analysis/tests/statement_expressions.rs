@@ -3,6 +3,56 @@
 use super::*;
 
 #[test]
+fn labeled_statement_expression_tails_keep_their_value_type() {
+    with_source(
+        include_str!("../../../../tests/fixtures/semantic/statement-expression-labeled-tails.c"),
+        |context, unit| {
+            assert_eq!(unit.errors, 0, "{:?}", context.take_pending_errors());
+            let types = unit
+                .expressions
+                .iter()
+                .filter(|i| matches!(i.expression.kind, ExpressionType::StatementExpression(_)))
+                .map(|i| unit.types.nodes[i.ty.index])
+                .collect::<Vec<_>>();
+            assert_eq!(&types[..4], &[TypeKind::Scalar(Scalar::Int); 4]);
+            assert!(matches!(types[4], TypeKind::Pointer(_)));
+        },
+    );
+}
+
+#[test]
+fn case_and_default_tails_preserve_typing_and_forbidden_entry_diagnostics() {
+    for label in ["case 1:", "default:"] {
+        with_source(
+            &format!("int f(void){{switch(0){{case 0:return ({{{label} 3;}});}}return 0;}}"),
+            |context, unit| {
+                let errors = context.take_pending_errors();
+                assert_eq!(unit.errors, 1, "{label}: {errors:?}");
+                assert!(
+                    matches!(
+                        errors.as_slice(),
+                        [TranslationError::Semantic(SemanticError {
+                            kind: SemanticErrorKind::SwitchIntoStatementExpression,
+                            ..
+                        })]
+                    ),
+                    "{label}: {errors:?}"
+                );
+                let tail = unit
+                    .expressions
+                    .iter()
+                    .find(|i| matches!(i.expression.kind, ExpressionType::StatementExpression(_)))
+                    .unwrap();
+                assert_eq!(
+                    unit.types.nodes[tail.ty.index],
+                    TypeKind::Scalar(Scalar::Int)
+                );
+            },
+        );
+    }
+}
+
+#[test]
 fn header_jumps_require_an_enclosing_body_context() {
     for header in [
         "while (({ break; 1; })) {}",

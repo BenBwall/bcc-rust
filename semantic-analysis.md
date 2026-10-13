@@ -1451,3 +1451,61 @@ four target semantic checks and all interpreter stages on both targets passed.
 The plain CLI was rebuilt after all feature-enabled checks. Shared LLVM
 junctions were preserved, and nothing was staged or committed. Whole-file
 commit groups are recorded in `target/commit-plan.md`.
+
+### PR #41 round-6 review repairs (2026-10-13)
+
+Reserved builtin identifiers acquire their semantic binding before expression
+reduction, including inside compile-time selections. Shared iterative lookup
+follows parentheses, `__extension__`, `_Generic` and `__builtin_choose_expr`
+to the selected binding. Scalar intrinsic dispatch uses that binding in both
+semantic checking and lowering; user declarations and local function pointers
+keep ordinary-call behavior. Direct callee lookup also follows retained
+selections before falling back to an indirect call.
+
+Intrinsic-only builtin designators outside a call now report Clang's "builtin
+functions must be directly called" diagnostic instead of producing external
+references. An arena-backed linear pass marks transparent child edges and
+callee uses, then diagnoses the outermost invalid designator use. Library
+builtin aliases retain addressability. See
+[GCC Other Builtins](https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html)
+and [Library Builtins](https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html);
+C99 6.5.1p5 (printed p. 69, PDF p. 81) preserves parenthesized designation.
+
+Statement-expression tail lookup iteratively strips ordinary, case/default,
+case-range and attributed labels. Lowering keeps the final statement on its
+task stack with a value-preserving flag: each label enters its usual jump
+target before the converted tail is evaluated. C99 6.8.1p4 (printed p. 132,
+PDF p. 144) and
+[GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html)
+support ordinary labeled tails. Direct case/default tails would require an
+outer switch to enter a statement expression, which GCC and Clang reject;
+semantic regressions preserve that diagnostic while checking tail typing.
+Execution tests therefore use legal internal case/default dispatch and jumps
+from those arms to an ordinary labeled value tail.
+
+Object-size modes, expect probabilities, assume-aligned alignments, and
+prefetch read/write/locality operands have requirement-specific diagnostics
+and goldens. Fixed-parameter checks retain round 5's converted-value rules;
+prefetch ICEs retain their original width, and optional alignment offsets
+remain allowed at runtime. Incompatible argument types emit only conversion
+errors, without an additional value-constraint error. Both new goldens retain
+following declarations and exact source spellings.
+
+The focused `Pass::Inline` regression calls a small dynamic-alloca function
+from a loop, asserts its call survives, and checks literal return values and
+at most 512 retained interpreter byte cells for 1 and 10,000 iterations.
+The original exclusion is retained: inlining would extend each allocation's
+lifetime to the caller's return. See
+[GCC Stack Allocation](https://gcc.gnu.org/onlinedocs/gcc/Stack-Allocation.html).
+
+Round-6 validation passed on Windows: `cargo test --all-targets` (1,611
+library tests passed, three existing ignores, and every integration target),
+all 26 feature-enabled allocation tests, nightly formatting and format checking,
+all-target Clippy with warnings denied in debug, release and feature-enabled
+configurations, and `git diff --check`. The plain CLI was rebuilt last.
+Removing the dynamic-alloca inliner exclusion made the new call-retention
+assertion fail; restoring it passed both iteration counts. Both execution
+fixtures returned zero with GCC and Clang at O0/O2. Linux native execution
+was unavailable because WSL returned access denied. Shared LLVM junctions
+were preserved, and nothing was staged or committed. The whole-file commit
+plan is `target/commit-plan.md`; check logs are under `target/round6/`.

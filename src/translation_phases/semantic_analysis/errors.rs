@@ -144,6 +144,25 @@ pub(crate) enum SemanticErrorKind {
     ImplicitLibraryFunction(StringCacheId),
     /// C99: §6.5.3.2p1, p. 78; PDF p. 90.
     InvalidAddressOperand,
+    /// Intrinsic-only GNU builtins have no addressable external function.
+    /// GNU extension: GCC manual, "Built-in Functions Provided by GCC".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html>
+    BuiltinRequiresCall,
+    /// GNU extension: GCC "Object Size Checking" mode constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html>
+    InvalidObjectSizeMode,
+    /// GNU extension: GCC "Other Builtins" probability constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    InvalidBuiltinProbability,
+    /// GNU extension: GCC "Other Builtins" alignment constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    InvalidBuiltinAlignment,
+    /// GNU extension: GCC "Other Builtins" prefetch read/write constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    InvalidPrefetchReadWrite,
+    /// GNU extension: GCC "Other Builtins" prefetch locality constraint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    InvalidPrefetchLocality,
     /// C99: §6.5.3p1, p. 78; PDF p. 90.
     InvalidUnaryOperand,
     /// C99: §6.5.16p2, p. 91; PDF p. 103.
@@ -322,6 +341,12 @@ impl SemanticErrorKind {
             | Self::UndeclaredIdentifier => "not declared",
             | Self::ImplicitLibraryFunction(_) => "library prototype used here",
             | Self::InvalidAddressOperand => "cannot take this address",
+            | Self::BuiltinRequiresCall => "builtin must be directly called",
+            | Self::InvalidObjectSizeMode | Self::InvalidPrefetchLocality =>
+                "expected an integer constant from 0 to 3",
+            | Self::InvalidBuiltinProbability => "expected a constant probability from 0 to 1",
+            | Self::InvalidBuiltinAlignment => "expected a constant power-of-two alignment",
+            | Self::InvalidPrefetchReadWrite => "expected an integer constant of 0 or 1",
             | Self::InvalidUnaryOperand | Self::InvalidAdditiveOperands =>
                 "operand type is not allowed here",
             | Self::ExpectedModifiableLvalue => "not a modifiable lvalue",
@@ -421,8 +446,37 @@ impl SemanticErrorKind {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keep semantic diagnostic headlines and their standard notes in one exhaustive \
+                  table."
+    )]
     fn explanation(self) -> (&'static str, &'static str) {
         match self {
+            | Self::BuiltinRequiresCall => (
+                "builtin functions must be directly called",
+                "GNU extension: intrinsic-only builtins have no addressable external function; parentheses and compile-time selections preserve callee designation",
+            ),
+            | Self::InvalidObjectSizeMode => (
+                "the mode argument must be an integer constant from 0 to 3",
+                "GNU extension: GCC Object Size Checking requires a constant mode after conversion to int",
+            ),
+            | Self::InvalidBuiltinProbability => (
+                "the probability argument must be a constant from 0 to 1",
+                "GNU extension: GCC Other Builtins requires a constant probability in the inclusive range [0, 1] after conversion to double",
+            ),
+            | Self::InvalidBuiltinAlignment => (
+                "the alignment argument must be a positive power-of-two integer constant",
+                "GNU extension: GCC Other Builtins requires a constant power-of-two alignment after conversion to size_t; the optional offset may be nonconstant",
+            ),
+            | Self::InvalidPrefetchReadWrite => (
+                "the read/write argument must be an integer constant of 0 or 1",
+                "GNU extension: GCC Other Builtins uses 0 for read prefetch and 1 for write prefetch",
+            ),
+            | Self::InvalidPrefetchLocality => (
+                "the locality argument must be an integer constant from 0 to 3",
+                "GNU extension: GCC Other Builtins uses locality 0 for no temporal locality through 3 for high temporal locality",
+            ),
             | Self::ImplicitLibraryFunction(_) => (
                 "implicitly declaring library function",
                 "C99 §6.5.2.2p6,p9: calls require compatible function types; §7.1.4p2 permits declaring library functions without their headers",

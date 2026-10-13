@@ -2,6 +2,77 @@
 use super::*;
 
 #[test]
+fn builtin_value_constraints_do_not_duplicate_incompatible_type_errors() {
+    with_source(
+        include_str!("../../../../tests/fixtures/diagnostics/sema-builtin-values.c"),
+        |context, unit| {
+            let errors = context.take_pending_errors();
+            assert_eq!(unit.errors, 13, "{errors:?}");
+            assert_eq!(
+                errors
+                    .iter()
+                    .filter(|e| matches!(
+                        e,
+                        TranslationError::Semantic(SemanticError {
+                            kind: SemanticErrorKind::InvalidArgumentType,
+                            ..
+                        })
+                    ))
+                    .count(),
+                3
+            );
+            assert!(
+                unit.bindings
+                    .iter()
+                    .any(|b| context.string_cache.at(b.name.name) == "following")
+            );
+        },
+    );
+}
+
+#[test]
+fn selected_builtin_callees_preserve_intrinsic_constraints_and_shadows() {
+    with_source(
+        include_str!("../../../../tests/fixtures/semantic/builtin-selected-callees.c"),
+        |context, unit| assert_eq!(unit.errors, 0, "{:?}", context.take_pending_errors()),
+    );
+    with_source(
+        "void f(void *p,int \
+         n){__builtin_choose_expr(1,__builtin_object_size,__builtin_object_size)(p,n);}",
+        |context, unit| {
+            assert_eq!(unit.errors, 1, "{:?}", context.take_pending_errors());
+        },
+    );
+}
+
+#[test]
+fn intrinsic_only_builtin_designators_require_a_call() {
+    for expression in [
+        "&__builtin_clz",
+        "__builtin_clz",
+        "&(__builtin_choose_expr(1,__builtin_clz,__builtin_clz))",
+        "_Generic(1,int:__builtin_clz,default:__builtin_ctz)",
+    ] {
+        with_source(
+            &format!("void f(void){{{expression};}} int following;"),
+            |context, unit| {
+                assert_eq!(
+                    unit.errors,
+                    1,
+                    "{expression}: {:?}",
+                    context.take_pending_errors()
+                );
+                assert!(
+                    unit.bindings
+                        .iter()
+                        .any(|b| context.string_cache.at(b.name.name) == "following")
+                );
+            },
+        );
+    }
+}
+
+#[test]
 fn statement_expression_tails_produce_converted_values() {
     with_source(
         include_str!("../../../../tests/fixtures/semantic/statement-expression-values.c"),
@@ -187,7 +258,7 @@ fn object_size_modes_check_and_fold_the_converted_int() {
                                 matches!(
                                     errors.as_slice(),
                                     [TranslationError::Semantic(SemanticError {
-                                        kind: SemanticErrorKind::InvalidArgumentType,
+                                        kind: SemanticErrorKind::InvalidObjectSizeMode,
                                         ..
                                     })]
                                 ),
@@ -236,7 +307,7 @@ fn alignment_checks_the_converted_size_t() {
                             matches!(
                                 errors.as_slice(),
                                 [TranslationError::Semantic(SemanticError {
-                                    kind: SemanticErrorKind::InvalidArgumentType,
+                                    kind: SemanticErrorKind::InvalidBuiltinAlignment,
                                     ..
                                 })]
                             ),
@@ -251,9 +322,15 @@ fn alignment_checks_the_converted_size_t() {
 
 #[test]
 fn variadic_and_type_generic_builtin_constants_keep_their_width() {
-    for call in [
-        "__builtin_prefetch(p,4294967296ULL,3)",
-        "__builtin_prefetch(p,0,4294967299ULL)",
+    for (call, expected) in [
+        (
+            "__builtin_prefetch(p,4294967296ULL,3)",
+            SemanticErrorKind::InvalidPrefetchReadWrite,
+        ),
+        (
+            "__builtin_prefetch(p,0,4294967299ULL)",
+            SemanticErrorKind::InvalidPrefetchLocality,
+        ),
     ] {
         with_source(&format!("void f(void *p){{{call};}}"), |context, unit| {
             assert_eq!(unit.errors, 1, "{call}");
@@ -262,9 +339,9 @@ fn variadic_and_type_generic_builtin_constants_keep_their_width() {
                 matches!(
                     errors.as_slice(),
                     [TranslationError::Semantic(SemanticError {
-                        kind: SemanticErrorKind::InvalidImmediate,
+                        kind,
                         ..
-                    })]
+                    })] if *kind == expected
                 ),
                 "{call}: {errors:?}"
             );
@@ -327,7 +404,7 @@ fn expect_probability_checks_the_converted_double_endpoints() {
                             matches!(
                                 errors.as_slice(),
                                 [TranslationError::Semantic(SemanticError {
-                                    kind: SemanticErrorKind::InvalidArgumentType,
+                                    kind: SemanticErrorKind::InvalidBuiltinProbability,
                                     ..
                                 })]
                             ),
@@ -372,11 +449,11 @@ fn gcc_scalar_builtin_counts_types_and_immediates_are_checked() {
         ),
         (
             "__builtin_expect_with_probability(1,1,1.5)",
-            SemanticErrorKind::InvalidArgumentType,
+            SemanticErrorKind::InvalidBuiltinProbability,
         ),
         (
             "__builtin_assume_aligned(&r,3)",
-            SemanticErrorKind::InvalidArgumentType,
+            SemanticErrorKind::InvalidBuiltinAlignment,
         ),
         (
             "__builtin_unreachable(1)",
@@ -385,11 +462,11 @@ fn gcc_scalar_builtin_counts_types_and_immediates_are_checked() {
         ("__builtin_trap(1)", SemanticErrorKind::InvalidArgumentCount),
         (
             "__builtin_prefetch(&r,2,3)",
-            SemanticErrorKind::InvalidImmediate,
+            SemanticErrorKind::InvalidPrefetchReadWrite,
         ),
         (
             "__builtin_prefetch(&r,0,4)",
-            SemanticErrorKind::InvalidImmediate,
+            SemanticErrorKind::InvalidPrefetchLocality,
         ),
         (
             "__builtin_prefetch(1.0)",
@@ -401,11 +478,11 @@ fn gcc_scalar_builtin_counts_types_and_immediates_are_checked() {
         ),
         (
             "__builtin_object_size(&r,4)",
-            SemanticErrorKind::InvalidArgumentType,
+            SemanticErrorKind::InvalidObjectSizeMode,
         ),
         (
             "__builtin_dynamic_object_size(&r,r)",
-            SemanticErrorKind::InvalidArgumentType,
+            SemanticErrorKind::InvalidObjectSizeMode,
         ),
         (
             "__builtin_alloca(&r)",

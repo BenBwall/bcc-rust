@@ -16,6 +16,7 @@
 //!   `library.rs` provides prototypes and runtime names for library aliases.
 //!   `common.rs` checks scalar calls; `effects.rs` summarizes overflow type
 //!   operands with an explicit postorder stack and an arena-backed cache.
+//!   `designators.rs` rejects non-call uses of intrinsic-only functions.
 //! - Atomic calls: `atomics.rs` classifies and checks atomic operands.
 //! - Target calls: `x86_builtins.rs` decodes signatures and checks operands;
 //!   `x86_builtin_table.rs` holds the generated signature and immediate table.
@@ -28,6 +29,7 @@
 
 // Header intrinsics and recognition
 mod common;
+mod designators;
 mod effects;
 mod intrinsics;
 mod library;

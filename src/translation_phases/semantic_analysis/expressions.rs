@@ -41,6 +41,8 @@ pub(crate) use results::{
     Conversion,
     ConversionKind,
     ValueCategory,
+    selected_designator,
+    statement_expression_tail,
 };
 
 use super::{
@@ -315,10 +317,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 // C99 §6.5.1p5: parentheses preserve the callee designation.
                 // GNU vector builtins retain constraints through parentheses.
-                let mut vector_callee = function_expression;
-                while let ExpressionType::Parenthesized { expression } = vector_callee.kind {
-                    vector_callee = expression;
-                }
+                let vector_callee =
+                    selected_designator(function_expression, |e| Some(self.expression_info(e)));
                 let intrinsic = self
                     .expression_info(vector_callee)
                     .binding
@@ -336,16 +336,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.shuffle_vector_builtin(e, arguments)
                 } else if let Some(info) = self.vector_overload(e, vector_callee, arguments) {
                     info
-                } else if let Some(info) = self.atomic_call(e, function_expression, arguments) {
+                } else if let Some(info) = self.atomic_call(e, vector_callee, arguments) {
                     info
-                } else if self.classify_type_callee(function_expression) {
+                } else if self.classify_type_callee(vector_callee) {
                     self.classify_type(e, &arguments)
-                } else if let Some(info) = self.math128_builtin(e, function_expression, &arguments)
-                {
+                } else if let Some(info) = self.math128_builtin(e, vector_callee, &arguments) {
                     info
-                } else if let Some(info) =
-                    self.common_builtin_call(e, function_expression, arguments)
-                {
+                } else if let Some(info) = self.common_builtin_call(e, vector_callee, arguments) {
                     info
                 } else {
                     self.type_call(e, self.expression_info(function_expression), arguments)
@@ -384,12 +381,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::StatementExpression(statement) => {
                 use crate::translation_phases::parsing::syntax::{
                     BlockItem,
-                    ExpressionSlot,
                     StatementType,
                 };
                 if let StatementType::Compound { items } = statement.kind
                     && let Some(BlockItem::Statement(last)) = items.last()
-                    && let StatementType::Expression(ExpressionSlot::Parsed(tail)) = last.kind
+                    && let Some(tail) = statement_expression_tail(last)
                 {
                     // GNU extension: GCC "Statement Exprs" returns the value
                     // of the final expression statement. Its ValueExpression

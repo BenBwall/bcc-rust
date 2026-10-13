@@ -545,13 +545,15 @@ int f(unsigned x,int y) {
   return ({int z=__builtin_clz(x)+__builtin_ctz(x)+__builtin_popcount(x)+__builtin_ffs(y)+__builtin_clrsb(y);z;}) ?: (int)__builtin_expect(result,0);
 }
 int g(void) {return __builtin_constant_p(1+2)+(__builtin_object_size((void*)0,0)==(__SIZE_TYPE__)-1);}
+int h(void) {return __builtin_choose_expr(1,__builtin_clz,__builtin_ctz)(1u);}
+int labeled(void) {return ({int x=3;goto out;x=4;out:x;});}
 "#;
         let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
         assert_no_allocations("GCC scalar builtin typing", summary, &allocations);
         assert_eq!(summary.diagnostics, 0);
         let source = "void f(void){_Bool \
                       b;__builtin_mul_overflow(1,2,&b);__builtin_prefetch((void*)0,2,4);\
-                      __builtin_ctz();}\n";
+                      __builtin_ctz();&__builtin_clz;}\n";
         let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
         assert_eq!(allocations.calls, 0, "invalid scalar builtin operands");
         assert!(summary.diagnostics >= 3);

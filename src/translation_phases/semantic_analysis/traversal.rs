@@ -33,6 +33,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             self.label_address(name);
         }
+        // Reserved builtin designators need their binding even before a
+        // compile-time selection becomes a callee, or an address is checked.
+        // GNU extension: GCC "Other Builtins"; C99 §7.1.3p1, p. 166;
+        // PDF p. 178 (implementation-reserved identifiers).
+        if !e.recovered
+            && let E::Identifier(name) = e.kind
+            && self.builtin_name(name)
+        {
+            self.implicit_function(e);
+        }
         if matches!(e.kind, E::SizeofExpr(_) | E::SizeofType(_)) {
             self.enter_sizeof(e);
         }
