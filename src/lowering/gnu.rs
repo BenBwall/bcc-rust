@@ -99,6 +99,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// Executes a block and leaves only its final expression's value.
     /// Non-expression endings have void type. No recursive syntax walk.
     /// GNU extension: GCC "Statement Exprs".
+    /// C99: §6.3.2.1p2-4, p. 46; PDF p. 58 (tail value conversions).
     pub(super) fn statement_expression(&mut self, statement: &'tu Statement<'tu>, ty: TypeId) {
         let StatementType::Compound { items } = statement.kind else {
             self.tasks.push(Task::Statement(statement));
@@ -116,7 +117,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | _ => None,
         });
         if let Some(tail) = tail {
-            self.tasks.push(Task::EvaluateRaw(tail));
+            self.tasks.push(Task::Evaluate(tail));
         } else {
             self.operands.push(Item {
                 operand: Operand::Void,

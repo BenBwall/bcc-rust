@@ -391,19 +391,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && let Some(BlockItem::Statement(last)) = items.last()
                     && let StatementType::Expression(ExpressionSlot::Parsed(tail)) = last.kind
                 {
-                    // GNU extension: GCC "Statement Exprs" preserves the
-                    // final expression's C value category. Executing the block
-                    // prevents folding even when its tail is constant.
+                    // GNU extension: GCC "Statement Exprs" returns the value
+                    // of the final expression statement. Its ValueExpression
+                    // work already recorded C99 §6.3.2.1p2-4 conversions
+                    // (p. 46; PDF p. 58), even under an enclosing sizeof.
+                    // Reuse their type without recording them twice. The
+                    // result is a value, without the tail's lvalue/bit-field
+                    // identity; block effects prevent constant folding.
                     // <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
-                    info = ExpressionInfo {
-                        expression: e,
-                        selected_expression: Some(tail),
-                        integer: None,
-                        floating: None,
-                        ice: false,
-                        constant: ConstantClass::None,
-                        ..self.expression_info(tail)
-                    };
+                    let tail = self.expression_info(tail);
+                    let (ty, _) = self.value_conversion(tail);
+                    info = Self::expression_result(e, ty);
+                    info.unfolded_binary128 = tail.unfolded_binary128;
                 } else {
                     info = Self::expression_result(e, self.types.scalar(Scalar::Void));
                 }

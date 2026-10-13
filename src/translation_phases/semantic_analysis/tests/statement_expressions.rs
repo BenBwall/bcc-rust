@@ -3,6 +3,43 @@
 use super::*;
 
 #[test]
+fn header_jumps_require_an_enclosing_body_context() {
+    for header in [
+        "while (({ break; 1; })) {}",
+        "while (({ continue; 1; })) {}",
+        "do {} while (({ break; 0; }));",
+        "do {} while (({ continue; 0; }));",
+        "for (({ break; 0; }); 0; ) {}",
+        "for (({ continue; 0; }); 0; ) {}",
+        "for (; ({ break; 0; }); ) {}",
+        "for (; ({ continue; 0; }); ) {}",
+        "for (; 0; ({ break; 0; })) {}",
+        "for (; 0; ({ continue; 0; })) {}",
+        "switch (({ break; 0; })) {}",
+        "switch (({ continue; 0; })) {}",
+    ] {
+        let expected = if header.contains("continue;") {
+            SemanticErrorKind::ContinueOutsideLoop
+        } else {
+            SemanticErrorKind::BreakOutsideLoopOrSwitch
+        };
+        with_source(
+            &format!("int f(void){{ {header} return 0; }} int following;"),
+            |context, unit| {
+                assert_eq!(unit.errors, 1, "{header}");
+                let errors = context.take_pending_errors();
+                assert!(errors.iter().any(|e| matches!(e, TranslationError::Semantic(SemanticError {kind,..}) if *kind==expected)), "{header}: {errors:?}");
+                assert!(
+                    unit.bindings
+                        .iter()
+                        .any(|b| context.string_cache.at(b.name.name) == "following")
+                );
+            },
+        );
+    }
+}
+
+#[test]
 fn statement_expression_ancestry_has_linear_work() {
     for depth in [128, 2048, 32_768] {
         // Exercise both repeated deepest-source queries and a distinct source

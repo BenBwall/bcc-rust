@@ -178,7 +178,7 @@ int main(void) {
   int a=once(0.5) ?: 7; if(a!=0 || n!=1) return 1;
   double b=once(0) ?: 2.5; if(b!=2.5 || n!=2) return 2;
   int result=({int x=3;for(int i=0;i<4;i++) x+=i; x;}); if(result!=9) return 3;
-  ({result++;}); if(result!=10) return 4; ({result;})=11; if(result!=11) return 7; int *address=&({result;}); *address=12; if(result!=12) return 8;
+  ({result++;}); if(result!=10) return 4; int value=({result;}); if(value!=10) return 7;
   if(classify(-100)!=1 || classify(0)!=2 || classify(2147483647)!=3) return 5;
   int y=1; __builtin_choose_expr(1,y,++y)=4; if(y!=4) return 6; int *q=&__builtin_choose_expr(1,y,++y); *q=5; if(y!=5) return 9;
   return 0;

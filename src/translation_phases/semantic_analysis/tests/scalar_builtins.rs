@@ -2,6 +2,53 @@
 use super::*;
 
 #[test]
+fn statement_expression_tails_produce_converted_values() {
+    with_source(
+        include_str!("../../../../tests/fixtures/semantic/statement-expression-values.c"),
+        |context, unit| {
+            assert_eq!(unit.errors, 0, "{:?}", context.take_pending_errors());
+            let results = unit
+                .expressions
+                .iter()
+                .filter(|i| matches!(i.expression.kind, ExpressionType::StatementExpression(_)))
+                .collect::<Vec<_>>();
+            assert_eq!(results.len(), 11);
+            for result in &results {
+                assert_eq!(result.category, ValueCategory::Rvalue);
+                assert_eq!(result.ty, result.ty.unqualified());
+                assert_eq!(result.bit_field, None);
+            }
+            assert!(matches!(
+                unit.types.nodes[results[0].ty.index],
+                TypeKind::Pointer(_)
+            ));
+            assert!(matches!(
+                unit.types.nodes[results[1].ty.index],
+                TypeKind::Pointer(_)
+            ));
+            assert_eq!(
+                unit.types.nodes[results[2].ty.index],
+                TypeKind::Scalar(Scalar::Int)
+            );
+            assert!(matches!(
+                unit.types.nodes[results[3].ty.index],
+                TypeKind::Tag(_)
+            ));
+            assert_eq!(
+                unit.types.nodes[results[4].ty.index],
+                TypeKind::Scalar(Scalar::UnsignedInt)
+            );
+            for result in &results[5..8] {
+                assert_eq!(
+                    unit.types.nodes[result.ty.index],
+                    TypeKind::Scalar(Scalar::Void)
+                );
+            }
+        },
+    );
+}
+
+#[test]
 fn scalar_builtin_dispatch_preserves_user_bindings() {
     with_source(
         &crate::test_support::builtin_binding_program(),

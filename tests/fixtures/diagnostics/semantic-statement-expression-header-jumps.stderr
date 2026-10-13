@@ -1,0 +1,97 @@
+error: break is outside an iteration or switch statement
+ --> semantic-statement-expression-header-jumps.c:2:15
+  |
+2 |     while (({ break; 1; })) {}
+  |               ^^^^^^ not in a loop or switch
+  |
+  = note: C99 §6.8.6.3p1: a break statement appears only in or as a loop or switch body
+
+error: continue is outside an iteration statement
+ --> semantic-statement-expression-header-jumps.c:3:15
+  |
+3 |     while (({ continue; 1; })) {}
+  |               ^^^^^^^^^ not in a loop
+  |
+  = note: C99 §6.8.6.2p1: a continue statement appears only in or as a loop body
+
+error: break is outside an iteration or switch statement
+ --> semantic-statement-expression-header-jumps.c:4:21
+  |
+4 |     do {} while (({ break; 0; }));
+  |                     ^^^^^^ not in a loop or switch
+  |
+  = note: C99 §6.8.6.3p1: a break statement appears only in or as a loop or switch body
+
+error: continue is outside an iteration statement
+ --> semantic-statement-expression-header-jumps.c:5:21
+  |
+5 |     do {} while (({ continue; 0; }));
+  |                     ^^^^^^^^^ not in a loop
+  |
+  = note: C99 §6.8.6.2p1: a continue statement appears only in or as a loop body
+
+error: break is outside an iteration or switch statement
+ --> semantic-statement-expression-header-jumps.c:6:13
+  |
+6 |     for (({ break; 0; }); 0; ) {}
+  |             ^^^^^^ not in a loop or switch
+  |
+  = note: C99 §6.8.6.3p1: a break statement appears only in or as a loop or switch body
+
+error: continue is outside an iteration statement
+ --> semantic-statement-expression-header-jumps.c:7:13
+  |
+7 |     for (({ continue; 0; }); 0; ) {}
+  |             ^^^^^^^^^ not in a loop
+  |
+  = note: C99 §6.8.6.2p1: a continue statement appears only in or as a loop body
+
+error: break is outside an iteration or switch statement
+ --> semantic-statement-expression-header-jumps.c:8:15
+  |
+8 |     for (; ({ break; 0; }); ) {}
+  |               ^^^^^^ not in a loop or switch
+  |
+  = note: C99 §6.8.6.3p1: a break statement appears only in or as a loop or switch body
+
+error: continue is outside an iteration statement
+  --> semantic-statement-expression-header-jumps.c:9:15
+   |
+ 9 |     for (; ({ continue; 0; }); ) {}
+   |               ^^^^^^^^^ not in a loop
+   |
+   = note: C99 §6.8.6.2p1: a continue statement appears only in or as a loop body
+
+error: break is outside an iteration or switch statement
+  --> semantic-statement-expression-header-jumps.c:10:18
+   |
+10 |     for (; 0; ({ break; 0; })) {}
+   |                  ^^^^^^ not in a loop or switch
+   |
+   = note: C99 §6.8.6.3p1: a break statement appears only in or as a loop or switch body
+
+error: continue is outside an iteration statement
+  --> semantic-statement-expression-header-jumps.c:11:18
+   |
+11 |     for (; 0; ({ continue; 0; })) {}
+   |                  ^^^^^^^^^ not in a loop
+   |
+   = note: C99 §6.8.6.2p1: a continue statement appears only in or as a loop body
+
+error: break is outside an iteration or switch statement
+  --> semantic-statement-expression-header-jumps.c:12:16
+   |
+12 |     switch (({ break; 0; })) {}
+   |                ^^^^^^ not in a loop or switch
+   |
+   = note: C99 §6.8.6.3p1: a break statement appears only in or as a loop or switch body
+
+error: continue is outside an iteration statement
+  --> semantic-statement-expression-header-jumps.c:13:16
+   |
+13 |     switch (({ continue; 0; })) {}
+   |                ^^^^^^^^^ not in a loop
+   |
+   = note: C99 §6.8.6.2p1: a continue statement appears only in or as a loop body
+
+12 errors generated.

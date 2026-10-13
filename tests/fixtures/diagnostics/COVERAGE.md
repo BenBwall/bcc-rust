@@ -55,7 +55,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **385 top-level C inputs and 385 stderr snapshots**, plus seven supporting headers and 142 mode/policy `.args` sidecars. One hundred twenty of the inputs cover semantic analysis (twenty-eight for declarations, twenty-nine for expressions and initializers, forty-two for statements and functions, three for 128-bit integers, four for resource intrinsics, six for atomics and generic selection, four for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 123 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **389 top-level C inputs and 389 stderr snapshots**, plus seven supporting headers and 146 mode/policy `.args` sidecars. One hundred twenty-four of the inputs cover semantic analysis (twenty-eight for declarations, twenty-nine for expressions and initializers, forty-six for statements and functions, three for 128-bit integers, four for resource intrinsics, six for atomics and generic selection, four for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 123 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -833,3 +833,14 @@ entering a GNU statement expression. Primary labels identify the goto or switch
 label; secondary labels identify the expression. These prevent the previous
 lowering/SSA internal errors from becoming user diagnostics. Semantic and
 pipeline tests also preserve legal internal jumps and exits.
+
+### Statement-expression header jumps
+
+`semantic-statement-expression-header-jumps.c` renders the existing
+`BreakOutsideLoopOrSwitch` and `ContinueOutsideLoop` constraints for statement
+expressions in while/do conditions, for initializers/conditions/increments and
+switch controlling expressions. Its GNU99 sidecar avoids extension-policy
+noise; all twelve primary labels identify their jump and retain the C99 notes.
+A following ordinary declaration survives. Semantic tests check each error
+individually; the shared header-target execution probe preserves valid outer
+loop/switch targets, including continue through a switch.

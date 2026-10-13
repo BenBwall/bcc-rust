@@ -946,8 +946,8 @@ GNU omitted-middle conditionals test a saved first value before converting the
 selected result, and evaluate that value once. Case ranges compare unsigned
 `control - lower <= upper - lower`, so very wide ranges need constant space;
 ordinary switch labels remain switch entries. Statement expressions execute
-an explicit-stack block schedule and retain the final expression's C value
-category, including lvalues; other endings yield void. Constant choose-expr
+an explicit-stack block schedule and return the final expression statement's converted
+value, including array/function decay; other endings yield void. Constant choose-expr
 selections lower only their chosen operand. Scalar header varargs use existing
 IR `va_start`, `va_arg`, `va_copy`, and `va_end`; aggregate varargs remain
 explicitly unsupported.
@@ -988,3 +988,43 @@ counts expression visits through the public pipeline: the pre-fix code visited
 short-circuit, volatile, call and increment tests preserve effect behavior.
 The contract remains [GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html)
 and C99 6.7.3p6 (printed p. 109, PDF p. 121).
+
+### PR #41 round-3 scalar and block-expression coverage (2026-10-13)
+
+GNU block tails now consume the expression statement's recorded conversions,
+matching their retained semantic value types. Loop header jumps use outer body
+targets, with semantic rejection when none exists; switch controlling-expression
+context already matched lowering. See the round-3 semantic record and
+[GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html).
+C99 6.3.2.1p2-4 (printed p. 46, PDF p. 58) and 6.8.6.2p1/6.8.6.3p1
+(printed p. 138, PDF p. 150) govern the underlying conversions and constraints.
+
+Textual IR now executes both `uadd_overflow` and `umul_overflow` at i8, i16,
+i32, i64 and i128. Each width has overflowing, adjacent non-overflowing and zero
+boundary cases, exercised as both parameterized instructions and constant
+instructions before/after the fold pass. LLVM emission must retain each width's
+intrinsic in the parameterized function; native O0/O2 executions compare with
+Clang-compiled C references. These checks passed without an overflow
+implementation change. The IR has no signed overflow predicate opcodes;
+separate C probes cover signed add/subtract/multiply destinations at 8, 16 and
+32 bits, with literal overflow and wrapped-result expectations, through the
+interpreter stages and native Clang comparisons. Contract:
+[GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).
+
+Native-reference limitation: bundled Clang 23.1.1 crashes for outer-switch
+breaks from for initializers and a nested switch controlling expression. It
+also selects the inner loop for jumps from while/do conditions and for
+conditions/increments, even when an outer body exists; continue can loop
+forever. `CLANG_HEADER_REFERENCE` excludes those 15 cases from Clang alone,
+retaining the six for-initializer and switch-header jumps to an outer loop.
+All 21 cases execute in bcc against literal results and, when GCC is available,
+an independent GCC O0/O2 reference. The installed GCC passes all 21 at both
+levels. No compiler or LLVM-tree change was made for these upstream failures.
+
+Validation passed: `cargo test --all-targets`, the 26 feature-enabled allocation
+tests, nightly formatting, Clippy with warnings denied in debug, release and
+benchmarking-internals configurations, `git diff --check`, and
+`BCC_DIFFTEST_CASES=1000 cargo test --lib difftest`. The plain CLI was rebuilt
+last. The invalid-header `--emit=ir` probe reports twelve ordinary constraints
+and exits with status 1, without an internal lowering error. Shared LLVM trees
+were preserved; no staging or commits were performed.

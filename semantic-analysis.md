@@ -1249,8 +1249,8 @@ constraints, control-argument validation,
 and conservative constant/object-size queries. Lowering shares its name
 classifier. `GnuBuiltins` reports these GNU-only calls through the common
 extension policy; prefetch now belongs to this family rather than vector
-builtins. Statement expressions retain the final expression's type and value
-category but never discard the block's effects by folding its tail. New focused
+builtins. Statement expressions retain the final expression statement's converted
+value type but never discard the block's effects by folding its tail. New focused
 semantic tests exercise signatures, rejected arities and types, ICE overflow
 predicates, and denied-extension diagnostics. See the GCC intrinsic contract
 section in [middle-end.md](middle-end.md) for conservative decisions and IR
@@ -1335,3 +1335,50 @@ Validation passed: all-target tests, feature-enabled allocation counting
 benchmarking-internals configurations with -D warnings, and git diff --check.
 The final all-target run includes the backward jump into a closed sibling
 expression regression. The plain CLI was rebuilt after feature-enabled checks.
+
+### PR #41 round-3 corrections (2026-10-13)
+
+A statement expression returns its tail expression statement's converted value:
+arrays and function designators decay, lvalues lose their qualifiers and value
+category, and bit-field identity does not escape. Struct/union results are values;
+empty blocks, void expressions and other endings remain void. The ordinary
+expression-statement visit already records these conversions, so result typing
+uses the shared conversion classifier without adding duplicate records. Lowering
+now evaluates the tail with those records. Enclosing `sizeof` does not suppress
+the conversions inside the block, and block effects still prohibit folding the
+construct to its tail constant. C99 6.3.2.1p2-4 (printed p. 46, PDF p. 58) and
+[GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html).
+
+Loop jump context is installed by a body continuation and removed before a
+`do` condition; `while` and `for` headers likewise retain only outer contexts.
+Switch traversal already installs its context after its controlling expression,
+so it needs no change. Invalid header jumps use the existing break/continue
+constraint diagnostics and preserve following declarations. Tests cover every
+header, expression and declaration initializers, and valid jumps to outer loops
+or switches, including continue through a nested switch. C99 6.8.6.2p1 and
+6.8.6.3p1 (printed p. 138, PDF p. 150), extended by GCC Statement Exprs.
+
+The shared value and header-target fixtures run before/after bcc optimization
+and ABI lowering on Linux GNU and Windows GNU, and compare host native execution
+with bundled Clang at O0/O2. Semantic tests inspect categories and exact types;
+the header-jump diagnostic fixture pins complete rendered output. The previous
+positive test assigning to a statement-expression result was corrected to read
+its value, consistent with the independent Clang reference.
+
+Native-reference limitation: bundled Clang 23.1.1 crashes for outer-switch
+breaks from for initializers and a nested switch controlling expression. It
+also selects the inner loop for jumps from while/do conditions and for
+conditions/increments, even when an outer body exists; continue can loop
+forever. `CLANG_HEADER_REFERENCE` excludes those 15 cases from Clang alone,
+retaining the six for-initializer and switch-header jumps to an outer loop.
+All 21 cases execute in bcc against literal results and, when GCC is available,
+an independent GCC O0/O2 reference. The installed GCC passes all 21 at both
+levels. No compiler or LLVM-tree change was made for these upstream failures.
+
+Validation passed: `cargo test --all-targets`, the 26 feature-enabled allocation
+tests, nightly formatting, Clippy with warnings denied in debug, release and
+benchmarking-internals configurations, `git diff --check`, and
+`BCC_DIFFTEST_CASES=1000 cargo test --lib difftest`. The plain CLI was rebuilt
+last. The invalid-header `--emit=ir` probe reports twelve ordinary constraints
+and exits with status 1, without an internal lowering error. Shared LLVM trees
+were preserved; no staging or commits were performed.

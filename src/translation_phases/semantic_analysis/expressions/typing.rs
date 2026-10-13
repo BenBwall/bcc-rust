@@ -1153,7 +1153,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         info: ExpressionInfo<'tu>,
     ) -> TypeId {
-        let (ty, kind) = match self.types.nodes[info.ty.index] {
+        let (ty, kind) = self.value_conversion(info);
+        if let Some(kind) = kind {
+            self.convert(info.expression, ty, kind);
+        }
+        ty
+    }
+
+    /// Determines the value type without recording a second conversion for
+    /// an already-converted expression statement's tail.
+    /// C99: §6.3.2.1p2-4, p. 46; PDF p. 58.
+    pub(super) fn value_conversion(
+        &mut self,
+        info: ExpressionInfo<'tu>,
+    ) -> (TypeId, Option<ConversionKind>) {
+        match self.types.nodes[info.ty.index] {
             | TypeKind::Array(element, _) => (
                 self.types.intern(TypeKind::Pointer(element)),
                 Some(ConversionKind::ArrayDecay),
@@ -1171,11 +1185,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Some(ConversionKind::Lvalue),
                 ),
             | _ => (info.ty.unqualified(), None),
-        };
-        if let Some(kind) = kind {
-            self.convert(info.expression, ty, kind);
         }
-        ty
     }
 
     /// C99: §6.3.1.1p2, pp. 42-43; PDF pp. 54-55. Bit-field width can promote

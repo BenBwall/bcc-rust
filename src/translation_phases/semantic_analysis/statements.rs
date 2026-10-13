@@ -65,6 +65,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.work.push(Work::PopScope);
                 self.work.push(Work::Statement(statement, false));
             },
+            | StatementWork::LoopBody(statement) => {
+                // C99 §6.8.6.2p1, §6.8.6.3p1 (p. 138; PDF p. 150):
+                // jump context belongs to the body. GNU "Statement Exprs"
+                // sends header jumps to an enclosing body, if one exists.
+                // <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+                self.statements.loops += 1;
+                self.work
+                    .push(Work::StatementWork(StatementWork::LeaveLoop));
+                self.work
+                    .push(Work::StatementWork(StatementWork::Substatement(statement)));
+            },
             | StatementWork::SwitchReady(slot, body) => {
                 let ty = if let Some(e) = slot_expression(slot) {
                     let info = self.expression_info(e);
@@ -648,6 +659,7 @@ pub(super) enum StatementWork<'tu> {
     SwitchReady(ExpressionSlot<'tu>, &'tu Statement<'tu>),
     SwitchFinish(usize, Option<usize>),
     LeaveLoop,
+    LoopBody(&'tu Statement<'tu>),
     ForDeclarationDone(&'tu Declaration<'tu>),
     CaseDone(
         Option<&'tu Expression<'tu>>,
