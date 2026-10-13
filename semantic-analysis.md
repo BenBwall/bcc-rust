@@ -512,7 +512,8 @@ binding keeps its declared type while the binding of the function holds the
 composite type with promoted parameter types, so lowering converts each
 argument on entry (§6.9.1p10, printed p. 142, PDF p. 154).
 
-The record also retains prototype/body parameter binding pairs when replaying
+The record retains original parameter types, source-ordered parameter-site typeof
+and new-bound actions, and prototype/body parameter binding pairs when replaying
 the definition's prototype scope. Runtime bounds use those prototype bindings;
 lowering aliases them to the initialized body parameters in work proportional
 to the definition's parameters. The 10,000-function regression bounds alias
@@ -570,14 +571,54 @@ to the promoted control type; GNU inclusive ranges use the same conversion.
 Cases are collected, then sorted once per switch. Duplicate values and overlaps
 are checked in O(n log n), and empty converted ranges produce a warning.
 
-A **variable scope path** is a persistent chain of declarations of variably
-modified identifiers, including typedefs and pointers to VLAs. Scope exit
-restores the previous chain. Labels, gotos and switch entry retain snapshots
-without borrowing a live scope stack. Iterative path comparison diagnoses jumps
-that enter a target declaration's scope (§6.8.6.1p1 and §6.8.4.2p2, printed
-pp. 137 and 134, PDF pp. 149 and 146). Forward labels are checked after their
-definitions are known. GNU nonlocal jumps through an enclosing local label are
-kept conservative rather than applying ordinary same-function VLA rules.
+#### Retained control and lifetime facts
+
+Semantic analysis owns one execution-region tree per function, separate from
+lexical name visibility. `FunctionRecord::control` identifies its function/root;
+`SemanticTranslationUnit::control` retains typed region, statement, label, jump,
+loop and switch identities. Regions distinguish lexical scopes, variably modified
+declarations and GNU statement expressions. Each region records its lexical owner,
+parent, function, provenance and preorder/subtree interval. VM typedefs and pointers
+protect entry without allocating storage; automatic VLA objects additionally carry
+cleanup obligations. Nearest VM, statement-expression and cleanup links are retained.
+
+The ordinary semantic work stack produces these facts while visiting signatures,
+bodies and all expression contexts: evaluated typeof operands and array bounds,
+runtime sizeof, initializers, conditions, arguments and nested statement expressions.
+There is no second syntax walk. Definition parameter expressions use their function's
+root during signature analysis. Nested definitions have independent roots. Loop and
+switch contexts apply only to their bodies; header jumps resolve to an enclosing
+body context, and invalid header jumps retain the existing diagnostics.
+
+Resolved labels carry identity and definition points. Goto, break, continue and
+return facts record source, resolved destination and compact left/entered region
+runs. Statements record normal-exit transitions. Switch records retain the promoted
+control type, source-ordered cases, inclusive converted endpoints, sorted case
+indices, default and no-match transitions. Cases are sorted once for overlap checks;
+lowering consumes those endpoints without converting them again.
+
+After traversal, iterative heavy-light indexing takes O(R) work/storage. Each
+transition/LCA and first-entered-VM query takes O(log R), with no ancestor scan
+per query and no recursion. Preorder containment checks are O(1). Forward labels
+resolve before goto diagnostics. Switch diagnostics retain their discovery order;
+their secondary VM labels are finalized to the outermost entered declaration.
+Entering statement expressions or VM scope reads this same graph, preserving text,
+order and secondary labels. GNU nonlocal jumps retain the existing conservative
+semantic handling and remain unsupported by lowering.
+
+GNU statement-expression tails consume their expression statement's converted
+value: arrays/functions decay, lvalues become values and bit-field identity does
+not escape. Empty blocks and other endings yield void. Aggregate results are copied
+before an exit releases VLA storage. Internal jumps preserve enclosing lifetimes;
+outward jumps release only the regions they leave. C99 §6.2.4p6, p. 32 (PDF p. 44),
+§6.8.4.2p2, p. 134 (PDF p. 146), §6.8.6.1p1, p. 137 (PDF p. 149),
+§6.8.6.2p1/§6.8.6.3p1, p. 138 (PDF p. 150); GNU extension:
+[GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html).
+
+Deep generated inputs count construction and query work rather than elapsed time.
+The M1 [validation receipt](docs/research/semantic-facts-m1.md) records retained
+bytes, native oracle limits and fresh matched corpus evidence. Superseded control
+and effect chronology is [archived](docs/research/semantic-control-pre-m1-history.md).
 
 #### Translation-unit definitions
 
@@ -1290,30 +1331,7 @@ contract already used for that target's C99 inline functions. See
 [GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html) and C99 6.7.4p6
 (printed pp. 112-113, PDF pp. 124-125).
 
-Labels, gotos and switch contexts retain statement-expression ancestry.
-Semantic analysis rejects entering an expression from outside or from a
-sibling expression, with a primary jump/case diagnostic and a secondary label
-at the expression. Internal and outward jumps remain legal, including nested
-outward jumps. Function entry resets this state for nested functions.
-The constraint comes from [GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html),
-extending C99 6.8.6.1p1 (printed p. 137, PDF p. 149) and 6.8.4.2p5
-(printed p. 134, PDF p. 146).
-
 ### PR #41 round-2 corrections (2026-10-13)
-
-Statement-expression ancestry uses preorder subtree intervals in the semantic
-scratch arena. Entering an expression assigns its index; its restore
-continuation records the first index outside its subtree. Open intervals have
-an unbounded end, so case/default checks during traversal use the same query
-as resolved gotos. Testing whether the destination encloses the source now
-costs O(1), without recursion or a cache whose cost depends on repeated pairs.
-Function-local jump filtering and expression-source diagnostic labels retain
-the round-1 contract. The generated regression checks both repeated deepest
-sources and distinct sources at each nesting level, up to 32,768 expressions.
-A test-only work counter replaces noisy timing assertions; the original walk
-failed at depth 128 with 8,384 checks against a bound of 256.
-The interval query performs exactly one check per goto: 32,768 checks for
-each depth-32,768 pattern. Existing rejected-entry and legal-jump tests pass.
 
 The scalar builtin execution table now covers conversion-changing operands
 for all 18 fixed-signature overflow builtins: signed/unsigned add, subtract
@@ -1341,52 +1359,6 @@ benchmarking-internals configurations with -D warnings, and git diff --check.
 The final all-target run includes the backward jump into a closed sibling
 expression regression. The plain CLI was rebuilt after feature-enabled checks.
 
-### PR #41 round-3 corrections (2026-10-13)
-
-A statement expression returns its tail expression statement's converted value:
-arrays and function designators decay, lvalues lose their qualifiers and value
-category, and bit-field identity does not escape. Struct/union results are values;
-empty blocks, void expressions and other endings remain void. The ordinary
-expression-statement visit already records these conversions, so result typing
-uses the shared conversion classifier without adding duplicate records. Lowering
-now evaluates the tail with those records. Enclosing `sizeof` does not suppress
-the conversions inside the block, and block effects still prohibit folding the
-construct to its tail constant. C99 6.3.2.1p2-4 (printed p. 46, PDF p. 58) and
-[GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html).
-
-Loop jump context is installed by a body continuation and removed before a
-`do` condition; `while` and `for` headers likewise retain only outer contexts.
-Switch traversal already installs its context after its controlling expression,
-so it needs no change. Invalid header jumps use the existing break/continue
-constraint diagnostics and preserve following declarations. Tests cover every
-header, expression and declaration initializers, and valid jumps to outer loops
-or switches, including continue through a nested switch. C99 6.8.6.2p1 and
-6.8.6.3p1 (printed p. 138, PDF p. 150), extended by GCC Statement Exprs.
-
-The shared value and header-target fixtures run before/after bcc optimization
-and ABI lowering on Linux GNU and Windows GNU, and compare host native execution
-with bundled Clang at O0/O2. Semantic tests inspect categories and exact types;
-the header-jump diagnostic fixture pins complete rendered output. The previous
-positive test assigning to a statement-expression result was corrected to read
-its value, consistent with the independent Clang reference.
-
-Native-reference limitation: bundled Clang 23.1.1 crashes for outer-switch
-breaks from for initializers and a nested switch controlling expression. It
-also selects the inner loop for jumps from while/do conditions and for
-conditions/increments, even when an outer body exists; continue can loop
-forever. `CLANG_HEADER_REFERENCE` excludes those 15 cases from Clang alone,
-retaining the six for-initializer and switch-header jumps to an outer loop.
-All 21 cases execute in bcc against literal results and, when GCC is available,
-an independent GCC O0/O2 reference. The installed GCC passes all 21 at both
-levels. No compiler or LLVM-tree change was made for these upstream failures.
-
-Validation passed: `cargo test --all-targets`, the 26 feature-enabled allocation
-tests, nightly formatting, Clippy with warnings denied in debug, release and
-benchmarking-internals configurations, `git diff --check`, and
-`BCC_DIFFTEST_CASES=1000 cargo test --lib difftest`. The plain CLI was rebuilt
-last. The invalid-header `--emit=ir` probe reports twelve ordinary constraints
-and exits with status 1, without an internal lowering error. Shared LLVM trees
-were preserved; no staging or commits were performed.
 ### PR #41 round-5 constant-argument audit (2026-10-13)
 
 Object-size modes now convert their ICE value to the target's `int` before
@@ -1525,8 +1497,8 @@ and `FunctionRecord::parameter_types` preserve parameter array types before
 adjustment, allowing the middle end to execute bounds on function entry.
 Lowering evaluates each retained bound at its declaration, saves its extent,
 and implements dynamic storage, strides, runtime sizeof and lifetime cleanup.
-The existing declaration-scope-path checks still reject jumps into scopes of
-variably modified identifiers, including typedefs and pointers to VLAs.
+The retained control graph rejects jumps into VM declaration regions, including
+typedefs and pointers to VLAs; those protection regions have no stack cleanup.
 C99 §6.7.5.2p5, pp. 116-117; PDF pp. 128-129; §6.9.1p10, p. 142;
 PDF p. 154; §6.8.6.1p1, p. 137; PDF p. 149.
 ## 2026-10-13: Torture representation types and constant forms
@@ -1612,8 +1584,9 @@ Non-VM expression operands retain an empty evaluation list. Typedef uses have
 no original operand action: their extents are remembered, as required by
 C99 §6.7.5.2p5 (pp. 116-117; PDF pp. 128-129).
 
-Lowering queries the written site and executes its operand effects once before
-its existing declarator-bound tasks. This preserves GCC's specifier-before-bound
+Written sites retain only newly introduced runtime-bound identities, excluding
+inherited bounds from an evaluated typeof operand or typedef. Lowering executes
+the operand effects once before those new-bound actions. This preserves GCC's specifier-before-bound
 ordering even where Clang chooses the opposite order. `sizeof` type queries
 retain their evaluation mode separately: a constant `sizeof` suppresses type
 operand effects, including `typeof` of a pointer to VLA. Runtime VLA size queries
@@ -1627,3 +1600,24 @@ Address-taking uses `FunctionRecord::parameter_aliases` to share the memory
 requirement between prototype and body bindings before parameter storage is
 chosen (C99 §6.9.1p10, p. 142; PDF p. 154). Bound expressions and body
 expressions then address the same parameter object.
+
+## Shared expression effects and entry actions
+
+Semantic analysis produces one `ExpressionEffects` record per expression in
+child-before-parent order, with value-read and designation/effects-only purity.
+ICE eligibility remains separate from purity. Cast type-site actions are normalized
+into `expression_actions`; both the summary producer and value/effect-only lowering
+consume that same record. An evaluated VM typeof operand or new bound therefore
+prevents an overflow predicate from folding away its effects. Short-circuit and
+selected branches preserve conditional execution, and address-only operations keep
+their existing volatile distinctions. There are no per-query semantic purity caches
+or lowering-owned summary caches. Full sparse evaluation recipes remain M5 work.
+
+`FunctionRecord::parameter_sites` keeps entry actions in written order alongside
+original types and parameter aliases. Lowering initializes incoming parameters and
+aliases first, then runs each site's typeof operand evaluations and newly introduced
+bounds before the body. Prototype-only declarations do not execute entry actions.
+This is the required M2 slice; occurrence IDs and runtime-size formula graphs remain
+future work. C99 §6.9.1p10, p. 142 (PDF p. 154), §6.5.3.4p2, p. 80 (PDF p. 92);
+[GCC Typeof](https://gcc.gnu.org/onlinedocs/gcc/Typeof.html) and
+[GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).
