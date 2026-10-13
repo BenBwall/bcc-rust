@@ -98,6 +98,9 @@ pub(super) enum Task<'tu> {
         ty:          TypeId,
         initializer: &'tu Initializer<'tu>,
     },
+    /// Preserve/reuse the once-evaluated value of a GNU range initializer.
+    RememberInitializer(usize),
+    ReuseInitializer(usize),
     /// Push the compound literal in `slot`, now initialized, as a place.
     PushSlot {
         slot: StackSlot,

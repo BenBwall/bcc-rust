@@ -390,6 +390,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | E::Cast { .. } => {
                 let item = self.pop();
+                if let Some(member) = info.operation_type {
+                    let layout = types::layout(&self.unit.sema.types, info.ty)
+                        .map_err(|kind| at(kind, source))?;
+                    let address = self.fresh_object(layout.size, types::align(layout), source)?;
+                    _ = self.write(
+                        Item {
+                            operand: Operand::Place(Place::Memory(address)),
+                            ty:      member,
+                        },
+                        item,
+                        source,
+                    )?;
+                    self.push_item(Operand::Aggregate(address), info.ty);
+                    return Ok(());
+                }
                 let operand = if repr(&self.unit.sema.types, info.ty)
                     .map_err(|kind| at(kind, source))?
                     == Repr::Void
