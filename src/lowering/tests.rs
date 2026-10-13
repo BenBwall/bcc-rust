@@ -4,6 +4,7 @@
 //! the constant conversions (`floats.rs`), and the constructs
 //! lowering refuses (`refusals.rs`).
 
+mod correspondence;
 mod extensions;
 mod floats;
 mod golden;

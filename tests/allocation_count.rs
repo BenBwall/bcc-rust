@@ -867,6 +867,18 @@ int labeled(void) {return ({int x=3;goto out;x=4;out:x;});}
     }
 
     #[test]
+    fn semantic_occurrence_parameter_and_size_facts_allocate_only_from_arenas() {
+        let source = "int proto(int,int a[static 3]);
+            int old(c,r) char c; float r; {return c+(int)r;}
+            int f(int n,int (*p)[n]){typedef int A[n++];A a;
+            int b[sizeof a/sizeof(int)];void *q=(int (*)[n])p;
+            (void)q;return sizeof b;}\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(summary.diagnostics, 0);
+        assert_eq!(allocations.calls, 0, "M2 retained correspondence and sizes");
+    }
+
+    #[test]
     fn semantic_control_regions_and_type_actions_allocate_only_from_arenas() {
         for (source, diagnostics) in [
             (

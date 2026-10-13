@@ -1,6 +1,41 @@
 //! C99 array extents, declaration lifetime, and Clang execution comparisons.
 use super::*;
 
+const M2_PROGRAMS: &[&str] = &[
+    "int count; int extent(void){return ++count+1;} int f(int n,int a[extent()][n]){
+     return count!=1 || sizeof *a!=12;} int main(void){int a[2][3];return f(3,a);}",
+    "int f(register int n,int (*p)[n],int a[static 3]){{int n=9;(void)n;}
+     return sizeof *p!=12 || a[0]!=7;} int main(void){int a[3][3]={{7}};return f(3,a,a[0]);}",
+    "int old(c,r) char c; float r; {return c!=7 || r!=2.5f;}
+     int main(void){return old(7,2.5f);}",
+    "int f(int,int n){return n!=7;} int main(void){return f(99,7);}",
+    "int main(void){int n=2;typedef int A[n++];A a,b;n=9;
+     int c[sizeof a/sizeof(int)];return n!=9 || sizeof a!=8 || sizeof b!=8 || sizeof c!=8;}",
+    "int main(void){int n=2,m=3;int a[n++][m++];a[1][2]=17;
+     return n!=3 || m!=4 || sizeof a!=24 || a[1][2]!=17;}",
+    "int main(void){int n=2;int a[3][3];int (*p)[n++]=(int (*)[3])a;
+     int before=n;unsigned long s=sizeof(int[n++]);
+     return before!=3 || n!=4 || s!=12 || sizeof(n++)!=4 || n!=4 || sizeof *p!=8;}",
+    "int main(void){int n=2,m=3,k=4;int a[n][m][k];int (*p)[m][k]=a;
+     p++;p[0][2][3]=42;return p-a!=1 || sizeof *p!=48 || a[1][2][3]!=42 ||
+     &a[1][2][3]-&a[1][0][0]!=11;}",
+    "int main(void){int n=2,m=3,a[n][m];int (*p)[m]=a;unsigned long size=sizeof *p++;
+     return p!=a+1 || size!=12;}",
+];
+
+#[test]
+fn m2_parameter_bound_size_and_stride_execution() {
+    for source in M2_PROGRAMS {
+        for target in [Target::LinuxGnu, Target::WindowsGnu] {
+            for (optimize, profile) in STAGES {
+                with_module(source, target, optimize, profile, |module, target| {
+                    assert_eq!(interpret(module, target).0, 0, "{source}");
+                });
+            }
+        }
+    }
+}
+
 const ALIGNED_VLAS: &str = "struct __attribute__((aligned(64))) S { int x; };
 int main(void) { int n=3; _Alignas(32) int a[n], b[n]; struct S c[n];
 a[0]=7; b[0]=11; c[0].x=13;
@@ -140,6 +175,7 @@ fn vla_native_arms_match_clang() {
     .chain(SWITCH_VLAS.iter().copied())
     .chain(M1_REPRODUCERS.iter().copied())
     .chain(M1_LIFETIMES.iter().copied())
+    .chain(M2_PROGRAMS.iter().copied())
     .enumerate()
     {
         // Clang O0 on Win64 retains repeated allocations after an earlier
