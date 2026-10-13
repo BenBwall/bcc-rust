@@ -1524,3 +1524,31 @@ The existing declaration-scope-path checks still reject jumps into scopes of
 variably modified identifiers, including typedefs and pointers to VLAs.
 C99 §6.7.5.2p5, pp. 116-117; PDF pp. 128-129; §6.9.1p10, p. 142;
 PDF p. 154; §6.8.6.1p1, p. 137; PDF p. 149.
+## 2026-10-13: Torture representation types and constant forms
+
+GNU `packed`, `aligned` and scalar `mode` now retain concrete types and layouts.
+Packed enums select the smallest compatible integer representation. Alignment
+belongs to the completed declarator, including arrays and pointers; aligned
+typedefs can weaken their alignment, while ordinary object declarations cannot.
+Record and member packing retain the original member types for ABI classification
+and lower the guaranteed alignment of member accesses and initializer stores.
+`_Alignas` operands are analyzed before declaration completion, with C11
+§6.7.5p2-6 constraints (printed p. 127; PDF p. 145). GNU forms continue to obey
+the existing extension policy, including `Deny` in GNU dialects.
+
+GNU union casts require an exactly compatible member type and produce a union
+rvalue. GNU range designators require ordered nonnegative integer constant
+endpoints within bounds, infer incomplete array bounds from the upper endpoint,
+and retain once-only expression evaluation. Existing `typeof`, type compatibility
+and `offsetof` queries consume these retained types without a separate feature
+implementation. Floating sign, infinity and sign-copy builtins retain signatures,
+operand constraints and constant results, preserving signed zero and NaN payloads.
+
+Decisions: use explicit arena-backed work stacks and retained type-handle
+alignment, existing scalar/memory IR, and the shared byte/relocation initializer
+representation. Do not add stack introspection, nonlocal jumps, argument replay,
+label relocation, inline assembly, vector or complex lowering here. The first
+four require backend/interpreter control or ABI subsystems; aggregate varargs
+and VLA lowering remain owned by the separate worktree. The dated corpus report
+in `docs/research/gcc-torture-execute-results.md` contains the exact inventory,
+counts, implementation references and validation evidence.

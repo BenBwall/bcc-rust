@@ -8,6 +8,8 @@
 //! <https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html>
 //! <https://gcc.gnu.org/onlinedocs/gcc/Stack-Allocation.html>
 
+mod floating;
+
 use super::{
     FunctionLowerer,
     Item,
@@ -349,6 +351,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 };
                 Operand::Value(self.extend(count, false, Type::I32))
             },
+            | CommonBuiltin::Float(operation, _) => self.floating_builtin(
+                operation,
+                &items[..count],
+                info.operation_type.ok_or_else(|| {
+                    LoweringError::missing("a floating builtin has no operand type", source)
+                })?,
+                source,
+            )?,
             | CommonBuiltin::Overflow(op, _, predicate) => {
                 let destination = info.operation_type.ok_or_else(|| {
                     LoweringError::missing("overflow destination is absent", source)

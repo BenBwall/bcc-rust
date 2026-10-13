@@ -703,8 +703,8 @@ exactly as the signature records them, on declarations, definitions and both
 kinds of call. A C `signed char` parameter on System V becomes
 `i8 noundef signext`; its result remains `signext i8`.
 
-**Known gaps:** packed structures do not reach ABI lowering yet,
-since the front end does not model them. A named bit-field in a small aggregate
+**Layout notes:** packed structures reach ABI lowering with their retained
+sizes, member offsets and unaligned-member facts. A named bit-field in a small aggregate
 contributes one `i8` scalar per byte its bits reach, so its bytes classify as
 INTEGER, as Clang classifies them.
 
@@ -1080,3 +1080,25 @@ and position, frees later objects, and reuses their memory. Text round-trip test
 cover both operations and aggregate fetch descriptors; VLA execution tests cover
 both optimization settings, native Clang comparisons, and bounded interpreter
 memory across repeated allocations and jumps.
+## 2026-10-13: Representation attributes and static constants
+
+Packed member reads, writes and aggregate initializers use their guaranteed
+alignment. GNU union casts materialize a temporary union and write the selected
+member. Range initializers use explicit Cartesian cursors and save each selected
+initializer expression once, including aggregate values. The runtime and static
+walkers share the same flattened initializer leaves.
+
+Static file-scope compound literals are memoized as internal globals and filled
+from an iterative queue. Constant pointer values emit bytes; addresses of compound
+literals, array members, selected GNU/C11 expressions and `&*` forms emit the
+existing global relocation representation. Interpreter and LLVM emission consume
+the same constants. C99 §6.6p7-9 (printed pp. 95-96; PDF pp. 107-108) and §6.7.8
+govern these static forms. Label addresses and differences remain deferred because
+they need a code-label relocation model and computed-goto execution.
+
+Floating queries/sign-copy lower through existing scalar operations and byte
+accesses. Native x87 support is exercised without changing the interpreter's
+existing f80/f128 limitation. Bounded formatting shares the existing interpreter
+formatter, writes at most `n-1` characters plus a terminator, avoids the destination
+for `n==0`, and returns the untruncated character count. See the dated torture
+survey for corpus and focused execution results.

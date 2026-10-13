@@ -9,8 +9,8 @@
 //! type (brace elision). An explicit stack of frames replaces recursion;
 //! a frame either owns a braced list or was opened by elision or a
 //! designator and takes its elements from the nearest list below it. A
-//! designation moves the frames to the subobject it names; GNU range
-//! designators are not supported.
+//! designation moves the frames to the subobject it names. GNU ranges use
+//! inclusive cursors; repeated expression leaves share one evaluated value.
 //!
 //! C99: §6.7.8 paragraphs 12-22, pp. 126-127; PDF pp. 138-139.
 
@@ -130,6 +130,8 @@ pub(super) fn leaves<'tu, 's>(
     let mut walker = Walker {
         sema,
         selected_unions: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+        ranges: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+        arena,
     };
     let mut leaves = ArenaVec::new_in(arena);
     if let Some(leaf) = walker.braced_string(ty, 0, initializer)? {
@@ -194,7 +196,7 @@ pub(super) fn leaves<'tu, 's>(
         if let Some(designation) = element.designation
             && designated != Some((owner, position))
         {
-            walker.designate(&mut frames, owner, designation, &mut leaves)?;
+            walker.designate(&mut frames, owner, position, designation, &mut leaves)?;
             designated = Some((owner, position));
             continue;
         }
@@ -213,15 +215,9 @@ pub(super) fn leaves<'tu, 's>(
         };
         walker.select_union(frame, element.source_vectors, &mut leaves)?;
         let offset = frame.offset + subobject.offset;
-        let consume = |frames: &mut ArenaVec<'_, Frame<'tu>>| {
-            frames[top].next = subobject.next;
-            if let Some((_, position)) = &mut frames[owner].list {
-                *position += 1;
-            }
-        };
         match element.initializer.kind {
             | InitializerType::InitializerList(inner) => {
-                consume(&mut frames);
+                walker.consume(&mut frames, top, owner, subobject.next);
                 designated = None;
                 if let Some(leaf) =
                     walker.braced_string(subobject.ty, offset, element.initializer)?
@@ -269,7 +265,7 @@ pub(super) fn leaves<'tu, 's>(
                         if let Leaf::Scalar { bit_field, .. } = &mut leaf {
                             *bit_field = subobject.bit_field;
                         }
-                        consume(&mut frames);
+                        walker.consume(&mut frames, top, owner, subobject.next);
                         designated = None;
                         leaves.push(leaf);
                     },
@@ -344,13 +340,51 @@ struct Subobject {
 }
 
 struct Walker<'a, 'tu, 's> {
+    arena:           &'s Bump,
     sema:            &'a SemanticTranslationUnit<'tu>,
     /// Selection survives frames closed and reopened by designators. The
     /// type distinguishes nested unions starting at the same byte offset.
     selected_unions: ArenaMap<'s, (u64, usize), usize>,
+    /// Inclusive range cursors for the currently consumed source element.
+    ranges:          ArenaMap<'s, (usize, usize), &'s mut [RangeCursor]>,
 }
 
+/// Inclusive GNU range bounds and the current element in their product.
+type RangeCursor = (u64, u64, u64);
+
 impl<'tu> Walker<'_, 'tu, '_> {
+    /// GNU Designated Initializers: advance a Cartesian range in source order,
+    /// then resume at the subobject following its inclusive upper endpoint.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Designated-Inits.html>
+    fn consume(
+        &mut self,
+        frames: &mut ArenaVec<'_, Frame<'tu>>,
+        top: usize,
+        owner: usize,
+        next: usize,
+    ) {
+        frames[top].next = next;
+        let position = frames[owner]
+            .list
+            .expect("a brace frame owns the element")
+            .1;
+        if let Some(cursors) = self.ranges.get_mut(&(owner, position)) {
+            for (lower, current, upper) in cursors.iter_mut().rev() {
+                if *current < *upper {
+                    *current += 1;
+                    return;
+                }
+                *current = *lower;
+            }
+            _ = self.ranges.remove(&(owner, position));
+        }
+        frames[owner]
+            .list
+            .as_mut()
+            .expect("a brace frame owns the element")
+            .1 += 1;
+    }
+
     /// Uses semantic analysis's whole-array classification before descending
     /// into an explicitly braced array's first character.
     /// C99: §6.7.8p14-15, p. 126; PDF p. 138.
@@ -443,7 +477,7 @@ impl<'tu> Walker<'_, 'tu, '_> {
                     .ok_or_else(|| LoweringError::missing("an array element has no size", source))?
                     .size;
                 Ok(Some(Subobject {
-                    ty:        element.qualified(ty.qualifiers),
+                    ty:        self.subobject_type(ty, element, next as u64 * size),
                     offset:    next as u64 * size,
                     bit_field: None,
                     next:      next + 1,
@@ -464,7 +498,7 @@ impl<'tu> Walker<'_, 'tu, '_> {
                     return Err(LoweringError::unsupported(Construct::Initializer, source));
                 }
                 Ok(Some(Subobject {
-                    ty:        member.ty.qualified(ty.qualifiers),
+                    ty:        self.subobject_type(ty, member.ty, member.offset),
                     offset:    member.offset,
                     bit_field: member.width.map(|width| BitFieldBits {
                         bit_offset: member.bit_offset,
@@ -481,6 +515,27 @@ impl<'tu> Walker<'_, 'tu, '_> {
         }
     }
 
+    /// A packed subobject's initializer uses the alignment guaranteed by its
+    /// containing object and offset, as member access does. GCC packed;
+    /// C99 §6.7.8p16-17, pp. 126-127; PDF pp. 138-139 (subobjects).
+    fn subobject_type(&self, parent: TypeId, child: TypeId, offset: u64) -> TypeId {
+        let types = &self.sema.types;
+        let parent_align = types.layout(parent).map_or(1, |layout| layout.align);
+        let offset_align = if offset == 0 {
+            parent_align
+        } else {
+            1_u64 << offset.trailing_zeros()
+        };
+        let child = child.qualified(parent.qualifiers);
+        let natural = types.layout(child).map_or(1, |layout| layout.align);
+        let alignment = natural.min(parent_align).min(offset_align);
+        if alignment < natural {
+            child.with_alignment(u32::try_from(alignment).unwrap_or(0))
+        } else {
+            child
+        }
+    }
+
     /// Moves the frames to the subobject a designation names: the frames
     /// above the brace pair that owns the element close, each designator
     /// but the last opens a frame for the subobject it names, and the last
@@ -490,11 +545,36 @@ impl<'tu> Walker<'_, 'tu, '_> {
         &mut self,
         frames: &mut ArenaVec<'_, Frame<'tu>>,
         owner: usize,
+        position: usize,
         designation: &'tu Designation<'tu>,
         leaves: &mut ArenaVec<'_, Leaf<'tu>>,
     ) -> Result<(), LoweringError> {
         frames.truncate(owner + 1);
         let designators = designation.designators.as_slice();
+        if !self.ranges.contains_key(&(owner, position)) {
+            let mut cursors = ArenaVec::new_in(self.arena);
+            for designator in designators {
+                if let DesignatorType::Range(range) = designator.kind {
+                    let value = |e| {
+                        self.sema
+                            .expression_info(e)
+                            .and_then(|info| info.integer)
+                            .and_then(Integer::to_u64)
+                    };
+                    let lower = value(range.lower.expression()).ok_or_else(|| {
+                        LoweringError::unsupported(Construct::Designator, designator.source_vectors)
+                    })?;
+                    let upper = value(range.upper.expression()).ok_or_else(|| {
+                        LoweringError::unsupported(Construct::Designator, designator.source_vectors)
+                    })?;
+                    cursors.push((lower, lower, upper));
+                }
+            }
+            if !cursors.is_empty() {
+                _ = self.ranges.insert((owner, position), cursors.leak());
+            }
+        }
+        let mut range_index = 0;
         for (index, designator) in designators.iter().enumerate() {
             let source = designator.source_vectors;
             let unsupported = || LoweringError::unsupported(Construct::Designator, source);
@@ -528,7 +608,17 @@ impl<'tu> Walker<'_, 'tu, '_> {
                         }
                     }
                 },
-                | DesignatorType::Range(_) | DesignatorType::Error => return Err(unsupported()),
+                | DesignatorType::Range(_) => {
+                    let current = self
+                        .ranges
+                        .get(&(owner, position))
+                        .and_then(|ranges| ranges.get(range_index))
+                        .ok_or_else(unsupported)?
+                        .1;
+                    frames[top].next = usize::try_from(current).map_err(|_| unsupported())?;
+                    range_index += 1;
+                },
+                | DesignatorType::Error => return Err(unsupported()),
             }
             if index + 1 < designators.len() {
                 self.open_next(frames, source, leaves)?;
@@ -630,7 +720,7 @@ impl<'tu> Walker<'_, 'tu, '_> {
 
 // Storing into automatic objects
 
-impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
+impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
     /// Schedules the leaves of a braced or aggregate initializer: each
     /// scalar is evaluated before its bytes are stored. Only omitted ranges
     /// are zeroed, including resets of later complete subobject initializers.
@@ -653,6 +743,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let mut covered = ArenaVec::new_in(self.scratch);
         let mut search = ArenaVec::new_in(self.scratch);
         let mut tasks = ArenaVec::with_capacity_in(2 * leaves.len(), self.scratch);
+        let mut values = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.scratch);
+        let mut counts = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.scratch);
+        for leaf in &leaves {
+            if let Leaf::Scalar { expression, .. } | Leaf::Copy { expression, .. } = leaf {
+                *counts
+                    .entry(std::ptr::from_ref(*expression).addr())
+                    .or_insert(0_usize) += 1;
+            }
+        }
         for (index, &leaf) in leaves.iter().enumerate() {
             match leaf {
                 | Leaf::Zero {
@@ -767,7 +866,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     expression,
                     bit_field,
                 } => {
-                    tasks.push(Task::Evaluate(expression));
+                    self.initializer_expression(&mut tasks, &mut values, &counts, expression, ty);
                     tasks.push(Task::Initialize {
                         object,
                         offset,
@@ -780,7 +879,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     ty,
                     expression,
                 } => {
-                    tasks.push(Task::Evaluate(expression));
+                    self.initializer_expression(&mut tasks, &mut values, &counts, expression, ty);
                     tasks.push(Task::Initialize {
                         object,
                         offset,
@@ -805,6 +904,35 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         // The first leaf runs first.
         self.tasks.extend(tasks.iter().rev().copied());
         Ok(())
+    }
+
+    /// A GNU range initializer evaluates each expression once, then reuses
+    /// its converted value for every selected subobject, including aggregates.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Designated-Inits.html>
+    fn initializer_expression(
+        &mut self,
+        tasks: &mut ArenaVec<'s, Task<'tu>>,
+        values: &mut ArenaMap<'s, usize, usize>,
+        counts: &ArenaMap<'s, usize, usize>,
+        expression: &'tu Expression<'tu>,
+        ty: TypeId,
+    ) {
+        let key = std::ptr::from_ref(expression).addr();
+        if counts.get(&key).copied().unwrap_or(0) <= 1 {
+            tasks.push(Task::Evaluate(expression));
+        } else if let Some(&index) = values.get(&key) {
+            tasks.push(Task::ReuseInitializer(index));
+        } else {
+            let index = self.initializer_values.len();
+            self.initializer_values.push(Item {
+                operand: Operand::Void,
+                ty,
+            });
+            _ = values.insert(key, index);
+            tasks.push(Task::Evaluate(expression));
+            tasks.push(Task::SnapshotArgument(expression));
+            tasks.push(Task::RememberInitializer(index));
+        }
     }
 
     /// Replaces the implicit members of a braced subobject with zeroes.

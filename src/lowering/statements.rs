@@ -813,6 +813,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             ),
             tasks: ArenaVec::new_in(scratch),
             operands: ArenaVec::new_in(scratch),
+            initializer_values: ArenaVec::new_in(scratch),
             locals: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             labels: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             cases: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),

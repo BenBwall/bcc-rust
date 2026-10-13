@@ -24,6 +24,7 @@ mod declaration_initializers;
 mod runtime_calls;
 mod scalar_builtins;
 mod statement_expressions;
+mod torture_sema;
 mod union_initializers;
 mod vla;
 

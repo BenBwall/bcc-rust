@@ -128,6 +128,19 @@ impl LongDouble {
     pub(crate) fn is_zero(self) -> bool {
         self.classify() == FloatClass::Zero
     }
+
+    /// C99 §7.12.11.1, p. 236; PDF p. 248: copysign changes only the
+    /// representation's sign, including zero and NaN. Both host carriers
+    /// are little-endian; padding remains untouched.
+    pub(crate) fn with_sign(mut self, sign: bool) -> Self {
+        let byte = if ffi::LONG_DOUBLE_VALUE_BYTES == 8 {
+            7
+        } else {
+            9
+        };
+        self.value[byte] = (self.value[byte] & 0x7F) | if sign { 0x80 } else { 0 };
+        self
+    }
 }
 
 impl LongDouble {

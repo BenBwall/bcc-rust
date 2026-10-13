@@ -301,6 +301,17 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 ty,
                 initializer,
             } => self.initialize_aggregate(object, ty, initializer),
+            | Task::RememberInitializer(index) => {
+                self.initializer_values[index] = *self
+                    .operands
+                    .last()
+                    .expect("an initializer value is on the stack");
+                Ok(())
+            },
+            | Task::ReuseInitializer(index) => {
+                self.operands.push(self.initializer_values[index]);
+                Ok(())
+            },
             | Task::PushSlot { slot, ty } => {
                 let address = self.inst(InstData::StackAddr { slot }, Type::Ptr);
                 self.operands.push(Item {
@@ -371,34 +382,35 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
 
 /// The state of lowering one function body.
 struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
-    unit:             &'u mut Unit<'a, 'tu, 'ir>,
-    record:           &'tu FunctionRecord<'tu>,
+    unit:               &'u mut Unit<'a, 'tu, 'ir>,
+    record:             &'tu FunctionRecord<'tu>,
     /// The function's name, for naming its static locals.
-    name:             &'a str,
-    draft:            Draft<'s>,
-    scratch:          &'s Bump,
+    name:               &'a str,
+    draft:              Draft<'s>,
+    scratch:            &'s Bump,
     /// Cached type-operand effects, reused across short-circuit scheduling.
-    effect_summaries: crate::translation_phases::semantic_analysis::EffectSummaries<'s>,
-    tasks:            ArenaVec<'s, Task<'tu>>,
-    operands:         ArenaVec<'s, Item>,
+    effect_summaries:   crate::translation_phases::semantic_analysis::EffectSummaries<'s>,
+    tasks:              ArenaVec<'s, Task<'tu>>,
+    operands:           ArenaVec<'s, Item>,
+    initializer_values: ArenaVec<'s, Item>,
     /// The storage of each automatic object, by binding.
-    locals:           ArenaMap<'s, usize, Local>,
+    locals:             ArenaMap<'s, usize, Local>,
     /// The block of each label, created at its first `goto` or definition.
-    labels:           ArenaMap<'s, StringCacheId, Block>,
+    labels:             ArenaMap<'s, StringCacheId, Block>,
     /// The block of each `case` or `default` statement, by its address.
-    cases:            ArenaMap<'s, usize, Block>,
-    jumps:            ArenaVec<'s, JumpTargets>,
+    cases:              ArenaMap<'s, usize, Block>,
+    jumps:              ArenaVec<'s, JumpTargets>,
     /// The case blocks of the open switches, sealed when each ends.
-    switch_blocks:    ArenaVec<'s, Block>,
+    switch_blocks:      ArenaVec<'s, Block>,
     /// Where each open switch's blocks start in `switch_blocks`.
-    switch_starts:    ArenaVec<'s, usize>,
+    switch_starts:      ArenaVec<'s, usize>,
     /// The unqualified result type that `return` converts to.
-    result:           TypeId,
-    bounds:           ArenaMap<'s, usize, ssa::Var>,
-    scopes:           ArenaVec<'s, vla::Scope>,
-    label_scopes:     ArenaMap<'s, StringCacheId, usize>,
-    block_scopes:     ArenaMap<'s, Block, usize>,
-    scope_parents:    ArenaMap<'s, usize, usize>,
+    result:             TypeId,
+    bounds:             ArenaMap<'s, usize, ssa::Var>,
+    scopes:             ArenaVec<'s, vla::Scope>,
+    label_scopes:       ArenaMap<'s, StringCacheId, usize>,
+    block_scopes:       ArenaMap<'s, Block, usize>,
+    scope_parents:      ArenaMap<'s, usize, usize>,
 }
 
 // Tests

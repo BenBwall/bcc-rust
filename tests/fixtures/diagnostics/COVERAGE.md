@@ -853,3 +853,10 @@ noise; all twelve primary labels identify their jump and retain the C99 notes.
 A following ordinary declaration survives. Semantic tests check each error
 individually; the shared header-target execution probe preserves valid outer
 loop/switch targets, including continue through a switch.
+
+### Representation attributes and GNU constant forms
+
+`sema-representation.c` pins invalid GNU alignment and scalar modes, weakening
+ISO alignment, mismatched union-cast member types and reversed GNU ranges.
+Its GNU11 sidecar keeps the diagnostics focused on operand constraints; a
+following declaration survives every error.

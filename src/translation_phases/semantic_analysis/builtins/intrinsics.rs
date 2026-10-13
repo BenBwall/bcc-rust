@@ -279,6 +279,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 tainted:           Cell::new(false),
                 contains_flexible: Cell::new(false),
                 compatible:        Cell::new(Scalar::Int),
+                packed:            Cell::new(false),
+                alignment:         Cell::new(0),
             }));
             id
         };

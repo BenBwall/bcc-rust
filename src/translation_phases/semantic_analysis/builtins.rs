@@ -31,6 +31,7 @@
 mod common;
 mod designators;
 mod effects;
+mod floating;
 mod intrinsics;
 mod library;
 mod names;
@@ -45,6 +46,7 @@ mod x86_builtins;
 pub(crate) use common::{
     BitOperation,
     CommonBuiltin,
+    FloatOperation,
     OverflowOperation,
     common_builtin,
     keyword_call,
