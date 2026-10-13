@@ -365,6 +365,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         name:          Some(name),
                         ty:            int,
                         array_minimum: None,
+                        original:      int,
                     });
                 }
                 _ = self
@@ -408,6 +409,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 self.types.unknown()
             };
+            // Adjustment must not discard a definition's evaluated outer
+            // array bound. C99: §6.9.1p10, p. 142; PDF p. 154.
+            if let Some(current) = self.functions.current.as_ref() {
+                _ = self.functions.old_types.insert((current.id, name.name), ty);
+            }
             let ty = match self.types.nodes[ty.index] {
                 | TypeKind::Array(element, _) => self.types.intern(TypeKind::Pointer(element)),
                 | TypeKind::Function { .. } => self.types.intern(TypeKind::Pointer(ty)),

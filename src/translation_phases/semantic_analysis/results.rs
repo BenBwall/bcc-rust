@@ -139,24 +139,27 @@ pub(crate) enum Duration {
     )
 )]
 pub(crate) struct FunctionRecord<'tu> {
-    pub(crate) syntax:     &'tu FunctionDefinition<'tu>,
+    pub(crate) syntax:          &'tu FunctionDefinition<'tu>,
     /// The function's binding; its type is the composite function type,
     /// which for an old-style definition lists the promoted parameter types
     /// (§6.9.1p7). `None` when the declarator names nothing.
-    pub(crate) binding:    Option<usize>,
+    pub(crate) binding:         Option<usize>,
     /// The declared result type, `Unknown` when it is invalid; a return
     /// converts to its unqualified version (§6.8.6.4p3).
-    pub(crate) result:     TypeId,
+    pub(crate) result:          TypeId,
     /// The function scope that holds the parameters and the body's
     /// outermost declarations (§6.9.1p9).
-    pub(crate) scope:      usize,
+    pub(crate) scope:           usize,
     /// One entry per declared parameter in the declarator's order (the
     /// identifier list for an old-style definition), each the parameter's
     /// body binding. A lone `void` gives no entries. An unnamed parameter or
     /// a repeated name has `None`. A binding's own type is the declared
     /// type, which an old-style definition converts to from the promoted
     /// argument type on entry (§6.9.1p10).
-    pub(crate) parameters: &'tu [Option<usize>],
+    pub(crate) parameters:      &'tu [Option<usize>],
+    /// Unadjusted definition parameter types, including evaluated outer bounds.
+    /// C99: §6.9.1p10, p. 142; PDF p. 154.
+    pub(crate) parameter_types: &'tu [TypeId],
 }
 
 /// A lexical scope and its enclosing scope.

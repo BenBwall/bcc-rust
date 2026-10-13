@@ -340,7 +340,7 @@ fn exceptional_array_bounds_are_variable_length_arrays() {
             .unwrap();
         assert!(matches!(
             s.types.nodes[b.ty.index],
-            TypeKind::Array(_, ArrayBound::Variable)
+            TypeKind::Array(_, ArrayBound::Variable(_))
         ));
     });
     assert_eq!(

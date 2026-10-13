@@ -580,7 +580,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | TypeKind::Vector { element, count, .. } => (index < count).then_some(element),
             | TypeKind::Array(element, bound) =>
                 if matches!(bound, ArrayBound::Constant(n) if index >= n)
-                    || matches!(bound, ArrayBound::Variable | ArrayBound::Star)
+                    || matches!(bound, ArrayBound::Variable(_) | ArrayBound::Star)
                 {
                     None
                 } else {

@@ -389,7 +389,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                                 }
                                 let text = match bound {
                                     | ArrayBound::Incomplete => "[]",
-                                    | ArrayBound::Variable => "[*runtime*]",
+                                    | ArrayBound::Variable(_) => "[*runtime*]",
                                     | ArrayBound::Star => "[*]",
                                     | ArrayBound::Constant(n) =>
                                         crate::diagnostics::format_in!(arena, "[{n}]"),

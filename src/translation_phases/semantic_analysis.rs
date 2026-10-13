@@ -619,11 +619,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             );
                         }
                     }
-                    value
-                        .to_u64()
-                        .map_or(ArrayBound::Variable, ArrayBound::Constant)
+                    value.to_u64().map_or_else(
+                        || self.types.variable_bound(expression),
+                        ArrayBound::Constant,
+                    )
                 } else {
-                    ArrayBound::Variable
+                    self.types.variable_bound(expression)
                 };
                 let ty = self
                     .types
@@ -690,6 +691,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::ParameterDone(p, params) => {
                 let mut ty = self.take_type();
+                let original = ty;
                 let array_minimum = if let TypeKind::Array(_, bound) = self.types.nodes[ty.index] {
                     p.declarator
                         .filter(|d| {
@@ -753,6 +755,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         name,
                         ty,
                         array_minimum,
+                        original,
                     },
                 );
             },

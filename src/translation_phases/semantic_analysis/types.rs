@@ -34,7 +34,7 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
             qualifiers: TypeQualifiers::empty(),
         };
         let variably_modified = match kind {
-            | TypeKind::Array(_, ArrayBound::Variable | ArrayBound::Star) => true,
+            | TypeKind::Array(_, ArrayBound::Variable(_) | ArrayBound::Star) => true,
             // C11 §6.7.6p3: derived types retain variably modified state.
             | TypeKind::Array(next, _) | TypeKind::Pointer(next) | TypeKind::Atomic(next) =>
                 self.variably_modified[next.index],
@@ -62,6 +62,17 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         self.nodes.push(kind);
         _ = self.keys.insert(kind, ty);
         ty
+    }
+
+    /// Retains a distinct bound identity for each evaluated array derivation.
+    /// C99: §6.7.5.2p5, pp. 116-117; PDF pp. 128-129.
+    pub(crate) fn variable_bound(
+        &mut self,
+        expression: &'tu crate::translation_phases::parsing::syntax::Expression<'tu>,
+    ) -> ArrayBound {
+        let index = self.runtime_bounds.len();
+        self.runtime_bounds.push(expression);
+        ArrayBound::Variable(index)
     }
 
     /// Compatibility and composite construction use an explicit postorder
@@ -281,6 +292,7 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
             #[cfg(test)]
             steps: Cell::new(0),
             nodes: ArenaVec::new_in(tu),
+            runtime_bounds: ArenaVec::new_in(tu),
             tags: ArenaVec::new_in(tu),
             keys: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             variably_modified: ArenaVec::new_in(scratch),
@@ -295,9 +307,10 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
 
     pub(crate) fn finish(self) -> Types<'tu> {
         Types {
-            nodes:  self.nodes.leak(),
-            tags:   self.tags.leak(),
-            target: self.target,
+            nodes:          self.nodes.leak(),
+            runtime_bounds: self.runtime_bounds.leak(),
+            tags:           self.tags.leak(),
+            target:         self.target,
         }
     }
 
@@ -373,6 +386,7 @@ pub(crate) struct TypeInterner<'tu, 's> {
     /// Type nodes examined by completeness and recovery queries in tests.
     #[cfg(test)]
     pub(super) steps:  Cell<usize>,
+    runtime_bounds: ArenaVec<'tu, &'tu crate::translation_phases::parsing::syntax::Expression<'tu>>,
     pub(crate) nodes:  ArenaVec<'tu, TypeKind<'tu>>,
     pub(crate) tags:   ArenaVec<'tu, &'tu Tag<'tu>>,
     keys:              ArenaMap<'s, TypeKind<'tu>, TypeId>,
@@ -423,9 +437,11 @@ pub(crate) enum TypeKind<'tu> {
 /// Durable type graph, retained after semantic working storage is released.
 #[derive(Debug)]
 pub(crate) struct Types<'tu> {
-    pub(crate) nodes:  &'tu [TypeKind<'tu>],
-    pub(crate) tags:   &'tu [&'tu Tag<'tu>],
-    pub(crate) target: TargetLayout,
+    pub(crate) runtime_bounds:
+        &'tu [&'tu crate::translation_phases::parsing::syntax::Expression<'tu>],
+    pub(crate) nodes:          &'tu [TypeKind<'tu>],
+    pub(crate) tags:           &'tu [&'tu Tag<'tu>],
+    pub(crate) target:         TargetLayout,
 }
 
 /// Retained nominal type; completion mutates only its member/layout cells.
@@ -502,6 +518,7 @@ pub(crate) struct Parameter {
     pub(crate) name:          Option<super::Identifier>,
     pub(crate) ty:            TypeId,
     pub(crate) array_minimum: Option<ArrayBound>,
+    pub(crate) original:      TypeId,
 }
 
 /// Array completeness and run-time extent; `Star` is prototype-scope `[*]`.
@@ -510,7 +527,7 @@ pub(crate) struct Parameter {
 pub(crate) enum ArrayBound {
     Incomplete,
     Constant(u64),
-    Variable,
+    Variable(usize),
     Star,
 }
 

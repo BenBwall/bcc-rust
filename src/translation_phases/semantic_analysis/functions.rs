@@ -198,6 +198,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             result,
             scope: self.scope,
             parameters: &[],
+            parameter_types: self
+                .types
+                .tu
+                .alloc_slice_fill_iter(parameters.iter().map(|p| p.original)),
         });
         self.functions.current = Some(FunctionContext {
             id,
@@ -607,6 +611,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut seen = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut parameters = ArenaVec::new_in(self.scratch);
         let mut parameter_bindings = ArenaVec::new_in(self.scratch);
+        let mut original_types = ArenaVec::new_in(self.scratch);
         for parameter in current.parameters {
             parameter_bindings.push(None);
             let Some(name) = parameter.name else {
@@ -676,10 +681,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | TypeKind::Scalar(Scalar::Float) => self.types.scalar(Scalar::Double),
                 | _ => declared.unqualified(),
             };
+            original_types.push(
+                self.functions
+                    .old_types
+                    .get(&(current.id, name.name))
+                    .copied()
+                    .unwrap_or(declared),
+            );
             parameters.push(promoted);
         }
         self.function_records[current.id].parameters =
             self.types.tu.alloc_slice_copy(&parameter_bindings);
+        self.function_records[current.id].parameter_types =
+            self.types.tu.alloc_slice_copy(&original_types);
         let Some(index) = current.binding else {
             return;
         };
@@ -1184,15 +1198,16 @@ struct InlineObject {
 }
 
 pub(super) struct State<'tu, 's> {
-    pub(super) current: Option<FunctionContext<'tu>>,
-    next_function:      usize,
-    old_names:          ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
-    entities:           ArenaMap<'s, StringCacheId, Entity>,
-    previous:           ArenaMap<'s, usize, SourceVectors>,
-    uses:               ArenaVec<'s, Use>,
-    sizeof_contexts:    ArenaVec<'s, SizeofContext<'tu>>,
-    pub(super) sizeof:  Option<usize>,
-    inline_objects:     ArenaVec<'s, InlineObject>,
+    pub(super) current:   Option<FunctionContext<'tu>>,
+    next_function:        usize,
+    old_names:            ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
+    pub(super) old_types: ArenaMap<'s, (usize, StringCacheId), TypeId>,
+    entities:             ArenaMap<'s, StringCacheId, Entity>,
+    previous:             ArenaMap<'s, usize, SourceVectors>,
+    uses:                 ArenaVec<'s, Use>,
+    sizeof_contexts:      ArenaVec<'s, SizeofContext<'tu>>,
+    pub(super) sizeof:    Option<usize>,
+    inline_objects:       ArenaVec<'s, InlineObject>,
 }
 
 impl<'s> State<'_, 's> {
@@ -1201,6 +1216,7 @@ impl<'s> State<'_, 's> {
             current:         None,
             next_function:   0,
             old_names:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            old_types:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             entities:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             previous:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             uses:            ArenaVec::new_in(scratch),
