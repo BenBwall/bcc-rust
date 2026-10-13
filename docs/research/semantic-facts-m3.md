@@ -1,8 +1,8 @@
 # M3 resolved expressions, calls, tails and members
 
 Base: PR #53 head `92098d53ed2a949a71d2434c0585d35d31217f6a`, branch
-`claude/semantic-facts-m2`, containing M1 and M2. Implementation remains
-uncommitted in this worktree. The approved design was read with
+`claude/semantic-facts-m2`, containing M1 and M2. M3 landed on that branch as
+`d30d4801..6b5327c0`. The approved design was read with
 `git show origin/claude/semantic-facts-design:docs/design/semantic-facts.md`;
 that branch resolves to `d6aa79b61ace166a54b0ab12518fe3b389b90943`.
 This implements the M3 migration row and the M3 portion of C09–C12, C31 and C32.
