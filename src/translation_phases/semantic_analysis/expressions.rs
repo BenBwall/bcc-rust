@@ -32,10 +32,7 @@ mod results;
 // Constant addresses
 mod address;
 
-use std::num::{
-    NonZeroU8,
-    NonZeroU32,
-};
+use std::num::NonZeroU8;
 
 pub(crate) use address::AddressBase;
 pub(crate) use results::{
@@ -44,8 +41,6 @@ pub(crate) use results::{
     Conversion,
     ConversionKind,
     ValueCategory,
-    selected_designator,
-    statement_expression_tail,
 };
 
 use super::{
@@ -360,8 +355,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 // C99 §6.5.1p5: parentheses preserve the callee designation.
                 // GNU vector builtins retain constraints through parentheses.
-                let vector_callee =
-                    selected_designator(function_expression, |e| Some(self.expression_info(e)));
+                let vector_callee = self.selected_designator(function_expression);
                 let intrinsic = self
                     .expression_info(vector_callee)
                     .binding
@@ -422,7 +416,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.static_address = self.scope == 0;
             },
             | E::StatementExpression(statement) => {
-                if let Some((_, tail)) = statement_expression_tail(statement) {
+                if let Some((_, tail)) = self.statement_expression_tail(statement) {
                     // GNU extension: GCC "Statement Exprs" returns the value
                     // of the final expression statement. Its ValueExpression
                     // work already recorded C99 §6.3.2.1p2-4 conversions
@@ -520,6 +514,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.folding = ConstantFolding::AddressDifference;
             }
         }
+        if let E::StatementExpression(block) = e.kind {
+            self.retain_statement_expression(e, block, info.ty);
+        }
         self.retain_expression(info);
     }
 }
@@ -549,10 +546,6 @@ pub(crate) struct ExpressionInfo<'tu> {
     pub(crate) category: ValueCategory,
     pub(crate) binding: Option<usize>,
     pub(crate) bit_field: Option<u32>,
-    /// For `.` and `->`, one more than the index of the selected member in
-    /// the record's `Tag::fields`; read it through [`Self::field_index`].
-    /// Four bytes fit in the record's padding, so it does not grow.
-    pub(in crate::translation_phases::semantic_analysis) field: Option<NonZeroU32>,
     pub(crate) register: bool,
     /// GNU vector extension: a lane remains assignable but has no address.
     pub(crate) vector_element: bool,

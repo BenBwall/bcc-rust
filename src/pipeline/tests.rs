@@ -1196,7 +1196,10 @@ fn member_access_retains_the_selected_field() {
                 .expect("(p->in.x) is typed");
             let field = sema.selected_field(parenthesized.expression).unwrap();
             assert_eq!(context.string_cache.at(field.name.name), "x");
-            assert_eq!(parenthesized.field_index(), Some(0));
+            assert_eq!(
+                sema.member_facts(parenthesized.expression).unwrap().field,
+                0
+            );
             assert!(
                 sema.selected_field(returned).is_none(),
                 "a sum selects nothing"

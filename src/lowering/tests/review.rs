@@ -208,7 +208,7 @@ fn ten_thousand_static_locals_use_linear_name_storage() {
     let arena = Bump::new();
     let tables = Bump::new();
     let scratch = Bump::new();
-    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables);
+    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables).unwrap();
     let mut errors = ArenaVec::new_in(&arena);
     unit.prepare_extensions(&mut errors);
     let functions = unit.declare_items(&syntax, &mut errors);
@@ -258,7 +258,7 @@ fn thousands_of_string_symbols_use_linear_arena_space() {
     assert!(sema.lowerable(&context));
     let arena = Bump::new();
     let tables = Bump::new();
-    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables);
+    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables).unwrap();
     // Pre-existing symbols must still be skipped by the suffix counter.
     for name in [".str", ".str.1", ".str.3"] {
         _ = unit.module.declare_global(
@@ -562,7 +562,7 @@ fn m2_many_functions_and_declarations_have_linear_correspondence_work() {
     assert!(sema.lowerable(&context));
     let arena = Bump::new();
     let tables = Bump::new();
-    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables);
+    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables).unwrap();
     let mut errors = ArenaVec::new_in(&arena);
     unit.prepare_extensions(&mut errors);
     let functions = unit.declare_items(&syntax, &mut errors);

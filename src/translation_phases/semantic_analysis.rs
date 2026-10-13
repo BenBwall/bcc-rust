@@ -117,8 +117,6 @@ pub(crate) use expressions::{
     ConversionKind,
     ExpressionInfo,
     ValueCategory,
-    selected_designator,
-    statement_expression_tail,
 };
 pub(crate) use facts::*;
 pub(crate) use integer::Integer;
@@ -266,6 +264,7 @@ pub(crate) fn analyze<'tu>(
                 },
             ));
     SemanticTranslationUnit {
+        resolved: analyzer.resolved.retain(),
         correspondence: analyzer.correspondence.retain(),
         sizes,
         runtime_bounds: analyzer.runtime_bounds.leak(),
@@ -1680,6 +1679,7 @@ struct Analyzer<'a, 'tu, 's> {
     bound_origins:           ArenaMap<'s, usize, BoundEvaluationSite>,
     bound_expression_starts: ArenaMap<'s, usize, usize>,
     integer_models:          ArenaMap<'s, usize, Option<(u32, bool)>>,
+    resolved:                resolved::ResolvedBuilder<'tu, 's>,
     expressions:             ArenaVec<'tu, ExpressionInfo<'tu>>,
     expression_effects:      ArenaVec<'tu, ExpressionEffects>,
     expression_actions:      ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,

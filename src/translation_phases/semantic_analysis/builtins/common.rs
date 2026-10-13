@@ -127,7 +127,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         callee: &'tu Expression<'tu>,
         arguments: ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> Option<ExpressionInfo<'tu>> {
-        let callee = super::super::selected_designator(callee, |e| Some(self.expression_info(e)));
+        let callee = self.selected_designator(callee);
         let ExpressionType::Identifier(name) = callee.kind else {
             return None;
         };

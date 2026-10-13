@@ -29,7 +29,6 @@ use crate::{
             },
             syntax::{
                 Expression,
-                ExpressionType,
                 FunctionDefinition,
                 Identifier,
             },
@@ -44,6 +43,7 @@ use crate::{
 /// Durable semantic output. Working maps/stacks are gone when this is returned.
 #[derive(Debug)]
 pub(crate) struct SemanticTranslationUnit<'tu> {
+    pub(crate) resolved:            super::ResolvedFacts<'tu>,
     pub(crate) correspondence:      super::CorrespondenceFacts<'tu>,
     pub(crate) sizes:               super::SizeFacts<'tu>,
     pub(crate) runtime_bounds:      &'tu [super::RuntimeBound<'tu>],
@@ -323,25 +323,13 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     /// C99: §6.5.2.3 paragraphs 3-4, p. 73; PDF p. 85.
     /// C11: §6.7.2.1 paragraph 13, p. 115; PDF p. 133 (anonymous members).
     pub(crate) fn selected_field(&self, member: &'tu Expression<'tu>) -> Option<&'tu Field<'tu>> {
-        let index = self.expression_info(member)?.field_index()?;
-        let member = super::selected_designator(member, |e| self.expression_info(e).copied());
-        let (base, indirect) = match member.kind {
-            | ExpressionType::DirectMember {
-                base_expression, ..
-            } => (base_expression, false),
-            | ExpressionType::IndirectMember {
-                base_expression, ..
-            } => (base_expression, true),
-            | _ => return None,
-        };
-        let mut record = self.expression_info(base)?.ty;
-        if indirect {
-            record = match self.types.kind(self.types.non_atomic(record)) {
-                | TypeKind::Pointer(target) | TypeKind::Array(target, _) => target,
-                | _ => return None,
-            };
-        }
-        self.types.tag(record)?.fields.get().get(index)
+        let facts = self.member_facts(member)?;
+        self.types
+            .tags
+            .get(facts.tag)?
+            .fields
+            .get()
+            .get(facts.field)
     }
 
     /// The conversions applied to `expression`, empty when it has no record.

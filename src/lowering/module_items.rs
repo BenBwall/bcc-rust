@@ -1069,10 +1069,12 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 | ExpressionType::DirectMember {
                     base_expression, ..
                 } if place || matches!(self.sema.types.kind(info.ty), TypeKind::Array(..)) => {
-                    let field = self
-                        .sema
-                        .selected_field(expression)
-                        .ok_or_else(unsupported)?;
+                    let field = self.sema.selected_field(expression).ok_or_else(|| {
+                        LoweringError::missing(
+                            "member facts are not retained",
+                            expression.source_vectors,
+                        )
+                    })?;
                     if field.width.is_some() {
                         return Err(unsupported());
                     }
@@ -1223,7 +1225,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         target: Target,
         arena: &'ir Bump,
         tables: &'a Bump,
-    ) -> Self {
+    ) -> Result<Self, LoweringError> {
+        let address_taken = address_taken::find(sema, context, tables)?;
         let mut module = Module::new(arena);
         module.set_target(target.triple(), types::data_layout(target));
         let mut definitions = ArenaMap::with_capacity_and_hasher_in(
@@ -1241,7 +1244,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 _ = defined_functions.insert(sema.bindings[binding].name.name);
             }
         }
-        Self {
+        Ok(Self {
             #[cfg(test)]
             parameter_alias_visits: 0,
             context,
@@ -1253,7 +1256,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             definitions,
             defined_functions,
             defined_objects,
-            address_taken: address_taken::find(sema, context, tables),
+            address_taken,
             statics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             strings: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             compound_literals: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
@@ -1263,6 +1266,6 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             generated_globals: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             conflicting_names: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             next_name_suffix: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
-        }
+        })
     }
 }

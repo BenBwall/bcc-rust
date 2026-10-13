@@ -72,6 +72,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             tag_declarations: ArenaVec::new_in(tu),
             resolved_type_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             integer_models: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            resolved: super::facts::resolved::ResolvedBuilder::new(tu, scratch),
             expressions: ArenaVec::new_in(tu),
             expression_effects: ArenaVec::new_in(tu),
             expression_actions: ArenaMap::with_hasher_in(FxBuildHasher, tu),

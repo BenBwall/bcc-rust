@@ -36,7 +36,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> Option<(AddressBase<'tu>, i128)> {
         let mut offset = 0_i128;
         loop {
-            e = super::selected_designator(e, |e| Some(self.expression_info(e)));
+            e = self.selected_designator(e);
             let info = self.expression_info(e);
             if !lvalue {
                 if matches!(
