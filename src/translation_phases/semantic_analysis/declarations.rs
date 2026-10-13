@@ -791,6 +791,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // ignore member alignment; MinGW retains it.
             // <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html>
             let packed = tag.packed.get() || member.packed;
+            // MinGW's Microsoft bit-field layout ignores typedef alignment,
+            // but retains alignment written on the member. GCC Common Type
+            // Attributes (aligned); C99 §6.7.2.1p10, p. 102; PDF p. 114.
+            if member.width.is_some()
+                && self.context.configuration.target() == crate::target::Target::WindowsGnu
+            {
+                layout.align = self
+                    .types
+                    .natural_alignment(member.ty)
+                    .unwrap_or(1)
+                    .max(u64::from(member.explicit_alignment));
+            }
             let ignore_alignment = packed
                 && member.width.is_some()
                 && self.context.configuration.target() == crate::target::Target::WindowsMsvc;
@@ -890,9 +902,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 bit_end,
                                 bits.max(u64::from(member.explicit_alignment).checked_mul(8)?),
                             )?
-                        } else if member.explicit_alignment != 0
-                            || !packed && member.ty.alignment != 0
-                        {
+                        } else if member.explicit_alignment != 0 {
                             align_up(bit_end, layout.align.checked_mul(8)?)?
                         } else if packed {
                             bit_end

@@ -213,6 +213,15 @@ holds is diagnosed.
 
 ### Storage, natural and member-place alignment
 
+`Member::explicit_alignment` alone requests a new System V value-bit-field
+boundary. Typedef-inherited alignment affects record alignment without splitting
+adjacent fields. MinGW ignores inherited typedef alignment on bit-fields; MSVC
+and System V retain it, following bundled Clang. Packed placement and zero-width
+boundaries retain their separate target rules. C99 §6.7.2.1p10 (printed p. 102;
+PDF p. 114) leaves allocation-unit alignment unspecified; the GNU
+[aligned attribute](https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html)
+supplies the extension contract.
+
 `Types::storage_alignment` is the retained query for a declaration's storage
 requirement, including variable array derivations. `Types::layout` supplies the
 same requirement for complete fixed objects; `Types::natural_alignment` ignores
