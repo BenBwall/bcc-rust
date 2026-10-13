@@ -2,6 +2,17 @@
 //! GNU extension: GCC manuals cited by the implementation owners.
 
 use super::*;
+use crate::{
+    backend::interpreter::{
+        Trap,
+        UbKind,
+    },
+    optimizer::{
+        Pass,
+        PassList,
+        optimize,
+    },
+};
 
 fn with_module<R>(
     source: &str,
@@ -308,7 +319,13 @@ fn gcc_scalar_builtin_poison_and_termination_are_observable() {
                     |module, target| {
                         let arena = Bump::new();
                         let mut host = DefaultHost::for_target(&arena, target);
-                        _ = interpreter::run(module, "main", &[], &mut host).unwrap_err();
+                        assert!(
+                            matches!(
+                                interpreter::run(module, "main", &[], &mut host),
+                                Err(Trap::UndefinedBehavior(UbKind::BranchOnPoison, _))
+                            ),
+                            "{name} {target:?} optimize={optimize}"
+                        );
                     },
                 );
             }
@@ -350,6 +367,52 @@ fn gcc_scalar_builtin_poison_and_termination_are_observable() {
                     _ = interpreter::run(module, "main", &[], &mut host).unwrap_err();
                 },
             );
+        }
+    }
+}
+
+#[test]
+fn zero_bit_counts_can_be_frozen_before_and_after_folding() {
+    for opcode in ["clz", "ctz"] {
+        for width in [8, 16, 32, 64] {
+            let text = format!(
+                "function @main() -> i32 external {{
+block0:
+    v0 = iconst.i{width} 0
+    v1 = {opcode}.i{width} v0
+    v2 = freeze.i{width} v1
+    v3 = icmp.i{width} eq v2, v2
+    brif v3, block1, block2
+block1:
+    v4 = iconst.i32 0
+    return v4
+block2:
+    v5 = iconst.i32 1
+    return v5
+}}
+"
+            );
+            for target in [Target::LinuxGnu, Target::WindowsGnu] {
+                let arena = Bump::new();
+                let mut module = parse_module(&arena, &text).unwrap();
+                for folded in [false, true] {
+                    if folded {
+                        let scratch = Bump::new();
+                        let mut options = OptimizerOptions::default();
+                        options.passes = PassList::new(&[Pass::Fold]);
+                        _ = optimize(&mut module, &options, &scratch);
+                        assert!(module.to_string().contains(&format!("poison.i{width}")));
+                    }
+                    let verifier = Bump::new();
+                    let errors = verify_module(&module, Profile::PreAbi, &verifier);
+                    assert!(errors.is_empty(), "{errors:?}\n{module}");
+                    assert_eq!(
+                        interpret(&module, target).0,
+                        0,
+                        "{opcode}.i{width} {target:?} folded={folded}"
+                    );
+                }
+            }
         }
     }
 }
