@@ -203,22 +203,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let ty = self.types.scalar(Scalar::Double);
                     self.common_argument(args[2], ty);
                     let p = self.expression_info(args[2]);
+                    // GCC's probability parameter is double; check its
+                    // converted value, including rounding
+                    // onto either endpoint. C99 §6.3.1.5p2,
+                    // p. 44; PDF p. 56.
+                    let value = self
+                        .floating_value(p)
+                        .and_then(|value| self.round_floating(value, ty));
                     if p.constant != ConstantClass::Arithmetic
-                        || p.integer
-                            .and_then(Integer::to_i128)
-                            .is_none_or(|v| v != 0 && v != 1)
-                            && p.floating.as_ref().is_none_or(|v| {
-                                !matches!(
-                                    v.real.compare(crate::float_parsing::LongDouble::ZERO),
-                                    0 | 1
-                                ) || !matches!(
-                                    v.real
-                                        .compare(crate::float_parsing::LongDouble::from_double(
-                                            1.0
-                                        )),
-                                    -1 | 0
-                                )
-                            })
+                        || value.is_none_or(|v| {
+                            !matches!(
+                                v.real.compare(crate::float_parsing::LongDouble::ZERO),
+                                0 | 1
+                            ) || !matches!(
+                                v.real
+                                    .compare(crate::float_parsing::LongDouble::from_double(1.0)),
+                                -1 | 0
+                            )
+                        })
                     {
                         self.error(
                             SemanticErrorKind::InvalidArgumentType,

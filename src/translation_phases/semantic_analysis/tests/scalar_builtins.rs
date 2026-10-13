@@ -137,6 +137,61 @@ int main(void) {int r; a=__builtin_bswap16(1);b=__builtin_bswap32(1);c=__builtin
 }
 
 #[test]
+fn expect_probability_checks_the_converted_double_endpoints() {
+    // Float-to-double promotion is exact: these float and double cases
+    // round at source precision, whereas long double rounds at the call.
+    for target in [
+        crate::target::Target::LinuxGnu,
+        crate::target::Target::LinuxMusl,
+        crate::target::Target::WindowsGnu,
+        crate::target::Target::WindowsMsvc,
+    ] {
+        for (probability, accepted) in [
+            ("(float)(1.0L + 0x1p-25L)", true),
+            ("(float)-0x1p-150L", true),
+            ("1.0f + 0x1p-23f", false),
+            ("-0x1p-149f", false),
+            ("(double)(1.0L + 0x1p-54L)", true),
+            ("(double)-0x1p-1075L", true),
+            ("1.0 + 0x1p-52", false),
+            ("-0x1p-1074", false),
+            ("1.0L + 0x1p-60L", true),
+            ("-0x1p-1075L", true),
+            ("1.0L + 0x1p-52L", false),
+            ("-0x1p-1074L", false),
+        ] {
+            let source = format!(
+                "long f(long x){{return __builtin_expect_with_probability(x,1,{probability});}}"
+            );
+            with_configuration(
+                &source,
+                crate::configuration::CompilerConfiguration::default().with_target(target),
+                |context, unit| {
+                    let errors = context.take_pending_errors();
+                    assert_eq!(
+                        unit.errors,
+                        usize::from(!accepted),
+                        "{target:?} {probability}: {errors:?}"
+                    );
+                    if !accepted {
+                        assert!(
+                            matches!(
+                                errors.as_slice(),
+                                [TranslationError::Semantic(SemanticError {
+                                    kind: SemanticErrorKind::InvalidArgumentType,
+                                    ..
+                                })]
+                            ),
+                            "{target:?} {probability}: {errors:?}"
+                        );
+                    }
+                },
+            );
+        }
+    }
+}
+
+#[test]
 fn gcc_scalar_builtin_counts_types_and_immediates_are_checked() {
     for (call, expected) in [
         ("__builtin_clz()", SemanticErrorKind::InvalidArgumentCount),
