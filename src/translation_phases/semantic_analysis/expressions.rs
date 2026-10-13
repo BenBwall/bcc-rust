@@ -81,6 +81,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.5.1-§6.5.17, pp. 69-94; PDF pp. 81-106.
     pub(super) fn expression_done(&mut self, e: &'tu Expression<'tu>) {
         use ExpressionType as E;
+        self.retain_expression_actions(e);
         let mut info = Self::expression_result(e, self.types.unknown());
         match e.kind {
             | E::Identifier(name) => {
@@ -285,6 +286,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     _ = self.size_query_sites.insert(
                         std::ptr::from_ref(e).addr(),
                         super::BoundSiteFacts {
+                            bounds: if info.ice { &[] } else { site.bounds },
                             ty,
                             operand_evaluations: if info.ice {
                                 &[]

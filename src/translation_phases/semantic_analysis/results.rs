@@ -46,6 +46,10 @@ use crate::{
 /// Durable semantic output. Working maps/stacks are gone when this is returned.
 #[derive(Debug)]
 pub(crate) struct SemanticTranslationUnit<'tu> {
+    pub(super) binding_bounds:      ArenaMap<'tu, usize, &'tu [usize]>,
+    pub(crate) control:             super::ControlFacts<'tu>,
+    pub(crate) expression_effects:  &'tu [super::ExpressionEffects],
+    pub(super) expression_actions:  ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
     /// Declarators with vendor modifiers visited by the explicit type stack,
     /// including abstract declarators, retained for the lowering gate.
     /// C99: §6.7.5-6.7.6, pp. 114-122; PDF pp. 126-134 (extensions).
@@ -62,6 +66,14 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) scopes:              &'tu [Scope],
     pub(crate) type_names:          &'tu [(SourceVectors, TypeId)],
     pub(super) declaration_sites:   ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained written type-site query; execution uses its normalized expression \
+                      actions."
+        )
+    )]
     pub(super) type_name_sites:     ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
     pub(super) size_query_sites:    ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
     pub(crate) parameters:          &'tu [(SourceVectors, &'tu [Parameter])],
@@ -94,6 +106,8 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BoundSiteFacts<'tu> {
     pub(crate) ty:                  TypeId,
+    /// New runtime-bound identities at this written site, in type order.
+    pub(crate) bounds:              &'tu [usize],
     pub(crate) operand_evaluations: &'tu [&'tu Expression<'tu>],
 }
 
@@ -148,14 +162,11 @@ pub(crate) enum Duration {
 /// have a record; lowering refuses their unit through the error gate.
 /// C99: §6.9.1 paragraphs 2-10, pp. 141-142; PDF pp. 153-154.
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Lowering reads these records; no lowering exists yet."
-    )
-)]
 pub(crate) struct FunctionRecord<'tu> {
+    pub(crate) control:           super::FunctionControl,
+    /// Source-ordered entry actions, before each parameter's new bounds.
+    /// GNU extension: GCC Typeof; C99: §6.9.1p10, p. 142; PDF p. 154.
+    pub(crate) parameter_sites:   &'tu [BoundSiteFacts<'tu>],
     pub(crate) syntax:            &'tu FunctionDefinition<'tu>,
     /// The function's binding; its type is the composite function type,
     /// which for an old-style definition lists the promoted parameter types
@@ -166,6 +177,13 @@ pub(crate) struct FunctionRecord<'tu> {
     pub(crate) result:            TypeId,
     /// The function scope that holds the parameters and the body's
     /// outermost declarations (§6.9.1p9).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained lexical owner of the function parameters."
+        )
+    )]
     pub(crate) scope:             usize,
     /// One entry per declared parameter in the declarator's order (the
     /// identifier list for an old-style definition), each the parameter's
@@ -234,6 +252,13 @@ impl<'tu> SemanticTranslationUnit<'tu> {
             .copied()
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Retained written type-site interface inspected by semantic tests."
+        )
+    )]
     pub(crate) fn type_name_site(&self, name: &TypeName<'tu>) -> Option<BoundSiteFacts<'tu>> {
         self.type_name_sites
             .get(&std::ptr::from_ref(name).addr())
@@ -338,5 +363,32 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
     pub(crate) fn lowerable(&self, context: &Context<'_>) -> bool {
         self.errors == 0 && context.error_count() == 0
+    }
+}
+
+impl<'tu> SemanticTranslationUnit<'tu> {
+    pub(crate) fn binding_bound_actions(&self, binding: usize) -> Option<&'tu [usize]> {
+        self.binding_bounds.get(&binding).copied()
+    }
+
+    pub(crate) fn expression_actions(
+        &self,
+        expression: &Expression<'_>,
+    ) -> Option<BoundSiteFacts<'tu>> {
+        self.expression_actions
+            .get(&std::ptr::from_ref(expression).addr())
+            .copied()
+    }
+
+    pub(crate) fn effect_pure(&self, expression: &'tu Expression<'tu>, read: bool) -> Option<bool> {
+        self.expression_index(expression)
+            .and_then(|index| self.expression_effects.get(index))
+            .map(|effects| {
+                if read {
+                    effects.value_pure
+                } else {
+                    effects.designation_pure
+                }
+            })
     }
 }

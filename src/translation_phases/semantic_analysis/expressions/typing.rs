@@ -987,12 +987,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         info
     }
 
-    pub(super) fn retain_expression(&mut self, info: ExpressionInfo<'tu>) {
+    pub(super) fn retain_expression(&mut self, mut info: ExpressionInfo<'tu>) {
         let key = std::ptr::from_ref(info.expression).addr();
         if self.expression_indices.contains_key(&key) {
             return;
         }
         _ = self.expression_indices.insert(key, self.expressions.len());
+        let effects = self.summarize_effects(info);
+        if self
+            .expression_actions
+            .get(&key)
+            .is_some_and(|site| !site.operand_evaluations.is_empty() || !site.bounds.is_empty())
+            && !effects.value_pure
+        {
+            // Written type-site effects prohibit folding the enclosing value;
+            // an empty action list preserves its existing constant eligibility.
+            info.ice = false;
+            info.integer = None;
+            info.floating = None;
+            info.constant = ConstantClass::None;
+        }
+        self.expression_effects.push(effects);
         self.expressions.push(info);
     }
 

@@ -28,6 +28,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             return;
         }
+        self.control.expression(e);
         if !e.recovered
             && let E::LabelAddress(name) = e.kind
         {
@@ -144,11 +145,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
         use super::statements::StatementWork as W;
         self.taint(s.recovered);
+        let outside = self.control.current;
+        _ = self.control.statement(s);
         match s.kind {
             | S::Compound { items } => {
+                if !new_scope {
+                    self.work.push(Work::StatementWork(W::FinishStatement(s)));
+                }
                 if new_scope {
                     self.enter(ScopeKind::Block);
                     self.work.push(Work::PopScope);
+                    if let Some(outside) = outside {
+                        self.work
+                            .push(Work::StatementWork(W::NormalExit(s, outside)));
+                    }
                 }
                 for &item in items.iter().rev() {
                     self.work.push(Work::BlockItem(item));
@@ -157,24 +167,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | S::Declaration(d) => self.work.push(Work::Declaration(d)),
             | S::Attributed(s) => self.work.push(Work::Statement(s.statement, new_scope)),
             | S::Label(name, child) => {
-                self.label(name, true);
+                self.label(s, name, true);
                 self.work.push(Work::Statement(child, new_scope));
             },
-            | S::Goto(name) => self.label(name, false),
+            | S::Goto(name) => self.label(s, name, false),
             | S::LocalLabels(names) => self.local_labels(names),
             | S::Default(child) => {
                 // The parser already diagnoses duplicate defaults, preserving
                 // its established diagnostic and recovery contract.
-                self.switch_label(s.source_vectors);
+                self.switch_label(s, s.source_vectors);
                 self.work.push(Work::Statement(child, new_scope));
             },
             | S::Case(expression, child) => {
                 self.work.push(Work::Statement(child, new_scope));
-                self.case_label(expression, None, s.source_vectors);
+                self.case_label(s, expression, None, s.source_vectors);
             },
             | S::CaseRange(c) => {
                 self.work.push(Work::Statement(c.statement, new_scope));
-                self.case_label(c.lower, Some(c.upper), s.source_vectors);
+                self.case_label(s, c.lower, Some(c.upper), s.source_vectors);
             },
             | S::If {
                 condition_expression,
@@ -183,6 +193,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 self.enter(ScopeKind::Block);
                 self.work.push(Work::PopScope);
+                if let Some(outside) = outside {
+                    self.work
+                        .push(Work::StatementWork(W::NormalExit(s, outside)));
+                }
                 if let Some(child) = else_statement {
                     self.work.push(Work::StatementWork(W::Substatement(child)));
                 }
@@ -197,7 +211,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 self.enter(ScopeKind::Block);
                 self.work.push(Work::PopScope);
+                if let Some(outside) = outside {
+                    self.work
+                        .push(Work::StatementWork(W::NormalExit(s, outside)));
+                }
                 self.work.push(Work::StatementWork(W::SwitchReady(
+                    s,
                     condition_expression,
                     body_statement,
                 )));
@@ -214,14 +233,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 self.enter(ScopeKind::Block);
                 self.work.push(Work::PopScope);
+                if let Some(outside) = outside {
+                    self.work
+                        .push(Work::StatementWork(W::NormalExit(s, outside)));
+                }
                 if matches!(s.kind, S::DoWhile { .. }) {
                     self.work.push(Work::Condition(condition_expression, false));
                     self.expression_slot(condition_expression);
                     self.work
-                        .push(Work::StatementWork(W::LoopBody(body_statement)));
+                        .push(Work::StatementWork(W::LoopBody(s, body_statement)));
                 } else {
                     self.work
-                        .push(Work::StatementWork(W::LoopBody(body_statement)));
+                        .push(Work::StatementWork(W::LoopBody(s, body_statement)));
                     self.work.push(Work::Condition(condition_expression, false));
                     self.expression_slot(condition_expression);
                 }
@@ -229,8 +252,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | S::For(f) => {
                 self.enter(ScopeKind::Block);
                 self.work.push(Work::PopScope);
+                if let Some(outside) = outside {
+                    self.work
+                        .push(Work::StatementWork(W::NormalExit(s, outside)));
+                }
                 self.work
-                    .push(Work::StatementWork(W::LoopBody(f.body_statement)));
+                    .push(Work::StatementWork(W::LoopBody(s, f.body_statement)));
                 if let Some(e) = f.iteration_expression {
                     self.expression_slot(e);
                 }
@@ -249,6 +276,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             | S::Return(slot) => {
+                if let Some(function) = self.functions.current {
+                    let control = self.function_records[function.id].control;
+                    self.control.jump(
+                        s,
+                        super::ControlTarget::FunctionExit(control.id),
+                        super::ControlPoint {
+                            function: control.id,
+                            region:   control.root,
+                        },
+                    );
+                }
                 self.work
                     .push(Work::StatementWork(W::ReturnDone(slot, s.source_vectors)));
                 if let Some(ExpressionSlot::Parsed(e)) = slot {
@@ -271,6 +309,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
                 None,
             ),
+            | S::Break => self.control_jump(s, false),
+            | S::Continue => self.control_jump(s, true),
             | S::Expression(e) | S::ComputedGoto(e) => self.expression_slot(e),
             | _ => {},
         }

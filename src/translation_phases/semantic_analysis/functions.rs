@@ -58,6 +58,15 @@ use crate::{
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn prepare_function(&mut self, f: &'tu FunctionDefinition<'tu>) {
+        // Definition parameter expressions execute on entry. Index them while
+        // resolving the signature, using the same root as the later body.
+        let previous = self.control.current;
+        let control =
+            self.control
+                .start_function(self.functions.next_function, self.scope, f.source_vectors);
+        _ = self
+            .function_controls
+            .insert(std::ptr::from_ref(f).addr(), (control, previous));
         if let Some(name) = f.declarator.identifier()
             && let Some(entry) = self.lookup(Namespace::Ordinary, name.name)
         {
@@ -177,11 +186,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.statements.loops,
             self.statements.switch,
             self.functions.sizeof,
-            self.statements.statement_expression,
+            self.control.targets.len(),
         )));
         self.enter(ScopeKind::Function);
-        self.statements.vm = None;
-        self.statements.statement_expression = None;
         self.functions.sizeof = None;
         self.statements.loops = 0;
         self.statements.switch = None;
@@ -192,7 +199,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.function_records.len(),
             "records follow function ids"
         );
+        let (control, previous) = self.function_controls[&std::ptr::from_ref(f).addr()];
+        debug_assert_eq!(
+            control.id.0, id,
+            "signature and body share their function root"
+        );
+        self.control.regions[control.root.0].lexical_scope = super::ScopeId(self.scope);
+        self.control.scope_regions[self.scope] = previous;
+        let mut parameter_sites = ArenaVec::new_in(self.scratch);
+        if let Some(DirectDeclarator::Function { parameter_list, .. }) = derivation {
+            for syntax in parameter_list {
+                if let Some(&site) = self.parameter_sites.get(&std::ptr::from_ref(syntax).addr()) {
+                    parameter_sites.push(site);
+                }
+            }
+        }
         self.function_records.push(FunctionRecord {
+            control,
+            parameter_sites: self.types.tu.alloc_slice_copy(&parameter_sites),
             syntax: f,
             binding,
             result,
@@ -364,13 +388,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     pub(super) fn function_work(&mut self, work: FunctionWork<'tu>) {
         match work {
-            | FunctionWork::Finish(previous, loops, switch, sizeof, statement_expression) => {
+            | FunctionWork::Finish(previous, loops, switch, sizeof, targets) => {
                 self.functions.current = previous;
                 self.functions.sizeof = sizeof;
                 self.function_name = previous.and_then(|f| f.syntax.declarator.identifier());
                 self.statements.loops = loops;
                 self.statements.switch = switch;
-                self.statements.statement_expression = statement_expression;
+                self.control.targets.truncate(targets);
             },
             | FunctionWork::RestoreSizeof(previous) => self.functions.sizeof = previous,
         }
@@ -380,6 +404,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.9p3,p5, p. 140; PDF p. 152; §6.9.2p2-3, p. 143;
     /// PDF p. 155; inline definitions §6.7.4p3,p6, p. 112; PDF p. 124.
     pub(super) fn finish_translation_unit(&mut self) {
+        self.control.finalize(self.scratch, self.types.tu);
+        for i in 0..self.control.deferred_vm_labels.len() {
+            let (diagnostic, from, to) = self.control.deferred_vm_labels[i];
+            let ancestry = self.control.ancestry.as_ref().expect("control finalized");
+            let transition = ancestry.transition(&self.control.regions, from, to);
+            if let Some(region) = ancestry.first_entered_vm(&self.control.regions, transition)
+                && let Some(crate::translation_phases::TranslationError::Semantic(error)) =
+                    self.context.pending_errors.iter_mut_from(diagnostic).next()
+            {
+                error.previous = Some(self.control.regions[region.0].source);
+            }
+        }
         self.finish_labels();
         let mut entities = ArenaVec::new_in(self.scratch);
         entities.extend(self.functions.entities.values().copied());
@@ -707,6 +743,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.types.tu.alloc_slice_copy(&parameter_bindings);
         self.function_records[current.id].parameter_types =
             self.types.tu.alloc_slice_copy(&original_types);
+        let mut sites = ArenaVec::new_in(self.scratch);
+        for &declaration in function.declaration_list {
+            if let Some(operand_evaluations) =
+                self.spec_evaluations(declaration.declaration_specifiers.type_specifiers)
+            {
+                sites.push(super::BoundSiteFacts {
+                    ty: self.types.unknown(),
+                    operand_evaluations,
+                    bounds: self.spec_bounds(declaration.declaration_specifiers.type_specifiers),
+                });
+            }
+            for init in declaration.init_declarators {
+                if let Some(name) = init.declarator.identifier()
+                    && let Some(&ty) = self.functions.old_types.get(&(current.id, name.name))
+                    && let Some(entry) = self.lookup(Namespace::Ordinary, name.name)
+                    && let Some(&bounds) = self.binding_bounds.get(&entry.binding)
+                {
+                    sites.push(super::BoundSiteFacts {
+                        ty,
+                        operand_evaluations: &[],
+                        bounds,
+                    });
+                }
+            }
+        }
+        self.function_records[current.id].parameter_sites = self.types.tu.alloc_slice_copy(&sites);
         let Some(index) = current.binding else {
             return;
         };
@@ -1157,7 +1219,7 @@ pub(super) enum FunctionWork<'tu> {
         usize,
         Option<usize>,
         Option<usize>,
-        Option<usize>,
+        usize,
     ),
     RestoreSizeof(Option<usize>),
 }

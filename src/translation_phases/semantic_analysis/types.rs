@@ -408,17 +408,18 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
 pub(crate) struct TypeInterner<'tu, 's> {
     /// Type nodes examined by completeness and recovery queries in tests.
     #[cfg(test)]
-    pub(super) steps:  Cell<usize>,
-    runtime_bounds: ArenaVec<'tu, &'tu crate::translation_phases::parsing::syntax::Expression<'tu>>,
-    pub(crate) nodes:  ArenaVec<'tu, TypeKind<'tu>>,
-    pub(crate) tags:   ArenaVec<'tu, &'tu Tag<'tu>>,
-    keys:              ArenaMap<'s, TypeKind<'tu>, TypeId>,
+    pub(super) steps: Cell<usize>,
+    pub(super) runtime_bounds:
+        ArenaVec<'tu, &'tu crate::translation_phases::parsing::syntax::Expression<'tu>>,
+    pub(crate) nodes: ArenaVec<'tu, TypeKind<'tu>>,
+    pub(crate) tags: ArenaVec<'tu, &'tu Tag<'tu>>,
+    keys: ArenaMap<'s, TypeKind<'tu>, TypeId>,
     /// Variably modified nodes, decided once from immediate children.
     variably_modified: ArenaVec<'s, bool>,
-    array_tails:       ArenaVec<'s, ArrayTail>,
+    array_tails: ArenaVec<'s, ArrayTail>,
     pub(crate) target: TargetLayout,
-    pub(crate) tu:     &'tu Bump,
-    scratch:           &'s Bump,
+    pub(crate) tu: &'tu Bump,
+    scratch: &'s Bump,
 }
 
 /// Canonical unqualified type identity plus its compact qualifier set.

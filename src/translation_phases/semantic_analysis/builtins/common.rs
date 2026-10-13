@@ -10,7 +10,6 @@
 //! <https://gcc.gnu.org/onlinedocs/gcc/Stack-Allocation.html>
 //! C99: §6.5.2.2 paragraphs 2 and 7, pp. 71-72; PDF pp. 83-84.
 
-use super::overflow_type_operand_is_pure;
 use crate::{
     configuration::Feature,
     translation_phases::{
@@ -383,11 +382,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         let b = self.expression_info(args[1]);
                         if a.ice
                             && b.ice
-                            && overflow_type_operand_is_pure(
-                                args[2],
-                                |e| Some(self.expression_info(e)),
-                                self.scratch,
-                            )
+                            && self.effect_pure(args[2], true)
                             && let Some((a, b)) = a.integer.zip(b.integer)
                         {
                             let (bits, signed) = self.integer_type(destination)?;
