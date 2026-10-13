@@ -45,6 +45,77 @@ fn cases(
 }
 
 #[test]
+fn undeclared_alloca_obeys_strict_and_gnu_modes() {
+    use crate::{
+        lowering::{
+            LoweringError,
+            LoweringErrorKind,
+        },
+        pipeline::MiddleEndError,
+        translation_phases::{
+            TranslationError,
+            semantic_analysis::{
+                SemanticError,
+                SemanticErrorKind,
+            },
+        },
+    };
+
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let strict =
+            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow).with_target(target);
+        let tu = Bump::new();
+        let mut context = Context::with_configuration(&tu, strict);
+        let unit = parse_translation_unit(
+            &mut context,
+            Path::new("<test>"),
+            "void f(void){alloca(4);}\n",
+            HeaderSearch::default(),
+        );
+        let sema = analyze_translation_unit(&mut context, &unit);
+        assert!(!sema.lowerable(&context));
+        let errors = context.take_pending_errors();
+        assert!(
+            matches!(
+                errors.as_slice(),
+                [TranslationError::Semantic(SemanticError {
+                    kind: SemanticErrorKind::UndeclaredIdentifier,
+                    ..
+                })]
+            ),
+            "{target:?}: {errors:?}"
+        );
+        let ir = Bump::new();
+        let result = lower_translation_unit(&context, &unit, &sema, &ir, None, Profile::PreAbi);
+        assert!(
+            matches!(result, Err(MiddleEndError::Lowering(errors)) if matches!(errors.errors, [LoweringError { kind: LoweringErrorKind::UnitHasErrors, .. }]))
+        );
+
+        for (source, configuration) in [
+            (
+                "void f(void){alloca(4);}\n",
+                strict.with_gnu_extensions(true),
+            ),
+            ("void f(void){__builtin_alloca(4);}\n", strict),
+        ] {
+            with_configured_module(
+                source,
+                target,
+                false,
+                Profile::PreAbi,
+                configuration,
+                |module, _| {
+                    assert!(
+                        module.to_string().contains("dyn_alloca"),
+                        "{source}\n{module}"
+                    );
+                },
+            );
+        }
+    }
+}
+
+#[test]
 fn builtin_bindings_and_language_modes_interpret_correctly() {
     let shadows = crate::test_support::builtin_binding_program();
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
