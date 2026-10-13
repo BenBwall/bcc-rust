@@ -239,7 +239,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | ExpressionType::Constant(Constant::Float(_)) => floating,
                     | ExpressionType::Cast { target_type, .. } => !self
                         .resolved_type_names
-                        .get(&target_type.source_vectors)
+                        .get(&super::type_name_identity(target_type))
                         .is_some_and(|ty| {
                             matches!(self.types.nodes[ty.index], TypeKind::Atomic(_))
                         }),
@@ -292,7 +292,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } => {
                     let floating = self
                         .resolved_type_names
-                        .get(&target_type.source_vectors)
+                        .get(&super::type_name_identity(target_type))
                         .is_some_and(|&ty| self.integer_type(ty).is_some());
                     work.push((operand_expression, floating, None));
                 },
@@ -442,7 +442,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.types.target.integer(self.types.target.size_t),
                 | ExpressionType::Cast { target_type, .. } => {
                     use super::TypeSpecifiers as S;
-                    if let Some(&ty) = self.resolved_type_names.get(&target_type.source_vectors) {
+                    if let Some(&ty) = self
+                        .resolved_type_names
+                        .get(&super::type_name_identity(target_type))
+                    {
                         let model = self.integer_type(ty);
                         _ = self.integer_models.insert(key, model);
                         values.push(model);
@@ -657,7 +660,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } => {
                     if self
                         .resolved_type_names
-                        .get(&target_type.source_vectors)
+                        .get(&super::type_name_identity(target_type))
                         .is_some_and(|&ty| self.types.unanalyzed(ty))
                     {
                         return true;
@@ -670,7 +673,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | ExpressionType::SizeofType(name) | ExpressionType::AlignofType(name) => {
                     if self
                         .resolved_type_names
-                        .get(&name.source_vectors)
+                        .get(&super::type_name_identity(name))
                         .is_some_and(|&ty| self.types.unanalyzed(ty))
                     {
                         return true;

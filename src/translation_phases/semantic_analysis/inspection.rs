@@ -69,16 +69,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         for (index, binding) in self.bindings.iter().enumerate() {
             items[binding.scope].push(Item::Binding(index));
         }
-        let mut minimums = super::ArenaMap::with_hasher_in(super::FxBuildHasher, arena);
-        for (_, parameters) in self.parameters {
-            for parameter in *parameters {
-                if let (Some(name), Some(ArrayBound::Constant(minimum))) =
-                    (parameter.name, parameter.array_minimum)
-                {
-                    _ = minimums.insert(name.source_vectors, minimum);
-                }
-            }
-        }
         let mut depths = ArenaVec::new_in(arena);
         for scope in self.scopes {
             let depth = scope.parent.map_or(0, |parent: usize| depths[parent] + 1);
@@ -106,12 +96,13 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                     },
                     | Item::Binding(binding) => {
                         indent(&mut out, depth + 1);
-                        self.write_binding(binding, &minimums, context, arena, &mut out);
+                        self.write_binding(binding, context, arena, &mut out);
                     },
                 }
             }
         }
-        for &(_, ty) in self.type_names {
+        for fact in self.type_names {
+            let ty = fact.resolved;
             let _ = writeln!(
                 out,
                 "type-name type={}",
@@ -269,7 +260,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     fn write_binding<'d>(
         &self,
         index: usize,
-        minimums: &super::ArenaMap<'d, super::SourceVectors, u64>,
         context: &Context<'tu>,
         arena: &'d Bump,
         out: &mut ArenaString<'d>,
@@ -298,7 +288,9 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         if let Some(value) = binding.value {
             let _ = write!(out, " value={value}");
         }
-        if let Some(minimum) = minimums.get(&binding.name.source_vectors) {
+        if let Some(ArrayBound::Constant(minimum)) =
+            self.correspondence.parameter_minimums.get(&index)
+        {
             let _ = write!(out, " static-minimum={minimum}");
         }
         match binding.linkage {

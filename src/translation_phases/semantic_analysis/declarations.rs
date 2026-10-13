@@ -305,6 +305,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                 }
                 if let Some(expression) = assignment_expression {
+                    _ = self
+                        .bound_expression_starts
+                        .entry(std::ptr::from_ref(expression).addr())
+                        .or_insert(self.expressions.len());
                     self.work.push(Work::ArrayDone(
                         base,
                         type_qualifiers,
@@ -369,6 +373,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let mut list = ArenaVec::new_in(self.types.tu);
                 for &name in parameters {
                     list.push(Parameter {
+                        site:          None,
+                        binding:       None,
                         name:          Some(name),
                         ty:            int,
                         array_minimum: None,

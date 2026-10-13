@@ -86,6 +86,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let declared_type = self.take_type();
         let nested = self.scopes[self.scope].kind != ScopeKind::File;
         let name = f.declarator.identifier();
+        let prior = self.bindings.len();
+        let errors_before = self.semantic_errors;
         if nested {
             // GNU nested functions denote lexical entities, not translation-
             // unit externals. Their parser owner reports the extension.
@@ -116,6 +118,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let binding = name
             .and_then(|n| self.lookup(Namespace::Ordinary, n.name))
             .map(|e| e.binding);
+        _ = self.correspondence.declaration(
+            f.declarator,
+            binding
+                .filter(|&i| i >= prior && self.semantic_errors == errors_before && !self.tainted)
+                .map(|i| (i, self.bindings[i])),
+            super::BoundSiteFacts {
+                ty:                  declared_type,
+                bounds:              &[],
+                operand_evaluations: &[],
+            },
+            &[],
+        );
         let ty = binding.map_or_else(|| self.types.unknown(), |i| self.bindings[i].ty);
         let derivation = function_derivation(f.declarator, self.scratch);
         if derivation.is_none()
@@ -206,27 +220,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         );
         self.control.regions[control.root.0].lexical_scope = super::ScopeId(self.scope);
         self.control.scope_regions[self.scope] = previous;
-        let mut parameter_sites = ArenaVec::new_in(self.scratch);
-        if let Some(DirectDeclarator::Function { parameter_list, .. }) = derivation {
-            for syntax in parameter_list {
-                if let Some(&site) = self.parameter_sites.get(&std::ptr::from_ref(syntax).addr()) {
-                    parameter_sites.push(site);
-                }
-            }
-        }
         self.function_records.push(FunctionRecord {
             control,
-            parameter_sites: self.types.tu.alloc_slice_copy(&parameter_sites),
+            parameter_sites: &[],
+            old_style,
+            parameter_facts: &[],
             syntax: f,
             binding,
             result,
             scope: self.scope,
-            parameters: &[],
             parameter_aliases: &[],
-            parameter_types: self
-                .types
-                .tu
-                .alloc_slice_fill_iter(parameters.iter().map(|p| p.original)),
         });
         self.functions.current = Some(FunctionContext {
             id,
@@ -246,17 +249,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
-        let mut prototype_parameters = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut parameter_aliases = ArenaVec::new_in(self.scratch);
         if prototype_scope != 0 {
             let entries = self.scope_entries[prototype_scope].finish(self.scratch, self.scratch);
             for &index in entries {
                 let entry = self.entries[index];
-                if entry.namespace == Namespace::Ordinary
-                    && self.bindings[entry.binding].kind == BindingKind::Parameter
-                {
-                    _ = prototype_parameters.insert(entry.name.name, entry.binding);
-                }
                 if entry.namespace == Namespace::Tag {
                     self.install(entry.name, entry.namespace, entry.binding);
                 } else if entry.namespace == Namespace::Ordinary
@@ -319,8 +316,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         Duration::Automatic,
                         None,
                     );
-                    if let Some(&prototype) = prototype_parameters.get(&name.name) {
+                    if let Some(prototype) = parameter.binding {
                         parameter_aliases.push((prototype, self.bindings.len() - 1));
+                    }
+                    if let Some(minimum) = parameter.array_minimum {
+                        _ = self
+                            .correspondence
+                            .parameter_minimums
+                            .insert(self.bindings.len() - 1, minimum);
                     }
                     self.record_vm(self.bindings.len() - 1);
                     if let Some(slot) = parameter_bindings.last_mut() {
@@ -364,10 +367,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
             self.validate_definition_stars(derivation);
-            self.function_records[id].parameters =
-                self.types.tu.alloc_slice_copy(&parameter_bindings);
             self.function_records[id].parameter_aliases =
                 self.types.tu.alloc_slice_copy(&parameter_aliases);
+            self.retain_parameter_facts(id, parameters, &parameter_bindings);
         }
         self.define_func_name(name);
         if !old_style {
@@ -739,10 +741,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             parameters.push(promoted);
         }
-        self.function_records[current.id].parameters =
-            self.types.tu.alloc_slice_copy(&parameter_bindings);
-        self.function_records[current.id].parameter_types =
-            self.types.tu.alloc_slice_copy(&original_types);
         let mut sites = ArenaVec::new_in(self.scratch);
         for &declaration in function.declaration_list {
             if let Some(operand_evaluations) =
@@ -769,6 +767,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         self.function_records[current.id].parameter_sites = self.types.tu.alloc_slice_copy(&sites);
+        self.function_records[current.id].parameter_facts =
+            self.types
+                .tu
+                .alloc_slice_fill_iter(parameter_bindings.iter().enumerate().map(
+                    |(ordinal, &binding)| {
+                        let declared = binding.map_or_else(
+                            || self.types.unknown(),
+                            |binding| self.bindings[binding].ty,
+                        );
+                        let original = original_types.get(ordinal).copied().unwrap_or(declared);
+                        super::ParameterFacts {
+                            prototype_binding: None,
+                            body_binding: binding,
+                            declared,
+                            promoted: parameters.get(ordinal).copied().unwrap_or(declared),
+                            original,
+                            site: Some(super::BoundSiteFacts {
+                                ty:                  original,
+                                bounds:              binding
+                                    .and_then(|binding| self.binding_bounds.get(&binding).copied())
+                                    .unwrap_or(&[]),
+                                operand_evaluations: &[],
+                            }),
+                        }
+                    },
+                ));
         let Some(index) = current.binding else {
             return;
         };
@@ -1209,7 +1233,7 @@ pub(super) struct FunctionContext<'tu> {
     pub(super) syntax:     &'tu FunctionDefinition<'tu>,
     pub(super) binding:    Option<usize>,
     pub(super) result:     TypeId,
-    pub(super) parameters: &'tu [Parameter],
+    pub(super) parameters: &'tu [Parameter<'tu>],
 }
 
 #[derive(Clone, Copy)]

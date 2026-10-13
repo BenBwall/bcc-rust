@@ -275,12 +275,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::SizeofType(name) | E::AlignofType(name) => {
                 let ty = self
                     .resolved_type_names
-                    .get(&name.source_vectors)
+                    .get(&super::type_name_identity(name))
                     .copied()
                     .unwrap_or_else(|| self.types.unknown());
                 info = self.type_sizeof(e, ty, None, matches!(e.kind, E::AlignofType(_)));
                 if matches!(e.kind, E::SizeofType(_))
-                    && let Some(site) = self.type_name_sites.get(&std::ptr::from_ref(name).addr())
+                    && let Some(site) = self.type_name_sites.get(&super::type_name_identity(name))
                 {
                     // C99 6.5.3.4p2: constant sizeof does not execute its
                     // type operand, even when a pointer is VM through its
@@ -288,19 +288,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     // typeof's operand evaluation independently.
                     _ = self.size_query_sites.insert(
                         std::ptr::from_ref(e).addr(),
-                        super::BoundSiteFacts {
-                            bounds: if info.ice { &[] } else { site.bounds },
-                            ty,
-                            operand_evaluations: if info.ice {
-                                &[]
-                            } else {
-                                site.operand_evaluations
+                        super::SizeQueryFacts {
+                            formula: None,
+                            operand: None,
+                            site:    super::BoundSiteFacts {
+                                bounds: if info.ice { &[] } else { site.bounds },
+                                ty,
+                                operand_evaluations: if info.ice {
+                                    &[]
+                                } else {
+                                    site.operand_evaluations
+                                },
                             },
                         },
                     );
                 }
             },
             | E::SizeofExpr(operand) | E::AlignofExpr(operand) => {
+                let operand_syntax = operand;
                 let operand = self.expression_info(operand);
                 info = self.type_sizeof(
                     e,
@@ -308,6 +313,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     operand.bit_field,
                     matches!(e.kind, E::AlignofExpr(_)),
                 );
+                if matches!(e.kind, E::SizeofExpr(_)) {
+                    _ = self.size_query_sites.insert(
+                        std::ptr::from_ref(e).addr(),
+                        super::SizeQueryFacts {
+                            formula: None,
+                            site:    super::BoundSiteFacts {
+                                ty:                  operand.ty,
+                                bounds:              &[],
+                                operand_evaluations: &[],
+                            },
+                            operand: (!info.ice).then_some(operand_syntax),
+                        },
+                    );
+                }
             },
             | E::Cast {
                 target_type,
@@ -315,7 +334,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 let target = self
                     .resolved_type_names
-                    .get(&target_type.source_vectors)
+                    .get(&super::type_name_identity(target_type))
                     .copied()
                     .unwrap_or_else(|| self.types.unknown());
                 info = self.type_cast(e, target, self.expression_info(operand_expression));
@@ -381,7 +400,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 let ty = self
                     .resolved_type_names
-                    .get(&type_name.source_vectors)
+                    .get(&super::type_name_identity(type_name))
                     .copied()
                     .unwrap_or_else(|| self.types.unknown());
                 // §6.5.2.5p1 excludes variable length array types; a pointer

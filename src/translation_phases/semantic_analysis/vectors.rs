@@ -617,7 +617,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let from = self.expression_info(input);
             let to = self
                 .resolved_type_names
-                .get(&name.source_vectors)
+                .get(&super::type_name_identity(name))
                 .copied()
                 .unwrap_or_else(|| self.types.unknown());
             if self.types.unanalyzed(from.ty) || self.types.unanalyzed(to) {
@@ -717,7 +717,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let from = self.expression_info(input);
             let to = self
                 .resolved_type_names
-                .get(&name.source_vectors)
+                .get(&super::type_name_identity(name))
                 .copied()
                 .unwrap_or_else(|| self.types.unknown());
             if self.types.unanalyzed(from.ty) || self.types.unanalyzed(to) {

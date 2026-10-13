@@ -261,7 +261,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.declare_binding(binding, initializer, source),
             | Task::FinishBound(index) => self.finish_bound(index),
             | Task::Sizeof(object, result, source) => {
-                let size = self.runtime_size(object, source)?;
+                let size = self.emit_size_formula(object, source)?;
                 let ty = self.value_type(result, source)?;
                 let size = self.extend(size, false, ty);
                 self.push_item(Operand::Value(size), result);

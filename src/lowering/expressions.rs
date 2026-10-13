@@ -264,22 +264,22 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     otherwise,
                 });
             },
-            | E::SizeofType(_) => {
-                let site = self.unit.sema.size_query_site(expression).ok_or_else(|| {
-                    LoweringError::missing("sizeof type-site facts are not retained", source)
+            | E::SizeofType(_) | E::SizeofExpr(_) => {
+                let query = self.unit.sema.size_query_site(expression).ok_or_else(|| {
+                    LoweringError::missing("sizeof evaluation facts are not retained", source)
                 })?;
-                let object = site.ty;
-                self.tasks.push(Task::Sizeof(object, info.ty, source));
+                let formula = query.formula.ok_or_else(|| {
+                    LoweringError::missing("sizeof size formula is not retained", source)
+                })?;
+                self.tasks.push(Task::Sizeof(formula, info.ty, source));
                 let mut tasks = ArenaVec::new_in(self.scratch);
-                Self::prepare_site_tasks(site, &mut tasks);
-                self.prepare_bound_tasks(site.bounds, &mut tasks);
+                Self::prepare_site_tasks(query.site, &mut tasks);
+                self.prepare_bound_tasks(query.site.bounds, &mut tasks, source)?;
+                if let Some(operand) = query.operand {
+                    tasks.push(Task::EvaluateRaw(operand));
+                    tasks.push(Task::Discard);
+                }
                 self.push_all(&tasks);
-            },
-            | E::SizeofExpr(operand) => {
-                let object = self.info(operand)?.ty;
-                self.tasks.push(Task::Sizeof(object, info.ty, source));
-                self.tasks.push(Task::Discard);
-                self.tasks.push(Task::EvaluateRaw(operand));
             },
             | E::AlignofType(_) | E::AlignofExpr(_) =>
                 return Err(LoweringError::unsupported(

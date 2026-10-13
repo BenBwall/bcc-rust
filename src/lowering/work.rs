@@ -46,7 +46,11 @@ pub(super) enum Task<'tu> {
         crate::translation_phases::SourceVectors,
     ),
     FinishBound(usize),
-    Sizeof(TypeId, TypeId, crate::translation_phases::SourceVectors),
+    Sizeof(
+        crate::translation_phases::semantic_analysis::SizeFormulaId,
+        TypeId,
+        crate::translation_phases::SourceVectors,
+    ),
     CleanupNormal(&'tu Statement<'tu>),
 
     /// Enter `block`: it is sealed if all its predecessors are known.
