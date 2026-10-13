@@ -35,6 +35,14 @@ fn with_module<R>(
 
 const PROGRAMS: &[(&str, &str)] = &[
     (
+        "selected_varargs_storage",
+        include_str!("../../../../tests/fixtures/semantic/selected-varargs-storage.c"),
+    ),
+    (
+        "labeled_overflow_effects",
+        include_str!("../../../../tests/fixtures/semantic/labeled-overflow-effects.c"),
+    ),
+    (
         "selected_callees",
         include_str!("../../../../tests/fixtures/semantic/builtin-selected-callees.c"),
     ),
@@ -260,6 +268,30 @@ int main(void) {return f(3,7,3.5)!=17;} ",
 ];
 
 #[test]
+fn labeled_overflow_effects_execute_in_all_stages() {
+    let source = include_str!("../../../../tests/fixtures/semantic/labeled-overflow-effects.c");
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        for (optimize, profile) in STAGES {
+            with_module(source, target, optimize, profile, |module, target| {
+                assert_eq!(interpret(module, target).0, 0);
+            });
+        }
+    }
+}
+
+#[test]
+fn selected_varargs_storage_executes_on_windows_targets() {
+    let source = include_str!("../../../../tests/fixtures/semantic/selected-varargs-storage.c");
+    for target in [Target::WindowsGnu, Target::WindowsMsvc] {
+        for (optimize, profile) in STAGES {
+            with_module(source, target, optimize, profile, |module, target| {
+                assert_eq!(interpret(module, target).0, 0);
+            });
+        }
+    }
+}
+
+#[test]
 fn gcc_scalar_builtins_execute_in_all_stages() {
     for &(name, source) in PROGRAMS {
         // Every new instruction also survives the text parser/printer and both
@@ -388,17 +420,27 @@ fn gcc_scalar_builtin_poison_and_termination_are_observable() {
                     _ = interpreter::run(module, "main", &[], &mut host).unwrap_err();
                 },
             );
-            with_module(
+            for source in [
                 "int main(void){volatile int *p=0;return __builtin_add_overflow_p(1,2,*p);}",
-                target,
-                optimize,
-                Profile::PostAbi,
-                |module, target| {
-                    let arena = Bump::new();
-                    let mut host = DefaultHost::for_target(&arena, target);
-                    _ = interpreter::run(module, "main", &[], &mut host).unwrap_err();
-                },
-            );
+                "int main(void){volatile int *p=0;return __builtin_add_overflow_p(1,2,({*p;}));}",
+                "int main(void){volatile int *p=0;return \
+                 __builtin_add_overflow_p(1,2,({tail:*p;}));}",
+            ] {
+                with_module(
+                    source,
+                    target,
+                    optimize,
+                    Profile::PostAbi,
+                    |module, target| {
+                        let arena = Bump::new();
+                        let mut host = DefaultHost::for_target(&arena, target);
+                        assert!(matches!(
+                            interpreter::run(module, "main", &[], &mut host),
+                            Err(Trap::UndefinedBehavior(UbKind::NullDereference, _))
+                        ));
+                    },
+                );
+            }
         }
     }
 }
