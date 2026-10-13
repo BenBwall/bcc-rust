@@ -129,7 +129,7 @@ fn declaration_attributes_never_erase_a_shared_tag_layout() {
 }
 
 #[test]
-fn only_layout_attributes_make_declarator_types_unanalyzed() {
+fn modeled_layout_attributes_preserve_redeclaration_constraints() {
     // Function, pointer and member attributes that do not change layout keep
     // the declared type, so later conflicts are still found.
     assert_eq!(
@@ -151,14 +151,17 @@ fn only_layout_attributes_make_declarator_types_unanalyzed() {
         ),
         [SemanticErrorKind::IncompatibleDeclaration]
     );
-    // Non-vector alignment, packing and modes are not modeled.
+    // Alignment retains C type identity; scalar modes select a real type.
     assert_eq!(
         kinds(
             "int x __attribute__((aligned(16))); extern long x; int \
              *__attribute__((__aligned__(8))) q; long q; int m __attribute__((mode(DI))); long m;",
             gnu17()
         ),
-        []
+        [
+            SemanticErrorKind::IncompatibleDeclaration,
+            SemanticErrorKind::IncompatibleDeclaration
+        ]
     );
     assert_eq!(
         tag_layout(
@@ -174,7 +177,10 @@ fn only_layout_attributes_make_declarator_types_unanalyzed() {
             gnu17(),
             "S"
         ),
-        None
+        Some(Layout {
+            size:  16,
+            align: 8,
+        })
     );
 }
 

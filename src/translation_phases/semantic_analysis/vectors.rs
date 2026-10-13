@@ -39,7 +39,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         mut ty: TypeId,
         chain: Option<&'tu super::SpecifierExtension<'tu>>,
+        storage_alignment: bool,
     ) -> TypeId {
+        let mut current = chain;
+        while let Some(item) = current {
+            if let super::SpecifierExtensionKind::Attributes(a) = item.kind {
+                ty = self.mode_attribute(ty, a);
+            }
+            current = item.next;
+        }
         for construction in [true, false] {
             let mut current = chain;
             while let Some(item) = current {
@@ -49,7 +57,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     ty = if self.layout_attribute(a) {
                         self.types.unknown()
                     } else {
-                        self.vector_attribute(ty, a)
+                        self.vector_attribute(ty, a, storage_alignment)
                     };
                 }
                 current = item.next;
@@ -260,6 +268,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         mut ty: TypeId,
         a: &AttributeSpecifier<'tu>,
+        storage_alignment: bool,
     ) -> TypeId {
         let tokens = a.tokens.as_slice();
         let mut bytes = None;
@@ -379,9 +388,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     align,
                 })
                 .qualified(ty.qualifiers);
-        } else if alignment.is_some() {
-            // Non-vector alignment remains an explicitly unanalyzed layout.
-            return self.types.unknown();
+        } else if alignment.is_some() && storage_alignment {
+            let attributes = self.layout_attributes(a);
+            ty = self.align_declared_type(ty, attributes.alignment);
         }
         while let Some((kind, q)) = derived.pop() {
             let kind = match kind {
@@ -410,7 +419,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GNU extension: GCC manual, "Attribute Syntax".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
     /// C99: §6.6 paragraph 6, p. 95; PDF p. 107.
-    fn vector_attribute_integer(
+    pub(super) fn vector_attribute_integer(
         &self,
         tokens: &[super::super::preprocessing::Token],
     ) -> Option<u64> {
@@ -733,7 +742,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 /// C99: §6.7, p. 97; PDF p. 109 (GNU attribute extension).
 /// GNU extension: GCC manual, "Attribute Syntax".
 /// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
-fn attribute_names<'a>(
+pub(super) fn attribute_names<'a>(
     a: &'a AttributeSpecifier<'_>,
     context: &'a super::Context<'_>,
 ) -> impl Iterator<Item = (usize, &'a str)> {
@@ -777,7 +786,7 @@ pub(super) fn declared_type_attribute(
     a: &AttributeSpecifier<'_>,
     context: &super::Context<'_>,
 ) -> bool {
-    attribute_names(a, context).any(|(_, name)| matches!(name, "vector_size" | "aligned"))
+    attribute_names(a, context).any(|(_, name)| matches!(name, "vector_size" | "aligned" | "mode"))
 }
 
 pub(super) fn constructs_vector(a: &AttributeSpecifier<'_>, context: &super::Context<'_>) -> bool {

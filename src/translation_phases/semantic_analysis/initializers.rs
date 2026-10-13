@@ -234,10 +234,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                     } else {
                                         None
                                     },
-                                // GNU ranges are deliberately not given fabricated C99 meaning.
-                                | DesignatorType::Range(_) | DesignatorType::Error => {
-                                    unmodeled |=
-                                        matches!(designator.kind, DesignatorType::Range(_));
+                                // GNU Designated Initializers: both inclusive
+                                // endpoints are integer constant expressions.
+                                // All elements have the same type; checking the
+                                // last also validates the bound and continuation.
+                                // <https://gcc.gnu.org/onlinedocs/gcc/Designated-Inits.html>
+                                | DesignatorType::Range(range) => {
+                                    let lower = self.expression_info(range.lower.expression());
+                                    let upper = self.expression_info(range.upper.expression());
+                                    unknown_designator |= self.types.unanalyzed(lower.ty)
+                                        || self.types.unanalyzed(upper.ty);
+                                    match (
+                                        lower.integer.and_then(Integer::to_u64),
+                                        upper.integer.and_then(Integer::to_u64),
+                                    ) {
+                                        | (Some(lower_index), Some(upper_index))
+                                            if lower.ice
+                                                && upper.ice
+                                                && lower_index <= upper_index
+                                                && matches!(
+                                                    self.types.nodes[selected.index],
+                                                    TypeKind::Array(..)
+                                                ) =>
+                                            Some(upper_index),
+                                        | _ => None,
+                                    }
+                                },
+                                | DesignatorType::Error => {
                                     valid = false;
                                     break;
                                 },
@@ -270,12 +293,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             unmodeled |= unknown_designator;
                             if !unknown_designator
                                 && !designation.recovered
-                                && !designation.designators.iter().any(|d| {
-                                    matches!(
-                                        d.kind,
-                                        DesignatorType::Error | DesignatorType::Range(_)
-                                    )
-                                })
+                                && !designation
+                                    .designators
+                                    .iter()
+                                    .any(|d| matches!(d.kind, DesignatorType::Error))
                             {
                                 self.error(
                                     SemanticErrorKind::InvalidDesignator,

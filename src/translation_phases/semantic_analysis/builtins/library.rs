@@ -169,6 +169,7 @@ fn library_function(name: &str) -> Option<(&'static str, &'static str, bool)> {
         | "strlen" => ("strlen", "zS", false),
         | "printf" => ("printf", "iS", true),
         | "sprintf" => ("sprintf", "isS", true),
+        | "snprintf" => ("snprintf", "iszS", true),
         | "puts" => ("puts", "iS", false),
         | "putchar" => ("putchar", "ii", false),
         | "abs" => ("abs", "ii", false),

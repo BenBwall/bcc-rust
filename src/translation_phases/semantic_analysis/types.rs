@@ -32,6 +32,7 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         let ty = TypeId {
             index:      self.nodes.len(),
             qualifiers: TypeQualifiers::empty(),
+            alignment:  0,
         };
         let variably_modified = match kind {
             | TypeKind::Array(_, ArrayBound::Variable | ArrayBound::Star) => true,
@@ -49,12 +50,18 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
             let element_tail = self.array_tails[element.index];
             ArrayTail {
                 incomplete: element_tail.incomplete || bound == ArrayBound::Incomplete,
+                alignment: if element.alignment == 0 {
+                    element_tail.alignment
+                } else {
+                    element.alignment
+                },
                 ..element_tail
             }
         } else {
             ArrayTail {
                 index:      ty.index,
                 incomplete: false,
+                alignment:  0,
             }
         };
         self.array_tails.push(tail);
@@ -75,6 +82,7 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     pub(crate) fn composite(&mut self, left: TypeId, right: TypeId) -> Option<TypeId> {
         enum Work<'a> {
             Pair(TypeId, TypeId),
+            Alignment(u32),
             Pointer(TypeQualifiers),
             Array(ArrayBound, TypeQualifiers),
             Function(&'a [TypeId], bool, bool, TypeQualifiers),
@@ -86,6 +94,9 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         while let Some(item) = work.pop() {
             match item {
                 | Work::Pair(a, b) => {
+                    // GCC aligned changes layout, not C type compatibility.
+                    work.push(Work::Alignment(a.alignment.max(b.alignment)));
+                    let (a, b) = (a.with_alignment(0), b.with_alignment(0));
                     if a == b {
                         values.push(a);
                         continue;
@@ -203,6 +214,10 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
                         | _ => return None,
                     }
                 },
+                | Work::Alignment(alignment) => {
+                    let ty = values.pop()?;
+                    values.push(ty.with_alignment(alignment));
+                },
                 | Work::Pointer(q) => {
                     let x = values.pop()?;
                     values.push(self.intern(TypeKind::Pointer(x)).qualified(q));
@@ -243,8 +258,14 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     /// Array alignment depends on the element, regardless of its extent.
     /// C11: §6.5.3.4p3, p. 90; PDF p. 108 (an extension in C99).
     pub(crate) fn alignment(&self, ty: TypeId) -> Option<u64> {
+        let tail = self.array_tails[ty.index];
         let ty = TypeId {
-            index: self.array_tails[ty.index].index,
+            index: tail.index,
+            alignment: if ty.alignment == 0 {
+                tail.alignment
+            } else {
+                ty.alignment
+            },
             ..ty
         };
         self.layout(ty).map(|layout| layout.align)
@@ -257,12 +278,14 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     pub(crate) fn unqualified_array(&mut self, mut ty: TypeId) -> TypeId {
         let mut bounds = ArenaVec::new_in(self.scratch);
         while let TypeKind::Array(element, bound) = self.nodes[ty.index] {
-            bounds.push(bound);
+            bounds.push((bound, ty.alignment));
             ty = element;
         }
         ty = ty.unqualified();
-        while let Some(bound) = bounds.pop() {
-            ty = self.intern(TypeKind::Array(ty, bound));
+        while let Some((bound, alignment)) = bounds.pop() {
+            ty = self
+                .intern(TypeKind::Array(ty, bound))
+                .with_alignment(alignment);
         }
         ty
     }
@@ -390,6 +413,10 @@ pub(crate) struct TypeInterner<'tu, 's> {
 pub(crate) struct TypeId {
     pub(crate) index:      usize,
     pub(crate) qualifiers: TypeQualifiers,
+    /// A GNU aligned typedef or a declaration's storage alignment, in the
+    /// existing padding of this handle. Zero uses the natural type alignment.
+    /// GNU extension: GCC Common Attributes, aligned.
+    pub(crate) alignment:  u32,
 }
 
 /// Hash-consing key. Child identities keep hashing bounded by immediate arity.
@@ -445,6 +472,9 @@ pub(crate) struct Tag<'tu> {
     /// completion.
     /// C99: §6.7.2.2 paragraph 4, p. 105; PDF p. 117.
     pub(crate) compatible:        Cell<Scalar>,
+    /// GNU packed and aligned on the record definition.
+    pub(crate) packed:            Cell<bool>,
+    pub(crate) alignment:         Cell<u32>,
 }
 
 /// A record member including ABI byte/bit offset and source bit-field width.
@@ -464,6 +494,8 @@ pub(crate) struct Member {
     pub(crate) bit_offset:     u32,
     pub(crate) width:          Option<u32>,
     pub(crate) anonymous:      bool,
+    /// GNU packed applies to this member without changing its C type.
+    pub(crate) packed:         bool,
 }
 
 /// One name in a record's member namespace, including the names an anonymous
@@ -530,6 +562,7 @@ pub(crate) enum TagKind {
 struct ArrayTail {
     index:      usize,
     incomplete: bool,
+    alignment:  u32,
 }
 
 /// Iteratively strips array derivations and multiplies their extents; the
@@ -543,6 +576,7 @@ fn layout(
 ) -> Option<Layout> {
     let mut count = 1_u64;
     let mut atomic = false;
+    let mut alignment = ty.alignment;
     let layout = loop {
         match nodes[ty.index] {
             | TypeKind::Scalar(scalar) => break target.scalar(scalar)?,
@@ -568,6 +602,9 @@ fn layout(
             | TypeKind::Array(element, ArrayBound::Constant(n)) => {
                 count = count.checked_mul(n)?;
                 ty = element;
+                if alignment == 0 {
+                    alignment = ty.alignment;
+                }
             },
             | TypeKind::Atomic(value) => {
                 atomic = true;
@@ -586,8 +623,12 @@ fn layout(
         layout
     };
     Some(Layout {
-        size: layout.size.checked_mul(count)?,
-        ..layout
+        size:  layout.size.checked_mul(count)?,
+        align: if alignment == 0 {
+            layout.align
+        } else {
+            u64::from(alignment)
+        },
     })
 }
 
@@ -596,6 +637,11 @@ pub(crate) fn align_up(value: u64, align: u64) -> Option<u64> {
 }
 
 impl TypeId {
+    /// GCC Common Attributes: alignment does not alter the underlying C type.
+    pub(crate) const fn with_alignment(self, alignment: u32) -> Self {
+        Self { alignment, ..self }
+    }
+
     /// C99: §6.7.3p9, p. 109; PDF p. 121.
     pub(crate) fn unqualified(self) -> Self {
         Self {

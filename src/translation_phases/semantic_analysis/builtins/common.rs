@@ -46,7 +46,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> Option<TypeId> {
         let builtin = common_builtin(self.context.string_cache.at(name.name))?;
         let scalar = match builtin {
-            | CommonBuiltin::Bit(_, _) | CommonBuiltin::Constant => Scalar::Int,
+            | CommonBuiltin::Float(FloatOperation::Copysign, scalar) =>
+                scalar.unwrap_or(Scalar::Double),
+            | CommonBuiltin::Bit(_, _) | CommonBuiltin::Constant | CommonBuiltin::Float(..) =>
+                Scalar::Int,
             | CommonBuiltin::Bswap(bits) => self.bswap_scalar(bits),
             | CommonBuiltin::Expect(_) => Scalar::Long,
             | CommonBuiltin::ObjectSize(_) => self.types.target.size_t,
@@ -69,6 +72,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut prototype = true;
         let mut variadic = false;
         match builtin {
+            | CommonBuiltin::Float(operation, scalar) =>
+                if let Some(scalar) = scalar {
+                    let ty = self.types.scalar(scalar);
+                    parameters.push(ty);
+                    if operation == FloatOperation::Copysign {
+                        parameters.push(ty);
+                    }
+                } else {
+                    prototype = false;
+                },
             | CommonBuiltin::Bit(_, scalar) => parameters.push(self.types.scalar(scalar)),
             | CommonBuiltin::Bswap(_) => parameters.push(result),
             | CommonBuiltin::Expect(probability) => {
@@ -155,11 +168,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .report_extension(Feature::GnuBuiltins, spelling, name.source_vectors);
         let args = arguments.as_slice();
         let (min, max) = match builtin {
+            | CommonBuiltin::Float(FloatOperation::Copysign, _)
+            | CommonBuiltin::Expect(false)
+            | CommonBuiltin::ObjectSize(_) => (2, 2),
             | CommonBuiltin::Bit(..)
             | CommonBuiltin::Bswap(_)
             | CommonBuiltin::Constant
-            | CommonBuiltin::Alloca => (1, 1),
-            | CommonBuiltin::Expect(false) | CommonBuiltin::ObjectSize(_) => (2, 2),
+            | CommonBuiltin::Alloca
+            | CommonBuiltin::Float(..) => (1, 1),
             | CommonBuiltin::Expect(true) | CommonBuiltin::Overflow(..) => (3, 3),
             | CommonBuiltin::Aligned => (2, 3),
             | CommonBuiltin::Prefetch => (1, 3),
@@ -185,6 +201,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let mut info = Self::expression_result(e, result);
         match builtin {
+            | CommonBuiltin::Float(operation, scalar) => {
+                return Some(self.floating_builtin(e, args, operation, scalar));
+            },
             | CommonBuiltin::Bit(_, scalar) => {
                 let ty = self.types.scalar(scalar);
                 _ = self.common_argument(args[0], ty);
@@ -440,6 +459,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 pub(crate) enum CommonBuiltin {
     Varargs(crate::translation_phases::preprocessing::KeywordTokenType),
     Bit(BitOperation, Scalar),
+    Float(FloatOperation, Option<Scalar>),
     Bswap(u32),
     Expect(bool),
     Aligned,
@@ -450,6 +470,13 @@ pub(crate) enum CommonBuiltin {
     ObjectSize(bool),
     Alloca,
     Overflow(OverflowOperation, Option<Scalar>, bool),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FloatOperation {
+    Signbit,
+    Isinf,
+    Copysign,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -483,6 +510,22 @@ pub(crate) fn common_builtin(name: &str) -> Option<CommonBuiltin> {
         | "va_end" => return Some(B::Varargs(K::BuiltinVaEnd)),
         | "va_copy" => return Some(B::Varargs(K::BuiltinVaCopy)),
         | _ => {},
+    }
+    for (prefix, operation) in [
+        ("signbit", FloatOperation::Signbit),
+        ("isinf", FloatOperation::Isinf),
+        ("copysign", FloatOperation::Copysign),
+    ] {
+        if let Some(suffix) = name.strip_prefix(prefix) {
+            let scalar = match suffix {
+                | "" if operation != FloatOperation::Copysign => None,
+                | "" => Some(Scalar::Double),
+                | "f" => Some(Scalar::Float),
+                | "l" => Some(Scalar::LongDouble),
+                | _ => continue,
+            };
+            return Some(B::Float(operation, scalar));
+        }
     }
     for (prefix, op) in [
         ("clz", BitOperation::Clz),
