@@ -34,12 +34,14 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
     pub(super) fn new(context: &'c mut Context<'tu>, scratch: &'s Bump) -> Self {
         let tu = context.tu_arena();
         let target = context.configuration.target().layout();
+        let pack_alignments = super::packing::states(context, scratch);
         let mut analyzer = Self {
             #[cfg(test)]
             review_steps: Cell::new([0; 3]),
             context,
             scratch,
             types: TypeInterner::new(tu, scratch, &target),
+            pack_alignments,
             bindings: ArenaVec::new_in(tu),
             declarators: ArenaVec::new_in(tu),
             spec_extensions: ArenaVec::new_in(tu),

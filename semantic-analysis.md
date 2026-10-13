@@ -178,8 +178,8 @@ C99-required int/unsigned-int/bool set are accepted as an implementation-defined
 choice following the target ABI. GCC's flexible-array forms (in a union, as a
 structure's only member, a flexible structure nested in a structure, and arrays
 of flexible structures) keep their layout and are reported through the
-`FlexibleArrayExtensions` policy. Packed/aligned/vendor attribute meaning is not
-modeled; affected record layouts become unavailable instead of fabricated.
+`FlexibleArrayExtensions` policy. Supported GNU packed/aligned attributes retain
+their layouts; unmodeled vendor attributes make affected layouts unavailable.
 Windows records use Microsoft's bit-field layout on both MinGW and MSVC,
 matching Clang's MinGW default `-mms-bitfields`. Consecutive nonzero fields share
 an entire reserved storage unit only when their base-type sizes match and they
@@ -193,7 +193,8 @@ verify bit offsets, typedef identities, literal types and UTF-16 surrogate
 values directly. `_Generic` now resolves associations in sema (see the atomic section below).
 The original target probe also includes **direct Rust type assertions** supplying
 bcc's type evidence rather than claiming unmodeled generic assertions passed.
-No packed/aligned attribute or pragma-pack semantics are added.
+Packed/aligned attributes and translation-ordered pragma packing are retained
+layout facts (see the storage and member-place alignment contract below).
 
 Compatibility handles qualifiers, pointer targets, constant vs incomplete array
 extents and prototype parameter types/ellipsis, and constructs composite derived
@@ -212,6 +213,46 @@ reported through the extension policy. A set of members that no 64-bit type
 holds is diagnosed.
 
 ### Storage, natural and member-place alignment
+
+`packing::states` interprets `#pragma pack` once from macro-replaced operands and
+output-token ordinals retained by preprocessing. The parser retains the opening
+brace ordinal on each record definition; semantic analysis queries that state
+and stores `Tag::max_member_alignment`. Record completion owns the resulting
+member offsets, allocation units, alignment and size, and ABI projection consumes
+those facts. This avoids source-location joins and downstream pragma walks.
+The opening state follows bundled Clang even if a directive occurs inside the
+body; the changed state still applies to subsequent definitions.
+
+The stack supports reset, numeric caps (0, 1, 2, 4, 8, 16), unnamed/named pushes
+and pops, optional pop caps, and `show`. Setting/resetting the cap does not
+change saved entries; a named pop removes its matching entry and every entry
+above it, and a missing name leaves the stack intact. Malformed forms are
+warnings and leave the state unchanged. Empty pops, named pops with an alignment,
+unterminated pushes, and `show` use Clang-compatible warnings, independently of
+language-extension policy. Includes, `_Pragma` and `__pragma` use the same state.
+State construction uses arenas and an explicit stack; each definition performs
+a binary search over directive boundaries, rather than replaying the directives.
+
+GNU layout caps explicit member alignment; MSVC ordinary members retain an
+explicit higher alignment. Record alignment attributes can still raise the final
+alignment. System V value bit-fields under a nonzero cap may cross their natural
+allocation boundary and packed union fields occupy their written bits. Zero-width
+fields retain the System V natural boundary. Microsoft fields retain complete
+declared storage units; active zero-width fields follow the distinct MinGW/MSVC
+rules. These are implementation-defined choices under C99 §6.7.2.1p10-12
+(printed pp. 102-103; PDF pp. 114-115), checked against all three Clang targets.
+See [GCC Structure-Layout Pragmas](https://gcc.gnu.org/onlinedocs/gcc/Structure-Layout-Pragmas.html),
+[MSVC pack](https://learn.microsoft.com/en-us/cpp/preprocessor/pack), and
+[Clang pragma semantics](https://clang.llvm.org/doxygen/SemaAttr_8cpp_source.html).
+
+`Member::explicit_alignment` alone requests a new System V value-bit-field
+boundary. Typedef-inherited alignment affects record alignment without splitting
+adjacent fields. MinGW ignores inherited typedef alignment on bit-fields; MSVC
+and System V retain it, following bundled Clang. Packed placement and zero-width
+boundaries retain their separate target rules. C99 §6.7.2.1p10 (printed p. 102;
+PDF p. 114) leaves allocation-unit alignment unspecified; the GNU
+[aligned attribute](https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html)
+supplies the extension contract.
 
 `Types::storage_alignment` is the retained query for a declaration's storage
 requirement, including variable array derivations. `Types::layout` supplies the
@@ -408,6 +449,19 @@ the final conversion to the left operand's type. The backend must evaluate that
 left operand once (§6.5.16.2p3, p. 93, PDF p. 105).
 
 Integer promotions preserve enum and bit-field rules. Usual arithmetic conversions
+use `ExpressionInfo::promotion_width`, separately from the `bit_field` designation
+used by address/size constraints. Comma forwards the right operand's width;
+simple/compound assignment and prefix updates forward the left/updated operand's
+width. Parentheses and designation-preserving selections retain it. Conditional
+arithmetic results use the already-promoted common type. Casts and postfix updates
+have ordinary declared-type results, matching Clang. `sizeof` and `_Generic`
+therefore observe their standard unpromoted types and designation constraints.
+Narrow extended integer bit-fields also follow Clang's width-based promotion.
+This compatibility choice implements C99 §6.3.1.1p2 (printed pp. 42-43; PDF
+pp. 54-55) for value-producing wrappers, where GCC and Clang preserve the field's
+promotion behavior. All arithmetic/comparison/default-argument consumers use the
+same promotion helper; constant folding and lowering consume its retained operand
+conversions. No downstream expression walk re-infers the width. Arithmetic types
 preserve integer rank even where LP64 long and long long have equal widths, and
 preserve real/complex component precision. Assignment conversion checks immediate
 pointed-to qualifier inclusion and exact compatibility at deeper pointer levels;

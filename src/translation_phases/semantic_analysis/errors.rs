@@ -41,6 +41,12 @@ pub(crate) struct SemanticError {
 /// C99: §6.7p3-4, p. 97; PDF p. 109; subsidiary constraints are cited below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SemanticErrorKind {
+    /// C99: §6.10.6p1, p. 159; PDF p. 171; GCC/MSVC pragma extension.
+    PragmaPackMalformed,
+    PragmaPackPopEmpty,
+    PragmaPackPopNameAlignment,
+    PragmaPackUnterminated,
+    PragmaPackShow(u32),
     /// C99: §7.15p3, p. 249; PDF p. 261.
     InvalidVaList,
     /// C99: §7.15.1.1p2, pp. 249-250; PDF pp. 261-262.
@@ -335,6 +341,11 @@ impl SemanticErrorKind {
     /// The primary label names what is wrong at the labeled source.
     const fn label(self) -> &'static str {
         match self {
+            | Self::PragmaPackMalformed
+            | Self::PragmaPackPopEmpty
+            | Self::PragmaPackPopNameAlignment
+            | Self::PragmaPackUnterminated
+            | Self::PragmaPackShow(_) => "packing directive",
             | Self::UnsupportedFloat128 => "unsupported floating type",
             | Self::InvalidVectorAttribute => "invalid vector size or element type",
             | Self::InvalidAlignmentAttribute => "alignment must be a power-of-two constant",
@@ -459,6 +470,11 @@ impl SemanticErrorKind {
     )]
     fn explanation(self) -> (&'static str, &'static str) {
         match self {
+            | Self::PragmaPackMalformed => ("malformed #pragma pack ignored", "C99 §6.10.6p1: implementation-defined GCC/MSVC packing pragma"),
+            | Self::PragmaPackPopEmpty => ("#pragma pack(pop, ...) failed: stack empty", "GCC/MSVC pack restores a saved alignment from its stack"),
+            | Self::PragmaPackPopNameAlignment => ("specifying both a name and alignment to 'pop' is undefined", "Clang warns and applies the named pop followed by the alignment"),
+            | Self::PragmaPackUnterminated => ("unterminated '#pragma pack(push, ...)' at end of file", "restore the saved packing state with #pragma pack(pop)"),
+            | Self::PragmaPackShow(_) => ("current #pragma pack alignment value", "GCC/MSVC packing state at this directive"),
             | Self::BuiltinRequiresCall => (
                 "builtin functions must be directly called",
                 "GNU extension: intrinsic-only builtins have no addressable external function; parentheses and compile-time selections preserve callee designation",
@@ -1024,6 +1040,8 @@ impl ToDiagnostic for SemanticError {
                 quote_spelling(self.name.map_or("", |name| context.string_cache.at(name))),
                 context.string_cache.at(ty)
             )
+        } else if let SemanticErrorKind::PragmaPackShow(value) = self.kind {
+            format_in!(arena, "value of #pragma pack(show) == {value}")
         } else if let Some(name) = self.name {
             format_in!(
                 arena,
@@ -1075,6 +1093,11 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::MainSignature
                 | SemanticErrorKind::TentativeArrayAssumedOne
                 | SemanticErrorKind::UnusedStaticFunction
+                | SemanticErrorKind::PragmaPackMalformed
+                | SemanticErrorKind::PragmaPackPopEmpty
+                | SemanticErrorKind::PragmaPackPopNameAlignment
+                | SemanticErrorKind::PragmaPackUnterminated
+                | SemanticErrorKind::PragmaPackShow(_)
                 | SemanticErrorKind::EmptyCaseRange
                 | SemanticErrorKind::MissingReturnValueWarning
                 | SemanticErrorKind::InvalidAtomicOrder

@@ -26,6 +26,7 @@ use crate::{
     },
     translation_phases::{
         Context,
+        SourceVectors,
         parsing::ParsedTranslationUnit,
         semantic_analysis::SemanticTranslationUnit,
     },
@@ -54,16 +55,24 @@ pub(crate) fn lower_translation_unit<'tu, 'ir>(
 ) -> Result<Module<'ir>, MiddleEndError<'ir>> {
     let mut scratch = Bump::new();
     let target = context.configuration.target();
-    let mut module =
-        crate::lowering::lower_translation_unit(context, syntax, sema, target, arena, &mut scratch)
-            .map_err(MiddleEndError::Lowering)?;
+    let crate::lowering::LoweredUnit {
+        mut module,
+        function_sources,
+    } = crate::lowering::lower_with_sources(context, syntax, sema, target, arena, &mut scratch)
+        .map_err(MiddleEndError::Lowering)?;
     if let Some(options) = optimizer {
         scratch.reset();
         _ = optimize(&mut module, options, &scratch);
     }
     if profile == Profile::PostAbi {
         scratch.reset();
-        lower_abi(&mut module, target, &scratch).map_err(MiddleEndError::Abi)?;
+        lower_abi(&mut module, target, &scratch).map_err(|error| MiddleEndError::Abi {
+            source: function_sources
+                .iter()
+                .find(|(function, _)| *function == error.function)
+                .map(|(_, source)| *source),
+            error,
+        })?;
     }
     Ok(module)
 }
@@ -74,5 +83,8 @@ pub(crate) enum MiddleEndError<'ir> {
     /// Lowering refused the unit, with one error per construct.
     Lowering(LoweringErrors<'ir>),
     /// ABI lowering met a case it does not handle.
-    Abi(AbiError<'ir>),
+    Abi {
+        error:  AbiError<'ir>,
+        source: Option<SourceVectors>,
+    },
 }

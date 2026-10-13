@@ -69,6 +69,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     }
                     self.own(parser, token);
                     if self.kind == ModernKind::Attributes {
+                        self.attribute_start = parser.cursor.consumed;
                         if matches!(token.kind, TokenType::Keyword(KeywordTokenType::Declspec)) {
                             self.attribute_syntax = AttributeSyntax::Msvc;
                             self.tokens.push(token);
@@ -498,9 +499,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                 self.complete_attribute_argument(parser, token, returned),
             | Phase::Finish => {
                 let source_vectors = if self.kind == ModernKind::Attributes {
-                    let mut sources = ArenaVec::new_in(parser.arena);
-                    sources.extend(self.tokens.iter().map(|x| x.source_vectors));
-                    parser.context.merge_vector_list(&sources)
+                    parser.cursor.source_since(self.attribute_start)
                 } else {
                     self.source_vectors.unwrap_or_default()
                 };
@@ -533,7 +532,9 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                         }))
                     },
                     | ModernKind::Attributes => {
-                        let tokens = parser.alloc_syntax_list(&mut self.tokens);
+                        let tokens = parser
+                            .cursor
+                            .retain_since(self.attribute_start, parser.tree);
                         let arguments = parser.alloc_syntax_list(&mut self.arguments);
                         ModernValue::Attributes(parser.alloc_syntax(AttributeSpecifier {
                             syntax: self.attribute_syntax,
@@ -552,7 +553,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
     /// GCC aligned has a C integer constant expression operand. Keep unknown
     /// vendor-prefixed attributes opaque, even if their name is `aligned`.
     /// C99: §6.6p6, p. 95; PDF p. 107 (GNU attribute extension).
-    fn start_attribute_argument(&mut self, parser: &Parser<'_, 'tu, 'p>) {
+    fn start_attribute_argument(&mut self, parser: &mut Parser<'_, 'tu, 'p>) {
         if matches!(
             self.attribute_position,
             AttributePosition::AfterPrefixedName
@@ -577,51 +578,11 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                 .at(name.contents)
                 .trim_matches('_')
                 == "aligned"
-        }) && Self::alignment_argument_closes(parser)
+        }) && parser.cursor.alignment_argument_closes(parser.arena)
         {
-            self.argument_index = self.tokens.len() - 1;
-            self.argument_start = parser.cursor.consumed + 1;
+            self.argument_index = parser.cursor.consumed - self.attribute_start - 1;
             self.phase = Phase::AttributeArgument;
         }
-    }
-
-    /// An unclosed operand keeps the attribute's original delimiter recovery.
-    /// Only complete operands enter the expression frame, so a missing inner
-    /// delimiter cannot replace the owning attribute's boundary diagnostic.
-    /// C99: §6.7, p. 97; PDF p. 109 (GNU attribute extension).
-    fn alignment_argument_closes(parser: &Parser<'_, 'tu, 'p>) -> bool {
-        let mut closing = ArenaVec::new_in(parser.arena);
-        closing.push(OperatorTokenType::ClosingParenthesis);
-        let mut offset = 0;
-        while let Some(token) = parser.cursor.lookahead(offset) {
-            offset += 1;
-            let TokenType::Operator(operator) = token.kind else {
-                continue;
-            };
-            match operator {
-                | OperatorTokenType::OpeningParenthesis =>
-                    closing.push(OperatorTokenType::ClosingParenthesis),
-                | OperatorTokenType::OpeningSquareBracket =>
-                    closing.push(OperatorTokenType::ClosingSquareBracket),
-                | OperatorTokenType::OpeningCurlyBrace =>
-                    closing.push(OperatorTokenType::ClosingCurlyBrace),
-                | OperatorTokenType::ClosingParenthesis
-                | OperatorTokenType::ClosingSquareBracket
-                | OperatorTokenType::ClosingCurlyBrace => {
-                    if closing.pop() != Some(operator) {
-                        return false;
-                    }
-                    if closing.is_empty() {
-                        return true;
-                    }
-                },
-                | OperatorTokenType::Semicolon
-                    if !closing.contains(&OperatorTokenType::ClosingCurlyBrace) =>
-                    return false,
-                | _ => {},
-            }
-        }
-        false
     }
 
     /// Preserve the operand's original tokens alongside its parsed expression.
@@ -633,13 +594,6 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         returned: Option<ParseValue<'tu>>,
     ) -> ParseAction<'tu, 'p> {
         let expression = any_expression_value(returned);
-        self.tokens.extend(
-            parser
-                .cursor
-                .consumed_since(self.argument_start)
-                .iter()
-                .copied(),
-        );
         self.arguments.push(AttributeArgument {
             index: self.argument_index,
             expression,
@@ -773,7 +727,7 @@ pub(crate) enum SpecifierExtensionKind<'tu> {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct AttributeSpecifier<'tu> {
     pub(crate) syntax:         AttributeSyntax,
-    pub(crate) tokens:         ArenaList<'tu, Token>,
+    pub(crate) tokens:         &'tu [Token],
     /// Attribute-name token index and its parsed alignment operand.
     pub(crate) arguments:      ArenaList<'tu, AttributeArgument<'tu>>,
     pub(crate) source_vectors: SourceVectors,
@@ -881,7 +835,7 @@ pub(in crate::translation_phases::parsing) struct ModernFrame<'tu, 'p> {
     pub(in crate::translation_phases::parsing) associations: ArenaVec<'p, GenericAssociation<'tu>>,
     pub(in crate::translation_phases::parsing) tokens: ArenaVec<'p, Token>,
     pub(in crate::translation_phases::parsing) arguments: ArenaVec<'p, AttributeArgument<'tu>>,
-    argument_start: usize,
+    attribute_start: usize,
     argument_index: usize,
     delimiters: ArenaVec<'p, OperatorTokenType>,
     message: Option<Token>,
@@ -1091,7 +1045,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
             associations: ArenaVec::new_in(arena),
             tokens: ArenaVec::new_in(arena),
             arguments: ArenaVec::new_in(arena),
-            argument_start: 0,
+            attribute_start: 0,
             argument_index: 0,
             delimiters: ArenaVec::new_in(arena),
             message: None,

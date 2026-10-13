@@ -36,18 +36,18 @@ use crate::{
 
 impl Expander<'_, '_, '_, '_> {
     /// Executes a `#pragma` directive, or the pragma of a `_Pragma` operator,
-    /// whose operands are not macro-replaced. Returns whether the directive's
-    /// new-line was consumed.
+    /// returning whether its new-line was consumed. Most operands are not
+    /// macro-replaced; pack operands are replaced for GCC/Clang compatibility.
     ///
     /// C99: §6.10.6 paragraphs 1-2, p. 159; PDF p. 171. `STDC` pragmas must
     /// name `FP_CONTRACT`, `FENV_ACCESS`, or `CX_LIMITED_RANGE` and an
     /// `on-off-switch`; they are checked but have no effect yet. `#pragma
-    /// once` and `#pragma GCC system_header` are bcc's implementation-defined
-    /// pragmas. Other pragmas are ignored (paragraph 1), and one that does
-    /// not begin with an identifier draws a warning first.
-    /// `from` is the physical invocation's byte offset, including when
-    /// `_Pragma` supplies tokens from a synthetic string (C99 §6.10.9p1,
-    /// p. 161; PDF p. 173).
+    /// once`, `#pragma pack` and `#pragma GCC system_header` are bcc's
+    /// implementation-defined pragmas. Other pragmas are ignored (paragraph
+    /// 1), and one that does not begin with an identifier draws a warning
+    /// first. `from` is the physical invocation's byte offset, including
+    /// when `_Pragma` supplies tokens from a synthetic string (C99
+    /// §6.10.9p1, p. 161; PDF p. 173).
     pub(in crate::translation_phases::preprocessing) fn parse_pragma_directive(
         &mut self,
         from: u32,
@@ -74,6 +74,11 @@ impl Expander<'_, '_, '_, '_> {
                 | PreprocessorTokenType::Identifier
                 | PreprocessorTokenType::UniversalIdentifier => {
                     match self.context.string_cache.at(token.contents) {
+                        | "pack" => {
+                            self.retain_pack_pragma(token.source_vectors);
+                            consumed_newline = true;
+                            break 'base;
+                        },
                         | "once" => {
                             if !self.current_is_header() {
                                 self.context.preprocessor_error(PreprocessorError {
@@ -244,6 +249,68 @@ impl Expander<'_, '_, '_, '_> {
             }
         }
         consumed_newline
+    }
+
+    /// GCC/Clang pack operands are macro-replaced, unlike ordinary pragmas.
+    /// Pass their tokens and output boundary to phase 7 for interpretation.
+    /// C99: §6.10.6p1 and footnote 152, p. 159; PDF p. 171 permit this choice.
+    /// Clang: <https://clang.llvm.org/doxygen/ParsePragma_8cpp_source.html>.
+    fn retain_pack_pragma(&mut self, source: SourceVectors) {
+        use crate::translation_phases::pragma_pack::{
+            PackPragma,
+            PackToken,
+        };
+        let arena = self.context.tu_arena();
+        let mut operands = crate::util::bump::ArenaVec::new_in(arena);
+        let mut raw = crate::util::bump::ArenaVec::new_in(self.scratch);
+        let line_state = (self.last_was_newline, self.current_is_newline);
+        while let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
+            if token.kind == PreprocessorTokenType::Newline {
+                break;
+            }
+            raw.push(token);
+        }
+        // A pragma operator temporarily replaces the tokenizer while its
+        // caller's macro frames remain active. Expand only the captured line:
+        // its parentheses/newline must never end or resume those frames.
+        let location = self.context.first_source_vector_or_default(source);
+        let tokenizer = crate::translation_phases::preprocessor_tokenizer::TokenSource::replay(
+            self.context,
+            self.scratch,
+            &[&raw],
+            location,
+        );
+        let hash_hash_stack = std::mem::replace(
+            &mut self.hash_hash_stack,
+            crate::util::bump::ArenaVec::new_in(self.scratch),
+        );
+        let generate_placeholders = self.generate_placeholders;
+        self.push_tokenizer_frame(super::super::runtime::TokenizerFrame {
+            frame_type: super::super::runtime::TokenizerFrameType::Rescan { argument: false },
+            tokenizer,
+        });
+        let depth = self.tokenizer_stack.len();
+        let operand_fence = std::mem::replace(&mut self.operand_fence, 0);
+        let expansion_fence = std::mem::replace(&mut self.expansion_fence, depth);
+        let verbatim_fence = std::mem::replace(&mut self.verbatim_fence, 0);
+        while let Some(token) = self.next_preprocessor_token::<true>() {
+            operands.push(PackToken {
+                spelling:   token.contents,
+                identifier: token.kind.is_identifier(),
+            });
+        }
+        self.operand_fence = operand_fence;
+        self.expansion_fence = expansion_fence;
+        self.verbatim_fence = verbatim_fence;
+        self.generate_placeholders = generate_placeholders;
+        self.hash_hash_stack = hash_hash_stack;
+        (self.last_was_newline, self.current_is_newline) = line_state;
+        let source = self.context.retain_token_source(source);
+        self.context.pack_pragmas.push(PackPragma {
+            position: self.context.preprocessed_tokens,
+            operands: operands.leak(),
+            source,
+        });
     }
 
     /// The source text a `_Pragma` string literal stands for (C99 §6.10.9p1),

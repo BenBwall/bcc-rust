@@ -530,6 +530,13 @@ pub(crate) struct ExpressionInfo<'tu> {
     pub(crate) category: ValueCategory,
     pub(crate) binding: Option<usize>,
     pub(crate) bit_field: Option<u32>,
+    /// Width used by integer promotions, independent of bit-field designation.
+    /// GCC/Clang preserve it through comma, assignment and prefix updates;
+    /// casts and postfix updates produce ordinary values of the declared type.
+    /// C99: §6.3.1.1p2, pp. 42-43; PDF pp. 54-55.
+    /// Checked integer bit-fields have at most 128 bits; one byte fits the
+    /// retained record's existing padding.
+    pub(in crate::translation_phases::semantic_analysis) promotion_width: Option<NonZeroU8>,
     /// For `.` and `->`, one more than the index of the selected member in
     /// the record's `Tag::fields`; read it through [`Self::field_index`].
     /// Four bytes fit in the record's padding, so it does not grow.

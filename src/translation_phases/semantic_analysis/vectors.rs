@@ -270,7 +270,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         a: &AttributeSpecifier<'tu>,
         storage_alignment: bool,
     ) -> TypeId {
-        let tokens = a.tokens.as_slice();
+        let tokens = a.tokens;
         let mut bytes = None;
         let mut alignment = None;
         for (i, name) in attribute_names(a, self.context) {
@@ -774,7 +774,7 @@ pub(super) fn attribute_names<'a>(
                 None
             },
             | _ if depth == level => {
-                let tokens = a.tokens.as_slice();
+                let tokens = a.tokens;
                 let colon = |index: usize| {
                     tokens
                         .get(index)

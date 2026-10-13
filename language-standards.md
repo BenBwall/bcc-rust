@@ -770,6 +770,17 @@ provenance, independent of `-fms-va-args` and the selected standard,
 consistent with the
 [MSVC operator documentation](https://learn.microsoft.com/en-us/cpp/preprocessor/pragma-directives-and-the-pragma-keyword?view=msvc-170).
 
+`#pragma pack`, `_Pragma("pack(...)")` and enabled `__pragma(pack(...))` retain
+translation order for semantic record layout. Numeric caps, reset, nested
+push/pop, identifiers, optional pop alignment and `show` are supported on all
+targets. Malformed directives warn and preserve state; unknown pragmas retain
+the existing ignore policy. Packing is implementation-defined pragma behavior
+under C99 §6.10.6p1, not a GNU/MSVC language-mode gate. Semantic analysis owns
+the cap, bit-field placement and explicit-alignment interaction; see
+[the retained layout contract](semantic-analysis.md#storage-natural-and-member-place-alignment),
+[GCC's pragma documentation](https://gcc.gnu.org/onlinedocs/gcc/Structure-Layout-Pragmas.html),
+and [MSVC pack](https://learn.microsoft.com/en-us/cpp/preprocessor/pack).
+
 ## System headers
 
 A header is a **system header** when it was found through a system directory,

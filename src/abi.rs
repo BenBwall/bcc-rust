@@ -176,6 +176,7 @@ fn lower_abi_with_function_scratch<'ir>(
 }
 
 /// A function that uses `sig`, to name in an error about it.
+/// C99: diagnostic ownership, §5.1.1.3p1, p. 11; PDF p. 23.
 fn signature_user<'ir>(module: &Module<'ir>, sig: SigId) -> &'ir str {
     let declared = module
         .functions()
@@ -187,7 +188,8 @@ fn signature_user<'ir>(module: &Module<'ir>, sig: SigId) -> &'ir str {
         function.body.as_ref().is_some_and(|body| {
             body.blocks().any(|block| {
                 body.block_insts(block).iter().any(|&inst| {
-                    matches!(*body.inst(inst), InstData::CallIndirect { sig: used, .. } if used == sig)
+                    matches!(*body.inst(inst), InstData::CallIndirect { sig: used, .. }
+                        | InstData::VaArgAggregate { sig: used, .. } if used == sig)
                 })
             })
         })

@@ -98,6 +98,36 @@ fn alignas_runtime_array_types_reject_weakened_alignment() {
 }
 
 #[test]
+fn nested_alignment_operands_retain_their_constant_results() {
+    for depth in [32, 1024] {
+        let source = format!(
+            "int value __attribute__((aligned({}8{}))); int following;",
+            "sizeof(int __attribute__((aligned(".repeat(depth),
+            "))))".repeat(depth)
+        );
+        with_source(&source, |context, sema| {
+            assert_eq!(
+                context.error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
+            for name in ["value", "following"] {
+                let binding = sema
+                    .bindings
+                    .iter()
+                    .find(|binding| context.string_cache.at(binding.name.name) == name)
+                    .unwrap();
+                assert_eq!(
+                    sema.types.layout(binding.ty),
+                    Some(Layout { size: 4, align: 4 })
+                );
+            }
+        });
+    }
+}
+
+#[test]
 fn alignment_constant_expressions_keep_constraint_diagnostics() {
     with_source(
         "[[vendor::aligned(!; arbitrary, {tokens})]] int object; int following;",

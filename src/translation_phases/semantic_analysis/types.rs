@@ -482,22 +482,25 @@ pub(crate) struct Types<'tu> {
 /// C99: §6.7.2.3p4-8, pp. 106-107; PDF pp. 118-119.
 #[derive(Debug)]
 pub(crate) struct Tag<'tu> {
-    pub(crate) name:              Option<StringCacheId>,
-    pub(crate) kind:              TagKind,
-    pub(crate) members:           Cell<&'tu [Member]>,
+    pub(crate) name:                 Option<StringCacheId>,
+    pub(crate) kind:                 TagKind,
+    pub(crate) members:              Cell<&'tu [Member]>,
     /// The member namespace in declaration order, set at completion.
-    pub(crate) fields:            Cell<&'tu [Field<'tu>]>,
-    pub(crate) layout:            Cell<Option<Layout>>,
-    pub(crate) complete:          Cell<bool>,
-    pub(crate) tainted:           Cell<bool>,
-    pub(crate) contains_flexible: Cell<bool>,
+    pub(crate) fields:               Cell<&'tu [Field<'tu>]>,
+    pub(crate) layout:               Cell<Option<Layout>>,
+    pub(crate) complete:             Cell<bool>,
+    pub(crate) tainted:              Cell<bool>,
+    pub(crate) contains_flexible:    Cell<bool>,
     /// The implementation-defined compatible integer type fixed at enum
     /// completion.
     /// C99: §6.7.2.2 paragraph 4, p. 105; PDF p. 117.
-    pub(crate) compatible:        Cell<Scalar>,
+    pub(crate) compatible:           Cell<Scalar>,
     /// GNU packed and aligned on the record definition.
-    pub(crate) packed:            Cell<bool>,
-    pub(crate) alignment:         Cell<u32>,
+    pub(crate) packed:               Cell<bool>,
+    /// Pragma maximum member alignment retained by sema; 0 selects default.
+    /// C99: §6.10.6p1, p. 159; PDF p. 171; GCC/MSVC extension.
+    pub(crate) max_member_alignment: Cell<u32>,
+    pub(crate) alignment:            Cell<u32>,
 }
 
 /// A record member including ABI byte/bit offset and source bit-field width.
