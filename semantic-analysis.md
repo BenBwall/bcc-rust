@@ -1509,3 +1509,18 @@ fixtures returned zero with GCC and Clang at O0/O2. Linux native execution
 was unavailable because WSL returned access denied. Shared LLVM junctions
 were preserved, and nothing was staged or committed. The whole-file commit
 plan is `target/commit-plan.md`; check logs are under `target/round6/`.
+
+
+### Runtime array metadata consumed by lowering (2026-10-13)
+
+`ArrayBound::Variable` retains a unique bound index into `Types::runtime_bounds`,
+whose entries are typed expression references. Distinct array derivations keep
+distinct identities even when their element types match. `Parameter::original`
+and `FunctionRecord::parameter_types` preserve parameter array types before
+adjustment, allowing the middle end to execute bounds on function entry.
+Lowering evaluates each retained bound at its declaration, saves its extent,
+and implements dynamic storage, strides, runtime sizeof and lifetime cleanup.
+The existing declaration-scope-path checks still reject jumps into scopes of
+variably modified identifiers, including typedefs and pointers to VLAs.
+C99 §6.7.5.2p5, pp. 116-117; PDF pp. 128-129; §6.9.1p10, p. 142;
+PDF p. 154; §6.8.6.1p1, p. 137; PDF p. 149.

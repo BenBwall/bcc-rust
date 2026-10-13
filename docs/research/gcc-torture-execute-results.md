@@ -1139,3 +1139,112 @@ The whole-file plan is `target/commit-plan.md`: five focused Conventional Commit
 with no file split across commits. Shared dispatch/task/opcode files require
 family changes to be grouped by compiler seam. No files are staged and no commits
 have been created. The shared prebuilt LLVM junctions are preserved.
+
+
+## 2026-10-13: Aggregate varargs and variable length arrays
+
+This worktree started at PR #41 head `a5670e7989cd78a6495fff19c3030bd94554eb5d`.
+Both release surveys read the same 1,677 top-level GCC 15.2.0 execute sources
+from the parent checkout's corpus. Source SHA-512 hashes match in every record.
+Commands used `--jobs 8 --timeout 10`; artifacts are
+`target/compiler-corpus/execute-torture2-abi-before` and
+`target/compiler-corpus/execute-torture2-abi-after`. The corpus and shared
+`target/llvm` and `target/llvm-libs` trees were not modified.
+
+| Status | I0 before | I0 after | I1 before | I1 after | A0 before | A0 after | A1 before | A1 after |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| pass | 1231 | 1255 | 1236 | 1260 | 1289 | 1313 | 1279 | 1303 |
+| frontend-error | 138 | 138 | 138 | 138 | 138 | 138 | 138 | 138 |
+| lowering-unsupported | 225 | 201 | 225 | 201 | 225 | 201 | 225 | 201 |
+| abi-unsupported | 4 | 6 | 4 | 6 | 4 | 6 | 4 | 6 |
+| interpreter-trap | 63 | 63 | 57 | 57 | 0 | 0 | 0 | 0 |
+| wrong-result | 16 | 14 | 17 | 15 | 16 | 14 | 26 | 24 |
+| timeout | 0 | 0 | 0 | 0 | 1 | 1 | 1 | 1 |
+| link-error | 0 | 0 | 0 | 0 | 4 | 4 | 4 | 4 |
+| compiler-crash | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+I0 is the interpreter without bcc optimization; I1 enables it. A0 and A1 are
+native LLVM O0 and O2. Each arm gains 24 passing sources. No source that passed
+in any baseline arm regressed in that arm. Compiler crashes remain zero;
+cross-arm status disagreements remain 65. `pr36339.c` times out in
+both native arms in both full surveys. Isolated baseline and final reruns with
+one worker report wrong native results for that same source; this existing
+failure is not counted as a pass or as an improvement.
+
+### Affected sources and outcomes
+
+The 17 baseline aggregate-varargs refusals were:
+
+`20180921-1.c`, `920625-1.c`, `920908-1.c`, `931004-10.c`, `931004-12.c`, `931004-14.c`, `931004-2.c`, `931004-4.c`, `931004-6.c`, `931004-8.c`, `pr44575.c`, `pr92904.c`, `stdarg-3.c`, `strct-stdarg-1.c`, `strct-varg-1.c`, `va-arg-22.c`, `va-arg-pack-1.c`.
+
+The 7 baseline VLA refusals were:
+
+`20040411-1.c`, `20040811-1.c`, `920721-2.c`, `920929-1.c`, `pr22061-1.c`, `pr43220.c`, `vla-dealloc-1.c`.
+
+All four arms now pass for these 15 aggregate-varargs sources:
+
+`20180921-1.c`, `920625-1.c`, `920908-1.c`, `931004-10.c`, `931004-12.c`, `931004-14.c`, `931004-2.c`, `931004-4.c`, `931004-6.c`, `931004-8.c`, `pr44575.c`, `stdarg-3.c`, `strct-stdarg-1.c`, `strct-varg-1.c`, `va-arg-22.c`.
+
+All four arms now pass for all 7 VLA sources listed above. Entry-time parameter
+bound evaluation also changes `970217-1.c` and `pr77767.c` from wrong results
+to passes in all four arms.
+
+The aggregate refusal is removed from `pr92904.c` and `va-arg-pack-1.c`, but
+neither is an execution pass on this Win64 target: ABI lowering now exposes the
+existing scalar `va_arg(i128)` and `va_arg(f80)` limitations respectively.
+These account for the two additional ABI refusals. Other frontend, unsupported,
+interpreter and native failures remain outside this change.
+
+### Implementation and evidence
+
+Typed call-site tails describe aggregate arguments without changing the fixed
+LLVM function type. System V reuses eightbyte classification, performs atomic
+INTEGER/SSE register availability checks, reconstructs register save area parts,
+and aligns MEMORY/fallback arguments in the overflow area. Win64 reads small
+aggregates from 8-byte slots and larger ones through pointers to caller copies.
+The interpreter supports aggregate fetches before ABI lowering and independently
+materializes the target's argument areas afterwards. Clang exchanges cover
+small integers, mixed integer/float classes, two doubles, 16-byte and larger
+objects, unions, arrays, empty objects and handwritten packed layouts, both call
+directions and both bcc optimization settings, with LLVM/Clang O0 and O2.
+Windows GNU and MSVC exchanges run here. System V execution is skipped by the
+existing harness because WSL returns `E_ACCESSDENIED`; System V interpreter and
+ABI planning/rewrite coverage executes. Packed source layout remains a frontend
+gap; packed ABI conformance uses explicit IR layout facts.
+
+VLA bounds retain expression identities and unadjusted definition parameter
+types, including K&R definitions. The middle end evaluates each bound once at
+its declaration, retains typedef extents, computes runtime sizeof and strides,
+and allocates dynamic stack storage. Declaration lifetime regions emit stack
+save/restore on lexical exit, return, break, continue and goto, including jumps
+back before one declaration or between two VLA declarations. Existing semantic
+checks reject jumps into a variably modified identifier's scope. Fixed-size IR
+snapshots remain unchanged. The new VLA golden and IR text/verifier tests cover
+`stack_save`, `stack_restore`, `va_arg_aggregate` and typed variadic tails.
+C99 §6.7.5.2p5, §6.5.3.4p2, §6.8p3, §6.2.4p6 and §6.9.1p10 govern this work.
+
+Execution tests compare native results with bundled Clang and run pre/post-ABI
+interpreter stages with both optimization settings. A thousand iterations with
+32 KiB arrays, backward goto, continue, break and nested scopes stay below
+100,000 interpreter memory cells. The repeated allocation after an earlier live
+VLA is also checked at full size in the interpreter. Bundled Clang Win64 O0
+retains those repeated allocations and overflows its default stack at that size;
+that native oracle comparison uses 128 elements, while ordinary loop and
+backward-goto native tests keep their full 8,192-element arrays. This oracle
+limitation is recorded rather than weakening the independent bounded-storage
+check. Explicitly aligned alloca variants remain deferred.
+
+
+Validation passed: `cargo test --all-targets`;
+`cargo test --features benchmarking-internals --test allocation_count` (26 tests);
+`cargo +nightly fmt` followed by `cargo +nightly fmt --check`;
+`cargo clippy --all-targets -- -D warnings`;
+`cargo clippy --release --all-targets -- -D warnings`;
+`cargo clippy --all-targets --features benchmarking-internals -- -D warnings`;
+`git diff --check`; and
+`BCC_DIFFTEST_CASES=1000 cargo test --lib difftest`.
+The feature-enabled build was isolated from CLI integration execution.
+The plain CLI was rebuilt with `cargo build --bin bcc-rust` afterwards and
+its help command completed through `scripts/cargo_runner.py`.
+`target/commit-plan.md` assigns all changed files to whole-file commits.
+No files were staged or committed.

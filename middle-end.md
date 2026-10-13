@@ -189,7 +189,9 @@ load  <ty> addr                  → ty      flags: volatile, align, access tag
 store <ty> value, addr                     flags: volatile, align, access tag
 copy  dst, src, size, align                flags: volatile, may_overlap
 fill  dst, byte, size, align               (memset)
-dyn_alloca.i64 size             → ptr     (function-lifetime, align 16)
+dyn_alloca.i64 size             → ptr     (until restore or return, align 16)
+stack_save                     → ptr     (opaque current stack position)
+stack_restore position                   (releases later dynamic objects)
 ```
 
 Calls: `call func(args)` and `call_indirect sig, callee(args)`, each with zero
@@ -482,7 +484,7 @@ The audit lists gaps that block lowering. In order:
 6. **Record the selected field.** Member access should store the field index
    instead of making lowering search the record by name.
 
-Later gaps (initializer placement plans, static address constants, VLA extents,
+Later gaps (initializer placement plans, static address constants,
 builtin result types, bit-field storage units) are scheduled with the features
 that need them.
 
@@ -666,7 +668,7 @@ The storage preflight covers fixed aggregate parameters of variadic signatures
 as well as ordinary parameters, return areas and `byval` copies, whether a call
 passes an existing stack slot or needs a temporary. Scalar variadic arguments
 and `va_arg` use at most sixteen bytes; aggregate variadic arguments and
-aggregate `va_arg` remain unsupported. Signatures and their expanded parameter
+aggregate `va_arg` descriptors use the same storage preflight as fixed aggregates. Signatures and their expanded parameter
 counts must also fit `u32`, as required by IR indices and LLVM-C.
 
 **System V x86-64** (Linux): eightbyte classification per the psABI §3.2.3, with
@@ -701,8 +703,7 @@ exactly as the signature records them, on declarations, definitions and both
 kinds of call. A C `signed char` parameter on System V becomes
 `i8 noundef signext`; its result remains `signext i8`.
 
-**Known gaps:** aggregates in the variable part of a call and `va_arg` of
-aggregates are unsupported; packed structures do not reach ABI lowering yet,
+**Known gaps:** packed structures do not reach ABI lowering yet,
 since the front end does not model them. A named bit-field in a small aggregate
 contributes one `i8` scalar per byte its bits reach, so its bytes classify as
 INTEGER, as Clang classifies them.
@@ -928,19 +929,19 @@ no bound is inferred and no argument is evaluated. `trap` is a side-effecting
 nullary instruction mapping to LLVM `trap`, followed by `unreachable`;
 `unreachable` itself ends control flow and is undefined when executed.
 
-`dyn_alloca.i64 size` is deliberately smaller than a general VLA/lifetime IR.
+`dyn_alloca.i64 size` allocates dynamic stack storage.
 It creates a fresh uninitialized byte object of the unsigned size on every
 execution, including each loop iteration, with 16-byte alignment (the current
 x86-64 targets' ordinary stack alignment). Its result is a pointer and its
-storage remains live until this invocation returns. The interpreter adds the
+storage remains live until a matching stack restore or this invocation returns. The interpreter adds the
 object to the current frame's stack allocations and releases it on return;
 LLVM emits `alloca i8, i64 size, align 16` at the point of execution. Poison
 size is undefined; allocation/resource exhaustion is an interpreter failure.
 Zero-size allocations produce an object whose bytes cannot be accessed.
 Dynamic allocations are effectful, are neither moved nor merged, and callees
 containing them are not inlined, preserving function lifetime. Fixed stack
-slots keep their existing representation and size bound. Scoped VLA lifetimes,
-stack-save/restore, and explicitly aligned alloca variants remain deferred.
+slots keep their existing representation and size bound. Explicitly aligned
+alloca variants remain deferred.
 
 GNU omitted-middle conditionals test a saved first value before converting the
 selected result, and evaluate that value once. Case ranges compare unsigned
@@ -949,8 +950,8 @@ ordinary switch labels remain switch entries. Statement expressions execute
 an explicit-stack block schedule and return the final expression statement's converted
 value, including array/function decay; other endings yield void. Constant choose-expr
 selections lower only their chosen operand. Scalar header varargs use existing
-IR `va_start`, `va_arg`, `va_copy`, and `va_end`; aggregate varargs remain
-explicitly unsupported.
+IR `va_start`, `va_arg`, `va_copy`, and `va_end`; aggregate fetches use
+`va_arg_aggregate`.
 
 Contracts: [GCC bit operations](https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html),
 [GCC overflow builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html),
@@ -1028,3 +1029,54 @@ benchmarking-internals configurations, `git diff --check`, and
 last. The invalid-header `--emit=ir` probe reports twelve ordinary constraints
 and exits with status 1, without an internal lowering error. Shared LLVM trees
 were preserved; no staging or commits were performed.
+
+
+## Aggregate varargs and runtime arrays (2026-10-13)
+
+A call-site signature can retain typed arguments after its ellipsis, for example
+`(i32, ..., ptr aggregate(size 16, align 8, [0: i64, 8: f64]))`.
+`Signature::variadic_fixed` identifies the fixed prefix; only that prefix enters
+LLVM's function type. Function declarations and definitions cannot carry typed
+variadic tails. The tail describes argument ABI attributes and classification,
+including `byval` on MEMORY arguments. Scalar-only calls keep the usual compact
+signature. The printer and parser preserve the ellipsis and every tail attribute.
+
+`va_arg_aggregate list : (ptr aggregate(...))` returns the address of a fresh
+copy of the next aggregate. Its signature is a layout descriptor with exactly
+one aggregate parameter and no result or ellipsis. It is legal only before ABI
+lowering. On System V, INTEGER and SSE eightbytes are reconstructed from the
+register save area only when both register classes have room; otherwise the
+whole object is fetched from the aligned overflow area. MEMORY aggregates use
+the overflow area directly. Empty aggregates do not advance the cursor. Win64
+reads aggregates of 1, 2, 4 or 8 bytes from a slot, and otherwise follows the slot's
+pointer to a caller copy. The pre-ABI interpreter retains argument layouts; its
+post-ABI model independently materializes target save and overflow areas.
+Conformance exchanges cover mixed classes, exhausted registers, unions, arrays,
+small and large objects, empty objects, and handwritten packed-layout IR.
+
+Semantic array bounds retain an identity and the typed bound expression. Lowering
+evaluates bounds on the explicit task stack, saves each extent in an SSA variable,
+and uses it for allocation, runtime `sizeof`, and multidimensional strides.
+Typedefs retain the declaration's extent. Function records also retain original
+parameter types, so array adjustment does not discard entry-time bound effects.
+C99 §6.7.5.2p5, pp. 116-117; PDF pp. 128-129; §6.5.3.4p2, p. 80;
+PDF p. 92; §6.9.1p10, p. 142; PDF p. 154.
+
+Each automatic VLA declaration saves the stack before its allocation. Lexical
+scope exits and jumps emit restores for the lifetime regions they leave,
+including a backward goto to before the declaration. A loop therefore reuses
+storage. Return expressions are evaluated before cleanup. Jumping into a
+variably modified identifier's scope remains a semantic constraint violation.
+C99 §6.2.4p6, p. 32; PDF p. 44; §6.8p3, p. 131; PDF p. 143;
+§6.8.6.1p1, p. 137; PDF p. 149.
+
+`stack_save` returns an opaque `ptr` token for the current dynamic stack position;
+`stack_restore` takes such a token from the current invocation and releases later
+dynamic objects. It leaves fixed slots and varargs backing storage live. These
+operations are effectful and cannot be merged or moved across allocations.
+The verifier checks their result and operand types. LLVM emission uses
+`llvm.stacksave.p0` and `llvm.stackrestore.p0`; the interpreter validates activation
+and position, frees later objects, and reuses their memory. Text round-trip tests
+cover both operations and aggregate fetch descriptors; VLA execution tests cover
+both optimization settings, native Clang comparisons, and bounded interpreter
+memory across repeated allocations and jumps.
