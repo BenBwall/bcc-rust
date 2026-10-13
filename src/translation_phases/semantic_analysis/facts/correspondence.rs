@@ -123,6 +123,21 @@ impl<'tu, 's> CorrespondenceBuilder<'tu, 's> {
         }
     }
 
+    pub(in crate::translation_phases::semantic_analysis) fn entity(
+        &mut self,
+        index: usize,
+        binding: Binding,
+    ) -> EntityId {
+        if binding.linkage == Linkage::None {
+            EntityId(index)
+        } else {
+            *self
+                .entities
+                .entry(binding.name.name)
+                .or_insert(EntityId(index))
+        }
+    }
+
     pub(in crate::translation_phases::semantic_analysis) fn declaration(
         &mut self,
         mut syntax: Declarator<'tu>,
@@ -131,16 +146,7 @@ impl<'tu, 's> CorrespondenceBuilder<'tu, 's> {
         parameter_facts: &'tu [ParameterFacts<'tu>],
     ) -> OccurrenceId {
         let id = OccurrenceId(self.declarations.len());
-        let entity = binding.map(|(index, binding)| {
-            if binding.linkage == Linkage::None {
-                EntityId(index)
-            } else {
-                *self
-                    .entities
-                    .entry(binding.name.name)
-                    .or_insert(EntityId(index))
-            }
-        });
+        let entity = binding.map(|(index, binding)| self.entity(index, binding));
         self.declarations.push(DeclarationFacts {
             id,
             binding: binding.map(|(index, _)| index),
