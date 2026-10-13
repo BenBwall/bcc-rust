@@ -198,6 +198,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             result,
             scope: self.scope,
             parameters: &[],
+            parameter_aliases: &[],
             parameter_types: self
                 .types
                 .tu
@@ -221,10 +222,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
+        let mut prototype_parameters = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        let mut parameter_aliases = ArenaVec::new_in(self.scratch);
         if prototype_scope != 0 {
             let entries = self.scope_entries[prototype_scope].finish(self.scratch, self.scratch);
             for &index in entries {
                 let entry = self.entries[index];
+                if entry.namespace == Namespace::Ordinary
+                    && self.bindings[entry.binding].kind == BindingKind::Parameter
+                {
+                    _ = prototype_parameters.insert(entry.name.name, entry.binding);
+                }
                 if entry.namespace == Namespace::Tag {
                     self.install(entry.name, entry.namespace, entry.binding);
                 } else if entry.namespace == Namespace::Ordinary
@@ -287,6 +295,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         Duration::Automatic,
                         None,
                     );
+                    if let Some(&prototype) = prototype_parameters.get(&name.name) {
+                        parameter_aliases.push((prototype, self.bindings.len() - 1));
+                    }
                     self.record_vm(self.bindings.len() - 1);
                     if let Some(slot) = parameter_bindings.last_mut() {
                         *slot = Some(self.bindings.len() - 1);
@@ -331,6 +342,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.validate_definition_stars(derivation);
             self.function_records[id].parameters =
                 self.types.tu.alloc_slice_copy(&parameter_bindings);
+            self.function_records[id].parameter_aliases =
+                self.types.tu.alloc_slice_copy(&parameter_aliases);
         }
         self.define_func_name(name);
         if !old_style {

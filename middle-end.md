@@ -1059,6 +1059,9 @@ evaluates bounds on the explicit task stack, saves each extent in an SSA variabl
 and uses it for allocation, runtime `sizeof`, and multidimensional strides.
 Typedefs retain the declaration's extent. Function records also retain original
 parameter types, so array adjustment does not discard entry-time bound effects.
+Prototype/body parameter binding pairs are retained by semantic analysis;
+function entry visits only those pairs, without scanning unrelated bindings or
+matching source positions.
 C99 §6.7.5.2p5, pp. 116-117; PDF pp. 128-129; §6.5.3.4p2, p. 80;
 PDF p. 92; §6.9.1p10, p. 142; PDF p. 154.
 
@@ -1067,6 +1070,9 @@ scope exits and jumps emit restores for the lifetime regions they leave,
 including a backward goto to before the declaration. A loop therefore reuses
 storage. Return expressions are evaluated before cleanup. Jumping into a
 variably modified identifier's scope remains a semantic constraint violation.
+The scope index traverses statement expressions in operands, initializers and
+bounds with their lexical parents. An internal jump keeps enclosing VLA regions
+live; every accepted goto must have an indexed label scope.
 C99 §6.2.4p6, p. 32; PDF p. 44; §6.8p3, p. 131; PDF p. 143;
 §6.8.6.1p1, p. 137; PDF p. 149.
 
@@ -1080,6 +1086,12 @@ and position, frees later objects, and reuses their memory. Text round-trip test
 cover both operations and aggregate fetch descriptors; VLA execution tests cover
 both optimization settings, native Clang comparisons, and bounded interpreter
 memory across repeated allocations and jumps.
+
+`dyn_alloca.i64 size, align N` retains the completed declaration's required
+alignment through text, optimization, interpretation and LLVM allocation.
+Legacy text without `align` and `__builtin_alloca` retain alignment 16.
+VLA declarations retain their element and declaration alignment (C11
+§6.7.5p6, p. 127; PDF p. 145). The aligned alloca builtin remains unsupported.
 ## 2026-10-13: Representation attributes and static constants
 
 Packed member reads, writes and aggregate initializers use their guaranteed

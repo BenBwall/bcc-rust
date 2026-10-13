@@ -512,6 +512,12 @@ binding keeps its declared type while the binding of the function holds the
 composite type with promoted parameter types, so lowering converts each
 argument on entry (§6.9.1p10, printed p. 142, PDF p. 154).
 
+The record also retains prototype/body parameter binding pairs when replaying
+the definition's prototype scope. Runtime bounds use those prototype bindings;
+lowering aliases them to the initialized body parameters in work proportional
+to the definition's parameters. The 10,000-function regression bounds alias
+visits directly, independently of machine speed and unrelated bindings.
+
 Prototype definitions require named, complete adjusted parameters, with the sole
 unnamed `void` exception (§6.9.1p5 and §6.7.5.3p4, printed pp. 141 and 118,
 PDF pp. 153 and 130). C23 permits unnamed parameters. Earlier-mode pedantic

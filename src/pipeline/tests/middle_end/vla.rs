@@ -1,6 +1,54 @@
 //! C99 array extents, declaration lifetime, and Clang execution comparisons.
 use super::*;
 
+const ALIGNED_VLAS: &str = "struct __attribute__((aligned(64))) S { int x; };
+int main(void) { int n=3; _Alignas(32) int a[n], b[n]; struct S c[n];
+a[0]=7; b[0]=11; c[0].x=13;
+return (unsigned long long)a%32 || (unsigned long long)b%32 ||
+(unsigned long long)c%64 || a[0]!=7 || b[0]!=11 || c[0].x!=13; }";
+
+#[test]
+fn dynamic_allocations_preserve_declared_alignment() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        for (optimize, profile) in STAGES {
+            with_module(ALIGNED_VLAS, target, optimize, profile, |module, target| {
+                assert_eq!(interpret(module, target).0, 0);
+                let printed = module.to_string();
+                let arena = Bump::new();
+                let parsed = parse_module(&arena, &printed).unwrap();
+                assert_eq!(interpret(&parsed, target).0, 0);
+            });
+        }
+    }
+}
+
+const STATEMENT_EXPRESSION_JUMPS: &[&str] = &[
+    "int main(void) { int n=4, a[n]; a[0]=42; ({ goto l; l:; 0; }); return a[0]!=42; }",
+    "int main(void) { int n=4; return ({ int a[n]; a[0]=42; goto l; l:; a[0]!=42; }); }",
+    "int main(void) { return ({ goto l; l:; 0; }); }",
+    "int main(void) { int n=4,a[n]; a[0]=42; int r=({ int b[n]; b[0]=7; ({ goto l; l:; 0; }); \
+     b[0]!=7; }); return r || a[0]!=42; }",
+    "int main(void) { int n=4,a[n]; a[0]=42; ({ int b[n]; b[0]=7; ({ int c[n]; c[0]=9; goto l; \
+     l:; c[0]; }); if(b[0]!=7)return 1; 0; }); return a[0]!=42; }",
+    "int main(void) { int n=4,a[n]; a[0]=42; ({ int b[n]; b[0]=7; goto done; 0; }); done: return \
+     a[0]!=42; }",
+    "int main(void) { int n=4,a[n]; a[0]=42; int r=({ int i=0; again:; int b[n]; b[0]=7; \
+     if(++i<10)goto again; b[0]!=7; }); return r || a[0]!=42; }",
+];
+
+#[test]
+fn statement_expression_jumps_preserve_enclosing_vlas() {
+    for source in STATEMENT_EXPRESSION_JUMPS {
+        for target in [Target::LinuxGnu, Target::WindowsGnu] {
+            for (optimize, profile) in STAGES {
+                with_module(source, target, optimize, profile, |module, target| {
+                    assert_eq!(interpret(module, target).0, 0, "{source}");
+                });
+            }
+        }
+    }
+}
+
 const BACKWARD_GOTO: &str = "int main(void) { int n=8192, i=0;
 again: ; int a[n]; a[0]=i; a[n-1]=i+1; if(a[n-1]-a[0]!=1)return 1;
  if(++i<1000)goto again; return 0; }";
@@ -62,6 +110,8 @@ fn vla_native_arms_match_clang() {
         BETWEEN_ARRAYS,
     ]
     .into_iter()
+    .chain(STATEMENT_EXPRESSION_JUMPS.iter().copied())
+    .chain([ALIGNED_VLAS])
     .enumerate()
     {
         // Clang O0 on Win64 retains repeated allocations after an earlier

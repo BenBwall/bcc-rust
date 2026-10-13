@@ -95,43 +95,46 @@ use crate::{
 
 /// Translation-unit state shared by every function's lowering.
 pub(super) struct Unit<'a, 'tu, 'ir> {
-    pub(super) context:       &'a Context<'tu>,
-    pub(super) sema:          &'a SemanticTranslationUnit<'tu>,
-    pub(super) module:        Module<'ir>,
-    pub(super) tables:        &'a Bump,
-    pub(super) target:        Target,
-    pub(super) names:         SymbolNames<'a>,
+    /// Work spent associating retained parameter bindings (scaling regression).
+    #[cfg(test)]
+    pub(super) parameter_alias_visits: usize,
+    pub(super) context: &'a Context<'tu>,
+    pub(super) sema: &'a SemanticTranslationUnit<'tu>,
+    pub(super) module: Module<'ir>,
+    pub(super) tables: &'a Bump,
+    pub(super) target: Target,
+    pub(super) names: SymbolNames<'a>,
     /// Each binding by its declared identifier, so a declarator finds its
     /// binding without a search.
-    declarators:              ArenaMap<'a, (StringCacheId, SourceVectors), usize>,
-    definitions:              ArenaMap<'a, usize, DefinitionKind>,
+    declarators: ArenaMap<'a, (StringCacheId, SourceVectors), usize>,
+    definitions: ArenaMap<'a, usize, DefinitionKind>,
     /// Completed types of linked object definitions, including tentative ones,
     /// indexed by emitted symbol name after applying GNU assembler labels.
     /// C99: §6.2.7 paragraph 4, p. 40; PDF p. 52; §6.9.2 paragraph 2,
     /// p. 143; PDF p. 155.
-    defined_objects:          ArenaMap<'a, &'a str, usize>,
+    defined_objects: ArenaMap<'a, &'a str, usize>,
     /// Definitions share their linked name across separate semantic bindings.
     /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42.
-    defined_functions:        ArenaSet<'a, StringCacheId>,
+    defined_functions: ArenaSet<'a, StringCacheId>,
     /// Bindings whose address is taken, which therefore live in memory.
     pub(super) address_taken: ArenaSet<'a, usize>,
     /// Globals of static locals and `__func__`, which have no linkage.
-    statics:                  ArenaMap<'a, usize, GlobalId>,
-    strings:                  ArenaMap<'a, (LiteralId, bool), GlobalId>,
+    statics: ArenaMap<'a, usize, GlobalId>,
+    strings: ArenaMap<'a, (LiteralId, bool), GlobalId>,
     /// One static object per file-scope compound literal syntax node. New
     /// initializers join the explicit queue, never recursively lower syntax.
-    compound_literals:        ArenaMap<'a, usize, GlobalId>,
-    static_initializers:      ArenaVec<'a, (GlobalId, TypeId, &'tu Initializer<'tu>)>,
+    compound_literals: ArenaMap<'a, usize, GlobalId>,
+    static_initializers: ArenaVec<'a, (GlobalId, TypeId, &'tu Initializer<'tu>)>,
     /// Next candidate for a string literal's internal symbol.
-    next_string_suffix:       u64,
+    next_string_suffix: u64,
     /// User names reserved before generating internal storage.
-    reserved_names:           ArenaSet<'a, &'a str>,
+    reserved_names: ArenaSet<'a, &'a str>,
     /// Internal storage cannot be reused by a linked object declaration.
-    generated_globals:        ArenaSet<'a, GlobalId>,
+    generated_globals: ArenaSet<'a, GlobalId>,
     /// Conflicting definitions are isolated while later functions are checked.
-    conflicting_names:        ArenaSet<'a, &'a str>,
+    conflicting_names: ArenaSet<'a, &'a str>,
     /// Each generated base probes a suffix at most once.
-    next_name_suffix:         ArenaMap<'a, &'a str, u64>,
+    next_name_suffix: ArenaMap<'a, &'a str, u64>,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -1227,6 +1230,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             }
         }
         Self {
+            #[cfg(test)]
+            parameter_alias_visits: 0,
             context,
             sema,
             module,

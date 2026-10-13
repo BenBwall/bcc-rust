@@ -382,7 +382,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.jump_away(target);
             },
             | S::Goto(label) => {
-                let scope = self.label_scopes.get(&label.name).copied().unwrap_or(0);
+                debug_assert!(
+                    self.label_scopes.contains_key(&label.name),
+                    "every goto label has an indexed lexical scope"
+                );
+                let scope = self.label_scopes.get(&label.name).copied().ok_or_else(|| {
+                    LoweringError::missing("a goto label has no indexed lexical scope", source)
+                })?;
                 let target = self.label_block(label.name);
                 _ = self.block_scopes.insert(target, scope);
                 self.jump_away(target);
@@ -858,24 +864,17 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             lowerer.operands.push(converted);
             lowerer.initialize(Object::Local(parameter), 0, declared, None)?;
         }
-        // Definition parameters have body bindings distinct from the
-        // prototype bindings referenced by their retained bound expressions.
+        // Bound expressions refer to prototype bindings. Semantic analysis
+        // retains their body correspondence; no translation-unit scan or
+        // source-position matching belongs in a per-function constructor.
         // C99: §6.9.1p10, p. 142; PDF p. 154.
-        let mut parameter_sources = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch);
-        for &parameter in record.parameters {
-            if let Some(binding) = parameter {
-                _ = parameter_sources.insert(
-                    lowerer.unit.sema.bindings[binding].name.source_vectors,
-                    binding,
-                );
-            }
-        }
-        for (index, data) in lowerer.unit.sema.bindings.iter().enumerate() {
-            if data.kind == BindingKind::Parameter
-                && let Some(&binding) = parameter_sources.get(&data.name.source_vectors)
-                && let Some(&local) = lowerer.locals.get(&binding)
+        for &(prototype, body) in record.parameter_aliases {
+            #[cfg(test)]
             {
-                _ = lowerer.locals.insert(index, local);
+                lowerer.unit.parameter_alias_visits += 1;
+            }
+            if let Some(&local) = lowerer.locals.get(&body) {
+                _ = lowerer.locals.insert(prototype, local);
             }
         }
         lowerer.index_vla_scopes();
