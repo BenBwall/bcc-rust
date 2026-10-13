@@ -5,6 +5,18 @@ use super::*;
 fn aggregates_cross_variadic_boundaries() {
     let shapes = [
         (
+            "struct S { long a,b,c; };",
+            "struct S",
+            "{7,8,9}",
+            "x.a==7 && x.b==8 && x.c==9",
+        ),
+        (
+            "struct __attribute__((packed)) S { char c; int x; };",
+            "struct S",
+            "{7,123456}",
+            "x.c==7 && x.x==123456",
+        ),
+        (
             "struct __attribute__((aligned(32))) S { long long x[4]; };",
             "struct S",
             "{{7,8,9,11}}",
@@ -75,6 +87,7 @@ fn aggregates_cross_variadic_boundaries() {
                 "int b_take(int n, ...) {{ __builtin_va_list ap,cp; __builtin_va_start(ap,n);
                 for(int i=0;i<n;i++) {{ (void)__builtin_va_arg(ap,long long); \
                  (void)__builtin_va_arg(ap,double); }}
+                (void)__builtin_va_arg(ap,{ty});
                 __builtin_va_copy(cp,ap); {ty} x=__builtin_va_arg(ap,{ty});
                 if(!({check})) return 1; x=__builtin_va_arg(cp,{ty}); if(!({check})) return 2;
                 int sentinel=__builtin_va_arg(ap,int); __builtin_va_end(ap); __builtin_va_end(cp); \
@@ -82,10 +95,10 @@ fn aggregates_cross_variadic_boundaries() {
             }}"
             );
             let calls = format!(
-                "{ty} x={init}; return c_take(0,x,123) || \
-                 c_take(5,1LL,1.,2LL,2.,3LL,3.,4LL,4.,5LL,5.,x,123) || \
-                 c_take(7,1LL,1.,2LL,2.,3LL,3.,4LL,4.,5LL,5.,6LL,6.,7LL,7.,x,123) || \
-                 c_take(8,1LL,1.,2LL,2.,3LL,3.,4LL,4.,5LL,5.,6LL,6.,7LL,7.,8LL,8.,x,123);"
+                "{ty} x __attribute__((aligned(64)))={init}; return c_take(0,x,x,123) || \
+                 c_take(5,1LL,1.,2LL,2.,3LL,3.,4LL,4.,5LL,5.,x,x,123) || \
+                 c_take(7,1LL,1.,2LL,2.,3LL,3.,4LL,4.,5LL,5.,6LL,6.,7LL,7.,x,x,123) || \
+                 c_take(8,1LL,1.,2LL,2.,3LL,3.,4LL,4.,5LL,5.,6LL,6.,7LL,7.,8LL,8.,x,x,123);"
             );
             let bcc = format!("{decl}{body} int c_take(int,...); int b_call(void){{{calls}}}");
             let clang = format!(
@@ -108,6 +121,35 @@ fn aggregates_cross_variadic_boundaries() {
                     _ = optimize(&mut module, &OptimizerOptions::default(), &Bump::new());
                 }
                 lower_abi(&mut module, target, &Bump::new()).unwrap();
+                let source = format!(
+                    "{bcc} {} int main(void){{ {} }}",
+                    body.replace("b_take", "c_take"),
+                    calls.replace("c_take", "b_take")
+                );
+                for profile in [Profile::PreAbi, Profile::PostAbi] {
+                    let arena = Bump::new();
+                    let mut interpreted = lower_c(&tu, &arena, &source, target);
+                    if optimized {
+                        _ = optimize(&mut interpreted, &OptimizerOptions::default(), &Bump::new());
+                    }
+                    if profile == Profile::PostAbi {
+                        lower_abi(&mut interpreted, target, &Bump::new()).unwrap();
+                    }
+                    assert_verified(&interpreted, profile, &interpreted.to_string());
+                    let execution = Bump::new();
+                    let mut host =
+                        crate::backend::interpreter::DefaultHost::for_target(&execution, target);
+                    let outcome =
+                        crate::backend::interpreter::run(&interpreted, "main", &[], &mut host)
+                            .unwrap();
+                    assert_eq!(
+                        outcome.termination,
+                        crate::backend::interpreter::Termination::Returned(Some(
+                            crate::backend::interpreter::RuntimeValue::Int(0)
+                        )),
+                        "shape {index} {target:?} {optimized} {profile:?}"
+                    );
+                }
                 assert_conforms(
                     &format!("aggregate-varargs-{index}-{optimized}"),
                     target,
