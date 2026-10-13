@@ -93,9 +93,10 @@ impl<'s> MemoryFacts<'s> {
             },
             | InstData::Call { .. }
             | InstData::CallIndirect { .. }
+            | InstData::VaArgAggregate { .. }
             | InstData::MemoryRange { .. }
             | InstData::Unary {
-                opcode: Opcode::VaStart | Opcode::VaArg | Opcode::VaEnd,
+                opcode: Opcode::VaStart | Opcode::VaArg | Opcode::VaEnd | Opcode::StackRestore,
                 ..
             }
             | InstData::Binary {

@@ -165,12 +165,22 @@ fn remove_param<'s>(
 /// defining a value.
 fn has_side_effects(data: &InstData) -> bool {
     match *data {
+        | InstData::Nullary {
+            opcode: Opcode::StackSave,
+            ..
+        }
+        | InstData::VaArgAggregate { .. }
         | InstData::Store { .. }
         | InstData::MemoryRange { .. }
         | InstData::Call { .. }
         | InstData::CallIndirect { .. }
         | InstData::Unary {
-            opcode: Opcode::VaStart | Opcode::VaArg | Opcode::VaEnd | Opcode::DynAlloca,
+            opcode:
+                Opcode::VaStart
+                | Opcode::VaArg
+                | Opcode::VaEnd
+                | Opcode::DynAlloca
+                | Opcode::StackRestore,
             ..
         }
         | InstData::Binary {

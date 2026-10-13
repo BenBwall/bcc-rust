@@ -150,7 +150,10 @@ pub(super) fn signature_type<'id>(
     arena: &Bump,
 ) -> Ty<'id> {
     let mut types = ArenaVec::with_capacity_in(signature.params.len(), arena);
-    for (index, &ty) in signature.params.iter().enumerate() {
+    for (index, &ty) in signature.params[..signature.fixed_count()]
+        .iter()
+        .enumerate()
+    {
         if passed(signature, index) {
             types.push(api.ty(ty));
         }
@@ -357,6 +360,8 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                         api.alignment(value, 16);
                         value
                     },
+                    | Opcode::StackRestore =>
+                        self.intrinsic("llvm.stackrestore", &[arg], &[api.ty(Type::Ptr)]),
                     | Opcode::Fneg => api.fneg(arg),
                     | Opcode::Freeze => api.freeze(arg),
                     | Opcode::VaArg => api.va_arg(arg, api.ty(ty)),
@@ -498,6 +503,10 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     api.ret_void()
                 }
             },
+            | InstData::Nullary {
+                opcode: Opcode::StackSave,
+                ..
+            } => self.intrinsic("llvm.stacksave", &[], &[api.ty(Type::Ptr)]),
             | InstData::Nullary {
                 opcode: Opcode::Trap,
                 ..

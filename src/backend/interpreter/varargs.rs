@@ -115,7 +115,7 @@ impl Machine<'_, '_, '_> {
         if position >= frame.varargs_len {
             return Err(UbKind::VaArgPastEnd.into());
         }
-        let (arg_ty, value) = self.varargs[frame.varargs + position];
+        let (arg_ty, value, _) = self.varargs[frame.varargs + position];
         if arg_ty != ty {
             return Err(UbKind::VaArgTypeMismatch.into());
         }
@@ -219,6 +219,35 @@ impl Machine<'_, '_, '_> {
         }
     }
 
+    /// C99: §7.15.1.1, pp. 249-250; PDF pp. 261-262.
+    pub(super) fn va_arg_aggregate(
+        &mut self,
+        layout: crate::ir::AggregateLayout<'_>,
+        list: RuntimeValue,
+    ) -> Result<RuntimeValue, Fault> {
+        let (cursor_ref, mut cursor) = self.cursor(list)?;
+        let frame = self.frames[cursor.depth as usize];
+        let position = cursor.position as usize;
+        if position >= frame.varargs_len {
+            return Err(UbKind::VaArgPastEnd.into());
+        }
+        let (_, value, abi) = self.varargs[frame.varargs + position];
+        if !matches!(abi, Some(crate::ir::ParamAbi::Aggregate(actual)) if actual == layout) {
+            return Err(UbKind::VaArgTypeMismatch.into());
+        }
+        cursor.position += 1;
+        self.memory.set_cursor(cursor_ref, cursor);
+        let pointer = self.frame_object(layout.size)?;
+        self.memory.copy(
+            RuntimeValue::Ptr(pointer),
+            value,
+            RuntimeValue::Int(u128::from(layout.size)),
+            layout.align,
+            false,
+        )?;
+        Ok(RuntimeValue::Ptr(pointer))
+    }
+
     /// Materializes the target's incoming variadic argument areas once.
     /// C99: §7.15.1.4p3, p. 251; PDF p. 263 (restarts reuse incoming
     /// arguments).
@@ -234,8 +263,11 @@ impl Machine<'_, '_, '_> {
                 let mut scan = fixed;
                 let mut overflow_size = 0_u64;
                 for index in start..end {
-                    let ty = self.varargs[index].0;
-                    if !scan.take_scalar(ty) {
+                    let (ty, _, abi) = self.varargs[index];
+                    if let Some(crate::ir::ParamAbi::ByVal(layout)) = abi {
+                        overflow_size = overflow_size.next_multiple_of(layout.align.bytes().max(8))
+                            + layout.size.next_multiple_of(8);
+                    } else if !scan.take_scalar(ty) {
                         overflow_size =
                             overflow_size.next_multiple_of(slot_align(ty)) + slot_size(ty);
                     }
@@ -245,7 +277,20 @@ impl Machine<'_, '_, '_> {
                 let mut used = fixed;
                 let mut overflow_offset = 0_u64;
                 for index in start..end {
-                    let (ty, value) = self.varargs[index];
+                    let (ty, value, abi) = self.varargs[index];
+                    if let Some(crate::ir::ParamAbi::ByVal(layout)) = abi {
+                        overflow_offset =
+                            overflow_offset.next_multiple_of(layout.align.bytes().max(8));
+                        self.memory.copy(
+                            RuntimeValue::Ptr(offset(overflow, overflow_offset)),
+                            value,
+                            RuntimeValue::Int(u128::from(layout.size)),
+                            layout.align,
+                            false,
+                        )?;
+                        overflow_offset += layout.size.next_multiple_of(8);
+                        continue;
+                    }
                     let before = used;
                     let address = if used.take_scalar(ty) {
                         if used.gp > before.gp {
@@ -268,7 +313,7 @@ impl Machine<'_, '_, '_> {
                 // Microsoft x64, "Varargs": one 8-byte slot per argument.
                 let slots = self.frame_object(8 * frame.varargs_len as u64)?;
                 for (slot, index) in (start..end).enumerate() {
-                    let (ty, value) = self.varargs[index];
+                    let (ty, value, _) = self.varargs[index];
                     if ty.bytes() > 8 {
                         return Err(Fault::Unsupported(Unsupported::WideVariadic));
                     }

@@ -46,6 +46,13 @@ pub(crate) enum InstData {
         ty:     Type,
         arg:    Value,
     },
+    /// Fetches an aggregate into fresh storage. `sig` describes one
+    /// `ptr aggregate(...)` parameter, retaining its target layout.
+    /// C99: §7.15.1.1, pp. 249-250; PDF pp. 261-262.
+    VaArgAggregate {
+        sig:  SigId,
+        list: Value,
+    },
     /// `icmp`; the type is the operands' type and the result is `i1`.
     IntCompare {
         cond: IntCC,
@@ -149,6 +156,7 @@ impl InstData {
             | Self::WideConst { opcode, .. }
             | Self::Nullary { opcode, .. }
             | Self::MemoryRange { opcode, .. } => opcode,
+            | Self::VaArgAggregate { .. } => Opcode::VaArgAggregate,
             | Self::IntCompare { .. } => Opcode::Icmp,
             | Self::FloatCompare { .. } => Opcode::Fcmp,
             | Self::Select { .. } => Opcode::Select,
@@ -269,6 +277,10 @@ named! {
         UaddOverflow = "uadd_overflow",
         UmulOverflow = "umul_overflow",
         DynAlloca = "dyn_alloca",
+        /// Captures the dynamic stack position for block lifetime cleanup.
+        /// C99: §6.2.4p6, p. 32; PDF p. 44.
+        StackSave = "stack_save",
+        StackRestore = "stack_restore",
         Trap = "trap",
         Icmp = "icmp",
         Fcmp = "fcmp",
@@ -302,6 +314,7 @@ named! {
         CallIndirect = "call_indirect",
         VaStart = "va_start",
         VaArg = "va_arg",
+        VaArgAggregate = "va_arg_aggregate",
         VaCopy = "va_copy",
         VaEnd = "va_end",
         Jump = "jump",
@@ -401,6 +414,9 @@ impl Opcode {
                 | Self::VaStart
                 | Self::VaCopy
                 | Self::VaEnd
+                | Self::StackSave
+                | Self::StackRestore
+                | Self::VaArgAggregate
                 | Self::Jump
                 | Self::Brif
                 | Self::Switch

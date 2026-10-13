@@ -222,7 +222,8 @@ fn remap_inst(mut data: InstData, map: &impl Fn(Value) -> Value, slots: &[StackS
         | InstData::Store { args, .. } => *args = args.map(map),
         | InstData::Select { args, .. } | InstData::MemoryRange { args, .. } =>
             *args = args.map(map),
-        | InstData::Unary { arg, .. } => *arg = map(*arg),
+        | InstData::Unary { arg, .. } | InstData::VaArgAggregate { list: arg, .. } =>
+            *arg = map(*arg),
         | InstData::Load { addr, .. } => *addr = map(*addr),
         | InstData::StackAddr { slot } => *slot = slots[slot.index()],
         // Constants and calls get owned pool data in expand; symbol ids are module-wide.
@@ -316,7 +317,10 @@ impl<'s> CallGraph<'s> {
                         }
                         unsafe_body |= matches!(
                             body.inst(inst).opcode(),
-                            Opcode::VaStart | Opcode::DynAlloca
+                            Opcode::VaStart
+                                | Opcode::DynAlloca
+                                | Opcode::StackSave
+                                | Opcode::StackRestore
                         );
                     }
                 }

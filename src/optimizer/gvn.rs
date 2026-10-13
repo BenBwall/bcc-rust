@@ -333,7 +333,10 @@ fn key(draft: &Draft<'_, '_>, inst: Inst) -> Option<Key> {
             opcode: Opcode::Null,
             ..
         } => Key::Null,
-        | InstData::Nullary { ty, .. } => Key::Poison(ty),
+        | InstData::Nullary {
+            opcode: Opcode::Poison,
+            ty,
+        } => Key::Poison(ty),
         | InstData::StackAddr { slot } => Key::StackAddr(slot),
         | InstData::GlobalAddr { global } => Key::GlobalAddr(global),
         | InstData::FuncAddr { func } => Key::FuncAddr(func),

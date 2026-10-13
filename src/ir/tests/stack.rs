@@ -1,0 +1,50 @@
+//! Text and verifier coverage of dynamic stack positions and aggregate fetches.
+use super::*;
+
+#[test]
+fn stack_positions_round_trip_and_verify() {
+    let text = "function @f(i64) -> i32 external {
+block0(v0: i64):
+    v1 = stack_save
+    v2 = dyn_alloca.i64 v0
+    v3 = iconst.i32 7
+    store.i32 v3, v2, align 4
+    v4 = load.i32 v2, align 4
+    stack_restore v1
+    return v4
+}
+";
+    assert_round_trip(text);
+    assert_eq!(verify_text(text), Vec::<String>::new());
+    let bad = text.replace("stack_restore v1", "stack_restore v0");
+    assert!(verify_text(&bad).iter().any(|e| e.contains("ptr")));
+    let arena = Bump::new();
+    let module = parse(&arena, text);
+    let mut llvm = String::new();
+    crate::backend::llvm::emit_module(&module, crate::target::Target::WindowsGnu, &mut llvm)
+        .unwrap();
+    assert!(llvm.contains("llvm.stacksave.p0"), "{llvm}");
+    assert!(llvm.contains("llvm.stackrestore.p0"), "{llvm}");
+}
+
+#[test]
+fn aggregate_fetches_and_typed_variadic_tails_round_trip() {
+    let text = "function @f(ptr, ptr, ptr) external {
+block0(v0: ptr, v1: ptr, v2: ptr):
+    v3 = va_arg_aggregate v0 : (ptr aggregate(size 4, align 4, [0: i32]))
+    call_indirect v1(v2, v3) : (ptr, ..., ptr aggregate(size 4, align 4, [0: i32]))
+    return
+}
+";
+    assert_round_trip(text);
+    assert_eq!(verify_text(text), Vec::<String>::new());
+    let arena = Bump::new();
+    let module = parse(&arena, text);
+    assert!(
+        verify(&module, Profile::PostAbi)
+            .iter()
+            .any(|e| e.contains("va_arg_aggregate"))
+    );
+    let malformed = text.replace("size 4", "size 1");
+    assert_ne!(verify_text(&malformed), Vec::<String>::new());
+}

@@ -467,6 +467,10 @@ fn volatile(mem: MemFlags) -> InstFlags {
 }
 
 impl<'m, 'ir> FunctionBuilder<'m, 'ir> {
+    pub(crate) fn signature(&self, sig: SigId) -> super::Signature<'ir> {
+        self.module.signature(sig)
+    }
+
     /// Starts an empty body for `func`, replacing any body it has once
     /// finished.
     pub(crate) fn new(module: &'m mut Module<'ir>, func: FuncId) -> Self {
