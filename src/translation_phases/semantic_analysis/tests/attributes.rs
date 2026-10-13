@@ -365,3 +365,57 @@ fn aggregate_value_layout_excludes_storage_alignment() {
         },
     );
 }
+
+#[test]
+fn natural_and_member_place_alignment_are_distinct_retained_facts() {
+    let source = "typedef int I __attribute__((aligned(1))); struct R { char c; I x; }; struct S \
+                  { int x,y; }; struct __attribute__((packed)) P { char c; struct S s; }; int \
+                  f(struct P *p) { struct S s=p->s; return s.x; }";
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default().with_target(target),
+            |context, sema| {
+                assert_eq!(context.error_count(), 0);
+                let record = sema
+                    .types
+                    .tags
+                    .iter()
+                    .find(|tag| {
+                        tag.name
+                            .is_some_and(|name| context.string_cache.at(name) == "R")
+                    })
+                    .unwrap();
+                let member = record.members.get()[1];
+                assert_eq!(sema.types.layout(member.ty).unwrap().align, 1);
+                assert_eq!(sema.types.natural_alignment(member.ty), Some(4));
+                assert_eq!(
+                    member.offset,
+                    if target == Target::LinuxGnu { 1 } else { 4 }
+                );
+                let access = sema
+                    .expressions
+                    .iter()
+                    .find(|info| {
+                        info.place_alignment() == Some(1)
+                            && sema.types.tag(info.ty).is_some_and(|tag| {
+                                tag.name
+                                    .is_some_and(|name| context.string_cache.at(name) == "S")
+                            })
+                    })
+                    .unwrap();
+                assert_eq!(
+                    sema.types.aggregate_value_layout(access.ty).unwrap().align,
+                    4
+                );
+                assert_eq!(sema.types.natural_alignment(access.ty), Some(4));
+                let converted = sema
+                    .expression_conversions(access.expression)
+                    .last()
+                    .unwrap();
+                assert_eq!(sema.types.layout(converted.ty).unwrap().align, 4);
+                assert_eq!(access.place_alignment(), Some(1));
+            },
+        );
+    }
+}

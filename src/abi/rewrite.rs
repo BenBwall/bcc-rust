@@ -452,13 +452,47 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
             };
             lowered.push(value);
         }
+        let mut lowered_sig = self.lowered_signatures[sig.index()];
+        let original = self.builder.signature(sig);
+        let projected = self.builder.signature(lowered_sig);
+        if original.variadic_noundef
+            && original.variadic_fixed.is_some()
+            && args.len() > original.params.len()
+        {
+            // A textual call can append scalars beyond its described tail.
+            // Preserve their inherited promises when projection materializes
+            // the known tail's attributes, without marking aggregate parts.
+            let mut params = ArenaVec::new_in(self.scratch);
+            params.extend_from_slice(projected.params);
+            let mut noundef = ArenaVec::new_in(self.scratch);
+            noundef.extend_from_slice(projected.noundef);
+            for &value in &args[original.params.len()..] {
+                noundef.push(u32::try_from(params.len()).expect("IR parameter index fits u32"));
+                let ty = self.old.value_type(value);
+                params.push(
+                    if self.convention == Convention::Win64 && ty == Type::I128 {
+                        Type::Ptr
+                    } else {
+                        ty
+                    },
+                );
+            }
+            lowered_sig = self.builder.intern(crate::ir::Signature {
+                params: &params,
+                noundef: &noundef,
+                variadic_fixed: Some(
+                    u32::try_from(projected.fixed_count()).expect("planned count"),
+                ),
+                ..projected
+            });
+        }
         let data = match callee {
             | Callee::Direct(func) => InstData::Call {
                 func,
                 args: self.builder.value_list(&lowered),
             },
             | Callee::Indirect(_) => InstData::CallIndirect {
-                sig:  self.lowered_signatures[sig.index()],
+                sig:  lowered_sig,
                 args: self.builder.value_list(&lowered),
             },
         };

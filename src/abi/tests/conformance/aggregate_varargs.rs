@@ -5,6 +5,12 @@ use super::*;
 fn aggregates_cross_variadic_boundaries() {
     let shapes = [
         (
+            "typedef int I __attribute__((aligned(1))); struct S { char c; I x; };",
+            "struct S",
+            "{7,123456}",
+            "x.c==7 && x.x==123456",
+        ),
+        (
             "struct S { long a,b,c; };",
             "struct S",
             "{7,8,9}",
@@ -279,6 +285,105 @@ __builtin_va_end(ap); return 0; }";
                 )),
                 "{optimized} {profile:?}"
             );
+        }
+    }
+}
+
+/// A scalar tail's noundef promise survives aggregate coercion, while poison
+/// bytes inside the aggregate remain legal. Exercise explicit and inherited
+/// scalar promises.
+#[test]
+fn mixed_aggregate_varargs_preserve_scalar_noundef() {
+    use crate::backend::interpreter::{
+        DefaultHost,
+        RuntimeValue,
+        Termination,
+        Trap,
+        UbKind,
+        run,
+    };
+    for (size, scalars) in [(8, "0: i64"), (24, "0: i64, 8: i64, 16: i64")] {
+        let layout = format!("ptr aggregate(size {size}, align 8, [{scalars}])");
+        for (explicit, described) in [(false, false), (false, true), (true, true)] {
+            for poisoned in [false, true] {
+                let scalar = if poisoned {
+                    "poison.i32"
+                } else {
+                    "iconst.i32 123"
+                };
+                let scalar_attribute = if explicit { " noundef" } else { "" };
+                let ellipsis_attribute = if explicit { "" } else { " noundef" };
+                let tail_scalar = if described {
+                    format!(", i32{scalar_attribute}")
+                } else {
+                    String::new()
+                };
+                let call = format!(
+                    "call_indirect v4(v1,v0,v3) : (i32, ...{ellipsis_attribute}, {layout} \
+                     noundef{tail_scalar}) -> i32"
+                );
+                let text = format!(
+                    "function @take(i32, ... noundef) -> i32 internal {{
+block0(v0: i32):
+ v1 = iconst.i32 0
+ return v1
+}}
+function @main() -> i32 external {{
+ slot0 = stack_slot {size}, align 8
+block0:
+ v0 = stack_addr slot0
+ v1 = iconst.i32 0
+ v2 = poison.i64
+ store.i64 v2, v0, align 8
+ v3 = {scalar}
+ v4 = func_addr @take
+ v5 = {call}
+ return v5
+}}"
+                );
+                for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+                    for optimized in [false, true] {
+                        for profile in [Profile::PreAbi, Profile::PostAbi] {
+                            let arena = Bump::new();
+                            let mut module = parse_module(&arena, &text).unwrap();
+                            if optimized {
+                                _ = optimize(
+                                    &mut module,
+                                    &OptimizerOptions::default(),
+                                    &Bump::new(),
+                                );
+                            }
+                            if profile == Profile::PostAbi {
+                                lower_abi(&mut module, target, &Bump::new()).unwrap();
+                            }
+                            assert_verified(&module, profile, &module.to_string());
+                            let execution = Bump::new();
+                            let mut host = DefaultHost::for_target(&execution, target);
+                            let result = run(&module, "main", &[], &mut host);
+                            if poisoned {
+                                assert!(
+                                    matches!(
+                                        result,
+                                        Err(Trap::UndefinedBehavior(UbKind::Noundef, _))
+                                    ),
+                                    "{target:?} {optimized} {profile:?}: {result:?}\n{module}"
+                                );
+                            } else {
+                                assert_eq!(
+                                    result
+                                        .unwrap_or_else(|error| panic!(
+                                            "{target:?} {size} {explicit} {optimized} \
+                                             {profile:?}: {error:?}\n{module}"
+                                        ))
+                                        .termination,
+                                    Termination::Returned(Some(RuntimeValue::Int(0))),
+                                    "{target:?} {optimized} {profile:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

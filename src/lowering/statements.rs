@@ -649,7 +649,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let value = match self.repr(self.result, source)? {
             | Repr::Void => None,
             | Repr::Aggregate => {
-                let Operand::Aggregate(from) = item.operand else {
+                let Operand::Aggregate(from, from_align) = item.operand else {
                     return Err(LoweringError::missing(
                         "a returned structure has no address",
                         source,
@@ -667,7 +667,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     Op::Inst(InstData::MemoryRange {
                         opcode: Opcode::Copy,
                         flags:  InstFlags::empty(),
-                        align:  types::align(layout),
+                        align:  if from_align.bytes() < layout.align {
+                            from_align
+                        } else {
+                            types::align(layout)
+                        },
                         args:   [to, from, size],
                     }),
                     None,

@@ -216,7 +216,7 @@ pub(super) fn is_volatile(ty: TypeId) -> bool {
 /// signature copies them into the module.
 ///
 /// A member is misaligned when its offset from the start of the whole
-/// aggregate is not a multiple of its type's alignment, at any level of
+/// aggregate is not a multiple of its type's natural alignment, at any level of
 /// nesting, which is how Clang applies the System V rule for unaligned
 /// fields. A named bit-field contributes one `i8` scalar for each byte its
 /// bits reach.
@@ -257,8 +257,8 @@ pub(super) fn aggregate_layout<'s>(
                 continue;
             }
             if types
-                .layout(ty)
-                .is_some_and(|layout| layout.align > 0 && offset % layout.align != 0)
+                .natural_alignment(ty)
+                .is_some_and(|align| align > 0 && offset % align != 0)
             {
                 flags |= AggregateFlags::UNALIGNED;
             }

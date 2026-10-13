@@ -118,7 +118,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 };
                 let sig = self.unit.module.intern(signature);
                 let address = self.inst(InstData::VaArgAggregate { sig, list: first }, Type::Ptr);
-                self.push_item(Operand::Aggregate(address), ty);
+                let layout = types::layout(&self.unit.sema.types, ty)
+                    .map_err(|kind| super::module_items::at(kind, source))?;
+                self.push_item(Operand::Aggregate(address, types::align(layout)), ty);
                 return Ok(());
             }
             let result_type = self.value_type(ty, source)?;

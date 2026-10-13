@@ -131,6 +131,13 @@ pub(crate) enum ConstantFolding {
 }
 
 impl ExpressionInfo<'_> {
+    /// The byte alignment guaranteed by a resolved member place, independent
+    /// of contextual conversions. C99: §6.7.2.1p12, p. 103; PDF p. 115.
+    pub(crate) fn place_alignment(&self) -> Option<u32> {
+        self.place_alignment
+            .and_then(|alignment| 1_u32.checked_shl(u32::from(alignment.get() - 1)))
+    }
+
     /// For `.` and `->` (and records copied from one, such as parentheses),
     /// the index of the selected member in the record's `Tag::fields`.
     /// C99: §6.5.2.3 paragraphs 3-4, p. 73; PDF p. 85.

@@ -32,7 +32,10 @@ mod results;
 // Constant addresses
 mod address;
 
-use std::num::NonZeroU32;
+use std::num::{
+    NonZeroU8,
+    NonZeroU32,
+};
 
 pub(crate) use address::AddressBase;
 pub(crate) use results::{
@@ -517,6 +520,11 @@ pub(crate) struct ExpressionInfo<'tu> {
     pub(crate) ty: TypeId,
     /// Arithmetic type before the final compound-assignment conversion.
     pub(crate) operation_type: Option<TypeId>,
+    /// Alignment guaranteed by the containing place and resolved member offset.
+    /// It survives independently of contextual destination-type conversions.
+    /// C99: §6.7.2.1p12, p. 103; PDF p. 115; GNU packed extension.
+    /// Stored as log2(bytes) + 1, so the optional fact uses one byte.
+    pub(in crate::translation_phases::semantic_analysis) place_alignment: Option<NonZeroU8>,
     pub(crate) category: ValueCategory,
     pub(crate) binding: Option<usize>,
     pub(crate) bit_field: Option<u32>,
