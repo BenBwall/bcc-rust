@@ -339,16 +339,38 @@ checks it.
 
 ### Memory facts
 
-Aggregate operands retain their backing address and actual alignment guarantee
-independently of their converted C type. A copy uses the weaker source and
-destination guarantee; argument snapshots and call results retain their newly
-allocated storage guarantee. Control joins conservatively retain byte alignment.
-Member accesses consume semantic place alignment and any weaker backing-storage
-guarantee. A GNU union cast stores through the union temporary's guarantee,
-including packed unions whose selected member has stronger nominal alignment.
-These rules apply to initialization, assignment, argument passing, return and
-compound literals (C99 §6.3.2.1p2, p. 46; PDF p. 58; §6.5.16.1p2-3,
-p. 92; PDF p. 104; GNU [Cast to Union](https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html)).
+`lowering/alignment.rs` owns each backing place's guaranteed alignment, indexed
+by its IR address in function scratch. Aggregate operands carry only that address;
+converting their C type cannot introduce another alignment fact. Stack/global
+addresses obtain their guarantee from the allocation, incoming aggregate and
+return-area pointers from the retained ABI descriptor, and aggregate `va_arg`
+fetches from their descriptor's backing allocation contract. A parameter whose
+declared storage alignment exceeds the incoming guarantee receives a fresh aligned
+home and a copy at the weaker guarantee.
+
+`Types::storage_alignment` supplies declared object requirements, including
+variable arrays. Lowering owns its fresh slots, call-result areas, snapshots and
+dynamic allocations. Constant offsets refine the base guarantee by their common
+power-of-two divisor; indexing uses the element stride. Runtime VLA strides
+retain the constant element-size factor, rather than an array typedef's storage
+alignment. Opaque dereferences use
+the retained pointee/member requirement as C's default. Resolved member offsets
+and packed guarantees come from semantic analysis. Control joins conservatively
+retain byte alignment.
+
+Every load, store, copy and fill crosses `align_memory`, through `inst` or
+`memory_op`. Copies use the weaker source/destination guarantee. Bit-field pieces,
+zero and string initialization, floating representation operations and overflow
+builtin stores use this same boundary. Fixed slots and dynamic allocations are
+created through the alignment owner, and static object/literal declarations use
+the same retained storage query. Initializer and member consumers no longer
+encode backing guarantees by rewriting C types.
+
+C99 6.3.2.3p7, pp. 47-48 (PDF pp. 59-60), 6.7.2.1p12, p. 103 (PDF p. 115),
+6.5.16.1p2-3, p. 92 (PDF p. 104); C11 6.7.5p6, p. 127 (PDF p. 145);
+GNU [aligned/packed](https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html)
+and [Cast to Union](https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html);
+System V AMD64 ABI 3.2.3/3.5.7 and Microsoft x64 parameter passing.
 
 Every memory operation records its access type, alignment and `volatile`.
 Strict aliasing becomes an *access tag*: an index into a per-module table of
@@ -1074,6 +1096,14 @@ and position, frees later objects, and reuses their memory. Text round-trip test
 cover both operations and aggregate fetch descriptors; VLA execution tests cover
 both optimization settings, native Clang comparisons, and bounded interpreter
 memory across repeated allocations and jumps.
+
+Nested loop-header `continue` and `break` also target the enclosing loop, as
+specified by the [GCC statement-expression manual](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html).
+Their 1,000-iteration stage matrix checks both results and bounded storage.
+Bundled Clang 23.1.1 at O0 on Win64 times out on the nested-header
+`continue` source, so native Clang comparisons use an explicit outward `goto`
+control. Every bcc arm and the available GCC reference retain the original
+source; Clang's control is not evidence that Clang implements the header jump.
 
 `dyn_alloca.i64 size, align N` retains the completed declaration's required
 alignment through text, optimization, interpretation and LLVM allocation.

@@ -213,19 +213,29 @@ holds is diagnosed.
 
 ### Storage, natural and member-place alignment
 
-`Types::layout` retains typedef/declaration storage alignment for placement and
-accesses. `Types::natural_alignment` ignores those overrides through array and
-atomic derivations while preserving nominal record packing. The ABI projection
-uses this canonical boundary for System V's unaligned-field classification.
-Microsoft record placement retains at least the natural boundary unless packed.
+`Types::storage_alignment` is the retained query for a declaration's storage
+requirement, including variable array derivations. `Types::layout` supplies the
+same requirement for complete fixed objects; `Types::natural_alignment` ignores
+storage overrides through arrays and atomic derivations while preserving record
+packing. Variable arrays preserve the same outermost override precedence as fixed
+array layout, including GNU typedefs that lower alignment. ABI projection uses
+natural/value layout rather than declaration
+alignment to classify a value.
 
 Member typing retains `ExpressionInfo::place_alignment` from the containing
-place and resolved offset, including nested packed aggregate members. Contextual
-conversions describe destination types; they do not strengthen this source
-storage guarantee. Lowering carries the backing address and guarantee together
-for aggregate values. C99 §6.7.2.1p12 (p. 103; PDF p. 115), GNU
-[aligned/packed attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html),
-and System V AMD64 ABI §3.2.3 define the layout/ABI boundary.
+place and resolved offset, including nested packed aggregates. Zero-width
+bit-fields apply explicit member alignment to the boundary: System V keeps the
+natural base-type minimum without raising the record alignment; MinGW honors
+explicit boundaries even without a preceding bit-field; MSVC requires a preceding
+value bit-field. Packed MSVC value-field placement remains distinct from an
+explicit zero-width boundary. These rules are checked against bundled Clang.
+
+Lowering owns allocated storage guarantees and refines them using the retained
+member facts. Conversions describe value types and cannot strengthen a backing
+place. See [Memory facts](middle-end.md#memory-facts) for the one alignment owner.
+C99 6.7.2.1p12, p. 103 (PDF p. 115); C11 6.7.5p6, p. 127 (PDF p. 145);
+GNU [aligned/packed attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html)
+and System V AMD64 ABI 3.2.3.
 
 ## Binding, scope, linkage and recovery
 
@@ -584,7 +594,9 @@ the translation unit has been walked. The parser retains ownership of the
 duplicate-default diagnostic, so it is emitted once. Case/default placement
 and case ICE requirements are checked semantically. Case values are converted
 to the promoted control type; GNU inclusive ranges use the same conversion.
-Cases are collected, then sorted once per switch. Duplicate values and overlaps
+Every case label is retained, including an empty GNU range for fallthrough. Only
+nonempty intervals receive dispatch transitions and enter the sorted case index.
+Duplicate values and overlaps
 are checked in O(n log n), and empty converted ranges produce a warning.
 
 #### Retained control and lifetime facts
