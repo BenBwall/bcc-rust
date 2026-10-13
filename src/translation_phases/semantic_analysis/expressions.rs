@@ -275,6 +275,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .copied()
                     .unwrap_or_else(|| self.types.unknown());
                 info = self.type_sizeof(e, ty, None, matches!(e.kind, E::AlignofType(_)));
+                if matches!(e.kind, E::SizeofType(_))
+                    && let Some(site) = self.type_name_sites.get(&std::ptr::from_ref(name).addr())
+                {
+                    // C99 6.5.3.4p2: constant sizeof does not execute its
+                    // type operand, even when a pointer is VM through its
+                    // pointee. The declaration/cast site still retains
+                    // typeof's operand evaluation independently.
+                    _ = self.size_query_sites.insert(
+                        std::ptr::from_ref(e).addr(),
+                        super::BoundSiteFacts {
+                            ty,
+                            operand_evaluations: if info.ice {
+                                &[]
+                            } else {
+                                site.operand_evaluations
+                            },
+                        },
+                    );
+                }
             },
             | E::SizeofExpr(operand) | E::AlignofExpr(operand) => {
                 let operand = self.expression_info(operand);

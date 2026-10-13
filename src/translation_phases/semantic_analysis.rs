@@ -31,8 +31,9 @@
 //! - Language extensions: `generic.rs` selects C11 generic associations;
 //!   `type_generic.rs` checks GNU type selections and math calls; `vectors.rs`
 //!   constructs vector types and checks operators; `attributes.rs` retains
-//!   packing, alignment and scalar machine modes; `builtins.rs` and `builtins/`
-//!   recognize and check header intrinsics, atomics and x86 calls.
+//!   packing, alignment and scalar machine modes; `bound_sites.rs` retains
+//!   typeof operand execution at written type sites; `builtins.rs` and
+//!   `builtins/` recognize and check header intrinsics, atomics and x86 calls.
 //! - Diagnostics and inspection: `diagnostics.rs` reports constraints and
 //!   extensions; `errors.rs` defines diagnostic kinds and renders them;
 //!   `inspection.rs` formats retained results. `tests.rs` and `tests/` exercise
@@ -68,6 +69,7 @@ mod types;
 
 // Language extensions and builtin calls
 mod attributes;
+mod bound_sites;
 mod builtins;
 mod generic;
 mod type_generic;
@@ -117,6 +119,7 @@ pub(crate) use integer::Integer;
 pub(crate) use results::{
     Binding,
     BindingKind,
+    BoundSiteFacts,
     Definition,
     DefinitionKind,
     Duration,
@@ -241,6 +244,9 @@ pub(crate) fn analyze<'tu>(
         functions:           analyzer.function_records.leak(),
         scopes:              analyzer.scopes.leak(),
         type_names:          analyzer.type_names.leak(),
+        declaration_sites:   analyzer.declaration_sites,
+        type_name_sites:     analyzer.type_name_sites,
+        size_query_sites:    analyzer.size_query_sites,
         parameters:          analyzer.parameter_lists.leak(),
         tag_declarations:    analyzer.tag_declarations.leak(),
         errors:              analyzer.error_diagnostics,
@@ -281,6 +287,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.values.push(self.types.unknown());
             },
             | Work::Declaration(d) => {
+                _ = self.declaration_sites.insert(
+                    std::ptr::from_ref(d).addr(),
+                    BoundSiteFacts {
+                        ty:                  self.types.unknown(),
+                        operand_evaluations: &[],
+                    },
+                );
                 if let Some(assertion) = d.assertion {
                     self.taint(assertion.recovered);
                     self.work.push(Work::RequireConstant(
@@ -299,6 +312,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::DeclarationBase(d) => {
                 let base = self.take_type();
+                if let Some(operand_evaluations) =
+                    self.spec_evaluations(d.declaration_specifiers.type_specifiers)
+                {
+                    _ = self.declaration_sites.insert(
+                        std::ptr::from_ref(d).addr(),
+                        BoundSiteFacts {
+                            ty: base,
+                            operand_evaluations,
+                        },
+                    );
+                } else {
+                    _ = self.declaration_sites.remove(&std::ptr::from_ref(d).addr());
+                }
                 if d.init_declarators.is_empty()
                     || matches!(
                         d.declaration_specifiers.storage_class,
@@ -431,17 +457,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     },
                 }
             },
-            | Work::TypeofDone(operand, unqualified) => {
-                let ty = self.operand_type(operand);
-                // C23 §6.7.3.6p5: typeof preserves qualifiers; typeof_unqual
-                // yields the non-atomic, unqualified type.
-                let ty = if unqualified {
-                    self.types.unqualified_array(self.types.non_atomic(ty))
-                } else {
-                    ty
-                };
-                self.values.push(ty);
-            },
+            | Work::TypeofDone(syntax) => self.finish_typeof(syntax),
             | Work::VectorAttributes(chain, storage_alignment) => {
                 self.work
                     .push(Work::VectorAttributesDone(chain, storage_alignment));
@@ -536,11 +552,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.values.push(ty);
             },
             | Work::TypeName(name) => {
-                if let Some(&ty) = self.resolved_type_names.get(&name.source_vectors) {
-                    self.values.push(ty);
+                if let Some(site) = self.type_name_sites.get(&std::ptr::from_ref(name).addr()) {
+                    self.values.push(site.ty);
                     return;
                 }
-                self.work.push(Work::TypeNameDone(name.source_vectors));
+                self.work.push(Work::TypeNameDone(name));
                 self.work.push(Work::TypeNameBase(name));
                 self.spec(name.declaration_specifiers, false);
             },
@@ -558,10 +574,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.values.push(base);
                 }
             },
-            | Work::TypeNameDone(source) =>
+            | Work::TypeNameDone(name) =>
                 if let Some(&ty) = self.values.last() {
-                    self.type_names.push((source, ty));
-                    _ = self.resolved_type_names.insert(source, ty);
+                    self.type_names.push((name.source_vectors, ty));
+                    _ = self.resolved_type_names.insert(name.source_vectors, ty);
+                    if let Some(operand_evaluations) =
+                        self.spec_evaluations(name.declaration_specifiers.type_specifiers)
+                    {
+                        _ = self.type_name_sites.insert(
+                            std::ptr::from_ref(name).addr(),
+                            BoundSiteFacts {
+                                ty,
+                                operand_evaluations,
+                            },
+                        );
+                    }
                 },
             | Work::Declarator(d, base, parameter) => {
                 self.work.push(Work::DeclaratorDone(d, base, parameter));
@@ -915,6 +942,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     members,
                     self.semantic_errors,
                     packed,
+                    extensions,
                 ));
                 if d.bitfield_width.is_some() {
                     self.reject_standard_alignment(extensions);
@@ -931,8 +959,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.values.push(base);
                 }
             },
-            | Work::MemberDone(tag, d, members, errors_before, packed) => {
+            | Work::MemberDone(tag, d, members, errors_before, packed, extensions) => {
                 let ty = self.take_type();
+                let explicit_alignment = if self.semantic_errors == errors_before {
+                    self.explicit_member_alignment(extensions, d.attributes, d.declarator)
+                } else {
+                    0
+                };
                 self.work.push(Work::MemberWidth(
                     tag,
                     d,
@@ -940,6 +973,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     members,
                     errors_before,
                     packed,
+                    explicit_alignment,
                 ));
                 if let Some(width) = d.bitfield_width {
                     self.work.push(Work::Eval(width.expression()));
@@ -948,7 +982,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.integers.push(None);
                 }
             },
-            | Work::MemberWidth(tag, d, ty, members, errors_before, packed) => {
+            | Work::MemberWidth(tag, d, ty, members, errors_before, packed, explicit_alignment) => {
                 let value = self.integers.pop().flatten();
                 // C99 §6.7.2.1p2-4: retain rejected members for recovery,
                 // without repeating their constraints during completion.
@@ -1028,6 +1062,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         bit_offset: 0,
                         anonymous: false,
                         packed,
+                        explicit_alignment,
                     },
                 );
             },
@@ -1371,7 +1406,7 @@ enum Work<'tu, 's> {
     Qualify(TypeQualifiers, SourceVectors),
     TypeName(&'tu TypeName<'tu>),
     TypeNameBase(&'tu TypeName<'tu>),
-    TypeNameDone(SourceVectors),
+    TypeNameDone(&'tu TypeName<'tu>),
     Declarator(Declarator<'tu>, TypeId, bool),
     DeclaratorDone(Declarator<'tu>, TypeId, bool),
     Direct(&'tu DirectDeclarator<'tu>, SourceVectors, bool),
@@ -1422,6 +1457,7 @@ enum Work<'tu, 's> {
         &'s Collection<'s, Member>,
         usize,
         bool,
+        Option<&'tu SpecifierExtension<'tu>>,
     ),
     MemberWidth(
         usize,
@@ -1430,6 +1466,7 @@ enum Work<'tu, 's> {
         &'s Collection<'s, Member>,
         usize,
         bool,
+        u32,
     ),
     EnumMembers(
         usize,
@@ -1448,7 +1485,7 @@ enum Work<'tu, 's> {
     ConvertInteger(u32, bool),
     SizeofDone(bool, SourceVectors),
     Atomic(SourceVectors),
-    TypeofDone(SyntaxOperand<'tu>, bool),
+    TypeofDone(&'tu ExtendedType<'tu>),
 }
 
 struct Analyzer<'a, 'tu, 's> {
@@ -1467,6 +1504,10 @@ struct Analyzer<'a, 'tu, 's> {
     function_records:    ArenaVec<'tu, FunctionRecord<'tu>>,
     scopes:              ArenaVec<'tu, Scope>,
     type_names:          ArenaVec<'tu, (SourceVectors, TypeId)>,
+    declaration_sites:   ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    type_name_sites:     ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    size_query_sites:    ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    typeof_evaluations:  ArenaMap<'s, usize, &'tu [&'tu Expression<'tu>]>,
     parameter_lists:     ArenaVec<'tu, (SourceVectors, &'tu [Parameter])>,
     scope:               usize,
     entries:             ArenaVec<'s, Entry>,

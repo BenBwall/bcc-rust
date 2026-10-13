@@ -218,10 +218,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             | Task::StatementValue(statement) => self.statement(statement, StatementMode::Value),
             | Task::StatementEffects(statement) =>
                 self.statement(statement, StatementMode::Effects),
-            | Task::Declaration(declaration) => {
-                self.declaration(declaration);
-                Ok(())
-            },
+            | Task::Declaration(declaration) => self.declaration(declaration),
             | Task::DeclareBinding(binding, initializer, source) =>
                 self.declare_binding(binding, initializer, source),
             | Task::FinishBound(index) => self.finish_bound(index),

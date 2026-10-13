@@ -45,3 +45,26 @@ int main(void) {{ struct S x={{7,8,9,11}}; return take(0,x,123); }}"
         }
     }
 }
+
+#[test]
+fn aggregate_varargs_use_nominal_alignment() {
+    let source = "struct S { long a,b,c; };
+int take(int n,...) { __builtin_va_list ap; __builtin_va_start(ap,n);
+for(int i=0;i<6;i++) if(__builtin_va_arg(ap,int)!=i+1)return 2;
+typedef struct S T __attribute__((aligned(32)));
+struct S x=__builtin_va_arg(ap,T); int s=__builtin_va_arg(ap,int);
+__builtin_va_end(ap); return x.a!=7 || x.b!=8 || x.c!=9 || s!=123; }
+int main(void) { struct S x __attribute__((aligned(64)))={7,8,9};
+return take(0,1,2,3,4,5,6,x,123); }";
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        for (optimize, profile) in STAGES {
+            with_module(source, target, optimize, profile, |module, target| {
+                assert_eq!(
+                    interpret(module, target).0,
+                    0,
+                    "{target:?} {optimize} {profile:?}"
+                );
+            });
+        }
+    }
+}

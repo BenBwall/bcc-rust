@@ -110,12 +110,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => None,
         };
         self.work.push(Work::Qualify(q, source));
-        if let S::Extended(super::ExtendedType::Typeof {
-            operand,
-            unqualified,
-        }) = spec
-        {
-            self.work.push(Work::TypeofDone(*operand, *unqualified));
+        if let S::Extended(syntax @ super::ExtendedType::Typeof { operand, .. }) = spec {
+            self.work.push(Work::TypeofDone(syntax));
             self.syntax_operand(*operand);
             return;
         }
@@ -802,7 +798,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 layout.align = if ignore_alignment {
                     1
                 } else {
-                    u64::from(member.ty.alignment.max(1))
+                    u64::from(
+                        if self.context.configuration.target() == crate::target::Target::WindowsMsvc
+                        {
+                            member.ty.alignment.max(1)
+                        } else {
+                            member.explicit_alignment.max(1)
+                        },
+                    )
                 };
             }
             // The System V ABI ignores unnamed bit-fields when aligning a
@@ -861,7 +864,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         let width = u64::from(width);
                         let start = if width == 0 {
                             align_up(bit_end, bits)?
-                        } else if member.ty.alignment != 0 {
+                        } else if member.explicit_alignment != 0
+                            || !packed && member.ty.alignment != 0
+                        {
                             align_up(bit_end, layout.align.checked_mul(8)?)?
                         } else if packed {
                             bit_end
@@ -934,7 +939,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     ty: member
                         .ty
                         .with_alignment(if tag.packed.get() || member.packed {
-                            member.ty.alignment.max(1)
+                            if self.context.configuration.target()
+                                == crate::target::Target::WindowsMsvc
+                            {
+                                member.ty.alignment.max(1)
+                            } else {
+                                member.explicit_alignment.max(1)
+                            }
                         } else {
                             member.ty.alignment
                         }),
@@ -1261,15 +1272,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         Some(Member {
-            name:           None,
-            source_vectors: member.source_vectors,
-            invalid:        false,
-            ty:             base,
-            width:          None,
-            offset:         0,
-            bit_offset:     0,
-            anonymous:      true,
-            packed:         self.layout_attribute_chain(member.extensions).packed,
+            name:               None,
+            source_vectors:     member.source_vectors,
+            invalid:            false,
+            ty:                 base,
+            width:              None,
+            offset:             0,
+            bit_offset:         0,
+            anonymous:          true,
+            packed:             self.layout_attribute_chain(member.extensions).packed,
+            explicit_alignment: self.explicit_member_alignment(member.extensions, None, None),
         })
     }
 

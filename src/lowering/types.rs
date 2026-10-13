@@ -232,7 +232,11 @@ pub(super) fn aggregate_layout<'s>(
     ty: TypeId,
     scratch: &'s Bump,
 ) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
-    let whole = layout(types, ty)?;
+    let whole = types
+        .aggregate_value_layout(ty)
+        .ok_or(LoweringErrorKind::MissingFact(
+            "an aggregate value has no nominal layout",
+        ))?;
     let mut flags = AggregateFlags::empty();
     if types.tag(ty).is_some_and(|tag| tag.contains_flexible.get()) {
         flags |= AggregateFlags::FLEXIBLE;

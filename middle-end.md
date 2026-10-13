@@ -1080,6 +1080,17 @@ C99 §6.2.4p6, p. 32; PDF p. 44; §6.8p3, p. 131; PDF p. 143;
 `stack_restore` takes such a token from the current invocation and releases later
 dynamic objects. It leaves fixed slots and varargs backing storage live. These
 operations are effectful and cannot be merged or moved across allocations.
+A VLA restore also releases newer `__builtin_alloca` storage. This follows
+Clang's emitted `llvm.stackrestore` placement and the
+[GCC 4.2.1 Variable Length rule](https://gcc.gnu.org/onlinedocs/gcc-4.2.1/gcc/Variable-Length.html).
+Reading that storage afterward is undefined in this model, and the interpreter
+reports a dangling pointer. A native run returning the stored value does not
+establish lifetime: optimization or unreused physical stack bytes can hide the
+invalid access. Current GCC retains VLA storage when `alloca` occurs in its
+scope ([current manual](https://gcc.gnu.org/onlinedocs/gcc/Variable-Length.html));
+that is a different implementation policy. The regression pins bcc's restore
+semantics before and after optimization and ABI lowering.
+
 The verifier checks their result and operand types. LLVM emission uses
 `llvm.stacksave.p0` and `llvm.stackrestore.p0`; the interpreter validates activation
 and position, frees later objects, and reuses their memory. Text round-trip tests

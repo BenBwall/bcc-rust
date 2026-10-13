@@ -714,8 +714,22 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// a global initialized before the program starts.
     /// C99: §6.7.8 paragraphs 9-10, p. 126; PDF p. 138; §6.8 paragraph 3,
     /// p. 131; PDF p. 143; §6.2.4 paragraph 5, p. 32; PDF p. 44.
-    pub(super) fn declaration(&mut self, declaration: &'tu Declaration<'tu>) {
+    pub(super) fn declaration(
+        &mut self,
+        declaration: &'tu Declaration<'tu>,
+    ) -> Result<(), LoweringError> {
         let mut tasks = ArenaVec::new_in(self.scratch);
+        let site = self
+            .unit
+            .sema
+            .declaration_site(declaration)
+            .ok_or_else(|| {
+                LoweringError::missing(
+                    "declaration type-site facts are not retained",
+                    declaration.source_vectors,
+                )
+            })?;
+        Self::prepare_site_tasks(site, &mut tasks);
         for init in declaration.init_declarators {
             let Some(binding) = self.unit.declarator_binding(init.declarator) else {
                 continue;
@@ -731,6 +745,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             ));
         }
         self.push_all(&tasks);
+        Ok(())
     }
 
     pub(super) fn declare_binding(

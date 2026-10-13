@@ -500,18 +500,21 @@ pub(crate) struct Tag<'tu> {
 /// C99: §6.7.2.1, pp. 101-104; PDF pp. 113-116.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Member {
-    pub(crate) name:           Option<super::Identifier>,
+    pub(crate) name:               Option<super::Identifier>,
     /// Declarator provenance, including unnamed bit-fields.
-    pub(crate) source_vectors: super::SourceVectors,
+    pub(crate) source_vectors:     super::SourceVectors,
     /// A rejected declarator must not produce dependent completion errors.
-    pub(crate) invalid:        bool,
-    pub(crate) ty:             TypeId,
-    pub(crate) offset:         u64,
-    pub(crate) bit_offset:     u32,
-    pub(crate) width:          Option<u32>,
-    pub(crate) anonymous:      bool,
+    pub(crate) invalid:            bool,
+    pub(crate) ty:                 TypeId,
+    pub(crate) offset:             u64,
+    pub(crate) bit_offset:         u32,
+    pub(crate) width:              Option<u32>,
+    pub(crate) anonymous:          bool,
     /// GNU packed applies to this member without changing its C type.
-    pub(crate) packed:         bool,
+    pub(crate) packed:             bool,
+    /// Alignment requested by this member's own attributes or _Alignas.
+    /// Typedef alignment remains on `ty`; GCC packing only honors this fact.
+    pub(crate) explicit_alignment: u32,
 }
 
 /// One name in a record's member namespace, including the names an anonymous
@@ -714,6 +717,17 @@ impl<'tu> Types<'tu> {
     /// C99: §6.5.3.4p2-4, p. 80; PDF p. 92.
     pub(crate) fn layout(&self, ty: TypeId) -> Option<Layout> {
         layout(self.nodes, self.tags, &self.target, ty)
+    }
+
+    /// The nominal record's value layout, independent of alignment requested
+    /// by a typedef or an object's declaration. Argument passing classifies
+    /// the record itself; stronger storage alignment is not a value property.
+    /// C99: §6.2.5p20, pp. 35-36; PDF pp. 47-48 (nominal aggregate types).
+    pub(crate) fn aggregate_value_layout(&self, ty: TypeId) -> Option<Layout> {
+        self.tag(ty)
+            .filter(|tag| tag.kind != TagKind::Enum)?
+            .layout
+            .get()
     }
 
     /// The unqualified type constructor; qualifiers stay on the `TypeId`.

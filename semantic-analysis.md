@@ -1592,3 +1592,38 @@ Each reported finding was reproduced by a failing regression before its repair.
 Bundled Clang checked all four target triples. GCC 13.2 with
 `-mno-ms-bitfields` checked System V record rules at O0/O2 on the Windows host;
 Linux-native GCC execution was unavailable because WSL access was denied.
+
+## Type-site execution and aggregate alignment
+
+`Types::aggregate_value_layout` reads the completed nominal tag layout. Storage
+alignment retained on a declaration or aligned typedef does not change the
+aggregate argument's ABI layout, including variadic calls and `va_arg`.
+`Member::explicit_alignment` retains alignment written on the member's own
+attributes or `_Alignas`; inherited typedef alignment remains on its type.
+GNU packed layout uses only explicit member alignment to override packing.
+MSVC preserves Clang's inherited-alignment policy for ordinary packed members
+and its existing rule ignoring explicit alignment on packed bit-fields.
+
+`BoundSiteFacts` retains the base/resolved type and required `typeof` operand
+evaluations on each declaration and type-name syntax identity. The semantic
+`TypeofDone` continuation determines VM status from the canonical type graph,
+without array decay. Nested type operands compose already-retained site facts.
+Non-VM expression operands retain an empty evaluation list. Typedef uses have
+no original operand action: their extents are remembered, as required by
+C99 §6.7.5.2p5 (pp. 116-117; PDF pp. 128-129).
+
+Lowering queries the written site and executes its operand effects once before
+its existing declarator-bound tasks. This preserves GCC's specifier-before-bound
+ordering even where Clang chooses the opposite order. `sizeof` type queries
+retain their evaluation mode separately: a constant `sizeof` suppresses type
+operand effects, including `typeof` of a pointer to VLA. Runtime VLA size queries
+execute the retained operand list.
+The new tables are arena-owned and keyed by syntax identity; provenance remains
+for diagnostics. Existing runtime-bound identities and extent SSA storage are
+unchanged. This is the minimal operand-evaluation part of the bound-site design,
+not the full proposed bound-action/formula migration.
+
+Address-taking uses `FunctionRecord::parameter_aliases` to share the memory
+requirement between prototype and body bindings before parameter storage is
+chosen (C99 §6.9.1p10, p. 142; PDF p. 154). Bound expressions and body
+expressions then address the same parameter object.

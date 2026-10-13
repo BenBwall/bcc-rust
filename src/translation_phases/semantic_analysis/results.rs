@@ -24,7 +24,11 @@ use crate::{
         SourceVectors,
         parsing::{
             SpecifierExtension,
-            declaration_syntax::Declarator,
+            declaration_syntax::{
+                Declaration,
+                Declarator,
+                TypeName,
+            },
             syntax::{
                 Expression,
                 ExpressionType,
@@ -57,6 +61,9 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) functions:           &'tu [FunctionRecord<'tu>],
     pub(crate) scopes:              &'tu [Scope],
     pub(crate) type_names:          &'tu [(SourceVectors, TypeId)],
+    pub(super) declaration_sites:   ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    pub(super) type_name_sites:     ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    pub(super) size_query_sites:    ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
     pub(crate) parameters:          &'tu [(SourceVectors, &'tu [Parameter])],
     /// Typed results in child-before-parent order; an expression's ordinal
     /// is its index here.
@@ -78,6 +85,16 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     /// Error-severity diagnostics semantic analysis reported; warnings and
     /// diagnostics suppressed inside recovered syntax are not counted.
     pub(crate) errors:              usize,
+}
+
+/// Execution attached to a declaration or type-name occurrence, rather than
+/// inherited through a typedef. Saved bounds keep their existing identities;
+/// these operand effects execute before the site's new declarator bounds.
+/// GNU extension: GCC Typeof; C99: §6.5.3.4p2, p. 80; PDF p. 92.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BoundSiteFacts<'tu> {
+    pub(crate) ty:                  TypeId,
+    pub(crate) operand_evaluations: &'tu [&'tu Expression<'tu>],
 }
 
 /// A resolved declaration occurrence, retained in lexical traversal order.
@@ -207,6 +224,32 @@ pub(crate) struct Definition {
 }
 
 impl<'tu> SemanticTranslationUnit<'tu> {
+    /// Identity-indexed type-site execution; provenance is not a binding join.
+    pub(crate) fn declaration_site(
+        &self,
+        declaration: &Declaration<'tu>,
+    ) -> Option<BoundSiteFacts<'tu>> {
+        self.declaration_sites
+            .get(&std::ptr::from_ref(declaration).addr())
+            .copied()
+    }
+
+    pub(crate) fn type_name_site(&self, name: &TypeName<'tu>) -> Option<BoundSiteFacts<'tu>> {
+        self.type_name_sites
+            .get(&std::ptr::from_ref(name).addr())
+            .copied()
+    }
+
+    /// Size-query execution includes the surrounding sizeof evaluation mode.
+    pub(crate) fn size_query_site(
+        &self,
+        expression: &Expression<'tu>,
+    ) -> Option<BoundSiteFacts<'tu>> {
+        self.size_query_sites
+            .get(&std::ptr::from_ref(expression).addr())
+            .copied()
+    }
+
     /// Whether analysis classified this expression as initializing the whole
     /// array, including braced literals and arrays completed from the string.
     /// C99: §6.7.8p14-15, p. 126; PDF p. 138.

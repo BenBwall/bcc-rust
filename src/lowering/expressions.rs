@@ -245,9 +245,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             } => {
                 self.tasks.push(Task::Finish(expression));
                 self.tasks.push(Task::Evaluate(base_expression));
-                if matches!(expression.kind, E::Cast { .. }) {
+                if let E::Cast { target_type, .. } = expression.kind {
+                    let site = self.unit.sema.type_name_site(target_type).ok_or_else(|| {
+                        LoweringError::missing("cast type-site facts are not retained", source)
+                    })?;
                     let mut tasks = ArenaVec::new_in(self.scratch);
-                    self.prepare_type_tasks(info.ty, &mut tasks);
+                    Self::prepare_site_tasks(site, &mut tasks);
+                    self.prepare_type_tasks(site.ty, &mut tasks);
                     self.push_all(&tasks);
                 }
             },
@@ -269,17 +273,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     otherwise,
                 });
             },
-            | E::SizeofType(name) => {
-                let object = self
-                    .unit
-                    .sema
-                    .type_names
-                    .iter()
-                    .find(|(source, _)| *source == name.source_vectors)
-                    .map(|&(_, ty)| ty)
-                    .ok_or_else(|| LoweringError::missing("sizeof type is not retained", source))?;
+            | E::SizeofType(_) => {
+                let site = self.unit.sema.size_query_site(expression).ok_or_else(|| {
+                    LoweringError::missing("sizeof type-site facts are not retained", source)
+                })?;
+                let object = site.ty;
                 self.tasks.push(Task::Sizeof(object, info.ty, source));
                 let mut tasks = ArenaVec::new_in(self.scratch);
+                Self::prepare_site_tasks(site, &mut tasks);
                 self.prepare_type_tasks(object, &mut tasks);
                 self.push_all(&tasks);
             },

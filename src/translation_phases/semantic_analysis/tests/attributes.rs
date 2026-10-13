@@ -290,3 +290,78 @@ fn floating_builtins_retain_constants_and_reject_bad_operands() {
         },
     );
 }
+
+#[test]
+fn packed_members_distinguish_typedef_and_explicit_alignment() {
+    let source = "typedef int I __attribute__((aligned(4)));
+struct __attribute__((packed)) P { char c; I n; };
+struct __attribute__((packed)) A { char c; I n __attribute__((aligned(4))); };
+struct __attribute__((packed)) B { char c; _Alignas(4) I n; };";
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default().with_target(target),
+            |context, sema| {
+                assert_eq!(
+                    context.error_count(),
+                    0,
+                    "{:?}",
+                    context.take_pending_errors()
+                );
+                for (name, mut size, mut align, mut offset) in
+                    [("P", 5, 1, 1), ("A", 8, 4, 4), ("B", 8, 4, 4)]
+                {
+                    if target == Target::WindowsMsvc && name == "P" {
+                        size = 8;
+                        align = 4;
+                        offset = 4;
+                    }
+                    let tag = sema
+                        .types
+                        .tags
+                        .iter()
+                        .find(|tag| {
+                            tag.name
+                                .is_some_and(|id| context.string_cache.at(id) == name)
+                        })
+                        .unwrap();
+                    assert_eq!(
+                        tag.layout.get(),
+                        Some(Layout { size, align }),
+                        "{target:?} {name}"
+                    );
+                    assert_eq!(tag.members.get()[1].offset, offset);
+                }
+            },
+        );
+    }
+}
+
+#[test]
+fn aggregate_value_layout_excludes_storage_alignment() {
+    with_source(
+        "struct S {long a,b,c;}; struct S x __attribute__((aligned(64)));",
+        |context, sema| {
+            assert_eq!(context.error_count(), 0);
+            let binding = sema
+                .bindings
+                .iter()
+                .find(|b| context.string_cache.at(b.name.name) == "x")
+                .unwrap();
+            assert_eq!(
+                sema.types.layout(binding.ty),
+                Some(Layout {
+                    size:  24,
+                    align: 64,
+                })
+            );
+            assert_eq!(
+                sema.types.aggregate_value_layout(binding.ty),
+                Some(Layout {
+                    size:  24,
+                    align: 8,
+                })
+            );
+        },
+    );
+}

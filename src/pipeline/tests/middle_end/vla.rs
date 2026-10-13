@@ -112,6 +112,12 @@ fn vla_native_arms_match_clang() {
     .into_iter()
     .chain(STATEMENT_EXPRESSION_JUMPS.iter().copied())
     .chain([ALIGNED_VLAS])
+    .chain(
+        TYPEOF_EVALUATIONS
+            .iter()
+            .filter_map(|source| (!source.contains("k=0")).then_some(*source)),
+    )
+    .chain(SWITCH_VLAS.iter().copied())
     .enumerate()
     {
         // Clang O0 on Win64 retains repeated allocations after an earlier
@@ -151,6 +157,118 @@ fn vla_native_arms_match_clang() {
                     expected,
                     "case {index} {opt:?} {optimize}"
                 );
+            }
+        }
+    }
+}
+
+#[test]
+fn parameter_addresses_follow_retained_aliases() {
+    for source in [
+        "int f(int,int*); int f(int n,int a[(*(&n)=5)]){int *p=&n; return *p;} int main(void){int \
+         a[5]; return f(3,a)!=5;}",
+        "int f(int n,int a[(*(&n)=5)]){return n;} int main(void){int a[5]; return f(3,a)!=5;}",
+        "int f(x) int x; { int *p=&x; *p=37; return x; } int main(void){return f(1)!=37;}",
+        "int f(int); int f(int x){int *p=&x; *p=37; return x;} int main(void){return f(1)!=37;}",
+        "struct S {int x;}; int f(s) struct S s; {struct S *p=&s; p->x=37; return s.x;} int \
+         main(void){struct S s={1}; return f(s)!=37 || s.x!=1;}",
+        "struct S {int x;}; int f(struct S); int f(struct S s){struct S *p=&s; p->x=37; return \
+         s.x;} int main(void){struct S s={1}; return f(s)!=37 || s.x!=1;}",
+    ] {
+        for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+            for (optimize, profile) in STAGES {
+                with_module(source, target, optimize, profile, |module, target| {
+                    assert_eq!(interpret(module, target).0, 0);
+                });
+            }
+        }
+    }
+}
+
+const TYPEOF_EVALUATIONS: &[&str] = &[
+    "int main(void){int n=3,a[n][n],(*p)[n]=a; int s=sizeof(__typeof__(p++)); return p!=a || \
+     s!=sizeof(void*);}",
+    "int main(void){int n=3,a[n][n],(*p)[n]=a; __typeof__(*p++) b; return p!=a+1 || sizeof b!=12;}",
+    "int main(void){int n=3,a[n][n],(*p)[n]=a; typedef __typeof__(*p++) Row; Row b; return p!=a+1 \
+     || sizeof b!=12;}",
+    "int main(void){int n=3,a[n][n],(*p)[n]=a; int (*q)[n]=(__typeof__(p++))a; return p!=a+1 || \
+     q!=a;}",
+    "int main(void){int n=3,a[n][n],(*p)[n]=a; int s=sizeof(__typeof__(*p++)); return p!=a+1 || \
+     s!=12;}",
+    "int main(void){int n=3,a[n][n],(*p)[n]=a,k=0; __typeof__(*(k=1,p++)) b[(k=k+1,2)]; return \
+     p!=a+1 || k!=2 || sizeof b!=24;}",
+    "int main(void){int n=3,a[n][n],(*p)[n]=a; __typeof__(__typeof__(*p++)) b; return p!=a+1 || \
+     sizeof b!=12;}",
+    "int main(void){int x=1; __typeof__(x++) y=2; return x!=1 || y!=2;}",
+];
+
+#[test]
+fn typeof_vm_operands_execute_at_their_type_site() {
+    for source in TYPEOF_EVALUATIONS {
+        for target in [Target::LinuxGnu, Target::WindowsGnu] {
+            for (optimize, profile) in STAGES {
+                with_module(source, target, optimize, profile, |module, target| {
+                    assert_eq!(interpret(module, target).0, 0, "{source}");
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn vla_restore_releases_newer_alloca_storage() {
+    let source = "int main(void){int n=3,*p; {int a[n]; a[0]=11; p=__builtin_alloca(sizeof(int)); \
+                  *p=37;} return *p!=37;}";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        for (optimize, profile) in STAGES {
+            with_module(source, target, optimize, profile, |module, target| {
+                let arena = Bump::new();
+                let mut host = DefaultHost::for_target(&arena, target);
+                let trap = interpreter::run(module, "main", &[], &mut host).unwrap_err();
+                assert!(
+                    matches!(
+                        trap,
+                        interpreter::Trap::UndefinedBehavior(
+                            interpreter::UbKind::DanglingPointer,
+                            _
+                        )
+                    ),
+                    "{trap:?}"
+                );
+            });
+        }
+    }
+}
+
+const SWITCH_VLAS: &[&str] = &[
+    "int main(void){int n=8192; for(int i=0;i<1000;i++){int a[n]; a[0]=i; a[n-1]=37; \
+     switch(i%3){case 0: break; case 1: a[0]+=1; break; default: a[0]+=2;} if(a[n-1]!=37 || \
+     a[0]!=i+i%3)return 1;} return 0;}",
+    "int main(void){int n=8192,total=0; for(int i=0;i<1000;i++){int a[n]; a[0]=i; a[n-1]=37; \
+     for(int j=0;j<3;j++){switch(j){case 0: if(a[0]!=i || a[n-1]!=37)return 1; continue; default: \
+     break;} if(a[0]!=i || a[n-1]!=37)return 2; total++;} if(a[n-1]!=37)return 3;} return \
+     total!=2000;}",
+];
+
+#[test]
+fn switches_preserve_enclosing_vlas_and_bound_stack_growth() {
+    for source in SWITCH_VLAS {
+        for target in [Target::LinuxGnu, Target::WindowsGnu] {
+            for (optimize, profile) in STAGES {
+                with_module(source, target, optimize, profile, |module, target| {
+                    let arena = Bump::new();
+                    let mut host = DefaultHost::for_target(&arena, target);
+                    let outcome = interpreter::run(module, "main", &[], &mut host).unwrap();
+                    assert_eq!(
+                        outcome.termination,
+                        Termination::Returned(Some(RuntimeValue::Int(0)))
+                    );
+                    assert!(
+                        outcome.memory_cells < 100_000,
+                        "{} cells",
+                        outcome.memory_cells
+                    );
+                });
             }
         }
     }

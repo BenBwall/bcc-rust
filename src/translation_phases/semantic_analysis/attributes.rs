@@ -48,6 +48,88 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         false
     }
 
+    /// Alignment written on this member, separate from its typedef's type
+    /// alignment. Operands have already been checked during type construction;
+    /// this retention step must not issue their diagnostics a second time.
+    /// GCC Common Variable Attributes, packed; C11: §6.7.5p2-6,
+    /// p. 127; PDF p. 145 (explicit _Alignas).
+    pub(super) fn explicit_member_alignment(
+        &self,
+        extensions: Option<&'tu SpecifierExtension<'tu>>,
+        attributes: Option<&'tu SpecifierExtension<'tu>>,
+        declarator: Option<Declarator<'tu>>,
+    ) -> u32 {
+        let mut alignment = self
+            .written_alignment(extensions)
+            .max(self.written_alignment(attributes));
+        let mut work = ArenaVec::new_in(self.scratch);
+        if let Some(declarator) = declarator {
+            work.push(declarator);
+        }
+        while let Some(declarator) = work.pop() {
+            for direct in declarator.kind {
+                match direct {
+                    | DirectDeclarator::Attributes(a) =>
+                        alignment = alignment.max(self.written_attribute_alignment(a)),
+                    | DirectDeclarator::Parenthesized(p) => work.push(p.declarator),
+                    | _ => {},
+                }
+            }
+        }
+        alignment
+    }
+
+    fn written_alignment(&self, mut chain: Option<&'tu SpecifierExtension<'tu>>) -> u32 {
+        let mut alignment = 0;
+        while let Some(item) = chain {
+            let requested = match item.kind {
+                | SpecifierExtensionKind::Attributes(a) => self.written_attribute_alignment(a),
+                | SpecifierExtensionKind::Alignment(operand) => {
+                    let value = match operand {
+                        | super::SyntaxOperand::Expression(e) => self
+                            .expression_info(e)
+                            .integer
+                            .and_then(super::Integer::to_u64),
+                        | super::SyntaxOperand::Type(_) =>
+                            self.types.alignment(self.operand_type(operand)),
+                    };
+                    value
+                        .and_then(|value| u32::try_from(value).ok())
+                        .unwrap_or(0)
+                },
+                | _ => 0,
+            };
+            alignment = alignment.max(requested);
+            chain = item.next;
+        }
+        alignment
+    }
+
+    fn written_attribute_alignment(&self, a: &AttributeSpecifier<'tu>) -> u32 {
+        super::vectors::attribute_names(a, self.context)
+            .filter(|(_, name)| *name == "aligned")
+            .filter_map(|(index, _)| self.requested_attribute_alignment(a, index))
+            .filter_map(|value| u32::try_from(value).ok())
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn requested_attribute_alignment(
+        &self,
+        a: &AttributeSpecifier<'tu>,
+        index: usize,
+    ) -> Option<u64> {
+        if a.tokens
+            .as_slice()
+            .get(index + 1)
+            .is_some_and(|token| self.context.string_cache.at(token.contents) == "(")
+        {
+            self.attribute_alignment(a, index)
+        } else {
+            Some(16)
+        }
+    }
+
     /// Schedule parsed alignment operands before consuming representation
     /// facts. C99: §6.6p6, p. 95; PDF p. 107 (GNU ICE operand extension).
     pub(super) fn attribute_operands(&mut self, attribute: &AttributeSpecifier<'tu>) {
@@ -98,15 +180,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if name == "packed" {
                 result.packed = true;
             } else if name == "aligned" {
-                let tokens = a.tokens.as_slice();
-                let argument = tokens
-                    .get(index + 1)
-                    .is_some_and(|token| self.context.string_cache.at(token.contents) == "(");
-                let value = if argument {
-                    self.attribute_alignment(a, index)
-                } else {
-                    Some(16)
-                };
+                let value = self.requested_attribute_alignment(a, index);
                 if let Some(value) =
                     value.filter(|value| value.is_power_of_two() && *value <= 1 << 31)
                 {

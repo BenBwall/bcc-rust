@@ -53,6 +53,18 @@ use crate::{
 };
 
 impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
+    /// Consume the site's semantic operand evaluations before new bounds.
+    /// GNU extension: GCC Typeof; C99: §6.5.3.4p2, p. 80; PDF p. 92.
+    pub(super) fn prepare_site_tasks(
+        site: crate::translation_phases::semantic_analysis::BoundSiteFacts<'tu>,
+        tasks: &mut ArenaVec<'_, Task<'tu>>,
+    ) {
+        for &expression in site.operand_evaluations {
+            tasks.push(Task::EvaluateRaw(expression));
+            tasks.push(Task::Discard);
+        }
+    }
+
     /// C99: §6.7.5.2p5, pp. 116-117; PDF pp. 128-129.
     pub(super) fn prepare_type_tasks(
         &mut self,
