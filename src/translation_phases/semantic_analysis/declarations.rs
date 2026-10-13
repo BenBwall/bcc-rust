@@ -173,6 +173,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let attributes = self.layout_attribute_chain(s.attributes);
                     self.types.tags[tag].packed.set(attributes.packed);
                     self.types.tags[tag].alignment.set(attributes.alignment);
+                    let before = self
+                        .pack_alignments
+                        .partition_point(|&(position, _)| position <= s.pack_position);
+                    let pack = before
+                        .checked_sub(1)
+                        .map_or(0, |index| self.pack_alignments[index].1);
+                    self.types.tags[tag].max_member_alignment.set(pack);
                 }
                 if define && self.unmodeled_extension(s.attributes) {
                     self.types.tags[tag].tainted.set(true);
@@ -828,6 +835,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .align
                     .max(self.types.natural_alignment(member.ty).unwrap_or(1));
             }
+            // GCC/Clang pack caps placement after attribute alignment. System V
+            // zero-width fields keep their natural boundary. MSVC ordinary
+            // members may explicitly raise it; value bit-fields may not.
+            // C99: §6.7.2.1p10-12, pp. 102-103; PDF pp. 114-115.
+            // <https://gcc.gnu.org/onlinedocs/gcc/Structure-Layout-Pragmas.html>
+            let pack = tag.max_member_alignment.get();
+            if pack != 0 && (ms || member.width != Some(0)) {
+                layout.align = layout.align.min(u64::from(pack));
+                if self.context.configuration.target() == crate::target::Target::WindowsMsvc
+                    && member.width.is_none()
+                {
+                    layout.align = layout.align.max(u64::from(
+                        member.explicit_alignment.max(member.ty.alignment),
+                    ));
+                }
+            }
             // The System V ABI ignores unnamed bit-fields when aligning a
             // structure or union; in a union one still occupies its bytes.
             let unnamed_bit_field = member.name.is_none() && member.width.is_some();
@@ -835,6 +858,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 alignment = alignment.max(layout.align);
             }
             let mut resolved = member;
+            if pack != 0 {
+                resolved.ty = resolved
+                    .ty
+                    .with_alignment(u32::try_from(layout.align).unwrap_or(0));
+            }
             if ignore_alignment {
                 resolved.ty = resolved.ty.with_alignment(1);
             }
@@ -845,7 +873,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     // GCC packed union fields occupy their bits, including
                     // named fields. Microsoft allocation still reserves the
                     // declared unit (handled above).
-                    | Some(width) if unnamed_bit_field || packed => u64::from(width).div_ceil(8),
+                    | Some(width) if unnamed_bit_field || packed || pack != 0 =>
+                        u64::from(width).div_ceil(8),
                     | _ => layout.size,
                 });
             } else if let Some(width) = member.width {
@@ -867,7 +896,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             } else {
                                 layout.align
                             };
-                            let boundary = boundary.max(u64::from(member.explicit_alignment));
+                            let boundary = if pack != 0 && msvc {
+                                boundary
+                            } else {
+                                boundary.max(u64::from(member.explicit_alignment))
+                            };
                             if !msvc && let Some((_, start, used)) = unit {
                                 bytes = start + used.div_ceil(8);
                             }
@@ -902,9 +935,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 bit_end,
                                 bits.max(u64::from(member.explicit_alignment).checked_mul(8)?),
                             )?
-                        } else if member.explicit_alignment != 0 {
+                        } else if member.explicit_alignment != 0 && pack == 0 {
                             align_up(bit_end, layout.align.checked_mul(8)?)?
-                        } else if packed {
+                        } else if packed || pack != 0 {
                             bit_end
                         } else {
                             let remaining = bits - bit_end.checked_rem(bits)?;
@@ -974,7 +1007,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     path: self.types.tu.alloc(FieldPath::new(index, None)),
                     ty: member
                         .ty
-                        .with_alignment(if tag.packed.get() || member.packed {
+                        .with_alignment(if tag.max_member_alignment.get() != 0 {
+                            member.ty.alignment
+                        } else if tag.packed.get() || member.packed {
                             if self.context.configuration.target()
                                 == crate::target::Target::WindowsMsvc
                             {
@@ -1148,6 +1183,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             contains_flexible: Cell::new(false),
             compatible: Cell::new(Scalar::Int),
             packed: Cell::new(false),
+            max_member_alignment: Cell::new(0),
             alignment: Cell::new(0),
         });
         self.types.tags.push(tag);

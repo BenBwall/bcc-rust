@@ -158,7 +158,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidUnaryOperand);
             }
-            return Self::expression_result(e, ty);
+            let mut result = Self::expression_result(e, ty);
+            if matches!(op, U::PreIncrement | U::PreDecrement) {
+                result.promotion_width = operand.promotion_width;
+            }
+            return result;
         }
         if !match op {
             | U::Plus | U::Minus => self.arithmetic(ty),
@@ -263,7 +267,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.types.non_atomic(left.ty).unqualified(),
                     ConversionKind::Assignment,
                 );
-                return Self::expression_result(e, self.types.non_atomic(left.ty).unqualified());
+                let mut result =
+                    Self::expression_result(e, self.types.non_atomic(left.ty).unqualified());
+                result.promotion_width = left.promotion_width;
+                return result;
             }
         }
         let op = compound.unwrap_or(op);
@@ -271,7 +278,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let rt = self.converted(right);
         let int = self.types.scalar(Scalar::Int);
         if op == B::Comma {
-            return Self::expression_result(e, rt);
+            let mut result = Self::expression_result(e, rt);
+            result.promotion_width = right.promotion_width;
+            return result;
         }
         let mut info = Self::expression_result(e, self.types.unknown());
         let mut arithmetic_operands = None;
@@ -491,6 +500,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.convert(e, ty, ConversionKind::Assignment);
             let mut result = Self::expression_result(e, ty);
             result.operation_type = Some(info.ty);
+            result.promotion_width = left.promotion_width;
             return result;
         }
         info
@@ -791,6 +801,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .ok()
             .and_then(NonZeroU8::new);
         info.bit_field = field.width;
+        info.promotion_width = field
+            .width
+            .and_then(|width| u8::try_from(width).ok())
+            .and_then(NonZeroU8::new);
         info.field = u32::try_from(index + 1).ok().and_then(NonZeroU32::new);
         info.register = !indirect && base.register;
         info.static_address = if indirect {
@@ -1096,6 +1110,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             category: ValueCategory::Rvalue,
             binding: None,
             bit_field: None,
+            promotion_width: None,
             field: None,
             register: false,
             vector_element: false,
@@ -1290,7 +1305,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let TypeKind::Tag(id) = self.types.nodes[ty.index]
             && self.types.tags[id].kind == TagKind::Enum
         {
-            let promoted = if info.bit_field.is_some_and(|width| width < 32) {
+            let promoted = if info.promotion_width.is_some_and(|width| width.get() < 32) {
                 Scalar::Int
             } else {
                 self.types.tags[id].compatible.get()
@@ -1299,18 +1314,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         // Clang's implementation-defined extended bit-field promotions.
         // C99: §6.3.1.1p2, p. 42; PDF p. 54; §6.7.2.1p4, p. 101; PDF p. 113.
-        if let Some(width) = info.bit_field
+        if let Some(width) = info.promotion_width.map(NonZeroU8::get)
             && width <= 32
             && matches!(
                 self.types.nodes[ty.index],
-                TypeKind::Scalar(Scalar::Int128 | Scalar::UnsignedInt128)
+                TypeKind::Scalar(
+                    Scalar::Long
+                        | Scalar::UnsignedLong
+                        | Scalar::LongLong
+                        | Scalar::UnsignedLongLong
+                        | Scalar::Int128
+                        | Scalar::UnsignedInt128
+                )
             )
         {
-            let unsigned = width == 32
-                && matches!(
-                    self.types.nodes[ty.index],
-                    TypeKind::Scalar(Scalar::UnsignedInt128)
-                );
+            let unsigned = width == 32 && self.integer_type(ty).is_some_and(|(_, signed)| !signed);
             return self.types.scalar(if unsigned {
                 Scalar::UnsignedInt
             } else {
@@ -1318,7 +1336,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             });
         }
         if self.integer_type(ty).is_some_and(|(bits, _)| bits < 32)
-            || (info.bit_field.is_some_and(|width| width < 32)
+            || (info.promotion_width.is_some_and(|width| width.get() < 32)
                 && matches!(
                     self.types.nodes[ty.index],
                     TypeKind::Scalar(Scalar::Int | Scalar::UnsignedInt | Scalar::Bool)
