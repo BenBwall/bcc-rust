@@ -97,13 +97,18 @@ static struct S pairs[4] = {[1 ... 3]={4,5},[2].y=6};
 static int *ptrs[3] = {[0 ... 2]=a+3};
 static int calls;
 int next(void) { return ++calls; }
+struct S make(void) { struct S s={++calls,77}; return s; }
 int main(void) {
  int b[5] = {[1 ... 4]=next(),[2]=9};
  int c[2][3] = {[0 ... 1][1 ... 2]=next()};
  struct S d[3] = {[0 ... 2].y=next(),[1].x=8};
+ struct S e[4] = {[0 ... 3]=make()};
  if(sizeof(a)!=6*sizeof(int) || a[2]!=7 || a[4]!=3 || a[5]!=9) return 1;
  if(pairs[1].x!=4 || pairs[2].y!=6 || pairs[3].y!=5 || *ptrs[2]!=7) return 2;
- if(calls!=3 || b[1]!=1 || b[2]!=9 || b[4]!=1 || c[0][2]!=2 || c[1][1]!=2) return 3;
+ if(calls!=4 || b[1]!=1 || b[2]!=9 || b[4]!=1 || c[0][2]!=2 || c[1][1]!=2) return 3;
+ for(int i=0;i<4;i++) if(e[i].x!=4 || e[i].y!=77) return 4;
+ e[0].x=99; e[0].y=100;
+ for(int i=1;i<4;i++) if(e[i].x!=4 || e[i].y!=77) return 5;
  return d[0].x || d[1].x!=8 || d[2].y!=3;
 }
 ",
@@ -198,6 +203,10 @@ fn torture_sema_matches_clang_and_native_arms() {
                     "struct S d[3] = {[0 ... 2].y=next(),[1].x=8};",
                     "int z=next(); struct S d[3]={{0,z},{8,z},{0,z}};",
                 )
+                .replace(
+                    "struct S e[4] = {[0 ... 3]=make()};",
+                    "struct S once=make(); struct S e[4]={once,once,once,once};",
+                )
         } else {
             source.to_owned()
         };
@@ -222,6 +231,22 @@ fn torture_sema_matches_clang_and_native_arms() {
         );
         let expected = run_native(&oracle);
         assert_eq!(expected.0, 0, "{name} Clang");
+        let mut command = toolchain.command(
+            &input,
+            &oracle,
+            LlvmOptions {
+                opt: Some(OptLevel::O2),
+                ..options
+            },
+        );
+        _ = command.args(["-std=gnu11", "-Wno-constant-conversion"]);
+        let compiled = crate::test_support::native::run_native(&mut command).unwrap();
+        assert!(
+            compiled.status.success(),
+            "{name} Clang O2: {}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        assert_eq!(run_native(&oracle), expected, "{name} Clang O2");
         for arm in ARMS {
             let executable = directory.join(format!("{name}-{}.exe", arm.name));
             with_module(source, target, arm.bcc, Profile::PostAbi, |module, _| {
