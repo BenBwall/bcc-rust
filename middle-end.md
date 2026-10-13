@@ -508,13 +508,20 @@ IDs to SSA stack tokens. It no longer indexes VLA scopes, reconstructs label/par
 maps, invents pointer/binding region IDs, walks switch bodies to rediscover cases,
 or recasts case endpoints. Lexical name scopes and execution regions remain distinct.
 
-The required M2/M5 slices retain source-ordered parameter typeof/bound actions and
-one dual-context expression effect summary including cast type-site actions.
-Declaration occurrence plans, sparse effect recipes, initializer plans, symbolic
-constants, builtin descriptors and final symbol/function policies remain later
-migration work. Some consumers therefore still inspect syntax in those families.
-See [semantic-analysis.md](semantic-analysis.md) for producer/query contracts and
-the [M1 receipt](docs/research/semantic-facts-m1.md) for checks and corpus comparison.
+**M2 is complete.** Lowering consumes declaration occurrences, parameter facts,
+identity-indexed type names, runtime-bound records and the shared size-formula DAG.
+The declarator `(name, source_vectors)` index and initializer association walk are
+deleted. Semantic inspection no longer joins parameter minima by provenance.
+Runtime allocation, sizeof and strides emit the retained formulas, and casts and
+size queries schedule their retained site actions. M1 had already removed the
+consumer type-name search and bound-discovery type walk; those remain absent.
+
+Initializer placement plans, sparse effect recipes, symbolic constants, builtin
+descriptors and final symbol/function policies remain later migration work.
+Some consumers therefore still inspect syntax in those families. See
+[semantic-analysis.md](semantic-analysis.md) for producer/query contracts and the
+[M1 receipt](docs/research/semantic-facts-m1.md) and
+[M2 receipt](docs/research/semantic-facts-m2.md) for checks and corpus comparisons.
 
 ### Algorithm
 
@@ -1053,8 +1060,8 @@ small and large objects, empty objects, and handwritten packed-layout IR.
 Semantic array bounds retain an identity and the typed bound expression. Lowering
 evaluates bounds on the explicit task stack, saves each extent in an SSA variable,
 and uses it for allocation, runtime `sizeof`, and multidimensional strides.
-Typedefs retain the declaration's extent. Function records also retain original
-parameter types, so array adjustment does not discard entry-time bound effects.
+Typedefs retain the declaration's extent. Parameter facts retain declared,
+promoted and original types, so adjustment does not discard entry-time actions.
 Prototype/body parameter binding pairs are retained by semantic analysis;
 function entry visits only those pairs, without scanning unrelated bindings or
 matching source positions.
@@ -1080,7 +1087,8 @@ remain SSA extents. A bound owned by an evaluated typeof operand is scheduled by
 that operand's declaration, preventing premature reservation of its SSA variable.
 Both ordinary expression lowering and effects-only overflow operands consume the
 same normalized type-site actions and semantic dual-context purity summaries.
-Full M2 runtime-size formulas and M5 sparse effect recipes remain future steps.
+Allocation, sizeof and pointer/subscript/increment strides consume the shared
+semantic size-formula DAG. M5 sparse effect recipes remain a later step.
 
 `stack_save` returns an opaque `ptr` token for the current dynamic stack position;
 `stack_restore` takes such a token from the current invocation and releases later

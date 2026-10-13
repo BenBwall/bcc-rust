@@ -1525,19 +1525,57 @@ were preserved, and nothing was staged or committed. The whole-file commit
 plan is `target/commit-plan.md`; check logs are under `target/round6/`.
 
 
-### Runtime array metadata consumed by lowering (2026-10-13)
+## Retained occurrence, parameter and runtime-size correspondence
 
-`ArrayBound::Variable` retains a unique bound index into `Types::runtime_bounds`,
-whose entries are typed expression references. Distinct array derivations keep
-distinct identities even when their element types match. `Parameter::original`
-and `FunctionRecord::parameter_types` preserve parameter array types before
-adjustment, allowing the middle end to execute bounds on function entry.
-Lowering evaluates each retained bound at its declaration, saves its extent,
-and implements dynamic storage, strides, runtime sizeof and lifetime cleanup.
-The retained control graph rejects jumps into VM declaration regions, including
-typedefs and pointers to VLAs; those protection regions have no stack cleanup.
-C99 §6.7.5.2p5, pp. 116-117; PDF pp. 128-129; §6.9.1p10, p. 142;
-PDF p. 154; §6.8.6.1p1, p. 137; PDF p. 149.
+`CorrespondenceFacts` retains source-ordered `DeclarationFacts` with typed
+`OccurrenceId` and `EntityId`, accepted binding, initializer association,
+prototype parameter facts and new declarator-bound actions. Named declarators
+are copied values: their arena-owned suffix-list identity indexes the occurrence,
+including parenthesized suffix aliases. No copied-value address or source-vector
+comparison identifies an occurrence. Rejected declarations keep an occurrence
+with no accepted binding/entity. The initializer association is retained now;
+subobject placement plans belong to the initializer-plan migration.
+
+`Parameter` retains its prototype binding and checked type-site actions during
+parameter-list construction. `FunctionRecord::parameter_facts` keeps prototype
+and body bindings, declared and incoming/promoted types, the original type before
+array/function adjustment, and entry actions in parameter order. Unnamed and
+invalid entries retain their ordinal with absent bindings. K&R declaration-list
+actions retain their written order separately from identifier-list incoming
+argument order. Bound expressions and the body use the same parameter storage
+through the retained alias pairs. Inspection reads static minima by binding ID.
+Correspondence construction and consumption visit parameters and occurrences;
+there is no per-function translation-unit binding scan.
+
+`TypeNameFacts` gives each written type name a deterministic `TypeNameId`,
+resolved type and size-query record. Both producer lookup and retained queries
+use syntax identity. `RuntimeBound` retains the typed integer expression, its
+required size_t conversion, written evaluation site and saved-extent dependencies.
+Distinct derivations keep distinct bound IDs, even when their expression spelling
+or element type agrees.
+Declaration, parameter, cast and type-operand sites retain the ordered actions
+that execute; typedef uses reuse saved extents. Dependency reduction includes
+size and stride uses in embedded statement expressions.
+
+`SizeFacts` interns a shared `SizeFormula` DAG of byte constants and products
+with constant extents or `BoundId`s. Finalization visits canonical types once,
+after nominal tag layouts complete, sharing each child formula. Cached constant
+sizes preserve fixed-size emission. Allocation, runtime `sizeof`, subscript,
+pointer arithmetic and increment strides query this same graph. Lowering assigns
+SSA extent variables and emits formula products; it does not rediscover bounds
+or reconstruct products from types.
+
+`SizeQueryFacts` records a formula and exactly which operand and written bound
+or typeof actions execute. Constant queries suppress both operand and type-site
+effects, including VM pointers with fixed pointer size. Runtime VLA queries
+execute the retained actions and, for expression operands, the retained operand.
+Missing required facts in a lowerable modeled node produce `MissingFact` with
+provenance. The control graph still rejects entry into VM declaration regions;
+VM typedef/pointer protection does not allocate stack storage.
+C99 §6.7.5.2p5, p. 117 (PDF p. 129), §6.9.1p7,10, p. 142 (PDF p. 154),
+§6.5.3.4p2, p. 80 (PDF p. 92), and §6.5.6p8, p. 83 (PDF p. 95).
+Validation and corpus evidence: [M2 receipt](docs/research/semantic-facts-m2.md).
+
 ## 2026-10-13: Torture representation types and constant forms
 
 GNU `packed`, `aligned` and scalar `mode` now retain concrete types and layouts.
@@ -1630,8 +1668,8 @@ operand effects, including `typeof` of a pointer to VLA. Runtime VLA size querie
 execute the retained operand list.
 The new tables are arena-owned and keyed by syntax identity; provenance remains
 for diagnostics. Existing runtime-bound identities and extent SSA storage are
-unchanged. This is the minimal operand-evaluation part of the bound-site design,
-not the full proposed bound-action/formula migration.
+unchanged. The retained occurrence, parameter and size records above complete
+the bound-action and formula interface.
 
 Address-taking uses `FunctionRecord::parameter_aliases` to share the memory
 requirement between prototype and body bindings before parameter storage is
@@ -1650,11 +1688,11 @@ selected branches preserve conditional execution, and address-only operations ke
 their existing volatile distinctions. There are no per-query semantic purity caches
 or lowering-owned summary caches. Full sparse evaluation recipes remain M5 work.
 
-`FunctionRecord::parameter_sites` keeps entry actions in written order alongside
-original types and parameter aliases. Lowering initializes incoming parameters and
+`FunctionRecord::parameter_facts` keeps each prototype-style entry action with
+its original type and binding correspondence; `parameter_sites` keeps K&R
+shared declaration actions in written order. Lowering initializes incoming parameters and
 aliases first, then runs each site's typeof operand evaluations and newly introduced
 bounds before the body. Prototype-only declarations do not execute entry actions.
-This is the required M2 slice; occurrence IDs and runtime-size formula graphs remain
-future work. C99 §6.9.1p10, p. 142 (PDF p. 154), §6.5.3.4p2, p. 80 (PDF p. 92);
+C99 §6.9.1p10, p. 142 (PDF p. 154), §6.5.3.4p2, p. 80 (PDF p. 92);
 [GCC Typeof](https://gcc.gnu.org/onlinedocs/gcc/Typeof.html) and
 [GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).
