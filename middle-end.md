@@ -689,6 +689,13 @@ are reported before anything changes. The interpreter runs both profiles; in a
 post-ABI module its `va_start` lays the variadic arguments out as the target
 passes them.
 
+ABI refusal ownership includes indirect-call signatures and aggregate-fetch
+descriptors. C lowering retains the emitted function symbol and its semantic
+binding's source at the existing function projection, including assembler
+aliases. The pipeline carries that association into a refusal diagnostic;
+it does not rediscover functions from syntax or C spellings. Raw textual IR
+keeps its function owner without inventing a C source location.
+
 The storage preflight covers fixed aggregate parameters of variadic signatures
 as well as ordinary parameters, return areas and `byval` copies, whether a call
 passes an existing stack slot or needs a temporary. Scalar variadic arguments

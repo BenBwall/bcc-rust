@@ -4,7 +4,7 @@
 //! each conversion becomes an instruction, each lvalue a load or an SSA
 //! read, each control structure blocks and branches.
 //!
-//! [`lower_translation_unit`] refuses a unit with errors, declares every
+//! [`lower_with_sources`] refuses a unit with errors, declares every
 //! defined function and file-scope object, and then lowers one function at a
 //! time with [`FunctionLowerer::run`]. That loop pops [`Task`]s from an
 //! explicit work stack, never recursing over syntax: a statement pushes its
@@ -25,7 +25,7 @@
 //! emits `iadd.i32 nsw` because signed overflow is undefined. The `return`
 //! applies the conversion to the result type and ends the block.
 //!
-//! Read [`lower_translation_unit`], [`FunctionLowerer::run`] and
+//! Read [`lower_with_sources`], [`FunctionLowerer::run`] and
 //! [`FunctionLowerer::step`], then `work.rs` for the task vocabulary,
 //! `ssa.rs` for the function under construction and `emit.rs` for how it
 //! becomes IR.
@@ -114,6 +114,7 @@ use crate::{
     target::Target,
     translation_phases::{
         Context,
+        SourceVectors,
         parsing::{
             ParsedTranslationUnit,
             syntax::ExpressionType,
@@ -140,14 +141,14 @@ use crate::{
 /// refused; any construct outside the supported subset is reported with its
 /// provenance, after every function has been attempted.
 /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
-pub(crate) fn lower_translation_unit<'tu, 'ir>(
+pub(crate) fn lower_with_sources<'tu, 'ir>(
     context: &Context<'tu>,
     syntax: &ParsedTranslationUnit<'tu>,
     sema: &SemanticTranslationUnit<'tu>,
     target: Target,
     arena: &'ir Bump,
     scratch: &mut Bump,
-) -> Result<Module<'ir>, LoweringErrors<'ir>> {
+) -> Result<LoweredUnit<'ir>, LoweringErrors<'ir>> {
     let mut errors = ArenaVec::new_in(arena);
     if !sema.lowerable(context) {
         errors.push(LoweringError {
@@ -162,22 +163,56 @@ pub(crate) fn lower_translation_unit<'tu, 'ir>(
     let mut unit = Unit::new(context, sema, target, arena, &tables);
     unit.prepare_extensions(&mut errors);
     let functions = unit.declare_items(syntax, &mut errors);
+    let mut function_sources = ArenaVec::new_in(arena);
     for record in functions {
         scratch.reset();
         let Some(func) = record.1 else {
             continue;
         };
+        // Record the binding-to-emitted-symbol association at its owner,
+        // including assembler aliases. ABI diagnostics need no syntax walk
+        // or spelling-based reconstruction. C99 §5.1.1.3p1, p. 11; PDF p. 23.
+        if let Some(binding) = record.0.binding {
+            function_sources.push((
+                unit.module.function(func).name,
+                sema.bindings[binding].name.source_vectors,
+            ));
+        }
         if let Err(error) = FunctionLowerer::lower(&mut unit, record.0, func, scratch) {
             errors.push(error);
         }
     }
     if errors.is_empty() {
-        Ok(unit.into_module())
+        Ok(LoweredUnit {
+            module:           unit.into_module(),
+            function_sources: arena.alloc_slice_copy(&function_sources),
+        })
     } else {
         Err(LoweringErrors {
             errors: arena.alloc_slice_copy(&errors),
         })
     }
+}
+
+/// IR and the source owners recorded while its function definitions are
+/// projected from semantic bindings. Raw textual IR remains source-free.
+/// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+pub(crate) struct LoweredUnit<'ir> {
+    pub(crate) module:           Module<'ir>,
+    pub(crate) function_sources: &'ir [(&'ir str, SourceVectors)],
+}
+
+/// Test adapter for the pre-ABI module seam.
+#[cfg(test)]
+pub(crate) fn lower_translation_unit<'tu, 'ir>(
+    context: &Context<'tu>,
+    syntax: &ParsedTranslationUnit<'tu>,
+    sema: &SemanticTranslationUnit<'tu>,
+    target: Target,
+    arena: &'ir Bump,
+    scratch: &mut Bump,
+) -> Result<Module<'ir>, LoweringErrors<'ir>> {
+    lower_with_sources(context, syntax, sema, target, arena, scratch).map(|unit| unit.module)
 }
 
 impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {

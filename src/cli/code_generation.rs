@@ -125,8 +125,8 @@ pub(super) fn generate_code<'tu>(
             drop(reporter.finish(context, stderr));
             return FAILURE_STATUS;
         },
-        | Err(MiddleEndError::Abi(error)) => {
-            reporter.report_late(&error, None, context);
+        | Err(MiddleEndError::Abi { error, source }) => {
+            reporter.report_late(&error, source, context);
             drop(reporter.finish(context, stderr));
             return FAILURE_STATUS;
         },
