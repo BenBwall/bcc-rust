@@ -1,8 +1,10 @@
 //! Code generation: lowers the analyzed translation unit to the bcc IR,
 //! optimizes it when asked, lowers its calls for the target's ABI, and hands
-//! it to a back end. `--emit` prints the bcc IR or LLVM IR, `--interpret`
-//! runs `main` in the IR interpreter, and `-o` builds an executable or object
-//! through the bundled clang.
+//! it to a back end. `--emit` prints the bcc IR, LLVM IR or the native back
+//! end's assembly, `--interpret` runs `main` in the IR interpreter, and `-o`
+//! builds an executable or object through LLVM-C (`--backend=llvm`, the
+//! default) or the native back end (`--backend=native`), linking with the
+//! bundled clang.
 //!
 //! Every back end receives the post-ABI module. `--emit=ir` prints the
 //! pre-ABI module the optimizer worked on, where a structure passed by value
@@ -43,6 +45,7 @@ use crate::{
             OptLevel,
             OutputKind,
         },
+        native,
     },
     diagnostics::ColorChoice as RenderColor,
     headers::HeaderSearch,
@@ -133,9 +136,16 @@ pub(super) fn generate_code<'tu>(
     };
     drop(reporter.finish(context, stderr));
     let target = context.configuration.target();
+    if let Some(conflict) = options.back_end_conflict() {
+        report_stderr(format_args!("error: {conflict}"));
+        return FAILURE_STATUS;
+    }
     match (options.emit, &options.output_path) {
         | (Some(Emit::Ir | Emit::IrAbi), _) => print_stdout(format_args!("{module}")),
         | (Some(Emit::Llvm), _) => print_llvm(&module, target),
+        | (Some(Emit::Asm), _) => print_native(&module, target),
+        | (None, Some(path)) if options.backend == BackEnd::Native =>
+            build_native(&module, target, path, options),
         | (None, Some(path)) => build(&module, target, path, options),
         | (None, None) => interpret(&module, target),
     }
@@ -210,6 +220,11 @@ pub(super) struct CodeGeneration {
     /// level.
     #[arg(long, requires = "back_end")]
     pub(super) llvm_codegen_only: bool,
+    /// Select the code generator for -o and --emit=asm: LLVM through its C
+    /// API, or bcc's own x86-64 back end, which refuses what it does not
+    /// support yet.
+    #[arg(long, value_enum, default_value = "llvm", requires = "back_end")]
+    pub(super) backend:           BackEnd,
 }
 
 /// What `--emit` prints.
@@ -221,6 +236,17 @@ pub(super) enum Emit {
     IrAbi,
     /// LLVM IR.
     Llvm,
+    /// The native back end's assembly (with --backend=native).
+    Asm,
+}
+
+/// The code generator `--backend` selects.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+pub(super) enum BackEnd {
+    /// LLVM through its C API.
+    Llvm,
+    /// bcc's own x86-64 code generator.
+    Native,
 }
 
 /// The middle-end optimizer `--opt` selects.
@@ -248,6 +274,34 @@ pub(super) enum LlvmOpt {
 }
 
 impl CodeGeneration {
+    /// Why the selected options do not fit the selected back end, if they
+    /// do not.
+    fn back_end_conflict(&self) -> Option<&'static str> {
+        let native = self.backend == BackEnd::Native;
+        match self.emit {
+            | Some(Emit::Asm) if !native =>
+                return Some(
+                    "--emit=asm prints the native back end's assembly; add --backend=native",
+                ),
+            | Some(Emit::Llvm) if native =>
+                return Some("--emit=llvm prints LLVM IR, which --backend=native does not use"),
+            | _ => {},
+        }
+        if !native {
+            return None;
+        }
+        if self.emit.is_none() && self.output_path.is_none() {
+            return Some("--backend=native needs -o or --emit=asm; --interpret runs the IR");
+        }
+        if self.llvm_opt != LlvmOpt::None || self.llvm_codegen_only {
+            return Some(
+                "--llvm-opt and --llvm-codegen-only configure the LLVM back end, not \
+                 --backend=native",
+            );
+        }
+        None
+    }
+
     /// Whether a back end was requested.
     pub(super) fn requested(&self) -> bool {
         self.emit.is_some() || self.interpret || self.output_path.is_some()
@@ -354,6 +408,50 @@ fn print_llvm(module: &Module<'_>, target: Target) -> i32 {
         | Ok(()) => print_stdout(format_args!("{text}")),
         | Err(error) => {
             report_stderr(format_args!("error: {error}"));
+            FAILURE_STATUS
+        },
+    }
+}
+
+/// Prints the native back end's assembly for `target` to stdout, or
+/// reports what it does not support.
+fn print_native(module: &Module<'_>, target: Target) -> i32 {
+    let arena = Bump::new();
+    let mut text = ArenaString::new_in(&arena);
+    match native::emit_assembly(module, target, &mut text) {
+        | Ok(()) => print_stdout(format_args!("{text}")),
+        | Err(error) => {
+            report_stderr(format_args!("error: {error}"));
+            FAILURE_STATUS
+        },
+    }
+}
+
+/// Builds an object or executable with the native back end.
+fn build_native(
+    module: &Module<'_>,
+    target: Target,
+    output: &Path,
+    options: &CodeGeneration,
+) -> i32 {
+    let arena = Bump::new();
+    let mut text = ArenaString::new_in(&arena);
+    if let Err(error) = native::emit_assembly(module, target, &mut text) {
+        report_stderr(format_args!("error: {error}"));
+        return FAILURE_STATUS;
+    }
+    let kind = if options.object {
+        OutputKind::Object
+    } else {
+        OutputKind::Executable
+    };
+    match native::assemble(&text, output, target, kind) {
+        | Ok(()) => 0,
+        | Err(error) => {
+            report_stderr(format_args!(
+                "error: cannot build `{}`: {error}",
+                output.display()
+            ));
             FAILURE_STATUS
         },
     }

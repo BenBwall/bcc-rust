@@ -1055,6 +1055,112 @@ mod tests {
     }
 
     #[test]
+    fn native_back_end_builds_runs_and_refuses_clearly() {
+        let Some(target) = host() else {
+            eprintln!("skipping: the host is not a supported target");
+            return;
+        };
+        let target = format!("--target={target}");
+        let path = |path: &Path| path.to_str().unwrap().to_owned();
+        let executable = temporary("native-hello.exe");
+        for flags in [&[][..], &["--opt=bcc"][..]] {
+            let built = bcc(
+                HELLO,
+                &[
+                    &[&target[..], "--backend=native", "-o", &path(&executable)][..],
+                    flags,
+                ]
+                .concat(),
+            );
+            if built.status.code() == Some(1) && text(&built.stderr).contains("cannot find") {
+                eprintln!("skipping: {}", text(&built.stderr));
+                return;
+            }
+            assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(3), "{flags:?}");
+            assert_eq!(text(&run.stdout), "answer 42\n", "{flags:?}");
+        }
+        let pair = temporary("native-pair.exe");
+        let built = bcc(PAIR, &[&target, "--backend=native", "-o", &path(&pair)]);
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let run = run_native(&mut Command::new(&pair)).unwrap();
+        assert_eq!(run.status.code(), Some(42));
+        let object = temporary("native-hello.o");
+        let compiled = bcc(
+            HELLO,
+            &[&target, "--backend=native", "-c", "-o", &path(&object)],
+        );
+        assert!(compiled.status.success(), "{}", text(&compiled.stderr));
+        assert!(object.is_file());
+        for file in [executable, pair, object] {
+            drop(std::fs::remove_file(file));
+        }
+
+        // Unsupported code is refused before anything is written.
+        let float = temporary("native-float.exe");
+        let refused = bcc(
+            "double half(double x) { return x / 2; }\nint main(void) { return half(4) != 2; }\n",
+            &[&target, "--backend=native", "-o", &path(&float)],
+        );
+        assert_eq!(refused.status.code(), Some(1));
+        assert_eq!(
+            text(&refused.stderr).trim(),
+            "error: not yet supported by the native back end: f64 values (in @half)"
+        );
+        assert!(!float.exists());
+    }
+
+    #[test]
+    fn native_assembly_and_option_conflicts() {
+        let asm = bcc(
+            SUM,
+            &[
+                "--target=x86_64-unknown-linux-gnu",
+                "--backend=native",
+                "--emit=asm",
+            ],
+        );
+        assert!(asm.status.success(), "{}", text(&asm.stderr));
+        let listing = text(&asm.stdout);
+        assert!(listing.contains("\t.globl\tmain\n"), "{listing}");
+        assert!(listing.contains(".cfi_startproc"), "{listing}");
+        let asm = bcc(
+            SUM,
+            &[
+                "--target=x86_64-w64-windows-gnu",
+                "--backend=native",
+                "--emit=asm",
+            ],
+        );
+        assert!(text(&asm.stdout).contains(".seh_proc\tmain"));
+        for (flags, message) in [
+            (
+                &["--emit=asm"][..],
+                "error: --emit=asm prints the native back end's assembly; add --backend=native",
+            ),
+            (
+                &["--backend=native", "--emit=llvm"][..],
+                "error: --emit=llvm prints LLVM IR, which --backend=native does not use",
+            ),
+            (
+                &["--backend=native", "--interpret"][..],
+                "error: --backend=native needs -o or --emit=asm; --interpret runs the IR",
+            ),
+            (
+                &["--backend=native", "--emit=asm", "--llvm-opt=O2"][..],
+                "error: --llvm-opt and --llvm-codegen-only configure the LLVM back end, not \
+                 --backend=native",
+            ),
+        ] {
+            let output = bcc(SUM, flags);
+            assert_eq!(output.status.code(), Some(1), "{flags:?}");
+            assert_eq!(text(&output.stderr).trim(), message, "{flags:?}");
+            assert!(output.stdout.is_empty(), "{flags:?}");
+        }
+    }
+
+    #[test]
     fn windows_gnu_object_output_needs_no_mingw() {
         let object = temporary("no-mingw.o");
         let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
