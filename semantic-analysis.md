@@ -1327,12 +1327,12 @@ an unavailable variadic fallback make this a separate feature; it is deferred.
 
 ### Common GCC scalar builtin coverage (2026-10-12)
 
-`builtins/common.rs` owns the fixed GCC scalar signatures, target-dependent
-parameter widths and fixed-width type identities, overloaded overflow
-constraints, control-argument validation,
-and conservative constant/object-size queries. Lowering shares its name
-classifier. `GnuBuiltins` reports these GNU-only calls through the common
-extension policy; prefetch now belongs to this family rather than vector
+The neutral registry in `src/builtins.rs` owns fixed GCC scalar signatures,
+target-dependent parameter widths, fixed-width type identities, operand rules,
+constant constraints and operation/effect identities. `builtins/common.rs`
+checks these descriptors, with dedicated overflow and floating handlers and
+conservative constant/object-size folds. Lowering consumes checked instances.
+`GnuBuiltins` reports these GNU-only calls through the common extension policy; prefetch now belongs to this family rather than vector
 builtins. Statement expressions retain the final expression statement's converted
 value type but never discard the block's effects by folding its tail. New focused
 semantic tests exercise signatures, rejected arities and types, ICE overflow
@@ -1589,13 +1589,13 @@ children. Scratch conversion summaries track count, first kind and final type
 while the existing contextual conversion records are produced.
 
 `CallFacts` records `Callee::Direct` with entity and binding, `Indirect` with
-the callee expression ordinal, or `Builtin` with its existing binding and
-designation-preserving directness. It retains the point-of-use function type,
-fixed prefix, prototype/ellipsis status and each argument's expression ordinal
+the callee expression ordinal, or `Builtin` with its optional named binding,
+designation-preserving directness and checked instance. It retains the point-of-use
+function type, fixed prefix, prototype/ellipsis status and each argument's expression ordinal
 and converted type. Argument ordinals reference the existing conversion runs;
-later composite binding types never replace the written call's type. Builtin
-descriptors, checked instances and name dispatch remain M4/M6 work. Overloaded
-builtins may lack an ordinary function type; ordinary lowerable calls require it.
+later composite binding types never replace the written call's type. M4 now
+retains checked scalar/library/varargs instances; remaining family descriptors
+are M6 work. Overloaded builtins may lack an ordinary function type; ordinary lowerable calls require it.
 The existing known-definition/open-external ABI policy remains downstream until
 M7. Returns-twice and unsupported-builtin capability refusals are unchanged.
 
@@ -1624,6 +1624,58 @@ C99 §6.5.1p5, p. 69 (PDF p. 81), §6.5.2.2p6-7, pp. 71-72
 (PDF pp. 83-84), §6.5.2.3p3-4, p. 73 (PDF p. 85), and §6.8.1p4,
 p. 132 (PDF p. 144); C11/GNU selections and GNU statement expressions.
 Validation and corpus evidence: [M3 receipt](docs/research/semantic-facts-m3.md).
+
+## Retained builtin contracts and checked instances
+
+**M4 is complete.** `src/builtins.rs` is a phase-neutral, static descriptor index.
+The scalar and library shards own exact spellings, append-only `BuiltinId`s,
+signatures expressed in target scalar/size/pointer patterns, closed type and
+operation rules, operand conversion/evaluation/constant constraints, feature and
+naming policy, effect classes and library equivalence. The generated sorted name
+index maps one spelling to one ID; `scripts/generate_builtin_index.py` preserves
+IDs when rows move or new entries are added. Descriptors contain no syntax,
+semantic types, IR opcodes, checker/lowerer callbacks or diagnostic messages.
+Constraint identities adapt to the existing `SemanticErrorKind` catalog.
+
+Lookup first respects a visible user binding. `BindingOrigin` then distinguishes
+`User`, `Intrinsic(BuiltinId)`, `ImplicitOrdinary`, the explicit temporary M6
+`LegacyIntrinsic` bridge and unknown reserved `OpaqueIntrinsic` bindings.
+Unknown reserved names keep opaque signatures. Plain implicit alloca is GNU-only;
+ordinary implicit library names are hosted-only. Reserved library aliases keep
+their signatures in freestanding mode. The fabs/fabsf/fabsl aliases share the
+registry's double/float/long-double contracts; host implementations remain backend
+capabilities.
+
+Named scalar, library and varargs calls and keyword varargs/offsetof retain an
+arena-owned `BuiltinCallFacts` in M3's `Callee::Builtin`. Keyword forms have no
+named binding. Instances retain descriptor ID, checked operation, result and
+operation types, result folds, effects and normalized operands. Each operand
+retains its converted type/constants, bit-field precision and evaluation mode:
+value, storage address, adjusted list pointer, effects only, unevaluated or type.
+System V pointer parameters read an adjusted list pointer; Win64 cursors retain
+storage-address uses. Lowering's address-use scan consumes the retained binding
+uses. No synthetic `Builtin` AST is allocated for ordinary varargs calls in either
+phase, and lowering does not decode scalar spellings or reconstruct operand shape.
+IR emission and varargs ABI expansion keep their existing algorithms.
+
+Fixed-parameter constants are checked after target conversion; probability rounds
+to double before finite endpoint checks. Prefetch constraints retain original ICE
+width, including 128-bit immediates. Assignment compatibility precedes dependent
+constant diagnostics. Dedicated overflow, floating and varargs handlers keep their
+type/precision/layout rules. Existing semantic/diagnostic/IR goldens are unchanged.
+
+Atomic, generated x86, vector and type-generic recognition and keyword checking,
+plus reserved builtin type spellings, remain explicit M6 bridges. The named
+capability adapter in `builtins/names.rs` joins the registry with those families;
+`__has_builtin` still uses the existing keyword classifier/semantic capability
+adapter. Exhaustive scalar/library agreement tests cover all current targets,
+strict/GNU modes and hosted/freestanding environments. Sparse evaluation recipes
+remain M5; the external/returns-twice symbol policy remains later work.
+
+C99 §6.5.2.2p7, p. 72 (PDF p. 84), §6.2.1p4, pp. 29-30
+(PDF pp. 41-42), §7.15.1, pp. 249-251 (PDF pp. 261-263),
+and §7.1.4, pp. 166-167 (PDF pp. 178-179); scalar intrinsics are GNU
+extensions. Validation and corpus evidence: [M4 receipt](docs/research/semantic-facts-m4.md).
 
 ## 2026-10-13: Torture representation types and constant forms
 

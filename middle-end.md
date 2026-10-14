@@ -525,16 +525,31 @@ prefixes; member queries index owning tags/fields and retained access facts.
 The linear address-use scan queries designations and calls. Consumer selection
 walks, repeated direct-callee checks, tail reruns and owning-record recovery are
 deleted; selection/tail helpers are private to semantic analysis. Missing facts
-produce provenance-bearing `MissingFact` errors. Existing builtin name dispatch,
-varargs syntax adapters and open-external ABI policy remain later migration work.
+produce provenance-bearing `MissingFact` errors. Open-external ABI policy remains
+later migration work.
 
-Initializer placement plans, sparse effect recipes, symbolic constants, builtin
-descriptors and final symbol/function policies remain later migration work.
+**M4 is complete.** The phase-neutral `src/builtins.rs` registry owns scalar and
+library contracts, exact spelling/ID lookup, signatures, feature/naming policy,
+operand evaluation/conversion/constant rules, effects and library equivalence.
+`BindingOrigin` preserves user shadowing before intrinsic lookup. Named scalar,
+library and varargs calls, plus keyword varargs and offsetof, retain
+`BuiltinCallFacts` inside `Callee::Builtin`: descriptor, checked operation,
+normalized operands and result/operation types. Lowering schedules those operand
+modes and dispatches the checked operation. Scalar name redispatch, the synthetic
+varargs `Builtin` AST adapters and varargs storage rediscovery are deleted. ABI
+classification and cursor movement remain downstream. Atomic, x86, vector and
+type-generic recognition/keyword handlers are explicit temporary M6 bridges;
+preprocessing retains its capability adapter until that migration. Scalar/library
+support is tested against the registry on every current target and environment.
+
+Initializer placement plans, sparse effect recipes, symbolic constants, remaining
+builtin families and final symbol/function policies remain later migration work.
 Some consumers therefore still inspect syntax in those families. See
 [semantic-analysis.md](semantic-analysis.md) for producer/query contracts and the
 [M1 receipt](docs/research/semantic-facts-m1.md),
-[M2 receipt](docs/research/semantic-facts-m2.md), and
-[M3 receipt](docs/research/semantic-facts-m3.md) for checks and corpus comparisons.
+[M2 receipt](docs/research/semantic-facts-m2.md),
+[M3 receipt](docs/research/semantic-facts-m3.md), and
+[M4 receipt](docs/research/semantic-facts-m4.md) for checks and corpus comparisons.
 
 ### Algorithm
 
