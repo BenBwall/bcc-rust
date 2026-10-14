@@ -88,6 +88,18 @@ fn compound_literals_with_static_or_thread_storage_name_themselves() {
     }
 }
 
+/// A type semantic analysis leaves unanalyzed is refused as unsupported,
+/// naming why, rather than as a type that "was not analyzed".
+#[test]
+fn unmodeled_extension_types_are_refused_as_unsupported() {
+    let message = refusal("int f(void) { _BitInt(9) b = 1; return b; }");
+    assert_eq!(
+        message,
+        "not yet supported by lowering: a type built from an extension semantic analysis does not \
+         model"
+    );
+}
+
 #[test]
 fn every_failing_function_is_reported() {
     let errors = lower(
