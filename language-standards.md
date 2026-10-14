@@ -1288,6 +1288,7 @@ Each rule below was checked against the same bundled Clang on
 | `const int (**)[]` from `int (**)[3]` | `incompatible-pointer-types` | **error** | Below the first pointer level Clang requires identical array derivations, so the nested-qualifier walk keeps exact bounds. |
 | `unsigned *` from `enum N *` (`N` has a negative enumerator) | `pointer-sign` | **warning** | Clang compares targets after a character type becomes `unsigned char` and a signed integer type, or an enumeration with a signed compatible type, becomes its unsigned counterpart. An enumeration with an unsigned compatible type stays itself, so `int *` from `enum E *` is an error on Linux, while MSVC (enums are `int`) makes `unsigned *` from `enum E *` a `pointer-sign` warning. |
 | `__atomic_store_n(&ip, up, 0)`, `__atomic_exchange_n`, `__sync_val_compare_and_swap`, `__c11_atomic_store` | the assignment groups | as assignment | Atomic builtin value operands convert through the assignment adapter; address and buffer contracts stay builtin errors. |
+| `long s = &x;` with int-conversion demoted | `int-conversion` | as configured | An address constant in an integer type exactly as wide as a pointer (also through an explicit cast) is a static initializer and lowers to a relocation; narrower types, including MSVC's 32-bit `long`, report that the initializer is not constant, as Clang does. |
 
 `-Wpointer-type-mismatch` and `-Wconditional-type-mismatch` accept the same
 option forms as the other groups, are promoted by `-Werror` and

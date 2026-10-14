@@ -968,6 +968,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.constant = ConstantClass::Address;
             info.integer = operand.integer.map(|v| v.cast(64, false));
         }
+        // An address cast to an integer type that holds it unchanged stays
+        // an address constant, as in GCC and Clang; narrower types would
+        // need a truncated relocation. Implementation latitude of C99
+        // §6.6p10, p. 96; PDF p. 108.
+        if self.pointer_width_integer(target)
+            && self.address_value(operand)
+            && Self::pointer_value(operand).is_none()
+        {
+            info.constant = ConstantClass::Address;
+        }
         // GNU modes fold an integer-valued address constant converted to an
         // integer type, which C99 does not count as arithmetic (§6.6p8).
         if self.context.configuration.gnu_extensions()
@@ -1231,6 +1241,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.5.6 paragraphs 2-3, pp. 82-83; PDF pp. 94-95.
     fn pointer_arithmetic_target(&self, target: TypeId) -> bool {
         self.complete_object(target) || self.types.unanalyzed(target)
+    }
+
+    /// Whether `ty` is an integer type exactly as wide as a pointer, which
+    /// can hold an address constant as a relocation (GCC and Clang accept
+    /// one there in a static initializer).
+    /// C99: §6.3.2.3 paragraph 6, p. 47; PDF p. 59; §6.6 paragraph 10,
+    /// p. 96; PDF p. 108.
+    pub(in crate::translation_phases::semantic_analysis) fn pointer_width_integer(
+        &self,
+        ty: TypeId,
+    ) -> bool {
+        self.integer_type(ty)
+            .is_some_and(|(bits, _)| u64::from(bits) == self.types.target.pointer.size * 8)
     }
 
     pub(super) fn pointer_target(&self, ty: TypeId) -> Option<TypeId> {

@@ -35,6 +35,13 @@ mod tests {
 static int sum(const int (*m)[3], int n) {                               int s = 0; for (int i = 0; i < n; i++) for (int j = 0; j < 3;                               j++) s += m[i][j]; return s; }
 int main(void) { int *ip = &x;                               unsigned *up = &ux; enum N n = M; enum N *pn = &n; unsigned *pu                               = pn; int c = x == 7; int *chosen = c ? ip : up; long l = 0; int                               *q = c ? ip : l; const int (*cpa)[3] = a; return !(*chosen == 7                               && q == ip && *pu == 0xffffffffu && sum(a, 2) == 21 && cpa ==                               a); }
 ";
+    /// Addresses in pointer-wide integers of static storage, accepted when
+    /// int-conversion is not an error, as in Clang.
+    const STATIC_ADDRESSES: &str = "int x = 5; static int arr[4] = {1, 2, 3, 4};
+long long s =                                     &x; long long t = (long long)&x;
+unsigned long long                                     u[2] = { &arr[1], &arr[3] };
+int main(void) { static long                                     long local = &arr[2]; return !(s == (long long)&x && t ==                                     s && (int *)u[1] - (int *)u[0] == 2 && *(int *)s == 5 &&                                     *(int *)local == 3); }
+";
 
     fn bcc(source: &str, flags: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
@@ -225,6 +232,7 @@ int main(void) { int *ip = &x;                               unsigned *up = &ux;
             (ACCEPTED, &[][..]),
             (ARGUMENT, &["-Wno-error=incompatible-pointer-types"][..]),
             (MISMATCHES, &[][..]),
+            (STATIC_ADDRESSES, &["-Wno-int-conversion"][..]),
         ] {
             for flags in [&["--interpret"][..], &["--interpret", "--opt=bcc"][..]] {
                 let output = bcc(source, &[&[target][..], extra, flags].concat());

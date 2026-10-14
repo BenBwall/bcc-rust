@@ -133,10 +133,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 {
                                     true
                                 } else if self.arithmetic(target) {
-                                    info.constant == ConstantClass::Arithmetic
+                                    (info.constant == ConstantClass::Arithmetic
                                         && (info.integer.is_some()
                                             || info.floating.is_some()
-                                            || info.unfolded_binary128)
+                                            || info.unfolded_binary128))
+                                        || (address && self.pointer_width_integer(target))
                                 } else {
                                     address
                                         || self.null_pointer_constant(info)

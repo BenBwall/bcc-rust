@@ -411,3 +411,28 @@ fn atomic_value_operands_take_assignment_groups() {
     }
 }
 
+#[test]
+fn static_addresses_fit_only_pointer_wide_integers() {
+    use crate::target::Target;
+    let demoted = |target| {
+        CompilerConfiguration::default()
+            .with_target(target)
+            .with_warning_option(DiagnosticGroup::IntConversion, WarningOption::Enable(false))
+    };
+    for (target, source, constant) in [
+        (Target::LinuxGnu, "int x; long s = &x;", true),
+        (Target::LinuxGnu, "int x; unsigned long s = &x + 1;", true),
+        (Target::LinuxGnu, "int x; long s = (long)&x;", true),
+        (Target::LinuxGnu, "int x; void f(void) { static long s = &x; }", true),
+        (Target::LinuxGnu, "int x; int s = &x;", false),
+        (Target::LinuxGnu, "int x; short s = &x;", false),
+        (Target::WindowsMsvc, "int x; long s = &x;", false),
+        (Target::WindowsMsvc, "int x; long long s = &x;", true),
+    ] {
+        with_configuration(source, demoted(target), |context, unit| {
+            let errors = context.take_pending_errors();
+            assert_eq!(unit.errors, usize::from(!constant), "{source}: {errors:?}");
+            assert_eq!(unit.lowerable(context), constant, "{source}");
+        });
+    }
+}
