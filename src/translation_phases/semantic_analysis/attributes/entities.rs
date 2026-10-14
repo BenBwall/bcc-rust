@@ -238,11 +238,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         let entity = self.entity_of(binding);
-        let section = self.types.tu.alloc_str(section);
         let previous = self.attributes.sections.get(&entity).copied();
-        let attributes = self.attributes.entity(entity);
-        if let (Some(written), Some(previous)) = (attributes.section, previous)
-            && written != &*section
+        let written = self.attributes.entity(entity).section;
+        if let (Some(written), Some(previous)) = (written, previous)
+            && written != section
         {
             self.error(
                 SemanticErrorKind::SectionMismatch,

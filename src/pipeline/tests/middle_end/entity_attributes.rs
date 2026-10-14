@@ -453,3 +453,42 @@ fn single_unit_programs_run_on_system_v_under_wsl() {
         }
     }
 }
+
+#[test]
+fn lowered_ir_carries_symbol_facts_and_cleanup_calls() {
+    let source = "void drop(int *p);
+int real(int x) { return x; }
+int copy(int) __attribute__((alias(\"real\"), weak));
+extern int maybe __attribute__((weak));
+__attribute__((section(\"mine\"), used, visibility(\"hidden\"))) int kept = 1;
+__attribute__((constructor(101))) static void init(void) {}
+__attribute__((destructor)) void fini(void) {}
+__attribute__((aligned(32))) void aligned_function(void) {}
+int main(void) {
+    int a __attribute__((cleanup(drop))) = 1;
+    { int b __attribute__((cleanup(drop))) = 2; }
+    return a + maybe;
+}
+";
+    with_module(
+        source,
+        Target::LinuxGnu,
+        false,
+        Profile::PreAbi,
+        |module, _| {
+            let text = module.to_string();
+            for expected in [
+                "global @kept external size 4, align 4 hidden section \"mine\" used = bytes",
+                "global @maybe weak size 4, align 4\n",
+                "constructor @init priority 101\ndestructor @fini priority 65535\n",
+                "function @copy(i32) -> i32 weak alias @real\n",
+                "function @aligned_function() external align 32 {",
+            ] {
+                assert!(text.contains(expected), "{expected}\n{text}");
+            }
+            // `b`'s cleanup runs at its block's end, before `a`'s at return.
+            let main = &text[text.find("function @main").unwrap()..];
+            assert_eq!(main.matches("call @drop(").count(), 2, "{main}");
+        },
+    );
+}
