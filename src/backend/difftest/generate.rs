@@ -3,7 +3,8 @@
 //! [`generate`] writes textual IR directly. Each function is built from
 //! structured statements (integer and floating arithmetic, comparisons,
 //! `select`, `freeze`, conversions, loads, stores and copies, accesses and
-//! whole copies of structure-like *record* slots, direct and indirect calls,
+//! copies of structure-like *record* slots, range checks and lowered `&&`
+//! and `||` conditions, direct and indirect calls,
 //! output through `putchar` and `printf`, diamonds, counted
 //! loops and switches), so every use is dominated by its
 //! definition by construction: the generator keeps a scope of the values
@@ -1370,17 +1371,120 @@ impl FunctionGen<'_> {
 
     /// A condition: one in scope, a new comparison, or a constant.
     fn condition(&mut self) -> Val {
-        match self.rng.below(10) {
+        match self.rng.below(12) {
             | 0..5 => match self.pick(Ty::I1) {
                 | Some(value) => value,
                 | None => self.new_condition(),
             },
-            | 5..9 => self.new_condition(),
+            | 5..8 => self.new_condition(),
+            | 8 => self.range_condition(),
+            | 9 if self.nesting < MAX_DEPTH => self.short_circuit(),
+            | 9..11 => self.new_condition(),
             | _ => {
                 let value = self.rng.int(2);
                 self.constant_value(Ty::I1, value)
             },
         }
+    }
+
+    /// Two comparisons of one value with constants, combined as `and`, `or`
+    /// or the selects that lowered `&&` and `||` become: a range check.
+    fn range_condition(&mut self) -> Val {
+        let ty = self.rng.pick(&[Ty::I8, Ty::I32, Ty::I64]);
+        let value = self.operand(ty);
+        let low = self.rng.int(41) - 20;
+        let high = low + self.rng.int(30) - 5;
+        let low = self.constant_value(ty, low);
+        let high = self.constant_value(ty, high);
+        let lower = self.rng.pick(&["sge", "sgt", "uge", "ugt", "sle"]);
+        let upper = self.rng.pick(&["sle", "slt", "ule", "ult", "sge"]);
+        let first = self.def(
+            Ty::I1,
+            Range::new(0, 1),
+            format_args!("icmp.{ty} {lower} v{}, v{}", value.id, low.id),
+        );
+        let second = self.def(
+            Ty::I1,
+            Range::new(0, 1),
+            format_args!("icmp.{ty} {upper} v{}, v{}", value.id, high.id),
+        );
+        let range = Range::new(0, 1);
+        match self.rng.below(4) {
+            | 0 => self.def(
+                Ty::I1,
+                range,
+                format_args!("and.i1 v{}, v{}", first.id, second.id),
+            ),
+            | 1 => self.def(
+                Ty::I1,
+                range,
+                format_args!("or.i1 v{}, v{}", first.id, second.id),
+            ),
+            | 2 => {
+                let no = self.constant_value(Ty::I1, 0);
+                self.def(
+                    Ty::I1,
+                    range,
+                    format_args!("select.i1 v{}, v{}, v{}", first.id, second.id, no.id),
+                )
+            },
+            | _ => {
+                let yes = self.constant_value(Ty::I1, 1);
+                self.def(
+                    Ty::I1,
+                    range,
+                    format_args!("select.i1 v{}, v{}, v{}", first.id, yes.id, second.id),
+                )
+            },
+        }
+    }
+
+    /// A lowered `a && b` or `a || b`: a branch on `a` to a block that
+    /// computes `b`, joined with the constant the first test decides, and
+    /// sometimes widened and compared with zero as a C condition is.
+    fn short_circuit(&mut self) -> Val {
+        let first = self.new_condition();
+        let and = self.rng.chance(50);
+        let decided = self.constant_value(Ty::I1, i128::from(!and));
+        let (second_block, _) = self.new_block(&[]);
+        let (merge, params) = self.new_block(&[Ty::I1]);
+        let join = block_call(merge, &[decided]);
+        if and {
+            self.line(format_args!(
+                "brif v{}, block{second_block}, {join}",
+                first.id
+            ));
+        } else {
+            self.line(format_args!(
+                "brif v{}, {join}, block{second_block}",
+                first.id
+            ));
+        }
+        self.current = second_block;
+        let mark = self.scope.len();
+        let second = if self.rng.chance(50) {
+            self.range_condition()
+        } else {
+            self.new_condition()
+        };
+        self.line(format_args!("jump {}", block_call(merge, &[second])));
+        self.scope.truncate(mark);
+        self.enter_merge(merge, &params, &[vec![decided], vec![second]]);
+        let joined = *self.scope.last().expect("the merge parameter is in scope");
+        if self.rng.chance(50) {
+            return joined;
+        }
+        let widened = self.def(
+            Ty::I32,
+            Range::new(0, 1),
+            format_args!("zext.i32 v{}", joined.id),
+        );
+        let zero = self.constant_value(Ty::I32, 0);
+        self.def(
+            Ty::I1,
+            Range::new(0, 1),
+            format_args!("icmp.i32 ne v{}, v{}", widened.id, zero.id),
+        )
     }
 
     /// An `icmp` of two operands, or of one operand with itself.

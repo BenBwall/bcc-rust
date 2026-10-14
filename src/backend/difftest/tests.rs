@@ -207,3 +207,24 @@ fn generated_records_exercise_scalar_replacement() {
         .count();
     assert!(split >= 10, "{split} of 50 programs split a record");
 }
+
+/// Range checks and lowered `&&` and `||` give `combine` work in many
+/// programs.
+#[test]
+fn generated_conditions_exercise_combining() {
+    let combined = (0..50)
+        .filter(|&seed| {
+            optimized(
+                &generate(seed, false),
+                Pipeline::Single(Pass::Combine),
+                None,
+            )
+            .rewrites
+                > 0
+        })
+        .count();
+    assert!(
+        combined >= 10,
+        "{combined} of 50 programs combined a condition"
+    );
+}

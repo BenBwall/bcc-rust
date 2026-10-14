@@ -24,6 +24,7 @@ mod select;
 mod simplify_cfg;
 mod sroa;
 mod ssa_pipeline;
+mod thread;
 
 use super::*;
 use crate::ir::{
