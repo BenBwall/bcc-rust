@@ -124,6 +124,10 @@ const DATA_GLOBALS: [(&str, u64); 3] = [("@g0", 16), ("@g1", 64), ("@table", 32)
 const RECORD_FIELDS: [(u64, Ty); 4] = [(0, Ty::I32), (4, Ty::I8), (8, Ty::F64), (16, Ty::I64)];
 const RECORD_SIZE: u64 = 24;
 
+/// The byte ranges record copies move: the whole record, or runs of whole
+/// fields with their padding.
+const RECORD_RANGES: [(u64, u64); 5] = [(0, 24), (0, 24), (0, 8), (8, 16), (16, 8)];
+
 /// The most a non-`main` function may cost, in estimated instructions
 /// executed per call.
 const FUNCTION_BUDGET: u64 = 4_000;
@@ -696,7 +700,11 @@ impl FunctionGen<'_> {
     fn initialize_record(&mut self, record: usize) {
         if self.rng.chance(50) {
             let address = self.record_address(record, 0);
-            let byte = self.rng.int(256) - 128;
+            let byte = if self.rng.chance(50) {
+                0
+            } else {
+                self.rng.int(256) - 128
+            };
             let byte = self.constant_value(Ty::I8, byte);
             let size = self.constant_value(Ty::I64, i128::from(RECORD_SIZE));
             self.line(format_args!(
@@ -716,8 +724,8 @@ impl FunctionGen<'_> {
         }
     }
 
-    /// A load or store of a record field, or a whole copy between two
-    /// records, into a record from `@g1` or out of a record to `@g1`.
+    /// A load or store of a record field, or a copy of a run of fields
+    /// between two records, into a record from `@g1` or out of one to `@g1`.
     fn record_statement(&mut self) {
         let record = self.rng.index(self.records);
         let (offset, ty) = self.rng.pick(&RECORD_FIELDS);
@@ -739,17 +747,19 @@ impl FunctionGen<'_> {
             },
             | 8 if self.records > 1 => {
                 let other = (record + 1 + self.rng.index(self.records - 1)) % self.records;
-                let destination = self.record_address(record, 0);
-                let source = self.record_address(other, 0);
-                self.copy_record(destination, source);
+                let (start, size) = self.rng.pick(&RECORD_RANGES);
+                let destination = self.record_address(record, start);
+                let source = self.record_address(other, start);
+                self.copy_record(destination, source, size);
             },
             | _ => {
-                let record = self.record_address(record, 0);
+                let (start, size) = self.rng.pick(&RECORD_RANGES);
+                let record = self.record_address(record, start);
                 let global = self.def(Ty::Ptr, Range::FULL_PTR, format_args!("global_addr @g1"));
                 if self.rng.chance(50) {
-                    self.copy_record(record, global);
+                    self.copy_record(record, global, size);
                 } else {
-                    self.copy_record(global, record);
+                    self.copy_record(global, record, size);
                 }
             },
         }
@@ -769,8 +779,8 @@ impl FunctionGen<'_> {
         ));
     }
 
-    fn copy_record(&mut self, destination: Val, source: Val) {
-        let size = self.constant_value(Ty::I64, i128::from(RECORD_SIZE));
+    fn copy_record(&mut self, destination: Val, source: Val, size: u64) {
+        let size = self.constant_value(Ty::I64, i128::from(size));
         self.line(format_args!(
             "copy v{}, v{}, v{}, align 8",
             destination.id, source.id, size.id

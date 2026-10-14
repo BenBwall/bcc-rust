@@ -266,11 +266,11 @@ block0(v0: i64):
 }
 
 #[test]
-fn a_component_copied_both_in_and_out_stays_whole() {
+fn a_slot_copied_in_and_out_keeps_its_memory_and_loads_its_shadows() {
     // Field-wise moves would turn a partly poisoned field of the source into
-    // a wholly poisoned one at the destination.
-    let input = "\
-function @f(ptr, ptr) -> i32 external {
+    // a wholly poisoned one at the destination, so the copies stay; the load
+    // reads the shadow the copy in wrote.
+    let input = "function @f(ptr, ptr) -> i32 external {
     slot0 = stack_slot 8, align 4
 block0(v0: ptr, v1: ptr):
     v2 = stack_addr slot0
@@ -281,13 +281,119 @@ block0(v0: ptr, v1: ptr):
     return v4
 }
 ";
+    let expected = "function @f(ptr, ptr) -> i32 external {
+    slot0 = stack_slot 8, align 4
+block0(v0: ptr, v1: ptr):
+    v2 = stack_addr slot0
+    v3 = iconst.i64 8
+    v4 = load.i32 v0, align 4
+    copy v2, v0, v3, align 4
+    copy v1, v2, v3, align 4
+    return v4
+}
+";
+    let (actual, _) = optimize_text(input, &only(&[Pass::Sroa, Pass::Promote, Pass::Dce]));
+    pretty_assertions::assert_eq!(actual, expected);
+    // The retained slot is not split again.
+    let (_, report) = optimize_text(&actual, &only(&[Pass::Sroa]));
+    assert_eq!(report.transformations(), 0);
+}
+
+#[test]
+fn a_member_copy_moves_the_fields_of_its_range() {
+    // `outer` holds two `{i32, i32}` members; the second is copied into
+    // `inner` and read back.
+    let input = "function @f(i32, i32) -> i32 external {
+    slot0 = stack_slot 16, align 4
+    slot1 = stack_slot 8, align 4
+block0(v0: i32, v1: i32):
+    v2 = stack_addr slot0
+    v3 = iconst.i64 8
+    v4 = ptr_add inbounds v2, v3
+    store.i32 v0, v4, align 4
+    v5 = iconst.i64 12
+    v6 = ptr_add inbounds v2, v5
+    store.i32 v1, v6, align 4
+    v7 = stack_addr slot1
+    copy v7, v4, v3, align 4
+    v8 = iconst.i64 4
+    v9 = ptr_add inbounds v7, v8
+    v10 = load.i32 v9, align 4
+    return v10
+}
+";
+    let (actual, _) = optimize_text(input, &only(&[Pass::Sroa, Pass::Promote, Pass::Dce]));
+    pretty_assertions::assert_eq!(
+        actual,
+        "function @f(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    return v1
+}
+"
+    );
+}
+
+#[test]
+fn a_split_slot_copied_into_a_retained_one_stores_its_fields_there() {
+    // slot0 is copied in from v0 and out to v1, so it is retained; slot1
+    // has no bytes from other memory, so its fields go into slot0's memory.
+    let input = "function @f(ptr, ptr, i32) -> i32 external {
+    slot0 = stack_slot 8, align 4
+    slot1 = stack_slot 4, align 4
+block0(v0: ptr, v1: ptr, v2: i32):
+    v3 = stack_addr slot0
+    v4 = iconst.i64 8
+    copy v3, v0, v4, align 4
+    v5 = stack_addr slot1
+    store.i32 v2, v5, align 4
+    v6 = iconst.i64 4
+    v7 = ptr_add inbounds v3, v6
+    copy v7, v5, v6, align 4
+    v8 = load.i32 v3, align 4
+    copy v1, v3, v4, align 4
+    return v8
+}
+";
+    let expected = "function @f(ptr, ptr, i32) -> i32 external {
+    slot0 = stack_slot 8, align 4
+block0(v0: ptr, v1: ptr, v2: i32):
+    v3 = iconst.i64 4
+    v4 = stack_addr slot0
+    v5 = stack_addr slot0
+    v6 = iconst.i64 8
+    v7 = load.i32 v0, align 4
+    copy v5, v0, v6, align 4
+    v8 = ptr_add inbounds v4, v3
+    store.i32 v2, v8, align 4
+    copy v1, v5, v6, align 4
+    return v7
+}
+";
+    let (actual, _) = optimize_text(input, &only(&[Pass::Sroa, Pass::Promote, Pass::Dce]));
+    pretty_assertions::assert_eq!(actual, expected);
+}
+
+#[test]
+fn a_field_straddling_a_copied_range_keeps_the_component_whole() {
+    let input = "function @f(i64) -> i32 external {
+    slot0 = stack_slot 8, align 8
+    slot1 = stack_slot 4, align 4
+block0(v0: i64):
+    v1 = stack_addr slot0
+    store.i64 v0, v1, align 8
+    v2 = stack_addr slot1
+    v3 = iconst.i64 4
+    copy v2, v1, v3, align 4
+    v4 = load.i32 v2, align 4
+    return v4
+}
+";
     assert_pass_leaves(Pass::Sroa, input);
 }
 
 #[test]
-fn volatile_and_partial_accesses_keep_a_slot_whole() {
-    let volatile = "\
-function @f(i32) -> i32 external {
+fn volatile_accesses_and_variable_copies_keep_a_slot_whole() {
+    let volatile = "function @f(i32) -> i32 external {
     slot0 = stack_slot 8, align 4
 block0(v0: i32):
     v1 = stack_addr slot0
@@ -300,8 +406,22 @@ block0(v0: i32):
 }
 ";
     assert_pass_leaves(Pass::Sroa, volatile);
-    let partial = "\
-function @f(ptr, i32) -> i32 external {
+    let variable = "function @f(ptr, i32, i64) -> i32 external {
+    slot0 = stack_slot 8, align 4
+block0(v0: ptr, v1: i32, v2: i64):
+    v3 = stack_addr slot0
+    store.i32 v1, v3, align 4
+    copy v0, v3, v2, align 4
+    v4 = load.i32 v3, align 4
+    return v4
+}
+";
+    assert_pass_leaves(Pass::Sroa, variable);
+}
+
+#[test]
+fn a_partial_copy_out_stores_the_fields_of_its_range() {
+    let input = "function @f(ptr, i32) -> i32 external {
     slot0 = stack_slot 8, align 4
 block0(v0: ptr, v1: i32):
     v2 = stack_addr slot0
@@ -312,7 +432,16 @@ block0(v0: ptr, v1: i32):
     return v4
 }
 ";
-    assert_pass_leaves(Pass::Sroa, partial);
+    let (actual, _) = optimize_text(input, &only(&[Pass::Sroa, Pass::Promote, Pass::Dce]));
+    pretty_assertions::assert_eq!(
+        actual,
+        "function @f(ptr, i32) -> i32 external {
+block0(v0: ptr, v1: i32):
+    store.i32 v1, v0, align 4
+    return v1
+}
+"
+    );
 }
 
 #[test]
