@@ -14,9 +14,13 @@ arms"):
     A1  bcc-rust --opt=bcc --llvm-opt=O2 --llvm-codegen-only       bcc only
     A2  bcc-rust --llvm-opt=O2                                     LLVM only
     A3  bcc-rust --opt=bcc --llvm-opt=O2                           bcc, then LLVM
+    B0  bcc-rust --backend=native                                  native codegen only
+    B1  bcc-rust --opt=bcc --backend=native                        bcc, native codegen
     R   clang -O2 x.c                                              reference
 
-A1/N isolates what the bcc optimizer adds on top of LLVM's code generator.
+A1/N isolates what the bcc optimizer adds on top of LLVM's code generator;
+B1/A1 compares the native code generator with LLVM's on the same optimized
+IR, and B1/B0 measures the bcc optimizer with the native code generator.
 
 `--ablate leave-one-out` adds arm A1-all (the default pass list as one
 explicit `--passes` list, repeated --ablate-rounds times) and one arm
@@ -81,6 +85,8 @@ STANDARD_ARMS = {
     "A1": ("--opt=bcc", "--llvm-opt=O2", "--llvm-codegen-only"),
     "A2": ("--llvm-opt=O2",),
     "A3": ("--opt=bcc", "--llvm-opt=O2"),
+    "B0": ("--backend=native",),
+    "B1": ("--opt=bcc", "--backend=native"),
     "R": None,  # clang -O2 on the C source
 }
 ARM_DESCRIPTIONS = {
@@ -89,6 +95,8 @@ ARM_DESCRIPTIONS = {
     "A1": "bcc optimizer only (fixpoint pipeline), LLVM-C O2 code generation",
     "A2": "LLVM default<O2> on unoptimized bcc IR, O2 code generation",
     "A3": "bcc optimizer, then LLVM default<O2>, O2 code generation",
+    "B0": "unoptimized bcc IR, bcc's native x86-64 code generator",
+    "B1": "bcc optimizer (fixpoint pipeline), bcc's native x86-64 code generator",
     "R": "clang -O2 from the C source",
 }
 ABLATION_BASELINE = "A1-all"
@@ -634,6 +642,10 @@ def summarize(records, resamples, seed, baseline, metric):
             lines += ratio_tables(f"Ratios to {baseline}", standard, baseline)
         if "A1" in standard and "N" in standard:
             lines += ratio_tables("Bcc optimizer ratios (A1/N)", ["A1"], "N")
+        if "B1" in standard and "A1" in standard:
+            lines += ratio_tables("Code generator ratios (B1/A1)", ["B1"], "A1")
+        if "B1" in standard and "B0" in standard:
+            lines += ratio_tables("Bcc optimizer ratios with native code (B1/B0)", ["B1"], "B0")
     if ablation:
         lines += time_table("Ablation run time", ablation)
         lines += ratio_tables(f"Ablation ratios to {ABLATION_BASELINE}", ablation, ABLATION_BASELINE)
