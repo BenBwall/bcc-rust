@@ -184,12 +184,31 @@ int main(void) {
 }
 ";
 
-const PROGRAMS: [(&str, &str); 5] = [
+/// GNU `void *` arithmetic, which position-independent dispatch relies on:
+/// subscripts, address constants and constant differences step by bytes.
+/// GNU extension: GCC "Pointer Arith".
+const VOID_POINTERS: &str = "int arr[8];
+static long d = (void *)&arr[3] - (void *)&arr[0];
+static void *e = (void *)arr + 4;
+static void *g = &((void *)arr)[2];
+int f(void *p) {
+    void *q = &p[2];
+    (void)p[1];
+    unsigned long s = sizeof(p[1]);
+    q += 1;
+    q -= 1;
+    return (int)s + (int)((char *)q - (char *)p) + (int)d + (int)((char *)e - (char *)g);
+}
+int main(void) { return f(arr) != 1 + 2 + 12 + 2; }
+";
+
+const PROGRAMS: [(&str, &str); 6] = [
     ("table", TABLE),
     ("lua", LUA_DISPATCH),
     ("differences", LABEL_DIFFERENCES),
     ("threaded", THREADED),
     ("miscellaneous", MISCELLANEOUS),
+    ("void_pointers", VOID_POINTERS),
 ];
 
 #[test]

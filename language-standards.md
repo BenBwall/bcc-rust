@@ -1165,13 +1165,18 @@ address, when the operand is not convertible, or when one of its possible
 targets lies inside a statement expression or the scope of a variably
 modified identifier that the goto is outside of. `&&label` outside a function
 is an error. `&&a - &&b` for labels of one function is a link-time constant
-in static initializers, converted to integers of at least 32 bits; Clang
-rejects narrower conversions and arithmetic on the difference, and so does
-bcc. GNU `__label__` local labels now lower as ordinary labels.
+in static initializers, converted to an integer of 32 to 64 bits that is no
+wider than the value it converts. Clang rejects other widths (`_Bool`, `short`,
+`__int128`), widening a narrowed difference, bit-field destinations and
+arithmetic on the difference, and so does bcc. GNU `__label__` local labels now lower as ordinary labels.
 
 `VoidPointerArithmetic` is a new GNU-origin feature, accepted in every mode
 ([GCC Pointer Arith](https://gcc.gnu.org/onlinedocs/gcc/Pointer-Arith.html)):
-addition, subtraction, increments and compound assignment on `void *` use an
-element size of 1 and report `'arithmetic on a pointer to void'` under
-Warn/Deny, like Clang's `-Wgnu-pointer-arith`. Subscripting `void *` remains an
-error. Function-pointer arithmetic is not accepted.
+addition, subtraction, increments, compound assignment and subscripts on
+`void *` use an element size of 1, also in address constants and constant
+differences, and report `'arithmetic on a pointer to void'` or
+`'subscript of a pointer to void'` under Warn/Deny, like Clang's
+`-Wgnu-pointer-arith`. `p[i]` is a `void` rvalue that is never read; `&p[i]`
+is its address. `sizeof` of `void` is 1 in every mode (`'sizeof of void'`
+under Warn/Deny, as Clang's `-Wpointer-arith`); `sizeof` of a function type
+stays GNU-only. Function-pointer arithmetic is not accepted.

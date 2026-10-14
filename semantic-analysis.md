@@ -1770,14 +1770,20 @@ address-taken labels as Clang's jump checker does: none at all is
 scope of a variably modified identifier that the goto is outside of is
 `IndirectJumpIntoStatementExpression` or `IndirectJumpIntoVariableScope`
 (C99 §6.8.6.1p1, p. 137; PDF p. 149), reported once per goto at its first
-such target with the region's start as secondary label. Only labels with a
-protecting region are visited, so plain dispatch tables cost no pairwise work.
+such target with the region's start as secondary label. Each function's
+labels inside a protecting region are collected once, so the work is
+O(gotos + labels) plus one check per goto and protected label; plain dispatch
+tables need no pairwise check at all.
 
 `&&a - &&b` for two labels of one function is `ConstantClass::LabelDifference`:
 a constant with no folded value whose two labels `ControlFacts::label_difference`
-retains. It survives parentheses and conversions to integer types of at least
-32 bits, which static initializers accept, matching Clang; narrower types and
-arithmetic on it are not constants. GNU `void *` arithmetic
+retains. It survives parentheses and conversions to an integer of 32 to 64
+bits no wider than the converted value, which static initializers accept
+unless the destination is a bit-field, matching Clang; `_Bool`, narrower and
+128-bit types, a narrowed difference widened again and arithmetic on it are not
+constants. GNU `void *` arithmetic
 ([GCC Pointer Arith](https://gcc.gnu.org/onlinedocs/gcc/Pointer-Arith.html),
-`Feature::VoidPointerArithmetic`) uses element size 1 for `+`, `-`, increments
-and compound assignment; subscripting `void *` stays invalid.
+`Feature::VoidPointerArithmetic`) uses element size 1 for `+`, `-`, increments,
+compound assignment and subscripts, and in address constants and constant
+differences; a `void` subscript is an rvalue that is never read, and `sizeof`
+of `void` is 1 in every mode.

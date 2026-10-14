@@ -1026,6 +1026,12 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         width: Type,
     ) -> Result<RelocationTarget, LoweringError> {
         let source = expression.source_vectors;
+        if !matches!(width, Type::I32 | Type::I64) {
+            return Err(LoweringError::missing(
+                "a label difference has a width semantic analysis refuses",
+                source,
+            ));
+        }
         let (label, base) = self
             .sema
             .control

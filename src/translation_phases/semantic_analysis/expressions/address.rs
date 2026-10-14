@@ -89,7 +89,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         };
                         let index = index.integer.filter(|_| index.ice)?.to_i128()?;
                         let target = self.pointer_target(info.ty)?;
-                        let size = i128::from(self.types.layout(target)?.size);
+                        let size = i128::from(self.arithmetic_size(target)?);
                         let step = index.checked_mul(size)?;
                         offset = if operator == BinaryOperator::Addition {
                             offset.checked_add(step)?
@@ -149,7 +149,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         (right, left)
                     };
                     let index = index.integer.filter(|_| index.ice)?.to_i128()?;
-                    let size = i128::from(self.types.layout(info.ty)?.size);
+                    let size = i128::from(self.arithmetic_size(info.ty)?);
                     offset = offset.checked_add(index.checked_mul(size)?)?;
                     lvalue = false;
                     e = pointer.expression;
@@ -176,7 +176,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> Option<Integer> {
         let (left_base, left_offset) = self.address_parts(left.expression, false)?;
         let (right_base, right_offset) = self.address_parts(right.expression, false)?;
-        let size = self.types.layout(target)?.size;
+        let size = self.arithmetic_size(target)?;
         let bytes = left_offset.checked_sub(right_offset)?;
         // Divide 64-bit magnitudes; i128 division is unavailable (see
         // integer.rs).

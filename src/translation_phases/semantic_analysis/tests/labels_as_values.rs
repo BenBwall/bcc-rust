@@ -3,6 +3,8 @@
 //! constraints Clang applies to every possible target.
 //! GNU extension: GCC "Labels as Values"; C99 §6.8.6.1p1, p. 137; PDF p. 149.
 
+use std::fmt::Write as _;
+
 use super::*;
 
 fn kinds(source: &str) -> Vec<SemanticErrorKind> {
@@ -127,7 +129,7 @@ fn computed_gotos_convert_to_const_void_pointers_and_jump_indirectly() {
 }
 
 #[test]
-fn label_differences_are_link_time_constants_of_at_least_32_bits() {
+fn label_differences_are_link_time_constants_of_32_to_64_bits() {
     with_source(
         "int f(void) { static int d[] = { &&a - &&b, (int)(&&b - &&a), (long)((&&a - &&b)) }; \
          static unsigned long long e = &&b - &&b; a: b: return d[0] + (int)e; }",
@@ -156,12 +158,22 @@ fn label_differences_are_link_time_constants_of_at_least_32_bits() {
             }
         },
     );
-    // Clang refuses narrower differences and arithmetic on a difference.
+    // Clang refuses differences narrower than 32 or wider than 64 bits,
+    // `_Bool`, a narrowed difference widened again, bit-field destinations
+    // and arithmetic on a difference.
     for source in [
         "int f(void) { static short s = &&a - &&b; a: b: return 0; }",
         "int f(void) { static int s = (short)(&&a - &&b); a: b: return 0; }",
         "int f(void) { static int s = &&a - &&b + 1; a: b: return 0; }",
         "int f(void) { static char s = &&a - &&a; a: return 0; }",
+        "int f(void) { static __int128 s = &&b - &&a; a: b: return 0; }",
+        "int f(void) { static unsigned __int128 s = &&b - &&a; a: b: return 0; }",
+        "int f(void) { static long s = (long)(__int128)(&&b - &&a); a: b: return 0; }",
+        "int f(void) { static long long s = (long long)(int)(&&b - &&a); a: b: return 0; }",
+        "int f(void) { static _Bool s = &&b - &&a; a: b: return 0; }",
+        "int f(void) { static struct { int x : 32; } s = { &&b - &&a }; a: b: return 0; }",
+        "int f(void) { static struct { int y; long long x : 40; } s = { .x = &&b - &&a }; a: b: \
+         return 0; }",
     ] {
         assert_eq!(
             kinds(source),
@@ -171,6 +183,11 @@ fn label_differences_are_link_time_constants_of_at_least_32_bits() {
     }
     // A label address plus a constant and a cast stay address constants.
     clean("int f(void) { static void *r = &&a + 1; static char *t = (char *)&&a; a: return 0; }");
+    // Narrowing a 64-bit difference stays constant, as in Clang.
+    clean(
+        "int f(void) { static int n = (int)(long long)(&&b - &&a); static unsigned long long u = \
+         &&b - &&a; static struct { int x; } s = { &&b - &&a }; a: b: return n + (int)u + s.x; }",
+    );
 }
 
 #[test]
@@ -258,9 +275,63 @@ fn void_pointer_arithmetic_is_a_gnu_extension_of_element_size_one() {
             )));
         },
     );
-    // Subscripting `void *` stays invalid, as dereferencing it would be.
-    assert_eq!(
-        kinds("int f(void *p) { p[1]; return 0; }"),
-        [SemanticErrorKind::InvalidSubscript]
+    // Subscripts and constant differences use element size 1 too, as in
+    // Clang: `&p[i]` is an address, `p[i]` a `void` rvalue that is never
+    // read, and differences of `void *` address constants fold.
+    clean("int f(void *p) { void *q = &p[2]; (void)p[1]; return (int)((char *)q - (char *)p); }");
+    with_source(
+        "int arr[8]; static long d = (void *)&arr[3] - (void *)&arr[0]; static void *g = &((void \
+         *)arr)[2];",
+        |context, s| {
+            assert_eq!(context.pending_error_count(), 0);
+            assert!(
+                s.expressions.iter().any(|info| info.folded_address()
+                    && info.integer.is_some_and(|value| value.value == 12)),
+                "the difference folds to 12 bytes"
+            );
+        },
     );
+}
+
+#[test]
+fn computed_goto_checks_visit_only_protected_labels() {
+    // Many gotos and many plain labels: no pairwise check at all; one
+    // protected label: one check per goto.
+    for (protected, expected) in [(false, 0), (true, 200)] {
+        let mut source = String::from("void f(int n) { static void *t[] = {");
+        for label in 0..200 {
+            write!(source, "&&l{label},").unwrap();
+        }
+        source.push_str(if protected { "&&in}; " } else { "}; " });
+        for label in 0..200 {
+            write!(source, "l{label}: goto *t[n];").unwrap();
+        }
+        if protected {
+            source.push_str("{ int v[n]; in: v[0] = 0; }");
+        }
+        source.push_str("}\n");
+        let tu = Bump::new();
+        let scratch = Bump::new();
+        let mut context = Context::new(&tu);
+        let unit = crate::pipeline::parse_translation_unit(
+            &mut context,
+            Path::new("<input>"),
+            tu.alloc_str(&source),
+            crate::headers::HeaderSearch::default(),
+        );
+        let mut analyzer = Analyzer::new(&mut context, &scratch);
+        for &root in unit.external_declarations().iter().rev() {
+            analyzer.work.push(Work::Root(root));
+        }
+        while let Some(work) = analyzer.work.pop() {
+            analyzer.step(work);
+        }
+        analyzer.finish_translation_unit();
+        assert_eq!(analyzer.statements.indirect_checks.get(), expected);
+        assert_eq!(
+            analyzer.context.error_count(),
+            usize::from(protected) * 200,
+            "each goto may enter the VLA scope"
+        );
+    }
 }

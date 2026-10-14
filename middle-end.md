@@ -871,8 +871,10 @@ bcc-rust --print-default-passes     print the default pass list and exit
 The back-end modes exclude one another and the inspection views
 (`--tokens`, `--syntax-tree`, `--raw-syntax`, `--semantic-types`); the other
 options require a back-end mode. `--emit` and `--interpret` print to stdout and
-the diagnostics, `--print-after-all` and interpreter traps to stderr. Each arm
-is one invocation:
+the diagnostics, `--print-after-all` and interpreter traps to stderr.
+`--emit=ir`, `--emit=ir-abi` and `--interpret` verify the module first, as the
+LLVM back end does for `--emit=llvm` and `-o`, and report an internal error
+instead of printing or running invalid IR. Each arm is one invocation:
 
 | Arm | Flags |
 | --- | --- |

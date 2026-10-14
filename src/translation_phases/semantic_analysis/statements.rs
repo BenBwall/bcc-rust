@@ -656,15 +656,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// function, as Clang does: a function without any is an error, and so
     /// is entering a statement expression or the scope of a variably
     /// modified identifier, reported once per goto for its first such
-    /// target. Only labels inside such a region need a check, so ordinary
-    /// dispatch tables cost no pairwise work.
+    /// target. Each function's labels inside such a region are collected
+    /// once, so the work is O(gotos + labels) plus one check per goto and
+    /// protected label; plain dispatch tables need no pairwise checks.
     /// GNU extension: GCC "Labels as Values" and "Statement Exprs".
     /// C99: §6.8.6.1p1, p. 137; PDF p. 149.
     fn finish_indirect_jumps(&mut self) {
+        // Each function's protected labels: a run of `protected`, found once.
+        let mut runs = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        let mut protected = ArenaVec::new_in(self.scratch);
         for i in 0..self.statements.indirect_jumps.len() {
             let jump = self.statements.indirect_jumps[i];
-            let taken = self.control.taken(jump.point.function);
-            if taken.is_empty() {
+            let function = jump.point.function;
+            let run = runs
+                .entry(function)
+                .or_insert_with(|| {
+                    let start = protected.len();
+                    for &label in self.control.taken(function) {
+                        let facts = self.control.labels[label.0];
+                        if let (Some(point), Some(name)) = (facts.point, facts.name) {
+                            let region = self.control.regions[point.region.0];
+                            if region.nearest_vm.is_some()
+                                || region.nearest_statement_expression.is_some()
+                            {
+                                protected.push((point.region, name));
+                            }
+                        }
+                    }
+                    start..protected.len()
+                })
+                .clone();
+            if self.control.taken(function).is_empty() {
                 self.error(
                     SemanticErrorKind::IndirectGotoWithoutLabels,
                     jump.source,
@@ -673,19 +695,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
                 continue;
             }
-            for index in 0..taken.len() {
-                let label = self.control.taken(jump.point.function)[index];
-                let facts = self.control.labels[label.0];
-                let (Some(point), Some(name)) = (facts.point, facts.name) else {
-                    continue;
-                };
-                let region = self.control.regions[point.region.0];
-                if region.nearest_vm.is_none() && region.nearest_statement_expression.is_none() {
-                    continue;
-                }
-                if let Some(expression) = self
-                    .control
-                    .forbidden_expression(jump.point.region, point.region)
+            for index in run {
+                let (target, name) = protected[index];
+                #[cfg(test)]
+                self.statements
+                    .indirect_checks
+                    .set(self.statements.indirect_checks.get() + 1);
+                if let Some(expression) =
+                    self.control.forbidden_expression(jump.point.region, target)
                 {
                     self.error(
                         SemanticErrorKind::IndirectJumpIntoStatementExpression,
@@ -695,7 +712,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                     break;
                 }
-                if let Some(vm) = self.control.forbidden_vm(jump.point.region, point.region) {
+                if let Some(vm) = self.control.forbidden_vm(jump.point.region, target) {
                     let RegionKind::VmDeclaration(binding) = self.control.regions[vm.0].kind else {
                         unreachable!("nearest VM is a VM region")
                     };
@@ -1061,14 +1078,17 @@ struct Switch<'tu, 's> {
 pub(super) struct State<'tu, 's> {
     #[cfg(test)]
     pub(super) ancestry_steps: std::cell::Cell<usize>,
-    pub(super) loops:          usize,
-    pub(super) switch:         Option<usize>,
-    labels:                    ArenaVec<'s, Label>,
-    label_names:               ArenaMap<'s, (usize, StringCacheId), usize>,
-    jumps:                     ArenaVec<'s, Jump<'tu>>,
-    indirect_jumps:            ArenaVec<'s, IndirectJump>,
-    switches:                  ArenaVec<'s, Switch<'tu, 's>>,
-    case_count:                usize,
+    /// Computed-goto checks against protected labels.
+    #[cfg(test)]
+    pub(super) indirect_checks: std::cell::Cell<usize>,
+    pub(super) loops: usize,
+    pub(super) switch: Option<usize>,
+    labels: ArenaVec<'s, Label>,
+    label_names: ArenaMap<'s, (usize, StringCacheId), usize>,
+    jumps: ArenaVec<'s, Jump<'tu>>,
+    indirect_jumps: ArenaVec<'s, IndirectJump>,
+    switches: ArenaVec<'s, Switch<'tu, 's>>,
+    case_count: usize,
 }
 
 impl<'s> State<'_, 's> {
@@ -1076,6 +1096,8 @@ impl<'s> State<'_, 's> {
         Self {
             #[cfg(test)]
             ancestry_steps: std::cell::Cell::new(0),
+            #[cfg(test)]
+            indirect_checks: std::cell::Cell::new(0),
             loops: 0,
             switch: None,
             labels: ArenaVec::new_in(scratch),

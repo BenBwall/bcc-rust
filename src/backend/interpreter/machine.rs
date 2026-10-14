@@ -525,13 +525,17 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
                         label, base, width, ..
                     } => {
                         // Labels are bytes of one object, so their distance
-                        // is the difference of their numbers.
-                        let distance = (label.index() as i64 - base.index() as i64)
-                            .wrapping_add(relocation.addend);
+                        // is the difference of their numbers. The verifier
+                        // bounds the width; the bytes are sign-extended.
+                        let distance = i128::from(
+                            (label.index() as i64 - base.index() as i64)
+                                .wrapping_add(relocation.addend),
+                        );
+                        let bytes = distance.to_le_bytes();
                         memory.initialize_bytes(
                             pointer,
                             relocation.offset,
-                            &distance.to_le_bytes()[..width.bytes() as usize],
+                            &bytes[..(width.bytes() as usize).min(bytes.len())],
                         );
                         continue;
                     },
