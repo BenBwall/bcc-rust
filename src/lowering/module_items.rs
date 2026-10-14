@@ -65,6 +65,7 @@ use crate::{
             },
         },
         preprocessing::{
+            LiteralEncoding,
             LiteralId,
             LiteralUnit,
             StringTokenType,
@@ -120,7 +121,8 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     pub(super) address_taken: ArenaSet<'a, usize>,
     /// Globals of static locals and `__func__`, which have no linkage.
     statics: ArenaMap<'a, usize, GlobalId>,
-    strings: ArenaMap<'a, (LiteralId, bool), GlobalId>,
+    /// Keyed by literal and [`string_form`]: narrow, `L`, `u8`, `u`, `U`.
+    strings: ArenaMap<'a, (LiteralId, u8), GlobalId>,
     /// One static object per file-scope compound literal syntax node. New
     /// initializers join the explicit queue, never recursively lower syntax.
     compound_literals: ArenaMap<'a, usize, GlobalId>,
@@ -635,15 +637,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 expression.source_vectors,
             ));
         };
-        let key = match literal {
-            | StringTokenType::String(id) => (id, false),
-            | StringTokenType::WideString(id) => (id, true),
-            | StringTokenType::EncodedString(..) =>
-                return Err(LoweringError::unsupported(
-                    Construct::EncodedString,
-                    expression.source_vectors,
-                )),
-        };
+        let key = string_form(literal);
         if let Some(&global) = self.strings.get(&key) {
             return Ok(global);
         }
@@ -694,17 +688,38 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     .scalar(layout.wchar_t)
                     .expect("wchar_t has a scalar layout");
                 let width = usize::try_from(character.size).expect("wchar_t fits usize");
-                let mut bytes = ArenaVec::new_in(self.tables);
-                for unit in self.context.wide_literal_units(id).chain([0]) {
-                    bytes.extend_from_slice(&unit.to_le_bytes()[..width]);
-                }
-                Ok((bytes, align))
+                Ok((
+                    self.unit_bytes(self.context.wide_literal_units(id), width),
+                    align,
+                ))
             },
-            | _ => Err(LoweringError::unsupported(
-                Construct::EncodedString,
+            // C11: §6.4.5 paragraph 6, p. 71; PDF p. 89: UTF-8 bytes,
+            // `char16_t` and `char32_t` units.
+            | ExpressionType::StringLiteral(StringTokenType::EncodedString(id, encoding)) => {
+                let width = match encoding {
+                    | LiteralEncoding::Utf8 => 1,
+                    | LiteralEncoding::Utf16 => 2,
+                    | LiteralEncoding::Utf32 => 4,
+                };
+                Ok((
+                    self.unit_bytes(self.context.encoded_literal_units(id, encoding), width),
+                    align,
+                ))
+            },
+            | _ => Err(LoweringError::missing(
+                "a string literal has no literal",
                 expression.source_vectors,
             )),
         }
+    }
+
+    /// Little-endian code units of `width` bytes, then the null unit.
+    fn unit_bytes(&self, units: impl Iterator<Item = u32>, width: usize) -> ArenaVec<'a, u8> {
+        let mut bytes = ArenaVec::new_in(self.tables);
+        for unit in units.chain([0]) {
+            bytes.extend_from_slice(&unit.to_le_bytes()[..width]);
+        }
+        bytes
     }
 
     /// The execution bytes of a narrow string literal and its null
@@ -1289,5 +1304,16 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             conflicting_names: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             next_name_suffix: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
         }
+    }
+}
+
+/// The string-literal table key's form: narrow, `L`, `u8`, `u` or `U`.
+fn string_form(literal: StringTokenType) -> (LiteralId, u8) {
+    match literal {
+        | StringTokenType::String(id) => (id, 0),
+        | StringTokenType::WideString(id) => (id, 1),
+        | StringTokenType::EncodedString(id, LiteralEncoding::Utf8) => (id, 2),
+        | StringTokenType::EncodedString(id, LiteralEncoding::Utf16) => (id, 3),
+        | StringTokenType::EncodedString(id, LiteralEncoding::Utf32) => (id, 4),
     }
 }

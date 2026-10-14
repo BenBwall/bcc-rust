@@ -21,6 +21,7 @@ use super::{
     ValueCategory,
 };
 use crate::{
+    configuration::CStandard,
     translation_phases::{
         parsing::{
             declaration_syntax::TypeQualifiers,
@@ -37,6 +38,7 @@ use crate::{
         },
         preprocessing::{
             FloatTokenType,
+            LiteralEncoding,
             LiteralUnit,
             StringTokenType,
         },
@@ -1676,35 +1678,52 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C99: §6.4.5p5-6, pp. 62-63; PDF pp. 74-75. The count includes the final
     /// zero; narrow source characters contribute their UTF-8 code units.
+    /// C11: §6.4.5 paragraph 6, p. 71; PDF p. 89: `u8`, `u` and `U` literals
+    /// have `char` (C23: `char8_t`), `char16_t` and `char32_t` elements.
     pub(in crate::translation_phases::semantic_analysis) fn string_type(
         &mut self,
         value: StringTokenType,
     ) -> Option<(TypeId, u64)> {
-        let (id, wide) = match value {
-            | StringTokenType::String(id) => (id, false),
-            | StringTokenType::WideString(id) => (id, true),
-            | _ => return None,
+        let (element, units) = match value {
+            | StringTokenType::String(id) => (
+                Scalar::Char,
+                self.context
+                    .literal_units(id)
+                    .iter()
+                    .map(|u| match u {
+                        | LiteralUnit::Character(c) => c.len_utf8() as u64,
+                        | LiteralUnit::Numeric(_) => 1,
+                    })
+                    .sum::<u64>(),
+            ),
+            | StringTokenType::WideString(id) => (
+                self.types.target.wchar_t,
+                self.context.wide_literal_units(id).count() as u64,
+            ),
+            | StringTokenType::EncodedString(id, encoding) => (
+                self.encoded_character_type(encoding),
+                self.context.encoded_literal_units(id, encoding).count() as u64,
+            ),
         };
-        let count = if wide {
-            self.context.wide_literal_units(id).count() as u64
-        } else {
-            self.context
-                .literal_units(id)
-                .iter()
-                .map(|u| match u {
-                    | LiteralUnit::Character(c) => c.len_utf8() as u64,
-                    | LiteralUnit::Numeric(_) => 1,
-                })
-                .sum::<u64>()
-        } + 1;
-        Some((
-            self.types.scalar(if wide {
-                self.types.target.wchar_t
-            } else {
-                Scalar::Char
-            }),
-            count,
-        ))
+        Some((self.types.scalar(element), units + 1))
+    }
+
+    /// The element type of a `u8`, `u` or `U` literal: `char16_t` and
+    /// `char32_t` are `uint_least16_t` and `uint_least32_t` on every target,
+    /// and `char8_t` (C23) is `unsigned char`; a C11/C17 `u8` string has
+    /// `char` elements.
+    /// C11: §6.4.5 paragraph 6, p. 71; PDF p. 89; §7.28 paragraph 2.
+    pub(in crate::translation_phases::semantic_analysis) fn encoded_character_type(
+        &self,
+        encoding: LiteralEncoding,
+    ) -> Scalar {
+        match encoding {
+            | LiteralEncoding::Utf8 if self.context.configuration.standard() >= CStandard::C23 =>
+                Scalar::UnsignedChar,
+            | LiteralEncoding::Utf8 => Scalar::Char,
+            | LiteralEncoding::Utf16 => Scalar::UnsignedShort,
+            | LiteralEncoding::Utf32 => Scalar::UnsignedInt,
+        }
     }
 
     #[cold]

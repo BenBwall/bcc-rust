@@ -150,7 +150,13 @@ target widths while keeping fundamental ranks distinct. Packed literal storage
 can hold 64-bit values even for a 32-bit target long. Phase-4 intmax arithmetic
 is 64-bit on every supported target. L-prefixed strings have int elements and
 UTF-32 execution units on Linux, unsigned-short elements and UTF-16 execution
-units on Windows. Source literal units remain intact for inspection;
+units on Windows. `u8`, `u` and `U` strings have `char` (C23: `unsigned char`,
+`char8_t`), `unsigned short` (`char16_t`) and `unsigned int` (`char32_t`)
+elements with UTF-8, UTF-16 and UTF-32 units on every target
+(`Context::encoded_literal_units`), complete arrays of unknown size, and
+initialize only arrays of their own element type (C11 §6.4.5p6, §6.7.9p15);
+`u` and `U` character constants have `char16_t` and `char32_t` type, and a
+`u8` constant `char8_t`. Source literal units remain intact for inspection;
 `Context::wide_literal_units` supplies execution units, including surrogate
 pairs, and semantic string bounds count those units. Linux numeric wide
 character escapes are sign-extended from wchar_t before intmax preprocessing

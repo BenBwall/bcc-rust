@@ -708,7 +708,9 @@ escapes are `\x{...}` and `\o{...}`, with empty, unterminated, invalid-radix,
 and out-of-range forms diagnosed. Phase 6 concatenates ordinary strings with
 encoded strings while keeping the encoding, and diagnoses incompatible
 nonordinary prefixes. Phase 7 adds encoding-bearing literal, bit-precise
-integer, and imaginary constant token variants.
+integer, and imaginary constant token variants. Semantic analysis types the
+encoded literals (see `semantic-analysis.md`, "Type graph and target data
+model") and lowering emits their UTF-8, UTF-16 and UTF-32 units.
 
 C23 `#elifdef`/`#elifndef`, `#warning`, `#embed`, `__has_include`,
 `__has_embed`, `__has_c_attribute`, and `__VA_OPT__` also work as earlier GNU

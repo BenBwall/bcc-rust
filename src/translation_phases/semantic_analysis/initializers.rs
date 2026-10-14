@@ -28,16 +28,22 @@ use super::{
     },
 };
 use crate::{
-    translation_phases::parsing::{
-        declaration_syntax::{
-            DesignatorType,
-            Initializer,
-            InitializerType,
-            TypeQualifiers,
+    translation_phases::{
+        parsing::{
+            declaration_syntax::{
+                DesignatorType,
+                Initializer,
+                InitializerType,
+                TypeQualifiers,
+            },
+            syntax::{
+                Expression,
+                ExpressionType,
+            },
         },
-        syntax::{
-            Expression,
-            ExpressionType,
+        preprocessing::{
+            LiteralEncoding,
+            StringTokenType,
         },
     },
     util::bump::{
@@ -517,10 +523,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let ExpressionType::StringLiteral(_) = unparenthesized(e).kind {
             // C99 §6.7.8p15: wchar_t is target-specific (unsigned short
             // on Windows), including when braces are elided in aggregates.
-            let wchar = self.types.scalar(self.types.target.wchar_t);
-            return matches!(self.types.nodes[target.index], TypeKind::Array(element, _) if
-                matches!(self.types.nodes[element.index], TypeKind::Scalar(Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar))
-                || element.unqualified() == wchar);
+            // C11 §6.7.9p15: so are char16_t and char32_t arrays, which a
+            // `u` or `U` literal initializes.
+            let TypeKind::Array(element, _) = self.types.nodes[target.index] else {
+                return false;
+            };
+            return match self.types.nodes[element.index] {
+                | TypeKind::Scalar(Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar) =>
+                    true,
+                | TypeKind::Scalar(scalar) =>
+                    scalar == self.types.target.wchar_t
+                        || matches!(scalar, Scalar::UnsignedShort | Scalar::UnsignedInt),
+                | _ => false,
+            };
         }
         if self.vector_assignment(target, self.expression_info(e).ty) {
             return true;
@@ -550,9 +565,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return None;
         }
         let (literal_element, count) = self.string_type(value)?;
+        // C11 §6.7.9p14: a character array takes a character or UTF-8
+        // literal (C23 `char8_t` included); p15: a wide array the literal of
+        // its own element type.
         let compatible = if matches!(
-            self.types.nodes[literal_element.index],
-            TypeKind::Scalar(Scalar::Char)
+            value,
+            StringTokenType::String(_) | StringTokenType::EncodedString(_, LiteralEncoding::Utf8)
         ) {
             matches!(
                 self.types.nodes[element.index],
