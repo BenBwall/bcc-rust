@@ -90,6 +90,7 @@ mod loops;
 mod memory;
 
 // Passes
+mod combine;
 mod dce;
 mod fold;
 mod gvn;
@@ -269,6 +270,7 @@ fn run_pass(
     let changed = match pass {
         | Pass::Inline => inline::run(draft, module, graph, report),
         | Pass::Fold => fold::run(draft, module.function_signature(func), report),
+        | Pass::Combine => combine::run(draft, report),
         | Pass::Dce => dce::run(draft, report),
         | Pass::SimplifyCfg => simplify_cfg::run(draft, report),
         | Pass::Gvn => gvn::run(draft, report),

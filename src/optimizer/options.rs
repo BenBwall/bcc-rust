@@ -54,6 +54,8 @@ pub(crate) enum Pass {
     Inline,
     /// Constant folding and algebraic simplification.
     Fold,
+    /// Peephole combining of instruction chains.
+    Combine,
     /// Dead code elimination.
     Dce,
     /// Control-flow graph simplification.
@@ -79,6 +81,7 @@ impl Pass {
         Self::Sroa,
         Self::Promote,
         Self::Fold,
+        Self::Combine,
         Self::SimplifyCfg,
         Self::Sccp,
         Self::KnownBits,
@@ -86,13 +89,14 @@ impl Pass {
         Self::Licm,
         Self::Dce,
     ];
-    pub(crate) const COUNT: usize = 10;
+    pub(crate) const COUNT: usize = 11;
 
     /// The name `--passes` and reports use.
     pub(crate) const fn name(self) -> &'static str {
         match self {
             | Self::Inline => "inline",
             | Self::Fold => "fold",
+            | Self::Combine => "combine",
             | Self::Dce => "dce",
             | Self::SimplifyCfg => "simplify-cfg",
             | Self::Gvn => "gvn",
@@ -121,6 +125,7 @@ impl Pass {
             | Self::Sccp => 6,
             | Self::KnownBits => 7,
             | Self::Sroa => 9,
+            | Self::Combine => 10,
         }
     }
 }
@@ -181,11 +186,11 @@ pub(crate) fn parse_pass_list(text: &str) -> Result<PassList, PassListError<'_>>
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Error)]
 pub(crate) enum PassListError<'a> {
     /// A name that is empty or not a pass; the known passes are `inline`,
-    /// `sroa`, `promote`, `fold`, `simplify-cfg`, `sccp`, `known-bits`,
-    /// `gvn`, `licm` and `dce`.
+    /// `sroa`, `promote`, `fold`, `combine`, `simplify-cfg`, `sccp`,
+    /// `known-bits`, `gvn`, `licm` and `dce`.
     #[error(
-        "unknown pass `{0}` (the passes are inline, sroa, promote, fold, simplify-cfg, sccp, \
-         known-bits, gvn, licm and dce)"
+        "unknown pass `{0}` (the passes are inline, sroa, promote, fold, combine, simplify-cfg, \
+         sccp, known-bits, gvn, licm and dce)"
     )]
     Unknown(&'a str),
     #[error("a pass list holds at most {} passes", PassList::CAPACITY)]

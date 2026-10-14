@@ -520,7 +520,10 @@ block0(v0: i32):
     v3 = ptr_add inbounds v1, v2
     store.i32 v0, v3, align 4
     v4 = load.i32 v3, align 4
-    return v4
+    v5 = iconst.i32 1
+    v6 = iadd.i32 v4, v5
+    v7 = iadd.i32 v6, v5
+    return v7
 }
 
 ";

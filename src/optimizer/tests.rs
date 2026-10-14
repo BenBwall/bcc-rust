@@ -5,6 +5,7 @@
 //! result, and compares the printed result with the expected text. After a
 //! pass, the printed values are numbered from 0 in listing order.
 
+mod combine;
 mod dce;
 mod draft;
 mod equivalence;
