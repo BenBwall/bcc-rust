@@ -29,6 +29,13 @@ mod tests {
                             char)p[3]==63; }\nint main(void) { float x=1.0f; return \
                             inspect(&x)-1; }\n";
 
+    /// Conditional mismatches, enum signs and array-element qualifiers that
+    /// Clang accepts with warnings (or silently) and bcc used to reject.
+    const MISMATCHES: &str = "enum N { M = -1 }; int x = 7; unsigned ux = 9; int a[2][3] =                               {{1,2,3},{4,5,6}};
+static int sum(const int (*m)[3], int n) {                               int s = 0; for (int i = 0; i < n; i++) for (int j = 0; j < 3;                               j++) s += m[i][j]; return s; }
+int main(void) { int *ip = &x;                               unsigned *up = &ux; enum N n = M; enum N *pn = &n; unsigned *pu                               = pn; int c = x == 7; int *chosen = c ? ip : up; long l = 0; int                               *q = c ? ip : l; const int (*cpa)[3] = a; return !(*chosen == 7                               && q == ip && *pu == 0xffffffffu && sum(a, 2) == 21 && cpa ==                               a); }
+";
+
     fn bcc(source: &str, flags: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
             .args(flags)
@@ -217,6 +224,7 @@ mod tests {
         for (source, extra) in [
             (ACCEPTED, &[][..]),
             (ARGUMENT, &["-Wno-error=incompatible-pointer-types"][..]),
+            (MISMATCHES, &[][..]),
         ] {
             for flags in [&["--interpret"][..], &["--interpret", "--opt=bcc"][..]] {
                 let output = bcc(source, &[&[target][..], extra, flags].concat());

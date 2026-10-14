@@ -16,6 +16,24 @@ are tested separately in `semantic_analysis/tests/pointers.rs` and
 `tests/pointer_diagnostics.rs`. The exact Clang oracle is in
 `language-standards.md`; `-Wdiscarded-qualifiers` is not a Clang group.
 
+PR #44 review fixes (2026-10-14): `sema-pointer-conditional` pins
+`-Wpointer-type-mismatch` for conditional arms with incompatible targets
+(signedness, function signatures, function/void and array-element
+qualifiers) and `-Wconditional-type-mismatch` for a pointer/integer pair in
+either order, beside the qualifier warning a merged `const int *` result
+produces and a silent null arm. `sema-pointer-array-qualifiers` shows that
+adding `const` through an array target is silent for parameters with
+constant, variable and unknown bounds, for assignment and for comparison,
+while dropping it warns and nested pointer levels keep Clang's exact-bound
+rule. `sema-pointer-enum-sign` (Linux, unsigned `enum E`) and
+`sema-pointer-enum-sign-msvc` (int-sized enums) pin enumeration pointer
+signedness through the compatible type. `sema-pointer-atomics` gives atomic
+builtin value operands the assignment groups; `sema-atomic-builtin` now shows
+two of its operands as `-Wincompatible-pointer-types` and `-Wint-conversion`
+errors, as Clang reports them. Every pointer-constraint note now also cites
+§6.5.15p3. Each of these matches the bundled Clang's group and line on every
+supported target.
+
 Round-6 scalar builtin coverage: `sema-builtin-values.c` distinguishes constant
 and value requirements for object-size mode, probability, alignment, and
 prefetch read/write/locality from three incompatible-type controls.
@@ -80,7 +98,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **391 top-level C inputs and 391 stderr snapshots**, plus seven supporting headers and 148 mode/policy `.args` sidecars. One hundred twenty-six of the inputs cover semantic analysis (twenty-eight for declarations, twenty-nine for expressions and initializers, forty-six for statements and functions, three for 128-bit integers, four for resource intrinsics, two for scalar builtin constraints, six for atomics and generic selection, four for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 123 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **404 top-level C inputs and 404 stderr snapshots**, plus seven supporting headers and 154 mode/policy `.args` sidecars. One hundred twenty-six of the inputs cover semantic analysis (twenty-eight for declarations, twenty-nine for expressions and initializers, forty-six for statements and functions, three for 128-bit integers, four for resource intrinsics, two for scalar builtin constraints, six for atomics and generic selection, four for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 123 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 

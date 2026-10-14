@@ -1252,7 +1252,8 @@ groups; each group's options control its diagnostic independently.
 pointer constraint warnings, following Clang. Explicit group options can
 suppress or demote those constraint diagnostics. `-pedantic` leaves their
 defaults unchanged. Warnings retain ordinary pointer conversion facts and
-permit lowering; errors block it. Intrinsic-specific contracts remain strict.
+permit lowering; errors block it. Atomic builtin value operands use the
+assignment groups; other intrinsic-specific contracts remain strict.
 The `float *` to `char *` argument execution regression explicitly uses
 `-Wno-error=incompatible-pointer-types`; accepting it by default would
 contradict the observed Clang behavior. Function/void pointer conversions
@@ -1267,3 +1268,29 @@ These defaults satisfy the diagnostic requirement of C99 §5.1.1.3p1
 (p. 92; PDF p. 104), §6.5.9p2 (p. 86; PDF p. 98), §6.5.8p2
 (p. 85; PDF p. 97), §6.5.2.2p2/p7 (pp. 71-72; PDF pp. 83-84),
 §6.8.6.4p3 (p. 139; PDF p. 151), and §6.7.8p11 (p. 126; PDF p. 138).
+
+### PR #44 review fixes (2026-10-14)
+
+Each rule below was checked against the same bundled Clang on
+`x86_64-unknown-linux-gnu`, `x86_64-w64-windows-gnu` and
+`x86_64-pc-windows-msvc` in `c89`, `c99`, `gnu17` and `c23`, with
+`target/review/cmp.py`; the shared classifier in
+`semantic_analysis/expressions/pointers.rs` and the group table in
+`configuration/diagnostics.rs` own them.
+
+| Construct | Clang group | Default | Result or decision |
+| --- | --- | --- | --- |
+| `c ? ip : up`, `c ? f1 : f2`, `c ? f1 : vp`, `c ? pa : cpa` | `pointer-type-mismatch` | **warning** | Unqualified `void *`. Clang 23 does not merge the targets' qualifiers here (`_Generic(c ? cip : vup, void *: 1)` selects `void *`), so neither does bcc. |
+| `c ? ip : l`, `c ? 1 : f1` | `conditional-type-mismatch` | **warning** | The pointer arm's type; the integer converts to it, and a constant integer arm stays an address constant. |
+| `c ? ip : cip`, `c ? vp : cip` | none | silent | Composite or `void` target with the union of qualifiers (C99 §6.5.15p6). |
+| `cpa = pa`, `f(a)` for `const double m[][3]`, `[n]` and `(*)[]` parameters, `cpa == pa` | none | silent | An array target's element qualifiers count as the array's own when pointer targets are compared for qualifier inclusion and compatibility (C23 §6.7.4.1p10, which Clang applies in every mode). The conditional operator keeps them part of the target, as Clang does. |
+| `pa = cpa` | `incompatible-pointer-types-discards-qualifiers` | **warning** | Only dropping a qualifier warns. |
+| `const int (**)[]` from `int (**)[3]` | `incompatible-pointer-types` | **error** | Below the first pointer level Clang requires identical array derivations, so the nested-qualifier walk keeps exact bounds. |
+| `unsigned *` from `enum N *` (`N` has a negative enumerator) | `pointer-sign` | **warning** | Clang compares targets after a character type becomes `unsigned char` and a signed integer type, or an enumeration with a signed compatible type, becomes its unsigned counterpart. An enumeration with an unsigned compatible type stays itself, so `int *` from `enum E *` is an error on Linux, while MSVC (enums are `int`) makes `unsigned *` from `enum E *` a `pointer-sign` warning. |
+| `__atomic_store_n(&ip, up, 0)`, `__atomic_exchange_n`, `__sync_val_compare_and_swap`, `__c11_atomic_store` | the assignment groups | as assignment | Atomic builtin value operands convert through the assignment adapter; address and buffer contracts stay builtin errors. |
+
+`-Wpointer-type-mismatch` and `-Wconditional-type-mismatch` accept the same
+option forms as the other groups, are promoted by `-Werror` and
+`-pedantic-errors` and are withheld by `-w`. `DiagnosticGroup::ALL`, `COUNT`,
+the names and `parse` come from one `diagnostic_groups!` table, which also
+records each group's default and whether `-pedantic-errors` promotes it.

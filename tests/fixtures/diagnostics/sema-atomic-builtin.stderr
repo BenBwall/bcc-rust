@@ -14,13 +14,13 @@ error: operand does not satisfy the atomic builtin type contract
   |
   = note: Clang C11 atomic builtins and GCC __atomic/__sync builtins: operations require eligible object pointers and compatible value or buffer operands (https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins)
 
-error: operand does not satisfy the atomic builtin type contract
+error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
  --> sema-atomic-builtin.c:5:50
   |
 5 |     __c11_atomic_compare_exchange_strong(atomic, floating, 1, 5, 0);
-  |                                                  ^^^^^^^^ invalid atomic builtin operand
+  |                                                  ^^^^^^^^ pointer constraint violation
   |
-  = note: Clang C11 atomic builtins and GCC __atomic/__sync builtins: operations require eligible object pointers and compatible value or buffer operands (https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins)
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
 error: operand does not satisfy the atomic builtin type contract
  --> sema-atomic-builtin.c:6:28
@@ -62,12 +62,12 @@ error: function call has the wrong number of arguments
    |
    = note: C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis permits additional arguments
 
-error: operand does not satisfy the atomic builtin type contract
+error: incompatible integer and pointer conversion [-Wint-conversion]
   --> sema-atomic-builtin.c:11:29
    |
 11 |     __atomic_store_n(plain, plain, 0);
-   |                             ^^^^^ invalid atomic builtin operand
+   |                             ^^^^^ pointer constraint violation
    |
-   = note: Clang C11 atomic builtins and GCC __atomic/__sync builtins: operations require eligible object pointers and compatible value or buffer operands (https://clang.llvm.org/docs/LanguageExtensions.html#c11-atomic-builtins)
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
 9 errors generated.

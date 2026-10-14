@@ -548,22 +548,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             lt
         } else if self.pointer_target(rt).is_some() && self.null_pointer_constant(left) {
             rt
-        } else if let (Some(lp), Some(rp)) = (self.pointer_target(lt), self.pointer_target(rt)) {
-            if !self.pointer_compatible(lp, rp, true) {
-                return self.invalid_expression(e, SemanticErrorKind::InvalidConditionalOperands);
-            }
-            let target = if matches!(self.types.nodes[lp.index], TypeKind::Scalar(Scalar::Void)) {
-                lp
-            } else if matches!(self.types.nodes[rp.index], TypeKind::Scalar(Scalar::Void)) {
-                rp
-            } else {
-                self.types
-                    .composite(lp.unqualified(), rp.unqualified())
-                    .unwrap_or(lp)
-            };
-            self.types.intern(TypeKind::Pointer(
-                target.qualified(lp.qualifiers | rp.qualifiers),
-            ))
+        } else if let Some(ty) =
+            self.conditional_pointers(lt, rt, e.operator_source_vectors.unwrap_or(e.source_vectors))
+        {
+            ty
         } else if matches!(self.types.nodes[lt.index], TypeKind::Tag(_))
             && self
                 .types
@@ -611,6 +599,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     selected.constant
                 };
+                // An integer arm converted to the pointer result is an
+                // address constant, as an integer cast to a pointer is.
+                if self.pointer_target(ty).is_some() && selected.ice && selected.integer.is_some()
+                {
+                    info.constant = ConstantClass::Address;
+                    info.integer = selected.integer.map(|v| v.cast(64, false));
+                }
             }
         }
         info
@@ -1498,7 +1493,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return true;
             }
             if let Some(from) = self.pointer_target(from) {
-                if !to.qualifiers.contains(from.qualifiers) {
+                if !self
+                    .types
+                    .object_qualifiers(to)
+                    .contains(self.types.object_qualifiers(from))
+                {
                     return false;
                 }
                 return self.pointer_compatible(to, from, true);
@@ -1513,9 +1512,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Checks compatible pointer targets, allowing object/void pairs where
-    /// required.
+    /// required. Qualifiers are ignored, including an array target's element
+    /// qualifiers, which belong to the array as in C23 and as Clang treats
+    /// them in every mode; the conditional operator does not use this.
     /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
     /// C99: §6.5.9 paragraph 2, p. 86; PDF p. 98.
+    /// C23: §6.7.4.1 paragraph 10, p. 121; PDF p. 134.
     pub(super) fn pointer_compatible(&mut self, left: TypeId, right: TypeId, void: bool) -> bool {
         if self.types.unanalyzed(left) || self.types.unanalyzed(right) {
             return true;
@@ -1529,9 +1531,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return true;
             }
         }
-        self.types
-            .composite(left.unqualified(), right.unqualified())
-            .is_some()
+        let (left, right) = (
+            self.types.unqualified_array(left),
+            self.types.unqualified_array(right),
+        );
+        self.types.composite(left, right).is_some()
     }
 
     /// C89 implicit function declarations are retained in GNU modes.

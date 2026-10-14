@@ -307,6 +307,21 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         ty
     }
 
+    /// The qualifiers of an object type, counting those of an array's
+    /// elements as the array's own. C99 qualifies only the elements; C23
+    /// qualifies both, and Clang applies that in every mode to pointer
+    /// assignment.
+    /// C99: §6.7.3 paragraph 8, p. 109; PDF p. 121.
+    /// C23: §6.7.4.1 paragraph 10, p. 121; PDF p. 134.
+    pub(crate) fn object_qualifiers(&self, mut ty: TypeId) -> TypeQualifiers {
+        let mut qualifiers = ty.qualifiers;
+        while let TypeKind::Array(element, _) = self.nodes[ty.index] {
+            ty = element;
+            qualifiers |= ty.qualifiers;
+        }
+        qualifiers
+    }
+
     /// Removes atomicity as required by lvalue value conversion.
     /// C11: §6.3.2.1 paragraph 2, p. 54; PDF p. 72.
     pub(crate) fn non_atomic(&self, ty: TypeId) -> TypeId {

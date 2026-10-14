@@ -268,10 +268,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Checks and retains assignment conversion for an atomic value argument.
+    /// The operand converts as a prototype argument does, so pointer
+    /// constraint violations take their diagnostic groups, as in Clang.
     /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
     /// C99: §6.5.2.2 paragraph 7, p. 72; PDF p. 84.
     fn atomic_value_argument(&mut self, e: &'tu Expression<'tu>, target: TypeId) {
-        if !self.assignment_compatible(target, self.expression_info(e)) {
+        let info = self.expression_info(e);
+        if !self.assignment_conversion(target, info) {
             self.error(
                 SemanticErrorKind::InvalidAtomicOperand,
                 e.source_vectors,
