@@ -44,6 +44,13 @@ use crate::{
 pub(crate) trait Host {
     /// Runs `call`, reading and writing the program's memory as it needs.
     fn call(&mut self, call: HostCall<'_>, memory: &mut Memory<'_>) -> Result<HostReturn, Fault>;
+
+    /// Whether the host defines `name`, so a weak declaration of it resolves
+    /// to the host function rather than to a null address. A host that does
+    /// not say defines nothing weak.
+    fn provides(&self, _name: &str) -> bool {
+        false
+    }
 }
 
 /// A call the host is asked to run.
@@ -97,6 +104,10 @@ pub(crate) struct DefaultHost<'a> {
 }
 
 impl Host for DefaultHost<'_> {
+    fn provides(&self, name: &str) -> bool {
+        HOST_FUNCTIONS.contains(&name)
+    }
+
     fn call(&mut self, call: HostCall<'_>, memory: &mut Memory<'_>) -> Result<HostReturn, Fault> {
         check_signature(call)?;
         let args = call.args;
@@ -297,6 +308,13 @@ impl Host for DefaultHost<'_> {
         })))
     }
 }
+
+/// The functions [`DefaultHost`] implements.
+const HOST_FUNCTIONS: [&str; 26] = [
+    "putchar", "puts", "printf", "sprintf", "snprintf", "malloc", "calloc", "free", "memcpy",
+    "memmove", "memcmp", "strcmp", "strncmp", "strcpy", "strncpy", "memchr", "strchr", "strrchr",
+    "memset", "strlen", "abs", "fabs", "floor", "isprint", "exit", "abort",
+];
 
 /// Rejects incompatible calls before a library function performs any effects.
 /// All supported targets use i32 int and i64 `size_t`. Open C declarations are

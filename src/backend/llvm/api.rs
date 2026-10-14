@@ -21,11 +21,13 @@ use llvm_sys::{
     LLVMLinkage,
     LLVMOpcode,
     LLVMRealPredicate,
+    LLVMVisibility,
     analysis::{
         LLVMVerifierFailureAction,
         LLVMVerifyModule,
     },
     core::{
+        LLVMAddAlias2,
         LLVMAddAttributeAtIndex,
         LLVMAddCallSiteAttribute,
         LLVMAddCase,
@@ -58,6 +60,7 @@ use llvm_sys::{
         LLVMBuildSwitch,
         LLVMBuildUnreachable,
         LLVMBuildVAArg,
+        LLVMConstArray2,
         LLVMConstBitCast,
         LLVMConstGEP2,
         LLVMConstIntOfArbitraryPrecision,
@@ -107,8 +110,10 @@ use llvm_sys::{
         LLVMSetNSW,
         LLVMSetNUW,
         LLVMSetOperand,
+        LLVMSetSection,
         LLVMSetTarget,
         LLVMSetValueName2,
+        LLVMSetVisibility,
         LLVMSetVolatile,
         LLVMStructTypeInContext,
         LLVMTypeOf,
@@ -178,6 +183,19 @@ pub(super) struct Session<'id> {
     context: LLVMContextRef,
     arena:   &'id Bump,
     _brand:  PhantomData<fn(&'id ()) -> &'id ()>,
+}
+
+/// The non-default linkages the back end assigns.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Linkage {
+    Internal,
+    /// A definition that a strong one replaces at link time.
+    Weak,
+    /// A declaration that may stay undefined, with a null address.
+    ExternWeak,
+    /// The special `llvm.global_ctors`, `llvm.global_dtors` and `llvm.used`
+    /// arrays.
+    Appending,
 }
 
 #[derive(Clone, Copy)]
@@ -430,12 +448,82 @@ impl<'id> Session<'id> {
         }
     }
 
-    pub(super) fn internal(&self, value: Val<'id>) {
-        // SAFETY: The type system ties handles to this live session;
-        // operands have the verified IR types.
+    pub(super) fn linkage(&self, value: Val<'id>, linkage: Linkage) {
+        let linkage = match linkage {
+            | Linkage::Internal => LLVMLinkage::LLVMInternalLinkage,
+            | Linkage::Weak => LLVMLinkage::LLVMWeakAnyLinkage,
+            | Linkage::ExternWeak => LLVMLinkage::LLVMExternalWeakLinkage,
+            | Linkage::Appending => LLVMLinkage::LLVMAppendingLinkage,
+        };
+        // SAFETY: The type system ties handles to this live session; every
+        // caller passes a function, global or alias.
         unsafe {
-            LLVMSetLinkage(value.0, LLVMLinkage::LLVMInternalLinkage);
+            LLVMSetLinkage(value.0, linkage);
         }
+    }
+
+    pub(super) fn hidden(&self, value: Val<'id>, protected: bool) {
+        let visibility = if protected {
+            LLVMVisibility::LLVMProtectedVisibility
+        } else {
+            LLVMVisibility::LLVMHiddenVisibility
+        };
+        // SAFETY: The value is a function, global or alias of this session.
+        unsafe {
+            LLVMSetVisibility(value.0, visibility);
+        }
+    }
+
+    pub(super) fn section(&self, value: Val<'id>, name: &str) {
+        let name = self.name(name);
+        // SAFETY: The value is a function or global of this live session;
+        // LLVM copies the NUL-terminated section name.
+        unsafe {
+            LLVMSetSection(value.0, name.as_ptr());
+        }
+    }
+
+    /// A global alias of `aliasee` whose value has type `ty`.
+    pub(super) fn alias(&self, name: &CStr, ty: Ty<'id>, aliasee: Val<'id>) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session; the
+        // aliasee is a function or global constant in address space 0.
+        let raw = unsafe { LLVMAddAlias2(self.module, ty.0, 0, aliasee.0, name.as_ptr()) };
+        Val(raw, PhantomData)
+    }
+
+    /// A constant array of `element` values.
+    pub(super) fn const_array(&self, element: Ty<'id>, values: &[Val<'id>]) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session. Val is
+        // ABI-identical to LLVMValueRef; every value has type `element`.
+        // LLVM only reads the counted array despite its *mut parameter.
+        Val(
+            unsafe {
+                LLVMConstArray2(
+                    element.0,
+                    values.as_ptr().cast::<LLVMValueRef>().cast_mut(),
+                    values.len() as u64,
+                )
+            },
+            PhantomData,
+        )
+    }
+
+    /// A constant structure with natural (unpacked) field layout.
+    pub(super) fn const_record(&self, values: &[Val<'id>]) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session. Val is
+        // ABI-identical to LLVMValueRef; LLVM only reads the counted array
+        // despite its *mut parameter.
+        Val(
+            unsafe {
+                LLVMConstStructInContext(
+                    self.context,
+                    values.as_ptr().cast::<LLVMValueRef>().cast_mut(),
+                    count(values.len()),
+                    0,
+                )
+            },
+            PhantomData,
+        )
     }
 
     pub(super) fn null(&self, ty: Ty<'id>) -> Val<'id> {

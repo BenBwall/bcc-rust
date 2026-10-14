@@ -270,7 +270,7 @@ fn run_pass(
         | Pass::Fold => fold::run(draft, module.function_signature(func), report),
         | Pass::Dce => dce::run(draft, report),
         | Pass::SimplifyCfg => simplify_cfg::run(draft, report),
-        | Pass::Gvn => gvn::run(draft, report),
+        | Pass::Gvn => gvn::run(draft, module, report),
         | Pass::Licm => licm::run(draft, report),
         | Pass::Promote => promote::run(draft, report),
         | Pass::Sccp => sccp::run(draft, report),

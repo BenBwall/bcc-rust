@@ -60,6 +60,12 @@ pub(super) fn run(
             continue;
         }
         let function = module.function(func);
+        // A weak definition can be replaced at link time, so its body is not
+        // necessarily the one a call reaches. GNU extension: GCC manual,
+        // "Common Function Attributes", weak.
+        if function.linkage == crate::ir::Linkage::Weak {
+            continue;
+        }
         let Some(body) = &function.body else { continue };
         if module.function_signature(func).variadic {
             continue;

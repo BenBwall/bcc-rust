@@ -9,6 +9,7 @@ mod host;
 mod memory;
 mod noundef_boundary;
 mod poison;
+mod startup;
 
 use std::fmt::Write as _;
 

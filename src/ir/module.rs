@@ -25,6 +25,7 @@ use super::{
 };
 use crate::util::bump::{
     ArenaMap,
+    ArenaVec,
     Bump,
 };
 
@@ -146,6 +147,8 @@ impl<'ir> Module<'ir> {
             signature,
             linkage,
             body: None,
+            attributes: SymbolAttributes::default(),
+            align: None,
         });
         self.add_symbol(name, Symbol::Function(id));
         id
@@ -162,9 +165,48 @@ impl<'ir> Module<'ir> {
             align: declaration.align,
             constant: declaration.constant,
             init: None,
+            attributes: SymbolAttributes::default(),
         });
         self.add_symbol(name, Symbol::Global(id));
         id
+    }
+
+    /// Records a symbol's alias target, section and retention, copying a
+    /// section name into the module's arena.
+    pub(crate) fn set_symbol_attributes(
+        &mut self,
+        symbol: Symbol,
+        attributes: SymbolAttributes<'_>,
+    ) {
+        let attributes = SymbolAttributes {
+            alias:      attributes.alias,
+            section:    attributes.section.map(|name| &*self.arena.alloc_str(name)),
+            used:       attributes.used,
+            visibility: attributes.visibility,
+        };
+        match symbol {
+            | Symbol::Function(func) => self.functions[func].attributes = attributes,
+            | Symbol::Global(global) => self.globals[global].attributes = attributes,
+        }
+    }
+
+    /// The alias target, section and retention of a function or global.
+    pub(crate) fn symbol_attributes(&self, symbol: Symbol) -> SymbolAttributes<'ir> {
+        match symbol {
+            | Symbol::Function(func) => self.functions[func].attributes,
+            | Symbol::Global(global) => self.globals[global].attributes,
+        }
+    }
+
+    /// Registers `func` to run before (`Constructor`) or after (`Destructor`)
+    /// the program's entry function.
+    pub(crate) fn add_init_function(&mut self, init: InitFunction) {
+        self.init_functions.push(init);
+    }
+
+    /// Constructors and destructors in registration order.
+    pub(crate) fn init_functions(&self) -> &[InitFunction] {
+        &self.init_functions
     }
 
     /// Gives a global its initializer, copying the bytes and relocations
@@ -212,6 +254,7 @@ impl<'ir> Module<'ir> {
             signatures: Table::new_in(arena),
             signature_ids: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             symbols: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            init_functions: ArenaVec::new_in(arena),
         }
     }
 
@@ -654,11 +697,17 @@ impl ResultRegisters {
     }
 }
 
-/// Whether a symbol is visible outside its module.
+/// Whether a symbol is visible outside its module. A `Weak` definition
+/// yields to a strong definition of the same name at link time, so its body
+/// may not be the one that runs; a `Weak` declaration (no body, initializer
+/// or alias target) may stay undefined, and its address is then null.
+/// GNU extension: GCC manual, "Common Function Attributes", weak.
+/// <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Linkage {
     External,
     Internal,
+    Weak,
 }
 
 impl Linkage {
@@ -666,13 +715,83 @@ impl Linkage {
         match self {
             | Self::External => "external",
             | Self::Internal => "internal",
+            | Self::Weak => "weak",
         }
     }
 
     pub(crate) fn from_name(name: &str) -> Option<Self> {
-        [Self::External, Self::Internal]
+        [Self::External, Self::Internal, Self::Weak]
             .into_iter()
             .find(|linkage| linkage.name() == name)
+    }
+}
+
+/// Link-time requests on a function or global besides its linkage.
+/// GNU extension: GCC manual, "Common Function Attributes" and "Common
+/// Variable Attributes": alias, section and used.
+/// <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) struct SymbolAttributes<'ir> {
+    /// This symbol is another name for that definition of the same kind
+    /// (LLVM's `alias`). An alias has no body or initializer of its own.
+    pub(crate) alias:      Option<Symbol>,
+    /// The object-file section that holds the definition.
+    pub(crate) section:    Option<&'ir str>,
+    /// The definition is kept even when nothing references it (LLVM's
+    /// `llvm.used`).
+    pub(crate) used:       bool,
+    /// ELF symbol visibility; `Default` unless requested.
+    pub(crate) visibility: Visibility,
+}
+
+/// ELF symbol visibility. COFF ignores it.
+/// GNU extension: GCC manual, "Common Function Attributes", visibility.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub(crate) enum Visibility {
+    #[default]
+    Default,
+    Hidden,
+    Protected,
+}
+
+impl Visibility {
+    /// The textual form's keyword, absent for the default.
+    pub(crate) const fn keyword(self) -> Option<&'static str> {
+        match self {
+            | Self::Default => None,
+            | Self::Hidden => Some("hidden"),
+            | Self::Protected => Some("protected"),
+        }
+    }
+}
+
+/// A function registered to run before or after the program's entry.
+/// Constructors run in increasing priority and registration order;
+/// destructors in decreasing priority and reverse registration order.
+/// GNU extension: GCC manual, "Common Function Attributes",
+/// constructor/destructor.
+/// <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct InitFunction {
+    pub(crate) kind:     InitKind,
+    pub(crate) priority: u16,
+    pub(crate) func:     FuncId,
+}
+
+/// Whether an [`InitFunction`] runs before or after the entry function.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum InitKind {
+    Constructor,
+    Destructor,
+}
+
+impl InitKind {
+    /// The textual form's keyword.
+    pub(crate) const fn keyword(self) -> &'static str {
+        match self {
+            | Self::Constructor => "constructor",
+            | Self::Destructor => "destructor",
+        }
     }
 }
 
@@ -686,12 +805,14 @@ pub(crate) enum Symbol {
 /// A global object. One without an initializer is declared, not defined.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Global<'ir> {
-    pub(crate) name:     &'ir str,
-    pub(crate) linkage:  Linkage,
-    pub(crate) size:     u64,
-    pub(crate) align:    Align,
-    pub(crate) constant: bool,
-    pub(crate) init:     Option<GlobalInit<'ir>>,
+    pub(crate) name:       &'ir str,
+    pub(crate) linkage:    Linkage,
+    pub(crate) size:       u64,
+    pub(crate) align:      Align,
+    pub(crate) constant:   bool,
+    pub(crate) init:       Option<GlobalInit<'ir>>,
+    /// Alias target, section and retention requests.
+    pub(crate) attributes: SymbolAttributes<'ir>,
 }
 
 /// What [`Module::declare_global`] needs besides the name.

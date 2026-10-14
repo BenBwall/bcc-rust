@@ -53,12 +53,16 @@ use super::{
         Extension,
         GlobalDecl,
         GlobalInit,
+        InitFunction,
+        InitKind,
         Linkage,
         ParamAbi,
         Relocation,
         ResultRegisters,
         Signature,
         Symbol,
+        SymbolAttributes,
+        Visibility,
     },
     types::Type,
     verifier::Profile,
@@ -99,7 +103,7 @@ fn declare_items<'t>(
             | TokenKind::End => return Ok(()),
             | TokenKind::Ident("target") => parse_target(cursor, module)?,
             | TokenKind::Ident("global") => {
-                let (name, declaration) = parse_global_header(cursor)?;
+                let (name, declaration, _) = parse_global_header(cursor)?;
                 if module.symbol(name.text_name(scratch)?).is_some() {
                     return Err(name.error(ParseErrorKind::DuplicateSymbol(name.text)));
                 }
@@ -107,13 +111,22 @@ fn declare_items<'t>(
                 skip_global_init(cursor)?;
             },
             | TokenKind::Ident("abi") => parse_abi(cursor, module)?,
+            | TokenKind::Ident("constructor" | "destructor") => {
+                _ = cursor.next();
+                _ = cursor.symbol()?;
+                cursor.expect(TokenKind::Ident("priority"), "`priority`")?;
+                _ = cursor.unsigned()?;
+            },
             | TokenKind::Ident("function") => {
-                let (name, signature, linkage) = parse_function_header(cursor, scratch)?;
+                let header = parse_function_header(cursor, scratch)?;
+                let name = header.name;
                 if module.symbol(name.text_name(scratch)?).is_some() {
                     return Err(name.error(ParseErrorKind::DuplicateSymbol(name.text)));
                 }
-                let signature = module.intern(signature);
-                _ = module.declare_function(name.text_name(scratch)?, signature, linkage);
+                let signature = module.intern(header.signature);
+                let func =
+                    module.declare_function(name.text_name(scratch)?, signature, header.linkage);
+                module.function_mut(func).align = header.align;
                 if cursor.eat(TokenKind::LBrace) {
                     while !matches!(cursor.peek().kind, TokenKind::RBrace | TokenKind::End) {
                         _ = cursor.next();
@@ -121,10 +134,12 @@ fn declare_items<'t>(
                     cursor.expect(TokenKind::RBrace, "`}`")?;
                 }
             },
-            | _ => return Err(token.expected("`target`, `abi`, `global` or `function`")),
+            | _ => return Err(token.expected(EXPECTED_ITEM)),
         }
     }
 }
+
+const EXPECTED_ITEM: &str = "`target`, `abi`, `global`, `constructor`, `destructor` or `function`";
 
 /// The second pass: parses initializers and bodies.
 fn define_items<'t>(
@@ -139,24 +154,49 @@ fn define_items<'t>(
             | TokenKind::Ident("target") => parse_target(cursor, module)?,
             | TokenKind::Ident("abi") => parse_abi(cursor, module)?,
             | TokenKind::Ident("global") => {
-                let (name, _) = parse_global_header(cursor)?;
+                let (name, _, attributes) = parse_global_header(cursor)?;
                 let Some(Symbol::Global(global)) = module.symbol(name.text_name(scratch)?) else {
                     unreachable!("the first pass declared every global");
                 };
+                let attributes = attributes.resolve(module, scratch)?;
+                module.set_symbol_attributes(Symbol::Global(global), attributes);
                 if cursor.eat(TokenKind::Equals) {
                     parse_global_init(cursor, module, global, scratch)?;
                 }
             },
+            | TokenKind::Ident(keyword @ ("constructor" | "destructor")) => {
+                _ = cursor.next();
+                let token = cursor.symbol()?;
+                let Some(Symbol::Function(func)) = module.symbol(token.text_name(scratch)?) else {
+                    return Err(token.error(ParseErrorKind::NotAFunction(token.text)));
+                };
+                cursor.expect(TokenKind::Ident("priority"), "`priority`")?;
+                let (number, priority) = cursor.unsigned()?;
+                let priority = u16::try_from(priority)
+                    .map_err(|_| number.error(ParseErrorKind::NumberTooLarge))?;
+                module.add_init_function(InitFunction {
+                    kind: if keyword == "constructor" {
+                        InitKind::Constructor
+                    } else {
+                        InitKind::Destructor
+                    },
+                    priority,
+                    func,
+                });
+            },
             | TokenKind::Ident("function") => {
-                let (name, ..) = parse_function_header(cursor, scratch)?;
+                let header = parse_function_header(cursor, scratch)?;
+                let name = header.name;
                 let Some(Symbol::Function(func)) = module.symbol(name.text_name(scratch)?) else {
                     unreachable!("the first pass declared every function");
                 };
+                let attributes = header.attributes.resolve(module, scratch)?;
+                module.set_symbol_attributes(Symbol::Function(func), attributes);
                 if cursor.eat(TokenKind::LBrace) {
                     parse_body(cursor, module, func, scratch)?;
                 }
             },
-            | _ => return Err(token.expected("`target`, `abi`, `global` or `function`")),
+            | _ => return Err(token.expected(EXPECTED_ITEM)),
         }
     }
 }
@@ -199,10 +239,11 @@ fn parse_target<'t>(
     Ok(())
 }
 
-/// `global @name linkage [constant] size N, align N`, up to the initializer.
+/// `global @name linkage [constant] size N, align N` and its symbol
+/// attributes, up to the initializer.
 fn parse_global_header<'t>(
     cursor: &mut Cursor<'_, 't>,
-) -> Result<(Token<'t>, GlobalDecl), ParseError<'t>> {
+) -> Result<(Token<'t>, GlobalDecl, WrittenAttributes<'t>), ParseError<'t>> {
     _ = cursor.next();
     let name = cursor.symbol()?;
     let linkage = cursor.linkage()?;
@@ -211,6 +252,7 @@ fn parse_global_header<'t>(
     let size = cursor.unsigned()?;
     cursor.expect(TokenKind::Comma, "`,`")?;
     let align = cursor.align()?;
+    let attributes = WrittenAttributes::parse(cursor)?;
     Ok((
         name,
         GlobalDecl {
@@ -220,7 +262,69 @@ fn parse_global_header<'t>(
             align,
             constant,
         },
+        attributes,
     ))
+}
+
+/// `[hidden|protected] [section "name"] [used] [alias @target]`, with the
+/// target resolved once
+/// every symbol is declared.
+#[derive(Clone, Copy)]
+struct WrittenAttributes<'t> {
+    visibility: Visibility,
+    section:    Option<&'t str>,
+    used:       bool,
+    alias:      Option<Token<'t>>,
+}
+
+impl<'t> WrittenAttributes<'t> {
+    fn parse(cursor: &mut Cursor<'_, 't>) -> Result<Self, ParseError<'t>> {
+        let visibility = if cursor.eat(TokenKind::Ident("hidden")) {
+            Visibility::Hidden
+        } else if cursor.eat(TokenKind::Ident("protected")) {
+            Visibility::Protected
+        } else {
+            Visibility::Default
+        };
+        let section = if cursor.eat(TokenKind::Ident("section")) {
+            Some(cursor.string()?.1)
+        } else {
+            None
+        };
+        let used = cursor.eat(TokenKind::Ident("used"));
+        let alias = if cursor.eat(TokenKind::Ident("alias")) {
+            Some(cursor.symbol()?)
+        } else {
+            None
+        };
+        Ok(Self {
+            visibility,
+            section,
+            used,
+            alias,
+        })
+    }
+
+    fn resolve(
+        self,
+        module: &Module<'_>,
+        scratch: &Bump,
+    ) -> Result<SymbolAttributes<'t>, ParseError<'t>> {
+        let alias = self
+            .alias
+            .map(|token| {
+                module
+                    .symbol(token.text_name(scratch)?)
+                    .ok_or_else(|| token.error(ParseErrorKind::UnknownSymbol(token.text)))
+            })
+            .transpose()?;
+        Ok(SymbolAttributes {
+            alias,
+            section: self.section,
+            used: self.used,
+            visibility: self.visibility,
+        })
+    }
 }
 
 /// Skips `= zero` or `= bytes "..." [relocs [...]]` in the first pass.
@@ -309,16 +413,37 @@ fn parse_global_init<'t>(
     Ok(())
 }
 
-/// `function @name(params) [-> ty] linkage`, up to the body.
+/// `function @name(params) [-> ty] linkage [align N]` and its symbol
+/// attributes, up to the body.
 fn parse_function_header<'t, 's>(
     cursor: &mut Cursor<'_, 't>,
     scratch: &'s Bump,
-) -> Result<(Token<'t>, Signature<'s>, Linkage), ParseError<'t>> {
+) -> Result<FunctionHeader<'t, 's>, ParseError<'t>> {
     _ = cursor.next();
     let name = cursor.symbol()?;
     let signature = cursor.signature(scratch)?;
     let linkage = cursor.linkage()?;
-    Ok((name, signature, linkage))
+    let align = if cursor.peek().kind == TokenKind::Ident("align") {
+        Some(cursor.align()?)
+    } else {
+        None
+    };
+    let attributes = WrittenAttributes::parse(cursor)?;
+    Ok(FunctionHeader {
+        name,
+        signature,
+        linkage,
+        align,
+        attributes,
+    })
+}
+
+struct FunctionHeader<'t, 's> {
+    name:       Token<'t>,
+    signature:  Signature<'s>,
+    linkage:    Linkage,
+    align:      Option<Align>,
+    attributes: WrittenAttributes<'t>,
 }
 
 /// Parses a body after its `{`, through its `}`.
@@ -962,7 +1087,7 @@ impl<'t> Cursor<'_, 't> {
             | TokenKind::Ident(name) => Linkage::from_name(name),
             | _ => None,
         }
-        .ok_or_else(|| token.expected("`external` or `internal`"))
+        .ok_or_else(|| token.expected("`external`, `internal` or `weak`"))
     }
 
     /// Any flag names that follow.

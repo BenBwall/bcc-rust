@@ -953,3 +953,38 @@ fn names_and_constants_are_spelled_for_llvm() {
         api.verify().unwrap();
     });
 }
+
+/// Weak linkage, aliases, sections, `llvm.used`, visibility, function
+/// alignment and the constructor/destructor arrays print as bundled Clang
+/// prints them for the same C declarations.
+#[test]
+fn symbol_attributes_match_clang_spellings() {
+    let text = "global @value external size 4, align 4 hidden section \"mine\" used = bytes \
+                \"05000000\"\nglobal @other external size 4, align 4 alias @value\nglobal @maybe \
+                weak size 4, align 4\nglobal @soft weak size 4, align 4 = zero\nconstructor @init \
+                priority 101\ndestructor @fini priority 65535\nfunction @init() internal align 16 \
+                {\nblock0:\n    return\n}\nfunction @fini() weak {\nblock0:\n    \
+                return\n}\nfunction @copy() weak alias @fini\nfunction @missing() -> i32 \
+                weak\nfunction @main() -> i32 external {\nblock0:\n    v0 = call @missing()\n    \
+                return v0\n}\n";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let llvm = emit(text, Profile::PostAbi, target);
+        for expected in [
+            r#"@value = hidden global [4 x i8] c"\05\00\00\00", section "mine", align 4"#,
+            "@maybe = extern_weak global [4 x i8], align 4",
+            "@soft = weak global [4 x i8] zeroinitializer, align 4",
+            "@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { \
+             i32 101, ptr @init, ptr null }]",
+            "@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { \
+             i32 65535, ptr @fini, ptr null }]",
+            "@llvm.used = appending global [1 x ptr] [ptr @value], section \"llvm.metadata\"",
+            "@other = alias [4 x i8], ptr @value",
+            "@copy = weak alias void (), ptr @fini",
+            "define internal void @init() align 16",
+            "define weak void @fini()",
+            "declare extern_weak i32 @missing()",
+        ] {
+            assert!(llvm.contains(expected), "{target:?}: {expected}\n{llvm}");
+        }
+    }
+}
