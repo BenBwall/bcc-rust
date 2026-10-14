@@ -808,9 +808,10 @@ bcc's own x86-64 code generator is designed in
 macro-expansion instruction selector over the post-ABI IR, a machine IR over
 virtual registers, linear-scan register allocation with fixed-register
 ranges, frame layout with CFI and SEH unwind directives for System V and Win64,
-and AT&T assembly assembled and linked by the bundled clang. Stage 1 compiles
-integer and pointer code and refuses everything else (floats, `i128`, variadic
-definitions, dynamic stack allocation) before writing any output.
+and AT&T assembly assembled and linked by the bundled clang. It compiles
+integer, pointer, `i128`, `f32` and `f64` code, variadic definitions and dynamic
+stack allocation, and refuses everything else (`f80`, `f128`, `i128` float
+conversions) before writing any output.
 `--backend=native` selects it for `-o`, and `--emit=asm` prints its assembly.
 
 ## Source layout
