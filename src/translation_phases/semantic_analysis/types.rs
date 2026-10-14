@@ -501,6 +501,11 @@ pub(crate) struct Tag<'tu> {
     /// C99: §6.10.6p1, p. 159; PDF p. 171; GCC/MSVC extension.
     pub(crate) max_member_alignment: Cell<u32>,
     pub(crate) alignment:            Cell<u32>,
+    /// Microsoft layout: the alignment `_Alignas`, `aligned` or a nested
+    /// record requires of this record, which `#pragma pack` cannot lower in
+    /// a containing record. Set at completion; 0 elsewhere.
+    /// C11: §6.7.5 paragraph 6, p. 127; PDF p. 145; MSVC extension.
+    pub(crate) required_alignment:   Cell<u32>,
 }
 
 /// A record member including ABI byte/bit offset and source bit-field width.

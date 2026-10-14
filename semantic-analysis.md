@@ -183,9 +183,11 @@ their layouts; unmodeled vendor attributes make affected layouts unavailable.
 Windows records use Microsoft's bit-field layout on both MinGW and MSVC,
 matching Clang's MinGW default `-mms-bitfields`. Consecutive nonzero fields share
 an entire reserved storage unit only when their base-type sizes match and they
-fit. A zero-width field affects alignment only immediately after a nonzero
-bit-field. Union bit-fields occupy a full unit without increasing alignment;
-zero-width union fields occupy no bytes. The C11 probe in
+fit. A zero-width field affects layout only immediately after a nonzero
+bit-field, where it ends that field's whole unit (see "Record layout
+references" below). Union bit-fields occupy a full unit without increasing
+alignment; zero-width union fields occupy no bytes, except that on MSVC one
+after a nonzero bit-field reserves its type's size. The C11 probe in
 `tests/fixtures/targets/conformance.c` covers every scalar, ABI aliases, offsets,
 mixed-type fields, exhausted units, zero-width fields, compact byte-field
 records, and unions against all four Clang targets. Rust tests additionally
@@ -277,6 +279,45 @@ place. See [Memory facts](middle-end.md#memory-facts) for the one alignment owne
 C99 6.7.2.1p12, p. 103 (PDF p. 115); C11 6.7.5p6, p. 127 (PDF p. 145);
 GNU [aligned/packed attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html)
 and System V AMD64 ABI 3.2.3.
+
+### Record layout references
+
+Record layout is checked against the platform compilers, not only bundled
+Clang: MinGW-w64 GCC and Clang for `x86_64-w64-windows-gnu`, Microsoft's
+`cl.exe` and Clang for `x86_64-pc-windows-msvc`, and GCC and Clang (WSL) for
+Linux. `scripts/layout_fuzz.py` generates random records (scalars, arrays,
+bit-fields of every integer type including zero-width and unnamed ones, nested
+records, `aligned`/`_Alignas` members, `#pragma pack` and `packed`) and compares
+each record's size, alignment, member byte images and bit-field read-back. Its
+deterministic programs in `tests/fixtures/layout/` run in the interpreter and
+natively (`pipeline::tests::middle_end::record_layout`), and
+`semantic_analysis::tests::record_layout` pins the cases below.
+
+- **Zero-width bit-fields (#55).** In Microsoft layout a zero-width field after
+  a nonzero one ends that field's allocation unit (C99 §6.7.2.1p11): the next
+  member starts after the whole unit, aligned for the zero-width field's type.
+  MSVC caps that alignment with `#pragma pack`. MinGW GCC caps it too, and in a
+  `packed` record still raises the record's alignment while placing the next
+  member without padding. Clang's MinGW layout ignores the pack cap on
+  zero-width fields and then lays such packed records out with overlapping
+  fields (conformance finding D1), so the MinGW target follows GCC there.
+- **MSVC required alignment.** `_Alignas` (or `aligned`) on a member, a typedef's
+  alignment, or such a member inside a nested record or array of records is a
+  requirement `#pragma pack` cannot lower: the containing record is aligned to
+  it and so is every record containing that one (`Tag::required_alignment`).
+  MinGW does not propagate it.
+- **System V aligned bit-fields.** Without a pack, a bit-field that would
+  straddle a unit of its alignment starts the next unit; otherwise an `aligned`
+  request no larger than the pack aligns its start. `#pragma pack` overrides
+  `packed` on a bit-field, which keeps its pack-capped declared alignment.
+
+Where the references disagree on MinGW outside zero-width fields, bcc keeps
+Clang's layout: GCC aligns unions to their bit-fields' types and does not let
+an `aligned` bit-field in a packed record raise the record's alignment, and on
+Linux GCC honors `aligned` bit-fields above the pack. A fuzzer run on
+2026-10-14 (110 programs of 50 records per target) found no record on which
+bcc differs from agreeing references; the counts per class are in the
+fuzzer's report.
 
 ## Binding, scope, linkage and recovery
 

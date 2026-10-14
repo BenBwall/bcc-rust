@@ -282,6 +282,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 packed:               Cell::new(false),
                 max_member_alignment: Cell::new(0),
                 alignment:            Cell::new(0),
+                required_alignment:   Cell::new(0),
             }));
             id
         };

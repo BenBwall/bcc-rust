@@ -23,6 +23,7 @@ mod mingw_inline;
 mod pointers;
 mod pragma_pack;
 mod predefined_identifiers;
+mod record_layout;
 mod scalar_builtins;
 mod statement_expressions;
 mod targets;
