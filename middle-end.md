@@ -1237,9 +1237,16 @@ leaves before the function returns. GNU local labels lower as ordinary
 labels (only nested functions, still refused, could jump to them from
 elsewhere). `void *` arithmetic steps by one byte with byte alignment.
 
-**Evidence.** The conformance reproducer
-`computed_goto_table.c` interprets and runs natively in every arm; the GCC
-execute sources that use computed goto went from 0 to 10 passing in every
-arm (see the final report of the branch for the survey comparison); the
-remaining ones need nested functions, inline assembly, a global register
-variable or hosted headers.
+**Evidence.** The conformance reproducer `computed_goto_table.c` interprets
+and runs natively in every arm. Of the 18 GCC 15.2.0 execute sources that use
+labels as values, 10 now pass in the interpreter, the optimized interpreter,
+A0 and A1 (none did before); the others need nested functions (4), inline
+assembly (2), a global register variable (`pr51447.c`) or hosted headers
+(`comp-goto-1.c`, which with MinGW headers interprets correctly but, like
+Clang's own build, crashes natively because it assumes 64-bit `long`). The
+whole survey (1,677 sources, `--jobs 6 --timeout 10`) has no source and arm
+that passed before and fails now; 14 sources pass newly in all four arms,
+four of them through `void *` arithmetic or local labels alone. Lua 5.4.9's
+`lvm.c` compiles with its `LUA_USE_JUMPTABLE` dispatch table; a Lua built
+from 29 bcc-compiled files (A0 and A1; `lua.c` and `loadlib.c` use MinGW
+vector types) runs a test script identically to a Clang build.
