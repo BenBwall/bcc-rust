@@ -61,7 +61,7 @@ fn optimize_text(text: &str, options: &OptimizerOptions<'_>) -> (String, Optimiz
 }
 
 /// The options that run `passes` once each.
-fn only(passes: &[Pass]) -> OptimizerOptions<'static> {
+fn only<'a>(passes: &[Pass]) -> OptimizerOptions<'a> {
     OptimizerOptions {
         passes: PassList::new(passes),
         verify_each: true,
