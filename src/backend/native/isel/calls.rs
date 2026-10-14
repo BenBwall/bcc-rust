@@ -143,6 +143,12 @@ impl Selector<'_, '_, '_> {
                 });
             }
         }
+        // Another compiler may leave an `i1` argument's upper bits set.
+        for &param in params {
+            if let (Type::I1, ValueKind::Reg(vreg)) = (self.ty(param), self.kind(param)) {
+                self.canonical_bool(Reg::Virt(vreg));
+            }
+        }
         // MinGW's `main` runs the constructors first, as GCC and Clang emit.
         if self.target == Target::WindowsGnu
             && self.function.name == "main"
@@ -201,6 +207,9 @@ impl Selector<'_, '_, '_> {
                 unreachable!("a call result is a register");
             };
             self.copy(Reg::Virt(dst), Reg::Phys(PReg::Rax));
+            if self.ty(result) == Type::I1 {
+                self.canonical_bool(Reg::Virt(dst));
+            }
         }
         if let Some((arg, registers)) = area {
             let mem = self.address(arg);

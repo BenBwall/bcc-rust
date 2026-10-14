@@ -918,7 +918,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
     }
 
     /// Keeps only the low bit of an `i1` result.
-    fn canonical_bool(&mut self, dst: Reg) {
+    pub(super) fn canonical_bool(&mut self, dst: Reg) {
         self.emit(MInst::Alu {
             op: AluOp::And,
             width: Width::B32,

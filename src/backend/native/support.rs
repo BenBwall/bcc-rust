@@ -159,6 +159,10 @@ fn signature(signature: Signature<'_>) -> Result<(), Construct> {
     }
     for param in signature.aggregates {
         match param.abi {
+            | ParamAbi::ByVal(layout) if layout.align.bytes() > 16 =>
+                return Err(Construct::SlotAlignment(layout.align.bytes())),
+            | ParamAbi::Registers(registers) if registers.align.bytes() > 16 =>
+                return Err(Construct::SlotAlignment(registers.align.bytes())),
             | ParamAbi::Sret(_) | ParamAbi::ByVal(_) => {},
             | ParamAbi::Registers(registers) =>
                 for ty in registers.types() {
