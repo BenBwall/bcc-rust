@@ -145,6 +145,9 @@ pub(crate) enum SemanticErrorKind {
     UnknownTypedef,
     /// C99: §6.5.1p2, p. 69; PDF p. 81.
     UndeclaredIdentifier,
+    /// Clang-compatible extension, `-Wpredefined-identifier-outside-function`;
+    /// C99: §6.4.2.2p1, p. 52; PDF p. 64.
+    PredefinedOutsideFunction,
     /// Clang-compatible extension; C99: §6.5.2.2p6,p9, pp. 71-72;
     /// PDF pp. 83-84; §7.1.4p2, p. 167; PDF p. 179.
     ImplicitLibraryFunction(StringCacheId),
@@ -356,6 +359,7 @@ impl SemanticErrorKind {
             | Self::InvalidImmediate => "expected an integer constant expression in range",
             | Self::UnknownTypedef => "not a typedef name in this scope",
             | Self::UndeclaredIdentifier => "not declared",
+            | Self::PredefinedOutsideFunction => "used outside a function",
             | Self::ImplicitLibraryFunction(_) => "library prototype used here",
             | Self::InvalidAddressOperand => "cannot take this address",
             | Self::BuiltinRequiresCall => "builtin must be directly called",
@@ -733,6 +737,12 @@ impl SemanticErrorKind {
                 "C99 §6.5.1p2: an identifier expression designates a declared object, function or \
                  enumeration constant",
             ),
+            | Self::PredefinedOutsideFunction => (
+                "predefined identifier is only valid inside function",
+                "C99 §6.4.2.2p1: __func__ names the enclosing function; GCC and Clang extend this \
+                 to __FUNCTION__ and __PRETTY_FUNCTION__ and use an empty or `top level` string \
+                 outside one",
+            ),
             | Self::InvalidAddressOperand => (
                 "address operator requires an addressable object or function",
                 "C99 §6.5.3.2p1: the operand is a function designator, subscript, indirection, or \
@@ -1100,6 +1110,7 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::PragmaPackShow(_)
                 | SemanticErrorKind::EmptyCaseRange
                 | SemanticErrorKind::MissingReturnValueWarning
+                | SemanticErrorKind::PredefinedOutsideFunction
                 | SemanticErrorKind::InvalidAtomicOrder
                 | SemanticErrorKind::InvalidAtomicFailureOrder
                 | SemanticErrorKind::AtomicBufferQualifiers

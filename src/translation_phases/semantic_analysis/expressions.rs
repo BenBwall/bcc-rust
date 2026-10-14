@@ -88,12 +88,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut info = Self::expression_result(e, self.types.unknown());
         match e.kind {
             | E::Identifier(name) => {
-                if let Some(entry) = self.lookup(Namespace::Ordinary, name.name) {
-                    let binding = self.bindings[entry.binding];
+                let found = self
+                    .lookup(Namespace::Ordinary, name.name)
+                    .map(|entry| entry.binding)
+                    .or_else(|| self.predefined_identifier(name));
+                if let Some(index) = found {
+                    let binding = self.bindings[index];
                     info.ty = binding.ty;
-                    info.binding = Some(entry.binding);
-                    self.record_binding_use(entry.binding, name);
-                    info.register = self.register_bindings.contains_key(&entry.binding);
+                    info.binding = Some(index);
+                    self.record_binding_use(index, name);
+                    info.register = self.register_bindings.contains_key(&index);
                     info.static_address = binding.duration == Duration::Static
                         || binding.kind == BindingKind::Function;
                     info.category = match binding.kind {

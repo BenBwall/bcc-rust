@@ -21,6 +21,7 @@ mod int128;
 mod library_modes;
 mod mingw_inline;
 mod pragma_pack;
+mod predefined_identifiers;
 mod scalar_builtins;
 mod statement_expressions;
 mod targets;
