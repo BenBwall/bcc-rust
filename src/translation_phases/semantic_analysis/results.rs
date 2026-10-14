@@ -21,7 +21,6 @@ use crate::{
     translation_phases::{
         Context,
         parsing::{
-            SpecifierExtension,
             declaration_syntax::{
                 Declaration,
                 Declarator,
@@ -51,12 +50,12 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) expression_effects:  &'tu [super::ExpressionEffects],
     pub(super) expression_actions:  ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
     /// Declarators with vendor modifiers visited by the explicit type stack,
-    /// including abstract declarators, retained for the lowering gate.
+    /// including abstract declarators; lowering reads their assembler labels.
     /// C99: §6.7.5-6.7.6, pp. 114-122; PDF pp. 126-134 (extensions).
     pub(crate) declarators:         &'tu [Declarator<'tu>],
-    /// Specifier extension chains, including those on type names and
-    /// parameters. C99: §6.7, p. 97; PDF p. 109 (vendor extensions).
-    pub(crate) spec_extensions:     &'tu [&'tu SpecifierExtension<'tu>],
+    /// Validated entity attributes, aliases, constructors, destructors and
+    /// attribute capability refusals.
+    pub(crate) symbols:             super::SymbolFacts<'tu>,
     pub(crate) types:               Types<'tu>,
     pub(crate) bindings:            &'tu [Binding],
     pub(crate) definitions:         &'tu [Definition],
@@ -354,6 +353,19 @@ impl<'tu> SemanticTranslationUnit<'tu> {
 }
 
 impl<'tu> SemanticTranslationUnit<'tu> {
+    /// The merged GNU attributes of the entity `binding` declares, if any
+    /// declaration of it had one.
+    /// C99: §6.2.2p2, p. 30; PDF p. 42.
+    pub(crate) fn entity_attributes(
+        &self,
+        binding: usize,
+    ) -> Option<&super::EntityAttributes<'tu>> {
+        let entity = self
+            .correspondence
+            .entity_of(binding, self.bindings[binding]);
+        self.symbols.entity(entity)
+    }
+
     pub(crate) fn expression_actions(
         &self,
         expression: &Expression<'_>,

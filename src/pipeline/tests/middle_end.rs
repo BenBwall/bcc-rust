@@ -22,6 +22,7 @@ mod braced_strings;
 mod builtin_bindings;
 mod compound_assignments;
 mod declaration_initializers;
+mod entity_attributes;
 mod resolved;
 mod runtime_calls;
 mod scalar_builtins;
@@ -137,7 +138,7 @@ fn with_configured_module<R>(
 fn interpret(module: &Module<'_>, target: Target) -> (i32, String) {
     let arena = Bump::new();
     let mut host = DefaultHost::for_target(&arena, target);
-    let outcome = interpreter::run(module, "main", &[], &mut host)
+    let outcome = interpreter::run_main(module, &mut host)
         .unwrap_or_else(|trap| panic!("{}\n{module}", trap.display_in(module)));
     #[expect(
         clippy::cast_possible_truncation,

@@ -167,7 +167,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             | S::Declaration(d) => self.work.push(Work::Declaration(d)),
-            | S::Attributed(s) => self.work.push(Work::Statement(s.statement, new_scope)),
+            | S::Attributed(s) => {
+                self.check_attribute_list(s.attributes);
+                self.work.push(Work::Statement(s.statement, new_scope));
+            },
             | S::Label(name, child) => {
                 self.label(s, name, true);
                 self.work.push(Work::Statement(child, new_scope));
@@ -313,7 +316,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ),
             | S::Break => self.control_jump(s, false),
             | S::Continue => self.control_jump(s, true),
-            | S::Expression(e) | S::ComputedGoto(e) => self.expression_slot(e),
+            | S::Expression(e) => self.expression_slot(e),
+            | S::ComputedGoto(e) => {
+                self.record_indirect_jump(s.source_vectors);
+                self.expression_slot(e);
+            },
             | _ => {},
         }
     }

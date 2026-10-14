@@ -94,10 +94,15 @@ impl<'tu, 's> Builder<'tu, 's> {
             } else {
                 previous.nearest_vm
             },
-            nearest_cleanup: if matches!(cleanup, CleanupKind::AutomaticVla(_)) {
+            nearest_cleanup: if cleanup == CleanupKind::None {
+                previous.nearest_cleanup
+            } else {
+                Some(id)
+            },
+            nearest_cleanup_declaration: if matches!(kind, RegionKind::CleanupDeclaration(_)) {
                 Some(id)
             } else {
-                previous.nearest_cleanup
+                previous.nearest_cleanup_declaration
             },
             nearest_statement_expression: if matches!(kind, RegionKind::StatementExpression(_)) {
                 Some(id)
@@ -131,6 +136,7 @@ impl<'tu, 's> Builder<'tu, 's> {
             subtree_end: usize::MAX,
             nearest_vm: None,
             nearest_cleanup: None,
+            nearest_cleanup_declaration: None,
             nearest_statement_expression: None,
         });
         self.current = Some(root);

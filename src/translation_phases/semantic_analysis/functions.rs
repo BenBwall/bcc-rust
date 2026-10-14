@@ -130,6 +130,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             &[],
         );
+        if let Some(binding) = binding.filter(|&i| i >= prior) {
+            self.declaration_attributes(
+                super::attributes::Subject::Function {
+                    binding,
+                    definition: true,
+                },
+                f.declaration_specifiers.extensions,
+                Some(f.declarator),
+            );
+        }
         let ty = binding.map_or_else(|| self.types.unknown(), |i| self.bindings[i].ty);
         let derivation = function_derivation(f.declarator, self.scratch);
         if derivation.is_none()
@@ -428,6 +438,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if entity.definition.is_none()
                 && entity.tentative.is_some()
                 && !matches!(self.types.nodes[b.ty.index], TypeKind::Scalar(Scalar::Void))
+                && !self.declares_alias(b.name.name)
             {
                 let mut ty = b.ty;
                 if let TypeKind::Array(element, ArrayBound::Incomplete) = self.types.nodes[ty.index]
@@ -538,6 +549,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         self.definitions.sort_unstable_by_key(|d| d.binding);
+    }
+
+    /// The latest binding of the linked entity `name` and whether the
+    /// translation unit defines it, including completed tentative objects.
+    /// C99: §6.9p5, p. 140; PDF p. 152; §6.9.2p2, p. 143; PDF p. 155.
+    pub(super) fn linked_entity(&self, name: StringCacheId) -> Option<(usize, bool)> {
+        self.functions
+            .entities
+            .get(&name)
+            .map(|entity| (entity.latest, entity.definition.is_some()))
     }
 
     /// Definition parameters have complete adjusted object types.

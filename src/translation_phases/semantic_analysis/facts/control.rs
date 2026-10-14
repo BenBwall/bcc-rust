@@ -110,7 +110,12 @@ pub(crate) struct Region {
     pub(crate) preorder: usize,
     pub(crate) subtree_end: usize,
     pub(crate) nearest_vm: Option<RegionId>,
+    /// The innermost region whose exit runs a cleanup: VLA storage release
+    /// or a GNU cleanup function call.
     pub(crate) nearest_cleanup: Option<RegionId>,
+    /// The innermost GNU cleanup declaration region, which jumps may leave
+    /// but not enter.
+    pub(crate) nearest_cleanup_declaration: Option<RegionId>,
     pub(crate) nearest_statement_expression: Option<RegionId>,
     pub(crate) cleanup: CleanupKind,
     pub(crate) source: SourceVectors,
@@ -121,12 +126,25 @@ pub(crate) enum RegionKind {
     Lexical,
     VmDeclaration(BindingId),
     StatementExpression(ExprId),
+    /// From the end of a GNU `cleanup` variable's declarator and initializer
+    /// to the end of its block.
+    /// GNU extension: GCC manual, "Common Variable Attributes", cleanup.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Variable-Attributes.html>
+    CleanupDeclaration(BindingId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CleanupKind {
     None,
     AutomaticVla(BindingId),
+    /// Every exit from the region calls `function` with the address of
+    /// `variable`, innermost region first.
+    /// GNU extension: GCC manual, "Common Variable Attributes", cleanup.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Variable-Attributes.html>
+    Call {
+        variable: BindingId,
+        function: BindingId,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

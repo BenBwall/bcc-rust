@@ -1,6 +1,9 @@
-//! Vendor declaration modifiers retained by semantic analysis's iterative
-//! type traversal. Check every occurrence before emitting symbols: unsupported
-//! conventions cannot leak through typedefs, abstract casts or indirect calls.
+//! Vendor declaration modifiers. Semantic analysis validates attributes and
+//! conventions once and retains the meanings code generation lacks as
+//! capability refusals, wherever they were written: declarations, typedefs,
+//! abstract casts or function pointers. This file reports those refusals
+//! and records GNU assembler labels before any declaration or definition
+//! can reserve the ordinary C spelling.
 //! C99: §6.7, p. 97; PDF p. 109; §6.7.5-6.7.6, pp. 114-122;
 //! PDF pp. 126-134 (GNU/MSVC extensions to declarations and type names).
 
@@ -10,17 +13,9 @@ use super::{
     module_items::Unit,
 };
 use crate::{
-    target::Target,
     translation_phases::{
-        SourceVectors,
-        parsing::{
-            AttributeSpecifier,
-            SpecifierExtension,
-            SpecifierExtensionKind,
-            declaration_syntax::DirectDeclarator,
-        },
+        parsing::declaration_syntax::DirectDeclarator,
         preprocessing::{
-            KeywordTokenType,
             StringTokenType,
             Token,
             TokenType,
@@ -42,48 +37,40 @@ use crate::{
 };
 
 impl<'a, 'tu> Unit<'a, 'tu, '_> {
-    /// Refuses convention changes and records assembler labels before any
-    /// declaration or definition can reserve the ordinary C spelling.
+    /// Refuses attribute meanings code generation lacks and records
+    /// assembler labels.
     /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42 (linked declarations);
     /// §6.7, p. 97; PDF p. 109 (GNU/MSVC declaration extensions).
     pub(super) fn prepare_extensions(&mut self, errors: &mut ArenaVec<'_, LoweringError>) {
-        for &chain in self.sema.spec_extensions {
-            self.check_chain(Some(chain), errors);
+        for refusal in self.sema.symbols.refusals {
+            errors.push(LoweringError::unsupported(
+                Construct::Attribute(refusal.capability),
+                refusal.source,
+            ));
         }
         for declarator in self.sema.declarators {
-            for level in declarator.pointer.levels {
-                self.check_chain(level.attributes, errors);
-            }
             for direct in declarator.kind {
-                match *direct {
-                    | DirectDeclarator::Attributes(attribute) =>
-                        self.check_attribute(attribute, errors),
-                    | DirectDeclarator::MsModifier(keyword, source) =>
-                        Self::check_keyword(keyword, source, errors),
-                    | DirectDeclarator::AsmLabel(label) => {
-                        if self
-                            .sema
-                            .correspondence
-                            .declaration(*declarator)
-                            .and_then(|fact| fact.binding)
-                            .is_none()
-                        {
-                            errors.push(LoweringError::missing(
-                                "assembler-label declaration occurrence is not retained",
-                                declarator.source_vectors,
-                            ));
-                            continue;
-                        }
-                        let result =
-                            self.record_label(*declarator, label.template, label.recovered);
-                        if result.is_err() {
-                            errors.push(LoweringError::unsupported(
-                                Construct::AssemblerLabel,
-                                label.source_vectors,
-                            ));
-                        }
-                    },
-                    | _ => {},
+                if let DirectDeclarator::AsmLabel(label) = *direct {
+                    if self
+                        .sema
+                        .correspondence
+                        .declaration(*declarator)
+                        .and_then(|fact| fact.binding)
+                        .is_none()
+                    {
+                        errors.push(LoweringError::missing(
+                            "assembler-label declaration occurrence is not retained",
+                            declarator.source_vectors,
+                        ));
+                        continue;
+                    }
+                    let result = self.record_label(*declarator, label.template, label.recovered);
+                    if result.is_err() {
+                        errors.push(LoweringError::unsupported(
+                            Construct::AssemblerLabel,
+                            label.source_vectors,
+                        ));
+                    }
                 }
             }
         }
@@ -101,100 +88,6 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         .unwrap_or_else(|| self.context.string_cache.at(data.name.name));
         debug_assert!(!name.contains('\0'), "lowered symbol names are NUL-free");
         name
-    }
-
-    fn check_chain(
-        &self,
-        mut chain: Option<&SpecifierExtension<'_>>,
-        errors: &mut ArenaVec<'_, LoweringError>,
-    ) {
-        while let Some(item) = chain {
-            match item.kind {
-                | SpecifierExtensionKind::Attributes(a) => self.check_attribute(a, errors),
-                | SpecifierExtensionKind::MsModifier(k) =>
-                    Self::check_keyword(k, item.source_vectors, errors),
-                | _ => {},
-            }
-            chain = item.next;
-        }
-    }
-
-    fn check_keyword(
-        keyword: KeywordTokenType,
-        source: SourceVectors,
-        errors: &mut ArenaVec<'_, LoweringError>,
-    ) {
-        if keyword == KeywordTokenType::Vectorcall {
-            errors.push(LoweringError::unsupported(
-                Construct::CallingConvention,
-                source,
-            ));
-        }
-    }
-
-    /// Attribute names occur at list depth, never inside argument tokens.
-    /// C99: §6.7, p. 97; PDF p. 109 (GNU/MSVC attribute extension).
-    fn check_attribute(
-        &self,
-        attribute: &AttributeSpecifier<'_>,
-        errors: &mut ArenaVec<'_, LoweringError>,
-    ) {
-        let list_depth = match attribute.tokens.first().map(|token| {
-            self.context
-                .string_cache
-                .at(token.contents)
-                .trim_matches('_')
-        }) {
-            | Some("attribute") => 2,
-            | Some("declspec") => 1,
-            | _ => 0,
-        };
-        let mut depth = 0_usize;
-        for token in attribute.tokens {
-            let name = self
-                .context
-                .string_cache
-                .at(token.contents)
-                .trim_end_matches('\0');
-            match name {
-                | "(" => depth += 1,
-                | ")" => depth = depth.saturating_sub(1),
-                | _ if depth == list_depth && !self.default_convention(name.trim_matches('_')) => {
-                    errors.push(LoweringError::unsupported(
-                        Construct::CallingConvention,
-                        attribute.source_vectors,
-                    ));
-                },
-                | _ => {},
-            }
-        }
-    }
-
-    /// Bundled Clang 23 leaves stdcall/cdecl/fastcall/thiscall/regparm at
-    /// the x86-64 default. Explicit ABI selection must match the target.
-    /// C99: §6.5.2.2, pp. 71-72; PDF pp. 83-84 (vendor call extensions).
-    fn default_convention(&self, name: &str) -> bool {
-        let windows = matches!(self.target, Target::WindowsGnu | Target::WindowsMsvc);
-        match name {
-            | "ms_abi" => windows,
-            | "sysv_abi" => !windows,
-            | "vectorcall"
-            | "regcall"
-            | "preserve_most"
-            | "preserve_all"
-            | "preserve_none"
-            | "swiftcall"
-            | "swiftasynccall"
-            | "intel_ocl_bicc"
-            | "pcs"
-            | "aarch64_vector_pcs"
-            | "aarch64_sve_pcs"
-            | "riscv_vector_cc"
-            | "no_caller_saved_registers"
-            | "no_callee_saved_registers"
-            | "interrupt" => false,
-            | _ => true,
-        }
     }
 
     /// GNU asm labels extend the name of a linked or static-duration entity.

@@ -15,6 +15,7 @@ use crate::{
         Context,
         ErrorSeverity,
         SourceVectors,
+        semantic_analysis::UnsupportedAttribute,
     },
     util::bump::Bump,
 };
@@ -61,7 +62,9 @@ pub(crate) enum Construct {
     ComputedGoto,
     InlineAssembly,
     AssemblerLabel,
-    CallingConvention,
+    /// An attribute semantic analysis accepted whose meaning code generation
+    /// lacks.
+    Attribute(UnsupportedAttribute),
     StructuredExceptionHandling,
     LocalLabel,
     NamedJump,
@@ -118,7 +121,7 @@ impl Construct {
             | Self::ComputedGoto => "computed goto",
             | Self::InlineAssembly => "inline assembly",
             | Self::AssemblerLabel => "assembler labels",
-            | Self::CallingConvention => "calling conventions",
+            | Self::Attribute(attribute) => attribute.description(),
             | Self::StructuredExceptionHandling => "structured exception handling",
             | Self::LocalLabel => "local labels",
             | Self::NamedJump => "named break and continue",

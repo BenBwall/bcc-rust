@@ -431,6 +431,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && let Some(index) = self.label_index(name)
         {
             _ = self.statements.labels[index].used.get_or_insert(name);
+            self.record_address_label(self.statements.labels[index].id);
         }
     }
 
@@ -571,8 +572,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Some(jump.source.name),
                     Some(self.bindings[binding].name.source_vectors),
                 );
+            } else if label.definition.is_some() && label.function == jump.function {
+                self.check_cleanup_entry(jump.statement, jump.source.source_vectors);
             }
         }
+        self.check_indirect_cleanup_jumps();
     }
 
     /// C99: §6.8.1p2, p. 131; PDF p. 143; §6.8.4.2p2-3,p5,
@@ -643,6 +647,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .deferred_vm_labels
                         .push((diagnostic, from.region, to.region));
                 }
+            }
+            if let Some((from, to)) = points {
+                self.check_cleanup_dispatch(from, to, source);
             }
             if let Some(point) = self.control.point() {
                 let id = LabelId(self.control.labels.len());

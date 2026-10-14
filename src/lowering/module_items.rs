@@ -247,6 +247,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 errors.push(error);
             }
         }
+        self.declare_aliases_and_initializers(errors);
         functions
     }
 
@@ -332,7 +333,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         } else {
             self.signature(data.ty)?
         };
-        Ok(self.module.declare_function(name, signature, linkage(data)))
+        let func = self
+            .module
+            .declare_function(name, signature, self.ir_linkage(binding));
+        self.symbol_attributes(binding, Symbol::Function(func));
+        Ok(func)
     }
 
     /// An external declaration without a prototype or a known definition.
@@ -495,8 +500,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     .defined_objects
                     .get(name)
                     .map_or(data, |&binding| self.sema.bindings[binding]);
-                let declaration = self.global_declaration(data, linkage(data))?;
-                Ok(self.module.declare_global(name, declaration))
+                let declaration = self.global_declaration(data, self.ir_linkage(binding))?;
+                let global = self.module.declare_global(name, declaration);
+                self.symbol_attributes(binding, Symbol::Global(global));
+                Ok(global)
             },
         }
     }
@@ -536,6 +543,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     .global_declaration(data, IrLinkage::Internal)
                     .map_err(|kind| at(kind, source))?;
                 let global = self.module.declare_global(name, declaration);
+                self.symbol_attributes(binding, Symbol::Global(global));
                 if self.names.local(binding).is_none() {
                     _ = self.generated_globals.insert(global);
                 }
@@ -1188,13 +1196,6 @@ pub(super) fn peel<'tu>(mut expression: &'tu Expression<'tu>) -> &'tu Expression
 
 /// The IR linkage of a function or object with linkage.
 /// C99: §6.2.2, pp. 30-31; PDF pp. 42-43.
-fn linkage(binding: Binding) -> IrLinkage {
-    match binding.linkage {
-        | Linkage::Internal => IrLinkage::Internal,
-        | Linkage::External | Linkage::None => IrLinkage::External,
-    }
-}
-
 /// Whether every byte of an object of this type is const: its type or,
 /// for an array, its element type is const-qualified.
 /// C99: §6.7.3 paragraph 5, p. 109; PDF p. 121.

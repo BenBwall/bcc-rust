@@ -4,7 +4,7 @@
 //! C99: §6.7, p. 97; PDF p. 109; §6.7.2.1p10, p. 102; PDF p. 114.
 //! GNU extension: <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html>.
 
-use super::{
+use super::super::{
     Analyzer,
     ArenaVec,
     AttributeSpecifier,
@@ -22,22 +22,25 @@ use super::{
 
 /// Representation facts independent of a declaration's underlying C type.
 #[derive(Clone, Copy, Default)]
-pub(super) struct LayoutAttributes {
-    pub(super) packed:    bool,
-    pub(super) alignment: u32,
+pub(in crate::translation_phases::semantic_analysis) struct LayoutAttributes {
+    pub(in crate::translation_phases::semantic_analysis) packed:    bool,
+    pub(in crate::translation_phases::semantic_analysis) alignment: u32,
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GCC member attributes may follow a complete declarator, including
     /// grouped declarators. Walk those attribute lists without recursion.
-    pub(super) fn packed_declarator(&mut self, declarator: Declarator<'tu>) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn packed_declarator(
+        &mut self,
+        declarator: Declarator<'tu>,
+    ) -> bool {
         let mut work = ArenaVec::new_in(self.scratch);
         work.push(declarator);
         while let Some(declarator) = work.pop() {
             for direct in declarator.kind {
                 match direct {
                     | DirectDeclarator::Attributes(a)
-                        if super::vectors::attribute_names(a, self.context)
+                        if super::super::vectors::attribute_names(a, self.context)
                             .any(|(_, name)| name == "packed") =>
                         return true,
                     | DirectDeclarator::Parenthesized(p) => work.push(p.declarator),
@@ -53,7 +56,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// this retention step must not issue their diagnostics a second time.
     /// GCC Common Variable Attributes, packed; C11: §6.7.5p2-6,
     /// p. 127; PDF p. 145 (explicit _Alignas).
-    pub(super) fn explicit_member_alignment(
+    pub(in crate::translation_phases::semantic_analysis) fn explicit_member_alignment(
         &self,
         extensions: Option<&'tu SpecifierExtension<'tu>>,
         attributes: Option<&'tu SpecifierExtension<'tu>>,
@@ -86,11 +89,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | SpecifierExtensionKind::Attributes(a) => self.written_attribute_alignment(a),
                 | SpecifierExtensionKind::Alignment(operand) => {
                     let value = match operand {
-                        | super::SyntaxOperand::Expression(e) => self
+                        | super::super::SyntaxOperand::Expression(e) => self
                             .expression_info(e)
                             .integer
-                            .and_then(super::Integer::to_u64),
-                        | super::SyntaxOperand::Type(_) =>
+                            .and_then(super::super::Integer::to_u64),
+                        | super::super::SyntaxOperand::Type(_) =>
                             self.types.alignment(self.operand_type(operand)),
                     };
                     value
@@ -106,7 +109,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     fn written_attribute_alignment(&self, a: &AttributeSpecifier<'tu>) -> u32 {
-        super::vectors::attribute_names(a, self.context)
+        super::super::vectors::attribute_names(a, self.context)
             .filter(|(_, name)| *name == "aligned")
             .filter_map(|(index, _)| self.requested_attribute_alignment(a, index))
             .filter_map(|value| u32::try_from(value).ok())
@@ -131,15 +134,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Schedule parsed alignment operands before consuming representation
     /// facts. C99: §6.6p6, p. 95; PDF p. 107 (GNU ICE operand extension).
-    pub(super) fn attribute_operands(&mut self, attribute: &AttributeSpecifier<'tu>) {
+    pub(in crate::translation_phases::semantic_analysis) fn attribute_operands(
+        &mut self,
+        attribute: &AttributeSpecifier<'tu>,
+    ) {
         for argument in attribute.arguments.iter().rev() {
-            self.work.push(super::Work::Expression(argument.expression));
+            self.work
+                .push(super::super::Work::Expression(argument.expression));
         }
     }
 
     /// Attribute chains share the ordinary iterative expression/type-name
     /// traversal, including sizeof, alignof, enum constants and arithmetic.
-    pub(super) fn attribute_chain_operands(
+    pub(in crate::translation_phases::semantic_analysis) fn attribute_chain_operands(
         &mut self,
         mut chain: Option<&'tu SpecifierExtension<'tu>>,
     ) {
@@ -155,7 +162,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// checks the positive power-of-two and target-representability rules.
     /// C99: §6.6p6, p. 95; PDF p. 107.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html> (aligned).
-    pub(super) fn attribute_alignment(
+    pub(in crate::translation_phases::semantic_analysis) fn attribute_alignment(
         &self,
         attribute: &AttributeSpecifier<'tu>,
         index: usize,
@@ -167,15 +174,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let info = self.expression_info(argument.expression);
         info.integer
             .filter(|_| info.ice)
-            .and_then(super::Integer::to_u64)
+            .and_then(super::super::Integer::to_u64)
     }
 
     /// GCC packed is member/record layout; aligned is a power-of-two byte
     /// alignment, defaulting to the x86-64 ABI's maximum scalar alignment.
-    pub(super) fn layout_attributes(&mut self, a: &AttributeSpecifier<'tu>) -> LayoutAttributes {
+    pub(in crate::translation_phases::semantic_analysis) fn layout_attributes(
+        &mut self,
+        a: &AttributeSpecifier<'tu>,
+    ) -> LayoutAttributes {
         let mut result = LayoutAttributes::default();
         let mut invalid = false;
-        for (index, name) in super::vectors::attribute_names(a, self.context) {
+        for (index, name) in super::super::vectors::attribute_names(a, self.context) {
             if name == "packed" {
                 result.packed = true;
             } else if name == "aligned" {
@@ -202,7 +212,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Combine separate attribute lists without interpreting argument names
     /// as attributes. GCC Common Attributes: packed and aligned compose.
-    pub(super) fn layout_attribute_chain(
+    pub(in crate::translation_phases::semantic_analysis) fn layout_attribute_chain(
         &mut self,
         mut chain: Option<&'tu SpecifierExtension<'tu>>,
     ) -> LayoutAttributes {
@@ -221,9 +231,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GCC mode selects an integer or real scalar representation, preserving
     /// signedness. Vector/complex modes require their separate subsystems.
     /// C99: §6.2.5p4-11, pp. 33-34; PDF pp. 45-46 (extended scalar types).
-    pub(super) fn mode_attribute(&mut self, mut ty: TypeId, a: &AttributeSpecifier<'tu>) -> TypeId {
+    pub(in crate::translation_phases::semantic_analysis) fn mode_attribute(
+        &mut self,
+        mut ty: TypeId,
+        a: &AttributeSpecifier<'tu>,
+    ) -> TypeId {
         let mut invalid = false;
-        for (index, name) in super::vectors::attribute_names(a, self.context) {
+        for (index, name) in super::super::vectors::attribute_names(a, self.context) {
             if name != "mode" {
                 continue;
             }
@@ -302,7 +316,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Apply storage/type alignment after the complete declarator. Alignment
     /// on a function declaration does not change its return type.
-    pub(super) fn align_declared_type(&mut self, ty: TypeId, alignment: u32) -> TypeId {
+    pub(in crate::translation_phases::semantic_analysis) fn align_declared_type(
+        &mut self,
+        ty: TypeId,
+        alignment: u32,
+    ) -> TypeId {
         if matches!(self.types.nodes[ty.index], TypeKind::Function { .. }) {
             return ty;
         }
@@ -312,7 +330,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GCC aligned cannot weaken a variable's requirement. A typedef may
     /// lower it, and declarations using that typedef inherit its alignment.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html>
-    pub(super) fn minimum_declared_alignment(
+    pub(in crate::translation_phases::semantic_analysis) fn minimum_declared_alignment(
         &self,
         ty: TypeId,
         base: TypeId,
@@ -342,7 +360,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C11 §6.7.5p2-6 (p. 127; PDF p. 145): alignas zero is
     /// ineffective; other operands specify valid alignment without weakening
     /// the natural requirement. Operands were typed by the explicit work stack.
-    pub(super) fn standard_alignment(
+    pub(in crate::translation_phases::semantic_analysis) fn standard_alignment(
         &mut self,
         ty: TypeId,
         mut chain: Option<&'tu SpecifierExtension<'tu>>,
@@ -368,12 +386,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     continue;
                 }
                 let value = match operand {
-                    | super::SyntaxOperand::Expression(expression) => self
+                    | super::super::SyntaxOperand::Expression(expression) => self
                         .expression_info(expression)
                         .integer
                         .filter(|_| self.expression_info(expression).ice)
-                        .and_then(super::Integer::to_u64),
-                    | super::SyntaxOperand::Type(_) =>
+                        .and_then(super::super::Integer::to_u64),
+                    | super::super::SyntaxOperand::Type(_) =>
                         self.types.alignment(self.operand_type(operand)),
                 };
                 if value != Some(0) {
@@ -410,7 +428,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C11 §6.7.5p2, p. 127; PDF p. 145: alignment is an object
     /// declaration specifier, forbidden on typedefs, register objects,
     /// parameters, bit-fields and functions.
-    pub(super) fn reject_standard_alignment(
+    pub(in crate::translation_phases::semantic_analysis) fn reject_standard_alignment(
         &mut self,
         mut chain: Option<&'tu SpecifierExtension<'tu>>,
     ) {

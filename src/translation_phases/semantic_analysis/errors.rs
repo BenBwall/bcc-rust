@@ -329,6 +329,68 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "x86 Built-in Functions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Built-in-Functions.html>
     InvalidImmediate,
+    /// Clang `-Wunknown-attributes`: an attribute name no rule knows.
+    /// C23: §6.7.13.2p2, p. 143; PDF p. 156 (unrecognized attributes are
+    /// ignored). GNU extension: GCC manual, "Attribute Syntax".
+    UnknownAttribute,
+    /// Clang `-Wignored-attributes`: an attribute that does not apply to
+    /// this declaration, or whose effect bcc drops.
+    /// Clang extension: Clang Attributes Reference.
+    IgnoredAttribute,
+    /// Clang `-Wignored-attributes`: a 32-bit x86 calling convention that
+    /// x86-64 targets other than Windows do not support.
+    IgnoredConvention,
+    /// Clang: an attribute's arguments have the wrong number or kind.
+    /// GNU extension: GCC manual, "Attribute Syntax".
+    AttributeArguments,
+    /// Clang: an attribute argument must be an integer constant.
+    /// C99: §6.6p6, p. 95; PDF p. 107.
+    AttributeRequiresConstant,
+    /// GCC: constructor and destructor priorities are 0 to 65535.
+    /// GNU extension: GCC manual, "Common Function Attributes".
+    InvalidPriority,
+    /// GCC `-Wprio-ctor-dtor`: priorities 0 to 100 are reserved.
+    /// GNU extension: GCC manual, "Common Function Attributes".
+    ReservedPriority,
+    /// Clang: `alias` and `section` apply to functions and global variables.
+    /// GNU extension: GCC manual, "Common Variable Attributes".
+    AttributeSubject,
+    /// Clang: a weak declaration needs external linkage.
+    /// GNU extension: GCC manual, "Common Function Attributes", weak.
+    WeakInternal,
+    /// Clang: a definition cannot also be an alias.
+    /// GNU extension: GCC manual, "Common Function Attributes", alias.
+    AliasDefinition,
+    /// Clang: an alias names a definition of this translation unit.
+    /// GNU extension: GCC manual, "Common Function Attributes", alias.
+    AliasTarget,
+    /// Clang: a function aliases a function and a variable a variable.
+    AliasKind,
+    /// Clang: aliases that name each other in a cycle.
+    AliasCycle,
+    /// Clang `-Wattribute-alias`: alias and target have different types.
+    AliasTypeMismatch,
+    /// Clang `-Wsection`: a redeclaration names another section.
+    SectionMismatch,
+    /// Clang `-Wignored-attributes`: an unsupported visibility argument.
+    InvalidVisibility,
+    /// Clang: the cleanup argument names no function.
+    /// GNU extension: GCC manual, "Common Variable Attributes", cleanup.
+    CleanupNotFunction,
+    /// Clang: the cleanup function takes exactly one parameter.
+    CleanupParameterCount,
+    /// Clang: a pointer to the variable converts to the cleanup function's
+    /// parameter type. C99: §6.5.16.1p1, p. 92; PDF p. 104.
+    CleanupParameterType,
+    /// Clang: a goto cannot bypass a cleanup variable's declaration.
+    /// C99: §6.8.6.1p1, p. 137; PDF p. 149 (extended to cleanup scopes).
+    JumpIntoCleanupScope,
+    /// Clang: switch dispatch cannot bypass a cleanup variable's
+    /// declaration. C99: §6.8.4.2p2, p. 134; PDF p. 146 (extended).
+    SwitchIntoCleanupScope,
+    /// Clang: an indirect goto cannot enter or leave a cleanup variable's
+    /// scope. GNU extension: GCC manual, "Labels as Values".
+    IndirectJumpCleanupScope,
 }
 
 impl SemanticErrorKind {
@@ -343,6 +405,28 @@ impl SemanticErrorKind {
             | Self::InvalidVectorOperand => "invalid vector operands",
             | Self::InvalidVectorBuiltin => "invalid vector builtin operands",
             | Self::InvalidImmediate => "expected an integer constant expression in range",
+            | Self::UnknownAttribute => "unknown attribute",
+            | Self::IgnoredAttribute => "attribute ignored here",
+            | Self::IgnoredConvention => "convention ignored on this target",
+            | Self::AttributeArguments => "invalid attribute arguments",
+            | Self::AttributeRequiresConstant => "not an integer constant expression",
+            | Self::InvalidPriority => "priority outside 0 to 65535",
+            | Self::ReservedPriority => "reserved priority",
+            | Self::AttributeSubject => "not a function or global variable",
+            | Self::WeakInternal => "weak declaration without external linkage",
+            | Self::AliasDefinition => "definition with an alias attribute",
+            | Self::AliasTarget => "alias target is not defined here",
+            | Self::AliasKind => "alias and target differ in kind",
+            | Self::AliasCycle => "alias is part of a cycle",
+            | Self::AliasTypeMismatch => "alias type differs from its target's",
+            | Self::SectionMismatch => "different section",
+            | Self::InvalidVisibility => "unsupported visibility",
+            | Self::CleanupNotFunction => "not a function",
+            | Self::CleanupParameterCount => "cleanup function must take one parameter",
+            | Self::CleanupParameterType => "parameter type is incompatible with the variable",
+            | Self::JumpIntoCleanupScope | Self::SwitchIntoCleanupScope =>
+                "jump bypasses a cleanup variable's initialization",
+            | Self::IndirectJumpCleanupScope => "indirect jump crosses a cleanup scope",
             | Self::UnknownTypedef => "not a typedef name in this scope",
             | Self::UndeclaredIdentifier => "not declared",
             | Self::ImplicitLibraryFunction(_) => "library prototype used here",
@@ -459,6 +543,29 @@ impl SemanticErrorKind {
     )]
     fn explanation(self) -> (&'static str, &'static str) {
         match self {
+            | Self::UnknownAttribute
+            | Self::IgnoredAttribute
+            | Self::IgnoredConvention
+            | Self::AttributeArguments
+            | Self::AttributeRequiresConstant
+            | Self::InvalidPriority
+            | Self::ReservedPriority
+            | Self::AttributeSubject
+            | Self::WeakInternal
+            | Self::AliasDefinition
+            | Self::AliasTarget
+            | Self::AliasKind
+            | Self::AliasCycle
+            | Self::AliasTypeMismatch
+            | Self::SectionMismatch
+            | Self::InvalidVisibility
+            | Self::CleanupNotFunction
+            | Self::CleanupParameterCount
+            | Self::CleanupParameterType
+            | Self::JumpIntoCleanupScope
+            | Self::SwitchIntoCleanupScope
+            | Self::IndirectJumpCleanupScope =>
+                self.attribute_explanation(),
             | Self::BuiltinRequiresCall => (
                 "builtin functions must be directly called",
                 "GNU extension: intrinsic-only builtins have no addressable external function; parentheses and compile-time selections preserve callee designation",
@@ -992,6 +1099,114 @@ impl SemanticErrorKind {
         }
     }
 
+    fn attribute_explanation(self) -> (&'static str, &'static str) {
+        match self {
+            | Self::UnknownAttribute => (
+                "unknown attribute ignored",
+                "Clang -Wunknown-attributes: bcc does not know this attribute and ignores it",
+            ),
+            | Self::IgnoredAttribute => (
+                "attribute ignored",
+                "Clang -Wignored-attributes: the attribute does not apply to this declaration, or \
+                 bcc drops its effect (see language-standards.md, \"Attribute status\")",
+            ),
+            | Self::IgnoredConvention => (
+                "calling convention is not supported for this target",
+                "Clang -Wignored-attributes: x86-64 outside Windows uses one C calling convention",
+            ),
+            | Self::AttributeArguments => (
+                "wrong number or kind of attribute arguments",
+                "GCC Attribute Syntax: cleanup takes one identifier; alias, section and \
+                 visibility one string literal; constructor and destructor at most one priority; \
+                 weak and used none",
+            ),
+            | Self::AttributeRequiresConstant => (
+                "attribute requires an integer constant",
+                "GCC Common Function Attributes: a constructor or destructor priority is an \
+                 integer constant expression",
+            ),
+            | Self::InvalidPriority => (
+                "constructor and destructor priorities must be integers from 0 to 65535",
+                "GCC Common Function Attributes: priorities are integers from 0 to 65535 inclusive",
+            ),
+            | Self::ReservedPriority => (
+                "constructor and destructor priorities from 0 to 100 are reserved for the \
+                 implementation",
+                "GCC -Wprio-ctor-dtor: priorities 0 to 100 are reserved; bundled Clang accepts \
+                 them silently",
+            ),
+            | Self::AttributeSubject => (
+                "attribute only applies to functions and global variables",
+                "Clang: alias and section name a symbol, which automatic variables do not have",
+            ),
+            | Self::WeakInternal => (
+                "weak declaration cannot have internal linkage",
+                "GCC Common Function Attributes: weak makes an external symbol overridable; \
+                 internal and automatic identifiers have no external symbol",
+            ),
+            | Self::AliasDefinition => (
+                "definition cannot also be an alias",
+                "GCC Common Function Attributes: an alias declaration takes its definition from \
+                 its target; tentative definitions are definitions",
+            ),
+            | Self::AliasTarget => (
+                "alias must point to a defined variable or function",
+                "GCC Common Function Attributes: the target names a definition in the same \
+                 translation unit, by its C name",
+            ),
+            | Self::AliasKind => (
+                "alias and target must both be functions or both be variables",
+                "Clang: a function cannot alias a variable, nor a variable a function",
+            ),
+            | Self::AliasCycle => (
+                "alias definition is part of a cycle",
+                "Clang: following alias targets must reach a definition",
+            ),
+            | Self::AliasTypeMismatch => (
+                "alias and aliasee have different types",
+                "Clang -Wattribute-alias: calls through the alias use the alias's type",
+            ),
+            | Self::SectionMismatch => (
+                "section does not match previous declaration",
+                "Clang -Wsection: the latest section request applies",
+            ),
+            | Self::InvalidVisibility => (
+                "visibility argument not supported",
+                "GCC Common Function Attributes: visibility is default, hidden, internal or \
+                 protected",
+            ),
+            | Self::CleanupNotFunction => (
+                "cleanup argument is not a function",
+                "GCC Common Variable Attributes: cleanup names a function to call with the \
+                 variable's address",
+            ),
+            | Self::CleanupParameterCount => (
+                "cleanup function must take one parameter",
+                "Clang: the cleanup function receives only a pointer to the variable",
+            ),
+            | Self::CleanupParameterType => (
+                "cleanup function parameter is incompatible with a pointer to the variable",
+                "Clang: a pointer to the variable must convert to the parameter type; GCC calls \
+                 the function as if by assignment (C99 §6.5.16.1p1)",
+            ),
+            | Self::JumpIntoCleanupScope => (
+                "cannot jump from this goto statement to its label",
+                "Clang: a jump into the scope of a cleanup variable would bypass its \
+                 initialization; jumps out of it run the cleanup",
+            ),
+            | Self::SwitchIntoCleanupScope => (
+                "cannot jump from switch statement to this case label",
+                "Clang: switch dispatch into the scope of a cleanup variable would bypass its \
+                 initialization",
+            ),
+            | Self::IndirectJumpCleanupScope => (
+                "cannot jump from this indirect goto statement to one of its possible targets",
+                "Clang: an indirect goto cannot enter or leave the scope of a cleanup variable",
+            ),
+            | _ => ("invalid attribute", "GCC Attribute Syntax"),
+        }
+    }
+
     fn statement_expression_explanation(goto: bool) -> (&'static str, &'static str) {
         if goto {
             (
@@ -1047,6 +1262,12 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::JumpIntoStatementExpression
                 | SemanticErrorKind::SwitchIntoStatementExpression =>
                     "statement expression begins here",
+                | SemanticErrorKind::JumpIntoCleanupScope
+                | SemanticErrorKind::SwitchIntoCleanupScope => "cleanup variable is declared here",
+                | SemanticErrorKind::IndirectJumpCleanupScope => "possible target is here",
+                | SemanticErrorKind::AliasKind | SemanticErrorKind::AliasTypeMismatch =>
+                    "aliasee is declared here",
+                | SemanticErrorKind::SectionMismatch => "previous attribute is here",
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);
@@ -1080,6 +1301,13 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::InvalidAtomicOrder
                 | SemanticErrorKind::InvalidAtomicFailureOrder
                 | SemanticErrorKind::AtomicBufferQualifiers
+                | SemanticErrorKind::UnknownAttribute
+                | SemanticErrorKind::IgnoredAttribute
+                | SemanticErrorKind::IgnoredConvention
+                | SemanticErrorKind::ReservedPriority
+                | SemanticErrorKind::AliasTypeMismatch
+                | SemanticErrorKind::SectionMismatch
+                | SemanticErrorKind::InvalidVisibility
         ) {
             ErrorSeverity::Warning
         } else {

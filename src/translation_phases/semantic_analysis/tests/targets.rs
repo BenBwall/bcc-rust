@@ -27,7 +27,14 @@ fn mingw_attributes_preserve_types_and_keep_alignment_conservative() {
             .with_gnu_extensions(true)
             .with_target(Target::WindowsGnu),
         |context, unit| {
-            assert_eq!(context.pending_error_count(), 0);
+            // Clang warns about `pascal` and the unknown `restrict`,
+            // `allocate` and `uuid` attributes here too; nothing is an error.
+            assert_eq!(
+                context.error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
             let ty = |name| {
                 unit.bindings
                     .iter()

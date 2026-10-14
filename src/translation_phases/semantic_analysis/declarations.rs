@@ -247,10 +247,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             spec.source_vectors,
             force_tag,
         ));
+        self.check_extension_chain(spec.extensions);
         let mut extension = spec.extensions;
-        if let Some(chain) = extension {
-            self.spec_extensions.push(chain);
-        }
         while let Some(item) = extension {
             if let SpecifierExtensionKind::Alignment(operand) = item.kind {
                 self.syntax_operand(operand);

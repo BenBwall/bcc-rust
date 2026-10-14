@@ -34,10 +34,12 @@
 //!   floating values.
 //! - Language extensions: `generic.rs` selects C11 generic associations;
 //!   `type_generic.rs` checks GNU type selections and math calls; `vectors.rs`
-//!   constructs vector types and checks operators; `attributes.rs` retains
-//!   packing, alignment and scalar machine modes; `bound_sites.rs` retains
-//!   typeof operand execution at written type sites; `builtins.rs` and
-//!   `builtins/` recognize and check header intrinsics, atomics and x86 calls.
+//!   constructs vector types and checks operators; `attributes.rs` and
+//!   `attributes/` check attribute names once, apply entity attributes (weak,
+//!   alias, section, constructors, cleanup) and retain packing, alignment and
+//!   scalar machine modes; `bound_sites.rs` retains typeof operand execution at
+//!   written type sites; `builtins.rs` and `builtins/` recognize and check
+//!   header intrinsics, atomics and x86 calls.
 //! - Diagnostics and inspection: `diagnostics.rs` reports constraints and
 //!   extensions; `errors.rs` defines diagnostic kinds and renders them;
 //!   `inspection.rs` formats retained results. `tests.rs` and `tests/` exercise
@@ -222,6 +224,7 @@ pub(crate) fn analyze<'tu>(
     }
     analyzer.assert_balanced();
     analyzer.finish_translation_unit();
+    let symbols = analyzer.finish_attributes();
     analyzer.check_builtin_designators();
     let index = analyzer.retain_expression_index();
     let sizes = SizeFacts::retain(&analyzer.types, &scratch);
@@ -262,7 +265,7 @@ pub(crate) fn analyze<'tu>(
         expression_effects: analyzer.expression_effects.leak(),
         expression_actions: analyzer.expression_actions,
         declarators: analyzer.declarators.leak(),
-        spec_extensions: analyzer.spec_extensions.leak(),
+        symbols,
         expressions: analyzer.expressions.leak(),
         expression_indices: index.expressions,
         string_initializers: analyzer.string_initializers,
@@ -365,6 +368,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.reject_standard_alignment(d.declaration_specifiers.extensions);
                 }
                 for init in d.init_declarators.iter().rev() {
+                    if attributes::written_on(d.declaration_specifiers.extensions, init.declarator)
+                    {
+                        self.work.push(Work::DeclarationEnd(
+                            init.declarator.kind.as_slice().as_ptr().addr(),
+                        ));
+                    }
                     if let Some(initializer) = init.initializer {
                         self.work
                             .push(Work::InitializeDeclaration(init.declarator, initializer));
@@ -423,7 +432,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     parameters,
                 );
                 self.record_bound_origins(bounds, BoundEvaluationSite::Declaration(id));
+                if let Some(binding) = binding {
+                    let subject = self.declaration_subject(binding, d, s, initialized);
+                    self.declaration_attributes(subject, s.extensions, Some(d));
+                }
             },
+            | Work::DeclarationEnd(declarator) => self.open_cleanup(declarator),
             | Work::Function(f) => {
                 self.taint(f.recovered);
                 self.prepare_function(f);
@@ -574,6 +588,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     | TypeSpecifiers::Enum(enumeration) => enumeration.attributes,
                     | _ => None,
                 };
+                self.check_extension_chain(attributes);
                 self.attribute_chain_operands(attributes);
             },
             | Work::SpecDone(s, q, source, force) => self.resolve_spec(s, q, source, force),
@@ -677,6 +692,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     }
                 },
             | Work::Declarator(d, base, parameter) => {
+                self.check_declarator_attributes(d);
                 self.work.push(Work::DeclaratorDone(d, base, parameter));
                 for level in d.pointer.levels {
                     self.attribute_chain_operands(level.attributes);
@@ -965,6 +981,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         BoundEvaluationSite::Parameter(self.next_parameter),
                     );
                 }
+                self.declaration_attributes(
+                    attributes::Subject::Parameter,
+                    p.declaration_specifiers.extensions,
+                    p.declarator,
+                );
                 self.next_parameter += 1;
                 params.push(
                     self.scratch,
@@ -993,6 +1014,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         self.work.push(Work::Expression(assertion.expression));
                         return;
                     }
+                    self.check_extension_chain(member.extensions);
                     self.work.push(Work::RecordMemberBase(tag, member, members));
                     self.work
                         .push(Work::VectorAttributes(member.extensions, false));
@@ -1051,6 +1073,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     spec_packed,
                     members,
                 ));
+                self.check_extension_chain(d.attributes);
                 self.attribute_chain_operands(d.attributes);
             },
             | Work::MemberBaseDone(tag, d, base, extensions, spec_packed, members) => {
@@ -1083,6 +1106,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::MemberDone(tag, d, members, errors_before, packed, extensions) => {
                 let ty = self.take_type();
+                self.declaration_attributes(
+                    attributes::Subject::Member,
+                    d.attributes,
+                    d.declarator,
+                );
                 let explicit_alignment = if self.semantic_errors == errors_before {
                     self.explicit_member_alignment(extensions, d.attributes, d.declarator)
                 } else {
@@ -1190,6 +1218,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::EnumMembers(tag, list, index, previous) => {
                 if let Some(item) = list.as_slice().get(index) {
+                    self.check_extension_chain(item.attributes);
                     self.work.push(Work::EnumeratorDone(
                         tag,
                         list,
@@ -1491,6 +1520,9 @@ enum Work<'tu, 's> {
     DeclarationBase(&'tu Declaration<'tu>),
     DeclarationDeclarator(Declarator<'tu>, DeclarationSpecifiers<'tu>, TypeId, bool),
     Bind(Declarator<'tu>, DeclarationSpecifiers<'tu>, bool, usize),
+    /// A declarator and its initializer are complete; a cleanup variable's
+    /// region opens here.
+    DeclarationEnd(usize),
     Function(&'tu FunctionDefinition<'tu>),
     FunctionBase(&'tu FunctionDefinition<'tu>),
     FunctionBody(&'tu FunctionDefinition<'tu>),
@@ -1630,7 +1662,6 @@ struct Analyzer<'a, 'tu, 's> {
     types:                   TypeInterner<'tu, 's>,
     bindings:                ArenaVec<'tu, Binding>,
     declarators:             ArenaVec<'tu, Declarator<'tu>>,
-    spec_extensions:         ArenaVec<'tu, &'tu SpecifierExtension<'tu>>,
     definitions:             ArenaVec<'tu, Definition>,
     /// Indexed by the function definition's traversal id.
     function_records:        ArenaVec<'tu, FunctionRecord<'tu>>,
@@ -1688,6 +1719,7 @@ struct Analyzer<'a, 'tu, 's> {
     va_list_type:            Option<TypeId>,
     statements:              statements::State<'tu, 's>,
     control:                 builder::Builder<'tu, 's>,
+    attributes:              attributes::AttributeState<'tu, 's>,
     /// Tags whose member or enumerator list is open.
     defining:                ArenaMap<'s, usize, ()>,
     /// Least and greatest enumerator values of an open enumeration.
