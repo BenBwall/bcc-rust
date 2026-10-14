@@ -102,7 +102,11 @@ Programs "compared" are those Clang can run reproducibly; front-end refusals are
 
 *Linux, YARPGen default (1,000 compared):* A0, A1 and A2 pass all 1,000; the interpreter passes 952 and `interpret-bcc` 976 (step limit, #52).
 
-*Pending:* Linux Csmith `--no-pointers`, real programs.
+*Linux, Csmith `--no-pointers` (600 programs, 460 compared; 140 discarded):* all five arms pass all 460.
+
+Totals: 3,600 Csmith programs (2,000 Windows, 1,600 Linux; 3,249 compared, 1,631 of them refused for #46) and 3,000 YARPGen programs (2,000 Windows, 1,000 Linux; all compared). The native arms A0, A1 and A2 never disagree with each other or with Clang on a program the front end accepts, apart from the two D1 programs on which Clang is wrong; no compiler crash, internal error, verifier failure, link error or timeout occurred in any arm. The bcc optimizer still never changes a result (A0 = A1 on every program), as in round 1.
+
+*Pending:* real programs.
 
 ## Findings, ranked
 
