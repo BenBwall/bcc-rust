@@ -28,11 +28,6 @@
 
 use std::fmt::Write as _;
 
-/// Seeds with this bit set generate programs without floating-point
-/// operations, which the native back end compiles today; the bit travels
-/// with the seed, so a reported seed reproduces its program.
-pub(super) const INTEGER_ONLY: u64 = 1 << 62;
-
 /// The textual module for `seed`; with `probe`, instrumented as the module
 /// documentation describes.
 pub(super) fn generate(seed: u64, probe: bool) -> String {
@@ -68,7 +63,6 @@ pub(super) fn generate(seed: u64, probe: bool) -> String {
             &signature,
             main,
         );
-        function.integer_only = seed & INTEGER_ONLY != 0;
         function.body(main);
         let cost = function.total_cost();
         out.push('\n');
@@ -146,38 +140,32 @@ const MAX_SELF_CALLS: u32 = 2;
 const RECURSION_FACTOR: u64 = 15;
 
 /// One function's generator state.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "Independent generation switches; a state enum would not fit them."
-)]
 struct FunctionGen<'g> {
-    rng:          &'g mut Rng,
-    probe:        bool,
-    index:        usize,
+    rng:         &'g mut Rng,
+    probe:       bool,
+    index:       usize,
     /// The signatures of the functions defined before this one, which it
     /// may call.
-    signatures:   &'g [Signature],
-    costs:        &'g [u64],
-    recursive:    bool,
-    result:       Ty,
+    signatures:  &'g [Signature],
+    costs:       &'g [u64],
+    recursive:   bool,
+    result:      Ty,
     /// The depth parameter of a recursive function.
-    depth_param:  Option<Val>,
-    own_params:   Vec<Ty>,
-    next_value:   u32,
-    blocks:       Vec<BlockText>,
-    current:      usize,
+    depth_param: Option<Val>,
+    own_params:  Vec<Ty>,
+    next_value:  u32,
+    blocks:      Vec<BlockText>,
+    current:     usize,
     /// The values that dominate the current point.
-    scope:        Vec<Val>,
-    slots:        Vec<u64>,
+    scope:       Vec<Val>,
+    slots:       Vec<u64>,
     /// The product of the trip counts of the enclosing loops.
-    multiplier:   u64,
-    cost:         u64,
-    budget:       u64,
-    nesting:      u32,
-    in_loop:      bool,
-    self_calls:   u32,
-    /// Whether floating-point operations are left out.
-    integer_only: bool,
+    multiplier:  u64,
+    cost:        u64,
+    budget:      u64,
+    nesting:     u32,
+    in_loop:     bool,
+    self_calls:  u32,
 }
 
 impl FunctionGen<'_> {
@@ -265,8 +253,7 @@ impl FunctionGen<'_> {
         if self.rng.chance(10) {
             return self.exact_pair();
         }
-        // The draw happens either way, so the bit changes nothing else.
-        if self.rng.chance(12) && !self.integer_only {
+        if self.rng.chance(12) {
             return self.float();
         }
         if self.rng.chance(8) {
@@ -1788,7 +1775,6 @@ impl<'g> FunctionGen<'g> {
             nesting: 0,
             in_loop: false,
             self_calls: 0,
-            integer_only: false,
         };
         let (_, params) = function.new_block(&signature.params);
         for (&id, &ty) in params.iter().zip(&signature.params) {

@@ -4,10 +4,7 @@
 
 use super::{
     super::interpreter::Trap,
-    generate::{
-        INTEGER_ONLY,
-        generate,
-    },
+    generate::generate,
     native::{
         check_native,
         check_native_backend,
@@ -130,14 +127,14 @@ fn check_native_sweep(first: u64, cases: u64) {
     );
 }
 
-/// The integer-only cases a default run compiles with the native back end,
-/// two arms each.
+/// The cases a default run compiles with the native back end, two arms
+/// each.
 const DEFAULT_NATIVE_BACKEND_CASES: u64 = 20;
 
 #[test]
 fn native_backend_matches_the_interpreter_on_generated_programs() {
     check_native_backend_sweep(
-        first_seed() | INTEGER_ONLY,
+        first_seed(),
         setting(
             "BCC_DIFFTEST_NATIVE_BACKEND_CASES",
             DEFAULT_NATIVE_BACKEND_CASES,
@@ -149,11 +146,12 @@ fn native_backend_matches_the_interpreter_on_generated_programs() {
 #[test]
 #[ignore = "takes minutes; run explicitly"]
 fn native_backend_matches_the_interpreter_on_many_generated_programs() {
-    check_native_backend_sweep(first_seed().wrapping_add(1 << 34) | INTEGER_ONLY, 500);
+    check_native_backend_sweep(first_seed().wrapping_add(1 << 34), 500);
 }
 
-/// Checks the first `cases` kept integer-only cases from `first` with the
-/// native back end, which must accept every one of them.
+/// Checks the first `cases` kept cases from `first` with the native back
+/// end, which must accept every one of them: the generator writes only
+/// integer, pointer, `f32` and `f64` code.
 fn check_native_backend_sweep(first: u64, cases: u64) {
     if cases == 0 {
         return;
@@ -179,7 +177,7 @@ fn check_native_backend_sweep(first: u64, cases: u64) {
         summary.kept.len() * 2,
         failures[0]
     );
-    assert_eq!(refused, 0, "integer-only programs are refused");
+    assert_eq!(refused, 0, "generated programs are refused");
 }
 
 /// `main` returning `value` (an `i32` constant or `poison`) after printing
