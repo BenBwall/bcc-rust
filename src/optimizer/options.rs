@@ -23,6 +23,9 @@ pub(crate) struct OptimizerOptions<'a> {
     /// (`--print-after-all`). It is a `RefCell` so that the options stay
     /// shared while the optimizer writes.
     pub(crate) print_after_all: Option<&'a RefCell<dyn fmt::Write + 'a>>,
+    /// Where to print the per-pass report when the run ends
+    /// (`--time-passes`).
+    pub(crate) time_passes:     Option<&'a RefCell<dyn fmt::Write + 'a>>,
     /// The number of rewrites to apply before stopping, in pipeline order
     /// (`--opt-bisect-limit`). With `Some(n)`, the first `n` rewrites happen
     /// and every later one is skipped, so a miscompile can be bisected on `n`.
@@ -40,6 +43,7 @@ impl Default for OptimizerOptions<'_> {
             passes:                None,
             verify_each:           cfg!(debug_assertions),
             print_after_all:       None,
+            time_passes:           None,
             bisect_limit:          None,
             #[cfg(test)]
             injected:              None,
@@ -203,6 +207,7 @@ impl fmt::Debug for OptimizerOptions<'_> {
             .field("passes", &self.passes)
             .field("verify_each", &self.verify_each)
             .field("print_after_all", &self.print_after_all.is_some())
+            .field("time_passes", &self.time_passes.is_some())
             .field("bisect_limit", &self.bisect_limit)
             .finish_non_exhaustive()
     }

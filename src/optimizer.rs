@@ -187,6 +187,9 @@ fn optimize_with_function_scratch(
         function_scratch.reset();
         report.functions += 1;
     }
+    if let Some(sink) = options.time_passes {
+        _ = write!(sink.borrow_mut(), "{report}");
+    }
     report
 }
 
