@@ -166,8 +166,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         function: &'tu Expression<'tu>,
         args: super::ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> Option<ExpressionInfo<'tu>> {
-        let function =
-            super::super::selected_designator(function, |e| Some(self.expression_info(e)));
+        let function = self.selected_designator(function);
         let super::ExpressionType::Identifier(id) = function.kind else {
             return None;
         };

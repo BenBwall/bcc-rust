@@ -751,28 +751,38 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 )
             })?;
         Self::prepare_site_tasks(site, &mut tasks);
-        self.prepare_bound_tasks(site.bounds, &mut tasks);
+        self.prepare_bound_tasks(site.bounds, &mut tasks, declaration.source_vectors)?;
         for init in declaration.init_declarators {
-            let Some(binding) = self.unit.declarator_binding(init.declarator) else {
-                continue;
-            };
+            let fact = self
+                .unit
+                .sema
+                .correspondence
+                .declaration(init.declarator)
+                .ok_or_else(|| {
+                    LoweringError::missing(
+                        "declaration occurrence is not retained",
+                        init.source_vectors,
+                    )
+                })?;
+            if init.initializer.is_some() && fact.initializer.is_none() {
+                return Err(LoweringError::missing(
+                    "declaration initializer association is not retained",
+                    init.source_vectors,
+                ));
+            }
+            let binding = fact.binding.ok_or_else(|| {
+                LoweringError::missing(
+                    "declaration occurrence has no accepted binding",
+                    init.source_vectors,
+                )
+            })?;
             let data = self.unit.sema.bindings[binding];
             if data.kind == BindingKind::Typedef || data.duration == Duration::Automatic {
-                let bounds = self
-                    .unit
-                    .sema
-                    .binding_bound_actions(binding)
-                    .ok_or_else(|| {
-                        LoweringError::missing(
-                            "declaration bound actions are not retained",
-                            init.declarator.source_vectors,
-                        )
-                    })?;
-                self.prepare_bound_tasks(bounds, &mut tasks);
+                self.prepare_bound_tasks(fact.site.bounds, &mut tasks, init.source_vectors)?;
             }
             tasks.push(Task::DeclareBinding(
                 binding,
-                init.initializer,
+                fact.initializer,
                 init.source_vectors,
             ));
         }
@@ -855,6 +865,12 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         let draft = Draft::new(scratch, signature.params);
         // A structure or union result comes first, before the C parameters.
         let first = usize::from(signature.result_param().is_some());
+        if record.parameter_facts.len() != parameters.len() {
+            return Err(LoweringError::missing(
+                "parameter correspondence is not retained",
+                source,
+            ));
+        }
         let mut lowerer = Self {
             unit,
             record,
@@ -883,20 +899,18 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 _ = lowerer.alignments.insert(value, layout.align);
             }
         }
-        for (index, &parameter) in record.parameters.iter().enumerate() {
-            let Some(parameter) = parameter else {
+        for (index, facts) in record.parameter_facts.iter().enumerate() {
+            let Some(parameter) = facts.body_binding else {
                 continue;
             };
-            let (Some(&value), Some(&incoming)) = (
-                lowerer.draft.block_params(entry).get(first + index),
-                parameters.get(index),
-            ) else {
+            let Some(&value) = lowerer.draft.block_params(entry).get(first + index) else {
                 return Err(LoweringError::missing(
                     "a parameter has no argument",
                     source,
                 ));
             };
-            let declared = lowerer.unit.sema.bindings[parameter].ty;
+            let declared = facts.declared;
+            let incoming = facts.promoted;
             let parameter_source = lowerer.unit.sema.bindings[parameter].name.source_vectors;
             if lowerer.repr(declared, parameter_source)? == Repr::Aggregate {
                 // C99 §6.9.1p10: the parameter object has its declared
@@ -939,7 +953,11 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         // retains their body correspondence; no translation-unit scan or
         // source-position matching belongs in a per-function constructor.
         // C99: §6.9.1p10, p. 142; PDF p. 154.
-        for &(prototype, body) in record.parameter_aliases {
+        for facts in record.parameter_facts {
+            let (Some(prototype), Some(body)) = (facts.prototype_binding, facts.body_binding)
+            else {
+                continue;
+            };
             #[cfg(test)]
             {
                 lowerer.unit.parameter_alias_visits += 1;
@@ -950,9 +968,25 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         }
         lowerer.tasks.push(Task::Statement(record.syntax.body));
         let mut bound_tasks = ArenaVec::new_in(scratch);
-        for &site in record.parameter_sites {
-            Self::prepare_site_tasks(site, &mut bound_tasks);
-            lowerer.prepare_bound_tasks(site.bounds, &mut bound_tasks);
+        if record.old_style {
+            for &site in record.parameter_sites {
+                Self::prepare_site_tasks(site, &mut bound_tasks);
+                lowerer.prepare_bound_tasks(site.bounds, &mut bound_tasks, source)?;
+            }
+        } else {
+            for facts in record.parameter_facts {
+                let site = facts.site.ok_or_else(|| {
+                    LoweringError::missing("parameter entry site is not retained", source)
+                })?;
+                if site.ty != facts.original {
+                    return Err(LoweringError::missing(
+                        "parameter entry type does not match its original type",
+                        source,
+                    ));
+                }
+                Self::prepare_site_tasks(site, &mut bound_tasks);
+                lowerer.prepare_bound_tasks(site.bounds, &mut bound_tasks, source)?;
+            }
         }
         lowerer.push_all(&bound_tasks);
         Ok(lowerer)

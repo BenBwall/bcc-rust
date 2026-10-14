@@ -50,7 +50,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         arguments: ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> Option<ExpressionInfo<'tu>> {
         use Operation as O;
-        let callee = super::super::selected_designator(callee, |e| Some(self.expression_info(e)));
+        let callee = self.selected_designator(callee);
         let ExpressionType::Identifier(name) = callee.kind else {
             return None;
         };

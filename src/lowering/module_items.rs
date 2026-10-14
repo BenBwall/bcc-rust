@@ -51,7 +51,6 @@ use crate::{
         Context,
         SourceVectors,
         parsing::{
-            ExternalDeclaration,
             ParsedTranslationUnit,
             declaration_syntax::{
                 Initializer,
@@ -104,9 +103,6 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     pub(super) tables: &'a Bump,
     pub(super) target: Target,
     pub(super) names: SymbolNames<'a>,
-    /// Each binding by its declared identifier, so a declarator finds its
-    /// binding without a search.
-    declarators: ArenaMap<'a, (StringCacheId, SourceVectors), usize>,
     definitions: ArenaMap<'a, usize, DefinitionKind>,
     /// Completed types of linked object definitions, including tentative ones,
     /// indexed by emitted symbol name after applying GNU assembler labels.
@@ -146,7 +142,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// p. 143; PDF p. 155.
     pub(super) fn declare_items(
         &mut self,
-        syntax: &ParsedTranslationUnit<'tu>,
+        _syntax: &ParsedTranslationUnit<'tu>,
         errors: &mut ArenaVec<'_, LoweringError>,
     ) -> ArenaVec<'a, (&'tu FunctionRecord<'tu>, Option<FuncId>)> {
         // Reserve every user spelling before any initializer or body creates
@@ -212,18 +208,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             }
             functions.push((record, func));
         }
-        let mut initializers: ArenaMap<'_, usize, &'tu Initializer<'tu>> =
+        let mut initializers: ArenaMap<'_, usize, Option<&'tu Initializer<'tu>>> =
             ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
-        for root in syntax.external_declarations() {
-            let ExternalDeclaration::Declaration(declaration) = *root else {
-                continue;
-            };
-            for init_declarator in declaration.init_declarators {
-                if let Some(initializer) = init_declarator.initializer
-                    && let Some(binding) = self.declarator_binding(init_declarator.declarator)
-                {
-                    _ = initializers.insert(binding, initializer);
-                }
+        for fact in self.sema.correspondence.declarations {
+            if let Some(binding) = fact.binding {
+                _ = initializers.insert(binding, fact.initializer);
             }
         }
         for definition in self.sema.definitions {
@@ -241,7 +230,20 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             {
                 continue;
             }
-            let initializer = initializers.get(&definition.binding).copied();
+            let Some(&initializer) = initializers.get(&definition.binding) else {
+                errors.push(LoweringError::missing(
+                    "object definition occurrence is not retained",
+                    binding.name.source_vectors,
+                ));
+                continue;
+            };
+            if definition.kind == DefinitionKind::Object && initializer.is_none() {
+                errors.push(LoweringError::missing(
+                    "object definition initializer is not retained",
+                    binding.name.source_vectors,
+                ));
+                continue;
+            }
             if let Err(error) = self.define_object(definition.binding, None, initializer) {
                 errors.push(error);
             }
@@ -260,6 +262,17 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         record: &FunctionRecord<'tu>,
     ) -> Result<Option<FuncId>, LoweringError> {
         let source = record.syntax.source_vectors;
+        if self
+            .sema
+            .correspondence
+            .declaration(record.syntax.declarator)
+            .is_none()
+        {
+            return Err(LoweringError::missing(
+                "function definition occurrence is not retained",
+                source,
+            ));
+        }
         let Some(binding) = record.binding else {
             return Err(LoweringError::missing(
                 "a function definition has no binding",
@@ -749,17 +762,6 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
     }
 
-    /// The binding a declarator declares.
-    pub(super) fn declarator_binding(
-        &self,
-        declarator: crate::translation_phases::parsing::declaration_syntax::Declarator<'tu>,
-    ) -> Option<usize> {
-        let identifier = declarator.identifier()?;
-        self.declarators
-            .get(&(identifier.name, identifier.source_vectors))
-            .copied()
-    }
-
     pub(super) fn into_module(self) -> Module<'ir> {
         self.module
     }
@@ -1067,10 +1069,12 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 | ExpressionType::DirectMember {
                     base_expression, ..
                 } if place || matches!(self.sema.types.kind(info.ty), TypeKind::Array(..)) => {
-                    let field = self
-                        .sema
-                        .selected_field(expression)
-                        .ok_or_else(unsupported)?;
+                    let field = self.sema.selected_field(expression).ok_or_else(|| {
+                        LoweringError::missing(
+                            "member facts are not retained",
+                            expression.source_vectors,
+                        )
+                    })?;
                     if field.width.is_some() {
                         return Err(unsupported());
                     }
@@ -1221,19 +1225,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         target: Target,
         arena: &'ir Bump,
         tables: &'a Bump,
-    ) -> Self {
+    ) -> Result<Self, LoweringError> {
+        let address_taken = address_taken::find(sema, context, tables)?;
         let mut module = Module::new(arena);
         module.set_target(target.triple(), types::data_layout(target));
-        let mut declarators = ArenaMap::with_capacity_and_hasher_in(
-            sema.bindings.len(),
-            rustc_hash::FxBuildHasher,
-            tables,
-        );
-        for (index, binding) in sema.bindings.iter().enumerate() {
-            _ = declarators
-                .entry((binding.name.name, binding.name.source_vectors))
-                .or_insert(index);
-        }
         let mut definitions = ArenaMap::with_capacity_and_hasher_in(
             sema.definitions.len(),
             rustc_hash::FxBuildHasher,
@@ -1249,7 +1244,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 _ = defined_functions.insert(sema.bindings[binding].name.name);
             }
         }
-        Self {
+        Ok(Self {
             #[cfg(test)]
             parameter_alias_visits: 0,
             context,
@@ -1258,11 +1253,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             tables,
             target,
             names: SymbolNames::new(tables),
-            declarators,
             definitions,
             defined_functions,
             defined_objects,
-            address_taken: address_taken::find(sema, context, tables),
+            address_taken,
             statics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             strings: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             compound_literals: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
@@ -1272,6 +1266,6 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             generated_globals: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             conflicting_names: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             next_name_suffix: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
-        }
+        })
     }
 }

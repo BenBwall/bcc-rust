@@ -22,6 +22,7 @@ mod braced_strings;
 mod builtin_bindings;
 mod compound_assignments;
 mod declaration_initializers;
+mod resolved;
 mod runtime_calls;
 mod scalar_builtins;
 mod statement_expressions;

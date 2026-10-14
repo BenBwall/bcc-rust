@@ -5,10 +5,7 @@
 //! C99: §6.3, pp. 42-48; PDF pp. 54-60;
 //! §6.5, pp. 67-94; PDF pp. 79-106.
 
-use std::num::{
-    NonZeroU8,
-    NonZeroU32,
-};
+use std::num::NonZeroU8;
 
 use rustc_hash::FxBuildHasher;
 
@@ -800,12 +797,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         info.place_alignment = u8::try_from(alignment.trailing_zeros() + 1)
             .ok()
             .and_then(NonZeroU8::new);
+        _ = self.resolved.members.insert(
+            self.expressions.len(),
+            super::super::facts::resolved::MemberFacts {
+                tag:         id,
+                field:       index,
+                access_type: field_ty,
+                alignment:   u32::try_from(alignment).unwrap_or(1),
+                bit_field:   field.width,
+            },
+        );
         info.bit_field = field.width;
         info.promotion_width = field
             .width
             .and_then(|width| u8::try_from(width).ok())
             .and_then(NonZeroU8::new);
-        info.field = u32::try_from(index + 1).ok().and_then(NonZeroU32::new);
         info.register = !indirect && base.register;
         info.static_address = if indirect {
             self.address_value(base)
@@ -1034,6 +1040,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.floating = None;
             info.constant = ConstantClass::None;
         }
+        self.retain_designation(info);
         self.expression_effects.push(effects);
         self.expressions.push(info);
     }
@@ -1111,7 +1118,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             binding: None,
             bit_field: None,
             promotion_width: None,
-            field: None,
             register: false,
             vector_element: false,
             static_address: false,
@@ -1244,6 +1250,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ty: TypeId,
         kind: ConversionKind,
     ) {
+        self.resolved.conversion(e, ty, kind);
         self.conversions.push(Conversion {
             expression: e,
             ty,
@@ -1539,7 +1546,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.tainted {
             return;
         }
-        let e = super::selected_designator(e, |e| Some(self.expression_info(e)));
+        let e = self.selected_designator(e);
         if let ExpressionType::Identifier(name) = e.kind
             && self.lookup(Namespace::Ordinary, name.name).is_none()
             && self.builtin_name(name)

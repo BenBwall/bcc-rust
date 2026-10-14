@@ -180,12 +180,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | E::IndirectMember {
                 base_expression, ..
             } => self.tasks.push(Task::BuiltinEffects(base_expression, true)),
-            | E::StatementExpression(block) => {
-                self.statement_expression(
-                    block,
-                    self.info(expression)?.ty,
-                    super::StatementMode::Effects,
-                )?;
+            | E::StatementExpression(_) => {
+                self.statement_expression(expression, super::StatementMode::Effects)?;
             },
             | E::Builtin(_) | E::Generic(_) => {
                 if let Some(selected) = self.info(expression)?.selected_expression {

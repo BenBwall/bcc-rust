@@ -481,11 +481,12 @@ to the member path, the qualifiers of the anonymous members on that path and the
 byte/bit offset from the record's start. Member access and designators use it
 through a scratch index with expected O(1) lookup; const-member queries cache
 explicit postorder results rather than rescanning aggregate trees for every use.
-A `.` or `->` record retains the index of the field it selected
-(`ExpressionInfo::field_index`, in four bytes the record's padding already
-had), and `SemanticTranslationUnit::selected_field` returns that `Field`
-without a name search, through parentheses, `__extension__` and generic
-selections.
+`MemberFacts` retains the owning tag, field index, qualified access type,
+guaranteed place alignment and bit-field width. `member_facts` and
+`selected_field` use the normalized designation and expression indices;
+neither query peels wrappers or recovers the owning record from base syntax.
+Parentheses, `__extension__`, generic and choose-expr selections preserve the
+member identity. The former relative field index in `ExpressionInfo` is deleted.
 
 #### Constant expressions
 
@@ -1514,12 +1515,12 @@ commit groups are recorded in `target/commit-plan.md`.
 ### PR #41 round-6 review repairs (2026-10-13)
 
 Reserved builtin identifiers acquire their semantic binding before expression
-reduction, including inside compile-time selections. Shared iterative lookup
-follows parentheses, `__extension__`, `_Generic` and `__builtin_choose_expr`
-to the selected binding. Scalar intrinsic dispatch uses that binding in both
+reduction, including inside compile-time selections. Bottom-up designation facts
+retain the leaf and binding through parentheses, `__extension__`, `_Generic`
+and `__builtin_choose_expr`. Scalar intrinsic dispatch uses that binding in both
 semantic checking and lowering; user declarations and local function pointers
-keep ordinary-call behavior. Direct callee lookup also follows retained
-selections before falling back to an indirect call.
+keep ordinary-call behavior. `CallFacts` retains directness once at the call site,
+including all conservative indirect cases.
 
 Intrinsic-only builtin designators outside a call now report Clang's "builtin
 functions must be directly called" diagnostic instead of producing external
@@ -1530,9 +1531,9 @@ builtin aliases retain addressability. See
 and [Library Builtins](https://gcc.gnu.org/onlinedocs/gcc/Library-Builtins.html);
 C99 6.5.1p5 (printed p. 69, PDF p. 81) preserves parenthesized designation.
 
-Statement-expression tail lookup iteratively strips ordinary, case/default,
-case-range and attributed labels. Lowering keeps the final statement on its
-task stack with a value-preserving flag: each label enters its usual jump
+Statement completion forwards the immediate ordinary, case/default, case-range
+or attributed child's value-tail result in constant work. Lowering keeps the
+retained outer tail statement on its task stack with a value-preserving flag: each label enters its usual jump
 target before the converted tail is evaluated. C99 6.8.1p4 (printed p. 132,
 PDF p. 144) and
 [GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html)
@@ -1570,19 +1571,105 @@ were preserved, and nothing was staged or committed. The whole-file commit
 plan is `target/commit-plan.md`; check logs are under `target/round6/`.
 
 
-### Runtime array metadata consumed by lowering (2026-10-13)
+## Retained occurrence, parameter and runtime-size correspondence
 
-`ArrayBound::Variable` retains a unique bound index into `Types::runtime_bounds`,
-whose entries are typed expression references. Distinct array derivations keep
-distinct identities even when their element types match. `Parameter::original`
-and `FunctionRecord::parameter_types` preserve parameter array types before
-adjustment, allowing the middle end to execute bounds on function entry.
-Lowering evaluates each retained bound at its declaration, saves its extent,
-and implements dynamic storage, strides, runtime sizeof and lifetime cleanup.
-The retained control graph rejects jumps into VM declaration regions, including
-typedefs and pointers to VLAs; those protection regions have no stack cleanup.
-C99 §6.7.5.2p5, pp. 116-117; PDF pp. 128-129; §6.9.1p10, p. 142;
-PDF p. 154; §6.8.6.1p1, p. 137; PDF p. 149.
+`CorrespondenceFacts` retains source-ordered `DeclarationFacts` with typed
+`OccurrenceId` and `EntityId`, accepted binding, initializer association,
+prototype parameter facts and new declarator-bound actions. Named declarators
+are copied values: their arena-owned suffix-list identity indexes the occurrence,
+including parenthesized suffix aliases. No copied-value address or source-vector
+comparison identifies an occurrence. Rejected declarations keep an occurrence
+with no accepted binding/entity. The initializer association is retained now;
+subobject placement plans belong to the initializer-plan migration.
+
+`Parameter` retains its prototype binding and checked type-site actions during
+parameter-list construction. `FunctionRecord::parameter_facts` keeps prototype
+and body bindings, declared and incoming/promoted types, the original type before
+array/function adjustment, and entry actions in parameter order. Unnamed and
+invalid entries retain their ordinal with absent bindings. K&R declaration-list
+actions retain their written order separately from identifier-list incoming
+argument order. Bound expressions and the body use the same parameter storage
+through the retained alias pairs. Inspection reads static minima by binding ID.
+Correspondence construction and consumption visit parameters and occurrences;
+there is no per-function translation-unit binding scan.
+
+`TypeNameFacts` gives each written type name a deterministic `TypeNameId`,
+resolved type and size-query record. Both producer lookup and retained queries
+use syntax identity. `RuntimeBound` retains the typed integer expression, its
+required size_t conversion, written evaluation site and saved-extent dependencies.
+Distinct derivations keep distinct bound IDs, even when their expression spelling
+or element type agrees.
+Declaration, parameter, cast and type-operand sites retain the ordered actions
+that execute; typedef uses reuse saved extents. Dependency reduction includes
+size and stride uses in embedded statement expressions.
+
+`SizeFacts` interns a shared `SizeFormula` DAG of byte constants and products
+with constant extents or `BoundId`s. Finalization visits canonical types once,
+after nominal tag layouts complete, sharing each child formula. Cached constant
+sizes preserve fixed-size emission. Allocation, runtime `sizeof`, subscript,
+pointer arithmetic and increment strides query this same graph. Lowering assigns
+SSA extent variables and emits formula products; it does not rediscover bounds
+or reconstruct products from types.
+
+`SizeQueryFacts` records a formula and exactly which operand and written bound
+or typeof actions execute. Constant queries suppress both operand and type-site
+effects, including VM pointers with fixed pointer size. Runtime VLA queries
+execute the retained actions and, for expression operands, the retained operand.
+Missing required facts in a lowerable modeled node produce `MissingFact` with
+provenance. The control graph still rejects entry into VM declaration regions;
+VM typedef/pointer protection does not allocate stack storage.
+C99 §6.7.5.2p5, p. 117 (PDF p. 129), §6.9.1p7,10, p. 142 (PDF p. 154),
+§6.5.3.4p2, p. 80 (PDF p. 92), and §6.5.6p8, p. 83 (PDF p. 95).
+Validation and corpus evidence: [M2 receipt](docs/research/semantic-facts-m2.md).
+
+## Retained resolved expressions, calls, tails and members
+
+**M3 is complete.** `ResolvedFacts` retains one `Designation` per expression
+ordinal and sparse call, member and statement-expression records. Expression
+completion copies one immediate selected child's leaf/binding and conversion
+summary. Parentheses, `__extension__`, `_Generic` and `__builtin_choose_expr`
+therefore cost O(1) per edge, without recursion or repeated chain walks.
+Conversions on the outer node remain separate from conversions on its selected
+children. Scratch conversion summaries track count, first kind and final type
+while the existing contextual conversion records are produced.
+
+`CallFacts` records `Callee::Direct` with entity and binding, `Indirect` with
+the callee expression ordinal, or `Builtin` with its existing binding and
+designation-preserving directness. It retains the point-of-use function type,
+fixed prefix, prototype/ellipsis status and each argument's expression ordinal
+and converted type. Argument ordinals reference the existing conversion runs;
+later composite binding types never replace the written call's type. Builtin
+descriptors, checked instances and name dispatch remain M4/M6 work. Overloaded
+builtins may lack an ordinary function type; ordinary lowerable calls require it.
+The existing known-definition/open-external ABI policy remains downstream until
+M7. Returns-twice and unsupported-builtin capability refusals are unchanged.
+
+GNU implicit function declarations still precede identifier typing. Discovery
+forwards callee context through immediate parentheses/extension children on the
+ordinary work stack; it does not walk a chain before every reduction. Compile-time
+selections reuse completed designation facts. Function pointers, casts, address
+and dereference operators, comma/conditional expressions, converted block values,
+extra outer conversions and conversion-changing children stay indirect.
+
+`StatementExpressionFacts` retains the block, outer labeled tail, optional value
+expression, prefix length and converted result type. Statement continuations
+forward one child's tail result; block reduction inspects only its last immediate
+item. Empty/declaration/nested-compound endings yield void. Labels execute before
+the converted tail value, and aggregate snapshots still precede lifetime cleanup.
+The existing retained expression-effects record describes the block's effects.
+
+Lowering's linear address-use scan and builtin dispatch read retained callee and
+designation records. Call scheduling and completion share `CallFacts`; member
+access reads `MemberFacts`; GNU block scheduling reads its retained tail/prefix.
+The old chain-walking helpers, repeated direct-callee checks and owning-record
+recovery are deleted. Constant-time selection/tail helpers are semantic-private.
+Missing required facts report `MissingFact` with the written node's provenance,
+including member references in static address initializers.
+C99 §6.5.1p5, p. 69 (PDF p. 81), §6.5.2.2p6-7, pp. 71-72
+(PDF pp. 83-84), §6.5.2.3p3-4, p. 73 (PDF p. 85), and §6.8.1p4,
+p. 132 (PDF p. 144); C11/GNU selections and GNU statement expressions.
+Validation and corpus evidence: [M3 receipt](docs/research/semantic-facts-m3.md).
+
 ## 2026-10-13: Torture representation types and constant forms
 
 GNU `packed`, `aligned` and scalar `mode` now retain concrete types and layouts.
@@ -1675,8 +1762,8 @@ operand effects, including `typeof` of a pointer to VLA. Runtime VLA size querie
 execute the retained operand list.
 The new tables are arena-owned and keyed by syntax identity; provenance remains
 for diagnostics. Existing runtime-bound identities and extent SSA storage are
-unchanged. This is the minimal operand-evaluation part of the bound-site design,
-not the full proposed bound-action/formula migration.
+unchanged. The retained occurrence, parameter and size records above complete
+the bound-action and formula interface.
 
 Address-taking uses `FunctionRecord::parameter_aliases` to share the memory
 requirement between prototype and body bindings before parameter storage is
@@ -1695,11 +1782,11 @@ selected branches preserve conditional execution, and address-only operations ke
 their existing volatile distinctions. There are no per-query semantic purity caches
 or lowering-owned summary caches. Full sparse evaluation recipes remain M5 work.
 
-`FunctionRecord::parameter_sites` keeps entry actions in written order alongside
-original types and parameter aliases. Lowering initializes incoming parameters and
+`FunctionRecord::parameter_facts` keeps each prototype-style entry action with
+its original type and binding correspondence; `parameter_sites` keeps K&R
+shared declaration actions in written order. Lowering initializes incoming parameters and
 aliases first, then runs each site's typeof operand evaluations and newly introduced
 bounds before the body. Prototype-only declarations do not execute entry actions.
-This is the required M2 slice; occurrence IDs and runtime-size formula graphs remain
-future work. C99 §6.9.1p10, p. 142 (PDF p. 154), §6.5.3.4p2, p. 80 (PDF p. 92);
+C99 §6.9.1p10, p. 142 (PDF p. 154), §6.5.3.4p2, p. 80 (PDF p. 92);
 [GCC Typeof](https://gcc.gnu.org/onlinedocs/gcc/Typeof.html) and
 [GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).

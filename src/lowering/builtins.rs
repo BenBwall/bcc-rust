@@ -179,25 +179,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     pub(super) fn schedule_builtin(
         &mut self,
         e: &'tu Expression<'tu>,
-        callee: &'tu Expression<'tu>,
         args: ArenaList<'tu, &'tu Expression<'tu>>,
-    ) -> bool {
-        let callee =
-            crate::translation_phases::semantic_analysis::selected_designator(callee, |e| {
-                self.info(e).ok().copied()
-            });
-        let ExpressionType::Identifier(name) = callee.kind else {
-            return false;
+    ) -> Result<bool, LoweringError> {
+        let call = self.unit.sema.call_facts(e).ok_or_else(|| {
+            LoweringError::missing("call facts are not retained", e.source_vectors)
+        })?;
+        let crate::translation_phases::semantic_analysis::Callee::Builtin { binding, .. } =
+            call.callee
+        else {
+            return Ok(false);
         };
+        let name = self.unit.sema.bindings[binding].name;
         let Some(builtin) = common_builtin(self.unit.context.string_cache.at(name.name)) else {
-            return false;
+            return Ok(false);
         };
-        if !self.info(callee).is_ok_and(|info| {
-            info.binding
-                .is_some_and(|id| self.unit.sema.bindings[id].builtin)
-        }) {
-            return false;
-        }
         if let CommonBuiltin::Varargs(keyword) = builtin {
             let b = crate::translation_phases::semantic_analysis::keyword_call(
                 self.unit.context.tu_arena(),
@@ -217,7 +212,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             for &arg in args.iter().take(count).rev() {
                 self.tasks.push(Task::EvaluateRaw(arg));
             }
-            return true;
+            return Ok(true);
         }
         self.tasks.push(Task::FinishBuiltin(e, builtin));
         // GCC object_size and constant_p discard even operand side effects.
@@ -233,7 +228,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 }
             }
         }
-        true
+        Ok(true)
     }
 
     /// Completes one intrinsic from its evaluated scalar operands.

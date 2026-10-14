@@ -70,6 +70,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.8.6.4 paragraphs 1-3, p. 139; PDF p. 151.
     pub(super) fn statement_work(&mut self, work: StatementWork<'tu>) {
         match work {
+            | StatementWork::RetainTail(statement) => self.retain_statement_tail(statement),
             | StatementWork::RestoreStatementExpression { region, previous } => {
                 if let Some(region) = region {
                     self.control.regions[region.0].kind =
@@ -846,6 +847,7 @@ pub(super) enum StatementWork<'tu> {
     LoopBody(&'tu Statement<'tu>, &'tu Statement<'tu>),
     NormalExit(&'tu Statement<'tu>, RegionId),
     FinishStatement(&'tu Statement<'tu>),
+    RetainTail(&'tu Statement<'tu>),
     ForDeclarationDone(&'tu Declaration<'tu>),
     CaseDone(
         &'tu Statement<'tu>,

@@ -21,13 +21,9 @@ use crate::{
             BlockItem,
             ConditionalExpression,
             Expression,
-            Statement,
             StatementType,
         },
-        semantic_analysis::{
-            ConversionKind,
-            TypeId,
-        },
+        semantic_analysis::ConversionKind,
     },
 };
 
@@ -102,19 +98,26 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// C99: §6.3.2.1p2-4, p. 46; PDF p. 58 (tail value conversions).
     pub(super) fn statement_expression(
         &mut self,
-        statement: &'tu Statement<'tu>,
-        ty: TypeId,
+        expression: &'tu Expression<'tu>,
         mode: StatementMode,
     ) -> Result<(), LoweringError> {
+        let resolved = self
+            .unit
+            .sema
+            .statement_expression_facts(expression)
+            .ok_or_else(|| {
+                LoweringError::missing(
+                    "statement-expression facts are not retained",
+                    expression.source_vectors,
+                )
+            })?;
+        let statement = resolved.block;
+        let ty = resolved.result_type;
         let StatementType::Compound { items } = statement.kind else {
-            self.tasks.push(Task::Statement(statement));
-            if mode == StatementMode::Value {
-                self.operands.push(Item {
-                    operand: Operand::Void,
-                    ty,
-                });
-            }
-            return Ok(());
+            return Err(LoweringError::missing(
+                "a statement expression has no block",
+                expression.source_vectors,
+            ));
         };
         let facts = self.unit.sema.control.statement(statement).ok_or_else(|| {
             LoweringError::missing(
@@ -123,9 +126,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             )
         })?;
         self.tasks.push(Task::CleanupNormal(statement));
-        let tail =
-            crate::translation_phases::semantic_analysis::statement_expression_tail(statement);
-        if let Some((tail, expression)) = tail {
+        if let (Some(tail), Some(expression)) = (resolved.outer_tail, resolved.value_tail) {
             if mode == StatementMode::Value && self.transition_has_cleanup(facts.exit) {
                 self.tasks.push(Task::SnapshotArgument(expression));
             }
@@ -140,11 +141,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 ty,
             });
         }
-        let prefix = if tail.is_some() {
-            &items[..items.len() - 1]
-        } else {
-            items.as_slice()
-        };
+        let prefix = items.as_slice().get(..resolved.prefix).ok_or_else(|| {
+            LoweringError::missing(
+                "a statement expression has no retained prefix",
+                expression.source_vectors,
+            )
+        })?;
         for item in prefix.iter().rev() {
             match *item {
                 | BlockItem::Statement(s) => self.tasks.push(if mode == StatementMode::Effects {

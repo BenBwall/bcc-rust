@@ -29,6 +29,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         self.control.expression(e);
+        self.discover_implicit_callee(e);
         if !e.recovered
             && let E::LabelAddress(name) = e.kind
         {
@@ -102,7 +103,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 for &argument in arguments.iter().rev() {
                     self.work.push(Work::Expression(argument));
                 }
-                self.implicit_function(function_expression);
+                self.mark_implicit_callee(function_expression);
                 self.work.push(Work::Expression(function_expression));
             },
             | E::DirectMember {
@@ -147,6 +148,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.taint(s.recovered);
         let outside = self.control.current;
         _ = self.control.statement(s);
+        self.work.push(Work::StatementWork(W::RetainTail(s)));
         match s.kind {
             | S::Compound { items } => {
                 if !new_scope {

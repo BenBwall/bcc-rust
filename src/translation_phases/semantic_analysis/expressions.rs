@@ -32,10 +32,7 @@ mod results;
 // Constant addresses
 mod address;
 
-use std::num::{
-    NonZeroU8,
-    NonZeroU32,
-};
+use std::num::NonZeroU8;
 
 pub(crate) use address::AddressBase;
 pub(crate) use results::{
@@ -44,8 +41,6 @@ pub(crate) use results::{
     Conversion,
     ConversionKind,
     ValueCategory,
-    selected_designator,
-    statement_expression_tail,
 };
 
 use super::{
@@ -275,12 +270,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::SizeofType(name) | E::AlignofType(name) => {
                 let ty = self
                     .resolved_type_names
-                    .get(&name.source_vectors)
+                    .get(&super::type_name_identity(name))
                     .copied()
                     .unwrap_or_else(|| self.types.unknown());
                 info = self.type_sizeof(e, ty, None, matches!(e.kind, E::AlignofType(_)));
                 if matches!(e.kind, E::SizeofType(_))
-                    && let Some(site) = self.type_name_sites.get(&std::ptr::from_ref(name).addr())
+                    && let Some(site) = self.type_name_sites.get(&super::type_name_identity(name))
                 {
                     // C99 6.5.3.4p2: constant sizeof does not execute its
                     // type operand, even when a pointer is VM through its
@@ -288,19 +283,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     // typeof's operand evaluation independently.
                     _ = self.size_query_sites.insert(
                         std::ptr::from_ref(e).addr(),
-                        super::BoundSiteFacts {
-                            bounds: if info.ice { &[] } else { site.bounds },
-                            ty,
-                            operand_evaluations: if info.ice {
-                                &[]
-                            } else {
-                                site.operand_evaluations
+                        super::SizeQueryFacts {
+                            formula: None,
+                            operand: None,
+                            site:    super::BoundSiteFacts {
+                                bounds: if info.ice { &[] } else { site.bounds },
+                                ty,
+                                operand_evaluations: if info.ice {
+                                    &[]
+                                } else {
+                                    site.operand_evaluations
+                                },
                             },
                         },
                     );
                 }
             },
             | E::SizeofExpr(operand) | E::AlignofExpr(operand) => {
+                let operand_syntax = operand;
                 let operand = self.expression_info(operand);
                 info = self.type_sizeof(
                     e,
@@ -308,6 +308,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     operand.bit_field,
                     matches!(e.kind, E::AlignofExpr(_)),
                 );
+                if matches!(e.kind, E::SizeofExpr(_)) {
+                    _ = self.size_query_sites.insert(
+                        std::ptr::from_ref(e).addr(),
+                        super::SizeQueryFacts {
+                            formula: None,
+                            site:    super::BoundSiteFacts {
+                                ty:                  operand.ty,
+                                bounds:              &[],
+                                operand_evaluations: &[],
+                            },
+                            operand: (!info.ice).then_some(operand_syntax),
+                        },
+                    );
+                }
             },
             | E::Cast {
                 target_type,
@@ -315,7 +329,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 let target = self
                     .resolved_type_names
-                    .get(&target_type.source_vectors)
+                    .get(&super::type_name_identity(target_type))
                     .copied()
                     .unwrap_or_else(|| self.types.unknown());
                 info = self.type_cast(e, target, self.expression_info(operand_expression));
@@ -341,8 +355,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 // C99 §6.5.1p5: parentheses preserve the callee designation.
                 // GNU vector builtins retain constraints through parentheses.
-                let vector_callee =
-                    selected_designator(function_expression, |e| Some(self.expression_info(e)));
+                let vector_callee = self.selected_designator(function_expression);
                 let intrinsic = self
                     .expression_info(vector_callee)
                     .binding
@@ -381,7 +394,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } => {
                 let ty = self
                     .resolved_type_names
-                    .get(&type_name.source_vectors)
+                    .get(&super::type_name_identity(type_name))
                     .copied()
                     .unwrap_or_else(|| self.types.unknown());
                 // §6.5.2.5p1 excludes variable length array types; a pointer
@@ -403,7 +416,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.static_address = self.scope == 0;
             },
             | E::StatementExpression(statement) => {
-                if let Some((_, tail)) = statement_expression_tail(statement) {
+                if let Some((_, tail)) = self.statement_expression_tail(statement) {
                     // GNU extension: GCC "Statement Exprs" returns the value
                     // of the final expression statement. Its ValueExpression
                     // work already recorded C99 §6.3.2.1p2-4 conversions
@@ -501,6 +514,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.folding = ConstantFolding::AddressDifference;
             }
         }
+        if let E::StatementExpression(block) = e.kind {
+            self.retain_statement_expression(e, block, info.ty);
+        }
         self.retain_expression(info);
     }
 }
@@ -537,10 +553,6 @@ pub(crate) struct ExpressionInfo<'tu> {
     /// Checked integer bit-fields have at most 128 bits; one byte fits the
     /// retained record's existing padding.
     pub(in crate::translation_phases::semantic_analysis) promotion_width: Option<NonZeroU8>,
-    /// For `.` and `->`, one more than the index of the selected member in
-    /// the record's `Tag::fields`; read it through [`Self::field_index`].
-    /// Four bytes fit in the record's padding, so it does not grow.
-    pub(in crate::translation_phases::semantic_analysis) field: Option<NonZeroU32>,
     pub(crate) register: bool,
     /// GNU vector extension: a lane remains assignable but has no address.
     pub(crate) vector_element: bool,

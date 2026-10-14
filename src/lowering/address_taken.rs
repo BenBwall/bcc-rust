@@ -19,7 +19,6 @@ use crate::{
             CommonBuiltin,
             SemanticTranslationUnit,
             common_builtin,
-            selected_designator,
         },
     },
     util::bump::{
@@ -34,22 +33,20 @@ pub(super) fn find<'a>(
     sema: &SemanticTranslationUnit<'_>,
     context: &Context<'_>,
     arena: &'a Bump,
-) -> ArenaSet<'a, usize> {
+) -> Result<ArenaSet<'a, usize>, super::LoweringError> {
     let mut taken = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena);
     for info in sema.expressions {
-        if let ExpressionType::Call {
-            function_expression: callee,
-            arguments,
-        } = info.expression.kind
-        {
-            let callee = selected_designator(callee, |e| sema.expression_info(e).copied());
-            if let ExpressionType::Identifier(name) = callee.kind
-                && sema
-                    .expression_info(callee)
-                    .and_then(|info| info.binding)
-                    .is_some_and(|id| sema.bindings[id].builtin)
+        if let ExpressionType::Call { arguments, .. } = info.expression.kind {
+            let call = sema.call_facts(info.expression).ok_or_else(|| {
+                super::LoweringError::missing(
+                    "call facts are not retained",
+                    info.expression.source_vectors,
+                )
+            })?;
+            if let crate::translation_phases::semantic_analysis::Callee::Builtin { binding, .. } =
+                call.callee
                 && let Some(CommonBuiltin::Varargs(keyword)) =
-                    common_builtin(context.string_cache.at(name.name))
+                    common_builtin(context.string_cache.at(sema.bindings[binding].name.name))
             {
                 // Win64 cursors need storage even though these intrinsics use
                 // ordinary call syntax. C99: §7.15.1, pp. 249-251; PDF pp.
@@ -95,9 +92,14 @@ pub(super) fn find<'a>(
         else {
             continue;
         };
-        let operand = selected_designator(operand_expression, |e| sema.expression_info(e).copied());
-        if matches!(operand.kind, ExpressionType::Identifier(_))
-            && let Some(binding) = sema.expression_info(operand).and_then(|info| info.binding)
+        let operand = sema.designation(operand_expression).ok_or_else(|| {
+            super::LoweringError::missing(
+                "designation facts are not retained",
+                operand_expression.source_vectors,
+            )
+        })?;
+        if matches!(operand.leaf.kind, ExpressionType::Identifier(_))
+            && let Some(binding) = operand.binding
         {
             _ = taken.insert(binding);
         }
@@ -113,5 +115,5 @@ pub(super) fn find<'a>(
             }
         }
     }
-    taken
+    Ok(taken)
 }

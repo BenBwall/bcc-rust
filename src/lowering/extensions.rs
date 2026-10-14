@@ -61,6 +61,19 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     | DirectDeclarator::MsModifier(keyword, source) =>
                         Self::check_keyword(keyword, source, errors),
                     | DirectDeclarator::AsmLabel(label) => {
+                        if self
+                            .sema
+                            .correspondence
+                            .declaration(*declarator)
+                            .and_then(|fact| fact.binding)
+                            .is_none()
+                        {
+                            errors.push(LoweringError::missing(
+                                "assembler-label declaration occurrence is not retained",
+                                declarator.source_vectors,
+                            ));
+                            continue;
+                        }
                         let result =
                             self.record_label(*declarator, label.template, label.recovered);
                         if result.is_err() {
@@ -195,7 +208,12 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         template: Option<Token>,
         recovered: bool,
     ) -> Result<(), ()> {
-        let binding = self.declarator_binding(declarator).ok_or(())?;
+        let binding = self
+            .sema
+            .correspondence
+            .declaration(declarator)
+            .and_then(|fact| fact.binding)
+            .ok_or(())?;
         let data = self.sema.bindings[binding];
         if recovered
             || !matches!(data.kind, BindingKind::Object | BindingKind::Function)

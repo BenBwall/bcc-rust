@@ -121,7 +121,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             result = self
                 .resolved_type_names
-                .get(&name.source_vectors)
+                .get(&super::super::type_name_identity(name))
                 .copied()
                 .unwrap_or_else(|| self.types.unknown());
             if !self.types.unanalyzed(result)
@@ -156,7 +156,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let mut ty = self
             .resolved_type_names
-            .get(&name.source_vectors)
+            .get(&super::super::type_name_identity(name))
             .copied()
             .unwrap_or_else(|| self.types.unknown());
         if self.types.unanalyzed(ty) {
@@ -305,7 +305,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | SyntaxOperand::Expression(e) => self.expression_info(e).ty,
             | SyntaxOperand::Type(name) => self
                 .resolved_type_names
-                .get(&name.source_vectors)
+                .get(&super::super::type_name_identity(name))
                 .copied()
                 .unwrap_or_else(|| self.types.unknown()),
         }
