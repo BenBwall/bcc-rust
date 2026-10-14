@@ -216,6 +216,14 @@ pub(crate) enum SemanticErrorKind {
     InvalidStorage,
     /// C99: §6.7.1p5, p. 98; PDF p. 110.
     InvalidFunctionStorage,
+    /// C11: §6.7.1p4, p. 109; PDF p. 127.
+    ThreadLocalFunction,
+    /// C11: §6.7.1p3, p. 109; PDF p. 127.
+    ThreadLocalBlockScope,
+    /// C11: §6.7.1p3, p. 109; PDF p. 127.
+    ThreadLocalAfterNonThreadLocal,
+    /// C11: §6.7.1p3, p. 109; PDF p. 127.
+    NonThreadLocalAfterThreadLocal,
     /// C99: §6.7.8p5, p. 125; PDF p. 137.
     LinkedBlockInitializer,
     /// C99: §6.7.3p2, p. 108; PDF p. 120.
@@ -379,6 +387,10 @@ impl SemanticErrorKind {
             | Self::NonConstantInitializer => "not a constant expression",
             | Self::InvalidStorage => "external declaration",
             | Self::InvalidFunctionStorage => "function declared in a block",
+            | Self::ThreadLocalFunction => "declared as a function",
+            | Self::ThreadLocalBlockScope => "automatic object at block scope",
+            | Self::ThreadLocalAfterNonThreadLocal => "declared thread-local here",
+            | Self::NonThreadLocalAfterThreadLocal => "declared without thread storage here",
             | Self::LinkedBlockInitializer => "initializer is not allowed here",
             | Self::InvalidRestrict => "restrict on a non-object pointer",
             | Self::QualifiedFunction => "function type qualifiers are ignored",
@@ -874,6 +886,26 @@ impl SemanticErrorKind {
                 "block-scope function declaration has a storage class other than extern",
                 "C99 §6.7.1p5: a function declared in a block has no explicit storage class other \
                  than extern",
+            ),
+            | Self::ThreadLocalFunction => (
+                "thread storage duration applies only to objects",
+                "C11 §6.7.1p4: `_Thread_local` does not appear in the declaration specifiers of \
+                 a function declaration",
+            ),
+            | Self::ThreadLocalBlockScope => (
+                "thread-local object at block scope must be static or extern",
+                "C11 §6.7.1p3: a block-scope declaration with `_Thread_local` also has `static` \
+                 or `extern`",
+            ),
+            | Self::ThreadLocalAfterNonThreadLocal => (
+                "thread-local declaration follows a non-thread-local declaration",
+                "C11 §6.7.1p3: if `_Thread_local` appears in any declaration of an object, it \
+                 appears in every declaration of that object",
+            ),
+            | Self::NonThreadLocalAfterThreadLocal => (
+                "non-thread-local declaration follows a thread-local declaration",
+                "C11 §6.7.1p3: if `_Thread_local` appears in any declaration of an object, it \
+                 appears in every declaration of that object",
             ),
             | Self::LinkedBlockInitializer => (
                 "block-scope declaration with linkage cannot have an initializer",

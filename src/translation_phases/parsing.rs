@@ -134,6 +134,7 @@ pub(crate) use modern::{
     SpecifierExtensionKind,
     StaticAssertion,
     SyntaxOperand,
+    ThreadSpelling,
 };
 use recovery::RecoveryState;
 use scope::{

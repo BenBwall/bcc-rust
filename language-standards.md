@@ -380,7 +380,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | Alignas | - | - | - | Y | Y | Y | Y | extension | parser, sema, lowering |
 | Alignof | - | - | - | Y | Y | Y | Y | extension | parser |
 | Noreturn | - | - | - | Y | Y | Y | Y | extension | parser |
-| ThreadLocal | - | - | - | Y | Y | Y | Y | extension | parser |
+| ThreadLocal | - | - | - | Y | Y | Y | Y | extension | parser, sema, lowering |
 | Atomic | - | - | - | Y | Y | Y | Y | extension | parser and sema |
 | AnonymousAggregates | - | - | - | Y | Y | Y | Y | extension | parser |
 | TypedefRedefinition | - | - | - | Y | Y | Y | Y | extension | semantic analysis |
@@ -572,6 +572,23 @@ Literals still select standard types through `long long`; there is no 128-bit
 suffix, matching [GCC's integer extension](https://gcc.gnu.org/onlinedocs/gcc/_005f_005fint128.html).
 Preprocessor arithmetic remains the target's 64-bit intmax/uintmax model
 (C99 §6.10.1p4, printed p. 148; PDF p. 160).
+
+`__thread` is a reserved GNU alternate spelling of `_Thread_local`, a keyword
+in every mode, as in GCC and Clang ([GCC Thread-Local
+Storage](https://gcc.gnu.org/onlinedocs/gcc/Thread-Local.html)). Under the
+unified policy `-pedantic` reports it as a GNU extension, which Clang does
+not; Clang's separate pedantic warning for `__thread` written before `static`
+or `extern` is not reproduced. The three spellings mean the same storage
+class, but `__thread` beside `_Thread_local` or `thread_local` is an error and
+the same one repeated is a repeated-specifier warning, as in Clang. With
+`static` or `extern` only (and `auto` from C23), thread storage obeys C11
+§6.7.1p2-4 (C23 (N3220) §6.7.2p2-3): parameters and functions reject it, a
+block-scope object needs `static` or `extern`, and every declaration of the
+object agrees. A thread-local object's address is no address constant (C11
+§6.6p9), and the objects become thread-local globals. C23 storage-class
+specifiers in a compound literal parse, but lowering refuses a `static` one in
+a function and any `thread_local` one by name, rather than giving it automatic
+or shared storage.
 
 GNU attributes accept declaration, aggregate, enumerator, pointer, parameter,
 nested declarator, array, bit-field, function and label positions from
@@ -834,7 +851,7 @@ diagnostics are not counted.
   and `asm`, and GNU89 `inline`, are exceptions. `restrict` stays an identifier
   before C99 unless written with a reserved GNU alternate spelling.
 - `_Alignas`/`alignas`, `_Static_assert`/`static_assert`, `_Bool`/`bool`, and
-  `_Thread_local`/`thread_local` share kinds. Aliases keep their original
+  `_Thread_local`/`thread_local`/GNU `__thread` share kinds. Aliases keep their original
   spelling for policy diagnostics, and token contents preserve it for parser
   consumers.
 - GNU alternate keywords map to existing C99 kinds where they exist. `__asm__`

@@ -711,13 +711,47 @@ pub(crate) struct SpecifierExtension<'tu> {
 pub(crate) enum SpecifierExtensionKind<'tu> {
     Alignment(SyntaxOperand<'tu>),
     Attributes(&'tu AttributeSpecifier<'tu>),
-    ThreadLocal,
+    ThreadLocal(ThreadSpelling),
     Constexpr,
     ExtensionMarker,
     /// MSVC declaration modifier, retaining exact spelling and provenance.
     /// MSVC extension: Microsoft Learn, "Microsoft-Specific Modifiers".
     /// <https://learn.microsoft.com/en-us/cpp/cpp/microsoft-specific-modifiers>
     MsModifier(KeywordTokenType),
+}
+
+/// How a thread storage-class specifier was written. Every spelling gives
+/// thread storage duration, but `__thread` does not combine with the
+/// standard ones, and diagnostics name the spelling the source used.
+/// C11: §6.7.1 paragraph 1, p. 109; PDF p. 127. C23: `thread_local` is a
+/// keyword, §6.4.1 paragraph 1, p. 53; PDF p. 66.
+/// GNU extension: GCC manual, "Thread-Local Storage".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Thread-Local.html>
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum ThreadSpelling {
+    /// GNU `__thread`.
+    Gnu,
+    /// C11 `_Thread_local`.
+    Reserved,
+    /// C23 `thread_local`.
+    Keyword,
+}
+
+impl ThreadSpelling {
+    /// The specifier as written.
+    pub(crate) const fn spelling(self) -> &'static str {
+        match self {
+            | Self::Gnu => "__thread",
+            | Self::Reserved => "_Thread_local",
+            | Self::Keyword => "thread_local",
+        }
+    }
+
+    /// Whether two specifiers are the same one written twice rather than
+    /// the GNU and the standard specifier, which do not combine.
+    pub(crate) const fn repeats(self, other: Self) -> bool {
+        matches!(self, Self::Gnu) == matches!(other, Self::Gnu)
+    }
 }
 
 /// Shared attribute syntax for ISO, GNU, and MSVC grammar owners.
