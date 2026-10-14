@@ -74,7 +74,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             integer_models: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             resolved: super::facts::resolved::ResolvedBuilder::new(tu, scratch),
             expressions: ArenaVec::new_in(tu),
-            expression_effects: ArenaVec::new_in(tu),
+            effects: super::facts::effects::EffectBuilder::new(tu, scratch),
             expression_actions: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             binding_bounds: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             correspondence: super::facts::correspondence::CorrespondenceBuilder::new(tu, scratch),
@@ -114,6 +114,10 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         debug_assert!(
             self.integers.is_empty(),
             "no integer value outlives its root"
+        );
+        debug_assert!(
+            self.effects.is_balanced(),
+            "no statement-expression effect summary outlives its root"
         );
     }
 

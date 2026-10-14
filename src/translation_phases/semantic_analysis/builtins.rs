@@ -15,9 +15,9 @@
 //!   member offsets; `names.rs` joins the named-call recognition queries.
 //!   `registry.rs` projects signatures and diagnostic identities; `library.rs`
 //!   retains the implicit-library warning policy. `common.rs` checks scalar
-//!   calls; `effects.rs` produces the retained dual-context summary once during
-//!   the ordinary expression postorder. `designators.rs` rejects non-call uses
-//!   of intrinsic-only functions.
+//!   calls; their effect classes feed the retained expression effects in
+//!   `facts/effects.rs`. `designators.rs` rejects non-call uses of
+//!   intrinsic-only functions.
 //! - Atomic calls: `atomics.rs` classifies and checks atomic operands.
 //! - Target calls: `x86_builtins.rs` decodes signatures and checks operands;
 //!   `x86_builtin_table.rs` holds the generated signature and immediate table.
@@ -31,7 +31,6 @@
 // Header intrinsics and recognition
 mod common;
 mod designators;
-mod effects;
 mod floating;
 mod intrinsics;
 mod library;
@@ -45,7 +44,6 @@ pub(super) mod atomics;
 mod x86_builtin_table;
 mod x86_builtins;
 
-pub(crate) use effects::ExpressionEffects;
 pub(crate) use modeled as implemented_builtin;
 pub(super) use names::legacy_named_builtin;
 pub(crate) use names::named_builtin;

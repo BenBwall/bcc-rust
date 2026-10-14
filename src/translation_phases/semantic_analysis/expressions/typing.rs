@@ -1012,12 +1012,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         }
         _ = self.expression_indices.insert(key, self.expressions.len());
+        // Call and builtin-instance facts precede their effect summaries.
+        self.retain_designation(info);
         let effects = self.summarize_effects(info);
         if self
             .expression_actions
             .get(&key)
             .is_some_and(|site| !site.operand_evaluations.is_empty() || !site.bounds.is_empty())
-            && !effects.value_pure
+            && !effects[0].is_empty()
         {
             // Written type-site effects prohibit folding the enclosing value;
             // an empty action list preserves its existing constant eligibility.
@@ -1026,8 +1028,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.floating = None;
             info.constant = ConstantClass::None;
         }
-        self.retain_designation(info);
-        self.expression_effects.push(effects);
+        _ = self.retain_effect_recipes(info, effects);
         self.expressions.push(info);
     }
 

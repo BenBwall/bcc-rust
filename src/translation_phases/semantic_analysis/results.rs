@@ -48,7 +48,7 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) sizes:               super::SizeFacts<'tu>,
     pub(crate) runtime_bounds:      &'tu [super::RuntimeBound<'tu>],
     pub(crate) control:             super::ControlFacts<'tu>,
-    pub(crate) expression_effects:  &'tu [super::ExpressionEffects],
+    pub(crate) effects:             super::EffectFacts<'tu>,
     pub(super) expression_actions:  ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
     /// Declarators with vendor modifiers visited by the explicit type stack,
     /// including abstract declarators, retained for the lowering gate.
@@ -361,18 +361,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         self.expression_actions
             .get(&std::ptr::from_ref(expression).addr())
             .copied()
-    }
-
-    pub(crate) fn effect_pure(&self, expression: &'tu Expression<'tu>, read: bool) -> Option<bool> {
-        self.expression_index(expression)
-            .and_then(|index| self.expression_effects.get(index))
-            .map(|effects| {
-                if read {
-                    effects.value_pure
-                } else {
-                    effects.designation_pure
-                }
-            })
     }
 }
 

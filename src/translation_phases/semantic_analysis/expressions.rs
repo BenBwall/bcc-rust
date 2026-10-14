@@ -515,6 +515,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         if let E::StatementExpression(block) = e.kind {
+            self.close_block_effects();
             self.retain_statement_expression(e, block, info.ty);
         }
         self.retain_expression(info);

@@ -70,7 +70,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.8.6.4 paragraphs 1-3, p. 139; PDF p. 151.
     pub(super) fn statement_work(&mut self, work: StatementWork<'tu>) {
         match work {
-            | StatementWork::RetainTail(statement) => self.retain_statement_tail(statement),
+            | StatementWork::RetainTail(statement) => {
+                self.statement_effects(statement);
+                self.retain_statement_tail(statement);
+            },
             | StatementWork::RestoreStatementExpression { region, previous } => {
                 if let Some(region) = region {
                     self.control.regions[region.0].kind =
@@ -293,6 +296,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
     /// C99: §6.8.6.1p1, p. 137; PDF p. 149 (extended goto constraint).
     pub(super) fn enter_statement_expression(&mut self, source: SourceVectors) {
+        self.open_block_effects();
         let previous = self.control.current;
         let region = self.control.open(
             self.scope,

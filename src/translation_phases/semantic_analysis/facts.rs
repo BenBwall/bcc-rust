@@ -15,6 +15,7 @@ pub(super) mod builder;
 mod builtin_instances;
 mod control;
 pub(super) mod correspondence;
+pub(super) mod effects;
 mod parameters;
 pub(super) mod resolved;
 mod sizes;
@@ -28,6 +29,11 @@ pub(crate) use correspondence::{
     CorrespondenceFacts,
     OccurrenceId,
     ParameterFacts,
+};
+pub(crate) use effects::{
+    EffectContext,
+    EffectFacts,
+    EffectRecipe,
 };
 pub(crate) use resolved::{
     CallFacts,

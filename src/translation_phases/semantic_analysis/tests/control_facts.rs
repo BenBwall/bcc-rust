@@ -290,9 +290,13 @@ fn m1_parameter_actions_and_cast_effects_are_retained_once() {
                     .len(),
                 1
             );
-            assert_eq!(s.effect_pure(cast, true), Some(false));
-            assert_eq!(s.effect_pure(cast, false), Some(false));
-            assert_eq!(s.expressions.len(), s.expression_effects.len());
+            for context in [EffectContext::Value, EffectContext::Designation] {
+                assert!(
+                    s.effect_summary(cast, context)
+                        .is_some_and(|effects| !effects.is_empty())
+                );
+            }
+            assert_eq!(s.expressions.len(), s.effects.summaries.len());
         },
     );
 }
