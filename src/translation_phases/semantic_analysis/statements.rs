@@ -227,7 +227,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.work
             .push(Work::StatementWork(StatementWork::ComputedGotoDone(slot)));
         self.expression_slot(slot);
-        if let Some(point) = self.control.point() {
+        // Recovered syntax records no label addresses, so, as for `goto`,
+        // it records no jump to check against them.
+        if !self.tainted
+            && let Some(point) = self.control.point()
+        {
             self.control.jump(
                 statement,
                 ControlTarget::IndirectGoto(point.function),
