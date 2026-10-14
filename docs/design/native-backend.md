@@ -777,6 +777,44 @@ with the following decisions recorded for review:
   auto-import.
 - `--emit=asm` prints the native assembly and requires `--backend=native`.
 
-The measured results (test counts, torture survey classes, difftest counts)
-are recorded in the commit history and the final report of the branch that
-introduced the prototype.
+- An `i1` arriving from another compiler (a parameter or a call result) is
+  masked to its low bit, since the back end keeps `i1` canonical.
+- `--backend=native` rejects `--llvm-opt`, `--llvm-codegen-only` and
+  `--interpret` with an explanation instead of ignoring them.
+
+Measured on 2026-10-14 (release build, GCC 15.2.0 `gcc.c-torture/execute`,
+1,677 top-level sources, `--target=x86_64-w64-windows-gnu`,
+`run_gcc_torture_execute.py --arms A0,B0,B1`):
+
+| Class | A0 | B0 | B1 |
+| --- | ---: | ---: | ---: |
+| pass | 1364 | 1184 | 1181 |
+| frontend-error | 137 | 137 | 137 |
+| lowering-unsupported | 152 | 152 | 152 |
+| abi-unsupported | 6 | 6 | 6 |
+| native-unsupported | 0 | 182 | 181 |
+| compiler-crash | 0 | 0 | 0 |
+| wrong-result | 14 | 13 | 17 |
+| link-error | 4 | 3 | 3 |
+
+Every B0 wrong result or link error is also an A0 one (sources whose
+expectations the survey does not apply, such as `-fwrapv` or source
+encodings). The four B1-only wrong results (`980526-2`, `pr22493-1`,
+`pr43629`, `pr99079`) are programs the interpreter reports as undefined
+behaviour (poison branched on or divided by) in bcc's semantics, before and
+after the bcc pipeline, so no behaviour is wrong; A0 passing them is
+coincidence. The native refusals are floats (`f64` in 75 sources, `f32` in
+31), `va_start` (31), `i128` (18, plus 5 structure results in `i128`
+registers), `f80` (10), `dyn_alloca` (7), `stack_save` (4) and `va_copy`
+(1), counted per source (a source can name several). Stages 2 and 3 remove
+them.
+
+The same 2,361 B0 and B1 executables that passed on Windows were rebuilt for
+`x86_64-unknown-linux-gnu` and run under WSL (glibc, WSL's clang 21): 2,359
+pass; the two failures (`pr31448-2`, both arms) abort in the interpreter
+too, because the test assumes a 32-bit `long`. Two arms of `20081103-1` are
+refused on System V only, where a structure comes back in an SSE register.
+
+The difftest native oracle compiled 1,000 integer-only generated programs
+(500 seeds, arms B0 and B1) with no disagreement and no refusal; the default
+`cargo test` run checks 40.

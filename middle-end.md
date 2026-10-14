@@ -50,7 +50,7 @@ The research behind the decisions lives in `docs/research/`:
    │
    ├──► LLVM back end (src/backend/llvm)        textual .ll → bundled clang
    ├──► interpreter (src/backend/interpreter)   reference semantics, test oracle
-   └──► native back end (later)                 instruction selection, regalloc
+   └──► native back end (src/backend/native)    x86-64 assembly → bundled clang
 ```
 
 One IR serves every stage. The analyzed syntax tree is already the C-aware high
@@ -79,11 +79,15 @@ arms below differ only in who optimizes; LLVM's code generator is shared
 | A1 | bcc pipeline | no IR passes, O2 machine | our optimizer alone, LLVM codegen |
 | A2 | none | `default<O2>`, O2 machine | LLVM's optimizer alone on our IR |
 | A3 | bcc pipeline | `default<O2>`, O2 machine | does our optimizer help or hurt LLVM |
+| B0 | none | native back end | our code generator alone |
+| B1 | bcc pipeline | native back end | our optimizer with our code generator |
 | R | clang front end | `clang -O2 x.c` | reference ceiling |
 
 A1/N isolates what our optimizer adds on top of LLVM's code generator;
-N/A2 measures the work left to it. A ratio below 1 means the numerator arm
-is faster.
+N/A2 measures the work left to it. B1/A1 compares the two code generators on
+the same optimized IR, and B1/B0 measures our optimizer with a code generator
+that does not clean up after it. A ratio below 1 means the numerator arm is
+faster.
 
 `--llvm-codegen-only` skips `LLVMRunPasses` entirely while the target machine
 keeps the selected optimization level. Otherwise LLVM-C runs the new pass
@@ -797,11 +801,17 @@ programs can report results. It is the oracle for differential tests: a program
 must print the same output when interpreted before optimization, interpreted
 after optimization, and compiled through each LLVM arm.
 
-### Native back end (later)
+### Native back end
 
-Instruction selection from the post-ABI IR, register allocation (evaluate the
-`regalloc2` crate against the arena rules), frame layout and object emission.
-It comes after the optimizer is measurably useful through the LLVM path.
+bcc's own x86-64 code generator is designed in
+[docs/design/native-backend.md](docs/design/native-backend.md): a
+macro-expansion instruction selector over the post-ABI IR, a machine IR over
+virtual registers, linear-scan register allocation with fixed-register
+ranges, frame layout with CFI and SEH unwind directives for System V and Win64,
+and AT&T assembly assembled and linked by the bundled clang. Stage 1 compiles
+integer and pointer code and refuses everything else (floats, `i128`, variadic
+definitions, dynamic stack allocation) before writing any output.
+`--backend=native` selects it for `-o`, and `--emit=asm` prints its assembly.
 
 ## Source layout
 
@@ -833,6 +843,8 @@ bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with cla
     [--print-after-all]             each function after every pass, to stderr
     [--llvm-opt=none|O0|O1|O2|O3]   LLVM pipeline and machine level; none means O0
     [--llvm-codegen-only]           skip LLVM IR passes; retain machine level
+    [--backend=llvm|native]         code generator for -o; native refuses what it lacks
+bcc-rust x.c --backend=native --emit=asm   print the native back end's assembly
 bcc-rust --print-default-passes     print the default pass list and exit
 ```
 
@@ -849,6 +861,8 @@ is one invocation:
 | A1 | `--opt=bcc --llvm-opt=O2 --llvm-codegen-only` |
 | A2 | `--llvm-opt=O2` |
 | A3 | `--opt=bcc --llvm-opt=O2` |
+| B0 | `--backend=native` |
+| B1 | `--opt=bcc --backend=native` |
 
 Exit statuses: 0 on success; 1 after an error, a construct lowering or ABI
 lowering does not support yet, or a clang failure; for `--interpret`, the status `main` returns
@@ -898,7 +912,7 @@ triple to produce a runnable program; `main` is called without arguments.
 | 5 | Optimizer prototype: fold, DCE, CFG simplification; `--passes` | arms A0-A3 run on a small benchmark set |
 | 6 | Floats, switch, globals with initializers, varargs, ABI lowering for x86-64 SysV and Win64 | GCC torture `execute` subset passes |
 | 7 | SCCP, GVN, LICM, inlining, slot promotion; comparison harness | first optimizer-vs-LLVM report |
-| 8 | Native back end exploration | — |
+| 8 | Native back end, stage 1 (integer code) | see [docs/design/native-backend.md](docs/design/native-backend.md) |
 
 Stage 7 status: promotion, SCCP, GVN, LICM and bottom-up inlining exist
 (the prototype pipeline above). The comparison harness exists:

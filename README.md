@@ -38,6 +38,8 @@ bcc-rust x.c --emit=llvm               # LLVM IR, to stdout
 bcc-rust x.c --interpret               # run main in the IR interpreter
 bcc-rust x.c --target=x86_64-w64-windows-gnu -o x.exe [--llvm-opt=O2]
 bcc-rust x.c --target=x86_64-w64-windows-gnu -c -o x.o
+bcc-rust x.c --target=x86_64-w64-windows-gnu --backend=native -o x.exe
+bcc-rust x.c --target=x86_64-unknown-linux-gnu --backend=native --emit=asm
 ```
 
 Every back end receives the module after ABI lowering, which fixes how the
@@ -61,6 +63,14 @@ runs no LLVM IR passes, so `--opt=bcc --llvm-opt=O2
 [middle-end.md](middle-end.md#comparison-arms). Errors, constructs lowering
 does not support yet (such as variable length arrays) and clang failures exit
 with status 1.
+
+`--backend=native` replaces LLVM with bcc's own x86-64 code generator
+([design](docs/design/native-backend.md)): it writes AT&T assembly for System V
+or Win64, which the bundled clang assembles and links, and `--emit=asm` prints
+that assembly. Its first stage compiles integer and pointer code; a module that
+uses anything else (floating point, `__int128`, variadic definitions, variable
+length arrays) is refused with `error: not yet supported by the native back
+end: ...` and status 1 before any output is written.
 
 Diagnostics are rendered like `rustc`'s: a lowercase message, the
 `file:line:column` location, the quoted source line with `^` under the problem
@@ -499,8 +509,10 @@ python scripts/run_gcc_torture_execute.py --source <gcc-15.2.0> --output target/
 ```
 
 This runner makes no downloads and executes the top-level `execute/*.c` sources
-through the unoptimized and bcc-optimized interpreter, A0 native code, and A1
-native code. It targets `x86_64-w64-windows-gnu`; see the
+through the unoptimized and bcc-optimized interpreter, A0 native code, A1
+native code, and the native back end's arms B0 (`--backend=native`) and B1
+(`--opt=bcc --backend=native`); `--arms B0,B1` selects a subset, and the
+native back end's refusals are classified as `native-unsupported`. It targets `x86_64-w64-windows-gnu`; see the
 [optimizer comparison harness](#optimizer-comparison-harness) for the native
 arm definitions. Each process has a deadline, and each test has its own working
 directory beneath `target/`. JSON Lines retain per-arm commands, source hashes,
