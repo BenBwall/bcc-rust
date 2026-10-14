@@ -12,9 +12,11 @@
 //! earlier, when the verifier or a printer asks to see the function after a
 //! pass).
 //!
-//! The default pipeline is `inline`, `promote`, `fold`, `simplify-cfg`, `sccp`,
-//! `known-bits`, `gvn`, `licm`, `dce` (promotion first, so the others see SSA
-//! values instead of loads and stores; value numbering before code motion, so
+//! The default pipeline is `inline`, `sroa`, `promote`, `fold`, `combine`,
+//! `simplify-cfg`, `sccp`, `known-bits`, `gvn`, `licm`, `dce` (scalar
+//! replacement and promotion first, so the others see SSA values instead of
+//! loads and stores; combining before CFG simplification, so its threading
+//! sees plain booleans; value numbering before code motion, so
 //! one copy of a repeated invariant moves; and dead code last, so it sweeps
 //! what the others leave). Inlining runs once per function, using already
 //! optimized callees; the remaining passes repeat until a round changes nothing
@@ -57,9 +59,12 @@
 //!   natural loops and their nesting, `frontiers.rs` dominance frontiers;
 //!   `memory.rs` tracks scoped memory generations and conservative aliases.
 //! - Passes: `fold.rs` (with `fold/eval.rs`, exact integer evaluation),
-//!   `dce.rs`, `simplify_cfg.rs` (with `simplify_cfg/select.rs`, bounded select
-//!   formation), `inline.rs` (module call graph and direct-call expansion),
-//!   `promote.rs` (stack-slot promotion), `sccp.rs` (sparse conditional
+//!   `combine.rs` (peephole combining), `dce.rs`, `simplify_cfg.rs` (with
+//!   `simplify_cfg/select.rs`, bounded select formation, and
+//!   `simplify_cfg/thread.rs`, branch threading), `inline.rs` (module call
+//!   graph and direct-call expansion), `sroa.rs` (scalar replacement of
+//!   aggregates, with `sroa/plan.rs` and `sroa/rewrite.rs`), `promote.rs`
+//!   (stack-slot promotion), `sccp.rs` (sparse conditional
 //!   constant propagation), `known_bits.rs` (integer facts from dominating
 //!   conditions and division rewrites), `gvn.rs` (value numbering over the
 //!   dominator tree, including load reuse and store forwarding) and `licm.rs`
