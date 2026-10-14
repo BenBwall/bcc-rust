@@ -1,6 +1,8 @@
-//! Phase-7 statement constraints, function labels and switch dispatch.
+//! Phase-7 statement constraints, function labels and switch dispatch, and
+//! GNU label addresses and computed gotos.
 //! C99: §6.8.1-§6.8.6.4, pp. 131-139; PDF pp. 143-151. All walking and
 //! jump validation are iterative; this does not construct a backend CFG.
+//! GNU extension: GCC "Labels as Values".
 
 use rustc_hash::FxBuildHasher;
 
@@ -40,7 +42,10 @@ use crate::{
     translation_phases::{
         SourceVectors,
         parsing::{
-            declaration_syntax::Declaration,
+            declaration_syntax::{
+                Declaration,
+                TypeQualifiers,
+            },
             syntax::{
                 Expression,
                 ExpressionSlot,
@@ -206,6 +211,58 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | StatementWork::CaseDone(statement, lower, upper, source) =>
                 self.case_done(statement, lower, upper, source),
             | StatementWork::ReturnDone(slot, source) => self.return_done(slot, source),
+            | StatementWork::ComputedGotoDone(slot) => self.computed_goto_done(slot),
+        }
+    }
+
+    /// Records a computed goto as a jump to any address-taken label of the
+    /// function, to be checked against them once every label is known.
+    /// GNU extension: GCC "Labels as Values".
+    /// C99: §6.8.6.1p1, p. 137; PDF p. 149 (extended to every target).
+    pub(super) fn computed_goto(
+        &mut self,
+        statement: &'tu Statement<'tu>,
+        slot: ExpressionSlot<'tu>,
+    ) {
+        self.work
+            .push(Work::StatementWork(StatementWork::ComputedGotoDone(slot)));
+        self.expression_slot(slot);
+        if let Some(point) = self.control.point() {
+            self.control.jump(
+                statement,
+                ControlTarget::IndirectGoto(point.function),
+                point,
+            );
+            self.statements.indirect_jumps.push(IndirectJump {
+                point,
+                source: statement.source_vectors,
+            });
+        }
+    }
+
+    /// Converts a computed goto's operand to `const void *`, as Clang does,
+    /// with the constraints of simple assignment.
+    /// GNU extension: GCC "Labels as Values".
+    /// C99: §6.5.16.1p1, p. 92; PDF p. 104.
+    fn computed_goto_done(&mut self, slot: ExpressionSlot<'tu>) {
+        let Some(e) = slot_expression(slot) else {
+            return;
+        };
+        let info = self.expression_info(e);
+        let void = self
+            .types
+            .scalar(Scalar::Void)
+            .qualified(TypeQualifiers::CONST);
+        let target = self.types.intern(TypeKind::Pointer(void));
+        if self.assignment_compatible(target, info) {
+            self.convert(e, target, ConversionKind::Assignment);
+        } else if !self.types.unanalyzed(info.ty) {
+            self.error(
+                SemanticErrorKind::InvalidComputedGoto,
+                e.source_vectors,
+                None,
+                None,
+            );
         }
     }
 
@@ -423,14 +480,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(index)
     }
 
-    /// Records a GNU label-address use as requiring a label definition.
+    /// Records a GNU label-address use as requiring a label definition, and
+    /// the label as a possible computed-goto target. Outside a function body
+    /// there is no label to name.
     /// GNU extension: GCC manual, "Labels as Values".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
-    pub(super) fn label_address(&mut self, name: Identifier) {
-        if !self.tainted
-            && let Some(index) = self.label_index(name)
-        {
+    pub(super) fn label_address(&mut self, expression: &'tu Expression<'tu>, name: Identifier) {
+        if self.tainted {
+            return;
+        }
+        if self.functions.current.is_none() {
+            self.error(
+                SemanticErrorKind::LabelAddressOutsideFunction,
+                expression.source_vectors,
+                Some(name.name),
+                None,
+            );
+            return;
+        }
+        if let Some(index) = self.label_index(name) {
             _ = self.statements.labels[index].used.get_or_insert(name);
+            let id = self.statements.labels[index].id;
+            self.control.take_address(expression, id, self.scratch);
         }
     }
 
@@ -471,6 +542,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             function: FunctionId(self.functions.current.map_or(usize::MAX, |f| f.id)),
             definition: None,
             point: None,
+            address: None,
         });
         id
     }
@@ -573,6 +645,66 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
             }
         }
+        self.finish_indirect_jumps();
+    }
+
+    /// Checks every computed goto against every address-taken label of its
+    /// function, as Clang does: a function without any is an error, and so
+    /// is entering a statement expression or the scope of a variably
+    /// modified identifier, reported once per goto for its first such
+    /// target. Only labels inside such a region need a check, so ordinary
+    /// dispatch tables cost no pairwise work.
+    /// GNU extension: GCC "Labels as Values" and "Statement Exprs".
+    /// C99: §6.8.6.1p1, p. 137; PDF p. 149.
+    fn finish_indirect_jumps(&mut self) {
+        for i in 0..self.statements.indirect_jumps.len() {
+            let jump = self.statements.indirect_jumps[i];
+            let taken = self.control.taken(jump.point.function);
+            if taken.is_empty() {
+                self.error(
+                    SemanticErrorKind::IndirectGotoWithoutLabels,
+                    jump.source,
+                    None,
+                    None,
+                );
+                continue;
+            }
+            for index in 0..taken.len() {
+                let label = self.control.taken(jump.point.function)[index];
+                let facts = self.control.labels[label.0];
+                let (Some(point), Some(name)) = (facts.point, facts.name) else {
+                    continue;
+                };
+                let region = self.control.regions[point.region.0];
+                if region.nearest_vm.is_none() && region.nearest_statement_expression.is_none() {
+                    continue;
+                }
+                if let Some(expression) = self
+                    .control
+                    .forbidden_expression(jump.point.region, point.region)
+                {
+                    self.error(
+                        SemanticErrorKind::IndirectJumpIntoStatementExpression,
+                        jump.source,
+                        Some(name.name),
+                        Some(expression),
+                    );
+                    break;
+                }
+                if let Some(vm) = self.control.forbidden_vm(jump.point.region, point.region) {
+                    let RegionKind::VmDeclaration(binding) = self.control.regions[vm.0].kind else {
+                        unreachable!("nearest VM is a VM region")
+                    };
+                    self.error(
+                        SemanticErrorKind::IndirectJumpIntoVariableScope,
+                        jump.source,
+                        Some(name.name),
+                        Some(self.bindings[binding.0].name.source_vectors),
+                    );
+                    break;
+                }
+            }
+        }
     }
 
     /// C99: §6.8.1p2, p. 131; PDF p. 143; §6.8.4.2p2-3,p5,
@@ -653,6 +785,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     local: false,
                     definition: Some(statement),
                     point: Some(point),
+                    address: None,
                 });
                 if let Some(statement_id) = self.control.statement_id(statement) {
                     self.control.statements[statement_id.0].label = Some(id);
@@ -856,6 +989,7 @@ pub(super) enum StatementWork<'tu> {
         SourceVectors,
     ),
     ReturnDone(Option<ExpressionSlot<'tu>>, SourceVectors),
+    ComputedGotoDone(ExpressionSlot<'tu>),
 }
 
 /// A function-scoped label or a GNU local label and its definition.
@@ -883,6 +1017,14 @@ struct Jump<'tu> {
     function:  usize,
     label:     usize,
     source:    Identifier,
+}
+
+/// A computed goto and where it is, checked against every address-taken
+/// label of its function. GNU extension: GCC "Labels as Values".
+#[derive(Clone, Copy)]
+struct IndirectJump {
+    point:  ControlPoint,
+    source: SourceVectors,
 }
 
 /// A converted switch case value or inclusive GNU case interval.
@@ -920,6 +1062,7 @@ pub(super) struct State<'tu, 's> {
     labels:                    ArenaVec<'s, Label>,
     label_names:               ArenaMap<'s, (usize, StringCacheId), usize>,
     jumps:                     ArenaVec<'s, Jump<'tu>>,
+    indirect_jumps:            ArenaVec<'s, IndirectJump>,
     switches:                  ArenaVec<'s, Switch<'tu, 's>>,
     case_count:                usize,
 }
@@ -934,6 +1077,7 @@ impl<'s> State<'_, 's> {
             labels: ArenaVec::new_in(scratch),
             label_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             jumps: ArenaVec::new_in(scratch),
+            indirect_jumps: ArenaVec::new_in(scratch),
             switches: ArenaVec::new_in(scratch),
             case_count: 0,
         }

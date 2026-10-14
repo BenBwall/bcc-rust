@@ -150,6 +150,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                 | ConstantClass::None => {},
                 | ConstantClass::Arithmetic => out.push_str(" constant=arithmetic"),
                 | ConstantClass::Address => out.push_str(" constant=address"),
+                | ConstantClass::LabelDifference => out.push_str(" constant=label-difference"),
             }
             out.push('\n');
         }

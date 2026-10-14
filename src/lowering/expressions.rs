@@ -336,7 +336,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | E::StatementExpression(_) =>
                 self.statement_expression(expression, super::StatementMode::Value)?,
-            | E::LabelAddress(_) | E::Countof(_) | E::Boolean(_) | E::Nullptr | E::Error =>
+            | E::LabelAddress(_) => {
+                let label = self
+                    .unit
+                    .sema
+                    .control
+                    .label_address(expression)
+                    .ok_or_else(|| {
+                        LoweringError::missing("a label address has no resolved label", source)
+                    })?;
+                let label = self.block_label(label, source)?;
+                let address = self.inst(InstData::BlockAddr { label }, Type::Ptr);
+                self.push_item(Operand::Value(address), info.ty);
+            },
+            | E::Countof(_) | E::Boolean(_) | E::Nullptr | E::Error =>
                 return Err(LoweringError::missing(
                     "an expression was not parsed",
                     source,
@@ -1523,14 +1536,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         self.convert(Opcode::Inttoptr, Type::Ptr, wide)
     }
 
-    /// The size of the element a pointer or array type designates.
+    /// The size of the element a pointer or array type designates; 1 for
+    /// `void`, as GNU pointer arithmetic counts it.
+    /// GNU extension: GCC "Pointer Arith".
     fn static_element_size(&self, pointer: TypeId) -> Option<u64> {
         let element = types::target_type(&self.unit.sema.types, pointer)?;
-        self.unit
-            .sema
-            .types
-            .layout(element)
-            .map(|layout| layout.size)
+        types::arithmetic_size(&self.unit.sema.types, element)
     }
 
     /// The saved runtime stride for a variably modified pointer or array.
@@ -1578,7 +1589,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 fn unsupported(expression: &Expression<'_>) -> Option<Construct> {
     Some(match expression.kind {
         | ExpressionType::Builtin(b) if !matches!(b.keyword,crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaArg|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaStart|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaEnd|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaCopy|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinTypesCompatible|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinOffsetof) => Construct::Builtin,
-        | ExpressionType::LabelAddress(_) => Construct::LabelAddress,
         | ExpressionType::Countof(_) | ExpressionType::Nullptr => Construct::Extension,
         | _ => return None,
     })

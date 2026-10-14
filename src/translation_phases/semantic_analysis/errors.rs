@@ -122,6 +122,27 @@ pub(crate) enum SemanticErrorKind {
     JumpIntoVariableScope,
     /// C99: §6.8.4.2p2, p. 134; PDF p. 146.
     SwitchIntoVariableScope,
+    /// GNU extension: a computed goto may reach every address-taken label,
+    /// so one inside a variably modified scope the goto is outside of is an
+    /// error, as in Clang. C99: §6.8.6.1p1, p. 137; PDF p. 149.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    IndirectJumpIntoVariableScope,
+    /// GNU extension: GCC "Statement Exprs" makes a computed goto into a
+    /// statement expression undefined; Clang rejects a possible one.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+    IndirectJumpIntoStatementExpression,
+    /// GNU extension: a computed goto can only reach labels whose address
+    /// is taken in its function, so without one it has no target; Clang
+    /// rejects it. <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    IndirectGotoWithoutLabels,
+    /// GNU extension: a computed goto's operand converts to `const void *`
+    /// as by simple assignment. C99: §6.5.16.1p1, p. 92; PDF p. 104.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    InvalidComputedGoto,
+    /// GNU extension: `&&label` names a label of the enclosing function, so
+    /// it cannot appear outside a function body.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    LabelAddressOutsideFunction,
     /// C99: §6.8.1p2, p. 131; PDF p. 143.
     CaseOutsideSwitch,
     /// C99: §6.8.4.2p3, p. 134; PDF p. 146.
@@ -434,6 +455,11 @@ impl SemanticErrorKind {
                 "jumps into a variably modified scope",
             | Self::JumpIntoStatementExpression | Self::SwitchIntoStatementExpression =>
                 "jumps into a statement expression",
+            | Self::IndirectJumpIntoVariableScope => "may jump into a variably modified scope",
+            | Self::IndirectJumpIntoStatementExpression => "may jump into a statement expression",
+            | Self::InvalidComputedGoto => "not convertible to `const void *`",
+            | Self::IndirectGotoWithoutLabels => "no label of this function has its address taken",
+            | Self::LabelAddressOutsideFunction => "label address outside a function",
             | Self::CaseOutsideSwitch => "not in a switch statement",
             | Self::EmptyCaseRange => "empty case range",
             | Self::BreakOutsideLoopOrSwitch => "not in a loop or switch",
@@ -684,6 +710,33 @@ impl SemanticErrorKind {
                 "goto enters the scope of a variably modified identifier",
                 "C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified \
                  identifier to inside that scope",
+            ),
+            | Self::IndirectJumpIntoVariableScope => (
+                "computed goto can enter the scope of a variably modified identifier at its \
+                 possible target",
+                "C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified \
+                 identifier to inside that scope; GCC Labels as Values: a computed goto may reach \
+                 every label whose address is taken",
+            ),
+            | Self::IndirectJumpIntoStatementExpression => (
+                "computed goto can enter a statement expression at its possible target",
+                "GCC Statement Exprs: jumping into a statement expression with a computed goto is \
+                 undefined; GCC Labels as Values: a computed goto may reach every label whose \
+                 address is taken",
+            ),
+            | Self::IndirectGotoWithoutLabels => (
+                "computed goto in a function without label addresses",
+                "GCC Labels as Values: a computed goto may only jump to a label of its own \
+                 function whose address is taken with `&&`",
+            ),
+            | Self::InvalidComputedGoto => (
+                "computed goto operand is not a pointer",
+                "GCC Labels as Values: `goto *expression` converts the operand to `const void *` \
+                 as C99 §6.5.16.1p1 simple assignment does",
+            ),
+            | Self::LabelAddressOutsideFunction => (
+                "label address outside a function body",
+                "GCC Labels as Values: `&&label` names a label of the function that contains it",
             ),
             | Self::SwitchIntoVariableScope => (
                 "switch dispatch enters the scope of a variably modified identifier",
@@ -1042,10 +1095,12 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::DuplicateLabel | SemanticErrorKind::DuplicateCase =>
                     "previous label is here",
                 | SemanticErrorKind::JumpIntoVariableScope
-                | SemanticErrorKind::SwitchIntoVariableScope =>
+                | SemanticErrorKind::SwitchIntoVariableScope
+                | SemanticErrorKind::IndirectJumpIntoVariableScope =>
                     "variably modified identifier is declared here",
                 | SemanticErrorKind::JumpIntoStatementExpression
-                | SemanticErrorKind::SwitchIntoStatementExpression =>
+                | SemanticErrorKind::SwitchIntoStatementExpression
+                | SemanticErrorKind::IndirectJumpIntoStatementExpression =>
                     "statement expression begins here",
                 | _ => "previous declaration is here",
             };

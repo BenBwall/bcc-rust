@@ -127,10 +127,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 {
                                     true
                                 } else if self.arithmetic(target) {
-                                    info.constant == ConstantClass::Arithmetic
+                                    (info.constant == ConstantClass::Arithmetic
                                         && (info.integer.is_some()
                                             || info.floating.is_some()
-                                            || info.unfolded_binary128)
+                                            || info.unfolded_binary128))
+                                        // GNU extension: GCC "Labels as
+                                        // Values"; Clang accepts integers of
+                                        // at least 32 bits.
+                                        || (info.constant == ConstantClass::LabelDifference
+                                            && self
+                                                .integer_type(target)
+                                                .is_some_and(|(bits, _)| bits >= 32))
                                 } else {
                                     address || self.null_pointer_constant(info)
                                 };

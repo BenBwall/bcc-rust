@@ -155,6 +155,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidUnaryOperand);
             }
+            if let Some(target) = self.pointer_target(ty) {
+                self.report_void_arithmetic(e, target);
+            }
             return Self::expression_result(e, ty);
         }
         if !match op {
@@ -284,7 +287,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let Some((target, pointer)) = pair else {
                     return self.invalid_expression(e, SemanticErrorKind::InvalidSubscript);
                 };
-                if !self.pointer_arithmetic_target(target) {
+                if !self.complete_object(target) && !self.types.unanalyzed(target) {
                     return self.invalid_expression(e, SemanticErrorKind::InvalidSubscript);
                 }
                 info.ty = target;
@@ -320,6 +323,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             .invalid_expression(e, SemanticErrorKind::InvalidAdditiveOperands);
                     }
                     if self.integer_type(rt).is_some() {
+                        self.report_void_arithmetic(e, target);
                         info.ty = lt;
                         if self.address_value(left) && right.ice && right.integer.is_some() {
                             info.constant = ConstantClass::Address;
@@ -330,11 +334,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 && self.pointer_compatible(target, t, false)
                         })
                     {
+                        self.report_void_arithmetic(e, target);
                         info.ty = self.types.scalar(self.types.target.ptrdiff_t);
                         info.integer = self.address_difference(left, right, target);
                         if info.integer.is_some() {
                             info.constant = ConstantClass::Arithmetic;
                             info.folding = ConstantFolding::AddressDifference;
+                        } else if let Some(labels) = self.label_difference(left, right) {
+                            info.constant = ConstantClass::LabelDifference;
+                            self.control.record_difference(e, labels);
                         }
                     } else {
                         return self
@@ -346,6 +354,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .pointer_target(rt)
                         .is_some_and(|t| self.pointer_arithmetic_target(t))
                 {
+                    if let Some(target) = self.pointer_target(rt) {
+                        self.report_void_arithmetic(e, target);
+                    }
                     info.ty = rt;
                     if self.address_value(right) && left.ice && left.integer.is_some() {
                         info.constant = ConstantClass::Address;
@@ -964,6 +975,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             info.constant = ConstantClass::Arithmetic;
         }
+        // GNU extension: GCC "Labels as Values". A label difference
+        // converted to an integer of at least 32 bits stays a link-time
+        // constant; Clang refuses narrower conversions, and so does bcc.
+        if operand.constant == ConstantClass::LabelDifference
+            && self
+                .integer_type(target)
+                .is_some_and(|(bits, _)| bits >= 32)
+            && let Some(labels) = self.control.difference_labels(operand.expression)
+        {
+            info.constant = ConstantClass::LabelDifference;
+            self.control.record_difference(e, labels);
+        }
         info
     }
 
@@ -1216,8 +1239,34 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Pointer arithmetic needs a complete object type (§6.5.6p2); an
     /// unanalyzed target, such as a GNU vector, is not checked.
     /// C99: §6.5.6 paragraphs 2-3, pp. 82-83; PDF pp. 94-95.
+    /// Whether a pointer to `target` supports addition, subtraction and
+    /// increments: a complete object type, or `void` as a GNU extension.
+    /// C99: §6.5.6p2-3, p. 82; PDF p. 94; GNU extension: GCC "Pointer Arith".
     fn pointer_arithmetic_target(&self, target: TypeId) -> bool {
-        self.complete_object(target) || self.types.unanalyzed(target)
+        self.complete_object(target)
+            || self.types.unanalyzed(target)
+            || (self.void_type(target)
+                && self
+                    .context
+                    .configuration
+                    .accepts(crate::configuration::Feature::VoidPointerArithmetic))
+    }
+
+    /// Reports arithmetic on a `void *` operand under the extension policy;
+    /// its element size is 1. GNU extension: GCC "Pointer Arith",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Pointer-Arith.html>.
+    fn report_void_arithmetic(&mut self, e: &'tu Expression<'tu>, target: TypeId) {
+        if self.void_type(target) {
+            self.context.report_extension(
+                crate::configuration::Feature::VoidPointerArithmetic,
+                "arithmetic on a pointer to void",
+                e.source_vectors,
+            );
+        }
+    }
+
+    fn void_type(&self, ty: TypeId) -> bool {
+        matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Void))
     }
 
     pub(super) fn pointer_target(&self, ty: TypeId) -> Option<TypeId> {

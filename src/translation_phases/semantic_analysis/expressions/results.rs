@@ -51,6 +51,12 @@ pub(crate) enum ConstantClass {
     None,
     Arithmetic,
     Address,
+    /// GNU extension: GCC "Labels as Values". `&&label - &&base` for two
+    /// labels of one function, possibly converted to an integer type of at
+    /// least 32 bits: a constant that only code layout determines, so it has
+    /// no folded value. Static initializers accept it; the control facts
+    /// retain its two labels.
+    LabelDifference,
 }
 
 /// Folding restrictions and GNU address-difference eligibility are separate
