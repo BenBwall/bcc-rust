@@ -1369,17 +1369,17 @@ impl FunctionGen<'_> {
         self.line(format_args!("return v{}", sum.id));
     }
 
-    /// A condition: one in scope, a new comparison, or a constant.
+    /// A condition: one in scope, a new comparison, a range check, a lowered
+    /// `&&` or `||`, or a constant.
     fn condition(&mut self) -> Val {
         match self.rng.below(12) {
             | 0..5 => match self.pick(Ty::I1) {
                 | Some(value) => value,
                 | None => self.new_condition(),
             },
-            | 5..8 => self.new_condition(),
             | 8 => self.range_condition(),
             | 9 if self.nesting < MAX_DEPTH => self.short_circuit(),
-            | 9..11 => self.new_condition(),
+            | 5..11 => self.new_condition(),
             | _ => {
                 let value = self.rng.int(2);
                 self.constant_value(Ty::I1, value)

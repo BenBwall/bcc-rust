@@ -64,11 +64,11 @@
 //!   `simplify_cfg/thread.rs`, branch threading), `inline.rs` (module call
 //!   graph and direct-call expansion), `sroa.rs` (scalar replacement of
 //!   aggregates, with `sroa/plan.rs` and `sroa/rewrite.rs`), `promote.rs`
-//!   (stack-slot promotion), `sccp.rs` (sparse conditional
-//!   constant propagation), `known_bits.rs` (integer facts from dominating
-//!   conditions and division rewrites), `gvn.rs` (value numbering over the
-//!   dominator tree, including load reuse and store forwarding) and `licm.rs`
-//!   (loop-invariant code motion).
+//!   (stack-slot promotion), `sccp.rs` (sparse conditional constant
+//!   propagation), `known_bits.rs` (integer facts from dominating conditions
+//!   and division rewrites), `gvn.rs` (value numbering over the dominator tree,
+//!   including load reuse and store forwarding) and `licm.rs` (loop-invariant
+//!   code motion).
 //! - `tests.rs` and `tests/` exercise each pass on textual IR, the pipeline as
 //!   a whole, and run programs in the interpreter before and after
 //!   optimization.

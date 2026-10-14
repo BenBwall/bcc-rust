@@ -90,12 +90,12 @@ fn move_accesses(
                 continue;
             }
             let data = *draft.inst(inst);
-            let addr = match data {
-                | InstData::Load { addr, .. }
-                | InstData::Store {
-                    args: [_, addr], ..
-                } => addr,
-                | _ => continue,
+            let (InstData::Load { addr, .. }
+            | InstData::Store {
+                args: [_, addr], ..
+            }) = data
+            else {
+                continue;
             };
             let Some((slot, Some(offset))) = derive(draft, addr) else {
                 continue;

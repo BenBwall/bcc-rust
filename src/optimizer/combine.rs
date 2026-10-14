@@ -16,11 +16,15 @@
 //!    true` is `xor c, true`; `select (xor c, true), a, b` is `select c, b, a`.
 //! 4. **Range checks.** Two comparisons of one value with constants, combined
 //!    by `and` or by `select a, b, false` (lowered `&&`), become one unsigned
-//!    comparison when they bound a single interval: `x >= lo && x <= hi` is `x
-//!    - lo <= hi - lo` (unsigned), with the subtraction wrapping. Their union
-//!    by `or` or `select a, true, b` (lowered `||`) outside the interval, `x <
-//!    lo || x > hi`, is `x - lo > hi - lo`. Disjoint bounds give `false` and
-//!    `true`.
+//!    comparison when they bound a single interval, and their union by `or` or
+//!    `select a, true, b` (lowered `||`) its negation:
+//!
+//!    ```text
+//!    x >= lo && x <= hi    is    x - lo <= hi - lo    (unsigned, wrapping)
+//!    x < lo || x > hi      is    x - lo > hi - lo
+//!    ```
+//!
+//!    Disjoint bounds give `false` and `true`.
 //! 5. **Constant reassociation.** `iadd (iadd x, c1), c2` is `iadd x, c1 + c2`,
 //!    and likewise with either operation a subtraction.
 //!
@@ -335,10 +339,10 @@ fn range_check(draft: &Draft<'_, '_>, a: Value, b: Value, both: bool) -> Option<
     } else {
         (first.complement()?, second.complement()?)
     };
-    let (low, high) = match (first.kind, second.kind) {
-        | (Side::AtLeast(low), Side::AtMost(high)) | (Side::AtMost(high), Side::AtLeast(low)) =>
-            (low, high),
-        | _ => return None,
+    let ((Side::AtLeast(low), Side::AtMost(high)) | (Side::AtMost(high), Side::AtLeast(low))) =
+        (first.kind, second.kind)
+    else {
+        return None;
     };
     let order = |bits: u128| {
         if first.signed {
