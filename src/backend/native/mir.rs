@@ -11,6 +11,10 @@
 //! [`MInst::visit_registers`] is the allocator's only view of the
 //! instruction set: it enumerates every register an instruction reads or
 //! writes, including the implicit ones.
+//!
+//! Registers come in two classes: general-purpose registers for integers
+//! and pointers, and SSE registers (`%xmm0`-`%xmm15`) for `f32` and `f64`.
+//! Each virtual register has one class, recorded in [`MFunction::classes`].
 
 use std::fmt;
 
@@ -28,33 +32,74 @@ use crate::{
 /// A function in machine IR: blocks in layout order, the number of virtual
 /// registers, allocation hints, and the frame objects selection created.
 pub(crate) struct MFunction<'a> {
-    pub(crate) blocks:   ArenaVec<'a, MBlockData<'a>>,
+    pub(crate) blocks:        ArenaVec<'a, MBlockData<'a>>,
     /// One hint per virtual register: the register a copy connects it to.
-    pub(crate) hints:    ArenaVec<'a, Option<Reg>>,
+    pub(crate) hints:         ArenaVec<'a, Option<Reg>>,
+    /// The class of each virtual register.
+    pub(crate) classes:       ArenaVec<'a, RegClass>,
     /// IR stack slots first, by their index, then back-end temporaries.
-    pub(crate) slots:    ArenaVec<'a, FrameSlotData>,
+    pub(crate) slots:         ArenaVec<'a, FrameSlotData>,
+    /// The function's read-only constants, 16 bytes each, addressed through
+    /// [`Base::Constant`].
+    pub(crate) constants:     ArenaVec<'a, u128>,
     /// Bytes of the outgoing argument area, including Win64's home area.
-    pub(crate) outgoing: u32,
+    pub(crate) outgoing:      u32,
     /// Whether the function calls anything, which fixes its stack alignment.
-    pub(crate) calls:    bool,
+    pub(crate) calls:         bool,
+    /// Whether `%rsp` moves after the prologue (`dyn_alloca`,
+    /// `stack_restore`), so frame objects are addressed from `%rbp`.
+    pub(crate) dynamic:       bool,
+    /// Whether the frame holds a System V register save area for
+    /// `va_start`.
+    pub(crate) register_save: bool,
 }
 
 impl<'a> MFunction<'a> {
     pub(crate) fn new_in(arena: &'a Bump) -> Self {
         Self {
-            blocks:   ArenaVec::new_in(arena),
-            hints:    ArenaVec::new_in(arena),
-            slots:    ArenaVec::new_in(arena),
-            outgoing: 0,
-            calls:    false,
+            blocks:        ArenaVec::new_in(arena),
+            hints:         ArenaVec::new_in(arena),
+            classes:       ArenaVec::new_in(arena),
+            slots:         ArenaVec::new_in(arena),
+            constants:     ArenaVec::new_in(arena),
+            outgoing:      0,
+            calls:         false,
+            dynamic:       false,
+            register_save: false,
         }
     }
 
-    /// A fresh virtual register.
+    /// A fresh general-purpose virtual register.
     pub(crate) fn vreg(&mut self) -> VReg {
+        self.vreg_of(RegClass::Gpr)
+    }
+
+    /// A fresh virtual register of `class`.
+    pub(crate) fn vreg_of(&mut self, class: RegClass) -> VReg {
         let vreg = VReg::new(self.hints.len());
         self.hints.push(None);
+        self.classes.push(class);
         vreg
+    }
+
+    /// The class of a register operand.
+    pub(crate) fn class(&self, reg: Reg) -> RegClass {
+        match reg {
+            | Reg::Phys(register) => register.class(),
+            | Reg::Virt(vreg) => self.classes[vreg.index()],
+        }
+    }
+
+    /// The index of a 16-byte read-only constant, added once.
+    pub(crate) fn constant(&mut self, bits: u128) -> u32 {
+        let index = match self.constants.iter().position(|&constant| constant == bits) {
+            | Some(index) => index,
+            | None => {
+                self.constants.push(bits);
+                self.constants.len() - 1
+            },
+        };
+        u32::try_from(index).expect("constant indices fit u32")
     }
 
     pub(crate) fn vreg_count(&self) -> usize {
@@ -124,7 +169,17 @@ dense! {
     MBlock => "bb";
 }
 
-/// A general-purpose register, numbered by its hardware encoding.
+/// A register class.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum RegClass {
+    /// The sixteen general-purpose registers.
+    Gpr,
+    /// The sixteen SSE registers, holding `f32` and `f64` values.
+    Xmm,
+}
+
+/// A physical register: the general-purpose registers by their hardware
+/// encoding, then the SSE registers.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 #[repr(u8)]
 pub(crate) enum PReg {
@@ -144,11 +199,27 @@ pub(crate) enum PReg {
     R13,
     R14,
     R15,
+    Xmm0,
+    Xmm1,
+    Xmm2,
+    Xmm3,
+    Xmm4,
+    Xmm5,
+    Xmm6,
+    Xmm7,
+    Xmm8,
+    Xmm9,
+    Xmm10,
+    Xmm11,
+    Xmm12,
+    Xmm13,
+    Xmm14,
+    Xmm15,
 }
 
 impl PReg {
-    /// Every register, by encoding.
-    pub(crate) const ALL: [Self; 16] = [
+    /// Every register, general-purpose first.
+    pub(crate) const ALL: [Self; Self::COUNT] = [
         Self::Rax,
         Self::Rcx,
         Self::Rdx,
@@ -165,14 +236,48 @@ impl PReg {
         Self::R13,
         Self::R14,
         Self::R15,
+        Self::Xmm0,
+        Self::Xmm1,
+        Self::Xmm2,
+        Self::Xmm3,
+        Self::Xmm4,
+        Self::Xmm5,
+        Self::Xmm6,
+        Self::Xmm7,
+        Self::Xmm8,
+        Self::Xmm9,
+        Self::Xmm10,
+        Self::Xmm11,
+        Self::Xmm12,
+        Self::Xmm13,
+        Self::Xmm14,
+        Self::Xmm15,
     ];
+    /// The number of physical registers.
+    pub(crate) const COUNT: usize = 32;
 
     pub(crate) const fn index(self) -> usize {
         self as usize
     }
 
-    /// The AT&T name of the register's low `width` bits, without `%`.
+    pub(crate) const fn class(self) -> RegClass {
+        if (self as usize) < 16 {
+            RegClass::Gpr
+        } else {
+            RegClass::Xmm
+        }
+    }
+
+    /// The AT&T name of the register's low `width` bits, without `%`; an
+    /// SSE register has one name.
     pub(crate) const fn name(self, width: Width) -> &'static str {
+        const XMM: [&str; 16] = [
+            "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9",
+            "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15",
+        ];
+        if (self as usize) >= 16 {
+            return XMM[self as usize - 16];
+        }
         const NAMES: [[&str; 4]; 16] = [
             ["al", "ax", "eax", "rax"],
             ["cl", "cx", "ecx", "rcx"],
@@ -197,7 +302,7 @@ impl PReg {
 
 /// A set of physical registers.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub(crate) struct PRegSet(u16);
+pub(crate) struct PRegSet(u32);
 
 impl PRegSet {
     pub(crate) const EMPTY: Self = Self(0);
@@ -206,7 +311,7 @@ impl PRegSet {
         let mut bits = 0;
         let mut index = 0;
         while index < registers.len() {
-            bits |= 1 << registers[index] as u16;
+            bits |= 1 << registers[index] as u32;
             index += 1;
         }
         Self(bits)
@@ -214,11 +319,16 @@ impl PRegSet {
 
     #[must_use]
     pub(crate) const fn with(self, register: PReg) -> Self {
-        Self(self.0 | 1 << register as u16)
+        Self(self.0 | 1 << register as u32)
+    }
+
+    #[must_use]
+    pub(crate) const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
     }
 
     pub(crate) const fn contains(self, register: PReg) -> bool {
-        self.0 & (1 << register as u16) != 0
+        self.0 & (1 << register as u32) != 0
     }
 
     /// The registers in encoding order.
@@ -239,7 +349,8 @@ impl fmt::Debug for PRegSet {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[expect(
     variant_size_differences,
-    reason = "Both variants fit eight bytes; packing them into one word would obscure every               match on them."
+    reason = "Both variants fit eight bytes; packing them into one word would obscure every match \
+              on them."
 )]
 pub(crate) enum Reg {
     Phys(PReg),
@@ -310,6 +421,8 @@ pub(crate) enum Base {
     /// `sym@GOTPCREL(%rip)`: the GOT entry holding the symbol's address
     /// (ELF only, for symbols the module does not define).
     Got(SymbolRef),
+    /// An entry of [`MFunction::constants`], `.LCPI…(%rip)`.
+    Constant(u32),
 }
 
 /// A frame object, before frame layout gives it an offset.
@@ -323,6 +436,12 @@ pub(crate) enum FrameObject {
     Outgoing(u32),
     /// A spill slot the allocator assigned.
     Spill(u32),
+    /// Win64's home area the caller reserved above the return address, by
+    /// byte offset: the slots of the four register arguments.
+    Home(u32),
+    /// The System V register save area of a variadic function, by byte
+    /// offset: six general registers, then eight SSE registers of 16 bytes.
+    RegisterSave(u32),
 }
 
 /// A symbol an instruction refers to.
@@ -359,6 +478,10 @@ pub(crate) enum Cond {
     Ae,
     O,
     No,
+    S,
+    Ns,
+    P,
+    Np,
 }
 
 impl Cond {
@@ -376,6 +499,10 @@ impl Cond {
             | Self::Ae => "ae",
             | Self::O => "o",
             | Self::No => "no",
+            | Self::S => "s",
+            | Self::Ns => "ns",
+            | Self::P => "p",
+            | Self::Np => "np",
         }
     }
 
@@ -394,6 +521,10 @@ impl Cond {
             | Self::Ae => Self::B,
             | Self::O => Self::No,
             | Self::No => Self::O,
+            | Self::S => Self::Ns,
+            | Self::Ns => Self::S,
+            | Self::P => Self::Np,
+            | Self::Np => Self::P,
         }
     }
 
@@ -422,6 +553,10 @@ pub(crate) enum AluOp {
     Xor,
     /// Two-operand `imul` (16, 32 or 64 bits).
     Imul,
+    /// Add with carry, right after an `Add` of the low halves.
+    Adc,
+    /// Subtract with borrow, right after a `Sub` of the low halves.
+    Sbb,
 }
 
 impl AluOp {
@@ -433,6 +568,8 @@ impl AluOp {
             | Self::Or => "or",
             | Self::Xor => "xor",
             | Self::Imul => "imul",
+            | Self::Adc => "adc",
+            | Self::Sbb => "sbb",
         }
     }
 }
@@ -452,6 +589,35 @@ impl ShiftOp {
             | Self::Shr => "shr",
             | Self::Sar => "sar",
             | Self::Rol => "rol",
+        }
+    }
+}
+
+/// A scalar SSE operation.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum XOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    /// `xorps`, on the whole register.
+    Xor,
+}
+
+impl XOp {
+    /// The mnemonic for a single (`B32`) or double (`B64`) operand.
+    pub(crate) const fn name(self, width: Width) -> &'static str {
+        let double = matches!(width, Width::B64);
+        match self {
+            | Self::Add if double => "addsd",
+            | Self::Add => "addss",
+            | Self::Sub if double => "subsd",
+            | Self::Sub => "subss",
+            | Self::Mul if double => "mulsd",
+            | Self::Mul => "mulss",
+            | Self::Div if double => "divsd",
+            | Self::Div => "divss",
+            | Self::Xor => "xorps",
         }
     }
 }
@@ -622,6 +788,70 @@ pub(crate) enum MInst {
         taken:     MBlock,
         not_taken: MBlock,
     },
+    /// An SSE move: a register copy (`movaps`, deleted between equal
+    /// registers when `width` is `B64`) or a load (`movss`/`movsd`).
+    XMov {
+        width: Width,
+        dst:   Reg,
+        src:   Operand,
+    },
+    /// `movss`/`movsd` of an SSE register to memory.
+    XStore {
+        width: Width,
+        dst:   Mem,
+        src:   Reg,
+    },
+    /// `xorps dst, dst`: positive zero.
+    XZero {
+        dst: Reg,
+    },
+    /// A scalar SSE operation in two-address form.
+    XAlu {
+        op:    XOp,
+        width: Width,
+        dst:   Reg,
+        src:   Operand,
+    },
+    /// `ucomiss`/`ucomisd`: ZF, PF and CF from comparing `lhs` with `rhs`;
+    /// an unordered pair sets all three.
+    Ucomi {
+        width: Width,
+        lhs:   Reg,
+        rhs:   Reg,
+    },
+    /// `cvtsi2ss`/`cvtsi2sd` of a 32- or 64-bit signed integer.
+    IntToFloat {
+        int:   Width,
+        float: Width,
+        dst:   Reg,
+        src:   Reg,
+    },
+    /// `cvttss2si`/`cvttsd2si`: truncation to a 32- or 64-bit integer.
+    FloatToInt {
+        float: Width,
+        int:   Width,
+        dst:   Reg,
+        src:   Reg,
+    },
+    /// `cvtss2sd` (from `B32`) or `cvtsd2ss` (from `B64`).
+    FloatToFloat {
+        from: Width,
+        dst:  Reg,
+        src:  Reg,
+    },
+    /// `movd`/`movq` between a general and an SSE register.
+    MovGx {
+        width: Width,
+        dst:   Reg,
+        src:   Reg,
+    },
+    /// `shld`/`shrd` of 64-bit registers: `dst` shifted, filled from `src`.
+    ShiftDouble {
+        left:   bool,
+        dst:    Reg,
+        src:    Reg,
+        amount: ShiftAmount,
+    },
     /// `rep movsb`: copies `%rcx` bytes from `(%rsi)` to `(%rdi)`, forwards.
     RepMovsb,
     /// `rep stosb`: stores `%al` into `%rcx` bytes from `(%rdi)`.
@@ -642,11 +872,42 @@ impl MInst {
             visit(&mut reg, role);
         };
         match self {
-            | Self::Mov { dst, src, .. } | Self::Extend { dst, src, .. } => {
+            | Self::Mov { dst, src, .. }
+            | Self::Extend { dst, src, .. }
+            | Self::XMov { dst, src, .. } => {
                 operand(src, &mut visit);
                 visit(dst, Role::Def);
             },
-            | Self::MovImm64 { dst, .. } | Self::Setcc { dst, .. } => visit(dst, Role::Def),
+            | Self::MovImm64 { dst, .. } | Self::Setcc { dst, .. } | Self::XZero { dst } =>
+                visit(dst, Role::Def),
+            | Self::XStore { dst, src, .. } => {
+                memory(dst, &mut visit);
+                visit(src, Role::Use);
+            },
+            | Self::XAlu { dst, src, .. } => {
+                operand(src, &mut visit);
+                visit(dst, Role::UseDef);
+            },
+            | Self::Ucomi { lhs, rhs, .. } => {
+                visit(lhs, Role::Use);
+                visit(rhs, Role::Use);
+            },
+            | Self::IntToFloat { dst, src, .. }
+            | Self::FloatToInt { dst, src, .. }
+            | Self::FloatToFloat { dst, src, .. }
+            | Self::MovGx { dst, src, .. } => {
+                visit(src, Role::Use);
+                visit(dst, Role::Def);
+            },
+            | Self::ShiftDouble {
+                dst, src, amount, ..
+            } => {
+                if *amount == ShiftAmount::Cl {
+                    phys(PReg::Rcx, Role::Use, &mut visit);
+                }
+                visit(src, Role::Use);
+                visit(dst, Role::UseDef);
+            },
             | Self::Store { dst, src, .. } => {
                 memory(dst, &mut visit);
                 operand(src, &mut visit);
@@ -748,10 +1009,18 @@ impl MInst {
     /// `Test`, `Alu`, `BitScan` and `MulWide`, none of which is pure).
     pub(crate) fn is_pure(&self) -> bool {
         match self {
-            | Self::Mov { dst, src, .. } | Self::Extend { dst, src, .. } =>
+            | Self::Mov { dst, src, .. }
+            | Self::Extend { dst, src, .. }
+            | Self::XMov { dst, src, .. } =>
                 matches!(dst, Reg::Virt(_)) && !matches!(src, Operand::Mem(_)),
-            | Self::MovImm64 { dst, .. } | Self::Lea { dst, .. } | Self::Imul3 { dst, .. } =>
-                matches!(dst, Reg::Virt(_)),
+            | Self::MovImm64 { dst, .. }
+            | Self::Lea { dst, .. }
+            | Self::Imul3 { dst, .. }
+            | Self::XZero { dst }
+            | Self::IntToFloat { dst, .. }
+            | Self::FloatToInt { dst, .. }
+            | Self::FloatToFloat { dst, .. }
+            | Self::MovGx { dst, .. } => matches!(dst, Reg::Virt(_)),
             | _ => false,
         }
     }

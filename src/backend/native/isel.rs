@@ -20,7 +20,8 @@
 //! operands are classified before their users, then selects the blocks.
 //! Calls, function entry and returns are in `isel/calls.rs`; branches and
 //! the parallel copies that replace block parameters in `isel/edges.rs`;
-//! loads, stores, `copy` and `fill` in `isel/memory.rs`.
+//! loads, stores, `copy` and `fill` in `isel/memory.rs`; `f32` and `f64`
+//! operations in `isel/float.rs`.
 //!
 //! Integer values narrower than 64 bits live in registers whose upper bits
 //! are unspecified, except `i1`, which is always 0 or 1 in the whole
@@ -30,6 +31,7 @@
 // Selection by family
 mod calls;
 mod edges;
+mod float;
 mod memory;
 
 use super::{
@@ -44,6 +46,7 @@ use super::{
         Operand,
         PReg,
         Reg,
+        RegClass,
         ShiftAmount,
         ShiftOp,
         UnaryOp,
@@ -109,11 +112,16 @@ pub(crate) fn select<'a>(
             selector.block_map[block.index()] = Some(selector.func.block(arena));
         }
     }
+    let uses_va_start = body.blocks().any(|block| {
+        body.block_insts(block)
+            .iter()
+            .any(|&inst| body.inst(inst).opcode() == Opcode::VaStart)
+    });
     for block in body.blocks() {
         if let Some(mblock) = selector.block_map[block.index()] {
             selector.current = mblock;
             if block.index() == 0 {
-                selector.entry()?;
+                selector.entry(uses_va_start)?;
             }
             for &inst in body.block_insts(block) {
                 selector.instruction(inst)?;
@@ -168,6 +176,8 @@ pub(super) struct Selector<'a, 'm, 'ir> {
     pub(super) current:   MBlock,
     /// How `return` hands back a structure result.
     pub(super) result:    calls::ResultArea,
+    /// What `va_start` stores, prepared by the entry sequence.
+    pub(super) va_start:  calls::VaStart,
 }
 
 impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
@@ -194,6 +204,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             block_map: filled(arena, body.block_count(), None),
             current: MBlock::new(0),
             result: calls::ResultArea::None,
+            va_start: calls::VaStart::None,
         }
     }
 
@@ -214,7 +225,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
     /// definitions are already classified.
     fn classify_block(&mut self, block: Block) {
         for &param in self.body.block_params(block) {
-            let vreg = self.func.vreg();
+            let vreg = self.func.vreg_of(class_of(self.ty(param)));
             self.values[param.index()] = ValueKind::Reg(vreg);
         }
         for &inst in self.body.block_insts(block) {
@@ -225,7 +236,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             self.skipped[inst.index()] = kind.is_some();
             let kind = match kind {
                 | Some(kind) => kind,
-                | None => ValueKind::Reg(self.func.vreg()),
+                | None => ValueKind::Reg(self.func.vreg_of(class_of(self.ty(result)))),
             };
             self.values[result.index()] = kind;
         }
@@ -280,11 +291,11 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                         Opcode::Trunc | Opcode::Ptrtoint | Opcode::Bitcast,
                         ValueKind::Const(bits),
                     ) => ValueKind::Const(bits & mask(ty)),
-                    // Conversions that keep every bit the result has. An
-                    // `i1` result must be canonical, which a wider value's
-                    // register is not.
+                    // Conversions that keep every bit the result has, in
+                    // the same register class. An `i1` result must be
+                    // canonical, which a wider value's register is not.
                     | (Opcode::Trunc | Opcode::Ptrtoint | Opcode::Bitcast, kind)
-                        if ty != Type::I1 =>
+                        if ty != Type::I1 && class_of(ty) == class_of(from) =>
                         kind,
                     | (Opcode::Inttoptr, kind) if from.bits() == 64 => kind,
                     | (Opcode::Zext, kind @ ValueKind::Reg(_)) if from == Type::I1 => kind,
@@ -341,6 +352,28 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         let result = self.body.inst_result(inst);
         let opcode = data.opcode();
         match data {
+            | InstData::Binary { ty, args, .. } if opcode.is_float_binary() => {
+                let dst = self.result_reg(result);
+                self.float_binary(opcode, ty, dst, args)?;
+            },
+            | InstData::Binary {
+                opcode: Opcode::VaCopy,
+                args: [dst, src],
+                ..
+            } => self.va_copy(dst, src),
+            | InstData::Unary {
+                opcode: Opcode::VaStart,
+                arg,
+                ..
+            } => self.va_start(arg),
+            | InstData::Unary {
+                opcode: Opcode::VaEnd,
+                ..
+            } => {},
+            | InstData::FloatCompare { cond, ty, args } => {
+                let dst = self.result_reg(result);
+                self.float_compare(cond, ty, dst, args);
+            },
             | InstData::Binary { ty, args, .. } => {
                 let dst = self.result_reg(result);
                 match opcode {
@@ -368,9 +401,30 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 let cond = self.compare(cond, ty, args);
                 self.set_condition(cond, dst);
             },
+            | InstData::Select { ty, args } if ty.is_float() => {
+                let dst = self.result_reg(result);
+                self.float_select(ty, dst, args);
+            },
             | InstData::Select { ty, args } => {
                 let dst = self.result_reg(result);
                 self.select(ty, dst, args);
+            },
+            | InstData::Unary {
+                opcode: Opcode::Fneg,
+                ty,
+                arg,
+            } => {
+                let dst = self.result_reg(result);
+                self.float_negate(ty, dst, arg);
+            },
+            | InstData::Unary { opcode, ty, arg } if ty.is_float() || self.ty(arg).is_float() => {
+                let dst = self.result_reg(result);
+                if opcode == Opcode::Freeze {
+                    let src = self.reg(arg);
+                    self.copy(dst, src);
+                } else {
+                    self.float_conversion(opcode, ty, dst, arg)?;
+                }
             },
             | InstData::Unary { opcode, ty, arg } => {
                 let dst = self.result_reg(result);
@@ -406,7 +460,13 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         Reg::Virt(self.func.vreg())
     }
 
-    /// `dst ← src` as a 64-bit copy, hinting both sides together.
+    /// A fresh virtual register for a value of `ty`.
+    pub(super) fn vreg_for(&mut self, ty: Type) -> Reg {
+        Reg::Virt(self.func.vreg_of(class_of(ty)))
+    }
+
+    /// `dst ← src` as a whole-register copy of their class, hinting both
+    /// sides together.
     pub(super) fn copy(&mut self, dst: Reg, src: Reg) {
         if let Reg::Virt(vreg) = dst {
             self.func.hint(vreg, src);
@@ -414,11 +474,19 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         if let Reg::Virt(vreg) = src {
             self.func.hint(vreg, dst);
         }
-        self.emit(MInst::Mov {
-            width: Width::B64,
-            dst,
-            src: Operand::Reg(src),
-        });
+        let inst = match self.func.class(dst) {
+            | RegClass::Gpr => MInst::Mov {
+                width: Width::B64,
+                dst,
+                src: Operand::Reg(src),
+            },
+            | RegClass::Xmm => MInst::XMov {
+                width: Width::B64,
+                dst,
+                src: Operand::Reg(src),
+            },
+        };
+        self.emit(inst);
     }
 
     /// The value in a register, materializing a leaf into a fresh one.
@@ -426,8 +494,9 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         match self.kind(value) {
             | ValueKind::Reg(vreg) => Reg::Virt(vreg),
             | ValueKind::Const(bits) => {
-                let dst = self.vreg();
-                self.constant(dst, bits, self.ty(value));
+                let ty = self.ty(value);
+                let dst = self.vreg_for(ty);
+                self.constant(dst, bits, ty);
                 dst
             },
             | ValueKind::Addr(base, disp) => {
@@ -437,12 +506,16 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             },
             // Only reachable code is selected, and it uses only reachable
             // definitions; any register will do for the rest.
-            | ValueKind::Unknown => self.vreg(),
+            | ValueKind::Unknown => self.vreg_for(self.ty(value)),
         }
     }
 
     /// `dst ← bits` for a constant of type `ty`.
     pub(super) fn constant(&mut self, dst: Reg, bits: u64, ty: Type) {
+        if ty.is_float() {
+            self.float_constant(dst, bits, ty);
+            return;
+        }
         let signed = bits.cast_signed();
         if ty.bits() <= 32 || u32::try_from(bits).is_ok() {
             // A 32-bit move clears the upper half.
@@ -940,8 +1013,17 @@ pub(super) const fn width(ty: Type) -> Width {
     match ty {
         | Type::I8 => Width::B8,
         | Type::I16 => Width::B16,
-        | Type::I64 | Type::Ptr => Width::B64,
+        | Type::I64 | Type::Ptr | Type::F64 => Width::B64,
         | _ => Width::B32,
+    }
+}
+
+/// The register class that holds a value of `ty`.
+pub(super) const fn class_of(ty: Type) -> RegClass {
+    if ty.is_float() {
+        RegClass::Xmm
+    } else {
+        RegClass::Gpr
     }
 }
 

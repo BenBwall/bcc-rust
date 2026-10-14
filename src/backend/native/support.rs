@@ -3,10 +3,10 @@
 //! compiled whole or refused with the first construct it lacks, never
 //! compiled in part or wrongly.
 //!
-//! Stage 1 (see `docs/design/native-backend.md`) compiles integer and
-//! pointer code. It refuses floating-point and `i128` values, variadic
-//! definitions (`va_start`), dynamic stack allocation, aggregate returns in
-//! non-integer registers, and stack slots aligned above 16 bytes.
+//! The back end (see `docs/design/native-backend.md`) compiles integer,
+//! pointer, `f32` and `f64` code and variadic definitions. It refuses `i128`,
+//! `f80` and `f128` values, dynamic stack allocation, aggregate returns in
+//! registers of those types, and stack slots aligned above 16 bytes.
 
 use std::fmt;
 
@@ -97,8 +97,6 @@ fn check_function(
 fn instruction(module: &Module<'_>, body: &Body<'_>, data: &InstData) -> Result<(), Construct> {
     let opcode = data.opcode();
     match *data {
-        | InstData::Binary { .. } if opcode.is_float_binary() || matches!(opcode, Opcode::VaCopy) =>
-            Err(Construct::Opcode(opcode)),
         | InstData::Binary { ty: Type::I1, .. }
             if matches!(
                 opcode,
@@ -107,25 +105,10 @@ fn instruction(module: &Module<'_>, body: &Body<'_>, data: &InstData) -> Result<
             Err(Construct::Opcode(opcode)),
         | InstData::Unary { ty: Type::I1, .. } if opcode.is_bit_unary() =>
             Err(Construct::Opcode(opcode)),
-        | InstData::Unary { .. }
-            if matches!(
-                opcode,
-                Opcode::Fneg
-                    | Opcode::Fpext
-                    | Opcode::Fptrunc
-                    | Opcode::Fptosi
-                    | Opcode::Fptoui
-                    | Opcode::Sitofp
-                    | Opcode::Uitofp
-                    | Opcode::VaStart
-                    | Opcode::VaEnd
-                    | Opcode::VaArg
-                    | Opcode::StackRestore
-            ) =>
+        | InstData::Unary { .. } if matches!(opcode, Opcode::VaArg | Opcode::StackRestore) =>
             Err(Construct::Opcode(opcode)),
         | InstData::DynAlloca { .. }
         | InstData::VaArgAggregate { .. }
-        | InstData::FloatCompare { .. }
         | InstData::WideConst { .. }
         | InstData::Nullary {
             opcode: Opcode::StackSave,
@@ -166,7 +149,16 @@ fn signature(signature: Signature<'_>) -> Result<(), Construct> {
             | ParamAbi::Sret(_) | ParamAbi::ByVal(_) => {},
             | ParamAbi::Registers(registers) =>
                 for ty in registers.types() {
-                    if !matches!(ty, Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::Ptr) {
+                    if !matches!(
+                        ty,
+                        Type::I8
+                            | Type::I16
+                            | Type::I32
+                            | Type::I64
+                            | Type::Ptr
+                            | Type::F32
+                            | Type::F64
+                    ) {
                         return Err(Construct::RegisterResult(ty));
                     }
                 },
@@ -191,8 +183,15 @@ fn variadic_arguments(
 /// Whether the back end handles values of `ty`.
 fn scalar(ty: Type) -> Result<(), Construct> {
     match ty {
-        | Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::Ptr => Ok(()),
-        | Type::I128 | Type::F32 | Type::F64 | Type::F80 | Type::F128 => Err(Construct::Type(ty)),
+        | Type::I1
+        | Type::I8
+        | Type::I16
+        | Type::I32
+        | Type::I64
+        | Type::Ptr
+        | Type::F32
+        | Type::F64 => Ok(()),
+        | Type::I128 | Type::F80 | Type::F128 => Err(Construct::Type(ty)),
     }
 }
 

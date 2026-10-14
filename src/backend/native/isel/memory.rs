@@ -177,6 +177,19 @@ impl Selector<'_, '_, '_> {
                 ty,
                 args: [value, addr],
                 ..
+            } if ty.is_float() => {
+                let src = self.reg(value);
+                let dst = self.address(addr);
+                self.emit(MInst::XStore {
+                    width: width(ty),
+                    dst,
+                    src,
+                });
+            },
+            | InstData::Store {
+                ty,
+                args: [value, addr],
+                ..
             } => {
                 let width = width(ty);
                 let src = self.operand(value, width);
@@ -201,6 +214,14 @@ impl Selector<'_, '_, '_> {
     /// `dst ← [mem]` of type `ty`; narrow loads zero-extend to 32 bits.
     pub(super) fn load(&mut self, ty: Type, dst: Reg, mem: Mem) {
         let width = width(ty);
+        if ty.is_float() {
+            self.emit(MInst::XMov {
+                width,
+                dst,
+                src: Operand::Mem(mem),
+            });
+            return;
+        }
         match width {
             | Width::B8 | Width::B16 => self.emit(MInst::Extend {
                 signed: false,

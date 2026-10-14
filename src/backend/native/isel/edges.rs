@@ -145,7 +145,7 @@ impl Selector<'_, '_, '_> {
             // Every destination is still read: save one and redirect its
             // readers to the copy.
             let saved = moves[0].0;
-            let temp = self.func.vreg();
+            let temp = self.func.vreg_of(self.func.classes[saved.index()]);
             self.copy(Reg::Virt(temp), Reg::Virt(saved));
             for (_, src) in &mut moves {
                 if *src == saved {

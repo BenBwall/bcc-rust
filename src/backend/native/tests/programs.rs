@@ -339,4 +339,106 @@ int main(void) {
     return 0;
 }"#,
     },
+    Program {
+        name:   "float_comparisons_and_conversions",
+        source: r#"int printf(const char *, ...);
+int main(void) {
+    double nan = 0.0 / 0.0;
+    double values[] = {1.5, -2.25, 0.0, 1e300, nan, -0.0};
+    for (int i = 0; i < 6; i++)
+        for (int j = 0; j < 6; j++) {
+            double a = values[i], b = values[j];
+            printf("%d%d%d%d%d%d ", a < b, a <= b, a == b, a != b, a > b, a >= b);
+            if (a < b) printf("<"); else if (!(a >= b)) printf("u");
+        }
+    float fn = nan;
+    printf("\n%d %d %d\n", fn != fn, fn == fn, (float)values[0] < 2.0f);
+    unsigned long long big = 18446744073709551000ULL, small = 12345;
+    double d = (double)big;
+    float f = (float)big;
+    unsigned long long back = (unsigned long long)1.8e19, sback = (unsigned long long)12345.75;
+    printf("%d %d %d %d %d\n", d > 1.8e19, (double)small == 12345.0, f > 1.8e19f, back == 18000000000000000000ULL, sback == 12345);
+    unsigned u = 4000000000u;
+    signed char c = -100; unsigned short us = 65000; _Bool flag = 1;
+    printf("%d %d %d %d %d\n", (int)-3.7, (unsigned)3e9 == 3000000000u, (int)(float)-12.5f, (double)u == 4e9, (int)((double)c + us + flag));
+    printf("%lld %d %d\n", (long long)-1e15, (int)(float)0.1 == 0, (int)(1.0f / 3 * 3000));
+    float x = 1.25f; double y = x; float z = (float)(y * 3);
+    printf("%d %d\n", (int)(z * 100), (int)-(double)x);
+    return 0;
+}"#,
+    },
+    Program {
+        name:   "float_calls_and_structures",
+        source: r#"int printf(const char *, ...);
+struct pt { double x, y; };
+struct mix { long long a; double b; };
+struct fl { float a, b; };
+struct big { double v[4]; };
+static struct pt mid(struct pt a, struct pt b) { struct pt r = {(a.x + b.x) / 2, (a.y + b.y) / 2}; return r; }
+static struct mix mk(long long a, double b) { struct mix m = {a, b}; return m; }
+static struct fl mkf(float a, float b) { struct fl r = {a * 2, b - 1}; return r; }
+static double total(struct big b) { return b.v[0] + b.v[1] + b.v[2] + b.v[3]; }
+static double poly(double x, float y, int n, double z, double w, double v, double u, double t, double s, double r) {
+    return x * y + n - z / w + v * u - t + s * r;
+}
+static float scale(float a, int n, float b, long long m) { return a * n + b * m; }
+static double (*pick(int which))(double) ;
+static double twice(double x) { return 2 * x; }
+static double square(double x) { return x * x; }
+static double (*pick(int which))(double) { return which ? square : twice; }
+int main(void) {
+    struct pt p = mid((struct pt){1, 2}, (struct pt){3, 7});
+    struct mix m = mk(7, 2.5);
+    struct fl q = mkf(1.5f, 4.0f);
+    struct big b = {{1, 2, 3, 4.5}};
+    printf("%d %d %lld %d %d %d %d\n", (int)(p.x * 10), (int)(p.y * 10), m.a, (int)(m.b * 4), (int)(q.a * 10), (int)q.b, (int)(total(b) * 2));
+    printf("%d %d\n", (int)(poly(1.5, 2.0f, 3, 4, 2, 0.5, 6, 1, 2, 3) * 100), (int)scale(1.5f, 4, 0.25f, 8));
+    printf("%d %d\n", (int)pick(0)(21), (int)pick(1)(9));
+    double sum = 0; float fsum = 0;
+    for (int i = 1; i <= 100; i++) { sum += 1.0 / i; fsum += 1.0f / i; }
+    printf("%d %d\n", (int)(sum * 1000), (int)(fsum * 1000));
+    return 0;
+}"#,
+    },
+    Program {
+        name:   "variadic_definitions",
+        source: r#"int printf(const char *, ...);
+static double dsum(int n, ...) {
+    __builtin_va_list ap;
+    __builtin_va_start(ap, n);
+    double s = 0;
+    for (int i = 0; i < n; i++) s += __builtin_va_arg(ap, double);
+    __builtin_va_end(ap);
+    return s;
+}
+static long long products(int n, ...) {
+    __builtin_va_list ap, aq;
+    __builtin_va_start(ap, n);
+    __builtin_va_copy(aq, ap);
+    long long s = 0;
+    for (int i = 0; i < n; i++) s += __builtin_va_arg(ap, long long) * __builtin_va_arg(aq, long long);
+    __builtin_va_end(ap);
+    __builtin_va_end(aq);
+    return s;
+}
+static int mixed(const char *format, ...) {
+    __builtin_va_list ap;
+    __builtin_va_start(ap, format);
+    int total = 0;
+    for (const char *p = format; *p; p++) {
+        if (*p == 'i') total += __builtin_va_arg(ap, int);
+        else if (*p == 'd') total += (int)(__builtin_va_arg(ap, double) * 10);
+        else if (*p == 'p') total += *__builtin_va_arg(ap, int *);
+    }
+    __builtin_va_end(ap);
+    return total;
+}
+int main(void) {
+    int seven = 7;
+    printf("%d\n", (int)(dsum(10, 1.0, 2.0, 3.5, 4.0, 10.25, 1.0, 1.0, 1.0, 1.0, 1.5) * 4));
+    printf("%lld\n", products(9, 1LL, 2LL, 3LL, 4LL, 5LL, 6LL, 7LL, 8LL, 9LL));
+    printf("%d\n", mixed("idipdidid", 1, 2.5, 3, &seven, 0.25, 100, 1.5, 1000, 9.75));
+    return 0;
+}"#,
+    },
 ];

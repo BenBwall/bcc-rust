@@ -258,8 +258,8 @@ block2:
 fn unsupported_constructs_are_refused_with_their_function() {
     let message = refusal(
         "abi lowered
-function @f(f64) -> f64 external {
-block0(v0: f64):
+function @f(f128) -> f128 external {
+block0(v0: f128):
     return v0
 }
 ",
@@ -267,7 +267,7 @@ block0(v0: f64):
     );
     assert_eq!(
         message,
-        "not yet supported by the native back end: f64 values (in @f)"
+        "not yet supported by the native back end: f128 values (in @f)"
     );
     let message = refusal(
         "abi lowered

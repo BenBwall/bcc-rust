@@ -11,7 +11,14 @@
 //!
 //! A Windows frame of 4096 bytes or more probes its pages through
 //! `___chkstk_ms` (MinGW) or `__chkstk` (MSVC) before moving `%rsp`
-//! ("x64 stack usage"), as Clang does.
+//! ("x64 stack usage"), as Clang does. Win64's callee-saved SSE registers
+//! are saved with `movaps` after the allocation (`.seh_savexmm`). A function
+//! whose stack moves sets `%rbp` to `%rsp` after the allocation
+//! (`.cfi_def_cfa_register`, `.seh_setframe %rbp, 0`) and its epilogue
+//! starts with `lea size(%rbp), %rsp`, the frame-pointer epilogue form.
+//!
+//! Each function's read-only constants follow it in `.rodata` (`.rdata` on
+//! COFF), 16 bytes each so that `xorps` may read them.
 
 use std::fmt::{
     self,
@@ -114,10 +121,31 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         }
         if self.elf {
             writeln!(self.out, "\t.cfi_endproc")?;
-            writeln!(self.out, "\t.size\t{name}, .-{name}")
+            writeln!(self.out, "\t.size\t{name}, .-{name}")?;
         } else {
-            writeln!(self.out, "\t.seh_endproc")
+            writeln!(self.out, "\t.seh_endproc")?;
         }
+        if !func.constants.is_empty() {
+            let section = if self.elf {
+                "\t.section\t.rodata"
+            } else {
+                "\t.section\t.rdata,\"dr\""
+            };
+            writeln!(self.out, "{section}\n\t.p2align\t4")?;
+            for (index, &bits) in func.constants.iter().enumerate() {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "The constant is written as two 64-bit halves."
+                )]
+                let (low, high) = (bits as u64, (bits >> 64) as u64);
+                writeln!(
+                    self.out,
+                    "{}:\n\t.quad\t{low:#x}\n\t.quad\t{high:#x}",
+                    ConstantLabel(id, index)
+                )?;
+            }
+        }
+        Ok(())
     }
 
     fn prologue(&mut self, frame: &Frame<'_>) -> fmt::Result {
@@ -155,6 +183,22 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 writeln!(self.out, "\t.seh_stackalloc {}", frame.size)?;
             }
         }
+        for &(register, offset) in &frame.saved_xmm {
+            writeln!(
+                self.out,
+                "\tmovaps\t%{}, {offset}(%rsp)\n\t.seh_savexmm %{}, {offset}",
+                register.name(Width::B64),
+                register.name(Width::B64)
+            )?;
+        }
+        if frame.frame_pointer {
+            writeln!(self.out, "\tmovq\t%rsp, %rbp")?;
+            if self.elf {
+                writeln!(self.out, "\t.cfi_def_cfa_register %rbp")?;
+            } else {
+                writeln!(self.out, "\t.seh_setframe %rbp, 0")?;
+            }
+        }
         if !self.elf {
             writeln!(self.out, "\t.seh_endprologue")?;
         }
@@ -166,7 +210,21 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             writeln!(self.out, "\t.cfi_remember_state")?;
         }
         let mut cfa = frame.cfa_offset();
-        if frame.size > 0 {
+        let base = if frame.frame_pointer { "rbp" } else { "rsp" };
+        for &(register, offset) in &frame.saved_xmm {
+            writeln!(
+                self.out,
+                "\tmovaps\t{offset}(%{base}), %{}",
+                register.name(Width::B64)
+            )?;
+        }
+        if frame.frame_pointer {
+            writeln!(self.out, "\tleaq\t{}(%rbp), %rsp", frame.size)?;
+            cfa -= frame.size;
+            if self.elf {
+                writeln!(self.out, "\t.cfi_def_cfa %rsp, {cfa}")?;
+            }
+        } else if frame.size > 0 {
             writeln!(self.out, "\taddq\t${}, %rsp", frame.size)?;
             cfa -= frame.size;
             if self.elf {
@@ -201,7 +259,8 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             operand,
             width,
             frame,
-            emitter: (self.module, self.elf),
+            module: self.module,
+            func,
         };
         let reg = |reg: Reg, width: Width| RegName(reg.phys(), width);
         match *inst {
@@ -372,6 +431,114 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 },
                 | Callee::Reg(target) => writeln!(out, "\tcallq\t*{}", reg(target, Width::B64)),
             },
+            | MInst::XMov { width, dst, src } => match src {
+                | Operand::Reg(src) =>
+                    writeln!(out, "\tmovaps\t{}, {}", reg(src, width), reg(dst, width)),
+                | src => writeln!(
+                    out,
+                    "\t{}\t{}, {}",
+                    scalar("movs", width),
+                    at(src, width),
+                    reg(dst, width)
+                ),
+            },
+            | MInst::XStore { width, dst, src } => writeln!(
+                out,
+                "\t{}\t{}, {}",
+                scalar("movs", width),
+                reg(src, width),
+                at(Operand::Mem(dst), width)
+            ),
+            | MInst::XZero { dst } => writeln!(
+                out,
+                "\txorps\t{}, {}",
+                reg(dst, Width::B64),
+                reg(dst, Width::B64)
+            ),
+            | MInst::XAlu {
+                op,
+                width,
+                dst,
+                src,
+            } => writeln!(
+                out,
+                "\t{}\t{}, {}",
+                op.name(width),
+                at(src, width),
+                reg(dst, width)
+            ),
+            | MInst::Ucomi { width, lhs, rhs } => writeln!(
+                out,
+                "\t{}\t{}, {}",
+                scalar("ucomis", width),
+                reg(rhs, width),
+                reg(lhs, width)
+            ),
+            | MInst::IntToFloat {
+                int,
+                float,
+                dst,
+                src,
+            } => writeln!(
+                out,
+                "\t{}{}\t{}, {}",
+                scalar("cvtsi2s", float),
+                int.suffix(),
+                reg(src, int),
+                reg(dst, float)
+            ),
+            | MInst::FloatToInt {
+                float,
+                int,
+                dst,
+                src,
+            } => writeln!(
+                out,
+                "\t{}2si\t{}, {}",
+                scalar("cvtts", float),
+                reg(src, float),
+                reg(dst, int)
+            ),
+            | MInst::FloatToFloat { from, dst, src } => writeln!(
+                out,
+                "\t{}\t{}, {}",
+                if from == Width::B32 {
+                    "cvtss2sd"
+                } else {
+                    "cvtsd2ss"
+                },
+                reg(src, from),
+                reg(dst, from)
+            ),
+            | MInst::MovGx { width, dst, src } => writeln!(
+                out,
+                "\t{}\t{}, {}",
+                if width == Width::B64 { "movq" } else { "movd" },
+                reg(src, width),
+                reg(dst, width)
+            ),
+            | MInst::ShiftDouble {
+                left,
+                dst,
+                src,
+                amount,
+            } => {
+                let mnemonic = if left { "shldq" } else { "shrdq" };
+                match amount {
+                    | ShiftAmount::Imm(count) => writeln!(
+                        out,
+                        "\t{mnemonic}\t${count}, {}, {}",
+                        reg(src, Width::B64),
+                        reg(dst, Width::B64)
+                    ),
+                    | ShiftAmount::Cl => writeln!(
+                        out,
+                        "\t{mnemonic}\t%cl, {}, {}",
+                        reg(src, Width::B64),
+                        reg(dst, Width::B64)
+                    ),
+                }
+            },
             | MInst::RepMovsb => writeln!(out, "\trep movsb"),
             | MInst::RepStosb => writeln!(out, "\trep stosb"),
             | MInst::Jmp { target } =>
@@ -509,6 +676,30 @@ impl fmt::Display for Name<'_> {
     }
 }
 
+/// A scalar SSE mnemonic: `prefix` and `s` (single) or `d` (double).
+const fn scalar(prefix: &str, width: Width) -> Scalar<'_> {
+    Scalar(prefix, width)
+}
+
+/// A scalar SSE mnemonic.
+struct Scalar<'a>(&'a str, Width);
+
+impl fmt::Display for Scalar<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let kind = if self.1 == Width::B64 { 'd' } else { 's' };
+        write!(f, "{}{kind}", self.0)
+    }
+}
+
+/// A function's read-only constant's label.
+struct ConstantLabel(FuncId, usize);
+
+impl fmt::Display for ConstantLabel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, ".LCPI{}_{}", self.0.index(), self.1)
+    }
+}
+
 /// A block's label.
 struct Label(FuncId, MBlock);
 
@@ -532,7 +723,8 @@ struct Op<'f, 'm, 'ir> {
     operand: Operand,
     width:   Width,
     frame:   &'f Frame<'f>,
-    emitter: (&'m Module<'ir>, bool),
+    module:  &'m Module<'ir>,
+    func:    FuncId,
 }
 
 impl fmt::Display for Op<'_, '_, '_> {
@@ -541,7 +733,7 @@ impl fmt::Display for Op<'_, '_, '_> {
             | Operand::Reg(reg) => write!(f, "{}", RegName(reg.phys(), self.width)),
             | Operand::Imm(imm) => write!(f, "${imm}"),
             | Operand::Mem(Mem { base, disp }) => {
-                let (module, _) = self.emitter;
+                let module = self.module;
                 match base {
                     | Base::Reg(reg) => {
                         if disp != 0 {
@@ -550,8 +742,16 @@ impl fmt::Display for Op<'_, '_, '_> {
                         write!(f, "({})", RegName(reg.phys(), Width::B64))
                     },
                     | Base::Frame(object) => {
-                        let offset = self.frame.offset(object) + i64::from(disp);
-                        write!(f, "{offset}(%rsp)")
+                        let (base, offset) = self.frame.address(object);
+                        let offset = offset + i64::from(disp);
+                        write!(f, "{offset}({})", RegName(base, Width::B64))
+                    },
+                    | Base::Constant(index) => {
+                        write!(f, "{}", ConstantLabel(self.func, index as usize))?;
+                        if disp != 0 {
+                            write!(f, "{disp:+}")?;
+                        }
+                        write!(f, "(%rip)")
                     },
                     | Base::Symbol(symbol) => {
                         write!(f, "{}", symbol_name(module, symbol))?;

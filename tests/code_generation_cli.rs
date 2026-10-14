@@ -1100,13 +1100,14 @@ mod tests {
         // Unsupported code is refused before anything is written.
         let float = temporary("native-float.exe");
         let refused = bcc(
-            "double half(double x) { return x / 2; }\nint main(void) { return half(4) != 2; }\n",
+            "long double half(long double x) { return x / 2; }\nint main(void) { return half(4) \
+             != 2; }\n",
             &[&target, "--backend=native", "-o", &path(&float)],
         );
         assert_eq!(refused.status.code(), Some(1));
         assert_eq!(
             text(&refused.stderr).trim(),
-            "error: not yet supported by the native back end: f64 values (in @half)"
+            "error: not yet supported by the native back end: f80 values (in @half)"
         );
         assert!(!float.exists());
     }

@@ -65,7 +65,14 @@ use crate::{
 
 /// Symbols the back end calls on its own; a module may not define them
 /// internally, since those calls would bind to its definition.
-pub(crate) const RUNTIME_SYMBOLS: [&str; 4] = ["memmove", "__main", "___chkstk_ms", "__chkstk"];
+pub(crate) const RUNTIME_SYMBOLS: [&str; 6] = [
+    "memmove",
+    "__main",
+    "___chkstk_ms",
+    "__chkstk",
+    "fmod",
+    "fmodf",
+];
 
 /// Writes the module's assembly for `target`, or refuses it.
 pub(crate) fn emit_assembly<'m>(

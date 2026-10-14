@@ -68,11 +68,14 @@ pub(crate) fn allocate<'a>(
     let mut allocation = Allocation {
         locations,
         spill_slots: 0,
-        written: liveness.written,
     };
     let mut active: ArenaVec<'_, Active> = ArenaVec::new_in(arena);
     for &interval in &intervals {
         active.retain(|active| active.end >= interval.start);
+        let class = func.classes[interval.vreg.index()];
+        // With a frame pointer, `%rbp` addresses the frame.
+        let order = conv.order(class);
+        let allowed = |register: &PReg| !(func.dynamic && *register == PReg::Rbp);
         let occupied = active
             .iter()
             .fold(PRegSet::EMPTY, |set, active| set.with(active.reg));
@@ -88,10 +91,11 @@ pub(crate) fn allocate<'a>(
             | None => None,
         };
         let choice = hint
-            .filter(|&register| conv.allocation.contains(&register) && free(register))
+            .filter(|register| order.contains(register) && allowed(register) && free(*register))
             .or_else(|| {
-                conv.allocation
+                order
                     .iter()
+                    .filter(|register| allowed(register))
                     .copied()
                     .find(|&register| free(register))
             });
@@ -107,7 +111,10 @@ pub(crate) fn allocate<'a>(
         let victim = active
             .iter()
             .enumerate()
-            .filter(|(_, active)| !fixed.overlaps(active.reg, interval.start, interval.end))
+            .filter(|(_, active)| {
+                active.reg.class() == class
+                    && !fixed.overlaps(active.reg, interval.start, interval.end)
+            })
             .max_by_key(|(_, active)| active.end)
             .map(|(index, &active)| (index, active));
         match victim {
@@ -127,11 +134,6 @@ pub(crate) fn allocate<'a>(
     if cfg!(debug_assertions) {
         check(&intervals, &allocation, &fixed, arena);
     }
-    for location in &allocation.locations {
-        if let Location::Reg(register) = *location {
-            allocation.written = allocation.written.with(register);
-        }
-    }
     allocation
 }
 
@@ -140,9 +142,6 @@ pub(crate) struct Allocation<'a> {
     pub(crate) locations:   ArenaVec<'a, Location>,
     /// Spill slots used, 8 bytes each.
     pub(crate) spill_slots: u32,
-    /// Every physical register the function writes, so the prologue saves
-    /// the callee-saved ones among them.
-    pub(crate) written:     PRegSet,
 }
 
 impl Allocation<'_> {
@@ -186,7 +185,7 @@ struct Active {
 /// Disjoint, sorted ranges per physical register where a precolored value
 /// lives or the register is clobbered.
 pub(crate) struct FixedRanges<'a> {
-    ranges: [ArenaVec<'a, (u32, u32)>; 16],
+    ranges: [ArenaVec<'a, (u32, u32)>; PReg::COUNT],
 }
 
 impl FixedRanges<'_> {
@@ -209,7 +208,7 @@ fn check(
     arena: &Bump,
 ) {
     let mut last_end: ArenaVec<'_, Option<(u32, VReg)>> = ArenaVec::new_in(arena);
-    last_end.resize(16, None);
+    last_end.resize(PReg::COUNT, None);
     for interval in intervals {
         let Location::Reg(register) = allocation.locations[interval.vreg.index()] else {
             continue;

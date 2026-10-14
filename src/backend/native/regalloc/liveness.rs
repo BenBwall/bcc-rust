@@ -15,7 +15,6 @@ use crate::{
         MFunction,
         MInst,
         PReg,
-        PRegSet,
         Reg,
         Role,
         VReg,
@@ -30,13 +29,11 @@ use crate::{
 /// The live-out sets of a function's blocks and its instruction numbering.
 pub(super) struct Liveness<'a> {
     /// `u64` words per set.
-    words:              usize,
+    words:    usize,
     /// The live-out set of each block, `words` words each.
-    live_out:           ArenaVec<'a, u64>,
+    live_out: ArenaVec<'a, u64>,
     /// The number of the first instruction of each block.
-    first:              ArenaVec<'a, u32>,
-    /// The physical registers instructions other than calls write.
-    pub(super) written: PRegSet,
+    first:    ArenaVec<'a, u32>,
 }
 
 impl<'a> Liveness<'a> {
@@ -65,7 +62,6 @@ impl<'a> Liveness<'a> {
         let mut live_in = zeroed(blocks * words);
         let mut live_out = zeroed(blocks * words);
         let mut first = ArenaVec::with_capacity_in(blocks, arena);
-        let mut written = PRegSet::EMPTY;
         let mut count = 0_u32;
         for (block, data) in func.blocks.iter().enumerate() {
             first.push(count);
@@ -76,7 +72,6 @@ impl<'a> Liveness<'a> {
             );
             for inst in &data.insts {
                 let mut inst = *inst;
-                let call = matches!(inst, MInst::Call { .. });
                 inst.visit_registers(|reg, role| {
                     if let Reg::Virt(vreg) = *reg
                         && role.reads()
@@ -85,11 +80,12 @@ impl<'a> Liveness<'a> {
                         insert(uses, vreg);
                     }
                 });
-                inst.visit_registers(|reg, role| match *reg {
-                    | Reg::Virt(vreg) if role.writes() => insert(defs, vreg),
-                    | Reg::Phys(register) if role.writes() && !call =>
-                        written = written.with(register),
-                    | _ => {},
+                inst.visit_registers(|reg, role| {
+                    if let Reg::Virt(vreg) = *reg
+                        && role.writes()
+                    {
+                        insert(defs, vreg);
+                    }
                 });
             }
         }
@@ -123,7 +119,6 @@ impl<'a> Liveness<'a> {
             words,
             live_out,
             first,
-            written,
         }
     }
 
@@ -228,11 +223,11 @@ impl<'a> Liveness<'a> {
     /// nobody reads (a clobber). A register read at a block's start without
     /// a definition (an incoming argument) is live from the block's start.
     pub(super) fn fixed_ranges(&self, func: &MFunction<'_>, arena: &'a Bump) -> FixedRanges<'a> {
-        let mut ranges: [ArenaVec<'a, (u32, u32)>; 16] =
+        let mut ranges: [ArenaVec<'a, (u32, u32)>; PReg::COUNT] =
             std::array::from_fn(|_| ArenaVec::new_in(arena));
         for (block, data) in func.blocks.iter().enumerate() {
             let first = self.first[block];
-            let mut live_end: [Option<u32>; 16] = [None; 16];
+            let mut live_end: [Option<u32>; PReg::COUNT] = [None; PReg::COUNT];
             for (index, inst) in data.insts.iter().enumerate().rev() {
                 let position = 2 * (first + u32::try_from(index).expect("fits"));
                 let mut inst = *inst;
