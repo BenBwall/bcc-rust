@@ -99,6 +99,7 @@ mod licm;
 mod promote;
 mod sccp;
 mod simplify_cfg;
+mod sroa;
 
 // Tests
 #[cfg(test)]
@@ -272,6 +273,7 @@ fn run_pass(
         | Pass::SimplifyCfg => simplify_cfg::run(draft, report),
         | Pass::Gvn => gvn::run(draft, report),
         | Pass::Licm => licm::run(draft, report),
+        | Pass::Sroa => sroa::run(draft, report),
         | Pass::Promote => promote::run(draft, report),
         | Pass::Sccp => sccp::run(draft, report),
         | Pass::KnownBits => known_bits::run(draft, report),

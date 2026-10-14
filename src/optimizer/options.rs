@@ -62,6 +62,8 @@ pub(crate) enum Pass {
     Gvn,
     /// Loop-invariant code motion.
     Licm,
+    /// Scalar replacement of aggregates: splits stack slots into fields.
+    Sroa,
     /// Stack-slot promotion (mem2reg).
     Promote,
     /// Sparse conditional constant propagation.
@@ -74,6 +76,7 @@ impl Pass {
     /// Every pass, in default pipeline order.
     pub(crate) const ALL: [Self; Self::COUNT] = [
         Self::Inline,
+        Self::Sroa,
         Self::Promote,
         Self::Fold,
         Self::SimplifyCfg,
@@ -83,7 +86,7 @@ impl Pass {
         Self::Licm,
         Self::Dce,
     ];
-    pub(crate) const COUNT: usize = 9;
+    pub(crate) const COUNT: usize = 10;
 
     /// The name `--passes` and reports use.
     pub(crate) const fn name(self) -> &'static str {
@@ -95,6 +98,7 @@ impl Pass {
             | Self::Gvn => "gvn",
             | Self::Licm => "licm",
             | Self::Promote => "promote",
+            | Self::Sroa => "sroa",
             | Self::Sccp => "sccp",
             | Self::KnownBits => "known-bits",
         }
@@ -116,6 +120,7 @@ impl Pass {
             | Self::Promote => 5,
             | Self::Sccp => 6,
             | Self::KnownBits => 7,
+            | Self::Sroa => 9,
         }
     }
 }
@@ -175,12 +180,12 @@ pub(crate) fn parse_pass_list(text: &str) -> Result<PassList, PassListError<'_>>
 /// A `--passes` value that is not a list of known passes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Error)]
 pub(crate) enum PassListError<'a> {
-    /// A name that is empty or not a pass; the known passes are `fold`,
-    /// `dce`, `simplify-cfg`, `gvn`, `licm`, `promote`, `sccp` and
-    /// `known-bits` and `inline`.
+    /// A name that is empty or not a pass; the known passes are `inline`,
+    /// `sroa`, `promote`, `fold`, `simplify-cfg`, `sccp`, `known-bits`,
+    /// `gvn`, `licm` and `dce`.
     #[error(
-        "unknown pass `{0}` (the passes are fold, dce, simplify-cfg, gvn, licm, promote, sccp and \
-         known-bits and inline)"
+        "unknown pass `{0}` (the passes are inline, sroa, promote, fold, simplify-cfg, sccp, \
+         known-bits, gvn, licm and dce)"
     )]
     Unknown(&'a str),
     #[error("a pass list holds at most {} passes", PassList::CAPACITY)]

@@ -6,9 +6,14 @@ use super::{
     super::interpreter::Trap,
     generate::generate,
     native::check_native,
-    oracle::observe_text,
+    oracle::{
+        Pipeline,
+        observe_text,
+        optimized,
+    },
     sweep,
 };
+use crate::optimizer::Pass;
 
 /// The first seed of the default sweeps; any seed works.
 const DEFAULT_SEED: u64 = 0xBCC0_D1FF;
@@ -190,4 +195,15 @@ fn noundef_poison_uses_the_existing_ub_oracle_rule() {
     assert!(matches!(trapped.result, Err(Trap::UndefinedBehavior(..))));
     assert!(trapped.refines(&defined).is_err());
     assert!((0..50).any(|seed| generate(seed, false).contains(" noundef")));
+}
+
+/// The record slots give `sroa` structures to split in many programs.
+#[test]
+fn generated_records_exercise_scalar_replacement() {
+    let split = (0..50)
+        .filter(|&seed| {
+            optimized(&generate(seed, false), Pipeline::Single(Pass::Sroa), None).rewrites > 0
+        })
+        .count();
+    assert!(split >= 10, "{split} of 50 programs split a record");
 }

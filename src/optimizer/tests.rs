@@ -21,6 +21,7 @@ mod promote;
 mod sccp;
 mod select;
 mod simplify_cfg;
+mod sroa;
 mod ssa_pipeline;
 
 use super::*;
