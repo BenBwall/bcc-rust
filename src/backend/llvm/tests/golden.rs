@@ -30,6 +30,7 @@ pub(super) const GOLDENS: &[Golden] = &[
     POISON_REGISTER_RETURN,
     NOUNDEF_PAIR_RETURN,
     EXTENSIONS,
+    LABELS,
 ];
 
 #[test]
@@ -759,6 +760,63 @@ block0:
   %inst1.ret = call noundef { i64, i64 } @f()
   store { i64, i64 } %inst1.ret, ptr %slot0, align 8
   ret i32 0
+}
+
+!llvm.module.flags = !{!0, !1}
+
+!0 = !{i32 4, !"PIC Level", i32 2}
+!1 = !{i32 4, !"PIE Level", i32 2}
+"#,
+};
+
+/// Label tables and label differences in globals, block addresses, an
+/// indirect branch with block arguments, and a labeled block nothing
+/// reaches, which LLVM still needs for its address.
+const LABELS: Golden = Golden {
+    name:     "labels",
+    input:    "global @table internal constant size 16, align 8 = bytes \"00000000000000000000000000000000\"                relocs [0: blockaddress(@select, label0), 8: blockaddress(@select, label1)]
+global @offsets internal constant size 6, align 2 = bytes \"000000000000\" relocs [0:                labeldiff.i32(@select, label1, label0), 4: labeldiff.i16(@select, label0, label1)                + 3]
+
+function @select(ptr) -> i32 external {
+    label0 = block_label block1
+    label1 = block_label block2
+    label2 = block_label block3
+block0(v0: ptr):
+    v1 = iconst.i32 1
+    indirect_br v0, [block1(v1), block2]
+block1(v2: i32):
+    return v2
+block2:
+    v3 = block_addr label2
+    v4 = iconst.i32 2
+    indirect_br v3, [block1(v4)]
+block3:
+    v5 = iconst.i32 3
+    return v5
+}
+",
+    profile:  Profile::PostAbi,
+    expected: r#"; ModuleID = 'bcc'
+source_filename = "bcc"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+@table = internal constant <{ ptr, ptr }> <{ ptr blockaddress(@select, %block1), ptr blockaddress(@select, %block2) }>, align 8
+@offsets = internal constant <{ i32, i16 }> <{ i32 trunc (i64 sub (i64 ptrtoint (ptr blockaddress(@select, %block2) to i64), i64 ptrtoint (ptr blockaddress(@select, %block1) to i64)) to i32), i16 trunc (i64 add (i64 sub (i64 ptrtoint (ptr blockaddress(@select, %block1) to i64), i64 ptrtoint (ptr blockaddress(@select, %block2) to i64)), i64 3) to i16) }>, align 2
+
+define i32 @select(ptr %v0) {
+block0:
+  indirectbr ptr %v0, [label %block1, label %block2]
+
+block1:                                           ; preds = %block2, %block0
+  %v2 = phi i32 [ 1, %block0 ], [ 2, %block2 ]
+  ret i32 %v2
+
+block2:                                           ; preds = %block0
+  indirectbr ptr blockaddress(@select, %block3), [label %block1]
+
+block3:                                           ; No predecessors!
+  unreachable
 }
 
 !llvm.module.flags = !{!0, !1}

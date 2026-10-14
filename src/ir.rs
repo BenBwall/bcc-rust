@@ -78,6 +78,7 @@ pub(crate) use dominators::DominatorTree;
 pub(crate) use entities::{
     AccessTag,
     Block,
+    BlockLabel,
     ConstId,
     Entity,
     FuncId,
@@ -98,6 +99,7 @@ pub(crate) use instructions::{
     Align,
     Bits64,
     BlockCall,
+    BlockList,
     CaseList,
     FloatCC,
     InstData,
@@ -120,6 +122,7 @@ pub(crate) use module::{
     Linkage,
     ParamAbi,
     Relocation,
+    RelocationTarget,
     ResultRegisters,
     Signature,
     Symbol,

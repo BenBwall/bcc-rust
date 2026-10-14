@@ -178,6 +178,14 @@ impl Machine<'_, '_, '_> {
                 RuntimeValue::Ptr(self.slots[self.frame().slots + slot.index()]),
             | InstData::GlobalAddr { global } => RuntimeValue::Ptr(self.globals[global.index()]),
             | InstData::FuncAddr { func } => RuntimeValue::Ptr(self.functions[func.index()]),
+            | InstData::BlockAddr { label } => {
+                let base = self.labels[self.frame().func.index()]
+                    .expect("a function with block_addr has labels");
+                RuntimeValue::Ptr(super::value::Pointer {
+                    address:    base.address + label.index() as u64,
+                    provenance: base.provenance,
+                })
+            },
             | InstData::Load {
                 ty, align, addr, ..
             } => self.memory.load(ty, self.value(addr), align)?,
@@ -310,6 +318,16 @@ impl Machine<'_, '_, '_> {
             | InstData::Return { value } => {
                 let value = value.map(|value| self.value(value));
                 return self.return_from(value);
+            },
+            | InstData::IndirectBr { addr, dests } => {
+                let label = self.memory.label_at(self.value(addr), self.frame().func)?;
+                let block = body.label_block(crate::ir::BlockLabel::new(label));
+                let taken = body
+                    .block_list(dests)
+                    .find(|&dest| Some(body.block_call(dest).0) == block)
+                    .ok_or(UbKind::IndirectBranch)?;
+                self.branch(body, taken);
+                return Ok(None);
             },
             | InstData::Unreachable => return Err(UbKind::Unreachable.into()),
         };

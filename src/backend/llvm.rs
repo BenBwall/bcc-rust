@@ -129,12 +129,20 @@ fn build_module<'m>(
         arena,
         functions: &functions,
         globals: &globals,
+        labels: &[],
+    };
+    // Bodies first: a relocation may take the address of a labeled block,
+    // which exists once its function is built.
+    let mut labels = ArenaVec::new_in(arena);
+    for (id, _) in module.functions() {
+        labels.push(emitter.function(id)?);
+    }
+    let emitter = Emitter {
+        labels: &labels,
+        ..emitter
     };
     for (id, _) in module.globals() {
         emitter.global(id)?;
-    }
-    for (id, _) in module.functions() {
-        emitter.function(id)?;
     }
     api.verify()?;
     Ok(())
@@ -146,6 +154,8 @@ struct Emitter<'a, 'id, 'm, 'ir> {
     arena:     &'a Bump,
     functions: &'a [Val<'id>],
     globals:   &'a [Val<'id>],
+    /// The LLVM block of each label of each function, by `FuncId`.
+    labels:    &'a [&'a [api::Block<'id>]],
 }
 
 fn uses_pre_abi_signature(module: &Module<'_>) -> bool {

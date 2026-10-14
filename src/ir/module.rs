@@ -10,6 +10,7 @@ use super::{
     Function,
     Module,
     entities::{
+        BlockLabel,
         FuncId,
         GlobalId,
         SigId,
@@ -52,12 +53,14 @@ impl<'ir> Module<'ir> {
             | InstData::Brif { .. }
             | InstData::Switch { .. }
             | InstData::Return { .. }
+            | InstData::IndirectBr { .. }
             | InstData::Unreachable => None,
             | InstData::DynAlloca { .. }
             | InstData::VaArgAggregate { .. }
             | InstData::StackAddr { .. }
             | InstData::GlobalAddr { .. }
-            | InstData::FuncAddr { .. } => Some(Type::Ptr),
+            | InstData::FuncAddr { .. }
+            | InstData::BlockAddr { .. } => Some(Type::Ptr),
             | InstData::Binary { opcode, .. } if opcode.is_overflow() => Some(Type::I1),
             | InstData::Binary { ty, .. }
             | InstData::Unary { ty, .. }
@@ -715,11 +718,43 @@ pub(crate) enum GlobalInit<'a> {
     },
 }
 
-/// An address constant in a global's bytes: the eight bytes at `offset`
-/// hold the address of `symbol` plus `addend`.
+/// An address constant in a global's bytes: the [`Relocation::size`] bytes
+/// at `offset` hold the value of `target` plus `addend`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Relocation {
     pub(crate) offset: u64,
-    pub(crate) symbol: Symbol,
+    pub(crate) target: RelocationTarget,
     pub(crate) addend: i64,
+}
+
+impl Relocation {
+    /// How many bytes of the global the relocation writes.
+    pub(crate) const fn size(&self) -> u64 {
+        match self.target {
+            | RelocationTarget::LabelDifference { width, .. } => width.bytes() as u64,
+            | RelocationTarget::Symbol(_) | RelocationTarget::Label { .. } => 8,
+        }
+    }
+}
+
+/// What a relocation's bytes hold.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RelocationTarget {
+    /// The address of a function or global: eight bytes.
+    Symbol(Symbol),
+    /// The address of the block `label` names in `func`: eight bytes. A
+    /// static table of label addresses for computed `goto`.
+    /// GNU extension: GCC "Labels as Values".
+    Label { func: FuncId, label: BlockLabel },
+    /// The address of `label` minus the address of `base`, both in `func`,
+    /// truncated to the integer type `width` (`i8` through `i64`). GCC and
+    /// Clang accept such differences as constants in static initializers;
+    /// the value is known only once code is laid out.
+    /// GNU extension: GCC "Labels as Values".
+    LabelDifference {
+        func:  FuncId,
+        label: BlockLabel,
+        base:  BlockLabel,
+        width: Type,
+    },
 }

@@ -28,6 +28,7 @@ use super::{
     Module,
     entities::{
         Block,
+        BlockLabel,
         ConstId,
         Entity,
         FuncId,
@@ -56,6 +57,7 @@ use super::{
         Linkage,
         ParamAbi,
         Relocation,
+        RelocationTarget,
         ResultRegisters,
         Signature,
         Symbol,
@@ -273,10 +275,7 @@ fn parse_global_init<'t>(
             }
             let (offset_token, offset) = cursor.unsigned()?;
             cursor.expect(TokenKind::Colon, "`:`")?;
-            let name = cursor.symbol()?;
-            let symbol = module
-                .symbol(name.text_name(scratch)?)
-                .ok_or_else(|| name.error(ParseErrorKind::UnknownSymbol(name.text)))?;
+            let target = parse_relocation_target(cursor, module, scratch)?;
             let addend = if cursor.eat(TokenKind::Plus) {
                 let (token, magnitude) = cursor.unsigned()?;
                 i64::try_from(magnitude).map_err(|_| token.error(ParseErrorKind::NumberTooLarge))?
@@ -294,7 +293,7 @@ fn parse_global_init<'t>(
             relocations.push(Relocation {
                 offset: u64::try_from(offset)
                     .map_err(|_| offset_token.error(ParseErrorKind::NumberTooLarge))?,
-                symbol,
+                target,
                 addend,
             });
         }
@@ -307,6 +306,60 @@ fn parse_global_init<'t>(
         },
     );
     Ok(())
+}
+
+/// `@symbol`, `blockaddress(@f, labelN)` or `labeldiff.ty(@f, labelA,
+/// labelB)`. Label numbers are checked by the verifier, since the body that
+/// defines them may come later in the text.
+fn parse_relocation_target<'t>(
+    cursor: &mut Cursor<'_, 't>,
+    module: &Module<'_>,
+    scratch: &Bump,
+) -> Result<RelocationTarget, ParseError<'t>> {
+    let function = |cursor: &mut Cursor<'_, 't>| -> Result<FuncId, ParseError<'t>> {
+        let name = cursor.symbol()?;
+        match module.symbol(name.text_name(scratch)?) {
+            | Some(Symbol::Function(func)) => Ok(func),
+            | _ => Err(name.error(ParseErrorKind::NotAFunction(name.text))),
+        }
+    };
+    let token = cursor.peek();
+    match token.kind {
+        | TokenKind::Ident("blockaddress") => {
+            _ = cursor.next();
+            cursor.expect(TokenKind::LParen, "`(`")?;
+            let func = function(cursor)?;
+            cursor.expect(TokenKind::Comma, "`,`")?;
+            let label = cursor.label()?;
+            cursor.expect(TokenKind::RParen, "`)`")?;
+            Ok(RelocationTarget::Label { func, label })
+        },
+        | TokenKind::Ident("labeldiff") => {
+            _ = cursor.next();
+            cursor.expect(TokenKind::Dot, "`.` and a type")?;
+            let width = cursor.ty()?;
+            cursor.expect(TokenKind::LParen, "`(`")?;
+            let func = function(cursor)?;
+            cursor.expect(TokenKind::Comma, "`,`")?;
+            let label = cursor.label()?;
+            cursor.expect(TokenKind::Comma, "`,`")?;
+            let base = cursor.label()?;
+            cursor.expect(TokenKind::RParen, "`)`")?;
+            Ok(RelocationTarget::LabelDifference {
+                func,
+                label,
+                base,
+                width,
+            })
+        },
+        | _ => {
+            let name = cursor.symbol()?;
+            module
+                .symbol(name.text_name(scratch)?)
+                .map(RelocationTarget::Symbol)
+                .ok_or_else(|| name.error(ParseErrorKind::UnknownSymbol(name.text)))
+        },
+    }
 }
 
 /// `function @name(params) [-> ty] linkage`, up to the body.
@@ -339,6 +392,9 @@ fn parse_body<'t>(
     for _ in 0..counts.slots {
         _ = builder.create_stack_slot(0, Align::BYTE);
     }
+    for _ in 0..counts.labels {
+        _ = builder.create_label(Block::new(0));
+    }
     let mut body = BodyParser {
         cursor,
         builder,
@@ -353,9 +409,10 @@ fn parse_body<'t>(
                 _ = body.cursor.next();
                 break;
             },
-            | TokenKind::Slot(_) | TokenKind::Value(_) if !token.line_start =>
+            | TokenKind::Slot(_) | TokenKind::Label(_) | TokenKind::Value(_) if !token.line_start =>
                 return Err(token.expected("a definition at the start of a line")),
             | TokenKind::Slot(_) => body.stack_slot()?,
+            | TokenKind::Label(_) => body.label_definition()?,
             | TokenKind::Block(_) => body.block_header()?,
             | TokenKind::Value(_) => {
                 let result = body.defined_value()?;
@@ -371,20 +428,22 @@ fn parse_body<'t>(
     Ok(())
 }
 
-/// How many blocks, values and stack slots a body defines.
+/// How many blocks, values, stack slots and labels a body defines.
 #[derive(Clone, Copy, Debug)]
 struct Definitions {
     blocks: usize,
     values: usize,
     slots:  usize,
+    labels: usize,
 }
 
 impl Definitions {
     /// Scans a body's tokens for definitions, checking that each kind is
     /// numbered from 0 without gaps or repeats. A block is defined by its
     /// header, a value by `vN =` at the start of a line or `vN:` in a block
-    /// header, and a slot by `slotN =` at the start of a line. Body parsing
-    /// enforces the same line boundary for named instructions and slots.
+    /// header, a slot by `slotN =` and a label by `labelN =` at the start of
+    /// a line. Body parsing enforces the same line boundary for named
+    /// instructions, slots and labels.
     fn scan<'t>(cursor: &Cursor<'_, 't>, scratch: &Bump) -> Result<Self, ParseError<'t>> {
         let end = cursor.tokens[cursor.pos..]
             .iter()
@@ -402,10 +461,12 @@ impl Definitions {
                     Some((1, number)),
                 | TokenKind::Slot(number) if token.line_start && next == Some(TokenKind::Equals) =>
                     Some((2, number)),
+                | TokenKind::Label(number) if token.line_start && next == Some(TokenKind::Equals) =>
+                    Some((3, number)),
                 | _ => None,
             }
         };
-        let mut counts = [0_usize; 3];
+        let mut counts = [0_usize; 4];
         let mut header = false;
         for (index, token) in tokens.iter().enumerate() {
             // A parameter list may span lines; only its closing delimiter
@@ -456,6 +517,7 @@ impl Definitions {
             blocks: counts[0],
             values: counts[1],
             slots:  counts[2],
+            labels: counts[3],
         })
     }
 }
@@ -630,6 +692,9 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
             | Opcode::FuncAddr => InstData::FuncAddr {
                 func: self.function()?,
             },
+            | Opcode::BlockAddr => InstData::BlockAddr {
+                label: self.label()?,
+            },
             | Opcode::Load => {
                 let flags = self.cursor.flags();
                 let addr = self.value()?;
@@ -707,6 +772,22 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                     None
                 },
             },
+            | Opcode::IndirectBr => {
+                let addr = self.value()?;
+                self.cursor.expect(TokenKind::Comma, "`,`")?;
+                self.cursor.expect(TokenKind::LBracket, "`[`")?;
+                let mut dests: ArenaVec<'_, BlockCall> = ArenaVec::new_in(self.scratch);
+                while !self.cursor.eat(TokenKind::RBracket) {
+                    if !dests.is_empty() {
+                        self.cursor.expect(TokenKind::Comma, "`,` or `]`")?;
+                    }
+                    dests.push(self.block_call()?);
+                }
+                InstData::IndirectBr {
+                    addr,
+                    dests: self.builder.block_list(&dests),
+                }
+            },
             | Opcode::Unreachable => InstData::Unreachable,
             | _ => unreachable!("every opcode has an arm above"),
         })
@@ -777,6 +858,42 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
             align,
         };
         Ok(())
+    }
+
+    /// `labelN = block_label blockM`.
+    fn label_definition(&mut self) -> Result<(), ParseError<'t>> {
+        let token = self.cursor.next();
+        let TokenKind::Label(number) = token.kind else {
+            unreachable!("the caller saw a label");
+        };
+        if number as usize >= self.counts.labels {
+            return Err(token.error(ParseErrorKind::NotDense(token.text)));
+        }
+        self.cursor.expect(TokenKind::Equals, "`=`")?;
+        self.cursor
+            .expect(TokenKind::Ident("block_label"), "`block_label`")?;
+        let block = self.cursor.next();
+        let TokenKind::Block(target) = block.kind else {
+            return Err(block.expected("a block"));
+        };
+        if target as usize >= self.counts.blocks {
+            return Err(block.error(ParseErrorKind::Undefined(block.text)));
+        }
+        self.builder.define_label(
+            BlockLabel::new(number as usize),
+            Block::new(target as usize),
+        );
+        Ok(())
+    }
+
+    /// A label operand of `block_addr`, defined by this body.
+    fn label(&mut self) -> Result<BlockLabel, ParseError<'t>> {
+        let token = self.cursor.peek();
+        let label = self.cursor.label()?;
+        if label.index() >= self.counts.labels {
+            return Err(token.error(ParseErrorKind::Undefined(token.text)));
+        }
+        Ok(label)
     }
 
     /// `blockN:` or `blockN(vA: ty, ...):`, which makes the block current.
@@ -936,6 +1053,15 @@ impl<'t> Cursor<'_, 't> {
         match token.kind {
             | TokenKind::Symbol(_) | TokenKind::QuotedSymbol(_) => Ok(token),
             | _ => Err(token.expected("a `@` symbol")),
+        }
+    }
+
+    /// `labelN`, unchecked against any body.
+    fn label(&mut self) -> Result<BlockLabel, ParseError<'t>> {
+        let token = self.next();
+        match token.kind {
+            | TokenKind::Label(number) => Ok(BlockLabel::new(number as usize)),
+            | _ => Err(token.expected("a label")),
         }
     }
 

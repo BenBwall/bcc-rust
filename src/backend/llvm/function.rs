@@ -1,5 +1,7 @@
 //! Direct post-ABI instruction construction. Blocks retain layout order;
 //! instructions are built in reverse postorder so dominating values exist.
+//! Every labeled block exists, reachable or not, because `blockaddress`
+//! names it; one the entry does not reach holds only `unreachable`.
 use std::fmt::Write as _;
 
 use llvm_sys::{
@@ -47,11 +49,13 @@ use crate::{
     },
 };
 
-impl<'m> Emitter<'_, '_, 'm, '_> {
-    pub(super) fn function(&self, id: FuncId) -> Result<(), EmitError<'m>> {
+impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
+    /// Emits the body of `id`, if it has one, and returns the LLVM block of
+    /// each of its labels, in label order, for relocations in globals.
+    pub(super) fn function(&self, id: FuncId) -> Result<&'a [api::Block<'id>], EmitError<'m>> {
         let function = self.module.function(id);
         let Some(body) = &function.body else {
-            return Ok(());
+            return Ok(&[]);
         };
         let api = self.api;
         let signature = self.module.signature(function.signature);
@@ -59,12 +63,23 @@ impl<'m> Emitter<'_, '_, 'm, '_> {
         let edges = IncomingEdges::compute(body, self.arena);
         let mut blocks = ArenaVec::new_in(self.arena);
         blocks.resize(body.block_count(), None);
+        let mut labeled = ArenaVec::new_in(self.arena);
+        labeled.resize(body.block_count(), false);
+        for (_, block) in body.labels() {
+            labeled[block.index()] = true;
+        }
         for block in body.blocks() {
-            if edges.reachable[block.index()] {
+            if edges.reachable[block.index()] || labeled[block.index()] {
                 blocks[block.index()] = Some(api.block(
                     self.functions[id.index()],
                     api.name(&named(block, self.arena)),
                 ));
+            }
+        }
+        for block in body.blocks() {
+            if labeled[block.index()] && !edges.reachable[block.index()] {
+                api.position(blocks[block.index()].ok_or(std::fmt::Error)?);
+                _ = api.unreachable();
             }
         }
         let mut values = ArenaVec::new_in(self.arena);
@@ -109,6 +124,7 @@ impl<'m> Emitter<'_, '_, 'm, '_> {
             emitter: self,
             body,
             signature,
+            function: self.functions[id.index()],
             blocks: &blocks,
             slots: &slots,
             values,
@@ -140,7 +156,11 @@ impl<'m> Emitter<'_, '_, 'm, '_> {
                 }
             }
         }
-        Ok(())
+        let mut labels = ArenaVec::with_capacity_in(body.label_count(), self.arena);
+        for (_, block) in body.labels() {
+            labels.push(blocks[block.index()].ok_or(std::fmt::Error)?);
+        }
+        Ok(self.arena.alloc_slice_copy(&labels))
     }
 }
 
@@ -253,6 +273,7 @@ struct BodyBuilder<'a, 'id, 'm, 'ir> {
     emitter:   &'a Emitter<'a, 'id, 'm, 'ir>,
     body:      &'m Body<'ir>,
     signature: Signature<'ir>,
+    function:  Val<'id>,
     blocks:    &'a [Option<api::Block<'id>>],
     slots:     &'a [Val<'id>],
     values:    ArenaVec<'a, Option<Val<'id>>>,
@@ -289,6 +310,10 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
             | InstData::StackAddr { slot } => self.slots[slot.index()],
             | InstData::GlobalAddr { global } => self.emitter.globals[global.index()],
             | InstData::FuncAddr { func } => self.emitter.functions[func.index()],
+            | InstData::BlockAddr { label } => api.block_address(
+                self.function,
+                self.blocks[self.body.label_block(label)?.index()]?,
+            ),
             | _ => return None,
         })
     }
@@ -511,6 +536,17 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                 opcode: Opcode::Trap,
                 ..
             } => self.intrinsic("llvm.trap", &[], &[]),
+            | InstData::IndirectBr { addr, dests } => {
+                let dests = self.body.block_list(dests);
+                let branch = api.indirect_br(
+                    self.value(addr)?,
+                    u32::try_from(dests.len()).map_err(|_| std::fmt::Error)?,
+                );
+                for dest in dests {
+                    api.add_destination(branch, self.destination(dest)?);
+                }
+                branch
+            },
             | InstData::Unreachable => api.unreachable(),
             | _ => return Err(std::fmt::Error.into()),
         };
@@ -642,6 +678,7 @@ fn folds(data: &InstData) -> bool {
             | InstData::StackAddr { .. }
             | InstData::GlobalAddr { .. }
             | InstData::FuncAddr { .. }
+            | InstData::BlockAddr { .. }
     )
 }
 

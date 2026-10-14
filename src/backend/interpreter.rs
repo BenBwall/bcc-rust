@@ -215,6 +215,9 @@ struct Machine<'m, 'ir, 'a> {
     argument_types: ArenaVec<'a, Type>,
     /// The address of each function, by `FuncId`.
     functions:      ArenaVec<'a, Pointer>,
+    /// The address of label 0 of each function that has labels, by
+    /// `FuncId`; label `n` is `n` bytes further.
+    labels:         ArenaVec<'a, Option<Pointer>>,
     /// The address of each global, by `GlobalId`.
     globals:        ArenaVec<'a, Pointer>,
     /// Instructions executed so far.

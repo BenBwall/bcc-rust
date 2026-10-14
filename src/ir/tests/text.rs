@@ -175,7 +175,7 @@ fn symbol_names_round_trip_through_definitions_and_uses() {
                 bytes:       &[0; 8],
                 relocations: &[Relocation {
                     offset: 0,
-                    symbol: Symbol::Global(global),
+                    target: RelocationTarget::Symbol(Symbol::Global(global)),
                     addend: 0,
                 }],
             },
@@ -327,8 +327,8 @@ fn parsed_module_holds_what_the_text_says() {
     };
     assert_eq!(relocations[1].addend, -1);
     assert_eq!(
-        relocations[1].symbol,
-        module.symbol("add").unwrap(),
+        relocations[1].target,
+        RelocationTarget::Symbol(module.symbol("add").unwrap()),
         "a relocation may name a function declared later"
     );
 }

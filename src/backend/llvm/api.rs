@@ -29,11 +29,13 @@ use llvm_sys::{
         LLVMAddAttributeAtIndex,
         LLVMAddCallSiteAttribute,
         LLVMAddCase,
+        LLVMAddDestination,
         LLVMAddFunction,
         LLVMAddGlobal,
         LLVMAddIncoming,
         LLVMAppendBasicBlockInContext,
         LLVMArrayType2,
+        LLVMBlockAddress,
         LLVMBuildAlloca,
         LLVMBuildArrayAlloca,
         LLVMBuildBinOp,
@@ -48,6 +50,7 @@ use llvm_sys::{
         LLVMBuildGEP2,
         LLVMBuildICmp,
         LLVMBuildInBoundsGEP2,
+        LLVMBuildIndirectBr,
         LLVMBuildInsertValue,
         LLVMBuildLoad2,
         LLVMBuildPhi,
@@ -58,12 +61,16 @@ use llvm_sys::{
         LLVMBuildSwitch,
         LLVMBuildUnreachable,
         LLVMBuildVAArg,
+        LLVMConstAdd,
         LLVMConstBitCast,
         LLVMConstGEP2,
         LLVMConstIntOfArbitraryPrecision,
         LLVMConstNull,
+        LLVMConstPtrToInt,
         LLVMConstStringInContext2,
         LLVMConstStructInContext,
+        LLVMConstSub,
+        LLVMConstTrunc,
         LLVMContextCreate,
         LLVMContextDispose,
         LLVMCreateBuilderInContext,
@@ -540,6 +547,50 @@ impl<'id> Session<'id> {
         )
     }
 
+    /// The address of `block`, a block of `function` other than its entry.
+    pub(super) fn block_address(&self, function: Val<'id>, block: Block<'id>) -> Val<'id> {
+        // SAFETY: The type system ties both handles to this live session; the
+        // verifier keeps labels off the entry block, as LLVM requires.
+        Val(
+            unsafe { LLVMBlockAddress(function.0, block.0) },
+            PhantomData,
+        )
+    }
+
+    /// `label - base + addend` truncated to `width`, for two block addresses
+    /// of one function: the constant expression Clang emits for a GNU label
+    /// difference in a static initializer.
+    pub(super) fn label_difference(
+        &self,
+        label: Val<'id>,
+        base: Val<'id>,
+        addend: i64,
+        width: Type,
+    ) -> Val<'id> {
+        let i64_ty = self.ty(Type::I64);
+        // SAFETY: Both operands are pointer constants of this session and
+        // i64 is a live integer type; LLVM folds or retains the expression.
+        let label = unsafe { LLVMConstPtrToInt(label.0, i64_ty.0) };
+        // SAFETY: As for the label.
+        let base = unsafe { LLVMConstPtrToInt(base.0, i64_ty.0) };
+        // SAFETY: Both operands are i64 constants of this session.
+        let difference = unsafe { LLVMConstSub(label, base) };
+        let difference = if addend == 0 {
+            difference
+        } else {
+            // SAFETY: Both operands are i64 constants of this session.
+            unsafe { LLVMConstAdd(difference, self.bits(Type::I64, addend as u128).0) }
+        };
+        if width == Type::I64 {
+            return Val(difference, PhantomData);
+        }
+        // SAFETY: The verifier restricts the width to a narrower integer.
+        Val(
+            unsafe { LLVMConstTrunc(difference, self.ty(width).0) },
+            PhantomData,
+        )
+    }
+
     pub(super) fn alloca(&self, ty: Ty<'id>) -> Val<'id> {
         // SAFETY: The type system ties handles to this live session;
         // operands have the verified IR types.
@@ -687,6 +738,23 @@ impl<'id> Session<'id> {
         // operands have the verified IR types.
         let raw = unsafe { LLVMBuildSwitch(self.builder, value.0, default.0, cases) };
         Val(raw, PhantomData)
+    }
+
+    /// An `indirectbr` to `addr` with room for `dests` destinations, which
+    /// [`Session::add_destination`] lists.
+    pub(super) fn indirect_br(&self, addr: Val<'id>, dests: u32) -> Val<'id> {
+        // SAFETY: The type system ties handles to this live session; the
+        // address has pointer type.
+        let raw = unsafe { LLVMBuildIndirectBr(self.builder, addr.0, dests) };
+        Val(raw, PhantomData)
+    }
+
+    pub(super) fn add_destination(&self, indirect: Val<'id>, block: Block<'id>) {
+        // SAFETY: The type system ties handles to this live session; the
+        // value is an indirectbr built by this session.
+        unsafe {
+            LLVMAddDestination(indirect.0, block.0);
+        }
     }
 
     pub(super) fn ret(&self, value: Val<'id>) -> Val<'id> {

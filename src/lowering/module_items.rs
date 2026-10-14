@@ -41,6 +41,7 @@ use crate::{
         Module,
         ParamAbi,
         Relocation,
+        RelocationTarget,
         SigId,
         Signature,
         Symbol,
@@ -850,7 +851,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     bytes[start..end].fill(0);
                     // C99 §6.7.8p19: replacement also discards old addresses.
                     relocations.retain(|relocation: &Relocation| {
-                        relocation.offset + 8 <= offset || relocation.offset >= offset + size
+                        relocation.offset + relocation.size() <= offset
+                            || relocation.offset >= offset + size
                     });
                 },
                 | Leaf::Scalar {
@@ -876,7 +878,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     let count = string.len().min(size);
                     bytes[start..start + size].fill(0);
                     relocations.retain(|relocation| {
-                        relocation.offset + 8 <= offset || relocation.offset >= offset + size as u64
+                        relocation.offset + relocation.size() <= offset
+                            || relocation.offset >= offset + size as u64
                     });
                     bytes[start..start + count].copy_from_slice(&string[..count]);
                 },
@@ -922,7 +925,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         // C99 §6.7.8p19: a later write replaces overlapping addresses,
         // including a scalar member that overwrites only part of a pointer.
         relocations.retain(|relocation| {
-            relocation.offset + 8 <= offset || relocation.offset >= offset + written
+            relocation.offset + relocation.size() <= offset || relocation.offset >= offset + written
         });
         let integer = info.integer.filter(|_| {
             representation == Repr::Pointer
@@ -991,7 +994,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         bytes[start..start + size].fill(0);
         relocations.push(Relocation {
             offset,
-            symbol,
+            target: RelocationTarget::Symbol(symbol),
             addend,
         });
         Ok(())
