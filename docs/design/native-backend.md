@@ -1,6 +1,7 @@
 # Native x86-64 back end
 
-Status: design, with stage 1 prototyped in `src/backend/native/` (2026-10-14).
+Status: design, with stages 1 and 2 and most of stage 3 implemented in
+`src/backend/native/` (2026-10-14); see "Implementation status" at the end.
 
 This document designs bcc-rust's own code generator for x86-64: the path from
 the post-ABI bcc IR to assembly and, later, to object files, without LLVM. It
@@ -153,13 +154,12 @@ error: not yet supported by the native back end: floating-point value (in @f)
 with exit status 1. The selector re-checks every case it handles (an
 `Err(Unsupported)` from deep inside selection is a defence in depth, never a
 panic), but the up-front check keeps refusals independent of selection order
-and lets the survey classify them. **Stage 1** refuses: `f32`, `f64`, `f80`,
-`f128` and `i128` values anywhere (parameters, results, instructions, loads,
-stores, constants); `va_start`/`va_copy`/`va_end` (definitions of variadic
-functions); `dyn_alloca`, `stack_save`, `stack_restore`; post-ABI aggregate
-kinds other than `sret`, `byval` and integer `registers`; stack slots aligned
-above 16; and frames larger than 2 GiB. Calls *to* variadic functions with
-integer and pointer arguments are supported (that is `printf`).
+and lets the survey classify them. Stage 1 refused floats, `i128`, variadic
+definitions and dynamic stack allocation; **today** the check refuses only
+`f80` and `f128` values, `i128` bit counts, byte swaps, `switch`es and
+conversions to or from floats, `i128` positions Win64 never passes by value,
+structure results in `f80`/`f128` registers, stack objects aligned above 16,
+and frames larger than 1 GiB.
 
 ### Legalization
 
@@ -172,8 +172,8 @@ in a later stage:
 | --- | --- | --- |
 | `i8`/`i16`/`i32`/`i64`/`ptr` | registers; operations at 32 or 64 bits, sub-registers for compares, loads and stores | 1 |
 | `i1` | a 32-bit register holding 0 or 1 | 1 |
-| `i128` | a pair of 64-bit values; `add`/`adc`, `sub`/`sbb`, `mul` + `imul` cross terms, shifts by `shld`/`shrd` with a ≥64 select; division through `__divti3`/`__udivti3`/`__modti3`/`__umodti3` | 3 |
-| `f32`/`f64` | XMM registers (a second register class) | 3 |
+| `i128` | a pair of 64-bit values; `add`/`adc`, `sub`/`sbb`, `mul` + `imul` cross terms, shifts by `shld`/`shrd` with a ≥64 select; division through `__divti3`/`__udivti3`/`__modti3`/`__umodti3` | 3 (done, in selection rather than a separate pass) |
+| `f32`/`f64` | XMM registers (a second register class) | 3 (done) |
 | `f80` | the x87 stack, selected as memory-to-memory sequences (no x87 register allocation) | 3 |
 | `f128` | libcalls (`__addtf3` …) over XMM | 3 |
 
@@ -238,7 +238,7 @@ The selector's per-opcode table for stage 1:
 | `bswap` | `bswap` (32/64), `rolw $8` (16) |
 | `uadd_overflow` | `mov d, a; add d, b; setb` |
 | `umul_overflow` | `mov %rax, a; mul b; seto` |
-| `copy`/`fill` | calls to `memcpy`/`memmove` (`may_overlap`)/`memset` |
+| `copy`/`fill` | up to 64 constant bytes as loads then stores; else `rep movsb`/`rep stosb`, or `memmove` for `may_overlap` |
 | `call`/`call_indirect` | see "Calls" |
 | `jump`/`brif`/`switch` | `jmp`; `test`/`cmp` + `jcc`; a compare chain (a jump table in stage 4) |
 | `return` | value to `%rax` (extended per `signext`/`zeroext`), epilogue, `ret` |
@@ -692,12 +692,12 @@ Following [CONTRIBUTING.md](../../CONTRIBUTING.md#source-layout):
 
 | File | Holds |
 | --- | --- |
-| `src/backend/native.rs` | the module map; `compile_module`, `emit_assembly`; the per-function loop |
+| `src/backend/native.rs` | the module map; `emit_assembly`; the per-function loop |
 | `native/support.rs` | the up-front support check and `Unsupported` |
 | `native/conv.rs` | `CallConv`: argument and result registers, saved sets, shadow space |
 | `native/mir.rs` | the machine IR: registers, operands, instructions, blocks |
-| `native/isel.rs` | instruction selection, with `isel/calls.rs` (calls, returns, entry) and `isel/copies.rs` (parallel copies) |
-| `native/regalloc.rs` | liveness, intervals and linear scan, with `regalloc/rewrite.rs` (spill code and physical rewrite) |
+| `native/isel.rs` | instruction selection, with `isel/calls.rs` (calls, returns, entry, `va_start`), `isel/edges.rs` (terminators and parallel copies), `isel/memory.rs` (addresses, loads, stores, `copy`, `fill`), `isel/float.rs` (SSE), `isel/wide.rs` (`i128` pairs) and `isel/stack.rs` (dynamic allocation) |
+| `native/regalloc.rs` | linear scan, with `regalloc/liveness.rs` (liveness, intervals, fixed ranges) and `regalloc/rewrite.rs` (spill code and physical rewrite) |
 | `native/frame.rs` | frame layout, prologue and epilogue |
 | `native/emit.rs` | AT&T text: instructions, functions, globals, symbols |
 | `native/driver.rs` | the assembly file and the bundled clang invocation |
@@ -751,17 +751,19 @@ The assembly text accumulates in one `ArenaString` in a module-lifetime arena.
 
 Sizes are estimated Rust lines including tests.
 
-| Stage | Content | Size | Acceptance |
-| --- | --- | ---: | --- |
-| 0 | This design | — | reviewed |
-| 1 | Integer and pointer code: arithmetic, comparisons, branches, switch chains, block parameters, direct and indirect calls (SysV and Win64, stack arguments, calls to variadic functions), stack slots, loads and stores, globals with relocated initializers, `copy`/`fill` through libc, bit operations, `sret`/`byval`/integer `registers`; linear scan with spilling; assembly text through clang; `--backend=native`, `--emit=asm`; arms B0/B1 in the torture survey | 5-6k | e2e programs match the interpreter on Windows and WSL; difftest native oracle clean; torture survey: zero native wrong results where A0 passes, zero crashes |
-| 2 | Variadic definitions (`va_start` save areas), `dyn_alloca`/`stack_save`/`stack_restore` and over-aligned slots with a frame pointer, inline `copy`/`fill` for small constant sizes, jump tables for dense switches | 2k | torture: every integer-only source A0 passes also passes B0 |
-| 3 | Floats: an XMM register class in the allocator, SSE selection for `f32`/`f64`, conversions, `fcmp` with parity, SSE `registers` returns and variadic float arguments (`%al` count, Win64 duplication), `f80` through x87 memory sequences, `f128` and `i128` legalization through libcalls | 4-5k | torture: B0 passes ⊇ A0 passes except documented x87 gaps; `benches/c` run in B0/B1 |
-| 4 | Quality: split intervals and second-chance binpacking or a greedy allocator, coalescing, memory operands for spills, addressing modes with index and scale, LEA arithmetic, red zone, compare/branch fusion across blocks, symbolic allocation checker | 4k | B1/A1 geometric mean within 1.5× on `benches/c` (native Linux), allocation checker clean on the whole torture corpus |
-| 5 | Direct object emission: encoder with relaxation, ELF and COFF writers, unwind table generation | 4-5k | objects byte-equivalent in disassembly and relocations to clang-assembled text on all tests; compile time measured against stage 1 |
-| 6 | Debug line tables (DWARF `.debug_line`, CodeView) | 2k | gdb/lldb and WinDbg step through test programs |
+| Stage | Content | Size | Acceptance | Status |
+| --- | --- | ---: | --- | --- |
+| 0 | This design | — | reviewed | done |
+| 1 | Integer and pointer code: arithmetic, comparisons, branches, switch chains, block parameters, direct and indirect calls (SysV and Win64, stack arguments, calls to variadic functions), stack slots, loads and stores, globals with relocated initializers, `copy`/`fill` inline or through `rep movsb`/`memmove`, bit operations, `sret`/`byval`/integer `registers`; linear scan with spilling; assembly text through clang; `--backend=native`, `--emit=asm`; arms B0/B1 in the torture survey | 5-6k | e2e programs match the interpreter on Windows and WSL; difftest native oracle clean; torture survey: zero native wrong results where A0 passes, zero crashes | done |
+| 2 | Variadic definitions (`va_start` save areas), `dyn_alloca`/`stack_save`/`stack_restore` with a frame pointer, inline `copy`/`fill` for small constant sizes; over-aligned slots and jump tables for dense switches | 2k | torture: every integer-only source A0 passes also passes B0 | done except over-aligned slots and jump tables |
+| 3 | Floats: an XMM register class in the allocator, SSE selection for `f32`/`f64`, conversions, `fcmp` with parity, SSE `registers` returns and variadic float arguments (`%al` count, Win64 duplication), `i128` register pairs and division libcalls; `f80` through x87 memory sequences and `f128` libcalls | 4-5k | torture: B0 passes ⊇ A0 passes except documented x87 gaps; `benches/c` run in B0/B1 | done except `f80`, `f128` and `i128`/float conversions |
+| 4 | Quality: split intervals and second-chance binpacking or a greedy allocator, coalescing, memory operands for spills, addressing modes with index and scale, LEA arithmetic, red zone, loop rotation, compare/branch fusion across blocks, symbolic allocation checker | 4k | B1/A1 geometric mean within 1.5× on `benches/c` (native Linux), allocation checker clean on the whole torture corpus | B1/A1 is 1.25-1.40× on Windows already; the allocator work is open |
+| 5 | Direct object emission: encoder with relaxation, ELF and COFF writers, unwind table generation | 4-5k | objects byte-equivalent in disassembly and relocations to clang-assembled text on all tests; compile time measured against stage 1 | open |
+| 6 | Debug line tables (DWARF `.debug_line`, CodeView) | 2k | gdb/lldb and WinDbg step through test programs | open |
 
-### Stage 1 status
+## Implementation status
+
+### Stage 1
 
 The prototype in `src/backend/native/` implements stage 1 as listed above,
 with the following decisions recorded for review:
@@ -770,9 +772,11 @@ with the following decisions recorded for review:
   pattern matcher.
 - `%r10` and `%r11` are reserved as spill scratch registers.
 - Every argument-carrying edge out of a multi-successor block is split.
-- `copy` and `fill` call `memcpy`/`memmove`/`memset`; a module that defines
-  one of those names with internal linkage is refused, since the call would
-  bind to it.
+- `copy` and `fill` of up to 64 constant bytes are moves; longer ones use
+  `rep movsb`/`rep stosb`, or `memmove` when they may overlap; a module that
+  defines a runtime name the back end calls (`memmove`, `__main`,
+  `___chkstk_ms`, `fmod`, `__divti3` …) with internal linkage is refused,
+  since the call would bind to it.
 - Undefined data on Windows is referenced directly, relying on LLD's MinGW
   auto-import.
 - `--emit=asm` prints the native assembly and requires `--backend=native`.
@@ -818,3 +822,101 @@ refused on System V only, where a structure comes back in an SSE register.
 The difftest native oracle compiled 1,000 integer-only generated programs
 (500 seeds, arms B0 and B1) with no disagreement and no refusal; the default
 `cargo test` run checks 40.
+
+### Stages 2 and 3
+
+Implemented in the priority order of the stage 1 refusals:
+
+- **`f32`/`f64`** (`isel/float.rs`): a second register class with its own
+  allocation order (Win64 saves `%xmm6`-`%xmm15` it writes with `movaps` and
+  `.seh_savexmm`; `%xmm14`/`%xmm15` are the SSE spill scratch registers);
+  scalar SSE arithmetic; `ucomis*` comparisons mapped to flag tests that give
+  the IR's ordered and unordered results for NaN (only `oeq` and `une` need two
+  `setcc`s); `cvtsi2s*`/`cvtts*2si` with branch-free unsigned 64-bit paths;
+  `fneg` by `xorps` with a sign-mask constant; float `select` through general
+  registers and `cmov`; constants in a per-function `.rodata`/`.rdata` pool of
+  16-byte entries; `frem` through `fmod`/`fmodf`. Calls place SSE arguments
+  by convention, set `%al` for System V variadic callees, duplicate Win64
+  variadic floats into the integer register of their position, and return
+  structures in SSE registers by part class.
+- **Variadic definitions** (`isel/calls.rs`): the entry saves the six integer
+  and eight SSE argument registers into a 176-byte register save area (System
+  V) or homes the four integer registers into the caller's home area (Win64);
+  `va_start` fills the `va_list` the expanded `va_arg` reads, `va_copy`
+  copies it, `va_end` is nothing.
+- **`i128`** (`isel/wide.rs`): register pairs as planned, plus branch-free
+  `uadd_overflow` and `umul_overflow`, the `__divti3` family (register pairs
+  on System V; pointers to 16-byte copies and an `%xmm0` result on Win64), and
+  Win64's `registers(i128)` results through `movups` of `%xmm0`.
+- **Dynamic stack** (`isel/stack.rs`): such functions keep `%rbp = %rsp`
+  after the allocation, address the fixed frame from it, allocate right above
+  the outgoing argument area, probe new pages on Windows, and end with the
+  frame-pointer epilogue `lea size(%rbp), %rsp`.
+- **Two peepholes**: a multiply by a power of two is a shift, and `zext` of a
+  narrow load reuses the load's zero-extended register.
+
+`f80` was not attempted: it needs memory-resident x87 values, `fnstcw`
+truncation sequences, and ST0 returns, which is not cheap; 16 sources need
+it.
+
+Measured on 2026-10-14 (release build, same corpus and target as stage 1,
+`--arms A0,B0,B1`; the 22 sources whose first run timed out or failed under
+machine load were rerun with two jobs and a 20-second deadline):
+
+| Class | A0 | B0 | B1 |
+| --- | ---: | ---: | ---: |
+| pass | 1364 | 1348 | 1344 |
+| frontend-error | 137 | 137 | 137 |
+| lowering-unsupported | 152 | 152 | 152 |
+| abi-unsupported | 6 | 6 | 6 |
+| native-unsupported | 0 | 16 | 16 |
+| compiler-crash | 0 | 0 | 0 |
+| wrong-result | 14 | 14 | 18 |
+| link-error | 4 | 4 | 4 |
+
+B0 has exactly A0's result on every source it compiles; its 16 refusals are
+all `f80` values. B1's four extra wrong results are the four
+undefined-behaviour programs listed for stage 1. Under WSL (System V), the
+2,690 B0/B1 executables that passed on Windows (stage 2 build before the
+peepholes) were rebuilt for `x86_64-unknown-linux-gnu`: 2,688 pass and the
+two failures are `pr31448-2` again; two arms of `20000402-1` are a front-end
+error on that target. The difftest oracle now runs ordinary seeds, floats
+included: 1,000 runs, no disagreement, no refusal.
+
+`scripts/compare_optimizers.py` (Windows, wall time, 7 interleaved
+repetitions, 10 programs of `benches/c`, all verified against the reduced
+interpreter workload) measured:
+
+| Ratio (geometric mean) | run 1 (before the peepholes) | run 2 |
+| --- | --- | --- |
+| A1/N (bcc optimizer, LLVM codegen) | 0.810 [0.787, 0.834] | — |
+| B1/B0 (bcc optimizer, native codegen) | 0.830 [0.807, 0.846] | 0.795 [0.719, 0.928] |
+| B1/A1 (native vs LLVM codegen, same IR) | 1.395 [1.359, 1.431] | 1.250 [1.170, 1.475] |
+| B0/A2 | 1.674 [1.638, 1.728] | 1.591 [1.408, 1.809] |
+| B1/A2 | 1.389 [1.357, 1.423] | 1.265 [1.175, 1.447] |
+
+The second run was noisier (another workload shared the machine); the first
+is the cleaner estimate. The bcc optimizer gains about as much with the
+native code generator (B1/B0) as with LLVM's (A1/N), so its gains do not
+depend on LLVM cleaning up after it. The native code generator itself costs
+25-40% against LLVM's O2 machine passes on the same IR. Reading the
+generated code (`levenshtein`, `bytecode`, `collatz`, the largest gaps)
+shows where:
+
+1. **Whole-interval allocation.** A loop counter and its incremented copy
+   overlap for the whole loop, so `i + 1` becomes `mov; add; mov` instead of
+   one `add` in place; live ranges with holes or splitting would coalesce
+   them.
+2. **No indexed addressing.** `a[i]` on a global is `movslq; shl;
+   leaq a(%rip); addq; mov (...)` where LLVM writes `mov (%base,%rcx,4)`
+   with the base hoisted.
+3. **Rematerialized addresses in loops.** `leaq sym(%rip)` is repeated at each
+   use instead of living in a register across the loop.
+4. **No loop rotation.** Loops test at the top and jump back from the bottom,
+   two branches per iteration.
+5. **Compare results through `setcc`** feed arithmetic (`a != b` added to an
+   integer) where `sbb`/`adc` idioms are shorter.
+
+Compile time is comparable: median whole-process build 1.29-1.51 s for B0/B1
+against 1.09-1.25 s for N/A1, the difference being the extra clang run that
+assembles the text.
