@@ -146,6 +146,10 @@ const MAX_SELF_CALLS: u32 = 2;
 const RECURSION_FACTOR: u64 = 15;
 
 /// One function's generator state.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent generation switches; a state enum would not fit them."
+)]
 struct FunctionGen<'g> {
     rng:          &'g mut Rng,
     probe:        bool,
