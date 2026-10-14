@@ -20,6 +20,9 @@ The research behind the decisions lives in `docs/research/`:
 - [optimizer-gap-analysis.md](docs/research/optimizer-gap-analysis.md)
   measures the optimizer gap, introduces control arm N, and prioritizes missing
   transformations.
+- [optimizer-performance-2026-10-14.md](docs/research/optimizer-performance-2026-10-14.md)
+  adds seven benchmarks, measures `sroa`, `combine`, branch threading and
+  join-aware GVN against LLVM, and ranks the transformations still missing.
 
 ## Goals
 
