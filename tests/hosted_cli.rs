@@ -875,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn msvc_identity_needs_the_umbrella_flag_and_clang_is_never_claimed() {
+    fn msvc_identity_needs_the_umbrella_flag_and_clang_is_always_claimed() {
         let source = "#ifdef _MSC_VER\nms _MSC_VER _MSC_FULL_VER _MSC_BUILD \
                       _MSC_EXTENSIONS\n#endif\n#ifdef __clang__\nclang\n#endif\n#if __bcc__ == 1 \
                       && defined __bcc_version__\nbcc __bcc_major__ __bcc_minor__ \
@@ -895,7 +895,7 @@ mod tests {
         for mode in ["-std=c99", "-std=gnu17"] {
             let output = bcc(&[mode, "-fms-extensions", "--tokens", "--input", source]);
             clean(&output);
-            let mut expected = vec!["ms", "1933", "193300000", "1", "1", "bcc"];
+            let mut expected = vec!["ms", "1933", "193300000", "1", "1", "clang", "bcc"];
             expected.extend(version);
             assert_eq!(constants(&output), expected, "{mode}");
             for flags in [
@@ -908,7 +908,7 @@ mod tests {
                 args.extend(["--tokens", "--input", source]);
                 let output = bcc(&args);
                 clean(&output);
-                let mut expected = vec!["bcc"];
+                let mut expected = vec!["clang", "bcc"];
                 expected.extend(version);
                 assert_eq!(constants(&output), expected, "{mode} {flags:?}");
             }
