@@ -242,8 +242,14 @@ Clang `-S -emit-llvm -O0` agree in all twelve probes:
 The durable CLI regression additionally covers constant `sizeof`, forward
 redeclarations, cycles, function tables, used and unused static local
 initializers, unsupported reachable bodies, parameter bound calls and a
-2,000-function chain.
+2,000-function chain. The synthetic GNU header test checks that compatibility
+macros select inline semantics consistent with the compiler.
 
+R1 also exposed an inconsistent GNU identity: bcc implements C99 inline but
+advertised GCC 4.2.1, whose headers assume GNU89 inline. The common identity is
+now GCC 4.3.1, the first GCC series with C99 inline semantics, rather than a
+header-specific workaround. See [GCC 4.3 porting notes](https://gcc.gnu.org/gcc-4.3/porting_to.html)
+and [GCC 4.2 inline documentation](https://gcc.gnu.org/onlinedocs/gcc-4.2.2/gcc/Inline.html).
 The existing builtin declaration table now gives `__builtin_fabsf` and
 `__builtin_fabsl` their float and long-double signatures alongside
 `__builtin_fabs`.

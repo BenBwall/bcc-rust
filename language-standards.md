@@ -67,8 +67,9 @@ hosted and the later flag wins. `CompilerConfiguration::default()` is hosted
 as well.
 
 Compiler identity follows Clang's approach. Every language mode, including
-strict ISO modes, defines `__GNUC__` `4`, `__GNUC_MINOR__` `2` and
-`__GNUC_PATCHLEVEL__` `1`, the GCC version Clang claims, and the
+strict ISO modes, defines `__GNUC__` `4`, `__GNUC_MINOR__` `3` and
+`__GNUC_PATCHLEVEL__` `1`, a GNU compatibility version with C99 inline
+semantics (introduced by GCC 4.3), and the
 inline-semantics macro Clang defines: `__GNUC_GNU_INLINE__` in GNU89 inline
 mode and `__GNUC_STDC_INLINE__` in C99 inline mode, each with value `1` and
 the other absent. Before C99 (including C95), GNU89 inline is the default;

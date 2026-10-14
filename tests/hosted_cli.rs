@@ -827,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn every_mode_claims_the_gnu_identity_clang_claims() {
+    fn every_mode_advertises_c99_compatible_gnu_version_and_clang_inline_mode() {
         for mode in [
             "-std=c89",
             "-std=iso9899:199409",
@@ -868,6 +868,20 @@ mod tests {
                 })
                 .collect();
             let mut actual = bcc_gnu_identity(mode);
+            for (name, value) in [
+                ("__GNUC__", "4"),
+                ("__GNUC_MINOR__", "3"),
+                ("__GNUC_PATCHLEVEL__", "1"),
+            ] {
+                assert!(
+                    actual.iter().any(|(n, v)| n == name && v == value),
+                    "{mode}: {actual:?}"
+                );
+            }
+            // Inline mode still matches Clang; bcc's GNU compatibility version
+            // is deliberately newer than Clang's legacy GNU version claim.
+            expected.retain(|(name, _)| name.ends_with("INLINE__"));
+            actual.retain(|(name, _)| name.ends_with("INLINE__"));
             expected.sort();
             actual.sort();
             assert_eq!(actual, expected, "{mode}");

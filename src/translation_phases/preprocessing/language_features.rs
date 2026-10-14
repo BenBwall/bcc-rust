@@ -941,8 +941,8 @@ pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
 ];
 
 /// Appends the compiler-identity macros to the target's predefined
-/// `definitions`, as source read before user input. Following Clang, every
-/// language mode claims GCC 4.2.1 with its inline-semantics macro, and
+/// `definitions`, as source read before user input. Every language mode
+/// advertises GNU compatibility 4.3.1 with its inline-semantics macro, and
 /// `-fms-extensions` claims MSVC 19.33, Clang's default
 /// `-fms-compatibility-version`. `__bcc__` and its version are defined in
 /// every mode; `__clang__` never is. They are ordinary macros, so `#undef`
@@ -967,7 +967,12 @@ pub(super) fn with_identity_macros<'a>(
         env!("CARGO_PKG_VERSION_PATCH"),
         env!("CARGO_PKG_VERSION"),
     );
-    out.push_str("#define __GNUC__ 4\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 1\n");
+    // GCC 4.3 introduced C99 inline semantics. Advertising the earlier 4.2
+    // contract without Clang's identity selects legacy GNU89 header bodies
+    // even in C99 mode. The version belongs here, not in header-specific or
+    // function-specific emission exceptions. GCC: "Porting to GCC 4.3",
+    // <https://gcc.gnu.org/gcc-4.3/porting_to.html> (C99 inline semantics).
+    out.push_str("#define __GNUC__ 4\n#define __GNUC_MINOR__ 3\n#define __GNUC_PATCHLEVEL__ 1\n");
     // Identity follows the effective inline mode, including flag overrides.
     out.push_str(if configuration.gnu89_inline() {
         "#define __GNUC_GNU_INLINE__ 1\n"

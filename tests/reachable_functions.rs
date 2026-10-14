@@ -288,6 +288,30 @@ int main(void) { int a[2]={7,9}; return f(a)-7; }";
     }
 
     #[test]
+    fn gnu_compatibility_version_selects_the_c99_header_inline_contract() {
+        let source = "
+#if (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 3) || defined(__clang__)) && \
+                      __STDC_VERSION__ >= 199901L
+#define HEADER_INLINE extern inline __attribute__((gnu_inline))
+#else
+#define HEADER_INLINE extern inline
+#endif
+int wrapper(void);
+HEADER_INLINE int wrapper(void) { __asm__(\"\"); return 0; }
+int main(void) { return 0; }";
+        let output = bcc(source, &["--emit=llvm"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            symbols(&output.stdout),
+            ["main"].into_iter().map(str::to_owned).collect()
+        );
+    }
+
+    #[test]
     fn fabs_builtin_siblings_have_their_declared_precision() {
         let source = "float (*f)(float)=__builtin_fabsf;
 long double (*l)(long double)=__builtin_fabsl;

@@ -360,7 +360,7 @@ fn version_strict_ansi_and_identity_macros_follow_every_mode() {
             if !gnu {
                 expected.extend(["strict".to_owned(), "1".to_owned()]);
             }
-            expected.extend(["gnu", "4", "2", "1"].map(str::to_owned));
+            expected.extend(["gnu", "4", "3", "1"].map(str::to_owned));
             expected.push(
                 if standard < CStandard::C99 {
                     "gnu_inline"
