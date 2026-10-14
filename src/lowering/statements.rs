@@ -802,7 +802,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         if data.kind != BindingKind::Object {
             return Ok(());
         }
-        if data.duration == Duration::Static {
+        if data.duration.is_static_or_thread() {
             if data.linkage == Linkage::None {
                 _ = self
                     .unit

@@ -121,6 +121,17 @@ fn build_module<'m>(
         if global.init.is_some() && global.linkage == crate::ir::Linkage::Internal {
             api.internal(value);
         }
+        if global.thread_local {
+            // Clang marks a definition `dso_local`, so in a position-
+            // independent ELF executable LLVM gives it the local-exec model
+            // and a declaration initial-exec. LLVM-C cannot mark a global
+            // `dso_local`, so a definition requests local-exec directly.
+            // Windows has one model, through `_tls_index` and the TEB.
+            api.thread_local(
+                value,
+                global.init.is_some() && api::position_independent(target),
+            );
+        }
         globals.push(value);
     }
     let emitter = Emitter {

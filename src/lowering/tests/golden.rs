@@ -547,3 +547,17 @@ int f(struct m *p) { p->b = 300; p->d = -2; return p->a + p->b + p->c + p->d; }"
     text.push_str(&ir);
     assert_snapshot("tests/fixtures/lowering/bit_fields_msvc.ir", &text);
 }
+
+#[test]
+fn thread_storage_becomes_thread_local_globals() {
+    golden(
+        "thread_local",
+        "_Thread_local int counter = 3;
+extern __thread long shared;
+static _Thread_local char name[4] = \"tls\";
+int next(void) { static __thread int calls; extern _Thread_local int counter; calls++; return \
+         counter++ + calls; }
+long *address(void) { return &shared; }
+char first(void) { return name[0]; }",
+    );
+}

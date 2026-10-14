@@ -1,0 +1,46 @@
+; _Thread_local int counter = 3;
+; extern __thread long shared;
+; static _Thread_local char name[4] = "tls";
+; int next(void) { static __thread int calls; extern _Thread_local int counter; calls++; return counter++ + calls; }
+; long *address(void) { return &shared; }
+; char first(void) { return name[0]; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+global @counter external thread_local size 4, align 4 = bytes "03000000"
+global @name internal thread_local size 4, align 1 = bytes "746c7300"
+global @next.calls internal thread_local size 4, align 4 = zero
+global @shared external thread_local size 8, align 8
+
+function @next() -> i32 external {
+block0:
+    v0 = global_addr @next.calls
+    v1 = load.i32 v0, align 4
+    v2 = iconst.i32 1
+    v3 = iadd.i32 nsw v1, v2
+    store.i32 v3, v0, align 4
+    v4 = global_addr @counter
+    v5 = load.i32 v4, align 4
+    v6 = iconst.i32 1
+    v7 = iadd.i32 nsw v5, v6
+    store.i32 v7, v4, align 4
+    v8 = global_addr @next.calls
+    v9 = load.i32 v8, align 4
+    v10 = iadd.i32 nsw v5, v9
+    return v10
+}
+
+function @address() -> ptr external {
+block0:
+    v0 = global_addr @shared
+    return v0
+}
+
+function @first() -> i8 signed external {
+block0:
+    v0 = global_addr @name
+    v1 = iconst.i32 0
+    v2 = load.i8 v0, align 1
+    return v2
+}

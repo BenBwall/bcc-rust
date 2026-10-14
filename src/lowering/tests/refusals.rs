@@ -69,6 +69,25 @@ fn unsupported_constructs_name_themselves() {
     }
 }
 
+/// C23 (N3220) §6.5.3.6p7: a `static` or `thread_local` compound literal
+/// in a function outlives its block, and a thread-local one at file scope
+/// is per thread. Lowering names them instead of allocating them in the
+/// frame or as one shared object.
+#[test]
+fn compound_literals_with_static_or_thread_storage_name_themselves() {
+    for source in [
+        "int *f(void) { return &(static int){1}; }",
+        "int *f(void) { return &(static _Thread_local int){1}; }",
+        "int *p = &(_Thread_local int){1};",
+    ] {
+        let message = refusal(source);
+        assert!(
+            message.ends_with("compound literals with static or thread storage duration"),
+            "{source}: {message}"
+        );
+    }
+}
+
 #[test]
 fn every_failing_function_is_reported() {
     let errors = lower(

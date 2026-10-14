@@ -74,6 +74,7 @@ pub(crate) enum Construct {
     SelectionDeclaration,
     Setjmp,
     Extension,
+    CompoundLiteralStorage,
 }
 
 /// The errors of one translation unit, in the `'ir` arena.
@@ -131,6 +132,8 @@ impl Construct {
             | Self::SelectionDeclaration => "declarations in selection statements",
             | Self::Setjmp => "setjmp",
             | Self::Extension => "this extension",
+            | Self::CompoundLiteralStorage =>
+                "compound literals with static or thread storage duration",
         }
     }
 }

@@ -969,6 +969,10 @@ fn verify_global<'m>(
         };
         if !exists {
             error(VerifierErrorKind::InvalidReference(kind, index));
+        } else if let Symbol::Global(target) = relocation.symbol
+            && module.global(target).thread_local
+        {
+            error(VerifierErrorKind::ThreadLocalRelocation(relocation.offset));
         }
     }
 }
@@ -1105,6 +1109,10 @@ pub(crate) enum VerifierErrorKind {
     },
     /// A relocation's eight bytes do not fit in the global.
     RelocationRange(u64),
+    /// A relocation names a thread-local global, whose address differs per
+    /// thread and so is no link-time constant.
+    /// C11: §6.6 paragraph 9, p. 107; PDF p. 125.
+    ThreadLocalRelocation(u64),
 }
 
 /// What is wrong with an aggregate parameter of a signature.
@@ -1291,6 +1299,11 @@ impl fmt::Display for VerifierErrorKind {
             | Self::RelocationRange(offset) => write!(
                 f,
                 "the relocation at offset {offset} does not fit in the global"
+            ),
+            | Self::ThreadLocalRelocation(offset) => write!(
+                f,
+                "the relocation at offset {offset} names a thread-local global, whose address is \
+                 not a link-time constant"
             ),
         }
     }

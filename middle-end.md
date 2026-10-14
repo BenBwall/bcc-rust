@@ -403,8 +403,24 @@ because a load of bytes never written is poison as a whole.
 A module holds its functions, its globals, its interned signatures and the
 target. A function has a name, a signature, a linkage (`external`, `internal`),
 and, if defined, a body. A global has a name, a linkage, size, alignment, a
-`constant` flag, and an initializer: zero, or bytes plus relocations
-`(offset, symbol, addend)` for address constants.
+`constant` flag, a `thread_local` flag, and an initializer: zero, or bytes plus
+relocations `(offset, symbol, addend)` for address constants.
+
+A `thread_local` global (`global @g external thread_local size 4, align 4`)
+has one copy per thread, initialized from its initializer when the thread
+starts; `global_addr` yields the evaluating thread's copy. Its address is
+therefore no link-time constant, and the verifier rejects a relocation that
+names it (C11 §6.2.4p4, §6.6p9). Lowering gives every object with semantic
+analysis's `Duration::Thread` such a global, file-scope or static local
+alike. The interpreter runs one thread and has no thread-creating host
+operation, so its thread-local globals are ordinary globals of that thread.
+The LLVM back end marks them `thread_local` and computes each access with
+`llvm.threadlocal.address`, as Clang does. Clang marks definitions
+`dso_local`, which gives them the local-exec model in an ELF executable;
+LLVM-C cannot set `dso_local`, so definitions on the position-independent
+ELF targets request local-exec directly, and declarations keep the default
+that becomes initial-exec. Windows targets use native TLS through
+`_tls_index` and the TEB, as Clang does for both MinGW and MSVC.
 
 ### Textual form
 

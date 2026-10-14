@@ -587,6 +587,8 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             size,
             align,
             constant: constant_object(types, data.ty),
+            thread_local: data.duration
+                == crate::translation_phases::semantic_analysis::Duration::Thread,
         })
     }
 
@@ -600,10 +602,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let global = self.module.declare_global(
             symbol,
             GlobalDecl {
-                linkage:  IrLinkage::Internal,
-                size:     text.len() as u64 + 1,
-                align:    Align::BYTE,
-                constant: true,
+                linkage:      IrLinkage::Internal,
+                size:         text.len() as u64 + 1,
+                align:        Align::BYTE,
+                constant:     true,
+                thread_local: false,
             },
         );
         let mut bytes = ArenaVec::with_capacity_in(text.len() + 1, self.tables);
@@ -655,6 +658,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 size: bytes.len() as u64,
                 align,
                 constant: true,
+                thread_local: false,
             },
         );
         self.module.define_global(
@@ -810,11 +814,12 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         let global = self.module.declare_global(
             name,
             GlobalDecl {
-                linkage:  IrLinkage::Internal,
-                size:     layout.size,
-                align:    super::alignment::storage_alignment(&self.sema.types, ty)
+                linkage:      IrLinkage::Internal,
+                size:         layout.size,
+                align:        super::alignment::storage_alignment(&self.sema.types, ty)
                     .map_err(|kind| at(kind, expression.source_vectors))?,
-                constant: constant_object(&self.sema.types, ty),
+                constant:     constant_object(&self.sema.types, ty),
+                thread_local: false,
             },
         );
         _ = self.compound_literals.insert(key, global);
@@ -1023,7 +1028,16 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 continue;
             }
             match expression.kind {
-                | ExpressionType::CompoundLiteral { initializer, .. } => {
+                | ExpressionType::CompoundLiteral {
+                    type_name,
+                    initializer,
+                } => {
+                    if super::expressions::literal_storage(type_name, false) {
+                        return Err(LoweringError::unsupported(
+                            Construct::CompoundLiteralStorage,
+                            expression.source_vectors,
+                        ));
+                    }
                     let global = self.static_compound_literal(expression, initializer, info.ty)?;
                     return Ok((Symbol::Global(global), addend));
                 },

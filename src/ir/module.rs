@@ -161,6 +161,7 @@ impl<'ir> Module<'ir> {
             size: declaration.size,
             align: declaration.align,
             constant: declaration.constant,
+            thread_local: declaration.thread_local,
             init: None,
         });
         self.add_symbol(name, Symbol::Global(id));
@@ -686,21 +687,27 @@ pub(crate) enum Symbol {
 /// A global object. One without an initializer is declared, not defined.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Global<'ir> {
-    pub(crate) name:     &'ir str,
-    pub(crate) linkage:  Linkage,
-    pub(crate) size:     u64,
-    pub(crate) align:    Align,
-    pub(crate) constant: bool,
-    pub(crate) init:     Option<GlobalInit<'ir>>,
+    pub(crate) name:         &'ir str,
+    pub(crate) linkage:      Linkage,
+    pub(crate) size:         u64,
+    pub(crate) align:        Align,
+    pub(crate) constant:     bool,
+    /// Every thread has its own copy, initialized from `init` when the
+    /// thread starts. `global_addr` yields the evaluating thread's copy, so
+    /// the address is not a link-time constant and no relocation names it.
+    /// C11: §6.2.4 paragraph 4, p. 38; PDF p. 56.
+    pub(crate) thread_local: bool,
+    pub(crate) init:         Option<GlobalInit<'ir>>,
 }
 
 /// What [`Module::declare_global`] needs besides the name.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct GlobalDecl {
-    pub(crate) linkage:  Linkage,
-    pub(crate) size:     u64,
-    pub(crate) align:    Align,
-    pub(crate) constant: bool,
+    pub(crate) linkage:      Linkage,
+    pub(crate) size:         u64,
+    pub(crate) align:        Align,
+    pub(crate) constant:     bool,
+    pub(crate) thread_local: bool,
 }
 
 /// A global's initial contents.

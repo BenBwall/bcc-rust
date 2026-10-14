@@ -251,6 +251,9 @@ impl<'ir> Module<'ir> {
                 display_name(data.name),
                 data.linkage.name()
             )?;
+            if data.thread_local {
+                f.write_str(" thread_local")?;
+            }
             if data.constant {
                 f.write_str(" constant")?;
             }

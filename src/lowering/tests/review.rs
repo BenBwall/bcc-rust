@@ -264,10 +264,11 @@ fn thousands_of_string_symbols_use_linear_arena_space() {
         _ = unit.module.declare_global(
             name,
             GlobalDecl {
-                linkage:  Linkage::Internal,
-                size:     0,
-                align:    Align::BYTE,
-                constant: true,
+                linkage:      Linkage::Internal,
+                size:         0,
+                align:        Align::BYTE,
+                constant:     true,
+                thread_local: false,
             },
         );
     }
