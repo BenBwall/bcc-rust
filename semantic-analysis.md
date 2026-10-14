@@ -471,6 +471,21 @@ unprototyped and variadic arguments receive default promotions. Core unary,
 postfix, binary, conditional, assignment, comma, cast and compound-literal
 constraints use the same helpers (§6.5, pp. 69-94, PDF pp. 81-106).
 
+Issue #46 (2026-10-14) adds Clang 23 pointer constraint classification in
+`expressions/pointers.rs`. `assignment_conversion` first checks the standard
+constraint and then classifies its violation once; assignment, initialization,
+ordinary prototype arguments and return share that adapter. Intrinsic-specific
+contracts retain strict `assignment_compatible`. Configuration diagnostic policy
+selects warning/error/suppression with Clang group names, defaults and parent
+group controls. Warnings retain ordinary conversion records and do not increment
+semantic error counters or taint initializer recovery. Errors block lowering.
+The qualifier classifier walks pointer/array derivations iteratively and does
+not weaken unrelated terminal types, function signatures or array bounds.
+The default/severity table and flag semantics are in `language-standards.md`.
+Global `-Werror` is also applied to existing diagnostics from every phase at the
+shared rendering/counting seam, so error counting blocks lowering before output.
+This changes no call/designation/tail/member facts or downstream lowering.
+
 Expression completion runs on the existing explicit work stack after children
 and type names. Failed operands yield `Unknown` and suppress dependent diagnostics.
 Recovery taint and unmodeled extension owners likewise yield unknown results;

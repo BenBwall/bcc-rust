@@ -69,7 +69,8 @@ impl<'tu> Context<'tu> {
             if matches!(&error, TranslationError::Extension(x) if x.suppressed.get()) {
                 self.suppressed_errors -= 1;
             } else {
-                self.drained_errors += usize::from(error.severity() == ErrorSeverity::Error);
+                self.drained_errors +=
+                    usize::from(error.configured_severity(self) == ErrorSeverity::Error);
                 return Some(error);
             }
         }
@@ -127,7 +128,7 @@ impl<'tu> Context<'tu> {
                 .iter()
                 .filter(|error| {
                     !matches!(error, TranslationError::Extension(x) if x.suppressed.get())
-                        && error.severity() == ErrorSeverity::Error
+                        && error.configured_severity(self) == ErrorSeverity::Error
                 })
                 .count()
     }

@@ -258,7 +258,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             .invalid_expression(e, SemanticErrorKind::InvalidAdditiveOperands);
                     }
                 }
-            } else if !self.assignment_compatible(left.ty, right) {
+            } else if !self.assignment_conversion(left.ty, right) {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidAssignment);
             }
             if compound.is_none() {
@@ -418,7 +418,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     } else {
                         false
                     };
-                    if !valid {
+                    if !valid
+                        && !self.pointer_comparison(
+                            left,
+                            right,
+                            lt,
+                            rt,
+                            equality,
+                            e.operator_source_vectors.unwrap_or(e.source_vectors),
+                        )
+                    {
                         return self
                             .invalid_expression(e, SemanticErrorKind::InvalidComparisonOperands);
                     }
@@ -654,7 +663,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let info = self.expression_info(argument);
             failed |= self.types.unanalyzed(info.ty);
             if prototype && let Some(&parameter) = parameters.get(index) {
-                if !self.assignment_compatible(parameter, info) {
+                if !self.assignment_conversion(parameter, info) {
                     failed = true;
                     self.error(
                         SemanticErrorKind::InvalidArgumentType,
@@ -1507,7 +1516,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// required.
     /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
     /// C99: §6.5.9 paragraph 2, p. 86; PDF p. 98.
-    fn pointer_compatible(&mut self, left: TypeId, right: TypeId, void: bool) -> bool {
+    pub(super) fn pointer_compatible(&mut self, left: TypeId, right: TypeId, void: bool) -> bool {
         if self.types.unanalyzed(left) || self.types.unanalyzed(right) {
             return true;
         }

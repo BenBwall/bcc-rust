@@ -15,6 +15,7 @@
 //! site.
 //!
 //! - Operator typing and conversions: `typing.rs`.
+//! - Pointer constraint classification: `pointers.rs`.
 //! - Retained categories and conversions: `results.rs`.
 //! - Constant addresses and address differences: `address.rs`.
 //!
@@ -24,6 +25,7 @@
 //! subobjects are walked by the initializer analyzer.
 
 // Operator typing and conversions
+mod pointers;
 mod typing;
 
 // Retained categories and conversions

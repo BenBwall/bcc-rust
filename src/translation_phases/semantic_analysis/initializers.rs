@@ -99,8 +99,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 }
                                 continue;
                             }
+                            let errors_before_conversion = self.semantic_errors;
                             if matches!(self.types.nodes[target.index], TypeKind::Array(..))
-                                || !self.assignment_compatible(target, info)
+                                || !self.assignment_conversion(target, info)
                             {
                                 self.error(
                                     SemanticErrorKind::InvalidInitializer,
@@ -108,6 +109,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                     None,
                                     None,
                                 );
+                                continue;
+                            }
+                            if self.semantic_errors != errors_before_conversion {
+                                // Suppress constant-initializer errors after a
+                                // rejected conversion (C99 §6.7.8p11).
                                 continue;
                             }
                             self.convert(e, target.unqualified(), ConversionKind::Assignment);
@@ -132,7 +138,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                             || info.floating.is_some()
                                             || info.unfolded_binary128)
                                 } else {
-                                    address || self.null_pointer_constant(info)
+                                    address
+                                        || self.null_pointer_constant(info)
+                                        || (matches!(
+                                            self.types.nodes[self.types.non_atomic(target).index],
+                                            TypeKind::Pointer(_)
+                                        ) && info.ice
+                                            && info.integer.is_some())
                                 };
                                 if !valid {
                                     self.error(

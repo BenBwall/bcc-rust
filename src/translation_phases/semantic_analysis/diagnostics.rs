@@ -19,6 +19,40 @@ use crate::{
 };
 
 impl Analyzer<'_, '_, '_> {
+    /// Central emitter for pointer constraints; classification has no severity
+    /// decisions. Accepted warnings do not taint initializer/ICE recovery.
+    /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(super) fn pointer_diagnostic(
+        &mut self,
+        group: crate::configuration::DiagnosticGroup,
+        source_vectors: SourceVectors,
+    ) {
+        if self.tainted {
+            return;
+        }
+        let Some(severity) = self.context.configuration.diagnostic_severity(group) else {
+            return;
+        };
+        if self.context.withholds(
+            severity,
+            group.default_severity() == crate::translation_phases::ErrorSeverity::Warning,
+            source_vectors,
+        ) {
+            return;
+        }
+        let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
+        self.semantic_errors += errors;
+        self.error_diagnostics += errors;
+        self.context
+            .append_pending_errors([TranslationError::Semantic(SemanticError {
+                extension_severity: Some(severity),
+                kind: SemanticErrorKind::PointerConstraint(group),
+                source_vectors,
+                name: None,
+                previous: None,
+            })]);
+    }
+
     #[cold]
     #[inline(never)]
     pub(super) fn error(

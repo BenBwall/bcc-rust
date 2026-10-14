@@ -41,6 +41,11 @@ pub(crate) struct SemanticError {
 /// C99: §6.7p3-4, p. 97; PDF p. 109; subsidiary constraints are cited below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SemanticErrorKind {
+    /// Pointer constraints diagnosed with Clang's group/default severity.
+    /// C99: §6.5.16.1p1, p. 92; PDF p. 104; §6.5.9p2, p. 86; PDF p. 98;
+    /// §6.5.8p2, p. 85; PDF p. 97; §6.5.2.2p2,p7, pp. 71-72; PDF pp. 83-84;
+    /// §6.8.6.4p3, p. 139; PDF p. 151; §6.7.8p11, p. 126; PDF p. 138.
+    PointerConstraint(crate::configuration::DiagnosticGroup),
     /// C99: §6.10.6p1, p. 159; PDF p. 171; GCC/MSVC pragma extension.
     PragmaPackMalformed,
     PragmaPackPopEmpty,
@@ -341,6 +346,7 @@ impl SemanticErrorKind {
     /// The primary label names what is wrong at the labeled source.
     const fn label(self) -> &'static str {
         match self {
+            | Self::PointerConstraint(_) => "pointer constraint violation",
             | Self::PragmaPackMalformed
             | Self::PragmaPackPopEmpty
             | Self::PragmaPackPopNameAlignment
@@ -470,6 +476,20 @@ impl SemanticErrorKind {
     )]
     fn explanation(self) -> (&'static str, &'static str) {
         match self {
+            | Self::PointerConstraint(group) => (
+                match group {
+                    | crate::configuration::DiagnosticGroup::CompareDistinctPointerTypes => "comparison of distinct pointer types",
+                    | crate::configuration::DiagnosticGroup::IncompatiblePointerTypes => "incompatible pointer types in conversion",
+                    | crate::configuration::DiagnosticGroup::PointerSign => "conversion between pointers to integer types with different sign",
+                    | crate::configuration::DiagnosticGroup::PointerQualifiers => "pointer conversion discards qualifiers, including nested pointer qualifiers",
+                    | crate::configuration::DiagnosticGroup::IncompatibleFunctionPointerTypes => "incompatible function pointer types in conversion",
+                    | crate::configuration::DiagnosticGroup::IntConversion => "incompatible integer and pointer conversion",
+                    | crate::configuration::DiagnosticGroup::PointerIntegerCompare => "comparison between pointer and integer",
+                    | crate::configuration::DiagnosticGroup::OrderedCompareFunctionPointers => "ordered comparison of function pointers",
+                    | crate::configuration::DiagnosticGroup::OrderedPointerIntegerCompare => "ordered comparison between pointer and integer",
+                },
+                "C99 §6.5.16.1p1, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1",
+            ),
             | Self::PragmaPackMalformed => ("malformed #pragma pack ignored", "C99 §6.10.6p1: implementation-defined GCC/MSVC packing pragma"),
             | Self::PragmaPackPopEmpty => ("#pragma pack(pop, ...) failed: stack empty", "GCC/MSVC pack restores a saved alignment from its stack"),
             | Self::PragmaPackPopNameAlignment => ("specifying both a name and alignment to 'pop' is undefined", "Clang warns and applies the named pop followed by the alignment"),
@@ -1048,6 +1068,13 @@ impl ToDiagnostic for SemanticError {
                 "{message}: {}",
                 quote_spelling(context.string_cache.at(name))
             )
+        } else {
+            message
+        };
+        let message = if let SemanticErrorKind::PointerConstraint(group) = self.kind
+            && let Some(group) = group.name()
+        {
+            format_in!(arena, "{message} [-W{group}]")
         } else {
             message
         };

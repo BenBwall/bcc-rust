@@ -28,8 +28,9 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   future draft change.
 - The unified extension policy reports reserved GNU and MSVC constructs that
   GCC or Clang sometimes exempt from pedantic diagnostics. Only `-pedantic`,
-  `-Wpedantic` and `-pedantic-errors` select a policy; other warning options,
-  including `-Wno-pedantic`, are not implemented.
+  `-Wpedantic` and `-pedantic-errors` select a policy. Pointer diagnostic group
+  controls and global `-Werror` are supported as described below;
+  `-Wno-pedantic` and other unrelated warning groups are not implemented.
 - `__extension__` suppresses keyword, grammar and numeric-constant extension
   diagnostics within its owning declaration or expression. Lexical diagnostics
   (dollar identifiers, `//` comments, digraphs), directives and macro
@@ -1159,3 +1160,85 @@ its token reducer. C11 §6.7.5p4,p6 combines multiple `_Alignas` requests before
 checking natural alignment, including runtime-sized arrays and VLA typedefs.
 See [the semantic repair record](semantic-analysis.md#pr-42-round-1-layout-and-alignment-repairs-2026-10-13)
 and [GCC's packed/aligned sections](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html).
+
+## Pointer diagnostic defaults (2026-10-14, issue #46)
+
+The oracle is bundled Clang **23.1.1**, Rust LLVM revision
+`1b9c0d5ff9bbe7634aead059efe6b11a7eeba145`, with `-fsyntax-only` and no warning flags.
+`python scripts/probe_pointer_diagnostics.py` retains source, argv, status and
+complete stderr in `target/pointer-diagnostics/matrix.json`. All 25 probes
+have identical default severity, group and wording on Linux GNU, Windows GNU
+and Windows MSVC, in `c89`, `gnu89`, `iso9899:199409`, `c99`, `gnu99`, `c11`,
+`gnu11`, `c17`, `gnu17`, `c23`, `gnu23`, `c2y`, `gnu2y` (975 invocations).
+
+| Probe | Clang group | Default | Exact Clang wording |
+| --- | --- | --- | --- |
+| distinct-equality | `compare-distinct-pointer-types` | **warning** | `comparison of distinct pointer types ('int *' and 'unsigned int *')` |
+| distinct-order | `compare-distinct-pointer-types` | **warning** | `comparison of distinct pointer types ('int *' and 'float *')` |
+| object-assignment | `incompatible-pointer-types` | **error** | `incompatible pointer types assigning to 'char *' from 'float *'` |
+| object-initialization | `incompatible-pointer-types` | **error** | `incompatible pointer types initializing 'char *' with an expression of type 'float *'` |
+| object-argument | `incompatible-pointer-types` | **error** | `incompatible pointer types passing 'float *' to parameter of type 'char *'` |
+| object-return | `incompatible-pointer-types` | **error** | `incompatible pointer types returning 'float *' from a function with result type 'char *'` |
+| pointer-sign | `pointer-sign` | **warning** | `assigning to 'int *' from 'unsigned int *' converts between pointers to integer types with different sign` |
+| char-sign | `pointer-sign` | **warning** | `assigning to 'char *' from 'signed char *' converts between pointers to integer types where one is of the unique plain 'char' type and the other is not` |
+| nested-sign | `incompatible-pointer-types` | **error** | `incompatible pointer types assigning to 'int **' from 'unsigned int **'` |
+| discard-qualifiers | `incompatible-pointer-types-discards-qualifiers` | **warning** | `assigning to 'int *' from 'const int *' discards qualifiers` |
+| nested-qualifiers | `incompatible-pointer-types-discards-qualifiers` | **warning** | `assigning to 'const int **' from 'int **' discards qualifiers in nested pointer types` |
+| nested-discard-qualifiers | `incompatible-pointer-types-discards-qualifiers` | **warning** | `assigning to 'int **' from 'const int **' discards qualifiers in nested pointer types` |
+| pointer-qualifiers | `incompatible-pointer-types-discards-qualifiers` | **warning** | `assigning to 'int **' from 'int *const *' discards qualifiers` |
+| function-assignment | `incompatible-function-pointer-types` | **error** | `incompatible function pointer types assigning to 'int (*)(int)' from 'int (*)(double)'` |
+| function-object | `incompatible-pointer-types` | **error** | `incompatible pointer types assigning to 'int (*)(int)' from 'int *'` |
+| function-void | `pedantic when requested` | **silent** | `No default diagnostic` |
+| integer-pointer | `int-conversion` | **error** | `incompatible integer to pointer conversion assigning to 'int *' from 'int'; take the address with &` |
+| pointer-integer | `int-conversion` | **error** | `incompatible pointer to integer conversion assigning to 'int' from 'int *'; dereference with *` |
+| pointer-integer-equality | `pointer-integer-compare` | **warning** | `comparison between pointer and integer ('int *' and 'int')` |
+| pointer-integer-order | `no named group` | **warning** | `ordered comparison between pointer and integer ('int *' and 'int')` |
+| pointer-zero-order | `pedantic when requested` | **silent** | `No default diagnostic` |
+| function-order | `ordered-compare-function-pointers` | **warning** | `ordered comparison of function pointers ('int (*)(int)' and 'int (*)(int)')` |
+| function-distinct-order | `ordered-compare-function-pointers`, then `compare-distinct-pointer-types` | **two warnings** | `ordered comparison of function pointers ('int (*)(int)' and 'int (*)(double)')`; `comparison of distinct pointer types ('int (*)(int)' and 'int (*)(double)')` |
+| function-equality | `compare-distinct-pointer-types` | **warning** | `comparison of distinct pointer types ('int (*)(int)' and 'int (*)(double)')` |
+| void-order | `compare-distinct-pointer-types` | **warning** | `comparison of distinct pointer types ('int *' and 'void *')` |
+
+`-Wdiscarded-qualifiers` is a GCC spelling, not a Clang or bcc alias. bcc
+rejects unsupported warning groups at CLI parsing, as other unknown flags.
+Use `-Wincompatible-pointer-types-discards-qualifiers` instead.
+Clang warns about the option itself with
+`unknown warning option '-Wdiscarded-qualifiers'; did you mean '-Wignored-qualifiers'?`
+in `[-Wunknown-warning-option]`; it does not select a pointer diagnostic group.
+
+For the eight named pointer constraint groups above (excluding `pedantic`),
+bcc supports `-WGROUP`, `-Wno-GROUP`,
+`-Werror=GROUP` and `-Wno-error=GROUP`. Global `-Werror` promotes warnings
+from every translation phase; `-Wno-error` restores their defaults. Specific
+group severity overrides win over global `-Werror` regardless of order.
+Repeated options for a group use the last setting. `-Werror=GROUP` enables
+the group; `-Wno-error=GROUP` does not enable a disabled group. The
+`incompatible-pointer-types` parent controls qualifier and function-pointer
+children at its argv position; subsequent child options override it.
+Disabling and re-enabling a default-error group makes it a warning, subject to
+global `-Werror`, matching Clang; it also clears an explicit group error
+promotion while preserving an explicit group demotion.
+`pointer-sign` is independent. `-w` suppresses warning groups even with
+`-Werror`; default errors remain errors unless suppressed or demoted.
+Ordering distinct function pointer types emits both applicable comparison
+groups; each group's options control its diagnostic independently.
+
+`-pedantic-errors` retains Deny for language extensions and promotes the
+pointer constraint warnings, following Clang. Explicit group options can
+suppress or demote those constraint diagnostics. `-pedantic` leaves their
+defaults unchanged. Warnings retain ordinary pointer conversion facts and
+permit lowering; errors block it. Intrinsic-specific contracts remain strict.
+The `float *` to `char *` argument execution regression explicitly uses
+`-Wno-error=incompatible-pointer-types`; accepting it by default would
+contradict the observed Clang behavior. Function/void pointer conversions
+and pointer/zero ordering use the existing GNU extension policy adapter.
+
+Existing inspection views keep their historical success status while printing
+diagnostics. Code-generation modes (`--emit=ir`, `--interpret`, `-c`, `-o`)
+return failure for error diagnostics; flag regressions verify that lowering gate.
+
+These defaults satisfy the diagnostic requirement of C99 §5.1.1.3p1
+(printed p. 11; PDF p. 23). The constraints remain §6.5.16.1p1
+(p. 92; PDF p. 104), §6.5.9p2 (p. 86; PDF p. 98), §6.5.8p2
+(p. 85; PDF p. 97), §6.5.2.2p2/p7 (pp. 71-72; PDF pp. 83-84),
+§6.8.6.4p3 (p. 139; PDF p. 151), and §6.7.8p11 (p. 126; PDF p. 138).
