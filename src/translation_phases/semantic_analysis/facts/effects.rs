@@ -62,11 +62,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
         info: ExpressionInfo<'tu>,
     ) -> [EffectSet; 2] {
-        let block = if matches!(info.expression.kind, E::StatementExpression(_)) {
-            Some(self.effects.closed.take().unwrap_or(EffectSet::UNKNOWN))
-        } else {
-            None
-        };
+        let block = matches!(info.expression.kind, E::StatementExpression(_))
+            .then(|| self.effects.closed.take().unwrap_or(EffectSet::UNKNOWN));
         let designation = self.context_summary(info, EffectContext::Designation, block);
         let value = if info.ty.qualifiers.contains(TypeQualifiers::VOLATILE) {
             designation | EffectSet::VOLATILE
@@ -94,7 +91,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 recipe:  self.recipe(info, index, EffectContext::Designation),
             },
         };
-        debug_assert_eq!(self.effects.summaries.len(), index);
+        debug_assert_eq!(
+            self.effects.summaries.len(),
+            index,
+            "effect records stay parallel to expression ordinals"
+        );
         self.effects.summaries.push(effects);
         effects
     }

@@ -273,7 +273,7 @@ fn m5_recipes_schedule_only_effects_and_conditions() {
     // A VM cast keeps its own bound action even when its operand is pure.
     probe("", "(int (*)[g])q", |sema, e| {
         assert_eq!(recipe(sema, e), EffectRecipe::Sequence(&[]));
-        assert!(!sema.expression_actions(e).unwrap().bounds.is_empty());
+        assert_eq!(sema.expression_actions(e).unwrap().bounds.len(), 1);
     });
 }
 
