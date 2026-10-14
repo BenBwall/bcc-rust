@@ -104,6 +104,8 @@ pub(in crate::backend::native) enum Passed {
         size:  u32,
         align: u32,
     },
+    /// A System V `__int128`: low and high halves.
+    Pair(Reg, Reg),
 }
 
 impl Selector<'_, '_, '_> {
@@ -122,8 +124,22 @@ impl Selector<'_, '_, '_> {
         let mut assigner = self.conv.assigner();
         let mut stack = ArenaVec::new_in(self.arena);
         for (index, &param) in params.iter().enumerate() {
-            let ValueKind::Reg(vreg) = self.kind(param) else {
-                unreachable!("parameters are registers");
+            let vreg = match self.kind(param) {
+                | ValueKind::Reg(vreg) => vreg,
+                | ValueKind::Pair(low, high) => {
+                    match assigner.pair() {
+                        | Ok((first, second)) => {
+                            self.copy(Reg::Virt(low), Reg::Phys(first));
+                            self.copy(Reg::Virt(high), Reg::Phys(second));
+                        },
+                        | Err(offset) => {
+                            stack.push((Reg::Virt(low), offset, Some(Type::I64)));
+                            stack.push((Reg::Virt(high), offset + 8, Some(Type::I64)));
+                        },
+                    }
+                    continue;
+                },
+                | _ => unreachable!("parameters are registers"),
             };
             let dst = Reg::Virt(vreg);
             match self.signature.param_abi(index) {
@@ -342,6 +358,11 @@ impl Selector<'_, '_, '_> {
                 }),
                 | _ => {
                     let extension = signature.param_extension(index).filter(|_| fixed);
+                    if self.ty(arg) == Type::I128 {
+                        let (low, high) = self.pair(arg);
+                        passed.push(Passed::Pair(low, high));
+                        continue;
+                    }
                     let operand = match extension {
                         | Some(Extension::Sign) => Operand::Reg(self.extended(arg, true)),
                         | Some(Extension::Zero) => Operand::Reg(self.extended(arg, false)),
@@ -353,7 +374,12 @@ impl Selector<'_, '_, '_> {
             }
         }
         self.call_sequence(callee, &passed, signature.variadic);
-        if let Some(result) = body.inst_result(inst) {
+        if let Some(result) = body.inst_result(inst)
+            && let ValueKind::Pair(low, high) = self.kind(result)
+        {
+            self.copy(Reg::Virt(low), Reg::Phys(PReg::Rax));
+            self.copy(Reg::Virt(high), Reg::Phys(PReg::Rdx));
+        } else if let Some(result) = body.inst_result(inst) {
             let ValueKind::Reg(dst) = self.kind(result) else {
                 unreachable!("a call result is a register");
             };
@@ -366,6 +392,15 @@ impl Selector<'_, '_, '_> {
         }
         if let Some((arg, registers)) = area {
             let mem = self.address(arg);
+            if registers.first == Type::I128 {
+                // Win64's `__int128` result, all of `%xmm0`.
+                self.emit(MInst::Move128 {
+                    load: false,
+                    reg: Reg::Phys(PReg::Xmm0),
+                    mem,
+                });
+                return Ok(());
+            }
             for (offset, ty, register) in result_registers(registers) {
                 let dst = Mem::new(mem.base, mem.disp + offset);
                 if ty.is_float() {
@@ -416,6 +451,16 @@ impl Selector<'_, '_, '_> {
                 },
                 | Passed::ByVal { src, size, align } =>
                     copies.push((assigner.memory(size, align), src, size)),
+                | Passed::Pair(low, high) => match assigner.pair() {
+                    | Ok((first, second)) => {
+                        registers.push((first, Operand::Reg(low)));
+                        registers.push((second, Operand::Reg(high)));
+                    },
+                    | Err(offset) => {
+                        stack.push((offset, Operand::Reg(low), RegClass::Gpr));
+                        stack.push((offset + 8, Operand::Reg(high), RegClass::Gpr));
+                    },
+                },
             }
         }
         let home = self.conv.home_area;
@@ -504,6 +549,14 @@ impl Selector<'_, '_, '_> {
                 self.copy(Reg::Phys(PReg::Rax), pointer);
                 uses = uses.with(PReg::Rax);
             },
+            | ResultArea::Registers { area, registers } if registers.first == Type::I128 => {
+                self.emit(MInst::Move128 {
+                    load: true,
+                    reg:  Reg::Phys(PReg::Xmm0),
+                    mem:  area,
+                });
+                uses = uses.with(PReg::Xmm0);
+            },
             | ResultArea::Registers { area, registers } => {
                 for (offset, ty, register) in result_registers(registers) {
                     let ty = if ty == Type::Ptr { Type::I64 } else { ty };
@@ -515,7 +568,12 @@ impl Selector<'_, '_, '_> {
         }
         if let Some(value) = value {
             let ty = self.ty(value);
-            if ty.is_float() {
+            if ty == Type::I128 {
+                let (low, high) = self.pair(value);
+                self.copy(Reg::Phys(PReg::Rax), low);
+                self.copy(Reg::Phys(PReg::Rdx), high);
+                uses = uses.with(PReg::Rax).with(PReg::Rdx);
+            } else if ty.is_float() {
                 let src = self.reg(value);
                 self.copy(Reg::Phys(PReg::Xmm0), src);
                 uses = uses.with(PReg::Xmm0);

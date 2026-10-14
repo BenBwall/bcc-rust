@@ -164,7 +164,7 @@ impl Selector<'_, '_, '_> {
     /// Loads, stores, `copy` and `fill`.
     pub(super) fn memory(&mut self, inst: Inst, data: InstData) -> Result<(), Construct> {
         match data {
-            | InstData::Load { ty, addr, .. } => {
+            | InstData::Load { ty, addr, .. } if ty != Type::I128 => {
                 let Some(ValueKind::Reg(dst)) =
                     self.body.inst_result(inst).map(|value| self.kind(value))
                 else {
@@ -172,6 +172,23 @@ impl Selector<'_, '_, '_> {
                 };
                 let mem = self.address(addr);
                 self.load(ty, Reg::Virt(dst), mem);
+            },
+            | InstData::Load {
+                ty: Type::I128,
+                addr,
+                ..
+            } => {
+                let dst = self.result_pair(inst);
+                let mem = self.address(addr);
+                self.wide_load(dst, mem);
+            },
+            | InstData::Store {
+                ty: Type::I128,
+                args: [value, addr],
+                ..
+            } => {
+                let mem = self.address(addr);
+                self.wide_store(value, mem);
             },
             | InstData::Store {
                 ty,

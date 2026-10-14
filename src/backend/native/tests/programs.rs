@@ -441,4 +441,60 @@ int main(void) {
     return 0;
 }"#,
     },
+    Program {
+        name:   "int128_and_dynamic_stack",
+        source: r#"int printf(const char *, ...);
+typedef __int128 i128;
+typedef unsigned __int128 u128;
+static void show(const char *tag, u128 x) {
+    printf("%s %llx %llx\n", tag, (unsigned long long)(x >> 64), (unsigned long long)x);
+}
+static u128 mul(u128 a, u128 b) { return a * b; }
+static u128 make(unsigned long long hi, unsigned long long lo) { return ((u128)hi << 64) | lo; }
+static int vla(int n) {
+    int a[n];
+    for (int i = 0; i < n; i++) a[i] = i * i;
+    int s = 0;
+    for (int i = 0; i < n; i++) s += a[i];
+    char *p = __builtin_alloca(n * 3);
+    for (int i = 0; i < n * 3; i++) p[i] = (char)i;
+    return s + p[n * 3 - 1];
+}
+int main(void) {
+    u128 a = make(0x0123456789abcdefULL, 0xfedcba9876543210ULL);
+    u128 b = make(3, 0xffffffffffffffffULL);
+    show("add", a + b);
+    show("sub", a - b);
+    show("mul", mul(a, b));
+    show("and", a & b);
+    show("xor", a ^ ~b);
+    for (int s = 0; s < 128; s += 37) {
+        show("shl", a << s);
+        show("shr", a >> s);
+        show("sar", (u128)((i128)a >> s));
+        show("sar-neg", (u128)(-(i128)a >> s));
+    }
+    show("shl70", a << 70);
+    show("sar70", (u128)((i128)~a >> 70));
+    show("div", a / b);
+    show("mod", a % b);
+    show("sdiv", (u128)(-(i128)a / (i128)b));
+    show("smod", (u128)(-(i128)a % 1000));
+    printf("%d %d %d %d %d\n", a < b, a > b, (i128)a < (i128)-b, a == a, a != b);
+    long long x = -5;
+    show("sext", (u128)(i128)x);
+    show("zext", (u128)(unsigned long long)x);
+    unsigned long long hi, lo;
+    u128 big = (u128)-1;
+    int over = __builtin_mul_overflow(big, (u128)2, &big);
+    int carry = __builtin_add_overflow(a, b, &a);
+    long long sres;
+    int sover = __builtin_mul_overflow(1LL << 62, 4, &sres);
+    printf("%d %d %d %lld\n", over, carry, sover, sres);
+    hi = (unsigned long long)(a >> 64); lo = (unsigned long long)a;
+    printf("%llx %llx\n", hi, lo);
+    printf("%d %d\n", vla(10), vla(1000));
+    return 0;
+}"#,
+    },
 ];

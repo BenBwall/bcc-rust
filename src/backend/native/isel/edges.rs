@@ -121,15 +121,28 @@ impl Selector<'_, '_, '_> {
         let params = self.body.block_params(block);
         let mut moves: ArenaVec<'_, (VReg, VReg)> = ArenaVec::new_in(self.arena);
         let mut leaves = ArenaVec::new_in(self.arena);
+        let mut wide = ArenaVec::new_in(self.arena);
         for (&param, &arg) in params.iter().zip(args) {
-            let ValueKind::Reg(dst) = self.kind(param) else {
-                unreachable!("block parameters are registers");
-            };
-            match self.kind(arg) {
-                | ValueKind::Reg(src) if src == dst => {},
-                | ValueKind::Reg(src) => moves.push((dst, src)),
-                | ValueKind::Unknown => {},
-                | _ => leaves.push((dst, arg)),
+            match (self.kind(param), self.kind(arg)) {
+                | (ValueKind::Pair(low, high), ValueKind::Pair(from_low, from_high)) =>
+                    for (dst, src) in [(low, from_low), (high, from_high)] {
+                        if dst != src {
+                            moves.push((dst, src));
+                        }
+                    },
+                | (ValueKind::Pair(low, high), ValueKind::Wide(bits)) => {
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "The halves are split here."
+                    )]
+                    let halves = [bits as u64, (bits >> 64) as u64];
+                    wide.push(((low, high), halves));
+                },
+                | (ValueKind::Reg(dst), ValueKind::Reg(src)) if src == dst => {},
+                | (ValueKind::Reg(dst), ValueKind::Reg(src)) => moves.push((dst, src)),
+                | (_, ValueKind::Unknown) => {},
+                | (ValueKind::Reg(dst), _) => leaves.push((dst, arg)),
+                | _ => unreachable!("block parameters are registers"),
             }
         }
         while !moves.is_empty() {
@@ -156,6 +169,10 @@ impl Selector<'_, '_, '_> {
         for (dst, arg) in leaves {
             self.leaf_into(Reg::Virt(dst), arg);
         }
+        for ((low, high), [low_bits, high_bits]) in wide {
+            self.constant(Reg::Virt(low), low_bits, Type::I64);
+            self.constant(Reg::Virt(high), high_bits, Type::I64);
+        }
     }
 
     /// Materializes a constant or address argument into `dst`.
@@ -163,7 +180,8 @@ impl Selector<'_, '_, '_> {
         match self.kind(value) {
             | ValueKind::Const(bits) => self.constant(dst, bits, self.ty(value)),
             | ValueKind::Addr(base, disp) => self.address_into(dst, base, disp),
-            | ValueKind::Reg(_) | ValueKind::Unknown => {},
+            | ValueKind::Reg(_) | ValueKind::Unknown | ValueKind::Pair(..) | ValueKind::Wide(_) => {
+            },
         }
     }
 

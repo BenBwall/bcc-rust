@@ -65,13 +65,17 @@ use crate::{
 
 /// Symbols the back end calls on its own; a module may not define them
 /// internally, since those calls would bind to its definition.
-pub(crate) const RUNTIME_SYMBOLS: [&str; 6] = [
+pub(crate) const RUNTIME_SYMBOLS: [&str; 10] = [
     "memmove",
     "__main",
     "___chkstk_ms",
     "__chkstk",
     "fmod",
     "fmodf",
+    "__divti3",
+    "__udivti3",
+    "__modti3",
+    "__umodti3",
 ];
 
 /// Writes the module's assembly for `target`, or refuses it.
@@ -86,7 +90,7 @@ pub(crate) fn emit_assembly<'m>(
             requested: target.triple(),
         });
     }
-    support::check_module(module)?;
+    support::check_module(module, target)?;
     let conv = CallConv::of(target);
     let mut emitter = Emitter::new(module, target, out);
     emitter.header()?;

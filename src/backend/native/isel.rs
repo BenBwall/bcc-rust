@@ -21,7 +21,8 @@
 //! Calls, function entry and returns are in `isel/calls.rs`; branches and
 //! the parallel copies that replace block parameters in `isel/edges.rs`;
 //! loads, stores, `copy` and `fill` in `isel/memory.rs`; `f32` and `f64`
-//! operations in `isel/float.rs`.
+//! operations in `isel/float.rs`; `i128` register pairs in `isel/wide.rs`;
+//! dynamic stack allocation in `isel/stack.rs`.
 //!
 //! Integer values narrower than 64 bits live in registers whose upper bits
 //! are unspecified, except `i1`, which is always 0 or 1 in the whole
@@ -33,6 +34,8 @@ mod calls;
 mod edges;
 mod float;
 mod memory;
+mod stack;
+mod wide;
 
 use super::{
     conv::CallConv,
@@ -112,11 +115,15 @@ pub(crate) fn select<'a>(
             selector.block_map[block.index()] = Some(selector.func.block(arena));
         }
     }
-    let uses_va_start = body.blocks().any(|block| {
-        body.block_insts(block)
-            .iter()
-            .any(|&inst| body.inst(inst).opcode() == Opcode::VaStart)
-    });
+    let uses = |opcodes: &[Opcode]| {
+        body.blocks().any(|block| {
+            body.block_insts(block)
+                .iter()
+                .any(|&inst| opcodes.contains(&body.inst(inst).opcode()))
+        })
+    };
+    let uses_va_start = uses(&[Opcode::VaStart]);
+    selector.func.dynamic = uses(&[Opcode::DynAlloca, Opcode::StackRestore]);
     for block in body.blocks() {
         if let Some(mblock) = selector.block_map[block.index()] {
             selector.current = mblock;
@@ -140,6 +147,10 @@ pub(super) enum ValueKind {
     Reg(VReg),
     /// A constant, masked to its type's width.
     Const(u64),
+    /// An `i128` in two virtual registers, low half first.
+    Pair(VReg, VReg),
+    /// An `i128` constant.
+    Wide(u128),
     /// An address: a frame slot or symbol plus a byte offset.
     Addr(AddrBase, i64),
 }
@@ -225,8 +236,8 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
     /// definitions are already classified.
     fn classify_block(&mut self, block: Block) {
         for &param in self.body.block_params(block) {
-            let vreg = self.func.vreg_of(class_of(self.ty(param)));
-            self.values[param.index()] = ValueKind::Reg(vreg);
+            let kind = self.fresh(self.ty(param));
+            self.values[param.index()] = kind;
         }
         for &inst in self.body.block_insts(block) {
             let Some(result) = self.body.inst_result(inst) else {
@@ -236,10 +247,60 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             self.skipped[inst.index()] = kind.is_some();
             let kind = match kind {
                 | Some(kind) => kind,
-                | None => ValueKind::Reg(self.func.vreg_of(class_of(self.ty(result)))),
+                | None => self.fresh(self.ty(result)),
             };
             self.values[result.index()] = kind;
         }
+    }
+
+    /// Fresh registers for a value of `ty`: a pair for `i128`.
+    fn fresh(&mut self, ty: Type) -> ValueKind {
+        if ty == Type::I128 {
+            ValueKind::Pair(self.func.vreg(), self.func.vreg())
+        } else {
+            ValueKind::Reg(self.func.vreg_of(class_of(ty)))
+        }
+    }
+
+    /// [`Self::classify`] for instructions with an `i128` result or
+    /// operand: `None` when it does not apply.
+    fn classify_wide(&self, ty: Type, data: InstData) -> Option<Option<ValueKind>> {
+        Some(match data {
+            | InstData::Const { bits, .. } if ty == Type::I128 =>
+                Some(ValueKind::Wide(u128::from(bits.get()))),
+            | InstData::WideConst { constant, .. } if ty == Type::I128 =>
+                Some(ValueKind::Wide(self.body.constant(constant))),
+            | InstData::Nullary {
+                opcode: Opcode::Poison,
+                ..
+            } if ty == Type::I128 => Some(ValueKind::Wide(0)),
+            | InstData::Unary { opcode, arg, .. }
+                if ty == Type::I128 || self.ty(arg) == Type::I128 =>
+            {
+                let from = self.ty(arg);
+                match (opcode, self.kind(arg)) {
+                    | (_, ValueKind::Unknown) => None,
+                    | (Opcode::Freeze, kind) => Some(kind),
+                    | (Opcode::Zext | Opcode::Ptrtoint, ValueKind::Const(bits)) =>
+                        Some(ValueKind::Wide(wide::widen(bits, from, false))),
+                    | (Opcode::Sext, ValueKind::Const(bits)) =>
+                        Some(ValueKind::Wide(wide::widen(bits, from, true))),
+                    | (Opcode::Trunc | Opcode::Inttoptr, ValueKind::Wide(bits)) => {
+                        #[expect(
+                            clippy::cast_possible_truncation,
+                            reason = "Truncation keeps the low bits."
+                        )]
+                        let low = bits as u64;
+                        Some(ValueKind::Const(low & mask(ty)))
+                    },
+                    | (Opcode::Trunc | Opcode::Inttoptr, ValueKind::Pair(low, _))
+                        if ty != Type::I1 =>
+                        Some(ValueKind::Reg(low)),
+                    | _ => None,
+                }
+            },
+            | _ => return None,
+        })
     }
 
     /// The representation of an instruction's result when it needs no code
@@ -247,6 +308,9 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
     fn classify(&self, inst: Inst) -> Option<ValueKind> {
         let ty = self.ty(self.body.inst_result(inst)?);
         let data = *self.body.inst(inst);
+        if let Some(kind) = self.classify_wide(ty, data) {
+            return kind;
+        }
         Some(match data {
             | InstData::Const { bits, .. } => ValueKind::Const(bits.get() & mask(ty)),
             | InstData::Nullary {
@@ -352,6 +416,37 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         let result = self.body.inst_result(inst);
         let opcode = data.opcode();
         match data {
+            | InstData::Binary {
+                ty: Type::I128,
+                args,
+                ..
+            } => self.wide_binary(inst, opcode, args)?,
+            | InstData::Select {
+                ty: Type::I128,
+                args,
+            } => {
+                let dst = self.result_pair(inst);
+                self.wide_select(dst, args);
+            },
+            | InstData::Unary { opcode, ty, arg }
+                if ty == Type::I128 || self.ty(arg) == Type::I128 =>
+                self.wide_conversion(inst, opcode, ty, arg)?,
+            | InstData::DynAlloca { size, align, .. } => {
+                let dst = self.result_reg(result);
+                self.dyn_alloca(dst, size, align);
+            },
+            | InstData::Nullary {
+                opcode: Opcode::StackSave,
+                ..
+            } => {
+                let dst = self.result_reg(result);
+                self.stack_save(dst);
+            },
+            | InstData::Unary {
+                opcode: Opcode::StackRestore,
+                arg,
+                ..
+            } => self.stack_restore(arg),
             | InstData::Binary { ty, args, .. } if opcode.is_float_binary() => {
                 let dst = self.result_reg(result);
                 self.float_binary(opcode, ty, dst, args)?;
@@ -448,7 +543,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
     }
 
     /// The register an instruction's result was classified into.
-    fn result_reg(&self, result: Option<Value>) -> Reg {
+    pub(super) fn result_reg(&self, result: Option<Value>) -> Reg {
         match result.map(|value| self.kind(value)) {
             | Some(ValueKind::Reg(vreg)) => Reg::Virt(vreg),
             | _ => unreachable!("an instruction with code has a register result"),
@@ -505,8 +600,10 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 dst
             },
             // Only reachable code is selected, and it uses only reachable
-            // definitions; any register will do for the rest.
-            | ValueKind::Unknown => self.vreg_for(self.ty(value)),
+            // definitions; any register will do for the rest. `i128` values
+            // are read as pairs, never through here.
+            | ValueKind::Unknown | ValueKind::Pair(..) | ValueKind::Wide(_) =>
+                self.vreg_for(self.ty(value)),
         }
     }
 
@@ -733,6 +830,9 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
     /// holds when the `icmp` is true. Operands are materialized before the
     /// `cmp`, so nothing separates it from the flags' consumer.
     pub(super) fn compare(&mut self, cond: IntCC, ty: Type, [lhs, rhs]: [Value; 2]) -> Cond {
+        if ty == Type::I128 {
+            return self.wide_compare(cond, [lhs, rhs]);
+        }
         let width = width(ty);
         let cond = int_cond(cond);
         let (lhs, rhs, cond) = if matches!(self.kind(lhs), ValueKind::Const(_)) {
@@ -771,7 +871,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
     }
 
     /// `dst ← cond ? 1 : 0` as a canonical `i1`.
-    fn set_condition(&mut self, cond: Cond, dst: Reg) {
+    pub(super) fn set_condition(&mut self, cond: Cond, dst: Reg) {
         let byte = self.vreg();
         self.emit(MInst::Setcc { cond, dst: byte });
         self.emit(MInst::Extend {
@@ -972,7 +1072,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         self.shift_imm(ShiftOp::Shr, width, dst, top);
     }
 
-    fn shift_imm(&mut self, op: ShiftOp, width: Width, dst: Reg, count: u8) {
+    pub(super) fn shift_imm(&mut self, op: ShiftOp, width: Width, dst: Reg, count: u8) {
         self.emit(MInst::Shift {
             op,
             width,

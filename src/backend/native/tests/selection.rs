@@ -271,17 +271,30 @@ block0(v0: f128):
     );
     let message = refusal(
         "abi lowered
-function @g(i64) -> ptr external {
-block0(v0: i64):
-    v1 = dyn_alloca.i64 v0
+function @g(i128) -> i128 external {
+block0(v0: i128):
+    v1 = clz.i128 v0
     return v1
+}
+",
+        Target::LinuxGnu,
+    );
+    assert_eq!(
+        message,
+        "not yet supported by the native back end: the `clz` instruction (in @g)"
+    );
+    let message = refusal(
+        "abi lowered
+function @w(i128) -> i128 external {
+block0(v0: i128):
+    return v0
 }
 ",
         Target::WindowsGnu,
     );
     assert_eq!(
         message,
-        "not yet supported by the native back end: the `dyn_alloca` instruction (in @g)"
+        "not yet supported by the native back end: an i128 passed by value on Win64 (in @w)"
     );
     let message = refusal(
         "function @h(i32) -> i32 external {
@@ -322,4 +335,130 @@ block0(v0: i32, v1: i64, v2: i16):
     assert!(f.contains("bsfq"), "{f}");
     assert!(!f.contains("popcnt") && !f.contains("lzcnt"), "{f}");
     assert!(f.contains("rolw\t$8, "), "{f}");
+}
+
+#[test]
+fn floats_use_sse_registers_and_read_only_constants() {
+    let ir = "abi lowered
+function @f(f64, f32, i64) -> f64 external {
+block0(v0: f64, v1: f32, v2: i64):
+    v3 = fconst.f64 0x400c000000000000
+    v4 = fadd.f64 v0, v3
+    v5 = fpext.f64 v1
+    v6 = fmul.f64 v4, v5
+    v7 = uitofp.f64 v2
+    v8 = fdiv.f64 v6, v7
+    v9 = fcmp.f64 oeq v8, v0
+    v10 = fneg.f64 v8
+    v11 = select.f64 v9, v8, v10
+    return v11
+}
+";
+    let text = assembly(ir, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    assert!(
+        f.contains("addsd\t.LCPI0_"),
+        "a constant operand is read from memory:\n{f}"
+    );
+    assert!(f.contains("cvtss2sd"), "{f}");
+    assert!(f.contains("cvtsi2sdq"), "{f}");
+    assert!(f.contains("ucomisd"), "{f}");
+    assert!(f.contains("setnp"), "oeq tests parity too:\n{f}");
+    assert!(
+        f.contains("xorps\t.LCPI0_"),
+        "fneg flips the sign bit:\n{f}"
+    );
+    assert!(
+        f.contains("cmov"),
+        "a float select picks in general registers:\n{f}"
+    );
+    assert!(
+        text.contains(".LCPI0_0:\n\t.quad\t0x400c000000000000"),
+        "{text}"
+    );
+}
+
+#[test]
+fn win64_saves_the_sse_registers_it_keeps_across_calls() {
+    let ir = "abi lowered
+function @g() external
+function @f(f64) -> f64 external {
+block0(v0: f64):
+    call @g()
+    v1 = fadd.f64 v0, v0
+    return v1
+}
+";
+    let text = assembly(ir, Target::WindowsGnu);
+    let f = function_text(&text, "f");
+    assert!(
+        f.contains("movaps\t%xmm6, ") && f.contains(".seh_savexmm %xmm6"),
+        "{f}"
+    );
+    assert!(f.contains("), %xmm6"), "the epilogue restores it:\n{f}");
+    let text = assembly(ir, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    assert!(
+        !f.contains("movaps\t%xmm6, "),
+        "System V has no callee-saved SSE register:\n{f}"
+    );
+}
+
+#[test]
+fn dynamic_allocation_keeps_a_frame_pointer() {
+    let ir = "abi lowered
+function @g(ptr) external
+function @f(i64) external {
+    slot0 = stack_slot 8, align 8
+block0(v0: i64):
+    v1 = stack_save
+    v2 = dyn_alloca.i64 v0, align 32
+    call @g(v2)
+    v3 = stack_addr slot0
+    store.i64 v0, v3, align 8
+    stack_restore v1
+    return
+}
+";
+    let text = assembly(ir, Target::WindowsGnu);
+    let f = function_text(&text, "f");
+    assert!(
+        f.contains("movq\t%rsp, %rbp\n\t.seh_setframe %rbp, 0"),
+        "{f}"
+    );
+    assert!(
+        f.contains("callq\t___chkstk_ms\n\tsubq\t"),
+        "dynamic pages are probed:\n{f}"
+    );
+    assert!(f.contains("andq\t$-32, "), "{f}");
+    assert!(
+        f.contains("(%rbp)"),
+        "the fixed frame is addressed from %rbp:\n{f}"
+    );
+    assert!(f.contains("leaq\t") && f.contains("(%rbp), %rsp\n"), "{f}");
+    let text = assembly(ir, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    assert!(f.contains(".cfi_def_cfa_register %rbp"), "{f}");
+    assert!(!f.contains("chkstk"), "{f}");
+}
+
+#[test]
+fn int128_values_use_register_pairs() {
+    let ir = "abi lowered
+function @f(i128, i128) -> i128 external {
+block0(v0: i128, v1: i128):
+    v2 = iadd.i128 v0, v1
+    v3 = imul.i128 v2, v0
+    v4 = icmp.i128 slt v3, v1
+    v5 = select.i128 v4, v3, v1
+    v6 = udiv.i128 v5, v0
+    return v6
+}
+";
+    let text = assembly(ir, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    assert!(f.contains("adcq"), "{f}");
+    assert!(f.contains("mulq"), "{f}");
+    assert!(f.contains("sbbq"), "{f}");
+    assert!(f.contains("callq\t__udivti3@PLT"), "{f}");
 }

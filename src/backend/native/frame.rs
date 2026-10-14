@@ -57,6 +57,7 @@ pub(crate) struct Frame<'a> {
     pub(crate) frame_pointer: bool,
     slots:                    ArenaVec<'a, u32>,
     spills:                   u32,
+    outgoing_end:             u32,
     register_save:            u32,
     incoming:                 u32,
     home:                     u32,
@@ -84,7 +85,10 @@ impl<'a> Frame<'a> {
             }
         }
         let mut aligned = func.calls || !xmm.is_empty() || func.register_save;
-        let spills = func.outgoing.next_multiple_of(8);
+        // Dynamic allocations start right above the outgoing arguments and
+        // keep 16-byte alignment.
+        let outgoing_end = func.outgoing.next_multiple_of(16);
+        let spills = outgoing_end;
         let mut end = spills + 8 * allocation.spill_slots;
         let mut saved_xmm = ArenaVec::with_capacity_in(xmm.len(), arena);
         for register in xmm {
@@ -119,6 +123,7 @@ impl<'a> Frame<'a> {
             frame_pointer,
             slots,
             spills,
+            outgoing_end,
             register_save,
             incoming,
             home: incoming - conv.home_area,
@@ -134,6 +139,7 @@ impl<'a> Frame<'a> {
             | FrameObject::Incoming(offset) => self.incoming + offset,
             | FrameObject::Home(offset) => self.home + offset,
             | FrameObject::Outgoing(offset) => return (PReg::Rsp, i64::from(offset)),
+            | FrameObject::OutgoingEnd => return (PReg::Rsp, i64::from(self.outgoing_end)),
             | FrameObject::Spill(slot) => self.spills + 8 * slot,
             | FrameObject::RegisterSave(offset) => self.register_save + offset,
         };

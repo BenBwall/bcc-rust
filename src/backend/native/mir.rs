@@ -322,11 +322,6 @@ impl PRegSet {
         Self(self.0 | 1 << register as u32)
     }
 
-    #[must_use]
-    pub(crate) const fn union(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-
     pub(crate) const fn contains(self, register: PReg) -> bool {
         self.0 & (1 << register as u32) != 0
     }
@@ -442,6 +437,9 @@ pub(crate) enum FrameObject {
     /// The System V register save area of a variadic function, by byte
     /// offset: six general registers, then eight SSE registers of 16 bytes.
     RegisterSave(u32),
+    /// Just above the outgoing argument area at the current `%rsp`: where a
+    /// dynamic allocation starts.
+    OutgoingEnd,
 }
 
 /// A symbol an instruction refers to.
@@ -795,6 +793,13 @@ pub(crate) enum MInst {
         dst:   Reg,
         src:   Operand,
     },
+    /// `movups`: all 16 bytes of an SSE register loaded from or stored to
+    /// memory (Win64 `__int128` results in `%xmm0`).
+    Move128 {
+        load: bool,
+        reg:  Reg,
+        mem:  Mem,
+    },
     /// `movss`/`movsd` of an SSE register to memory.
     XStore {
         width: Width,
@@ -883,6 +888,10 @@ impl MInst {
             | Self::XStore { dst, src, .. } => {
                 memory(dst, &mut visit);
                 visit(src, Role::Use);
+            },
+            | Self::Move128 { load, reg, mem } => {
+                memory(mem, &mut visit);
+                visit(reg, if *load { Role::Def } else { Role::Use });
             },
             | Self::XAlu { dst, src, .. } => {
                 operand(src, &mut visit);

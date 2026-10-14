@@ -442,6 +442,26 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                     reg(dst, width)
                 ),
             },
+            | MInst::Move128 {
+                load,
+                reg: xmm,
+                mem,
+            } =>
+                if load {
+                    writeln!(
+                        out,
+                        "\tmovups\t{}, {}",
+                        at(Operand::Mem(mem), Width::B64),
+                        reg(xmm, Width::B64)
+                    )
+                } else {
+                    writeln!(
+                        out,
+                        "\tmovups\t{}, {}",
+                        reg(xmm, Width::B64),
+                        at(Operand::Mem(mem), Width::B64)
+                    )
+                },
             | MInst::XStore { width, dst, src } => writeln!(
                 out,
                 "\t{}\t{}, {}",
