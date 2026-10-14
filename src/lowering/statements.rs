@@ -137,7 +137,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | S::Expression(slot) => {
                 let expression = expression(slot, source)?;
                 if mode == StatementMode::Effects {
-                    self.tasks.push(Task::BuiltinEffects(expression, true));
+                    self.tasks.push(Task::BuiltinEffects(
+                        expression,
+                        crate::translation_phases::semantic_analysis::EffectContext::Value,
+                    ));
                 } else {
                     if mode == StatementMode::Discard {
                         self.tasks.push(Task::Discard);

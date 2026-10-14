@@ -768,19 +768,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     }
 }
 
-impl<'tu> SemanticTranslationUnit<'tu> {
-    /// Temporary purity view for the lowering consumer switched next.
-    pub(crate) fn effect_pure(&self, expression: &Expression<'tu>, read: bool) -> Option<bool> {
-        let context = if read {
-            EffectContext::Value
-        } else {
-            EffectContext::Designation
-        };
-        self.effect_summary(expression, context)
-            .map(|effects| effects.is_empty())
-    }
-}
-
 impl ExpressionEffects {
     pub(crate) const fn context(self, context: EffectContext) -> ContextEffects {
         match context {

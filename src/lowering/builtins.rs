@@ -250,8 +250,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 | ArgumentEvaluation::Value => self.tasks.push(Task::Evaluate(expression)),
                 | ArgumentEvaluation::StorageAddress | ArgumentEvaluation::AdjustedPointer =>
                     self.tasks.push(Task::EvaluateRaw(expression)),
-                | ArgumentEvaluation::EffectsOnly =>
-                    self.tasks.push(Task::BuiltinEffects(expression, true)),
+                | ArgumentEvaluation::EffectsOnly => self.tasks.push(Task::BuiltinEffects(
+                    expression,
+                    crate::translation_phases::semantic_analysis::EffectContext::Value,
+                )),
                 | ArgumentEvaluation::Unevaluated | ArgumentEvaluation::Type => {},
             }
         }

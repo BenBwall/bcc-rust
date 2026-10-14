@@ -6,8 +6,8 @@
 pub(crate) mod native;
 
 std::thread_local! {
-    /// Counts expression visits in overflow operand effect analysis, scoped
-    /// to the compiling test thread so parallel tests cannot affect the bound.
+    /// Counts effects-only recipe tasks lowering interprets, scoped to the
+    /// compiling test thread so parallel tests cannot affect the bound.
     #[cfg_attr(
         windows,
         expect(
@@ -15,7 +15,7 @@ std::thread_local! {
             reason = "The const initializer still trips the lint in the Windows std expansion."
         )
     )]
-    pub(crate) static OVERFLOW_EFFECT_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static EFFECT_RECIPE_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 use std::{
