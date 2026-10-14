@@ -314,10 +314,14 @@ natively (`pipeline::tests::middle_end::record_layout`), and
 Where the references disagree on MinGW outside zero-width fields, bcc keeps
 Clang's layout: GCC aligns unions to their bit-fields' types and does not let
 an `aligned` bit-field in a packed record raise the record's alignment, and on
-Linux GCC honors `aligned` bit-fields above the pack. A fuzzer run on
-2026-10-14 (110 programs of 50 records per target) found no record on which
-bcc differs from agreeing references; the counts per class are in the
-fuzzer's report.
+Linux GCC honors `aligned` bit-fields above the pack. The 2026-10-14 run
+(seeds 2000-2109, 5,500 records per target) found no record on which bcc
+differs from agreeing references. MSVC: all 5,500 match `cl.exe` and Clang.
+Linux: 5,435 match both; on 65 GCC and Clang disagree and bcc follows Clang.
+MinGW: 4,848 match both; on 238 bcc follows GCC (zero-width fields), on 343
+Clang, and 3 mix the two policies; 68 records came after a Clang-built
+program crashed on an overlapping layout, and the 3 of those that differ
+from GCC were checked by hand to follow Clang's (non-crashing) layout.
 
 ## Binding, scope, linkage and recovery
 
