@@ -1,6 +1,6 @@
-//! The native oracle: a kept case, compiled through the LLVM back end and the
-//! bundled clang and run on the host, must behave as the interpreter says the
-//! original program does.
+//! The native oracles: a kept case, compiled through the LLVM back end and the
+//! bundled clang, or through bcc's own native back end, and run on the host,
+//! must behave as the interpreter says the original program does.
 //!
 //! Two comparison arms run per case: A0 compiles the original module with
 //! `-O0`, and A1 compiles the module the default pipeline produced with O2 code
@@ -178,4 +178,99 @@ fn host() -> Option<Target> {
     } else {
         None
     }
+}
+
+/// The native back end's oracle: every kept case it accepts, compiled as
+/// generated (arm B0) and after the default pipeline (arm B1), must behave
+/// as the interpreter says. Returns the disagreements and how many arms the
+/// back end refused; a refusal is a capability gap, not a failure.
+pub(super) fn check_native_backend(cases: &[Reference]) -> (Vec<String>, usize) {
+    let Some(target) = host() else {
+        eprintln!("skipping the native back end oracle: the host is not a supported target");
+        return (Vec::new(), 0);
+    };
+    if let Err(error) = Toolchain::bundled(target) {
+        eprintln!("skipping the native back end oracle: {error}");
+        return (Vec::new(), 0);
+    }
+    let directory = TempDir::new("difftest-native-backend");
+    let jobs: Vec<(&Reference, bool)> = cases
+        .iter()
+        .flat_map(|case| [false, true].map(|optimize| (case, optimize)))
+        .collect();
+    let parallelism = thread::available_parallelism().map_or(4, usize::from);
+    let (mut failures, mut refused) = (Vec::new(), 0);
+    for chunk in jobs.chunks(parallelism) {
+        thread::scope(|scope| {
+            let runs: Vec<_> = chunk
+                .iter()
+                .map(|&(case, optimize)| {
+                    let directory = &directory;
+                    scope.spawn(move || check_backend_arm(case, optimize, target, directory.path()))
+                })
+                .collect();
+            for run in runs {
+                match run.join().expect("a native check does not panic") {
+                    | Ok(true) => {},
+                    | Ok(false) => refused += 1,
+                    | Err(report) => failures.push(report),
+                }
+            }
+        });
+    }
+    (failures, refused)
+}
+
+/// Compiles one case with the native back end and runs it: `Ok(false)` if
+/// the back end refused it.
+fn check_backend_arm(
+    case: &Reference,
+    optimize: bool,
+    target: Target,
+    directory: &Path,
+) -> Result<bool, String> {
+    let arm = if optimize { "B1" } else { "B0" };
+    let text = if optimize {
+        optimized(&case.text, Pipeline::Default, None)
+            .text
+            .map_err(|error| format!("seed {:#x}: {error}", case.seed))?
+    } else {
+        case.text.clone()
+    };
+    // The generator writes no aggregate or extension, so its modules are
+    // already in the post-ABI profile.
+    let text = format!("abi lowered\n{text}");
+    let arena = Bump::new();
+    let module = parse_module(&arena, &text).map_err(|error| error.to_string())?;
+    let errors = verify_errors(&module, Profile::PostAbi);
+    if !errors.is_empty() {
+        return Err(format!(
+            "seed {:#x}: not a post-ABI module:\n{errors}",
+            case.seed
+        ));
+    }
+    let mut assembly = String::new();
+    if crate::backend::native::emit_assembly(&module, target, &mut assembly).is_err() {
+        return Ok(false);
+    }
+    let executable = directory.join(format!("case-{:x}-{arm}.exe", case.seed));
+    crate::backend::native::assemble(&assembly, &executable, target, OutputKind::Executable)
+        .map_err(|error| format!("seed {:#x} {arm}: {error}\n{assembly}", case.seed))?;
+    let output = crate::test_support::native::run_native(&mut Command::new(&executable))
+        .map_err(|error| format!("seed {:#x} {arm}: {error}\n{text}\n{assembly}", case.seed))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n");
+    let expected_stdout = String::from_utf8_lossy(&case.observation.output);
+    let status = output.status.code();
+    let expected_status = case
+        .exit_value()
+        .map(|value| if cfg!(windows) { value } else { value & 0xFF });
+    if (case.returns_poison() || status == expected_status) && stdout == expected_stdout {
+        return Ok(true);
+    }
+    Err(format!(
+        "seed {:#x}, arm {arm}: the interpreter says the original {}, but the native back end's \
+         executable exits with {status:?} and prints {stdout:?}\nrerun with \
+         BCC_DIFFTEST_SEED={:#x}\n\nthe compiled module:\n{text}\nits assembly:\n{assembly}",
+        case.seed, case.observation, case.seed
+    ))
 }
