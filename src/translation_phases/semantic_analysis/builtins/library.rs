@@ -106,6 +106,8 @@ impl Analyzer<'_, '_, '_> {
             | b'i' => "int",
             | b'z' => self.types.target.size_t.spelling(),
             | b'd' => "double",
+            | b'f' => "float",
+            | b'l' => "long double",
             | b'p' => "void *",
             | b'P' => "const void *",
             | b's' => "char *",
@@ -119,6 +121,8 @@ impl Analyzer<'_, '_, '_> {
             | b'i' => Scalar::Int,
             | b'z' => self.types.target.size_t,
             | b'd' => Scalar::Double,
+            | b'f' => Scalar::Float,
+            | b'l' => Scalar::LongDouble,
             | b's' | b'S' => Scalar::Char,
             | _ => Scalar::Void,
         };
@@ -140,7 +144,8 @@ pub(crate) fn library_builtin_name(name: &str) -> Option<&'static str> {
     library_builtin(name).map(|(name, _, _)| name)
 }
 
-/// Result first, then parameters: v=void, i=int, `z=size_t`, d=double,
+/// Result first, then parameters: v=void, i=int, `z=size_t`, f=float,
+/// d=double, l=long double,
 /// p/P=void*/const void*, s/S=char*/const char*.
 fn library_builtin(name: &str) -> Option<(&'static str, &'static str, bool)> {
     library_function(name.strip_prefix("__builtin_")?)
@@ -174,6 +179,8 @@ fn library_function(name: &str) -> Option<(&'static str, &'static str, bool)> {
         | "putchar" => ("putchar", "ii", false),
         | "abs" => ("abs", "ii", false),
         | "fabs" => ("fabs", "dd", false),
+        | "fabsf" => ("fabsf", "ff", false),
+        | "fabsl" => ("fabsl", "ll", false),
         | "floor" => ("floor", "dd", false),
         | _ => return None,
     })

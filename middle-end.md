@@ -807,6 +807,15 @@ programs can report results. It is the oracle for differential tests: a program
 must print the same output when interpreted before optimization, interpreted
 after optimization, and compiled through each LLVM arm.
 
+The default host also implements the C99 real `<math.h>` function families in
+float, double and long double spellings, including pointer outputs, integer
+results and NaN constructors. Native libm evaluates float and double in their
+own precision; guest pointers stay in interpreter memory. Long double follows
+the target representation: binary64 on MSVC is supported, while GNU `f80`
+execution retains the existing unsupported-operation trap. `%f` output uses
+the default six fractional digits. Guest errno and floating-environment APIs
+remain outside the host implementation.
+
 ### Native back end (later)
 
 Instruction selection from the post-ABI IR, register allocation (evaluate the
@@ -836,6 +845,7 @@ bcc-rust x.c --emit=ir              print the bcc IR (after the optimizer, if it
 bcc-rust x.c --emit=ir-abi          print the bcc IR after ABI lowering
 bcc-rust x.c --emit=llvm            print the LLVM IR
 bcc-rust x.c --interpret            run main in the interpreter; exit with its status
+    [--interpret-step-limit=N]      instruction limit; default 100000000, 0 unlimited
 bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with clang
     [--opt=none|bcc]                the bcc optimizer; none is the default
     [--passes=fold,dce,simplify-cfg] an explicit pass list, run once (implies bcc)

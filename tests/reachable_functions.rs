@@ -288,6 +288,19 @@ int main(void) { int a[2]={7,9}; return f(a)-7; }";
     }
 
     #[test]
+    fn fabs_builtin_siblings_have_their_declared_precision() {
+        let source = "float (*f)(float)=__builtin_fabsf;
+long double (*l)(long double)=__builtin_fabsl;
+int main(void) { return f(-1.5f)!=1.5f || l(-2.5L)!=2.5L; }";
+        let output = bcc(source, &["--interpret", "--target=x86_64-pc-windows-msvc"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn long_reference_chain_uses_an_explicit_worklist() {
         let mut source = String::from("static int f0(void) { return 7; }\n");
         for index in 1..2000 {

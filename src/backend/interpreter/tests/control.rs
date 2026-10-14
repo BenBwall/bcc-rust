@@ -188,6 +188,21 @@ block1:
         2 + 10 * 6 + 2 + 1,
         "the instructions executed"
     );
+    let unlimited = run_text_with(
+        COUNT,
+        "count",
+        &[int(10)],
+        Limits {
+            steps: 0,
+            ..Limits::default()
+        },
+    )
+    .result
+    .unwrap();
+    assert_eq!(
+        unlimited, outcome,
+        "zero disables only the instruction limit"
+    );
 }
 
 #[test]
