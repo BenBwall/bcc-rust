@@ -35,9 +35,10 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   diagnostics within its owning declaration or expression. Lexical diagnostics
   (dollar identifiers, `//` comments, digraphs), directives and macro
   definitions stay outside its scope.
-- An extension diagnostic raised in a macro expansion may underline the
-  replacement in the macro definition, and a conditional-expression diagnostic
-  may keep only the definition location; no expansion backtrace is rendered.
+- A preprocessing extension diagnostic raised in a macro expansion may
+  underline the replacement in the macro definition. Parser and semantic
+  extension diagnostics and warning-group diagnostics point at the outermost
+  invocation instead, as Clang does; no expansion backtrace is rendered.
   Preprocessing diagnostics precede parser diagnostics by pipeline design.
 - The added syntax costs parser time and retained memory; see
   [Performance](#performance).
@@ -821,24 +822,33 @@ a system header; in the primary source file it is ignored with a warning, as
 in GCC and Clang. A `#line` directive gives the following lines a new file
 identity that is not a system header.
 
-Inside a system header, warnings and extension diagnostics are withheld, the
-latter at every policy level: under `-pedantic-errors` an extension in a system
-header is not reported, matching Clang, where such diagnostics are warnings
-promoted to errors and are not emitted from system headers. Policy-governed
+Inside a system header, warnings, extension diagnostics and warning-group
+diagnostics are withheld, the latter two at every severity: under
+`-pedantic-errors` an extension in a system header is not reported, and
+neither is an `-Wincompatible-pointer-types`, `-Wint-conversion` or
+`-Wincompatible-function-pointer-types` error, matching Clang, where such
+diagnostics are warnings that default to or are promoted to errors and are
+not emitted from system headers. Policy-governed
 preprocessor diagnostics (macro redefinitions, `__VA_ARGS__` and `__VA_OPT__`
 outside a variadic macro, empty variadic arguments, the `#if` comma operator,
 `defined` produced by a function-like macro, a backslash in a quoted header
 name) count as extensions. Errors, such as syntax errors, constraint violations
 that are errors by default, and `#error`, are always reported.
 
-The diagnostic's location decides: its first source vector, which for a token
-produced by macro expansion is where the token is spelled in the macro's
-replacement list. This matches Clang's rule for its spelling location. A
-diagnostic in user code about something a system header declared or defined,
-such as a redefinition of the header's macro, is reported, while a construct
-that a system header's macro spells, like a `long long` it supplies to C89
-code, is not. Suppression happens when the diagnostic is reported, so withheld
-diagnostics are not counted.
+The diagnostic's expansion location decides, as in Clang: for a token that a
+macro expansion produced, where the outermost invocation begins, and
+otherwise the token itself. The preprocessor records that location for every
+output token it expands from a macro (`Context::record_expansion_start`), and
+the record lasts for the whole translation unit, so semantic analysis reads
+it too. A diagnostic in user code about something a system header declared or
+defined, such as a redefinition of the header's macro, is reported, and so is
+a construct that a system header's macro supplies to user code, like a
+`long long` in C89 code or `SYS_SET(ip)` assigning an `unsigned *`, which is
+reported at the user's invocation; a user macro expanded inside a system
+header is withheld. Tokens of a macro argument take the invocation too, where
+Clang would point at the argument's spelling; that changes only the column.
+Preprocessing diagnostics keep their own locations. Suppression happens when
+the diagnostic is reported, so withheld diagnostics are not counted.
 
 ## Decisions
 
@@ -1295,3 +1305,11 @@ option forms as the other groups, are promoted by `-Werror` and
 `-pedantic-errors` and are withheld by `-w`. `DiagnosticGroup::ALL`, `COUNT`,
 the names and `parse` come from one `diagnostic_groups!` table, which also
 records each group's default and whether `-pedantic-errors` promotes it.
+
+The system-header rule uses the expansion location, so a system macro
+expanded in user code reports its pointer diagnostics at the user's
+invocation, and every warning group, including the three that default to
+errors, is withheld inside a system header at any severity
+(`sema-pointer-system-header`). Clang 23 also reports a `long long` that a
+system macro supplies to C89 user code at the invocation, which the
+`pp-system-header-diagnostics` snapshot now shows.

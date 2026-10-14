@@ -67,6 +67,7 @@ impl Context<'_> {
         self.pending_errors = pending_errors;
         self.source_vectors.0.clear();
         self.expansion_sites[SourceArena::Preprocessor as usize].clear();
+        self.expansion_starts[SourceArena::Preprocessor as usize].clear();
     }
 
     /// Joins two provenance ranges, preserving `v1`'s vectors followed by
@@ -189,6 +190,17 @@ impl Context<'_> {
         let (arena, start) = SourceArena::decode(source);
         let range = start as usize..(start + source.length()) as usize;
         if source.length() != 0
+            && let Some(site) = self.expansion_starts[arena as usize].get(start)
+        {
+            let site = if arena == target {
+                site
+            } else {
+                let location = self.expansion_starts[arena as usize].ends[site as usize].clone();
+                self.expansion_starts[target as usize].site_id(location)
+            };
+            self.expansion_starts[target as usize].insert(end - source.length(), site);
+        }
+        if source.length() != 0
             && let Some(site) =
                 self.expansion_sites[arena as usize].get(start + source.length() - 1)
         {
@@ -232,6 +244,51 @@ impl Context<'_> {
             let id = sites.site_id(site);
             sites.insert(start + source.length() - 1, id);
         }
+    }
+
+    /// Records where the outermost macro invocation that produced the
+    /// token `source` begins.
+    /// C99: §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22.
+    pub(crate) fn record_expansion_start(&mut self, source: SourceVectors, site: SourceVector) {
+        if source.length() != 0 {
+            let (arena, start) = SourceArena::decode(source);
+            let sites = &mut self.expansion_starts[arena as usize];
+            let id = sites.site_id(site);
+            sites.insert(start, id);
+        }
+    }
+
+    /// Where a diagnostic about `source` belongs, as Clang's expansion
+    /// location: the start of the outermost macro invocation that produced
+    /// its first token, or that token itself when a file or a macro
+    /// argument spells it. `source` must not be empty.
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    pub(crate) fn expansion_location(&self, source: SourceVectors) -> &SourceVector {
+        let (arena, start) = SourceArena::decode(source);
+        let sites = &self.expansion_starts[arena as usize];
+        sites
+            .get(start)
+            .map_or_else(|| self.first_source_vector(source), |id| &sites.ends[id as usize])
+    }
+
+    /// `source`, or its expansion location when a macro expansion produced
+    /// its first token, as a range a diagnostic can point at.
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    pub(crate) fn file_location(&mut self, source: SourceVectors) -> SourceVectors {
+        if source.length() == 0 {
+            return source;
+        }
+        let (arena, start) = SourceArena::decode(source);
+        let sites = &self.expansion_starts[arena as usize];
+        let Some(id) = sites.get(start) else {
+            return source;
+        };
+        let site = sites.ends[id as usize].clone();
+        self.create_retained_source_vectors(
+            site.position(self),
+            site.source_file_index,
+            site.length as usize,
+        )
     }
 
     /// Where a source range ends in the user's input, before macro expansion.

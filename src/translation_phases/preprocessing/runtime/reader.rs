@@ -63,6 +63,10 @@ impl Expander<'_, '_, '_, '_> {
                 {
                     self.context
                         .record_expansion_end(result.source_vectors, site);
+                    if let Some(start) = self.expansion_start() {
+                        self.context
+                            .record_expansion_start(result.source_vectors, start);
+                    }
                 }
                 return Some(result);
             }

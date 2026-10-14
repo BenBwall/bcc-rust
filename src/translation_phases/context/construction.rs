@@ -57,6 +57,7 @@ impl<'tu> Context<'tu> {
             canonical_identifiers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             literal_values: DedupArena::new(tu),
             expansion_sites: std::array::from_fn(|_| ExpansionSites::new_in(tu)),
+            expansion_starts: std::array::from_fn(|_| ExpansionSites::new_in(tu)),
             ignore_tokenizer_errors: false,
             pending_errors: ArenaQueue::new_in(tu),
             suppressed_errors: 0,

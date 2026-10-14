@@ -21,6 +21,9 @@ use crate::{
 impl Analyzer<'_, '_, '_> {
     /// Central emitter for pointer constraints; classification has no severity
     /// decisions. Accepted warnings do not taint initializer/ICE recovery.
+    /// Every group is a Clang warning, some defaulting to an error, so a
+    /// system header withholds it at any severity. It is reported at its
+    /// expansion location, as Clang reports it.
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
     pub(super) fn pointer_diagnostic(
         &mut self,
@@ -33,13 +36,10 @@ impl Analyzer<'_, '_, '_> {
         let Some(severity) = self.context.configuration.diagnostic_severity(group) else {
             return;
         };
-        if self.context.withholds(
-            severity,
-            group.default_severity() == crate::translation_phases::ErrorSeverity::Warning,
-            source_vectors,
-        ) {
+        if self.context.withholds(severity, true, source_vectors) {
             return;
         }
+        let source_vectors = self.context.file_location(source_vectors);
         let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
         self.semantic_errors += errors;
         self.error_diagnostics += errors;
