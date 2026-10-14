@@ -78,7 +78,6 @@ use crate::{
             SemanticTranslationUnit,
             TypeId,
             TypeKind,
-            library_builtin_name,
         },
     },
     util::{
@@ -155,9 +154,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             };
             if let Some(name) = name {
                 _ = self.reserved_names.insert(name);
-                if binding.builtin
+                if binding.origin.is_intrinsic()
                     && self.names.linked(binding.name.name).is_none()
-                    && let Some(runtime) = library_builtin_name(name)
+                    && let Some(runtime) = binding.origin.library()
                 {
                     _ = self.reserved_names.insert(runtime);
                 }
@@ -300,8 +299,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let name = self.symbol_name(binding);
         // Builtin aliases describe the C binding, never the exact assembler
         // label chosen by the user (GNU extension to C99 §6.2.2p2).
-        let runtime = (data.builtin && self.names.linked(data.name.name).is_none())
-            .then(|| library_builtin_name(self.context.string_cache.at(data.name.name)))
+        let runtime = self
+            .names
+            .linked(data.name.name)
+            .is_none()
+            .then(|| data.origin.library())
             .flatten();
         let name = runtime.unwrap_or(name);
         if let Some(Symbol::Function(func)) = self.module.symbol(name) {
@@ -1226,7 +1228,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         arena: &'ir Bump,
         tables: &'a Bump,
     ) -> Result<Self, LoweringError> {
-        let address_taken = address_taken::find(sema, context, tables)?;
+        let address_taken = address_taken::find(sema, tables)?;
         let mut module = Module::new(arena);
         module.set_target(target.triple(), types::data_layout(target));
         let mut definitions = ArenaMap::with_capacity_and_hasher_in(

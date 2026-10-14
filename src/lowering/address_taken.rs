@@ -10,16 +10,11 @@
 
 use crate::{
     translation_phases::{
-        Context,
         parsing::syntax::{
             ExpressionType,
             UnaryOperator,
         },
-        semantic_analysis::{
-            CommonBuiltin,
-            SemanticTranslationUnit,
-            common_builtin,
-        },
+        semantic_analysis::SemanticTranslationUnit,
     },
     util::bump::{
         ArenaSet,
@@ -31,57 +26,34 @@ use crate::{
 /// `__extension__` and generic selections.
 pub(super) fn find<'a>(
     sema: &SemanticTranslationUnit<'_>,
-    context: &Context<'_>,
     arena: &'a Bump,
 ) -> Result<ArenaSet<'a, usize>, super::LoweringError> {
     let mut taken = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena);
     for info in sema.expressions {
-        if let ExpressionType::Call { arguments, .. } = info.expression.kind {
+        if matches!(info.expression.kind, ExpressionType::Call { .. }) {
             let call = sema.call_facts(info.expression).ok_or_else(|| {
                 super::LoweringError::missing(
                     "call facts are not retained",
                     info.expression.source_vectors,
                 )
             })?;
-            if let crate::translation_phases::semantic_analysis::Callee::Builtin { binding, .. } =
-                call.callee
-                && let Some(CommonBuiltin::Varargs(keyword)) =
-                    common_builtin(context.string_cache.at(sema.bindings[binding].name.name))
+            if let crate::translation_phases::semantic_analysis::Callee::Builtin {
+                binding: Some(binding),
+                instance: None,
+                ..
+            } = call.callee
+                && sema.bindings[binding].origin.descriptor().is_some()
             {
-                // Win64 cursors need storage even though these intrinsics use
-                // ordinary call syntax. C99: §7.15.1, pp. 249-251; PDF pp.
-                // 261-263.
-                let count = if keyword
-                    == crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaCopy
-                {
-                    2
-                } else {
-                    1
-                };
-                for &operand in arguments.iter().take(count) {
-                    if let Some(binding) =
-                        sema.expression_info(operand).and_then(|info| info.binding)
-                    {
-                        _ = taken.insert(binding);
-                    }
-                }
+                return Err(super::LoweringError::missing(
+                    "checked named builtin is not retained",
+                    info.expression.source_vectors,
+                ));
             }
         }
-        if let ExpressionType::Builtin(b) = info.expression.kind {
-            use crate::translation_phases::{
-                parsing::SyntaxOperand,
-                preprocessing::KeywordTokenType as K,
-            };
-            if matches!(
-                b.keyword,
-                K::BuiltinVaStart | K::BuiltinVaArg | K::BuiltinVaCopy | K::BuiltinVaEnd
-            ) {
-                for &operand in b.operands {
-                    if let SyntaxOperand::Expression(e) = operand
-                        && let Some(binding) = sema.expression_info(e).and_then(|info| info.binding)
-                    {
-                        _ = taken.insert(binding);
-                    }
+        if let Some(instance) = sema.builtin_call_facts(info.expression) {
+            for operand in instance.operands {
+                if let Some(binding) = operand.storage_binding {
+                    _ = taken.insert(binding);
                 }
             }
         }

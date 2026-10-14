@@ -138,7 +138,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !self
             .expression_info(function)
             .binding
-            .is_some_and(|id| self.bindings[id].builtin)
+            .is_some_and(|id| self.bindings[id].origin.is_intrinsic())
         {
             return None;
         }
@@ -210,7 +210,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && self
                 .expression_info(function)
                 .binding
-                .is_some_and(|id| self.bindings[id].builtin)
+                .is_some_and(|id| self.bindings[id].origin.is_intrinsic())
     }
 
     pub(super) fn binary128_type(&self, ty: TypeId) -> bool {

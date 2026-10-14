@@ -89,22 +89,11 @@ mod inspection;
 use std::cell::Cell;
 
 pub(crate) use builtins::{
-    BitOperation,
-    CommonBuiltin,
     ExpressionEffects,
-    FloatOperation,
-    OverflowOperation,
-    common_builtin,
     implemented_builtin,
-    keyword_call,
-    library_builtin_name,
     named_builtin,
 };
 use collection::Collection;
-#[expect(
-    unused_imports,
-    reason = "The retained semantic vocabulary is the crate interface for lowering and inspection."
-)]
 pub(crate) use constants::Floating;
 use declarations::compatible_enum_type;
 pub(crate) use errors::{
@@ -123,6 +112,7 @@ pub(crate) use integer::Integer;
 pub(crate) use results::{
     Binding,
     BindingKind,
+    BindingOrigin,
     BoundSiteFacts,
     Definition,
     DefinitionKind,

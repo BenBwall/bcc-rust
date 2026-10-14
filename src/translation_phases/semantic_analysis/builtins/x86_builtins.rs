@@ -116,7 +116,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(binding) = function.binding else {
             return;
         };
-        if !self.bindings[binding].builtin {
+        if !self.bindings[binding].origin.is_intrinsic() {
             return;
         }
         let name = self
@@ -173,7 +173,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !self
             .expression_info(function)
             .binding
-            .is_some_and(|id| self.bindings[id].builtin)
+            .is_some_and(|id| self.bindings[id].origin.is_intrinsic())
         {
             return None;
         }

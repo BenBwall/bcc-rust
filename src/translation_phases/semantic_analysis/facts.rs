@@ -12,12 +12,17 @@
 mod ancestry;
 mod bounds;
 pub(super) mod builder;
+mod builtin_instances;
 mod control;
 pub(super) mod correspondence;
 mod parameters;
 pub(super) mod resolved;
 mod sizes;
 
+pub(crate) use builtin_instances::{
+    BuiltinCallFacts,
+    BuiltinOperand,
+};
 pub(crate) use control::*;
 pub(crate) use correspondence::{
     CorrespondenceFacts,

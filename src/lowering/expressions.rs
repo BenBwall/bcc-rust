@@ -66,8 +66,6 @@ use crate::{
             ExpressionInfo,
             TypeId,
             TypeKind,
-            library_builtin_name,
-            named_builtin,
         },
     },
     util::bump::ArenaVec,
@@ -226,7 +224,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         source,
                     ));
                 }
-                if self.schedule_builtin(expression, arguments)? {
+                if self.schedule_builtin(expression)? {
                     return Ok(());
                 }
                 self.tasks.push(Task::Finish(expression));
@@ -1416,8 +1414,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     ) -> Result<Option<usize>, LoweringError> {
         let (Callee::Direct { binding, entity }
         | Callee::Builtin {
-            binding,
+            binding: Some(binding),
             direct: Some(entity),
+            ..
         }) = call.callee
         else {
             return Ok(None);
@@ -1434,10 +1433,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         ) {
             return Err(LoweringError::unsupported(Construct::Setjmp, source));
         }
-        if data.builtin
-            && (text.starts_with("__builtin_") || named_builtin(text))
-            && library_builtin_name(text).is_none()
-        {
+        if data.origin.is_intrinsic() && data.origin.library().is_none() {
             return Err(LoweringError::unsupported(Construct::Builtin, source));
         }
         Ok(Some(binding))

@@ -46,7 +46,10 @@ fn m3_calls_and_builtins_preserve_every_selection_wrapper() {
                             );
                             binding
                         },
-                        | Callee::Builtin { binding, .. } if leaf != "f" => binding,
+                        | Callee::Builtin {
+                            binding: Some(binding),
+                            ..
+                        } if leaf != "f" => binding,
                         | other => panic!("{callee}: {other:?}"),
                     };
                     assert_eq!(

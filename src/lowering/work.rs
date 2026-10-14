@@ -135,10 +135,6 @@ pub(super) enum Task<'tu> {
     },
     /// Complete an operator whose operands are on the stack.
     Finish(&'tu Expression<'tu>),
-    FinishKeyword(
-        &'tu Expression<'tu>,
-        &'tu crate::translation_phases::parsing::Builtin<'tu>,
-    ),
     OmittedConditional {
         expression:  &'tu Expression<'tu>,
         conditional: &'tu ConditionalExpression<'tu>,
@@ -147,7 +143,7 @@ pub(super) enum Task<'tu> {
     },
     FinishBuiltin(
         &'tu Expression<'tu>,
-        crate::translation_phases::semantic_analysis::CommonBuiltin,
+        &'tu crate::translation_phases::semantic_analysis::BuiltinCallFacts<'tu>,
     ),
     /// Copy the place on top of the stack and convert the copy, as a
     /// compound assignment or increment reads its operand.

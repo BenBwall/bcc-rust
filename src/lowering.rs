@@ -357,7 +357,6 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             | Task::Convert { expression, skip } => self.convert_recorded(expression, skip),
             | Task::Finish(expression) => self.finish(expression),
             | Task::FinishBuiltin(expression, builtin) => self.finish_builtin(expression, builtin),
-            | Task::FinishKeyword(expression, builtin) => self.finish_keyword(expression, builtin),
             | Task::OmittedConditional {
                 expression,
                 conditional,

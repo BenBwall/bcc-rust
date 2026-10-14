@@ -60,17 +60,19 @@ pub(crate) struct Designation<'tu> {
     pub(crate) converted_child: bool,
 }
 
-/// The checked callee kind; builtin descriptors/instances are M4 work.
+/// The checked callee kind, including the retained M4 operation instance.
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum Callee {
+pub(crate) enum Callee<'tu> {
     Direct {
         entity:  EntityId,
         binding: usize,
     },
     Indirect(ExprId),
     Builtin {
-        binding: usize,
-        direct:  Option<EntityId>,
+        binding:  Option<usize>,
+        direct:   Option<EntityId>,
+        /// None only for the explicit temporary M6/unknown-reserved bridge.
+        instance: Option<&'tu super::builtin_instances::BuiltinCallFacts<'tu>>,
     },
 }
 
@@ -78,7 +80,7 @@ pub(crate) enum Callee {
 /// C99: §6.5.2.2p6-7, pp. 71-72; PDF pp. 83-84.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CallFacts<'tu> {
-    pub(crate) callee:        Callee,
+    pub(crate) callee:        Callee<'tu>,
     pub(crate) function_type: Option<TypeId>,
     pub(crate) fixed:         usize,
     pub(crate) prototype:     bool,
@@ -200,8 +202,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             arguments,
         } = info.expression.kind
         {
-            self.retain_call(function_expression, arguments.as_slice());
+            self.retain_call(info, function_expression, arguments.as_slice());
+        } else if let ExpressionType::Builtin(syntax) = info.expression.kind {
+            self.retain_keyword_call(info, syntax);
         }
+    }
+
+    /// Keyword forms join the same sparse call table without a named binding.
+    pub(in crate::translation_phases::semantic_analysis) fn retain_keyword_call(
+        &mut self,
+        info: ExpressionInfo<'tu>,
+        syntax: &'tu crate::translation_phases::parsing::Builtin<'tu>,
+    ) {
+        let Some(descriptor) = super::super::builtins::registry::keyword_descriptor(syntax.keyword)
+        else {
+            return;
+        };
+        let instance = self.checked_keyword_builtin(info, descriptor, syntax);
+        _ = self.resolved.calls.insert(
+            self.expressions.len(),
+            CallFacts {
+                callee:        Callee::Builtin {
+                    binding:  None,
+                    direct:   None,
+                    instance: Some(instance),
+                },
+                function_type: None,
+                fixed:         0,
+                prototype:     false,
+                variadic:      false,
+                arguments:     &[],
+            },
+        );
     }
 
     pub(in crate::translation_phases::semantic_analysis) fn designation(
@@ -230,6 +262,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     fn retain_call(
         &mut self,
+        info: ExpressionInfo<'tu>,
         expression: &'tu Expression<'tu>,
         arguments: &[&'tu Expression<'tu>],
     ) {
@@ -243,9 +276,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .binding
                 .is_some_and(|binding| self.bindings[binding].kind == BindingKind::Function);
         let callee = match designation.binding {
-            | Some(binding) if self.bindings[binding].builtin => Callee::Builtin {
-                binding,
-                direct: direct.then(|| self.correspondence.entity(binding, self.bindings[binding])),
+            | Some(binding) if self.bindings[binding].origin.is_intrinsic() => Callee::Builtin {
+                binding:  Some(binding),
+                direct:   direct
+                    .then(|| self.correspondence.entity(binding, self.bindings[binding])),
+                instance: self.bindings[binding]
+                    .origin
+                    .descriptor()
+                    .map(|descriptor| self.checked_named_builtin(info, descriptor, arguments)),
             },
             | Some(binding) if direct => Callee::Direct {
                 entity: self.correspondence.entity(binding, self.bindings[binding]),
@@ -426,6 +464,16 @@ impl<'tu, 's> ResolvedBuilder<'tu, 's> {
             #[cfg(test)]
             work:                  [0; 2],
         }
+    }
+
+    pub(in crate::translation_phases::semantic_analysis) fn argument_type(
+        &self,
+        expression: &Expression<'tu>,
+        original: TypeId,
+    ) -> TypeId {
+        self.conversions
+            .get(&identity(expression))
+            .map_or(original, |c| c.ty)
     }
 
     pub(in crate::translation_phases::semantic_analysis) fn conversion(

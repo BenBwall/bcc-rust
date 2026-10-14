@@ -359,9 +359,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let intrinsic = self
                     .expression_info(vector_callee)
                     .binding
-                    .is_some_and(|id| self.bindings[id].builtin);
+                    .is_some_and(|id| self.bindings[id].origin.is_intrinsic());
                 info = if !intrinsic {
                     self.type_call(e, self.expression_info(function_expression), arguments)
+                } else if let Some(info) = self.common_builtin_call(e, vector_callee, arguments) {
+                    info
                 } else if let ExpressionType::Identifier(name) = vector_callee.kind
                     && super::vectors::named_builtin(self.context.string_cache.at(name.name))
                 {
@@ -378,8 +380,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else if self.classify_type_callee(vector_callee) {
                     self.classify_type(e, &arguments)
                 } else if let Some(info) = self.math128_builtin(e, vector_callee, &arguments) {
-                    info
-                } else if let Some(info) = self.common_builtin_call(e, vector_callee, arguments) {
                     info
                 } else {
                     self.type_call(e, self.expression_info(function_expression), arguments)

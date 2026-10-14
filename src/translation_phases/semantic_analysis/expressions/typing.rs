@@ -1536,9 +1536,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // Unmodeled GNU compiler intrinsics do not have the C89 implicit
             // int signature. Preserve an opaque result rather than rejecting
             // valid pointer/aggregate returns based on an invented int type.
-            let ty = if let Some(ty) = self
-                .common_builtin_type(name)
-                .or_else(|| self.library_builtin_type(name))
+            let descriptor = crate::builtins::lookup(self.context.string_cache.at(name.name));
+            let ty = if let Some(ty) = descriptor
+                .map(|descriptor| self.descriptor_type(descriptor))
                 .or_else(|| self.x86_builtin_type(name))
             {
                 ty
@@ -1560,7 +1560,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Duration::None,
                 None,
             );
-            self.bindings[index].builtin = true;
+            self.bindings[index].origin = if let Some(descriptor) = descriptor {
+                super::super::BindingOrigin::Intrinsic(descriptor.id)
+            } else if super::super::builtins::legacy_named_builtin(
+                self.context.string_cache.at(name.name),
+            ) {
+                super::super::BindingOrigin::LegacyIntrinsic
+            } else {
+                super::super::BindingOrigin::OpaqueIntrinsic
+            };
             return;
         }
         if let ExpressionType::Identifier(name) = e.kind
@@ -1588,6 +1596,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Duration::None,
                 None,
             );
+            self.bindings.last_mut().expect("implicit binding").origin =
+                super::super::BindingOrigin::ImplicitOrdinary;
             self.context.report_extension(
                 crate::configuration::Feature::ImplicitFunctionDeclaration,
                 "implicit function declaration",
@@ -1604,9 +1614,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &self,
         name: Identifier,
     ) -> bool {
-        (self.context.configuration.gnu_extensions()
-            && self.context.string_cache.at(name.name) == "alloca")
-            || super::atomics::modeled(self.context.string_cache.at(name.name))
+        crate::builtins::lookup(self.context.string_cache.at(name.name)).is_some_and(|descriptor| {
+            descriptor.availability.naming == crate::builtins::NamingPolicy::GnuOrdinary
+                && self.context.configuration.gnu_extensions()
+        }) || super::atomics::modeled(self.context.string_cache.at(name.name))
             || self
                 .context
                 .string_cache

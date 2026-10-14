@@ -106,9 +106,9 @@ pub(crate) struct BoundSiteFacts<'tu> {
 /// C99: §6.7p3-4, p. 97; PDF p. 109.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Binding {
-    /// Introduced by intrinsic lookup, rather than a user declaration.
+    /// User, intrinsic or implicit-ordinary origin retained at lookup.
     /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42 (shadowing).
-    pub(crate) builtin:  bool,
+    pub(crate) origin:   BindingOrigin,
     pub(crate) name:     Identifier,
     pub(crate) ty:       TypeId,
     pub(crate) scope:    usize,
@@ -373,5 +373,39 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                     effects.designation_pure
                 }
             })
+    }
+}
+
+/// Lookup origin, independent of spelling and user assembler labels.
+/// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42 (user shadowing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BindingOrigin {
+    User,
+    Intrinsic(crate::builtins::BuiltinId),
+    ImplicitOrdinary,
+    /// Temporary M6 recognition bridge: atomic/x86/vector/type-generic
+    /// families.
+    LegacyIntrinsic,
+    /// Unknown reserved names retain opaque signatures and bounded refusals.
+    OpaqueIntrinsic,
+}
+
+impl BindingOrigin {
+    pub(crate) fn is_intrinsic(self) -> bool {
+        matches!(
+            self,
+            Self::Intrinsic(_) | Self::LegacyIntrinsic | Self::OpaqueIntrinsic
+        )
+    }
+
+    pub(crate) fn descriptor(self) -> Option<&'static crate::builtins::BuiltinDescriptor> {
+        match self {
+            | Self::Intrinsic(id) => Some(id.descriptor()),
+            | _ => None,
+        }
+    }
+
+    pub(crate) fn library(self) -> Option<&'static str> {
+        self.descriptor().and_then(|descriptor| descriptor.library)
     }
 }
