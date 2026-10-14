@@ -36,6 +36,9 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         let target = context.configuration.target().layout();
         let pack_alignments = super::packing::states(context, scratch);
         let mut analyzer = Self {
+            declarator_functions: ArenaVec::new_in(tu),
+            specifier_functions: ArenaVec::new_in(tu),
+            references: ArenaVec::new_in(tu),
             #[cfg(test)]
             review_steps: Cell::new([0; 3]),
             context,

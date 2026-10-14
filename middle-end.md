@@ -489,7 +489,17 @@ Inline body emission is decided by semantic analysis and consumed by lowering:
 C99 inline-only bodies and GNU89 `extern inline` bodies remain external
 declarations in IR, so uninlined calls and addresses refer to the external
 symbol. Plain GNU89 `inline` and `static inline` bodies are lowered normally.
-The interpreter and LLVM therefore share the same decision. See
+The interpreter and LLVM therefore share the same decision. Internal functions
+and objects are planned in `lowering/module_items/reachability.rs`: external
+definitions seed an explicit worklist over retained semantic entity references.
+Calls, function addresses and object initializer references reach internal
+definitions transitively. Unreferenced static objects do not seed the worklist;
+their initializers therefore do not force function emission. Unreachable
+function signatures and bodies are not lowered, so unsupported vector or
+assembly implementations in system headers do not refuse otherwise supported
+programs. Unevaluated `sizeof`, `alignof` and `typeof` references are excluded
+by semantic analysis; VM typeof operands retain their runtime references.
+See
 `language-standards.md` for mode overrides and the per-function `gnu_inline`
 attribute. C99 §6.7.4p6-7 (pp. 112-113; PDF pp. 124-125), §6.9p5 (p. 140;
 PDF p. 152), and [GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html).

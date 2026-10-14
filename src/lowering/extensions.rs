@@ -1,6 +1,6 @@
 //! Vendor declaration modifiers retained by semantic analysis's iterative
-//! type traversal. Check every occurrence before emitting symbols: unsupported
-//! conventions cannot leak through typedefs, abstract casts or indirect calls.
+//! type traversal. Resolve symbol aliases before planning reachability, then
+//! check modifiers belonging to emitted definitions and file declarations.
 //! C99: §6.7, p. 97; PDF p. 109; §6.7.5-6.7.6, pp. 114-122;
 //! PDF pp. 126-134 (GNU/MSVC extensions to declarations and type names).
 
@@ -42,15 +42,45 @@ use crate::{
 };
 
 impl<'a, 'tu> Unit<'a, 'tu, '_> {
-    /// Refuses convention changes and records assembler labels before any
-    /// declaration or definition can reserve the ordinary C spelling.
+    /// Records assembler labels before reachability merges linked declarations.
     /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42 (linked declarations);
     /// §6.7, p. 97; PDF p. 109 (GNU/MSVC declaration extensions).
-    pub(super) fn prepare_extensions(&mut self, errors: &mut ArenaVec<'_, LoweringError>) {
-        for &chain in self.sema.spec_extensions {
+    pub(super) fn prepare_symbol_names(&mut self) -> ArenaVec<'a, (usize, LoweringError)> {
+        let mut errors = ArenaVec::new_in(self.tables);
+        for (index, declarator) in self.sema.declarators.iter().enumerate() {
+            for direct in declarator.kind {
+                if let DirectDeclarator::AsmLabel(label) = *direct
+                    && self
+                        .record_label(*declarator, label.template, label.recovered)
+                        .is_err()
+                {
+                    errors.push((
+                        index,
+                        LoweringError::unsupported(Construct::AssemblerLabel, label.source_vectors),
+                    ));
+                }
+            }
+        }
+        errors
+    }
+
+    /// Retained ownership keeps unsupported modifiers in unreachable bodies
+    /// from refusing the module. File declarations still constrain emitted
+    /// uses. C99: §6.9 paragraphs 3-5, p. 140; PDF p. 152.
+    pub(super) fn check_extensions(&self, errors: &mut ArenaVec<'_, LoweringError>) {
+        for (index, &chain) in self.sema.spec_extensions.iter().enumerate() {
+            if self.sema.specifier_functions[index].is_some_and(|owner| !self.emits_function(owner))
+            {
+                continue;
+            }
             self.check_chain(Some(chain), errors);
         }
-        for declarator in self.sema.declarators {
+        for (index, declarator) in self.sema.declarators.iter().enumerate() {
+            if self.sema.declarator_functions[index]
+                .is_some_and(|owner| !self.emits_function(owner))
+            {
+                continue;
+            }
             for level in declarator.pointer.levels {
                 self.check_chain(level.attributes, errors);
             }
@@ -60,16 +90,6 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                         self.check_attribute(attribute, errors),
                     | DirectDeclarator::MsModifier(keyword, source) =>
                         Self::check_keyword(keyword, source, errors),
-                    | DirectDeclarator::AsmLabel(label) => {
-                        let result =
-                            self.record_label(*declarator, label.template, label.recovered);
-                        if result.is_err() {
-                            errors.push(LoweringError::unsupported(
-                                Construct::AssemblerLabel,
-                                label.source_vectors,
-                            ));
-                        }
-                    },
                     | _ => {},
                 }
             }

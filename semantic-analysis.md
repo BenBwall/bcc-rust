@@ -725,6 +725,19 @@ Internal-linkage expression uses require a definition, except operands of
 constant `sizeof` results (§6.9p3, printed p. 140, PDF p. 152). Persistent
 sizeof contexts are resolved after typing, so runtime VLA-size uses still count.
 Used undefined static functions are errors; unused undefined declarations warn.
+Resolved entity uses are retained in `SemanticTranslationUnit.references` with
+their owning function definition or object initializer. Parameter type-site
+uses belong to the function whose entry executes them, even before its binding
+is installed. The producer excludes constant `sizeof`, `alignof` and
+non-VM `typeof` operands after typing, using retained typeof execution facts;
+linked redeclarations keep their binding identities. The module-item planner
+joins those identities by emitted symbol and computes the closure of external
+definitions with an explicit worklist. Semantic definition constraints still
+apply to every analyzed definition, including bodies omitted from emission.
+Retained declarator and specifier occurrences also identify their enclosing
+function definition. Lowering checks unsupported vendor modifiers only when
+that definition is emitted; file declarations remain checked. Symbol aliases
+are resolved before the planner joins linked entities.
 Inline restrictions are deferred until all file-scope declarations are known:
 a later non-inline or `extern` declaration can make the body an external
 definition (§6.7.4p3,p6, printed p. 112, PDF p. 124). Inline-only external bodies

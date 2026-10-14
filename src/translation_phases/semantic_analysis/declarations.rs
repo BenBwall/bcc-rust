@@ -111,6 +111,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         self.work.push(Work::Qualify(q, source));
         if let S::Extended(syntax @ super::ExtendedType::Typeof { operand, .. }) = spec {
+            self.enter_reference_context(Some(syntax));
             self.work.push(Work::TypeofDone(syntax));
             self.syntax_operand(*operand);
             return;
@@ -257,6 +258,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut extension = spec.extensions;
         if let Some(chain) = extension {
             self.spec_extensions.push(chain);
+            self.specifier_functions
+                .push(self.functions.reference_function);
         }
         while let Some(item) = extension {
             if let SpecifierExtensionKind::Alignment(operand) = item.kind {

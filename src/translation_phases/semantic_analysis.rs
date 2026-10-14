@@ -129,6 +129,7 @@ pub(crate) use results::{
     Definition,
     DefinitionKind,
     Duration,
+    EntityReference,
     FunctionRecord,
     Linkage,
     Scope,
@@ -237,29 +238,32 @@ pub(crate) fn analyze<'tu>(
     analyzer.check_builtin_designators();
     let index = analyzer.retain_expression_index();
     SemanticTranslationUnit {
-        binding_bounds:      analyzer.binding_bounds,
-        control:             analyzer.control.retain(analyzer.types.tu),
-        expression_effects:  analyzer.expression_effects.leak(),
-        expression_actions:  analyzer.expression_actions,
-        declarators:         analyzer.declarators.leak(),
-        spec_extensions:     analyzer.spec_extensions.leak(),
-        expressions:         analyzer.expressions.leak(),
-        expression_indices:  index.expressions,
-        string_initializers: analyzer.string_initializers,
-        conversions:         index.conversions,
-        conversion_starts:   index.conversion_starts,
-        types:               analyzer.types.finish(),
-        bindings:            analyzer.bindings.leak(),
-        definitions:         analyzer.definitions.leak(),
-        functions:           analyzer.function_records.leak(),
-        scopes:              analyzer.scopes.leak(),
-        type_names:          analyzer.type_names.leak(),
-        declaration_sites:   analyzer.declaration_sites,
-        type_name_sites:     analyzer.type_name_sites,
-        size_query_sites:    analyzer.size_query_sites,
-        parameters:          analyzer.parameter_lists.leak(),
-        tag_declarations:    analyzer.tag_declarations.leak(),
-        errors:              analyzer.error_diagnostics,
+        declarator_functions: analyzer.declarator_functions.leak(),
+        specifier_functions:  analyzer.specifier_functions.leak(),
+        references:           analyzer.references.leak(),
+        binding_bounds:       analyzer.binding_bounds,
+        control:              analyzer.control.retain(analyzer.types.tu),
+        expression_effects:   analyzer.expression_effects.leak(),
+        expression_actions:   analyzer.expression_actions,
+        declarators:          analyzer.declarators.leak(),
+        spec_extensions:      analyzer.spec_extensions.leak(),
+        expressions:          analyzer.expressions.leak(),
+        expression_indices:   index.expressions,
+        string_initializers:  analyzer.string_initializers,
+        conversions:          index.conversions,
+        conversion_starts:    index.conversion_starts,
+        types:                analyzer.types.finish(),
+        bindings:             analyzer.bindings.leak(),
+        definitions:          analyzer.definitions.leak(),
+        functions:            analyzer.function_records.leak(),
+        scopes:               analyzer.scopes.leak(),
+        type_names:           analyzer.type_names.leak(),
+        declaration_sites:    analyzer.declaration_sites,
+        type_name_sites:      analyzer.type_name_sites,
+        size_query_sites:     analyzer.size_query_sites,
+        parameters:           analyzer.parameter_lists.leak(),
+        tag_declarations:     analyzer.tag_declarations.leak(),
+        errors:               analyzer.error_diagnostics,
     }
 }
 
@@ -412,17 +416,22 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.work.push(Work::Initializer(initializer));
             },
             | Work::InitializeDeclaration(declarator, initializer) => {
+                self.work
+                    .push(Work::RestoreReferenceOwner(self.functions.initializer));
                 if let Some(entry) = declarator
                     .identifier()
                     .and_then(|n| self.lookup(Namespace::Ordinary, n.name))
                 {
                     self.work
                         .push(Work::InitializeDone(entry.binding, initializer));
+                    self.functions.initializer = Some(entry.binding);
                 }
                 self.work.push(Work::Initializer(initializer));
             },
             | Work::InitializeDone(binding, initializer) =>
                 self.initialize_declaration(binding, initializer),
+            | Work::RestoreReferenceOwner(owner) => self.functions.initializer = owner,
+            | Work::RestoreReferenceFunction(owner) => self.functions.reference_function = owner,
             | Work::Condition(slot, integer) => self.check_condition(slot, integer),
             | Work::RequireConstant(e, assertion, before) => {
                 let value = self.integers.pop().flatten();
@@ -648,6 +657,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     })
                 {
                     self.declarators.push(d);
+                    self.declarator_functions
+                        .push(self.functions.reference_function);
                 }
                 for level in d.pointer.levels {
                     if !(level.qualifiers
@@ -1420,6 +1431,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 // record/function types.
 #[derive(Clone, Copy)]
 enum Work<'tu, 's> {
+    RestoreReferenceFunction(Option<usize>),
+    RestoreReferenceOwner(Option<usize>),
     DeclaredAlignment(Option<&'tu SpecifierExtension<'tu>>, TypeId, bool),
     Root(ExternalDeclaration<'tu>),
     Declaration(&'tu Declaration<'tu>),
@@ -1556,73 +1569,76 @@ enum Work<'tu, 's> {
 }
 
 struct Analyzer<'a, 'tu, 's> {
+    declarator_functions: ArenaVec<'tu, Option<usize>>,
+    specifier_functions:  ArenaVec<'tu, Option<usize>>,
+    references:           ArenaVec<'tu, EntityReference>,
     // Deterministic scaling-test counts: VM ancestors, offset members,
     // initializer type nodes. They are absent from production compilation.
     #[cfg(test)]
-    review_steps:        Cell<[usize; 3]>,
-    context:             &'a mut Context<'tu>,
-    scratch:             &'s Bump,
-    types:               TypeInterner<'tu, 's>,
-    pack_alignments:     &'s [(usize, u32)],
-    bindings:            ArenaVec<'tu, Binding>,
-    declarators:         ArenaVec<'tu, Declarator<'tu>>,
-    spec_extensions:     ArenaVec<'tu, &'tu SpecifierExtension<'tu>>,
-    definitions:         ArenaVec<'tu, Definition>,
+    review_steps:         Cell<[usize; 3]>,
+    context:              &'a mut Context<'tu>,
+    scratch:              &'s Bump,
+    types:                TypeInterner<'tu, 's>,
+    pack_alignments:      &'s [(usize, u32)],
+    bindings:             ArenaVec<'tu, Binding>,
+    declarators:          ArenaVec<'tu, Declarator<'tu>>,
+    spec_extensions:      ArenaVec<'tu, &'tu SpecifierExtension<'tu>>,
+    definitions:          ArenaVec<'tu, Definition>,
     /// Indexed by the function definition's traversal id.
-    function_records:    ArenaVec<'tu, FunctionRecord<'tu>>,
-    scopes:              ArenaVec<'tu, Scope>,
-    type_names:          ArenaVec<'tu, (SourceVectors, TypeId)>,
-    declaration_sites:   ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    type_name_sites:     ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    size_query_sites:    ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    typeof_sites:        ArenaMap<'s, usize, BoundSiteFacts<'tu>>,
-    parameter_lists:     ArenaVec<'tu, (SourceVectors, &'tu [Parameter])>,
-    scope:               usize,
-    entries:             ArenaVec<'s, Entry>,
-    visible:             ArenaMap<'s, (Namespace, StringCacheId), usize>,
-    external:            ArenaMap<'s, StringCacheId, usize>,
-    scope_entries:       ArenaVec<'s, &'s Collection<'s, usize>>,
-    parameters:          ArenaMap<'s, usize, (&'tu [Parameter], usize)>,
-    work:                ArenaVec<'s, Work<'tu, 's>>,
-    values:              ArenaVec<'s, TypeId>,
-    integers:            ArenaVec<'s, Option<Integer>>,
-    tainted:             bool,
-    function_name:       Option<Identifier>,
-    old_parameter_mode:  bool,
+    function_records:     ArenaVec<'tu, FunctionRecord<'tu>>,
+    scopes:               ArenaVec<'tu, Scope>,
+    type_names:           ArenaVec<'tu, (SourceVectors, TypeId)>,
+    declaration_sites:    ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    type_name_sites:      ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    size_query_sites:     ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    typeof_sites:         ArenaMap<'s, usize, BoundSiteFacts<'tu>>,
+    parameter_lists:      ArenaVec<'tu, (SourceVectors, &'tu [Parameter])>,
+    scope:                usize,
+    entries:              ArenaVec<'s, Entry>,
+    visible:              ArenaMap<'s, (Namespace, StringCacheId), usize>,
+    external:             ArenaMap<'s, StringCacheId, usize>,
+    scope_entries:        ArenaVec<'s, &'s Collection<'s, usize>>,
+    parameters:           ArenaMap<'s, usize, (&'tu [Parameter], usize)>,
+    work:                 ArenaVec<'s, Work<'tu, 's>>,
+    values:               ArenaVec<'s, TypeId>,
+    integers:             ArenaVec<'s, Option<Integer>>,
+    tainted:              bool,
+    function_name:        Option<Identifier>,
+    old_parameter_mode:   bool,
     /// Exceptional evaluation yields a variable array bound, not an error.
-    runtime_bound:       bool,
+    runtime_bound:        bool,
     /// Reported constraint diagnostics, warnings included: local checks
     /// compare it with an earlier value to learn whether a check failed.
-    semantic_errors:     usize,
+    semantic_errors:      usize,
     /// Reported diagnostics of error severity only, retained for lowering.
-    error_diagnostics:   usize,
-    member_indices:      ArenaMap<'s, (usize, StringCacheId), usize>,
-    member_names:        ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
-    tag_declarations:    ArenaVec<'tu, (usize, usize)>,
-    resolved_type_names: ArenaMap<'s, SourceVectors, TypeId>,
-    integer_models:      ArenaMap<'s, usize, Option<(u32, bool)>>,
-    expressions:         ArenaVec<'tu, ExpressionInfo<'tu>>,
-    expression_effects:  ArenaVec<'tu, ExpressionEffects>,
-    expression_actions:  ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    binding_bounds:      ArenaMap<'tu, usize, &'tu [usize]>,
-    parameter_sites:     ArenaMap<'s, usize, BoundSiteFacts<'tu>>,
-    function_controls:   ArenaMap<'s, usize, (FunctionControl, Option<RegionId>)>,
-    expression_indices:  ArenaMap<'s, usize, usize>,
-    string_initializers: ArenaMap<'tu, usize, TypeId>,
+    error_diagnostics:    usize,
+    member_indices:       ArenaMap<'s, (usize, StringCacheId), usize>,
+    member_names:         ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
+    tag_declarations:     ArenaVec<'tu, (usize, usize)>,
+    resolved_type_names:  ArenaMap<'s, SourceVectors, TypeId>,
+    integer_models:       ArenaMap<'s, usize, Option<(u32, bool)>>,
+    expressions:          ArenaVec<'tu, ExpressionInfo<'tu>>,
+    expression_effects:   ArenaVec<'tu, ExpressionEffects>,
+    expression_actions:   ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    binding_bounds:       ArenaMap<'tu, usize, &'tu [usize]>,
+    parameter_sites:      ArenaMap<'s, usize, BoundSiteFacts<'tu>>,
+    function_controls:    ArenaMap<'s, usize, (FunctionControl, Option<RegionId>)>,
+    expression_indices:   ArenaMap<'s, usize, usize>,
+    string_initializers:  ArenaMap<'tu, usize, TypeId>,
     /// Conversion records in the order they were applied, grouped by
     /// expression when analysis ends.
-    conversions:         ArenaVec<'s, Conversion<'tu>>,
-    const_members:       ArenaMap<'s, usize, bool>,
-    register_bindings:   ArenaMap<'s, usize, bool>,
-    ice_operands:        ArenaMap<'s, (usize, bool), bool>,
-    functions:           functions::State<'tu, 's>,
-    va_list_type:        Option<TypeId>,
-    statements:          statements::State<'tu, 's>,
-    control:             builder::Builder<'tu, 's>,
+    conversions:          ArenaVec<'s, Conversion<'tu>>,
+    const_members:        ArenaMap<'s, usize, bool>,
+    register_bindings:    ArenaMap<'s, usize, bool>,
+    ice_operands:         ArenaMap<'s, (usize, bool), bool>,
+    functions:            functions::State<'tu, 's>,
+    va_list_type:         Option<TypeId>,
+    statements:           statements::State<'tu, 's>,
+    control:              builder::Builder<'tu, 's>,
     /// Tags whose member or enumerator list is open.
-    defining:            ArenaMap<'s, usize, ()>,
+    defining:             ArenaMap<'s, usize, ()>,
     /// Least and greatest enumerator values of an open enumeration.
-    enum_ranges:         ArenaMap<'s, usize, (i128, i128)>,
+    enum_ranges:          ArenaMap<'s, usize, (i128, i128)>,
 }
 
 // Tests

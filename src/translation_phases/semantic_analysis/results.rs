@@ -46,26 +46,33 @@ use crate::{
 /// Durable semantic output. Working maps/stacks are gone when this is returned.
 #[derive(Debug)]
 pub(crate) struct SemanticTranslationUnit<'tu> {
-    pub(super) binding_bounds:      ArenaMap<'tu, usize, &'tu [usize]>,
-    pub(crate) control:             super::ControlFacts<'tu>,
-    pub(crate) expression_effects:  &'tu [super::ExpressionEffects],
-    pub(super) expression_actions:  ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    /// Function owners of modifier occurrences; None is a file-scope
+    /// declaration. C99: §6.7.4p6-7, pp. 112-113; PDF pp. 124-125
+    /// (emission).
+    pub(crate) declarator_functions: &'tu [Option<usize>],
+    pub(crate) specifier_functions:  &'tu [Option<usize>],
+    /// Evaluated entity references, owned by a function or object initializer.
+    pub(crate) references:           &'tu [EntityReference],
+    pub(super) binding_bounds:       ArenaMap<'tu, usize, &'tu [usize]>,
+    pub(crate) control:              super::ControlFacts<'tu>,
+    pub(crate) expression_effects:   &'tu [super::ExpressionEffects],
+    pub(super) expression_actions:   ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
     /// Declarators with vendor modifiers visited by the explicit type stack,
     /// including abstract declarators, retained for the lowering gate.
     /// C99: §6.7.5-6.7.6, pp. 114-122; PDF pp. 126-134 (extensions).
-    pub(crate) declarators:         &'tu [Declarator<'tu>],
+    pub(crate) declarators:          &'tu [Declarator<'tu>],
     /// Specifier extension chains, including those on type names and
     /// parameters. C99: §6.7, p. 97; PDF p. 109 (vendor extensions).
-    pub(crate) spec_extensions:     &'tu [&'tu SpecifierExtension<'tu>],
-    pub(crate) types:               Types<'tu>,
-    pub(crate) bindings:            &'tu [Binding],
-    pub(crate) definitions:         &'tu [Definition],
+    pub(crate) spec_extensions:      &'tu [&'tu SpecifierExtension<'tu>],
+    pub(crate) types:                Types<'tu>,
+    pub(crate) bindings:             &'tu [Binding],
+    pub(crate) definitions:          &'tu [Definition],
     /// Every function definition in traversal order, nested GNU definitions
     /// included, with its binding, body and parameter bindings.
-    pub(crate) functions:           &'tu [FunctionRecord<'tu>],
-    pub(crate) scopes:              &'tu [Scope],
-    pub(crate) type_names:          &'tu [(SourceVectors, TypeId)],
-    pub(super) declaration_sites:   ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    pub(crate) functions:            &'tu [FunctionRecord<'tu>],
+    pub(crate) scopes:               &'tu [Scope],
+    pub(crate) type_names:           &'tu [(SourceVectors, TypeId)],
+    pub(super) declaration_sites:    ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
     #[cfg_attr(
         not(test),
         expect(
@@ -74,29 +81,40 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
                       actions."
         )
     )]
-    pub(super) type_name_sites:     ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    pub(super) size_query_sites:    ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    pub(crate) parameters:          &'tu [(SourceVectors, &'tu [Parameter])],
+    pub(super) type_name_sites:      ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    pub(super) size_query_sites:     ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    pub(crate) parameters:           &'tu [(SourceVectors, &'tu [Parameter])],
     /// Typed results in child-before-parent order; an expression's ordinal
     /// is its index here.
-    pub(crate) expressions:         &'tu [ExpressionInfo<'tu>],
+    pub(crate) expressions:          &'tu [ExpressionInfo<'tu>],
     /// Syntax identity (the node's address) to its ordinal in
     /// `expressions`; see [`Self::expression_index`].
-    pub(super) expression_indices:  ArenaMap<'tu, usize, usize>,
+    pub(super) expression_indices:   ArenaMap<'tu, usize, usize>,
     /// String initializer syntax to its destination element type, independent
     /// of array completion. C99: §6.7.8p14-15, p. 126; PDF p. 138.
-    pub(super) string_initializers: ArenaMap<'tu, usize, TypeId>,
+    pub(super) string_initializers:  ArenaMap<'tu, usize, TypeId>,
     /// Conversion records grouped by expression ordinal, each run in the
     /// order its conversions were applied; see [`Self::conversions_of`].
-    pub(crate) conversions:         &'tu [Conversion<'tu>],
+    pub(crate) conversions:          &'tu [Conversion<'tu>],
     /// `conversions[conversion_starts[i]..conversion_starts[i + 1]]` is the
     /// run of expression `i`. Records for an operand without a retained
     /// result follow the last run.
-    pub(super) conversion_starts:   &'tu [usize],
-    pub(crate) tag_declarations:    &'tu [(usize, usize)],
+    pub(super) conversion_starts:    &'tu [usize],
+    pub(crate) tag_declarations:     &'tu [(usize, usize)],
     /// Error-severity diagnostics semantic analysis reported; warnings and
     /// diagnostics suppressed inside recovered syntax are not counted.
-    pub(crate) errors:              usize,
+    pub(crate) errors:               usize,
+}
+
+/// A resolved use needed by module emission. Owners and targets are binding
+/// occurrences; linkage joins redeclarations without losing local identity.
+/// Constant sizeof operands are excluded after their types are known.
+/// C99: §6.9p3-5, p. 140; PDF p. 152; §6.7.8, pp. 125-130;
+/// PDF pp. 137-142.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct EntityReference {
+    pub(crate) owner:   usize,
+    pub(crate) binding: usize,
 }
 
 /// Execution attached to a declaration or type-name occurrence, rather than
