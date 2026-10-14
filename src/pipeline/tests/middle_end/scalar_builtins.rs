@@ -43,6 +43,10 @@ const PROGRAMS: &[(&str, &str)] = &[
         include_str!("../../../../tests/fixtures/semantic/labeled-overflow-effects.c"),
     ),
     (
+        "selected_overflow_effects",
+        include_str!("../../../../tests/fixtures/semantic/selected-overflow-effects.c"),
+    ),
+    (
         "selected_callees",
         include_str!("../../../../tests/fixtures/semantic/builtin-selected-callees.c"),
     ),
