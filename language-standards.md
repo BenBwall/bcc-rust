@@ -466,6 +466,31 @@ The following vocabulary entries retain the established diagnostic contracts:
   rescanning and preprocessing-expression expansion. C99 §6.10.3p4 (printed
   p. 151; PDF p. 163) requires more arguments than named parameters;
   C23 §6.10.5p4 (printed p. 178; PDF p. 191) requires at least as many.
+- `Func` covers `__func__`, whose predefined declaration is C99
+  (§6.4.2.2p1, printed p. 52; PDF p. 64). `__FUNCTION__` and
+  `__PRETTY_FUNCTION__` are the GNU spellings: they are not a feature row,
+  because Clang 23.1.1 reserves both in every `-std` and says nothing about them
+  even under `-pedantic`, so bcc accepts them silently in every mode, ISO,
+  GNU and every extension policy. Each names a `static const char` array. In C,
+  `__FUNCTION__` is the same object as `__func__` (the function's name), and
+  `__PRETTY_FUNCTION__` holds the signature as Clang prints it (`void f(int)`,
+  `int (*g(void))(char)`; GCC prints only the name in C). A definition
+  without a prototype prints `()`, and a typedef name appears as written for
+  a parameter or result (`size_t`), but not for an adjusted array
+  parameter. Known differences from Clang are an unnamed `struct` parameter
+  (`struct (unnamed)`, where Clang adds a source position) and a variable
+  length array behind a pointer (`[*]`, where Clang prints the bound
+  expression). Outside a function all three are an empty string
+  (`top level` for the pretty form) behind the default warning
+  `predefined identifier is only valid inside function`, Clang's
+  `-Wpredefined-identifier-outside-function`. Clang makes `__FUNCTION__` and
+  `__PRETTY_FUNCTION__` keywords, so declaring them is a syntax error there;
+  bcc uses a visible declaration of the same spelling in preference.
+  The objects are static, so address equality holds as in Clang: all uses of
+  `__func__` and `__FUNCTION__` in one function are one object, and so are all
+  uses of `__PRETTY_FUNCTION__`; the two objects never compare equal, and no
+  object equals a string literal (Clang may merge equal constants, which C
+  leaves unspecified). Source: [GCC function names](https://gcc.gnu.org/onlinedocs/gcc/Function-Names.html).
 - `ArrayParameterSyntax` has C99 origin and accepts array qualifiers, `static`
   bounds and `[*]` in every mode. C89/C95 report the existing C99-origin
   spellings under Warn/Deny, including GNU modes; C99 and later are silent.

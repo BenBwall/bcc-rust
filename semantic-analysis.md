@@ -404,7 +404,8 @@ designators and rvalues (§6.3.2.1p1, printed p. 46, PDF p. 58). Const aggregate
 members, including array elements, prevent modification; bit-fields retain enough
 information for promotion and address/sizeof constraints. Parentheses preserve
 the underlying category. Ordinary identifiers resolve through the declaration
-binding model. A function's `__func__` is modeled as a static const character array.
+binding model. A function's `__func__` is modeled as a static const character array;
+`__FUNCTION__` names the same object and `__PRETTY_FUNCTION__` a second one holding the signature.
 Calls to undeclared names are accepted only in C89/C95 and GNU modes, using
 shared removed-feature policy. Known standard library names receive the complete
 prototype from the existing 24-entry library-alias table, with target `size_t`,
@@ -614,7 +615,14 @@ policy in GNU modes. This prevents accidental lookup of a same-named global.
 `__func__` is a function-entry binding for a static const character array,
 including before its first use (§6.4.2.2p1, printed p. 52, PDF p. 64). Its
 retained synthesized definition records the function-name string. Inner blocks
-may shadow it; the function's outer block may not redefine it. Hosted `main`
+may shadow it; the function's outer block may not redefine it. GCC's
+`__FUNCTION__` and `__PRETTY_FUNCTION__` are not declared at entry: lookup that
+finds no declaration resolves them (`predefined.rs`), `__FUNCTION__` to the
+`__func__` object and `__PRETTY_FUNCTION__` to an object made at its first use
+in the function, holding the signature as Clang prints it in C, with typedef
+names as written. The object is installed in the function scope, so later uses
+find it without another build. Outside any function all three warn at each use
+and share one file-scope object (an empty string, or `top level`). Hosted `main`
 signatures outside the portable `int (void)` and `int (int, char **)` forms,
 including internal linkage, receive an implementation warning. With
 `-ffreestanding` the startup function is implementation-defined (§5.1.2.1p1),
@@ -716,7 +724,8 @@ uncompleted tentative object types are rejected at translation-unit end.
 `SemanticTranslationUnit.definitions` retains deterministic binding-index order
 for explicit objects/functions, inline-only bodies, completed tentative objects
 and implicit function-name arrays. The existing inspection schema is retained;
-implicit `__func__` bindings appear through its ordinary binding output. No
+implicit `__func__` and `__PRETTY_FUNCTION__` bindings appear through its ordinary
+binding output. No
 statement inspection format was added. Earlier source occurrences and expression
 types retain their point-of-use types; synthesized tentative definitions identify
 the final composite binding needed by lowering.
