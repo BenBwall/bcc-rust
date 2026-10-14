@@ -1,17 +1,18 @@
 //! Byte-addressed memory with provenance.
 //!
 //! Memory is a set of objects: stack slots, globals, heap allocations,
-//! functions (size zero, so a function's address is unique) and `va_list`
-//! cursors. Each object has a fresh base address, a size and an array of
-//! cells, with backing capacity rounded up to a power of two for reuse.
-//! Logical bounds remain the requested size. A cell holds the byte, whether it
-//! was ever written with a defined value, and, for the eight bytes of a stored
-//! pointer, which fragment of which pointer it is. Loading a pointer whose
-//! eight cells are the fragments of one pointer in order gives that pointer
-//! back with its provenance; loading it from other bytes treats them as an
-//! integer address, as `inttoptr` does.
-//! Unresolved globals retain their declared bounds for pointer arithmetic,
-//! but have no backing cells; any data access reports the missing symbol.
+//! functions (size zero, so a function's address is unique), each function's
+//! labels (one byte per label, holding no data) and `va_list` cursors. Each
+//! object has a fresh base address, a size and an array of cells, with backing
+//! capacity rounded up to a power of two for reuse. Logical bounds remain the
+//! requested size. A cell holds the byte, whether it was ever written with a
+//! defined value, and, for the eight bytes of a stored pointer, which fragment
+//! of which pointer it is. Loading a pointer whose eight cells are the
+//! fragments of one pointer in order gives that pointer back with its
+//! provenance; loading it from other bytes treats them as an integer address,
+//! as `inttoptr` does. Unresolved globals retain their declared bounds for
+//! pointer arithmetic, but have no backing cells; any data access reports the
+//! missing symbol.
 //!
 //! A [`Pointer`] is an address with an optional [`ObjectRef`]. An access
 //! through it checks, in order: that it has provenance (null and wild

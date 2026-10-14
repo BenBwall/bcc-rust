@@ -16,9 +16,10 @@
 //! poison, poison propagates, and branching on poison, dividing by it or
 //! using it as an address traps as undefined behaviour. Memory is a set of
 //! byte-addressed objects (stack slots, globals, heap allocations,
-//! functions, `va_list` cursors); see `memory.rs`. Calls to functions the
-//! module declares but does not define go to a [`Host`]; [`DefaultHost`]
-//! provides a small C library and captures the program's output.
+//! functions, each function's labels, `va_list` cursors); see `memory.rs`.
+//! Calls to functions the module declares but does not define go to a [`Host`];
+//! [`DefaultHost`] provides a small C library and captures the program's
+//! output.
 //!
 //! For `function @main() -> i32` whose entry block computes `iadd.i32 v0,
 //! v1` and returns it, `run` allocates the globals and function objects,

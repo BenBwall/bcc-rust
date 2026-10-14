@@ -110,6 +110,7 @@ tables:
 | `Inst` | function | an instruction |
 | `Block` | function | a basic block; the entry block's parameters are the function's parameters |
 | `StackSlot` | function | a fixed-size, fixed-alignment region of the frame |
+| `BlockLabel` | function | an address-taken block: a stable name `block_addr` and relocations use while passes renumber blocks |
 | `FuncId` | module | a function, defined or declared |
 | `GlobalId` | module | a global object, defined or declared |
 | `SigId` | module | an interned call signature |
@@ -184,6 +185,7 @@ Memory:
 stack_addr  slot                 → ptr
 global_addr global               → ptr
 func_addr   func                 → ptr
+block_addr  label                → ptr     (GNU label value)
 ptr_add     base, offset_i64     → ptr     flags: inbounds
 load  <ty> addr                  → ty      flags: volatile, align, access tag
 store <ty> value, addr                     flags: volatile, align, access tag
@@ -328,9 +330,13 @@ Terminators end every block and nothing else does:
 jump  block(args)
 brif  cond, block(args), block(args)
 switch value, default block(args), [case_value: block(args), ...]
+indirect_br addr, [block(args), ...]
 return [value]
 unreachable
 ```
+
+`indirect_br` continues at the listed edge whose target block's label has
+the address `addr`; see [Labels as values and computed goto](#labels-as-values-and-computed-goto-2026-10-14).
 
 Two edges from one terminator to the same block must pass the same arguments;
 lowering and passes split such an edge with a forwarding block. That keeps the
@@ -404,7 +410,10 @@ A module holds its functions, its globals, its interned signatures and the
 target. A function has a name, a signature, a linkage (`external`, `internal`),
 and, if defined, a body. A global has a name, a linkage, size, alignment, a
 `constant` flag, and an initializer: zero, or bytes plus relocations
-`(offset, symbol, addend)` for address constants.
+`(offset, target, addend)` for address constants. A target is a function or
+global (eight bytes), a label of a defined function (eight bytes,
+`blockaddress(@f, label0)`), or a label difference truncated to `i8`-`i64`
+(`labeldiff.i32(@f, label1, label0)`).
 
 ### Textual form
 
@@ -466,6 +475,9 @@ on every parsed test input. It checks:
   types, and duplicate edges to one block pass identical arguments;
 - every use is dominated by its definition (dominators from the iterative
   Cooper-Harvey-Kennedy algorithm);
+- labels name distinct blocks other than the entry; `block_addr` names an
+  existing label; an `indirect_br` lists distinct labeled blocks; a label
+  relocation names a label of a defined function;
 - the profile's constraints: no `va_arg` post-ABI; each aggregate kind only in
   its profile, on a `ptr` parameter, results on parameter 0 of a signature
   without a result, and layout scalars within the aggregate; each extension
@@ -621,8 +633,8 @@ defined internal or external callees of at most 100 instructions, including
 terminators, after their cleanup. The caller can grow by its original instruction
 count or 256 instructions, whichever is larger, with an absolute cap of 2,000.
 Every site consumes exactly one `allow()` rewrite, including all block splits,
-return joins and copied definitions. Recursive callees, variadic callees and
-`va_start` bodies are refused. The IR has no returns-twice attribute yet; textual
+return joins and copied definitions. Recursive callees, variadic callees,
+`va_start` bodies and bodies with labels or indirect branches are refused. The IR has no returns-twice attribute yet; textual
 IR's recognized `setjmp`, `_setjmp`, `sigsetjmp`, `__sigsetjmp` and `vfork` symbols,
 their direct wrappers and bodies taking their addresses are refused too. Lowering
 already rejects those builtins. General indirect returns-twice metadata remains
@@ -1151,8 +1163,8 @@ from an iterative queue. Constant pointer values emit bytes; addresses of compou
 literals, array members, selected GNU/C11 expressions and `&*` forms emit the
 existing global relocation representation. Interpreter and LLVM emission consume
 the same constants. C99 §6.6p7-9 (printed pp. 95-96; PDF pp. 107-108) and §6.7.8
-govern these static forms. Label addresses and differences remain deferred because
-they need a code-label relocation model and computed-goto execution.
+govern these static forms. Label addresses and differences use the label
+relocations described below.
 
 Floating queries/sign-copy lower through existing scalar operations and byte
 accesses. Native x87 support is exercised without changing the interpreter's
@@ -1160,3 +1172,74 @@ existing f80/f128 limitation. Bounded formatting shares the existing interpreter
 formatter, writes at most `n-1` characters plus a terminator, avoids the destination
 for `n==0`, and returns the untruncated character count. See the dated torture
 survey for corpus and focused execution results.
+
+## Labels as values and computed goto (2026-10-14)
+
+GNU labels as values (`&&label`, `goto *expression`, issue #51) run end to
+end, the way Clang compiles them. Contract:
+[GCC Labels as Values](https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html);
+LLVM [`blockaddress`](https://llvm.org/docs/LangRef.html#addresses-of-basic-blocks)
+and [`indirectbr`](https://llvm.org/docs/LangRef.html#indirectbr-instruction).
+
+**IR.** A body has a label table: `label0 = block_label block3` names an
+address-taken block. Labels, not block numbers, are what `block_addr label0`
+and global relocations refer to, so renumbering passes and ABI lowering keep
+them valid by remapping one table. `indirect_br addr, [block1(v2), block3]`
+lists every possible target with its own arguments, so a labeled block may
+have parameters; each edge becomes one phi entry in LLVM. Labels follow
+LLVM's rules: not the entry block, one label per block, `indirect_br`
+targets distinct and labeled. An address that names no listed block is
+undefined behaviour, as for `indirectbr`. An unreachable labeled block stays
+in the body, since its address may still be taken; it is never executed.
+Relocations `blockaddress(@f, labelN)` and `labeldiff.TY(@f, labelA, labelB)`
+put label addresses and differences into static data.
+
+**Interpreter.** Each function with labels owns one label object: label `n`
+is its byte `n`, so a label difference is a small integer and a label
+address plus a difference names another label, as the position-independent
+GCC idiom `goto *(&&base + offset)` requires. The object holds no data.
+`indirect_br` traps with "computed goto to an address that is not a label of
+the executing function" for any other pointer, including another function's
+label, and as a poison branch for poison.
+
+**LLVM.** `block_addr` is `LLVMBlockAddress`, `indirect_br` is
+`LLVMBuildIndirectBr` plus `LLVMAddDestination`. Every labeled block exists
+even when unreachable (holding only `unreachable`). Bodies are built before
+global initializers, which may take block addresses; a label difference is
+`trunc(sub(ptrtoint blockaddress, ptrtoint blockaddress))`, Clang's constant.
+LLVM leaves equality between two block addresses undefined; only comparison
+with null is meaningful. The interpreter compares them as distinct
+addresses, so a program comparing two label addresses may differ natively.
+
+**Optimizer.** No pass deletes, merges or threads through a labeled block,
+and no pass redirects an `indirect_br` edge. `simplify-cfg` empties an
+unreachable labeled block to an `unreachable` stub, once (`Draft::retire_block`),
+skips labeled forwarders and select arms and never merges a labeled block
+into its predecessor. SCCP marks every `indirect_br` edge executable. DCE,
+promotion and GVN treat indirect edges like any other through the shared
+edge iterators, so promotion passes slot values on them. LICM leaves a loop
+whose header an `indirect_br` outside it enters, since no preheader can be
+inserted on that edge, as LLVM does for loops without a preheader. The
+inliner refuses a callee with labels or indirect branches, as LLVM refuses
+`indirectbr` and address-taken blocks; callers with labels still inline
+others (a split keeps the block's start, and so its label).
+
+**Lowering.** Semantic analysis retains each function's address-taken labels
+in first-`&&` order (`ControlFacts::address_taken`, `LabelFacts::address`),
+the label each `&&label` names and the labels of each constant label
+difference; lowering numbers IR labels by that order, so static initializers
+lowered before the body refer to the right label. As in Clang, every
+`goto *e` passes its `const void *` to one indirect-branch block per
+function, whose `indirect_br` lists all address-taken labels, so `n` gotos
+and `m` labels make `n + m` edges rather than `n * m`. A computed goto is a
+jump with an empty transition: like Clang, it releases no VLA storage it
+leaves before the function returns. GNU local labels lower as ordinary
+labels (only nested functions, still refused, could jump to them from
+elsewhere). `void *` arithmetic steps by one byte with byte alignment.
+
+**Evidence.** The conformance reproducer
+`computed_goto_table.c` interprets and runs natively in every arm; the GCC
+execute sources that use computed goto went from 0 to 10 passing in every
+arm (see the final report of the branch for the survey comparison); the
+remaining ones need nested functions, inline assembly, a global register
+variable or hosted headers.

@@ -409,8 +409,8 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | BuiltinTypesCompatible | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | VectorBuiltins | - | - | - | - | - | - | - | extension (GNU native) | shuffle/convert/bitcast and x86 signatures |
 | BuiltinChooseExpr | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
-| LabelsAsValues | - | - | - | - | - | - | - | extension (GNU native) | parser |
-| LocalLabels | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| LabelsAsValues | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
+| LocalLabels | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
 | OmittedConditionalOperand | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | ZeroLengthArrays | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | Float128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
@@ -437,6 +437,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | SignBitShifts | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | FlexibleArrayExtensions | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | ConstantFolding | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
+| VoidPointerArithmetic | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis, lowering |
 | MsDeclspec | - | - | - | - | - | - | - | MS flag | parser |
 | MsIntTypes | - | - | - | - | - | - | - | MS flag | parser |
 | MsCallingConventions | - | - | - | - | - | - | - | MS flag | parser |
@@ -1137,7 +1138,8 @@ and [other builtins](https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html).
 ISO constraints and arithmetic/address constant classification remain those of
 C99 §6.6 and §6.7.8; standard alignment follows C11 §6.7.5. GNU range expressions
 execute once for the entire selected range. Vector and complex execution, inline
-assembly, nested functions and label relocations remain outside this change.
+assembly and nested functions remain outside this change; label relocations
+arrived with labels as values below.
 
 PR #42 round-1 repairs complete explicit alignment of packed System V
 bit-fields, occupied-bit sizing of packed unions and lowering/static packing
@@ -1148,3 +1150,28 @@ its token reducer. C11 §6.7.5p4,p6 combines multiple `_Alignas` requests before
 checking natural alignment, including runtime-sized arrays and VLA typedefs.
 See [the semantic repair record](semantic-analysis.md#pr-42-round-1-layout-and-alignment-repairs-2026-10-13)
 and [GCC's packed/aligned sections](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html).
+
+## GNU labels as values (2026-10-14)
+
+`&&label` and `goto *expression`
+([GCC Labels as Values](https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html))
+keep their parser-owned `LabelsAsValues` diagnostics: silent in GNU dialects,
+`'label address'` and `'computed goto'` GNU-origin extension reports under
+Warn/Deny in ISO modes, as Clang's `-Wgnu-label-as-value`. Semantic analysis
+and lowering then follow Clang: `&&label` is a `void *` address constant of
+the enclosing function, `goto *e` converts `e` to `const void *` by simple
+assignment, and a computed goto is an error when its function takes no label
+address, when the operand is not convertible, or when one of its possible
+targets lies inside a statement expression or the scope of a variably
+modified identifier that the goto is outside of. `&&label` outside a function
+is an error. `&&a - &&b` for labels of one function is a link-time constant
+in static initializers, converted to integers of at least 32 bits; Clang
+rejects narrower conversions and arithmetic on the difference, and so does
+bcc. GNU `__label__` local labels now lower as ordinary labels.
+
+`VoidPointerArithmetic` is a new GNU-origin feature, accepted in every mode
+([GCC Pointer Arith](https://gcc.gnu.org/onlinedocs/gcc/Pointer-Arith.html)):
+addition, subtraction, increments and compound assignment on `void *` use an
+element size of 1 and report `'arithmetic on a pointer to void'` under
+Warn/Deny, like Clang's `-Wgnu-pointer-arith`. Subscripting `void *` remains an
+error. Function-pointer arithmetic is not accepted.

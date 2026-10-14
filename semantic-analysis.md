@@ -598,7 +598,8 @@ continuations use the same explicit work stack as expression typing.
 
 Each function has a separate label map. GNU `__label__` declarations install
 lexically scoped label identities, also available to nested functions. Label
-addresses count as references; computed-goto destinations remain opaque.
+addresses count as references and make their label a possible computed-goto
+target (see [Labels as values](#labels-as-values-2026-10-14)).
 Duplicate labels are diagnosed immediately, and unresolved references after
 the translation unit has been walked. The parser retains ownership of the
 duplicate-default diagnostic, so it is emitted once. Case/default placement
@@ -642,7 +643,8 @@ resolve before goto diagnostics. Switch diagnostics retain their discovery order
 their secondary VM labels are finalized to the outermost entered declaration.
 Entering statement expressions or VM scope reads this same graph, preserving text,
 order and secondary labels. GNU nonlocal jumps retain the existing conservative
-semantic handling and remain unsupported by lowering.
+semantic handling and remain unsupported by lowering. A computed goto is a
+jump to `ControlTarget::IndirectGoto(function)` with an empty transition.
 
 GNU statement-expression tails consume their expression statement's converted
 value: arrays/functions decay, lvalues become values and bit-field identity does
@@ -705,7 +707,7 @@ known calls. Opaque results suppress dependent return-conversion errors.
   runtime VLA allocation/extent evaluation, automatic lifetime cleanup, return
   value lowering and a calling convention. The syntax and conversion graph remain
   available, but statement constraints do not provide an executable control-flow
-  graph or computed-goto target set.
+  graph; the computed-goto target set is retained per function.
 - GNU statement-expression result types, intrinsic signatures, local-label
   nonlocal-jump mechanics, other attributes and calling-convention
   effects remain conservative. The five requested GNU statement forms retain
@@ -1745,3 +1747,37 @@ bounds before the body. Prototype-only declarations do not execute entry actions
 C99 §6.9.1p10, p. 142 (PDF p. 154), §6.5.3.4p2, p. 80 (PDF p. 92);
 [GCC Typeof](https://gcc.gnu.org/onlinedocs/gcc/Typeof.html) and
 [GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).
+
+#### Labels as values (2026-10-14)
+
+GNU `&&label` ([GCC Labels as Values](https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html))
+types as a `void *` rvalue address constant (`ConstantClass::Address`) and
+resolves through the ordinary label lookup, so GNU local labels keep their
+lexical identity. Outside a function it is `LabelAddressOutsideFunction`.
+The first `&&` of a label numbers it among its function's address-taken labels:
+`ControlFacts::address_taken(function)` lists them in that order,
+`LabelFacts::address` holds each position, and `ControlFacts::label_address`
+maps every `&&label` expression to its `LabelId`. Lowering uses the position as
+the IR label number, so static initializers lowered before the body agree.
+
+`goto *e` records a jump to `ControlTarget::IndirectGoto(function)` with an
+empty transition (like Clang, it releases no VLA storage it leaves) and
+converts `e` to `const void *` under simple-assignment constraints
+(`InvalidComputedGoto` otherwise; C99 §6.5.16.1p1, p. 92; PDF p. 104). After
+the unit is walked, each computed goto is checked against its function's
+address-taken labels as Clang's jump checker does: none at all is
+`IndirectGotoWithoutLabels`; a target inside a statement expression or the
+scope of a variably modified identifier that the goto is outside of is
+`IndirectJumpIntoStatementExpression` or `IndirectJumpIntoVariableScope`
+(C99 §6.8.6.1p1, p. 137; PDF p. 149), reported once per goto at its first
+such target with the region's start as secondary label. Only labels with a
+protecting region are visited, so plain dispatch tables cost no pairwise work.
+
+`&&a - &&b` for two labels of one function is `ConstantClass::LabelDifference`:
+a constant with no folded value whose two labels `ControlFacts::label_difference`
+retains. It survives parentheses and conversions to integer types of at least
+32 bits, which static initializers accept, matching Clang; narrower types and
+arithmetic on it are not constants. GNU `void *` arithmetic
+([GCC Pointer Arith](https://gcc.gnu.org/onlinedocs/gcc/Pointer-Arith.html),
+`Feature::VoidPointerArithmetic`) uses element size 1 for `+`, `-`, increments
+and compound assignment; subscripting `void *` stays invalid.
