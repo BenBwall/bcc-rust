@@ -363,11 +363,28 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                         kind,
                     | (Opcode::Inttoptr, kind) if from.bits() == 64 => kind,
                     | (Opcode::Zext, kind @ ValueKind::Reg(_)) if from == Type::I1 => kind,
+                    // A narrow load already zero-extends its register.
+                    | (Opcode::Zext, kind @ ValueKind::Reg(_)) if self.loaded(arg) => kind,
                     | _ => return None,
                 }
             },
             | _ => return None,
         })
+    }
+
+    /// Whether `value` is the result of a non-float load of 32 bits or
+    /// fewer, whose register the selector zero-extends to 64 bits.
+    fn loaded(&self, value: Value) -> bool {
+        let ValueDef::Result(inst) = self.body.value_def(value) else {
+            return false;
+        };
+        matches!(
+            *self.body.inst(inst),
+            InstData::Load {
+                ty: Type::I8 | Type::I16 | Type::I32,
+                ..
+            }
+        )
     }
 
     /// Counts the uses of every value in one reachable block.
@@ -679,6 +696,17 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         };
         if let Operand::Imm(imm) = self.operand(rhs, width) {
             let src = self.reg(lhs);
+            // A power of two is a shift; the low bits are the same.
+            if imm > 1 && imm.count_ones() == 1 {
+                self.copy(dst, src);
+                #[expect(clippy::cast_possible_truncation, reason = "The exponent is below 32.")]
+                let count = imm.trailing_zeros() as u8;
+                self.shift_imm(ShiftOp::Shl, width, dst, count);
+                if ty == Type::I1 {
+                    self.canonical_bool(dst);
+                }
+                return;
+            }
             self.emit(MInst::Imul3 {
                 width,
                 dst,
