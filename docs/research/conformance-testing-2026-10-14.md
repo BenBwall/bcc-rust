@@ -2,12 +2,10 @@ Research date: 2026-10-14.
 
 Second conformance campaign for bcc, run against the merge of `claude/semantic-facts-m2` (semantic-facts M1-M3) into the conformance branch that carries the round-1 fixes (`#pragma pack` retention and bit-field result promotion, commit 9d019dc8). Round 1 is [`conformance-testing-2026-10-13.md`](conformance-testing-2026-10-13.md); this report uses its arms, tools and terminology. No compiler source was changed; reproducers are under [`conformance-reproducers-2026-10-14/`](conformance-reproducers-2026-10-14/).
 
-> Status: **in progress.** Sections marked *pending* are filled as the runs finish; the findings below are final unless noted.
-
 ## Summary
 
 - **The merge** (535fb1a3) keeps both sides' meaning: the GCC torture survey passes every (source, arm) pair that either parent passed, and every canonical check passes. The round-1 wrong-code defects W1 (`#pragma pack`) and W2 (bit-field promotion) are fixed in the merged compiler: their reproducers now print Clang's output.
-- **Random programs.** In the runs finished so far, every arm agrees with Clang on every Csmith and YARPGen program the front end accepts, except two Csmith programs on which the *reference* is wrong: the bundled Clang 23.1.1 miscompiles `#pragma pack(1)` records containing a zero-width bit-field on the MinGW target (its fields overlap); MinGW GCC and bcc agree with each other and with the source.
+- **Random programs.** 3,600 Csmith and 3,000 YARPGen programs on both targets. Every arm agrees with Clang on every Csmith and YARPGen program the front end accepts, except two Csmith programs on which the *reference* is wrong: the bundled Clang 23.1.1 miscompiles `#pragma pack(1)` records containing a zero-width bit-field on the MinGW target (its fields overlap); MinGW GCC and bcc agree with each other and with the source.
 - **New defects found by targeted generators and probes** (the random generators do not exercise these):
   1. *Wrong code (ABI layout), Windows target:* Microsoft bit-field layout ignores the rule that a zero-width bit-field closes the current allocation unit. `struct { int a : 5; short : 0; char b : 6; }` is 4 bytes in bcc and 8 in Clang and GCC.
   2. *Wrong code, both targets:* the GNU attributes `cleanup`, `constructor` and `destructor` are accepted without a diagnostic and do nothing; `weak` is dropped and `alias` emits no symbol.
@@ -78,7 +76,7 @@ Round 1 noted that the generators exercise neither aggregate passing nor unusual
 - **ABI exchange fuzzer:** random aggregates (nested records, arrays, unions, `_Bool`, `float`, `double`, `long double`, packed and over-aligned records) passed by value and returned, mixed with scalars and, in 30% of the functions, variadic aggregate arguments read with `va_arg`. Caller and callee are separate translation units, built by Clang, by bcc (A0) and by bcc (A1); seven mixes are linked and must print what Clang/Clang prints.
 - **Feature probes:** about 60 short programs for constructs real code uses (GNU attributes, TLS, atomics, `__int128`, overflow and bit builtins, `alloca`, `_Generic`, K&R definitions, local labels, asm labels, `__has_include`, unicode literals, flexible array initializers, large switch values, conversions), run through all five arms on both targets.
 
-Disagreements were triaged by printing Csmith's per-variable checksums (`./program 1`) for Clang, GCC and bcc, then isolating the first diverging variable's type or statement by hand; the reproducers are hand-minimized programs that show the defect directly. Optimizer involvement was checked by comparing A0 (no optimizer) with A1 (bcc optimizer); `--passes`/`--opt-bisect-limit` were needed only for C1.
+Disagreements were triaged by printing Csmith's per-variable checksums (`./program 1`) for Clang, GCC and bcc, then isolating the first diverging variable's type or statement by hand; the reproducers are hand-minimized programs that show the defect directly. Optimizer involvement was checked by comparing A0 (no optimizer) with A1 (bcc optimizer); `--passes`/`--opt-bisect-limit` were needed only for C1. `scripts/reduce_conformance.py` was run on Csmith seed 1000061 (`--arm A0 --kind wrong-output --no-ub-check`, since GCC agrees with bcc and not with Clang, which the default undefined-behavior check would reject): after 50 minutes and 3,172 candidates it had cut the preprocessed program to 1,471 lines and kept the `#pragma pack(1)` record with `unsigned : 0`, confirming the hand diagnosis; as in round 1 the line reducer is too slow for 100 KB Csmith programs, so the committed reproducers are hand-written.
 
 ## Counts per generator, target and arm
 
@@ -106,7 +104,19 @@ Programs "compared" are those Clang can run reproducibly; front-end refusals are
 
 Totals: 3,600 Csmith programs (2,000 Windows, 1,600 Linux; 3,249 compared, 1,631 of them refused for #46) and 3,000 YARPGen programs (2,000 Windows, 1,000 Linux; all compared). The native arms A0, A1 and A2 never disagree with each other or with Clang on a program the front end accepts, apart from the two D1 programs on which Clang is wrong; no compiler crash, internal error, verifier failure, link error or timeout occurred in any arm. The bcc optimizer still never changes a result (A0 = A1 on every program), as in round 1.
 
-*Pending:* real programs.
+## Real programs
+
+`run_program_corpus.py` on both targets, every arm (same sources, workloads and mixed-build rule as round 1):
+
+| Program (target) | Units built by bcc | Refused units (known issue) | Workloads, A0 / A1 / A2 |
+| --- | --- | --- | --- |
+| zlib (Windows, Linux) | 18 of 18 | none | 3 of 3 pass in every arm; `roundtrip_small` also passes in both interpreters |
+| Lua (Windows) | 31 of 33 | `lua.c`, `loadlib.c` (vector types via `windows.h`, #45); `lvm.c` with the jump table (#51) | 6 of 6 pass (mixed) |
+| Lua (Linux) | 32 of 33 | `ldo.c` (`setjmp`, #50); `lvm.c` with the jump table (#51) | 6 of 6 pass (mixed) |
+| SQLite (Windows) | 1 of 3 (the driver) | `sqlite3.c`, `shell.c` (#45); `sqlite3.c` with math functions (#49) | 5 of 5 pass, with Clang's `sqlite3.c` |
+| SQLite (Linux) | 2 of 3 | `shell.c` (`INFINITY`/math builtins, #47); `sqlite3.c` with math functions (#49) | 5 of 5 pass with bcc's `sqlite3.c` |
+
+The outcome is identical to round 1: no wrong output, crash or new refusal; the merge did not regress any real program. The harness's `-D__CRT__NO_INLINE` keeps L1 out of these Windows builds.
 
 ## Findings, ranked
 
