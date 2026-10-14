@@ -1,0 +1,81 @@
+warning: comparison of distinct pointer types [-Wcompare-distinct-pointer-types]
+ --> sema-pointer-warnings.c:1:43
+  |
+1 | int equal(int *p, unsigned *q) { return p == q; }
+  |                                           ^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: comparison of distinct pointer types [-Wcompare-distinct-pointer-types]
+ --> sema-pointer-warnings.c:2:40
+  |
+2 | int order(int *p, float *q) { return p < q; }
+  |                                        ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: conversion between pointers to integer types with different sign [-Wpointer-sign]
+ --> sema-pointer-warnings.c:3:38
+  |
+3 | void sign(int *p, unsigned *q) { p = q; }
+  |                                      ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: pointer conversion discards qualifiers, including nested pointer qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+ --> sema-pointer-warnings.c:4:42
+  |
+4 | void discard(int *p, const int *q) { p = q; }
+  |                                          ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: pointer conversion discards qualifiers, including nested pointer qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+ --> sema-pointer-warnings.c:5:43
+  |
+5 | void nested(const int **p, int **q) { p = q; }
+  |                                           ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: comparison between pointer and integer [-Wpointer-integer-compare]
+ --> sema-pointer-warnings.c:6:45
+  |
+6 | int integer_equal(int *p, int q) { return p == q; }
+  |                                             ^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: ordered comparison between pointer and integer
+ --> sema-pointer-warnings.c:7:45
+  |
+7 | int integer_order(int *p, int q) { return p < q; }
+  |                                             ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: ordered comparison of function pointers [-Wordered-compare-function-pointers]
+ --> sema-pointer-warnings.c:8:61
+  |
+8 | int function_order(int (*p)(int), int (*q)(int)) { return p < q; }
+  |                                                             ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: ordered comparison of function pointers [-Wordered-compare-function-pointers]
+  --> sema-pointer-warnings.c:9:73
+   |
+ 9 | int distinct_function_order(int (*p)(int), int (*q)(double)) { return p < q; }
+   |                                                                         ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: comparison of distinct pointer types [-Wcompare-distinct-pointer-types]
+  --> sema-pointer-warnings.c:9:73
+   |
+ 9 | int distinct_function_order(int (*p)(int), int (*q)(double)) { return p < q; }
+   |                                                                         ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+10 warnings generated.

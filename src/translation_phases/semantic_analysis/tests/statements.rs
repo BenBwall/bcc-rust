@@ -314,7 +314,9 @@ fn return_assignment_conversion_is_retained() {
     );
     assert_eq!(
         kinds("int *f(const int *p) {return p;}"),
-        [SemanticErrorKind::InvalidReturnConversion]
+        [SemanticErrorKind::PointerConstraint(
+            crate::configuration::DiagnosticGroup::PointerQualifiers
+        )]
     );
     clean("const int *f(int *p) {return p;} int *g(void) {return 0;}");
     clean("struct S {int x;}; struct S f(struct S s) {return s;}");
@@ -554,7 +556,9 @@ fn opaque_compiler_builtins_do_not_acquire_implicit_int_results() {
     );
     assert_eq!(
         kinds("int *f(void) {return 1;}"),
-        [SemanticErrorKind::InvalidReturnConversion]
+        [SemanticErrorKind::PointerConstraint(
+            crate::configuration::DiagnosticGroup::IntConversion
+        )]
     );
 }
 

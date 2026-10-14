@@ -1,5 +1,21 @@
 # Diagnostic golden corpus
 
+Issue #46 (2026-10-14): `sema-pointer-warnings` pins distinct object comparisons,
+pointer signedness, immediate/nested qualifiers, pointer/integer comparisons
+and ordered function-pointer comparisons with Clang group names. Ordering
+distinct function pointer types emits both comparison groups independently.
+`sema-pointer-errors` retains default errors for all four object conversion
+contexts, incompatible function signatures, nested signedness and both
+integer/pointer directions. `sema-pointer-werror` promotes accepted constraints;
+`sema-pointer-demote` exercises explicit default-error demotion, including the
+incompatible-pointer parent group. `sema-pointer-pedantic` pins pedantic-only
+function/void conversion and comparison and pointer/zero ordering. Every fixture
+preserves a following declaration. Semantic mode/target matrices, conversion
+facts, unrelated type controls, CLI flag precedence and all five execution arms
+are tested separately in `semantic_analysis/tests/pointers.rs` and
+`tests/pointer_diagnostics.rs`. The exact Clang oracle is in
+`language-standards.md`; `-Wdiscarded-qualifiers` is not a Clang group.
+
 Round-6 scalar builtin coverage: `sema-builtin-values.c` distinguishes constant
 and value requirements for object-size mode, probability, alignment, and
 prefetch read/write/locality from three incompatible-type controls.
