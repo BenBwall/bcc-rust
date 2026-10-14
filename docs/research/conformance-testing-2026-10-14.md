@@ -14,7 +14,7 @@ Second conformance campaign for bcc, run against the merge of `claude/semantic-f
   3. *Link failure, Windows target:* any program with two translation units that include MinGW `<string.h>` (without `-D__CRT__NO_INLINE`) fails to link with duplicate `strncasecmp`/`strcasecmp`: bcc reports GCC 4.2 without `__clang__`, so MinGW selects `extern __inline__`, which bcc compiles with C99 semantics.
   4. *Compiler panic:* the `known-bits` optimizer pass indexes past its fact table when a rewritten instruction's new constant reaches an equality condition (`--passes known-bits`; the default pipeline folds the pattern first). Found by the IR differential tester's 20,000-case sweep.
   5. *Refusals of valid code:* `u""`/`U""` literals cannot size an array; static initialization of a flexible array member (GNU); `transparent_union` (GNU); thread-local storage (`__thread` is unknown and `_Thread_local` is not lowered); atomics (`_Atomic`, `<stdatomic.h>`, `__atomic_*`, `__sync_*`) are not lowered.
-- **What held up:** 700 random functions exchanging aggregates (packed, over-aligned, nested, unions, `long double`, variadic) between bcc and Clang objects agree in all seven caller/callee mixes on both targets; 1,500 random records without zero-width bit-fields and 1,400 System V records have Clang's layout byte for byte.
+- **What held up:** 700 random functions exchanging aggregates (packed, over-aligned, nested, unions, `long double`, variadic) between bcc and Clang objects agree in all seven caller/callee mixes on both targets; 1,900 random Windows records without zero-width bit-fields and 1,800 System V records have Clang's layout byte for byte.
 
 ## Part 1: the merge
 
@@ -74,7 +74,7 @@ Profiles:
 
 Round 1 noted that the generators exercise neither aggregate passing nor unusual record layouts, and the merge changed exactly those front-end facts (packing, members, designations). Three small generators written for this campaign (kept in `target/r2scratch/`, not committed) cover them:
 
-- **Layout fuzzer:** random structures and unions (scalars, arrays, bit-fields of every integer type including zero-width and unnamed ones, `#pragma pack(1|2|4|8)` or `__attribute__((packed))`); the program prints `sizeof`, `_Alignof` and, for each named member, the byte image after storing all ones into it. bcc (A0) is compared with Clang and GCC.
+- **Layout fuzzer:** random structures and unions (scalars, arrays, bit-fields of every integer type including zero-width and unnamed ones, `#pragma pack(1|2|4|8)` or `__attribute__((packed))`, and in a "rich" variant nested records and `aligned(N)` members); the program prints `sizeof`, `_Alignof` and, for each named member, the byte image after storing all ones into it. bcc (A0) is compared with Clang and GCC.
 - **ABI exchange fuzzer:** random aggregates (nested records, arrays, unions, `_Bool`, `float`, `double`, `long double`, packed and over-aligned records) passed by value and returned, mixed with scalars and, in 30% of the functions, variadic aggregate arguments read with `va_arg`. Caller and callee are separate translation units, built by Clang, by bcc (A0) and by bcc (A1); seven mixes are linked and must print what Clang/Clang prints.
 - **Feature probes:** about 60 short programs for constructs real code uses (GNU attributes, TLS, atomics, `__int128`, overflow and bit builtins, `alloca`, `_Generic`, K&R definitions, local labels, asm labels, `__has_include`, unicode literals, flexible array initializers, large switch values, conversions), run through all five arms on both targets.
 
@@ -96,7 +96,9 @@ Programs "compared" are those Clang can run reproducibly; front-end refusals are
 | interpreter trap (step limit, #52) | 1 | 0 | 0 | 0 | 0 |
 | wrong output (reference defect D1) | 2 | 2 | 2 | 2 | 2 |
 
-*Pending:* YARPGen mutate (Windows), Linux runs, real programs.
+*Windows, YARPGen mutate (1,000 compared):* A0, A1 and A2 pass all 1,000; the interpreter passes 929 and `interpret-bcc` 970, the rest stopping at the step limit (#52). Nine rows recorded `compiler-crash` with empty logs in the minutes before the session that ran the campaign was killed (seeds 1001776-1001806); they were removed and the run resumed, and all nine pass on the rerun, so they were harness artifacts of the shutdown, not compiler crashes.
+
+*Pending:* Linux runs, real programs.
 
 ## Findings, ranked
 
@@ -116,7 +118,7 @@ Severity order: wrong code, then crash/ICE, then refusal of valid code, then dia
   | the same with `__attribute__((packed))` | 8, 5 | 12, 5 | **8, 4** |
 
   `sizeof` and every later member offset differ, so a program that prints `sizeof` is wrong on its own, and records exchanged with Clang- or GCC-compiled code (headers, files, network buffers) are misread. Values stay self-consistent inside a bcc-only program.
-- Scope: Windows targets only (Microsoft layout). The layout fuzzer found 31 differing records among 1,900 Windows records, every one with a zero-width bit-field, with and without packing; 1,500 Windows records without zero-width fields and 1,400 Linux records (zero-width included) match Clang exactly.
+- Scope: Windows targets only (Microsoft layout). The layout fuzzer found 39 differing records among 2,300 Windows records, every one with a zero-width bit-field, with and without packing; 1,900 Windows records without zero-width fields (400 of them with nested records and `aligned` members) and 1,800 Linux records (zero-width included) match Clang exactly. A hand-written check of `#pragma pack` forms (named push/pop, `_Pragma`, `pack()`, `pack(8)`, `aligned` inside packed records, nested records, unions) matches Clang and GCC on both targets.
 - Component: semantic analysis, record layout (`Analyzer::complete_record` in `semantic_analysis/declarations.rs`, the `ms_unit` handling of `width == Some(0)`).
 - Not a merge regression: it reproduces without packing, which predates 9d019dc8.
 
@@ -168,7 +170,7 @@ Also seen and not re-reported: `__FUNCTION__` is refused like `__PRETTY_FUNCTION
 
 Titles and bodies for filing; not filed by this task.
 
-1. **Windows bit-field layout: zero-width bit-field must end the Microsoft allocation unit.** Body: W3 above (table, reproducer, `complete_record`), noting the layout fuzzer result (31/1,900 Windows records, all with zero-width fields; 0/1,500 without; 0/1,400 on Linux) and that Clang itself mislays packed variants (D1), so tests should compare offsets with GCC and Clang where they agree.
+1. **Windows bit-field layout: zero-width bit-field must end the Microsoft allocation unit.** Body: W3 above (table, reproducer, `complete_record`), noting the layout fuzzer result (39/2,300 Windows records, all with zero-width fields; 0/1,900 without; 0/1,800 on Linux) and that Clang itself mislays packed variants (D1), so tests should compare offsets with GCC and Clang where they agree.
 2. **GNU `cleanup`, `constructor`, `destructor`, `alias` and `weak` are accepted and ignored.** Body: W4, reproducers, impact (GLib/systemd cleanup, library constructors), and the request to diagnose dropped attributes until they are implemented.
 3. **MinGW: two translation units including `<string.h>` fail to link (duplicate `strncasecmp`).** Body: L1 with the `_mingw.h` condition, the `__GNUC__`/`__GNUC_MINOR__`/`__GNUC_STDC_INLINE__` combination, and the note that the conformance harnesses mask it with `-D__CRT__NO_INLINE`.
 4. **`known-bits` panics on values created by its own rewrites.** Body: C1, both difftest seeds, the C reproducer with `--passes known-bits`.
