@@ -35,6 +35,7 @@ pub(crate) use driver::{
     LlvmOptions,
     OptLevel,
     OutputKind,
+    TemporaryObject,
     Toolchain,
     compile_module,
 };

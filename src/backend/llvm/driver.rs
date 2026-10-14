@@ -45,20 +45,23 @@ pub(crate) fn compile_module(
     if options.kind == OutputKind::Object {
         return std::fs::write(out_path, buffer.bytes());
     }
-    let (object, mut file) = TemporaryObject::create(out_path, &arena)?;
+    let (object, mut file) = TemporaryObject::create(out_path, "o", &arena)?;
     file.write_all(buffer.bytes())?;
     drop(file);
     Toolchain::bundled(options.target)?.link_object(&object.0, out_path, options)
 }
 
-/// Deletes the temporary object on success and on failure.
-struct TemporaryObject(PathBuf);
+/// A temporary file beside the output (an object, or the native back
+/// end's assembly), deleted on success and on failure.
+pub(crate) struct TemporaryObject(PathBuf);
 
 impl TemporaryObject {
-    /// Exclusively creates an object beside the output. Only an object this
-    /// invocation created acquires a cleanup guard; collisions are retried.
-    fn create(
+    /// Exclusively creates a file with `extension` beside the output. Only
+    /// a file this invocation created acquires a cleanup guard; collisions
+    /// are retried.
+    pub(crate) fn create(
         out_path: &Path,
+        extension: &str,
         arena: &crate::util::bump::Bump,
     ) -> io::Result<(Self, std::fs::File)> {
         use std::fmt::Write as _;
@@ -69,7 +72,7 @@ impl TemporaryObject {
             suffix.clear();
             write!(
                 suffix,
-                ".bcc-{}-{}.o",
+                ".bcc-{}-{}.{extension}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             )
@@ -87,6 +90,12 @@ impl TemporaryObject {
                 | Err(error) => return Err(error),
             }
         }
+    }
+}
+
+impl TemporaryObject {
+    pub(crate) fn path(&self) -> &Path {
+        &self.0
     }
 }
 
@@ -202,6 +211,33 @@ impl Toolchain {
         options: LlvmOptions,
     ) -> io::Result<()> {
         let output = self.command(object, out_path, options).output()?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(ClangError(output)))
+        }
+    }
+
+    /// Assembles an assembly file into an object (`OutputKind::Object`) or
+    /// an executable linked with LLD, for the native back end.
+    pub(crate) fn assemble(
+        &self,
+        assembly: &Path,
+        out_path: &Path,
+        target: Target,
+        kind: OutputKind,
+    ) -> io::Result<()> {
+        let mut command = Command::new(&self.clang);
+        _ = command.arg(concat_os("--target=", target.triple().as_ref()));
+        if let Some(sysroot) = &self.sysroot {
+            _ = command.arg(concat_os("--sysroot=", sysroot.as_os_str()));
+        }
+        _ = match kind {
+            | OutputKind::Object => command.arg("-c"),
+            | OutputKind::Executable => command.arg("-fuse-ld=lld"),
+        };
+        _ = command.arg(assembly).arg("-o").arg(out_path);
+        let output = command.output()?;
         if output.status.success() {
             Ok(())
         } else {

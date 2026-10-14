@@ -9,6 +9,9 @@
 //! - `llvm.rs` and `llvm/`: print LLVM IR text and drive the bundled clang to
 //!   turn it into objects and executables. The module map there shows how the
 //!   optimizer comparison arms map onto its options.
+//! - `native.rs` and `native/`: bcc's own x86-64 code generator, which writes
+//!   assembly for the bundled clang to assemble and link
+//!   (`docs/design/native-backend.md`).
 //! - `interpreter.rs` and `interpreter/`: execute a module directly with exact
 //!   poison and undefined-behaviour tracking. It is the reference semantics of
 //!   the IR and the oracle for differential tests. It also accepts pre-ABI
@@ -23,6 +26,7 @@
 
 // Code generation
 pub(crate) mod llvm;
+pub(crate) mod native;
 
 // Reference execution
 pub(crate) mod interpreter;
