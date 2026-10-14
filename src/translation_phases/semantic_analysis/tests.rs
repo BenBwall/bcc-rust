@@ -20,6 +20,7 @@ mod float128;
 mod int128;
 mod library_modes;
 mod mingw_inline;
+mod registry;
 mod resolved;
 mod scalar_builtins;
 mod statement_expressions;
