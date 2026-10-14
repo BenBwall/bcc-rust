@@ -876,3 +876,18 @@ loop/switch targets, including continue through a switch.
 ISO alignment, mismatched union-cast member types and reversed GNU ranges.
 Its GNU11 sidecar keeps the diagnostics focused on operand constraints; a
 following declaration survives every error.
+
+### Predefined function-name identifiers
+
+`sema-predefined-outside-function.c` renders the default warning
+`predefined identifier is only valid inside function` (Clang's
+`-Wpredefined-identifier-outside-function`) for `__func__`, `__FUNCTION__` and
+`__PRETTY_FUNCTION__` at file scope, in an initializer and in a `sizeof`
+operand; each use warns and a following declaration survives. `sema-predefined-readonly.c`
+renders the ordinary read-only errors for assigning to the const arrays.
+Acceptance without a diagnostic in every mode, as in Clang 23.1.1 even under
+`-std=c99 -pedantic`, has no golden because a silent compile has no stderr; the
+semantic tests check each ISO and GNU revision and extension policy. The text of
+`__PRETTY_FUNCTION__` is checked against the bundled Clang by the
+`semantic/predefined-function-names.c` end-to-end program and by
+`semantic_analysis/tests/predefined_identifiers.rs`.
