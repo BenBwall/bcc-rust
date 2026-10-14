@@ -98,7 +98,11 @@ Programs "compared" are those Clang can run reproducibly; front-end refusals are
 
 *Windows, YARPGen mutate (1,000 compared):* A0, A1 and A2 pass all 1,000; the interpreter passes 929 and `interpret-bcc` 970, the rest stopping at the step limit (#52). Nine rows recorded `compiler-crash` with empty logs in the minutes before the session that ran the campaign was killed (seeds 1001776-1001806); they were removed and the run resumed, and all nine pass on the rerun, so they were harness artifacts of the shutdown, not compiler crashes.
 
-*Pending:* Linux runs, real programs.
+*Linux, Csmith default (1,000 programs, 998 compared; 2 discarded):* all five arms pass 172 and refuse 826 (#46: comparison 727, assignment 62, argument 33, return 4).
+
+*Linux, YARPGen default (1,000 compared):* A0, A1 and A2 pass all 1,000; the interpreter passes 952 and `interpret-bcc` 976 (step limit, #52).
+
+*Pending:* Linux Csmith `--no-pointers`, real programs.
 
 ## Findings, ranked
 
