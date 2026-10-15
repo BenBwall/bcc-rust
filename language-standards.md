@@ -99,6 +99,26 @@ ordinary macros that `#undef` may remove. OS identity
 macros such as `__linux__` and `_WIN32` follow the selected target, below. The identity and target definitions are read from the synthetic
 `<built-in>/predefined.h` before user input.
 
+Claiming Clang changes the paths the C libraries take. In glibc,
+`sys/cdefs.h` drops its pre-C11 `_Noreturn` and `_Static_assert` fallbacks
+(bcc accepts both keywords in every mode, as Clang does), marks socket
+address structures `may_alias` (bcc's optimizer makes no type-based alias
+assumptions) and turns `__glibc_macro_warning` into `#pragma GCC warning`;
+`math.h` uses the type-generic classification builtins, `complex.h` defines
+`CMPLX` with `__builtin_complex`, and `bits/floatn.h` enables binary128, as
+described below. With `_FORTIFY_SOURCE` and `__OPTIMIZE__`, which bcc never
+defines itself, glibc selects Clang's fortify wrappers, which need the
+`overloadable`, `pass_object_size` and `diagnose_if` attributes; bcc has none
+of them and rejects those headers. In MinGW-w64, `__CRT_INLINE` becomes
+`extern inline` with `gnu_inline`, `setjmp` passes `__builtin_frame_address (0)`,
+`intrin.h` always includes the x86 intrinsic headers, the printf and strftime
+format archetypes become Clang's, and `intsafe.h` defines its functions as
+`FORCEINLINE` bodies over the overflow builtins. bcc does not inline
+`always_inline` bodies, so a call to one still needs an external definition,
+which MinGW-w64 does not supply for `intsafe.h`. The UCRT's `corecrt.h` uses
+`_Static_assert` for `_STATIC_ASSERT` and wraps itself in `#pragma clang
+diagnostic`, which bcc ignores.
+
 Reserved target-description macros follow the pinned LLVM 23.1.1 Clang for the
 selected `--target` triple. The default remains `x86_64-unknown-linux-gnu`;
 `x86_64-unknown-linux-musl`, `x86_64-w64-windows-gnu` (aliases

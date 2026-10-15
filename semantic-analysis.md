@@ -1176,7 +1176,8 @@ rejected on MSVC. Clang nevertheless accepts `q` literals and a `typeof`
 type derived from them on MSVC; bcc preserves that distinction. The target
 macros mirror the pinned Clang exactly: `__SIZEOF_FLOAT128__` on the GNU
 triples, `__FLOAT128__` on Linux, no `__FLT128_*__` inventory and no MSVC
-capability advertisement. GCC 4.2.1 identity remains unchanged.
+capability advertisement. GCC 4.2.1 identity remains unchanged (bcc later also
+claimed Clang 23.1.1).
 
 Native `_Float128` and `f128`/`F128` literals are deliberately not added:
 Clang 23.1.1 rejects them in every tested mode (C11/C17/GNU17/C23/GNU23).
@@ -1184,7 +1185,9 @@ The reachable glibc path supplies `_Float32`, `_Float64`, `_Float32x` and
 `_Float64x` as typedefs of the existing standard types. A private embedded
 `bits/floatn.h` uses `include_next` and adjusts glibc's old-GCC binary128
 capability decision, providing its `_Float128` and complex typedefs, suffix
-macro and old-compiler builtin aliases. System headers stay read-only.
+macro and old-compiler builtin aliases. (Since 2026-10-15 bcc claims Clang,
+glibc's own `bits/floatn.h` takes its Clang path and the bridge is gone; see
+[language-standards.md](language-standards.md).) System headers stay read-only.
 GNU-source math and stdlib probes cover quad sqrt/pow/fabs, complex sin,
 `strtof128`, binary128 infinity/NaN initializers, fabs/copy-sign builtins,
 and the standard float/double/long-double selections. Clang accepts the
