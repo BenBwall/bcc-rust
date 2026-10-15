@@ -1325,3 +1325,9 @@ enables it, `-Werror=GROUP` included, and a system header withholds it:
 | Unknown `#pragma` | `unknown-pragmas` | Off (an unknown `STDC` pragma keeps its own diagnostic). |
 | Unused undefined `static` function | `unused-function` | Off. |
 | Constant that takes a wider type of its list | `constant-promotion` (bcc only) | Not diagnosed. |
+
+`__VA_ARGS__` outside a variadic replacement list, `#line 0` and a `#line`
+number from 2147483648 to 4294967295 are reported only under `-pedantic`, as
+Clang reports them. The line number applies, as in Clang, and a later line
+past 4294967295 wraps to 0; a larger `#line` number is an error and is
+ignored (C99 §6.10.4p3, p. 158; PDF p. 170, leaves these values undefined).

@@ -42,7 +42,9 @@ fixtures enable them: `initial-missing-final-newline` (`-Wnewline-eof`),
 `pp-undefined-identifier-in-preprocessor-expression` (`-Wundef`),
 `pp-unknown-pragma-directive` (`-Wunknown-pragmas`), `sema3-static-unused`
 (`-Wunused-function`) and both `pp-forced-*-promotion` fixtures (the bcc-only
-`-Wconstant-promotion`).
+`-Wconstant-promotion`). `pp-va-args-outside-variadic-macro` and both
+`pp-line-directive-number-*` fixtures pass `-pedantic`, the only mode in which
+Clang reports them.
 
 Round-6 scalar builtin coverage: `sema-builtin-values.c` distinguishes constant
 and value requirements for object-size mode, probability, alignment, and

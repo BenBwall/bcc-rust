@@ -728,9 +728,9 @@ fn va_args_outside_a_variadic_replacement_list_is_diagnosed() {
         ("#define __VA_ARGS__ 1\n__VA_ARGS__\n", "1"),
         ("#define H(__VA_ARGS__) 2\nH(0)\n", "2"),
     ] {
-        assert_only_error(source, expected, |error| {
-            matches!(error, PreprocessorErrorType::VaArgsOutsideVariadicMacro(_))
-        });
+        // Clang reports the constraint only under -pedantic, which the
+        // language-mode tests cover; by default nothing is reported.
+        assert_expansion(source, expected);
     }
     assert_expansion("#define V(x, ...) x __VA_ARGS__\nV(1, 2, 3)\n", "1 2 , 3");
 }
