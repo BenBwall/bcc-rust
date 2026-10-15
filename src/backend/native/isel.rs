@@ -262,10 +262,16 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
         }
     }
 
-    /// [`Self::classify`] for instructions with an `i128` result or
-    /// operand: `None` when it does not apply.
-    fn classify_wide(&self, ty: Type, data: InstData) -> Option<Option<ValueKind>> {
-        Some(match data {
+    /// Whether [`Self::classify_wide`] classifies an instruction: one with
+    /// an `i128` result, or a conversion from an `i128`.
+    fn is_wide(&self, ty: Type, data: InstData) -> bool {
+        ty == Type::I128
+            || matches!(data, InstData::Unary { arg, .. } if self.ty(arg) == Type::I128)
+    }
+
+    /// [`Self::classify`] for the instructions [`Self::is_wide`] accepts.
+    fn classify_wide(&self, ty: Type, data: InstData) -> Option<ValueKind> {
+        match data {
             | InstData::Const { bits, .. } if ty == Type::I128 =>
                 Some(ValueKind::Wide(u128::from(bits.get()))),
             | InstData::WideConst { constant, .. } if ty == Type::I128 =>
@@ -299,8 +305,8 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                     | _ => None,
                 }
             },
-            | _ => return None,
-        })
+            | _ => None,
+        }
     }
 
     /// The representation of an instruction's result when it needs no code
@@ -308,8 +314,8 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
     fn classify(&self, inst: Inst) -> Option<ValueKind> {
         let ty = self.ty(self.body.inst_result(inst)?);
         let data = *self.body.inst(inst);
-        if let Some(kind) = self.classify_wide(ty, data) {
-            return kind;
+        if self.is_wide(ty, data) {
+            return self.classify_wide(ty, data);
         }
         Some(match data {
             | InstData::Const { bits, .. } => ValueKind::Const(bits.get() & mask(ty)),

@@ -195,10 +195,6 @@ impl Selector<'_, '_, '_> {
     /// Shifts of an `i128`.
     fn wide_shift(&mut self, opcode: Opcode, dst: Halves, (low, high): Halves, amount: Value) {
         if let ValueKind::Wide(count) = self.kind(amount) {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "The count is masked to 7 bits."
-            )]
             let count = (count & 127) as u8;
             self.wide_shift_constant(opcode, dst, (low, high), count);
             return;
@@ -626,7 +622,7 @@ impl Selector<'_, '_, '_> {
 /// The `i128` constant a narrower constant extends to.
 pub(super) fn widen(bits: u64, from: Type, signed: bool) -> u128 {
     if signed {
-        sign_extend(bits & mask(from), from).cast_signed() as i128 as u128
+        i128::from(sign_extend(bits & mask(from), from).cast_signed()).cast_unsigned()
     } else {
         u128::from(bits & mask(from))
     }

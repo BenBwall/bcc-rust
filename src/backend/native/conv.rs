@@ -278,9 +278,8 @@ impl ArgumentAssigner {
     /// The location of the next argument of `class`.
     pub(crate) fn scalar(&mut self, class: RegClass) -> ArgLocation {
         let register = match (self.conv.kind, class) {
-            | (ConvKind::Win64, RegClass::Gpr) => self.conv.arguments.get(self.gpr),
+            | (_, RegClass::Gpr) => self.conv.arguments.get(self.gpr),
             | (ConvKind::Win64, RegClass::Xmm) => self.conv.float_arguments.get(self.gpr),
-            | (ConvKind::SystemV, RegClass::Gpr) => self.conv.arguments.get(self.gpr),
             | (ConvKind::SystemV, RegClass::Xmm) => self.conv.float_arguments.get(self.xmm),
         };
         if let Some(&register) = register {

@@ -275,9 +275,6 @@ impl PReg {
             "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9",
             "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15",
         ];
-        if (self as usize) >= 16 {
-            return XMM[self as usize - 16];
-        }
         const NAMES: [[&str; 4]; 16] = [
             ["al", "ax", "eax", "rax"],
             ["cl", "cx", "ecx", "rcx"],
@@ -296,6 +293,9 @@ impl PReg {
             ["r14b", "r14w", "r14d", "r14"],
             ["r15b", "r15w", "r15d", "r15"],
         ];
+        if (self as usize) >= 16 {
+            return XMM[self as usize - 16];
+        }
         NAMES[self as usize][width as usize]
     }
 }
@@ -893,21 +893,6 @@ impl MInst {
                 memory(mem, &mut visit);
                 visit(reg, if *load { Role::Def } else { Role::Use });
             },
-            | Self::XAlu { dst, src, .. } => {
-                operand(src, &mut visit);
-                visit(dst, Role::UseDef);
-            },
-            | Self::Ucomi { lhs, rhs, .. } => {
-                visit(lhs, Role::Use);
-                visit(rhs, Role::Use);
-            },
-            | Self::IntToFloat { dst, src, .. }
-            | Self::FloatToInt { dst, src, .. }
-            | Self::FloatToFloat { dst, src, .. }
-            | Self::MovGx { dst, src, .. } => {
-                visit(src, Role::Use);
-                visit(dst, Role::Def);
-            },
             | Self::ShiftDouble {
                 dst, src, amount, ..
             } => {
@@ -925,11 +910,16 @@ impl MInst {
                 memory(addr, &mut visit);
                 visit(dst, Role::Def);
             },
-            | Self::Alu { dst, src, .. } => {
+            | Self::Alu { dst, src, .. } | Self::XAlu { dst, src, .. } => {
                 operand(src, &mut visit);
                 visit(dst, Role::UseDef);
             },
-            | Self::Imul3 { dst, src, .. } | Self::BitScan { dst, src, .. } => {
+            | Self::Imul3 { dst, src, .. }
+            | Self::BitScan { dst, src, .. }
+            | Self::IntToFloat { dst, src, .. }
+            | Self::FloatToInt { dst, src, .. }
+            | Self::FloatToFloat { dst, src, .. }
+            | Self::MovGx { dst, src, .. } => {
                 visit(src, Role::Use);
                 visit(dst, Role::Def);
             },
@@ -937,7 +927,7 @@ impl MInst {
                 visit(lhs, Role::Use);
                 operand(rhs, &mut visit);
             },
-            | Self::Test { lhs, rhs, .. } => {
+            | Self::Test { lhs, rhs, .. } | Self::Ucomi { lhs, rhs, .. } => {
                 visit(lhs, Role::Use);
                 visit(rhs, Role::Use);
             },

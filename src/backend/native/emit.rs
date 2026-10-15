@@ -191,7 +191,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 register.name(Width::B64)
             )?;
         }
-        if frame.frame_pointer {
+        if frame.rbp_based {
             writeln!(self.out, "\tmovq\t%rsp, %rbp")?;
             if self.elf {
                 writeln!(self.out, "\t.cfi_def_cfa_register %rbp")?;
@@ -210,7 +210,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             writeln!(self.out, "\t.cfi_remember_state")?;
         }
         let mut cfa = frame.cfa_offset();
-        let base = if frame.frame_pointer { "rbp" } else { "rsp" };
+        let base = if frame.rbp_based { "rbp" } else { "rsp" };
         for &(register, offset) in &frame.saved_xmm {
             writeln!(
                 self.out,
@@ -218,7 +218,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 register.name(Width::B64)
             )?;
         }
-        if frame.frame_pointer {
+        if frame.rbp_based {
             writeln!(self.out, "\tleaq\t{}(%rbp), %rsp", frame.size)?;
             cfa -= frame.size;
             if self.elf {

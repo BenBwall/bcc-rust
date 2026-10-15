@@ -48,19 +48,19 @@ pub(crate) const REGISTER_SAVE_BYTES: u32 = 6 * 8 + 8 * 16;
 pub(crate) struct Frame<'a> {
     /// The callee-saved general registers the prologue pushes, in push
     /// order.
-    pub(crate) saved:         ArenaVec<'a, PReg>,
+    pub(crate) saved:     ArenaVec<'a, PReg>,
     /// The callee-saved SSE registers (Win64) and their offsets.
-    pub(crate) saved_xmm:     ArenaVec<'a, (PReg, u32)>,
+    pub(crate) saved_xmm: ArenaVec<'a, (PReg, u32)>,
     /// Bytes the prologue subtracts from `%rsp` after the pushes.
-    pub(crate) size:          u32,
+    pub(crate) size:      u32,
     /// Whether `%rbp` addresses the fixed frame.
-    pub(crate) frame_pointer: bool,
-    slots:                    ArenaVec<'a, u32>,
-    spills:                   u32,
-    outgoing_end:             u32,
-    register_save:            u32,
-    incoming:                 u32,
-    home:                     u32,
+    pub(crate) rbp_based: bool,
+    slots:                ArenaVec<'a, u32>,
+    spills:               u32,
+    outgoing_end:         u32,
+    register_save:        u32,
+    incoming:             u32,
+    home:                 u32,
 }
 
 impl<'a> Frame<'a> {
@@ -121,7 +121,7 @@ impl<'a> Frame<'a> {
             saved,
             saved_xmm,
             size,
-            frame_pointer,
+            rbp_based: frame_pointer,
             slots,
             spills,
             outgoing_end,
@@ -144,11 +144,7 @@ impl<'a> Frame<'a> {
             | FrameObject::Spill(slot) => self.spills + 8 * slot,
             | FrameObject::RegisterSave(offset) => self.register_save + offset,
         };
-        let base = if self.frame_pointer {
-            PReg::Rbp
-        } else {
-            PReg::Rsp
-        };
+        let base = if self.rbp_based { PReg::Rbp } else { PReg::Rsp };
         (base, i64::from(offset))
     }
 

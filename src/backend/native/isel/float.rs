@@ -197,8 +197,8 @@ impl Selector<'_, '_, '_> {
         let width = float_width(ty);
         let then = self.reg(then);
         let otherwise = self.reg(otherwise);
-        let then_bits = self.to_gpr(width, then);
-        let picked = self.to_gpr(width, otherwise);
+        let then_bits = self.bits_in_gpr(width, then);
+        let picked = self.bits_in_gpr(width, otherwise);
         let cond = self.condition(cond);
         self.emit(MInst::Cmov {
             cond,
@@ -214,7 +214,7 @@ impl Selector<'_, '_, '_> {
     }
 
     /// The bits of an SSE register in a fresh general register.
-    fn to_gpr(&mut self, width: Width, src: Reg) -> Reg {
+    fn bits_in_gpr(&mut self, width: Width, src: Reg) -> Reg {
         let dst = self.vreg();
         self.emit(MInst::MovGx { width, dst, src });
         dst
@@ -383,8 +383,8 @@ impl Selector<'_, '_, '_> {
             dst:   halved,
             src:   Operand::Reg(halved),
         });
-        let picked = self.to_gpr(float, Reg::Virt(direct));
-        let doubled = self.to_gpr(float, halved);
+        let picked = self.bits_in_gpr(float, Reg::Virt(direct));
+        let doubled = self.bits_in_gpr(float, halved);
         self.emit(MInst::Test {
             width: Width::B64,
             lhs:   x,
