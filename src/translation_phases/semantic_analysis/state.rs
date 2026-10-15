@@ -82,6 +82,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             function_controls: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             expression_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             string_initializers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            flexible_arrays: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            transparent_unions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             conversions: ArenaVec::new_in(scratch),
             const_members: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             register_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
