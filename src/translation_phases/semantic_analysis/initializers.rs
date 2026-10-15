@@ -727,7 +727,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.aggregate(element) {
             return None;
         }
-        let (literal_element, count) = self.string_type(value)?;
+        let (literal_element, count) = self.string_type(value);
         // C11 §6.7.9p14: a character array takes a character or UTF-8
         // literal (C23 `char8_t` included); p15: a wide array the literal of
         // its own element type.

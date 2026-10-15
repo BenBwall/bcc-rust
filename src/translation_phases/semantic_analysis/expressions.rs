@@ -249,14 +249,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
                 info.constant = ConstantClass::Arithmetic;
             },
-            | E::StringLiteral(value) =>
-                if let Some((element, count)) = self.string_type(value) {
-                    info.ty = self
-                        .types
-                        .intern(TypeKind::Array(element, ArrayBound::Constant(count)));
-                    info.category = ValueCategory::Lvalue;
-                    info.static_address = true;
-                },
+            | E::StringLiteral(value) => {
+                let (element, count) = self.string_type(value);
+                info.ty = self
+                    .types
+                    .intern(TypeKind::Array(element, ArrayBound::Constant(count)));
+                info.category = ValueCategory::Lvalue;
+                info.static_address = true;
+            },
             | E::Parenthesized { expression } => {
                 info = ExpressionInfo {
                     expression: e,

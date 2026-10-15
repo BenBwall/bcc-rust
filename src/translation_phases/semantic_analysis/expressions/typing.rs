@@ -1748,7 +1748,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(in crate::translation_phases::semantic_analysis) fn string_type(
         &mut self,
         value: StringTokenType,
-    ) -> Option<(TypeId, u64)> {
+    ) -> (TypeId, u64) {
         let (element, units) = match value {
             | StringTokenType::String(id) => (
                 Scalar::Char,
@@ -1770,7 +1770,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.context.encoded_literal_units(id, encoding).count() as u64,
             ),
         };
-        Some((self.types.scalar(element), units + 1))
+        (self.types.scalar(element), units + 1)
     }
 
     /// The element type of a `u8`, `u` or `U` literal: `char16_t` and

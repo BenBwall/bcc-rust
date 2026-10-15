@@ -81,7 +81,7 @@ fn fuzzed_record_layouts_match_the_platform_compilers_natively() {
 /// member after the zero-width bit-field sets. MinGW GCC and `cl.exe` print
 /// these on their targets; Clang's MinGW layout differs on P1 and A1 (it
 /// overlaps their fields).
-const ZERO_WIDTH: &str = r#"
+const ZERO_WIDTH: &str = r"
 int putchar(int);
 struct N1 { int a : 5; short : 0; char b : 6; };
 struct N2 { long long a : 15; unsigned char : 0; int b; };
@@ -103,7 +103,7 @@ int main(void) {
     FIRST(N1, b) FIRST(N2, b) FIRST(P1, c) FIRST(P2, a) FIRST(P3, b)
     return 0;
 }
-"#;
+";
 
 #[test]
 fn zero_width_bit_fields_end_the_microsoft_unit_at_run_time() {
