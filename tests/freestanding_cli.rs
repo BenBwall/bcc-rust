@@ -333,7 +333,7 @@ mod tests {
             ),
             (
                 "#include <stdarg.h>\nvoid f(int n, ...) { va_list ap; int *p=va_arg(ap,int); }\n",
-                "initializer",
+                "incompatible integer and pointer conversion [-Wint-conversion]",
             ),
             (
                 "#include <stddef.h>\nstruct S {int bit:3;}; int x=offsetof(struct S,bit);\n",

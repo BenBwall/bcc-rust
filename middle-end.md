@@ -113,6 +113,7 @@ tables:
 | `Inst` | function | an instruction |
 | `Block` | function | a basic block; the entry block's parameters are the function's parameters |
 | `StackSlot` | function | a fixed-size, fixed-alignment region of the frame |
+| `BlockLabel` | function | an address-taken block: a stable name `block_addr` and relocations use while passes renumber blocks |
 | `FuncId` | module | a function, defined or declared |
 | `GlobalId` | module | a global object, defined or declared |
 | `SigId` | module | an interned call signature |
@@ -187,6 +188,7 @@ Memory:
 stack_addr  slot                 → ptr
 global_addr global               → ptr
 func_addr   func                 → ptr
+block_addr  label                → ptr     (GNU label value)
 ptr_add     base, offset_i64     → ptr     flags: inbounds
 load  <ty> addr                  → ty      flags: volatile, align, access tag
 store <ty> value, addr                     flags: volatile, align, access tag
@@ -331,9 +333,13 @@ Terminators end every block and nothing else does:
 jump  block(args)
 brif  cond, block(args), block(args)
 switch value, default block(args), [case_value: block(args), ...]
+indirect_br addr, [block(args), ...]
 return [value]
 unreachable
 ```
+
+`indirect_br` continues at the listed edge whose target block's label has
+the address `addr`; see [Labels as values and computed goto](#labels-as-values-and-computed-goto-2026-10-14).
 
 Two edges from one terminator to the same block must pass the same arguments;
 lowering and passes split such an edge with a forwarding block. That keeps the
@@ -406,8 +412,27 @@ because a load of bytes never written is poison as a whole.
 A module holds its functions, its globals, its interned signatures and the
 target. A function has a name, a signature, a linkage (`external`, `internal`),
 and, if defined, a body. A global has a name, a linkage, size, alignment, a
-`constant` flag, and an initializer: zero, or bytes plus relocations
-`(offset, symbol, addend)` for address constants.
+`constant` flag, a `thread_local` flag, and an initializer: zero, or bytes
+plus relocations `(offset, target, addend)` for address constants. A target
+is a function or global (eight bytes), a label of a defined function (eight
+bytes, `blockaddress(@f, label0)`), or a label difference truncated to
+`i8`-`i64` (`labeldiff.i32(@f, label1, label0)`).
+
+A `thread_local` global (`global @g external thread_local size 4, align 4`)
+has one copy per thread, initialized from its initializer when the thread
+starts; `global_addr` yields the evaluating thread's copy. Its address is
+therefore no link-time constant, and the verifier rejects a relocation that
+names it (C11 §6.2.4p4, §6.6p9). Lowering gives every object with semantic
+analysis's `Duration::Thread` such a global, file-scope or static local
+alike. The interpreter runs one thread and has no thread-creating host
+operation, so its thread-local globals are ordinary globals of that thread.
+The LLVM back end marks them `thread_local` and computes each access with
+`llvm.threadlocal.address`, as Clang does. Clang marks definitions
+`dso_local`, which gives them the local-exec model in an ELF executable;
+LLVM-C cannot set `dso_local`, so definitions on the position-independent
+ELF targets request local-exec directly, and declarations keep the default
+that becomes initial-exec. Windows targets use native TLS through
+`_tls_index` and the TEB, as Clang does for both MinGW and MSVC.
 
 ### Textual form
 
@@ -469,6 +494,9 @@ on every parsed test input. It checks:
   types, and duplicate edges to one block pass identical arguments;
 - every use is dominated by its definition (dominators from the iterative
   Cooper-Harvey-Kennedy algorithm);
+- labels name distinct blocks other than the entry; `block_addr` names an
+  existing label; an `indirect_br` lists distinct labeled blocks; a label
+  relocation names a label of a defined function;
 - the profile's constraints: no `va_arg` post-ABI; each aggregate kind only in
   its profile, on a `ptr` parameter, results on parameter 0 of a signature
   without a result, and layout scalars within the aggregate; each extension
@@ -511,13 +539,60 @@ IDs to SSA stack tokens. It no longer indexes VLA scopes, reconstructs label/par
 maps, invents pointer/binding region IDs, walks switch bodies to rediscover cases,
 or recasts case endpoints. Lexical name scopes and execution regions remain distinct.
 
-The required M2/M5 slices retain source-ordered parameter typeof/bound actions and
-one dual-context expression effect summary including cast type-site actions.
-Declaration occurrence plans, sparse effect recipes, initializer plans, symbolic
-constants, builtin descriptors and final symbol/function policies remain later
-migration work. Some consumers therefore still inspect syntax in those families.
-See [semantic-analysis.md](semantic-analysis.md) for producer/query contracts and
-the [M1 receipt](docs/research/semantic-facts-m1.md) for checks and corpus comparison.
+**M2 is complete.** Lowering consumes declaration occurrences, parameter facts,
+identity-indexed type names, runtime-bound records and the shared size-formula DAG.
+The declarator `(name, source_vectors)` index and initializer association walk are
+deleted. Semantic inspection no longer joins parameter minima by provenance.
+Runtime allocation, sizeof and strides emit the retained formulas, and casts and
+size queries schedule their retained site actions. M1 had already removed the
+consumer type-name search and bound-discovery type walk; those remain absent.
+
+**M3 is complete.** Lowering consumes bottom-up designation summaries,
+`CallFacts`, `StatementExpressionFacts` and `MemberFacts`. Calls use their retained
+direct/indirect/builtin classification, point-of-use type/shape and argument
+conversion references. Function pointers and conversion-changing wrappers retain
+their indirect behavior. GNU blocks schedule retained outer labeled tails and
+prefixes; member queries index owning tags/fields and retained access facts.
+The linear address-use scan queries designations and calls. Consumer selection
+walks, repeated direct-callee checks, tail reruns and owning-record recovery are
+deleted; selection/tail helpers are private to semantic analysis. Missing facts
+produce provenance-bearing `MissingFact` errors. Open-external ABI policy remains
+later migration work.
+
+**M4 is complete.** The phase-neutral `src/builtins.rs` registry owns scalar and
+library contracts, exact spelling/ID lookup, signatures, feature/naming policy,
+operand evaluation/conversion/constant rules, effects and library equivalence.
+`BindingOrigin` preserves user shadowing before intrinsic lookup. Named scalar,
+library and varargs calls, plus keyword varargs and offsetof, retain
+`BuiltinCallFacts` inside `Callee::Builtin`: descriptor, checked operation,
+normalized operands and result/operation types. Lowering schedules those operand
+modes and dispatches the checked operation. Scalar name redispatch, the synthetic
+varargs `Builtin` AST adapters and varargs storage rediscovery are deleted. ABI
+classification and cursor movement remain downstream. Atomic, x86, vector and
+type-generic recognition/keyword handlers are explicit temporary M6 bridges;
+preprocessing retains its capability adapter until that migration. Scalar/library
+support is tested against the registry on every current target and environment.
+
+**M5 is complete.** Effects-only evaluation (an overflow predicate's third operand
+and the statements of a GNU block inside it) interprets retained
+`EffectRecipe`s: nothing, evaluate-and-discard, the node's type-site actions and
+child uses, a single branch on a condition with optional arms, or the
+statement-expression body in effects mode. `builtin_effects.rs` no longer
+inspects operators, volatility, ICE state or selections, and never consults a
+purity predicate. A branch with one empty arm uses one effects block and the merge
+block, the same shape short circuits already had; an omitted conditional, or a
+conditional with one effect-free arm, now takes that shape too. A missing summary
+or recipe is a provenance-bearing `MissingFact`.
+
+Initializer placement plans, symbolic constants, remaining builtin families and
+final symbol/function policies remain later migration work.
+Some consumers therefore still inspect syntax in those families. See
+[semantic-analysis.md](semantic-analysis.md) for producer/query contracts and the
+[M1 receipt](docs/research/semantic-facts-m1.md),
+[M2 receipt](docs/research/semantic-facts-m2.md),
+[M3 receipt](docs/research/semantic-facts-m3.md),
+[M4 receipt](docs/research/semantic-facts-m4.md), and
+[M5 receipt](docs/research/semantic-facts-m5.md) for checks and corpus comparisons.
 
 ### Algorithm
 
@@ -605,8 +680,8 @@ defined internal or external callees of at most 100 instructions, including
 terminators, after their cleanup. The caller can grow by its original instruction
 count or 256 instructions, whichever is larger, with an absolute cap of 2,000.
 Every site consumes exactly one `allow()` rewrite, including all block splits,
-return joins and copied definitions. Recursive callees, variadic callees and
-`va_start` bodies are refused. The IR has no returns-twice attribute yet; textual
+return joins and copied definitions. Recursive callees, variadic callees,
+`va_start` bodies and bodies with labels or indirect branches are refused. The IR has no returns-twice attribute yet; textual
 IR's recognized `setjmp`, `_setjmp`, `sigsetjmp`, `__sigsetjmp` and `vfork` symbols,
 their direct wrappers and bodies taking their addresses are refused too. Lowering
 already rejects those builtins. General indirect returns-twice metadata remains
@@ -868,8 +943,10 @@ bcc-rust --print-default-passes     print the default pass list and exit
 The back-end modes exclude one another and the inspection views
 (`--tokens`, `--syntax-tree`, `--raw-syntax`, `--semantic-types`); the other
 options require a back-end mode. `--emit` and `--interpret` print to stdout and
-the diagnostics, `--print-after-all` and interpreter traps to stderr. Each arm
-is one invocation:
+the diagnostics, `--print-after-all` and interpreter traps to stderr.
+`--emit=ir`, `--emit=ir-abi` and `--interpret` verify the module first, as the
+LLVM back end does for `--emit=llvm` and `-o`, and report an internal error
+instead of printing or running invalid IR. Each arm is one invocation:
 
 | Arm | Flags |
 | --- | --- |
@@ -1082,8 +1159,8 @@ small and large objects, empty objects, and handwritten packed-layout IR.
 Semantic array bounds retain an identity and the typed bound expression. Lowering
 evaluates bounds on the explicit task stack, saves each extent in an SSA variable,
 and uses it for allocation, runtime `sizeof`, and multidimensional strides.
-Typedefs retain the declaration's extent. Function records also retain original
-parameter types, so array adjustment does not discard entry-time bound effects.
+Typedefs retain the declaration's extent. Parameter facts retain declared,
+promoted and original types, so adjustment does not discard entry-time actions.
 Prototype/body parameter binding pairs are retained by semantic analysis;
 function entry visits only those pairs, without scanning unrelated bindings or
 matching source positions.
@@ -1108,8 +1185,9 @@ source order after parameter initialization and alias installation. Saved bounds
 remain SSA extents. A bound owned by an evaluated typeof operand is scheduled by
 that operand's declaration, preventing premature reservation of its SSA variable.
 Both ordinary expression lowering and effects-only overflow operands consume the
-same normalized type-site actions and semantic dual-context purity summaries.
-Full M2 runtime-size formulas and M5 sparse effect recipes remain future steps.
+same normalized type-site actions. Effects-only operands interpret the retained M5
+recipes. Allocation, sizeof and pointer/subscript/increment strides consume the
+shared semantic size-formula DAG.
 
 `stack_save` returns an opaque `ptr` token for the current dynamic stack position;
 `stack_restore` takes such a token from the current invocation and releases later
@@ -1159,8 +1237,8 @@ from an iterative queue. Constant pointer values emit bytes; addresses of compou
 literals, array members, selected GNU/C11 expressions and `&*` forms emit the
 existing global relocation representation. Interpreter and LLVM emission consume
 the same constants. C99 §6.6p7-9 (printed pp. 95-96; PDF pp. 107-108) and §6.7.8
-govern these static forms. Label addresses and differences remain deferred because
-they need a code-label relocation model and computed-goto execution.
+govern these static forms. Label addresses and differences use the label
+relocations described below.
 
 Floating queries/sign-copy lower through existing scalar operations and byte
 accesses. Native x87 support is exercised without changing the interpreter's
@@ -1168,3 +1246,81 @@ existing f80/f128 limitation. Bounded formatting shares the existing interpreter
 formatter, writes at most `n-1` characters plus a terminator, avoids the destination
 for `n==0`, and returns the untruncated character count. See the dated torture
 survey for corpus and focused execution results.
+
+## Labels as values and computed goto (2026-10-14)
+
+GNU labels as values (`&&label`, `goto *expression`, issue #51) run end to
+end, the way Clang compiles them. Contract:
+[GCC Labels as Values](https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html);
+LLVM [`blockaddress`](https://llvm.org/docs/LangRef.html#addresses-of-basic-blocks)
+and [`indirectbr`](https://llvm.org/docs/LangRef.html#indirectbr-instruction).
+
+**IR.** A body has a label table: `label0 = block_label block3` names an
+address-taken block. Labels, not block numbers, are what `block_addr label0`
+and global relocations refer to, so renumbering passes and ABI lowering keep
+them valid by remapping one table. `indirect_br addr, [block1(v2), block3]`
+lists every possible target with its own arguments, so a labeled block may
+have parameters; each edge becomes one phi entry in LLVM. Labels follow
+LLVM's rules: not the entry block, one label per block, `indirect_br`
+targets distinct and labeled. An address that names no listed block is
+undefined behaviour, as for `indirectbr`. An unreachable labeled block stays
+in the body, since its address may still be taken; it is never executed.
+Relocations `blockaddress(@f, labelN)` and `labeldiff.TY(@f, labelA, labelB)`
+put label addresses and differences into static data.
+
+**Interpreter.** Each function with labels owns one label object: label `n`
+is its byte `n`, so a label difference is a small integer and a label
+address plus a difference names another label, as the position-independent
+GCC idiom `goto *(&&base + offset)` requires. The object holds no data.
+`indirect_br` traps with "computed goto to an address that is not a label of
+the executing function" for any other pointer, including another function's
+label, and as a poison branch for poison.
+
+**LLVM.** `block_addr` is `LLVMBlockAddress`, `indirect_br` is
+`LLVMBuildIndirectBr` plus `LLVMAddDestination`. Every labeled block exists
+even when unreachable (holding only `unreachable`). Bodies are built before
+global initializers, which may take block addresses; a label difference is
+`trunc(sub(ptrtoint blockaddress, ptrtoint blockaddress))`, Clang's constant.
+LLVM leaves equality between two block addresses undefined; only comparison
+with null is meaningful. The interpreter compares them as distinct
+addresses, so a program comparing two label addresses may differ natively.
+
+**Optimizer.** No pass deletes, merges or threads through a labeled block,
+and no pass redirects an `indirect_br` edge. `simplify-cfg` empties an
+unreachable labeled block to an `unreachable` stub, once (`Draft::retire_block`),
+skips labeled forwarders and select arms and never merges a labeled block
+into its predecessor. SCCP marks every `indirect_br` edge executable. DCE,
+promotion and GVN treat indirect edges like any other through the shared
+edge iterators, so promotion passes slot values on them. LICM leaves a loop
+whose header an `indirect_br` outside it enters, since no preheader can be
+inserted on that edge, as LLVM does for loops without a preheader. The
+inliner refuses a callee with labels or indirect branches, as LLVM refuses
+`indirectbr` and address-taken blocks; callers with labels still inline
+others (a split keeps the block's start, and so its label).
+
+**Lowering.** Semantic analysis retains each function's address-taken labels
+in first-`&&` order (`ControlFacts::address_taken`, `LabelFacts::address`),
+the label each `&&label` names and the labels of each constant label
+difference; lowering numbers IR labels by that order, so static initializers
+lowered before the body refer to the right label. As in Clang, every
+`goto *e` passes its `const void *` to one indirect-branch block per
+function, whose `indirect_br` lists all address-taken labels, so `n` gotos
+and `m` labels make `n + m` edges rather than `n * m`. A computed goto is a
+jump with an empty transition: like Clang, it releases no VLA storage it
+leaves before the function returns. GNU local labels lower as ordinary
+labels (only nested functions, still refused, could jump to them from
+elsewhere). `void *` arithmetic steps by one byte with byte alignment.
+
+**Evidence.** The conformance reproducer `computed_goto_table.c` interprets
+and runs natively in every arm. Of the 18 GCC 15.2.0 execute sources that use
+labels as values, 10 now pass in the interpreter, the optimized interpreter,
+A0 and A1 (none did before); the others need nested functions (4), inline
+assembly (2), a global register variable (`pr51447.c`) or hosted headers
+(`comp-goto-1.c`, which with MinGW headers interprets correctly but, like
+Clang's own build, crashes natively because it assumes 64-bit `long`). The
+whole survey (1,677 sources, `--jobs 6 --timeout 10`) has no source and arm
+that passed before and fails now; 14 sources pass newly in all four arms,
+four of them through `void *` arithmetic or local labels alone. Lua 5.4.9's
+`lvm.c` compiles with its `LUA_USE_JUMPTABLE` dispatch table; a Lua built
+from 29 bcc-compiled files (A0 and A1; `lua.c` and `loadlib.c` use MinGW
+vector types) runs a test script identically to a Clang build.

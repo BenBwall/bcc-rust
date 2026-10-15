@@ -5,6 +5,11 @@ use std::path::{
 
 use super::with_tokens_of;
 use crate::{
+    configuration::{
+        CStandard,
+        CompilerConfiguration,
+        ExtensionPolicy,
+    },
     test_support::TempDir,
     translation_phases::{
         Context,
@@ -32,8 +37,17 @@ fn with_directive_tokens_at_path<R>(
     path: &Path,
     inspect: impl FnOnce(&[Token], &mut Context<'_>) -> R,
 ) -> R {
+    with_configured_directive_tokens(source, path, CompilerConfiguration::default(), inspect)
+}
+
+fn with_configured_directive_tokens<R>(
+    source: &str,
+    path: &Path,
+    configuration: CompilerConfiguration,
+    inspect: impl FnOnce(&[Token], &mut Context<'_>) -> R,
+) -> R {
     let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    let mut context = Context::with_configuration(&tu, configuration);
     let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
         &preprocess_arena,
@@ -54,7 +68,11 @@ fn with_directive_tokens_with_system_directory<R>(
     inspect: impl FnOnce(&[Token], &mut Context<'_>) -> R,
 ) -> R {
     let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    // These tests observe where the missing final newline is reported.
+    let mut context = Context::with_configuration(
+        &tu,
+        CompilerConfiguration::default().with_default_off_groups(),
+    );
     let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
         &preprocess_arena,
@@ -807,19 +825,30 @@ fn terminal_include_variants_stay_in_their_source_file() {
 }
 
 #[test]
-fn line_number_zero_is_diagnosed_and_ignored() {
-    // C99 §6.10.4p3: zero is out of range. Like a number that is too large,
-    // it is ignored, while a file name in the same directive still applies.
-    with_directive_tokens_at_path(
-        "#line 0\n__LINE__\n#line 00 \"named.c\"\n__LINE__\n",
+fn line_number_zero_is_applied_and_diagnosed_only_under_pedantic() {
+    // C99 §6.10.4p3: zero is out of range, so the behavior is undefined.
+    // Clang applies it and reports it only under -pedantic; a file name in
+    // the same directive applies as well.
+    let source = "#line 0\n__LINE__\n#line 00 \"named.c\"\n__LINE__\n";
+    let expected = [
+        TokenType::Integer(IntegerTokenType::Int(0)),
+        TokenType::Integer(IntegerTokenType::Int(0)),
+    ];
+    with_directive_tokens_at_path(source, Path::new("main.c"), |tokens, context| {
+        assert_eq!(
+            tokens.iter().map(|token| token.kind).collect::<Vec<_>>(),
+            expected
+        );
+        assert!(context.take_pending_errors().is_empty());
+    });
+    with_configured_directive_tokens(
+        source,
         Path::new("main.c"),
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Warn),
         |tokens, context| {
             assert_eq!(
                 tokens.iter().map(|token| token.kind).collect::<Vec<_>>(),
-                [
-                    TokenType::Integer(IntegerTokenType::Int(2)),
-                    TokenType::Integer(IntegerTokenType::Int(4)),
-                ]
+                expected
             );
             let vector = context.first_source_vector(tokens[1].source_vectors);
             assert_eq!(
@@ -836,13 +865,60 @@ fn line_number_zero_is_diagnosed_and_ignored() {
             };
             assert!(matches!(
                 first.error_type,
-                PreprocessorErrorType::LineDirectiveNumberZero("0")
+                PreprocessorErrorType::LineDirectiveNumberZero("0", ErrorSeverity::Warning)
             ));
             assert!(matches!(
                 second.error_type,
-                PreprocessorErrorType::LineDirectiveNumberZero("00")
+                PreprocessorErrorType::LineDirectiveNumberZero("00", ErrorSeverity::Warning)
             ));
             assert_eq!(first.severity(), ErrorSeverity::Warning);
+        },
+    );
+}
+
+#[test]
+fn line_numbers_beyond_the_c99_range_follow_clang() {
+    // C99 §6.10.4p3 allows at most 2147483647. Clang applies a number up to
+    // 4294967295, reported only under -pedantic, and wraps the next line;
+    // it rejects a larger number and keeps the current line.
+    let source = "#line 4294967295\n__LINE__\n__LINE__\n#line 4294967296\n__LINE__\n";
+    let numbers = |tokens: &[Token], context: &Context<'_>| {
+        tokens
+            .iter()
+            .map(|token| {
+                let spelling = context.string_cache.at(token.contents);
+                spelling.trim_end_matches('\0').to_owned()
+            })
+            .collect::<Vec<_>>()
+    };
+    with_directive_tokens_at_path(source, Path::new("main.c"), |tokens, context| {
+        assert_eq!(numbers(tokens, context), ["4294967295", "0", "2"]);
+        let errors = context.take_pending_errors();
+        let [TranslationError::Preprocessing(error)] = errors.as_slice() else {
+            panic!("{errors:#?}");
+        };
+        assert!(matches!(
+            error.error_type,
+            PreprocessorErrorType::LineDirectiveNumberTooLarge("4294967296", ErrorSeverity::Error)
+        ));
+    });
+    with_configured_directive_tokens(
+        "#line 2147483648\n__LINE__\n",
+        Path::new("main.c"),
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Warn),
+        |tokens, context| {
+            assert_eq!(numbers(tokens, context), ["2147483648"]);
+            let errors = context.take_pending_errors();
+            let [TranslationError::Preprocessing(error)] = errors.as_slice() else {
+                panic!("{errors:#?}");
+            };
+            assert!(matches!(
+                error.error_type,
+                PreprocessorErrorType::LineDirectiveNumberTooLarge(
+                    "2147483648",
+                    ErrorSeverity::Warning
+                )
+            ));
         },
     );
 }

@@ -135,8 +135,19 @@ impl<'s> FunctionLowerer<'_, '_, '_, '_, 's> {
     ) -> Result<Value, LoweringError> {
         let element = super::types::target_type(&self.unit.sema.types, pointer)
             .ok_or_else(|| LoweringError::missing("an index has no pointee type", source))?;
-        let default = storage_alignment(&self.unit.sema.types, element)
-            .map_err(|kind| super::module_items::at(kind, source))?;
+        // GNU `void *` arithmetic promises no alignment beyond a byte.
+        // GNU extension: GCC "Pointer Arith".
+        let default = if matches!(
+            self.unit.sema.types.kind(element),
+            crate::translation_phases::semantic_analysis::TypeKind::Scalar(
+                crate::translation_phases::semantic_analysis::Scalar::Void
+            )
+        ) {
+            Align::BYTE
+        } else {
+            storage_alignment(&self.unit.sema.types, element)
+                .map_err(|kind| super::module_items::at(kind, source))?
+        };
         let base_align = self.place_alignment(base, default);
         let align = if let Some(offset) = self.draft.constant(offset) {
             at_offset(base_align, offset.unsigned_abs())

@@ -49,6 +49,7 @@ fn run_in(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport, analysis: 
             | Term::Jump(next)
                 if edge.target != block
                     && edge.target != Draft::entry()
+                    && !draft.is_labeled(edge.target)
                     && cheap_arm(draft, edge.target) =>
                 Some(next.target),
             | _ => None,

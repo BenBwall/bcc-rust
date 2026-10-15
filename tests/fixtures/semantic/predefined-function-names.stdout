@@ -1,0 +1,29 @@
+unprototyped unprototyped|unprototyped|void unprototyped() 13 13 20
+no_parameters no_parameters|no_parameters|void no_parameters(void) 14 14 25
+scalars scalars|scalars|int scalars(char, signed char, unsigned char, short, unsigned short, int, unsigned int, long, unsigned long, long long, unsigned long long) 8 8 140
+reals reals|reals|void reals(float, double, _Bool) 6 6 33
+pointers pointers|pointers|void pointers(char *, const char *, char *const, const char *const, char **, volatile int *, int *restrict, void *) 9 9 116
+tags tags|tags|void tags(struct node, struct node *, union number, enum color, const struct node *) 5 5 85
+typedefs typedefs|typedefs|void typedefs(count_t, size_t, callback_t, callback_t *, box_t, box_t *, fixed_t, const callback_t, ptrdiff_t) 9 9 111
+arrays arrays|arrays|void arrays(int *, int *, int (*)[3], int, int *) 7 7 50
+functions functions|functions|void functions(int (*)(int, char), void (*)(void), int (*)(), int (*)(int, ...)) 10 10 81
+derived derived|derived|void derived(const count_t *, count_t **, volatile count_t, int *, row_t *, callback_function_t *, _Atomic(int) *, __int128) 8 8 125
+variadic variadic|variadic|void variadic(int, ...) 9 9 24
+only_variadic_after_pointer only_variadic_after_pointer|only_variadic_after_pointer|void only_variadic_after_pointer(const char *, ...) 28 28 52
+pointer_result pointer_result|pointer_result|const char *pointer_result(int) 15 15 32
+typedef_result typedef_result|typedef_result|count_t typedef_result(void) 15 15 29
+tag_result tag_result|tag_result|struct node *tag_result(const struct node *) 11 11 45
+function_result function_result|function_result|int (*function_result(int))(char) 16 16 34
+array_pointer_result array_pointer_result|array_pointer_result|int (*array_pointer_result(void))[4] 21 21 37
+inline_function inline_function|inline_function|unsigned int inline_function(unsigned int) 16 16 43
+old_style old_style|old_style|int old_style() 10 10 16
+main_like_name main_like_name|main_like_name|int main_like_name(int, char **) 15 15 33
+block blocks|blocks|void blocks(int) 7 7 17
+nested block blocks|blocks|void blocks(int) 7 7 17
+expression void blocks(int)
+for blocks
+same 1 1 1
+elements b l i
+pointer 1
+file [] [] [top level] 15
+main main|main|int main(void) 5 5 15

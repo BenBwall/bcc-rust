@@ -121,6 +121,17 @@ fn build_module<'m>(
         if global.init.is_some() && global.linkage == crate::ir::Linkage::Internal {
             api.internal(value);
         }
+        if global.thread_local {
+            // Clang marks a definition `dso_local`, so in a position-
+            // independent ELF executable LLVM gives it the local-exec model
+            // and a declaration initial-exec. LLVM-C cannot mark a global
+            // `dso_local`, so a definition requests local-exec directly.
+            // Windows has one model, through `_tls_index` and the TEB.
+            api.thread_local(
+                value,
+                global.init.is_some() && api::position_independent(target),
+            );
+        }
         globals.push(value);
     }
     let emitter = Emitter {
@@ -129,12 +140,20 @@ fn build_module<'m>(
         arena,
         functions: &functions,
         globals: &globals,
+        labels: &[],
+    };
+    // Bodies first: a relocation may take the address of a labeled block,
+    // which exists once its function is built.
+    let mut labels = ArenaVec::new_in(arena);
+    for (id, _) in module.functions() {
+        labels.push(emitter.function(id)?);
+    }
+    let emitter = Emitter {
+        labels: &labels,
+        ..emitter
     };
     for (id, _) in module.globals() {
         emitter.global(id)?;
-    }
-    for (id, _) in module.functions() {
-        emitter.function(id)?;
     }
     api.verify()?;
     Ok(())
@@ -146,6 +165,8 @@ struct Emitter<'a, 'id, 'm, 'ir> {
     arena:     &'a Bump,
     functions: &'a [Val<'id>],
     globals:   &'a [Val<'id>],
+    /// The LLVM block of each label of each function, by `FuncId`.
+    labels:    &'a [&'a [api::Block<'id>]],
 }
 
 fn uses_pre_abi_signature(module: &Module<'_>) -> bool {

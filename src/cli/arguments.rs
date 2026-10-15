@@ -30,9 +30,11 @@ use super::Cli;
 use crate::{
     configuration::{
         CompilerConfiguration,
+        DiagnosticGroup,
         ExtensionPolicy,
         LanguageMode,
         MsvcFeature,
+        WarningOption,
     },
     translation_phases::Context,
 };
@@ -160,6 +162,8 @@ impl Cli {
 /// A GCC language flag, which clap receives as `--language-option`.
 #[derive(Clone, Copy)]
 enum LanguageFlag {
+    WarningsAsErrors(bool),
+    WarningGroup(DiagnosticGroup, WarningOption),
     /// `-pedantic` or `-Wpedantic` (warn), or `-pedantic-errors` (deny).
     Pedantic(ExtensionPolicy),
     /// `-fms-extensions` or `-fno-ms-extensions`.
@@ -177,11 +181,25 @@ impl LanguageFlag {
         match text {
             | "-pedantic" | "-Wpedantic" => return Some(Self::Pedantic(ExtensionPolicy::Warn)),
             | "-pedantic-errors" => return Some(Self::Pedantic(ExtensionPolicy::Deny)),
+            | "-Werror" => return Some(Self::WarningsAsErrors(true)),
+            | "-Wno-error" => return Some(Self::WarningsAsErrors(false)),
             | "-fhosted" => return Some(Self::Hosted(true)),
             | "-ffreestanding" => return Some(Self::Hosted(false)),
             | "-fgnu89-inline" => return Some(Self::Gnu89Inline(true)),
             | "-fno-gnu89-inline" => return Some(Self::Gnu89Inline(false)),
             | _ => {},
+        }
+        if let Some(text) = text.strip_prefix("-W") {
+            let (name, option) = if let Some(name) = text.strip_prefix("error=") {
+                (name, WarningOption::Error(true))
+            } else if let Some(name) = text.strip_prefix("no-error=") {
+                (name, WarningOption::Error(false))
+            } else if let Some(name) = text.strip_prefix("no-") {
+                (name, WarningOption::Enable(false))
+            } else {
+                (text, WarningOption::Enable(true))
+            };
+            return DiagnosticGroup::parse(name).map(|group| Self::WarningGroup(group, option));
         }
         let (name, enabled) = text
             .strip_prefix("-fms-")
@@ -196,6 +214,8 @@ impl LanguageFlag {
 
     fn apply(self, configuration: CompilerConfiguration) -> CompilerConfiguration {
         match self {
+            | Self::WarningsAsErrors(enabled) => configuration.with_warnings_as_errors(enabled),
+            | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
             | Self::Pedantic(policy) => configuration.with_extension_policy(policy),
             | Self::MsvcExtensions(enabled) => configuration.with_msvc_extensions(enabled),
             | Self::MsvcFeature(feature, enabled) =>

@@ -22,11 +22,11 @@ use crate::{
         SourceVectors,
         parsing::syntax::Statement,
         semantic_analysis::{
-            ArrayBound,
             ControlTarget,
+            SizeExtent,
+            SizeFormula,
             Transition,
             TypeId,
-            TypeKind,
         },
     },
     util::bump::ArenaVec,
@@ -52,7 +52,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         if let Some(site) = self.unit.sema.expression_actions(expression) {
             let mut tasks = ArenaVec::new_in(self.scratch);
             Self::prepare_site_tasks(site, &mut tasks);
-            self.prepare_bound_tasks(site.bounds, &mut tasks);
+            self.prepare_bound_tasks(site.bounds, &mut tasks, expression.source_vectors)?;
             self.push_all(&tasks);
         } else if matches!(
             expression.kind,
@@ -70,26 +70,62 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         &mut self,
         bounds: &[usize],
         tasks: &mut ArenaVec<'_, Task<'tu>>,
-    ) {
+        source: SourceVectors,
+    ) -> Result<(), LoweringError> {
         for &index in bounds {
+            let fact = self.unit.sema.runtime_bounds.get(index).ok_or_else(|| {
+                LoweringError::missing("runtime bound record is not retained", source)
+            })?;
+            if fact.site
+                == crate::translation_phases::semantic_analysis::BoundEvaluationSite::Unevaluated
+            {
+                return Err(LoweringError::missing(
+                    "runtime bound evaluation site is not retained",
+                    source,
+                ));
+            }
+            if fact
+                .dependencies
+                .iter()
+                .any(|dependency| self.unit.sema.runtime_bounds.get(dependency.0).is_none())
+            {
+                return Err(LoweringError::missing(
+                    "runtime bound dependency is not retained",
+                    source,
+                ));
+            }
             if !self.bounds.contains_key(&index) {
                 let var = self.draft.declare_var(Type::I64);
                 _ = self.bounds.insert(index, var);
-                tasks.push(Task::Evaluate(self.unit.sema.types.runtime_bounds[index]));
+                tasks.push(Task::Evaluate(
+                    self.unit.sema.runtime_bounds[index].expression,
+                ));
                 tasks.push(Task::FinishBound(index));
             }
         }
+        Ok(())
     }
 
     pub(super) fn finish_bound(&mut self, index: usize) -> Result<(), LoweringError> {
         let mut item = self.pop();
-        let source = self.unit.sema.types.runtime_bounds[index].source_vectors;
+        let bound = self.unit.sema.runtime_bounds[index];
+        let source = bound.expression.source_vectors;
         if let super::Operand::Place(place) = item.operand {
             item = self.read(place, item.ty, item.ty, source)?;
         }
-        let signed = self.repr(item.ty, source)?.signed();
+        let signed = self.repr(bound.ty, source)?.signed();
+        let (bits, converted_signed) = self
+            .unit
+            .sema
+            .types
+            .target
+            .integer(bound.conversion)
+            .ok_or_else(|| {
+                LoweringError::missing("bound extent conversion is not retained", source)
+            })?;
         let value = self.value(item, source)?;
-        let value = self.extend(value, signed, Type::I64);
+        let value = self.extend(value, signed, super::types::int_type(bits));
+        let value = self.extend(value, converted_signed, Type::I64);
         self.draft.def_var(self.bounds[&index], value);
         Ok(())
     }
@@ -98,34 +134,53 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// pp. 116-117; PDF pp. 128-129. A saved bound is never reevaluated.
     pub(super) fn runtime_size(
         &mut self,
-        mut ty: TypeId,
+        ty: TypeId,
         source: SourceVectors,
     ) -> Result<Value, LoweringError> {
-        if let Some(layout) = self.unit.sema.types.layout(ty) {
-            return Ok(self.iconst(Type::I64, i128::from(layout.size)));
+        let facts = &self.unit.sema.sizes;
+        if let Some(size) = facts.constant_size(ty) {
+            return Ok(self.iconst(Type::I64, i128::from(size)));
         }
+        let formula = facts
+            .formula(ty)
+            .ok_or_else(|| LoweringError::missing("type size formula is not retained", source))?;
+        self.emit_size_formula(formula, source)
+    }
+
+    pub(super) fn emit_size_formula(
+        &mut self,
+        mut formula: crate::translation_phases::semantic_analysis::SizeFormulaId,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let facts = &self.unit.sema.sizes;
+        let mut products = ArenaVec::new_in(self.scratch);
+        let size = loop {
+            match facts.formulas.get(formula.0).copied().ok_or_else(|| {
+                LoweringError::missing("size formula node is not retained", source)
+            })? {
+                | SizeFormula::Constant(size) => break size,
+                | SizeFormula::Product { inner, extent } => {
+                    products.push(extent);
+                    formula = inner;
+                },
+            }
+        };
+        // Keep the existing scalar instruction order while interpreting the
+        // semantic DAG. No type walk or factor discovery occurs here.
         let mut factors = ArenaVec::new_in(self.scratch);
-        while let TypeKind::Array(element, bound) = self.unit.sema.types.kind(ty) {
-            let factor = match bound {
-                | ArrayBound::Constant(n) => self.iconst(Type::I64, i128::from(n)),
-                | ArrayBound::Variable(index) => {
-                    let var = self.bounds.get(&index).copied().ok_or_else(|| {
+        for &extent in &products {
+            let value = match extent {
+                | SizeExtent::Constant(size) => self.iconst(Type::I64, i128::from(size)),
+                | SizeExtent::Bound(id) => {
+                    let var = self.bounds.get(&id.0).copied().ok_or_else(|| {
                         LoweringError::missing("VLA bound was not evaluated", source)
                     })?;
                     self.draft.use_var(var)
                 },
-                | _ =>
-                    return Err(LoweringError::missing(
-                        "array has no runtime extent",
-                        source,
-                    )),
             };
-            factors.push(factor);
-            ty = element;
+            factors.push(value);
         }
-        let layout = super::types::layout(&self.unit.sema.types, ty)
-            .map_err(|kind| super::module_items::at(kind, source))?;
-        let mut size = self.iconst(Type::I64, i128::from(layout.size));
+        let mut size = self.iconst(Type::I64, i128::from(size));
         for &factor in factors.iter().rev() {
             size = self.binary_inst(Opcode::Imul, InstFlags::empty(), size, factor);
         }

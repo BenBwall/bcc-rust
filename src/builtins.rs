@@ -1,0 +1,28 @@
+//! Phase-neutral builtin contracts, indexed by exact spelling and stable ID.
+//! Read [`lookup`] and [`BuiltinDescriptor`] first. `index.rs` assigns IDs and
+//! supplies the sorted name index; `scalar.rs` and `library.rs` are the first
+//! contract shards. `contract.rs` defines closed rules, operations and effects.
+//! Semantic handlers check these contracts and retain instances; lowering owns
+//! executable implementations. Atomic, x86, vector and type-generic shards are
+//! migration M6 work. No syntax, semantic type IDs or IR types belong here.
+//!
+//! C99: §6.5.2.2p2,p7, pp. 71-72; PDF pp. 83-84 (call contracts);
+//! §7.1.4, pp. 166-167; PDF pp. 178-179 (library equivalence).
+//! Scalar intrinsics are GNU extensions documented by their contract shard.
+
+// Contract vocabulary
+mod contract;
+
+// Static index and contract shards
+mod index;
+mod library;
+mod scalar;
+
+pub(crate) use contract::*;
+#[cfg(test)]
+pub(crate) use index::descriptors as test_descriptors;
+pub(crate) use index::{
+    BuiltinId,
+    lookup,
+};
+pub(crate) use library::ordinary;

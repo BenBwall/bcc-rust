@@ -50,6 +50,43 @@ pub(crate) enum TranslationError<'tu> {
 }
 
 impl TranslationError<'_> {
+    /// A warning-group diagnostic takes its group's configured severity,
+    /// which already includes global -Werror and the group's own overrides.
+    /// Other warnings from every phase share the global -Werror control.
+    pub(crate) fn configured_severity(&self, context: &Context<'_>) -> ErrorSeverity {
+        if let Some(group) = self.group() {
+            context
+                .configuration
+                .diagnostic_severity(group)
+                .unwrap_or_else(|| self.severity())
+        } else {
+            context.configuration.warning_severity(self.severity())
+        }
+    }
+
+    /// The warning group that controls this diagnostic, if any.
+    pub(crate) fn group(&self) -> Option<crate::configuration::DiagnosticGroup> {
+        use super::preprocessing::PreprocessorErrorType as P;
+        use crate::configuration::DiagnosticGroup as G;
+        match self {
+            | Self::InitialProcessing(_) => Some(G::NewlineEof),
+            | Self::Preprocessing(error) => match error.error_type {
+                | P::UndefinedIdentifierInPreprocessorExpression(_) => Some(G::Undef),
+                | P::UnknownPragmaDirective => Some(G::UnknownPragmas),
+                | P::ForcedSignedPromotion { .. } | P::ForcedUnsignedPromotion { .. } =>
+                    Some(G::ConstantPromotion),
+                | _ => None,
+            },
+            | Self::Semantic(error) => match error.kind {
+                | semantic_analysis::SemanticErrorKind::PointerConstraint(group) => Some(group),
+                | semantic_analysis::SemanticErrorKind::UnusedStaticFunction =>
+                    Some(G::UnusedFunction),
+                | _ => None,
+            },
+            | _ => None,
+        }
+    }
+
     /// Visits every provenance range this diagnostic reads from a context
     /// arena. Owned source vectors are not visited.
     pub(crate) fn for_each_source_vectors_mut(
@@ -103,14 +140,16 @@ impl ToDiagnostic for TranslationError<'_> {
     ) -> Diagnostic<'d> {
         // C99 §5.1.1.3 and footnote 8: every primary label has a location.
         _ = context.diagnostic_position(source);
-        match self {
+        let mut diagnostic = match self {
             | Self::InitialProcessing(error) => error.diagnostic_in(context, source, arena),
             | Self::PreprocessorTokenizining(error) => error.diagnostic_in(context, source, arena),
             | Self::Preprocessing(error) => error.diagnostic_in(context, source, arena),
             | Self::Parsing(error) => error.diagnostic_in(context, source, arena),
             | Self::Semantic(error) => error.diagnostic_in(context, source, arena),
             | Self::Extension(error) => error.diagnostic_in(context, source, arena),
-        }
+        };
+        diagnostic.severity = self.configured_severity(context);
+        diagnostic
     }
 }
 

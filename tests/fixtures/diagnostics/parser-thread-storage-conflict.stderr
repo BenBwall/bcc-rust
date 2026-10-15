@@ -1,0 +1,41 @@
+error: cannot combine `register` and `__thread`
+ --> parser-thread-storage-conflict.c:1:25
+  |
+1 | void f(void) { register __thread int a; }
+  |                         ^^^^^^^^ `register` was already specified
+  |
+  = note: C11 §6.7.1p2: thread storage combines only with `static` or `extern`, and GNU `__thread` does not combine with `_Thread_local`
+
+error: cannot combine `_Thread_local` and `typedef`
+ --> parser-thread-storage-conflict.c:2:15
+  |
+2 | _Thread_local typedef int T;
+  |               ^^^^^^^ `_Thread_local` was already specified
+  |
+  = note: C11 §6.7.1p2: thread storage combines only with `static` or `extern`, and GNU `__thread` does not combine with `_Thread_local`
+
+error: cannot combine `_Thread_local` and `__thread`
+ --> parser-thread-storage-conflict.c:3:15
+  |
+3 | _Thread_local __thread int b;
+  |               ^^^^^^^^ `_Thread_local` was already specified
+  |
+  = note: C11 §6.7.1p2: thread storage combines only with `static` or `extern`, and GNU `__thread` does not combine with `_Thread_local`
+
+error: cannot combine `__thread` and `_Thread_local`
+ --> parser-thread-storage-conflict.c:4:17
+  |
+4 | static __thread _Thread_local int c;
+  |                 ^^^^^^^^^^^^^ `__thread` was already specified
+  |
+  = note: C11 §6.7.1p2: thread storage combines only with `static` or `extern`, and GNU `__thread` does not combine with `_Thread_local`
+
+error: cannot combine `constexpr` and `thread_local`
+ --> parser-thread-storage-conflict.c:5:11
+  |
+5 | constexpr thread_local int d = 1;
+  |           ^^^^^^^^^^^^ `constexpr` was already specified
+  |
+  = note: C11 §6.7.1p2: thread storage combines only with `static` or `extern`, and GNU `__thread` does not combine with `_Thread_local`
+
+5 errors generated.

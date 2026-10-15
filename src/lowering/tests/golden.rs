@@ -269,6 +269,24 @@ int first(void) { return __func__[0]; }",
 }
 
 #[test]
+fn pretty_function_names_hold_the_signature() {
+    golden(
+        "pretty_function_name",
+        "const char *signature(int n, const char *s) { return __PRETTY_FUNCTION__; }
+int shared(void) { return __FUNCTION__ == __func__ && __PRETTY_FUNCTION__[0] == 'i'; }",
+    );
+}
+
+#[test]
+fn function_names_outside_functions_are_empty_arrays() {
+    golden(
+        "function_name_outside",
+        "const char *plain = __func__;
+const char *pretty = __PRETTY_FUNCTION__;",
+    );
+}
+
+#[test]
 fn implicit_declarations_use_library_prototypes_and_unknown_open_types() {
     let configuration = crate::configuration::CompilerConfiguration::new(
         crate::configuration::CStandard::C89,
@@ -546,4 +564,38 @@ int f(struct m *p) { p->b = 300; p->d = -2; return p->a + p->b + p->c + p->d; }"
     text.push('\n');
     text.push_str(&ir);
     assert_snapshot("tests/fixtures/lowering/bit_fields_msvc.ir", &text);
+}
+
+#[test]
+fn computed_gotos_branch_through_one_indirect_block() {
+    // GNU extension: GCC "Labels as Values". Address-taken labels become IR
+    // labels in address order, static tables and differences become label
+    // relocations, every `goto *` passes its address to one block ending in
+    // `indirect_br`, and `void *` arithmetic steps by bytes.
+    golden(
+        "computed_goto",
+        "int dispatch(int k, int n) {
+    static const void *const table[] = { &&add, &&twice, &&done };
+    static const int offsets[] = { &&add - &&done, &&done - &&done };
+    int acc = n;
+    goto *table[k];
+add: acc += 1; goto *(&&done + offsets[1]);
+twice: acc *= 2; goto *table[2];
+done: return acc;
+}",
+    );
+}
+
+#[test]
+fn thread_storage_becomes_thread_local_globals() {
+    golden(
+        "thread_local",
+        "_Thread_local int counter = 3;
+extern __thread long shared;
+static _Thread_local char name[4] = \"tls\";
+int next(void) { static __thread int calls; extern _Thread_local int counter; calls++; return \
+         counter++ + calls; }
+long *address(void) { return &shared; }
+char first(void) { return name[0]; }",
+    );
 }

@@ -1,0 +1,1282 @@
+//! Declarative GCC scalar and resource-header special-form contracts.
+//! GNU extension: GCC Other/Bit Operation/Byte-Swapping/Integer Overflow
+//! Builtins. <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+//! <https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html>
+//! C99: §6.5.2.2p2,p7, pp. 71-72; PDF pp. 83-84;
+//! §7.15.1, pp. 249-251; PDF pp. 261-263 (varargs).
+use super::{
+    ArgumentEvaluation as E,
+    ArgumentRule as A,
+    Availability,
+    BitOperation,
+    BuiltinDescriptor,
+    BuiltinEffectClass,
+    BuiltinId as Id,
+    BuiltinOperation as B,
+    ConstantConstraint as K,
+    ConstraintDiagnostic as D,
+    ConversionRule as C,
+    DesignatorPolicy,
+    FloatOperation,
+    NamingPolicy,
+    OverflowOperation,
+    Signature,
+    SignatureType as T,
+    SyntaxForm,
+    TypeRule,
+    VaOperation,
+};
+use crate::target::Scalar as S;
+
+pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
+    descriptor(
+        Id::AddOverflow,
+        "__builtin_add_overflow",
+        B::Overflow(OverflowOperation::Add, None, false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value), A::value(C::Value), A::value(C::Value)],
+        3,
+    ),
+    descriptor(
+        Id::AddOverflowP,
+        "__builtin_add_overflow_p",
+        B::Overflow(OverflowOperation::Add, None, true),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Value),
+            A::value(C::Value),
+            A::evaluation(E::EffectsOnly),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::Alloca,
+        "__builtin_alloca",
+        B::Alloca,
+        Signature {
+            result:     T::Pointer(S::Void, false),
+            parameters: &[T::Size],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Size))],
+        1,
+    ),
+    descriptor(
+        Id::AssumeAligned,
+        "__builtin_assume_aligned",
+        B::Aligned,
+        Signature {
+            result:     T::Pointer(S::Void, false),
+            parameters: &[T::Pointer(S::Void, true), T::Size],
+            prototype:  true,
+            variadic:   true,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Void, true))),
+            A::constrained(C::Parameter(T::Size), K::ConvertedPowerOfTwo, D::Alignment),
+            A::value(C::Parameter(T::Size)),
+        ],
+        2,
+    ),
+    descriptor(
+        Id::Bswap16,
+        "__builtin_bswap16",
+        B::Bswap(16),
+        Signature {
+            result:     T::Unsigned(16),
+            parameters: &[T::Unsigned(16)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Unsigned(16)))],
+        1,
+    ),
+    descriptor(
+        Id::Bswap32,
+        "__builtin_bswap32",
+        B::Bswap(32),
+        Signature {
+            result:     T::Unsigned(32),
+            parameters: &[T::Unsigned(32)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Unsigned(32)))],
+        1,
+    ),
+    descriptor(
+        Id::Bswap64,
+        "__builtin_bswap64",
+        B::Bswap(64),
+        Signature {
+            result:     T::Unsigned(64),
+            parameters: &[T::Unsigned(64)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Unsigned(64)))],
+        1,
+    ),
+    descriptor(
+        Id::Clrsb,
+        "__builtin_clrsb",
+        B::Bit(BitOperation::Clrsb, S::Int),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+        1,
+    ),
+    descriptor(
+        Id::Clrsbl,
+        "__builtin_clrsbl",
+        B::Bit(BitOperation::Clrsb, S::Long),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Long)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Long)))],
+        1,
+    ),
+    descriptor(
+        Id::Clrsbll,
+        "__builtin_clrsbll",
+        B::Bit(BitOperation::Clrsb, S::LongLong),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::LongLong)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::LongLong)))],
+        1,
+    ),
+    descriptor(
+        Id::Clz,
+        "__builtin_clz",
+        B::Bit(BitOperation::Clz, S::UnsignedInt),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::UnsignedInt)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::UnsignedInt)))],
+        1,
+    ),
+    descriptor(
+        Id::Clzl,
+        "__builtin_clzl",
+        B::Bit(BitOperation::Clz, S::UnsignedLong),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::UnsignedLong)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::UnsignedLong)))],
+        1,
+    ),
+    descriptor(
+        Id::Clzll,
+        "__builtin_clzll",
+        B::Bit(BitOperation::Clz, S::UnsignedLongLong),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::UnsignedLongLong)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::UnsignedLongLong)))],
+        1,
+    ),
+    descriptor(
+        Id::ConstantP,
+        "__builtin_constant_p",
+        B::Constant,
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::evaluation(E::Unevaluated)],
+        1,
+    ),
+    descriptor(
+        Id::Copysign,
+        "__builtin_copysign",
+        B::Float(FloatOperation::Copysign, Some(S::Double)),
+        Signature {
+            result:     T::Scalar(S::Double),
+            parameters: &[T::Scalar(S::Double), T::Scalar(S::Double)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::Double))),
+            A::value(C::Parameter(T::Scalar(S::Double))),
+        ],
+        2,
+    ),
+    descriptor(
+        Id::Copysignf,
+        "__builtin_copysignf",
+        B::Float(FloatOperation::Copysign, Some(S::Float)),
+        Signature {
+            result:     T::Scalar(S::Float),
+            parameters: &[T::Scalar(S::Float), T::Scalar(S::Float)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::Float))),
+            A::value(C::Parameter(T::Scalar(S::Float))),
+        ],
+        2,
+    ),
+    descriptor(
+        Id::Copysignl,
+        "__builtin_copysignl",
+        B::Float(FloatOperation::Copysign, Some(S::LongDouble)),
+        Signature {
+            result:     T::Scalar(S::LongDouble),
+            parameters: &[T::Scalar(S::LongDouble), T::Scalar(S::LongDouble)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::LongDouble))),
+            A::value(C::Parameter(T::Scalar(S::LongDouble))),
+        ],
+        2,
+    ),
+    descriptor(
+        Id::Ctz,
+        "__builtin_ctz",
+        B::Bit(BitOperation::Ctz, S::UnsignedInt),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::UnsignedInt)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::UnsignedInt)))],
+        1,
+    ),
+    descriptor(
+        Id::Ctzl,
+        "__builtin_ctzl",
+        B::Bit(BitOperation::Ctz, S::UnsignedLong),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::UnsignedLong)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::UnsignedLong)))],
+        1,
+    ),
+    descriptor(
+        Id::Ctzll,
+        "__builtin_ctzll",
+        B::Bit(BitOperation::Ctz, S::UnsignedLongLong),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::UnsignedLongLong)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::UnsignedLongLong)))],
+        1,
+    ),
+    descriptor(
+        Id::DynamicObjectSize,
+        "__builtin_dynamic_object_size",
+        B::ObjectSize(true),
+        Signature {
+            result:     T::Size,
+            parameters: &[T::Pointer(S::Void, true), T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A {
+                evaluation: E::Unevaluated,
+                ..A::value(C::Parameter(T::Pointer(S::Void, true)))
+            },
+            A {
+                evaluation: E::Unevaluated,
+                ..A::constrained(
+                    C::Parameter(T::Scalar(S::Int)),
+                    K::ConvertedIntegerRange(3),
+                    D::ObjectSizeMode,
+                )
+            },
+        ],
+        2,
+    ),
+    descriptor(
+        Id::Expect,
+        "__builtin_expect",
+        B::Expect(false),
+        Signature {
+            result:     T::Scalar(S::Long),
+            parameters: &[T::Scalar(S::Long), T::Scalar(S::Long)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::Long))),
+            A::value(C::Parameter(T::Scalar(S::Long))),
+        ],
+        2,
+    ),
+    descriptor(
+        Id::ExpectWithProbability,
+        "__builtin_expect_with_probability",
+        B::Expect(true),
+        Signature {
+            result:     T::Scalar(S::Long),
+            parameters: &[T::Scalar(S::Long), T::Scalar(S::Long), T::Scalar(S::Double)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::Long))),
+            A::value(C::Parameter(T::Scalar(S::Long))),
+            A::constrained(
+                C::Parameter(T::Scalar(S::Double)),
+                K::ConvertedProbability,
+                D::Probability,
+            ),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::Ffs,
+        "__builtin_ffs",
+        B::Bit(BitOperation::Ffs, S::Int),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+        1,
+    ),
+    descriptor(
+        Id::Ffsl,
+        "__builtin_ffsl",
+        B::Bit(BitOperation::Ffs, S::Long),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Long)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Long)))],
+        1,
+    ),
+    descriptor(
+        Id::Ffsll,
+        "__builtin_ffsll",
+        B::Bit(BitOperation::Ffs, S::LongLong),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::LongLong)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::LongLong)))],
+        1,
+    ),
+    descriptor(
+        Id::Isinf,
+        "__builtin_isinf",
+        B::Float(FloatOperation::Isinf, None),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value)],
+        1,
+    ),
+    descriptor(
+        Id::Isinff,
+        "__builtin_isinff",
+        B::Float(FloatOperation::Isinf, Some(S::Float)),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Float)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Float)))],
+        1,
+    ),
+    descriptor(
+        Id::Isinfl,
+        "__builtin_isinfl",
+        B::Float(FloatOperation::Isinf, Some(S::LongDouble)),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::LongDouble)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::LongDouble)))],
+        1,
+    ),
+    descriptor(
+        Id::MulOverflow,
+        "__builtin_mul_overflow",
+        B::Overflow(OverflowOperation::Mul, None, false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value), A::value(C::Value), A::value(C::Value)],
+        3,
+    ),
+    descriptor(
+        Id::MulOverflowP,
+        "__builtin_mul_overflow_p",
+        B::Overflow(OverflowOperation::Mul, None, true),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Value),
+            A::value(C::Value),
+            A::evaluation(E::EffectsOnly),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::ObjectSize,
+        "__builtin_object_size",
+        B::ObjectSize(false),
+        Signature {
+            result:     T::Size,
+            parameters: &[T::Pointer(S::Void, true), T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A {
+                evaluation: E::Unevaluated,
+                ..A::value(C::Parameter(T::Pointer(S::Void, true)))
+            },
+            A {
+                evaluation: E::Unevaluated,
+                ..A::constrained(
+                    C::Parameter(T::Scalar(S::Int)),
+                    K::ConvertedIntegerRange(3),
+                    D::ObjectSizeMode,
+                )
+            },
+        ],
+        2,
+    ),
+    descriptor(
+        Id::Offsetof,
+        "__builtin_offsetof",
+        B::Offsetof,
+        Signature {
+            result:     T::Size,
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A {
+            conversion: C::Type,
+            ..A::evaluation(E::Type)
+        }],
+        1,
+    ),
+    descriptor(
+        Id::Parity,
+        "__builtin_parity",
+        B::Bit(BitOperation::Parity, S::UnsignedInt),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::UnsignedInt)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::UnsignedInt)))],
+        1,
+    ),
+    descriptor(
+        Id::Parityl,
+        "__builtin_parityl",
+        B::Bit(BitOperation::Parity, S::UnsignedLong),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::UnsignedLong)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::UnsignedLong)))],
+        1,
+    ),
+    descriptor(
+        Id::Parityll,
+        "__builtin_parityll",
+        B::Bit(BitOperation::Parity, S::UnsignedLongLong),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::UnsignedLongLong)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::UnsignedLongLong)))],
+        1,
+    ),
+    descriptor(
+        Id::Popcount,
+        "__builtin_popcount",
+        B::Bit(BitOperation::Popcount, S::UnsignedInt),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::UnsignedInt)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::UnsignedInt)))],
+        1,
+    ),
+    descriptor(
+        Id::Popcountl,
+        "__builtin_popcountl",
+        B::Bit(BitOperation::Popcount, S::UnsignedLong),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::UnsignedLong)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::UnsignedLong)))],
+        1,
+    ),
+    descriptor(
+        Id::Popcountll,
+        "__builtin_popcountll",
+        B::Bit(BitOperation::Popcount, S::UnsignedLongLong),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::UnsignedLongLong)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::UnsignedLongLong)))],
+        1,
+    ),
+    descriptor(
+        Id::Prefetch,
+        "__builtin_prefetch",
+        B::Prefetch,
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[T::Pointer(S::Void, true)],
+            prototype:  true,
+            variadic:   true,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Void, true))),
+            A::constrained(
+                C::Parameter(T::Scalar(S::Int)),
+                K::OriginalIntegerRange(1),
+                D::PrefetchReadWrite,
+            ),
+            A::constrained(
+                C::Parameter(T::Scalar(S::Int)),
+                K::OriginalIntegerRange(3),
+                D::PrefetchLocality,
+            ),
+        ],
+        1,
+    ),
+    descriptor(
+        Id::SaddOverflow,
+        "__builtin_sadd_overflow",
+        B::Overflow(OverflowOperation::Add, Some(S::Int), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::Int),
+                T::Scalar(S::Int),
+                T::Pointer(S::Int, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::Int))),
+            A::value(C::Parameter(T::Scalar(S::Int))),
+            A::value(C::Parameter(T::Pointer(S::Int, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::SaddlOverflow,
+        "__builtin_saddl_overflow",
+        B::Overflow(OverflowOperation::Add, Some(S::Long), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::Long),
+                T::Scalar(S::Long),
+                T::Pointer(S::Long, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::Long))),
+            A::value(C::Parameter(T::Scalar(S::Long))),
+            A::value(C::Parameter(T::Pointer(S::Long, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::SaddllOverflow,
+        "__builtin_saddll_overflow",
+        B::Overflow(OverflowOperation::Add, Some(S::LongLong), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::LongLong),
+                T::Scalar(S::LongLong),
+                T::Pointer(S::LongLong, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::LongLong))),
+            A::value(C::Parameter(T::Scalar(S::LongLong))),
+            A::value(C::Parameter(T::Pointer(S::LongLong, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::Signbit,
+        "__builtin_signbit",
+        B::Float(FloatOperation::Signbit, None),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value)],
+        1,
+    ),
+    descriptor(
+        Id::Signbitf,
+        "__builtin_signbitf",
+        B::Float(FloatOperation::Signbit, Some(S::Float)),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Float)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Float)))],
+        1,
+    ),
+    descriptor(
+        Id::Signbitl,
+        "__builtin_signbitl",
+        B::Float(FloatOperation::Signbit, Some(S::LongDouble)),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::LongDouble)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::LongDouble)))],
+        1,
+    ),
+    descriptor(
+        Id::SmulOverflow,
+        "__builtin_smul_overflow",
+        B::Overflow(OverflowOperation::Mul, Some(S::Int), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::Int),
+                T::Scalar(S::Int),
+                T::Pointer(S::Int, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::Int))),
+            A::value(C::Parameter(T::Scalar(S::Int))),
+            A::value(C::Parameter(T::Pointer(S::Int, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::SmullOverflow,
+        "__builtin_smull_overflow",
+        B::Overflow(OverflowOperation::Mul, Some(S::Long), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::Long),
+                T::Scalar(S::Long),
+                T::Pointer(S::Long, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::Long))),
+            A::value(C::Parameter(T::Scalar(S::Long))),
+            A::value(C::Parameter(T::Pointer(S::Long, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::SmulllOverflow,
+        "__builtin_smulll_overflow",
+        B::Overflow(OverflowOperation::Mul, Some(S::LongLong), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::LongLong),
+                T::Scalar(S::LongLong),
+                T::Pointer(S::LongLong, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::LongLong))),
+            A::value(C::Parameter(T::Scalar(S::LongLong))),
+            A::value(C::Parameter(T::Pointer(S::LongLong, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::SsubOverflow,
+        "__builtin_ssub_overflow",
+        B::Overflow(OverflowOperation::Sub, Some(S::Int), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::Int),
+                T::Scalar(S::Int),
+                T::Pointer(S::Int, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::Int))),
+            A::value(C::Parameter(T::Scalar(S::Int))),
+            A::value(C::Parameter(T::Pointer(S::Int, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::SsublOverflow,
+        "__builtin_ssubl_overflow",
+        B::Overflow(OverflowOperation::Sub, Some(S::Long), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::Long),
+                T::Scalar(S::Long),
+                T::Pointer(S::Long, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::Long))),
+            A::value(C::Parameter(T::Scalar(S::Long))),
+            A::value(C::Parameter(T::Pointer(S::Long, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::SsubllOverflow,
+        "__builtin_ssubll_overflow",
+        B::Overflow(OverflowOperation::Sub, Some(S::LongLong), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::LongLong),
+                T::Scalar(S::LongLong),
+                T::Pointer(S::LongLong, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::LongLong))),
+            A::value(C::Parameter(T::Scalar(S::LongLong))),
+            A::value(C::Parameter(T::Pointer(S::LongLong, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::SubOverflow,
+        "__builtin_sub_overflow",
+        B::Overflow(OverflowOperation::Sub, None, false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value), A::value(C::Value), A::value(C::Value)],
+        3,
+    ),
+    descriptor(
+        Id::SubOverflowP,
+        "__builtin_sub_overflow_p",
+        B::Overflow(OverflowOperation::Sub, None, true),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Value),
+            A::value(C::Value),
+            A::evaluation(E::EffectsOnly),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::Trap,
+        "__builtin_trap",
+        B::Trap,
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[],
+        0,
+    ),
+    descriptor(
+        Id::UaddOverflow,
+        "__builtin_uadd_overflow",
+        B::Overflow(OverflowOperation::Add, Some(S::UnsignedInt), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::UnsignedInt),
+                T::Scalar(S::UnsignedInt),
+                T::Pointer(S::UnsignedInt, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedInt))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedInt))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedInt, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::UaddlOverflow,
+        "__builtin_uaddl_overflow",
+        B::Overflow(OverflowOperation::Add, Some(S::UnsignedLong), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::UnsignedLong),
+                T::Scalar(S::UnsignedLong),
+                T::Pointer(S::UnsignedLong, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedLong))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedLong))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedLong, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::UaddllOverflow,
+        "__builtin_uaddll_overflow",
+        B::Overflow(OverflowOperation::Add, Some(S::UnsignedLongLong), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::UnsignedLongLong),
+                T::Scalar(S::UnsignedLongLong),
+                T::Pointer(S::UnsignedLongLong, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedLongLong))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedLongLong))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedLongLong, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::UmulOverflow,
+        "__builtin_umul_overflow",
+        B::Overflow(OverflowOperation::Mul, Some(S::UnsignedInt), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::UnsignedInt),
+                T::Scalar(S::UnsignedInt),
+                T::Pointer(S::UnsignedInt, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedInt))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedInt))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedInt, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::UmullOverflow,
+        "__builtin_umull_overflow",
+        B::Overflow(OverflowOperation::Mul, Some(S::UnsignedLong), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::UnsignedLong),
+                T::Scalar(S::UnsignedLong),
+                T::Pointer(S::UnsignedLong, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedLong))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedLong))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedLong, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::UmulllOverflow,
+        "__builtin_umulll_overflow",
+        B::Overflow(OverflowOperation::Mul, Some(S::UnsignedLongLong), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::UnsignedLongLong),
+                T::Scalar(S::UnsignedLongLong),
+                T::Pointer(S::UnsignedLongLong, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedLongLong))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedLongLong))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedLongLong, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::Unreachable,
+        "__builtin_unreachable",
+        B::Unreachable,
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[],
+        0,
+    ),
+    descriptor(
+        Id::UsubOverflow,
+        "__builtin_usub_overflow",
+        B::Overflow(OverflowOperation::Sub, Some(S::UnsignedInt), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::UnsignedInt),
+                T::Scalar(S::UnsignedInt),
+                T::Pointer(S::UnsignedInt, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedInt))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedInt))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedInt, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::UsublOverflow,
+        "__builtin_usubl_overflow",
+        B::Overflow(OverflowOperation::Sub, Some(S::UnsignedLong), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::UnsignedLong),
+                T::Scalar(S::UnsignedLong),
+                T::Pointer(S::UnsignedLong, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedLong))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedLong))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedLong, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::UsubllOverflow,
+        "__builtin_usubll_overflow",
+        B::Overflow(OverflowOperation::Sub, Some(S::UnsignedLongLong), false),
+        Signature {
+            result:     T::Scalar(S::Bool),
+            parameters: &[
+                T::Scalar(S::UnsignedLongLong),
+                T::Scalar(S::UnsignedLongLong),
+                T::Pointer(S::UnsignedLongLong, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedLongLong))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedLongLong))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedLongLong, false))),
+        ],
+        3,
+    ),
+    descriptor(
+        Id::VaArg,
+        "__builtin_va_arg",
+        B::Varargs(VaOperation::Arg),
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[
+            A {
+                diagnostic: D::VaList,
+                ..A::evaluation(E::StorageAddress)
+            },
+            A {
+                conversion: C::Type,
+                diagnostic: D::VaArgType,
+                ..A::evaluation(E::Type)
+            },
+        ],
+        2,
+    ),
+    descriptor(
+        Id::VaCopy,
+        "__builtin_va_copy",
+        B::Varargs(VaOperation::Copy),
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[
+            A {
+                diagnostic: D::VaList,
+                ..A::evaluation(E::StorageAddress)
+            },
+            A {
+                diagnostic: D::VaList,
+                ..A::evaluation(E::StorageAddress)
+            },
+        ],
+        2,
+    ),
+    descriptor(
+        Id::VaEnd,
+        "__builtin_va_end",
+        B::Varargs(VaOperation::End),
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A {
+            diagnostic: D::VaList,
+            ..A::evaluation(E::StorageAddress)
+        }],
+        1,
+    ),
+    descriptor(
+        Id::VaStart,
+        "__builtin_va_start",
+        B::Varargs(VaOperation::Start),
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[
+            A {
+                diagnostic: D::VaList,
+                ..A::evaluation(E::StorageAddress)
+            },
+            A::evaluation(E::Unevaluated),
+        ],
+        2,
+    ),
+    descriptor(
+        Id::PlainAlloca,
+        "alloca",
+        B::Alloca,
+        Signature {
+            result:     T::Pointer(S::Void, false),
+            parameters: &[T::Size],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Size))],
+        1,
+    ),
+];
+
+const fn descriptor(
+    id: Id,
+    spelling: &'static str,
+    operation: B,
+    signature: Signature,
+    arguments: &'static [A],
+    minimum: usize,
+) -> BuiltinDescriptor {
+    let (type_rule, effects, feature, syntax) = match operation {
+        | B::Varargs(VaOperation::Arg) => (
+            TypeRule::Varargs,
+            BuiltinEffectClass::Write,
+            None,
+            SyntaxForm::VaArg,
+        ),
+        | B::Varargs(_) => (
+            TypeRule::Varargs,
+            BuiltinEffectClass::Write,
+            None,
+            SyntaxForm::OrdinaryCall,
+        ),
+        | B::Offsetof => (
+            TypeRule::Offsetof,
+            BuiltinEffectClass::Query,
+            None,
+            SyntaxForm::Offsetof,
+        ),
+        | B::Float(..) => (
+            TypeRule::Floating,
+            BuiltinEffectClass::Pure,
+            Some(crate::configuration::Feature::GnuBuiltins),
+            SyntaxForm::OrdinaryCall,
+        ),
+        | B::Overflow(_, _, predicate) => (
+            TypeRule::Overflow,
+            if predicate {
+                BuiltinEffectClass::Pure
+            } else {
+                BuiltinEffectClass::Write
+            },
+            Some(crate::configuration::Feature::GnuBuiltins),
+            SyntaxForm::OrdinaryCall,
+        ),
+        | B::Constant | B::ObjectSize(_) => (
+            TypeRule::Fixed,
+            BuiltinEffectClass::Query,
+            Some(crate::configuration::Feature::GnuBuiltins),
+            SyntaxForm::OrdinaryCall,
+        ),
+        | B::Alloca => (
+            TypeRule::Fixed,
+            BuiltinEffectClass::Allocate,
+            Some(crate::configuration::Feature::GnuBuiltins),
+            SyntaxForm::OrdinaryCall,
+        ),
+        | B::Trap | B::Unreachable => (
+            TypeRule::Fixed,
+            BuiltinEffectClass::Control,
+            Some(crate::configuration::Feature::GnuBuiltins),
+            SyntaxForm::OrdinaryCall,
+        ),
+        | _ => (
+            TypeRule::Fixed,
+            BuiltinEffectClass::Pure,
+            Some(crate::configuration::Feature::GnuBuiltins),
+            SyntaxForm::OrdinaryCall,
+        ),
+    };
+    BuiltinDescriptor {
+        id,
+        spelling,
+        operation,
+        signature,
+        arguments,
+        type_rule,
+        effects,
+        syntax,
+        arity: (minimum, arguments.len()),
+        library: None,
+        designator: DesignatorPolicy::DirectCallOnly,
+        availability: Availability {
+            feature,
+            naming: if matches!(id, Id::PlainAlloca) {
+                NamingPolicy::GnuOrdinary
+            } else {
+                NamingPolicy::Reserved
+            },
+        },
+    }
+}

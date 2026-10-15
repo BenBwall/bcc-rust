@@ -21,13 +21,23 @@ use crate::{
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    pub(super) fn record_bound_origins(
+        &mut self,
+        bounds: &[usize],
+        site: super::BoundEvaluationSite,
+    ) {
+        for &bound in bounds {
+            _ = self.bound_origins.entry(bound).or_insert(site);
+        }
+    }
+
     pub(super) fn retain_expression_actions(&mut self, expression: &'tu Expression<'tu>) {
         // Normalize the written type site once. Both effect classification and
         // value/effects lowering consume this same generic prelude record.
         if let ExpressionType::Cast { target_type, .. } = expression.kind
             && let Some(&site) = self
                 .type_name_sites
-                .get(&std::ptr::from_ref(target_type).addr())
+                .get(&super::type_name_identity(target_type))
         {
             _ = self
                 .expression_actions
@@ -108,7 +118,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | SyntaxOperand::Expression(expression) =>
                     self.types.tu.alloc_slice_copy(&[expression]),
                 | SyntaxOperand::Type(name) => {
-                    let Some(site) = self.type_name_sites.get(&std::ptr::from_ref(name).addr())
+                    let Some(site) = self.type_name_sites.get(&super::type_name_identity(name))
                     else {
                         self.values.push(self.types.unknown());
                         return;

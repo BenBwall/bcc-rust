@@ -4,6 +4,8 @@
 //! the constant conversions (`floats.rs`), and the constructs
 //! lowering refuses (`refusals.rs`).
 
+mod correspondence;
+mod effects;
 mod extensions;
 mod floats;
 mod golden;
@@ -12,6 +14,8 @@ mod layout;
 mod numeric_programs;
 pub(crate) mod programs;
 mod refusals;
+mod registry;
+mod resolved;
 mod review;
 
 use std::path::Path;

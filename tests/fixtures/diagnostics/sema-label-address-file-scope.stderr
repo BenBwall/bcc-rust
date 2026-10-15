@@ -1,0 +1,9 @@
+error: label address outside a function body: `x`
+ --> sema-label-address-file-scope.c:1:11
+  |
+1 | void *p = &&x;
+  |           ^^^ label address outside a function
+  |
+  = note: GCC Labels as Values: `&&label` names a label of the function that contains it
+
+1 error generated.

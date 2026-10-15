@@ -13,6 +13,7 @@ mod fold;
 mod gvn;
 mod inline;
 mod known_bits;
+mod labels;
 mod licm;
 mod loops;
 mod memory;

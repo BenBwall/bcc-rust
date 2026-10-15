@@ -63,6 +63,10 @@ impl Expander<'_, '_, '_, '_> {
                 {
                     self.context
                         .record_expansion_end(result.source_vectors, site);
+                    if let Some(start) = self.expansion_start() {
+                        self.context
+                            .record_expansion_start(result.source_vectors, start);
+                    }
                 }
                 return Some(result);
             }
@@ -92,6 +96,9 @@ impl Expander<'_, '_, '_, '_> {
     /// C99: §5.1.1.2 paragraph 1 item 6, p. 10; PDF p. 22.
     pub(in crate::translation_phases::preprocessing) fn next_item(&mut self) -> Option<Token> {
         let token = self.next_parser_token()?;
+        // Count before string lookahead: a pragma read beyond a string belongs
+        // after that output token, even while its concatenation is pending.
+        self.context.preprocessed_tokens += 1;
         Some(self.concatenate_adjacent_strings(token))
     }
 }

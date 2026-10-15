@@ -60,6 +60,21 @@ impl Verifier<'_, '_, '_, '_> {
                         }
                         valid
                     },
+                    | InstData::IndirectBr { dests, .. } => {
+                        if let Some(calls) = entries(body, dests.0, 1, 1) {
+                            let mut valid = true;
+                            for call in calls {
+                                valid &= self.pool_edge(inst, BlockCall(call.as_u32()));
+                            }
+                            valid
+                        } else {
+                            self.error(
+                                Location::Inst(inst),
+                                VerifierErrorKind::InvalidReference(EntityKind::BlockList, dests.0),
+                            );
+                            false
+                        }
+                    },
                     | _ => true,
                 };
                 sound &= valid;

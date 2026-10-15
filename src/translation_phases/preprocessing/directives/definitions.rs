@@ -523,6 +523,8 @@ impl Expander<'_, '_, '_, '_> {
                 .string_cache
                 .at(token.identifier_id(self.context))
             {
+                // Clang reports this constraint only under -pedantic.
+                | "__VA_ARGS__" if policy == crate::configuration::ExtensionPolicy::Allow => return,
                 | "__VA_ARGS__" => PreprocessorErrorType::VaArgsOutsideVariadicMacro(policy),
                 | "__VA_OPT__" => PreprocessorErrorType::VaOptOutsideVariadicMacro(policy),
                 | _ => return,

@@ -208,7 +208,7 @@ fn ten_thousand_static_locals_use_linear_name_storage() {
     let arena = Bump::new();
     let tables = Bump::new();
     let scratch = Bump::new();
-    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables);
+    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables).unwrap();
     let mut errors = ArenaVec::new_in(&arena);
     unit.prepare_extensions(&mut errors);
     let functions = unit.declare_items(&syntax, &mut errors);
@@ -258,16 +258,17 @@ fn thousands_of_string_symbols_use_linear_arena_space() {
     assert!(sema.lowerable(&context));
     let arena = Bump::new();
     let tables = Bump::new();
-    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables);
+    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables).unwrap();
     // Pre-existing symbols must still be skipped by the suffix counter.
     for name in [".str", ".str.1", ".str.3"] {
         _ = unit.module.declare_global(
             name,
             GlobalDecl {
-                linkage:  Linkage::Internal,
-                size:     0,
-                align:    Align::BYTE,
-                constant: true,
+                linkage:      Linkage::Internal,
+                size:         0,
+                align:        Align::BYTE,
+                constant:     true,
+                thread_local: false,
             },
         );
     }
@@ -539,11 +540,16 @@ fn aggregate_reinitialization_preserves_explicit_bit_fields() {
 }
 
 #[test]
-fn ten_thousand_functions_lower_with_linear_parameter_work() {
+fn m2_many_functions_and_declarations_have_linear_correspondence_work() {
     use std::fmt::Write as _;
     let mut source = String::new();
     for index in 0..10_000 {
-        writeln!(source, "int f{index}(int n, int a[n]) {{ return n; }}").unwrap();
+        writeln!(
+            source,
+            "int f{index}(int n, int a[n]) {{ int x=1,y=2,z=3,u=4,v=5,w=6; return n+x+y+z+u+v+w; \
+             }}"
+        )
+        .unwrap();
     }
     let tu = Bump::new();
     let mut context = Context::new(&tu);
@@ -557,7 +563,7 @@ fn ten_thousand_functions_lower_with_linear_parameter_work() {
     assert!(sema.lowerable(&context));
     let arena = Bump::new();
     let tables = Bump::new();
-    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables);
+    let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables).unwrap();
     let mut errors = ArenaVec::new_in(&arena);
     unit.prepare_extensions(&mut errors);
     let functions = unit.declare_items(&syntax, &mut errors);
@@ -575,4 +581,16 @@ fn ten_thousand_functions_lower_with_linear_parameter_work() {
     }
     assert_eq!(unit.module.functions().count(), 10_000);
     assert_eq!(unit.parameter_alias_visits, 20_000);
+    assert_eq!(sema.correspondence.declarations.len(), 70_000);
+    assert!(sema.correspondence.work <= sema.bindings.len());
+    eprintln!(
+        "M2 work: functions=10000 parameters=20000 declarations={} bindings={} construction={} \
+         aliases={} TU used={} committed={}",
+        sema.correspondence.declarations.len(),
+        sema.bindings.len(),
+        sema.correspondence.work,
+        unit.parameter_alias_visits,
+        tu.used(),
+        tu.committed()
+    );
 }

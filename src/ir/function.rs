@@ -4,12 +4,14 @@
 //! The pools hold what does not fit in a 16-byte instruction record. The
 //! value pool stores each list with its length first: a [`ValueList`] is
 //! `[len, values...]`, a [`BlockCall`] is `[len, block, args...]`, and a
-//! [`CaseList`] is `[len, (constant, block call)...]`. Lengths, blocks and
-//! constants are stored as raw indices in the pool's `Value` slots.
+//! [`CaseList`] is `[len, (constant, block call)...]` and a [`BlockList`] is
+//! `[len, block call...]`. Lengths, blocks and constants are stored as raw
+//! indices in the pool's `Value` slots.
 
 use super::{
     entities::{
         Block,
+        BlockLabel,
         ConstId,
         Entity,
         Inst,
@@ -20,6 +22,7 @@ use super::{
     instructions::{
         Align,
         BlockCall,
+        BlockList,
         CaseList,
         InstData,
         MemFlags,
@@ -42,6 +45,9 @@ pub(crate) struct Body<'ir> {
     pub(super) results:     Table<'ir, Inst, Option<Value>>,
     pub(super) values:      Table<'ir, Value, ValueData>,
     pub(super) stack_slots: Table<'ir, StackSlot, StackSlotData>,
+    /// The block each label names: the blocks whose address `block_addr`
+    /// and global relocations may take.
+    pub(super) labels:      Table<'ir, BlockLabel, Block>,
     pub(super) pool:        ArenaVec<'ir, Value>,
     pub(super) constants:   Table<'ir, ConstId, u128>,
 }
@@ -114,6 +120,31 @@ impl<'ir> Body<'ir> {
         self.stack_slots.iter().map(|(slot, &data)| (slot, data))
     }
 
+    /// Every label with the block it names, in label order.
+    pub(crate) fn labels(&self) -> impl DoubleEndedIterator<Item = (BlockLabel, Block)> {
+        self.labels.iter().map(|(label, &block)| (label, block))
+    }
+
+    pub(crate) fn label_count(&self) -> usize {
+        self.labels.len()
+    }
+
+    /// The block `label` names, if the label exists.
+    pub(crate) fn label_block(&self, label: BlockLabel) -> Option<Block> {
+        self.labels.get(label).copied()
+    }
+
+    /// Whether the body takes the address of a block or branches
+    /// indirectly: the optimizer's inliner refuses such callees, as LLVM
+    /// does, because each copy would need its own labels.
+    pub(crate) fn has_indirect_control(&self) -> bool {
+        !self.labels.is_empty()
+            || self.blocks().any(|block| {
+                self.terminator(block)
+                    .is_some_and(|inst| matches!(self.insts[inst], InstData::IndirectBr { .. }))
+            })
+    }
+
     pub(crate) fn value_list(&self, list: ValueList) -> &[Value] {
         let start = list.0 as usize;
         let len = self.pool[start].index();
@@ -145,6 +176,15 @@ impl<'ir> Body<'ir> {
                     BlockCall(pair[1].as_u32()),
                 )
             })
+    }
+
+    /// Each edge of an `indirect_br`, in order.
+    pub(crate) fn block_list(&self, list: BlockList) -> impl ExactSizeIterator<Item = BlockCall> {
+        let start = list.0 as usize;
+        let len = self.pool[start].index();
+        self.pool[start + 1..start + 1 + len]
+            .iter()
+            .map(|call| BlockCall(call.as_u32()))
     }
 
     pub(crate) fn constant(&self, constant: ConstId) -> u128 {
@@ -221,18 +261,26 @@ impl<'ir> Body<'ir> {
                 }
             },
             | InstData::Return { value } => value.into_iter().for_each(visit),
+            | InstData::IndirectBr { addr, dests } => {
+                visit(addr);
+                for dest in self.block_list(dests) {
+                    edge(dest, &mut visit);
+                }
+            },
             | InstData::Const { .. }
             | InstData::WideConst { .. }
             | InstData::Nullary { .. }
             | InstData::StackAddr { .. }
             | InstData::GlobalAddr { .. }
             | InstData::FuncAddr { .. }
+            | InstData::BlockAddr { .. }
             | InstData::Unreachable => {},
         }
     }
 
     /// Calls `visit` with each edge of a terminator: the `brif` targets in
-    /// order, or a `switch`'s default and then its cases.
+    /// order, a `switch`'s default and then its cases, or an
+    /// `indirect_br`'s listed targets.
     pub(crate) fn visit_destinations(&self, inst: Inst, mut visit: impl FnMut(BlockCall)) {
         match self.insts[inst] {
             | InstData::Jump { dest } => visit(dest),
@@ -241,6 +289,7 @@ impl<'ir> Body<'ir> {
                 visit(default);
                 self.switch_cases(cases).for_each(|(_, dest)| visit(dest));
             },
+            | InstData::IndirectBr { dests, .. } => self.block_list(dests).for_each(visit),
             | _ => {},
         }
     }
@@ -294,6 +343,7 @@ impl<'ir> Body<'ir> {
             results:     Table::new_in(arena),
             values:      Table::new_in(arena),
             stack_slots: Table::new_in(arena),
+            labels:      Table::new_in(arena),
             pool:        ArenaVec::new_in(arena),
             constants:   Table::new_in(arena),
         }
