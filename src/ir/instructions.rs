@@ -306,6 +306,13 @@ named! {
         /// Captures the dynamic stack position for block lifetime cleanup.
         /// C99: §6.2.4p6, p. 32; PDF p. 44.
         StackSave = "stack_save",
+        /// The current function's frame address, as GCC's
+        /// `__builtin_frame_address (0)`.
+        /// <https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html>
+        FrameAddress = "frame_address",
+        /// The current function's return address, as GCC's
+        /// `__builtin_return_address (0)`.
+        ReturnAddress = "return_address",
         StackRestore = "stack_restore",
         Trap = "trap",
         Icmp = "icmp",
@@ -449,6 +456,8 @@ impl Opcode {
                 | Self::VaCopy
                 | Self::VaEnd
                 | Self::StackSave
+                | Self::FrameAddress
+                | Self::ReturnAddress
                 | Self::StackRestore
                 | Self::VaArgAggregate
                 | Self::Jump

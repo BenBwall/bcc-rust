@@ -1,9 +1,9 @@
 //! Vendor declaration modifiers. Semantic analysis validates attributes and
 //! conventions once and retains the meanings code generation lacks as
 //! capability refusals, wherever they were written: declarations, typedefs,
-//! abstract casts or function pointers. This file reports those refusals
-//! and records GNU assembler labels before any declaration or definition
-//! can reserve the ordinary C spelling.
+//! abstract casts or function pointers. This file records GNU assembler
+//! labels before reachability merges linked declarations, then reports the
+//! refusals and label errors of emitted definitions and file declarations.
 //! C99: §6.7, p. 97; PDF p. 109; §6.7.5-6.7.6, pp. 114-122;
 //! PDF pp. 126-134 (GNU/MSVC extensions to declarations and type names).
 
@@ -36,18 +36,13 @@ use crate::{
 };
 
 impl<'a, 'tu> Unit<'a, 'tu, '_> {
-    /// Refuses attribute meanings code generation lacks and records
-    /// assembler labels.
+    /// Records assembler labels before reachability merges linked
+    /// declarations; each error carries its declarator's index.
     /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42 (linked declarations);
     /// §6.7, p. 97; PDF p. 109 (GNU/MSVC declaration extensions).
-    pub(super) fn prepare_extensions(&mut self, errors: &mut ArenaVec<'_, LoweringError>) {
-        for refusal in self.sema.symbols.refusals {
-            errors.push(LoweringError::unsupported(
-                Construct::Attribute(refusal.capability),
-                refusal.source,
-            ));
-        }
-        for declarator in self.sema.declarators {
+    pub(super) fn prepare_symbol_names(&mut self) -> ArenaVec<'a, (usize, LoweringError)> {
+        let mut errors = ArenaVec::new_in(self.tables);
+        for (index, declarator) in self.sema.declarators.iter().enumerate() {
             for direct in declarator.kind {
                 if let DirectDeclarator::AsmLabel(label) = *direct {
                     if self
@@ -57,21 +52,49 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                         .and_then(|fact| fact.binding)
                         .is_none()
                     {
-                        errors.push(LoweringError::missing(
-                            "assembler-label declaration occurrence is not retained",
-                            declarator.source_vectors,
+                        errors.push((
+                            index,
+                            LoweringError::missing(
+                                "assembler-label declaration occurrence is not retained",
+                                declarator.source_vectors,
+                            ),
                         ));
                         continue;
                     }
-                    let result = self.record_label(*declarator, label.template, label.recovered);
-                    if result.is_err() {
-                        errors.push(LoweringError::unsupported(
-                            Construct::AssemblerLabel,
-                            label.source_vectors,
+                    if self
+                        .record_label(*declarator, label.template, label.recovered)
+                        .is_err()
+                    {
+                        errors.push((
+                            index,
+                            LoweringError::unsupported(
+                                Construct::AssemblerLabel,
+                                label.source_vectors,
+                            ),
                         ));
                     }
                 }
             }
+        }
+        errors
+    }
+
+    /// Refuses the attribute meanings code generation lacks, except those
+    /// written in bodies the module does not emit: retained ownership keeps
+    /// them from refusing the module, while file declarations still
+    /// constrain emitted uses. C99: §6.9 paragraphs 3-5, p. 140; PDF p. 152.
+    pub(super) fn check_extensions(&self, errors: &mut ArenaVec<'_, LoweringError>) {
+        for refusal in self.sema.symbols.refusals {
+            if refusal
+                .owner
+                .is_some_and(|owner| !self.emits_function(owner))
+            {
+                continue;
+            }
+            errors.push(LoweringError::unsupported(
+                Construct::Attribute(refusal.capability),
+                refusal.source,
+            ));
         }
     }
 

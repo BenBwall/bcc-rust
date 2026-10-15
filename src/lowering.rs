@@ -167,7 +167,6 @@ pub(crate) fn lower_with_sources<'tu, 'ir>(
         Unit::new(context, sema, target, arena, &tables).map_err(|error| LoweringErrors {
             errors: arena.alloc_slice_copy(&[error]),
         })?;
-    unit.prepare_extensions(&mut errors);
     let functions = unit.declare_items(syntax, &mut errors);
     let mut function_sources = ArenaVec::new_in(arena);
     for record in functions {

@@ -86,11 +86,40 @@ individual `-fms-NAME` groups do not, and a later `-fno-ms-extensions`
 withdraws it. Both GNU and MSVC identity can therefore be claimed at once,
 whereas Clang drops the GNU identity under `-fms-compatibility`. Every mode
 defines `__bcc__` `1`, `__bcc_major__`, `__bcc_minor__`, `__bcc_patchlevel__`
-and the string `__bcc_version__` from the package version. `__clang__`,
-`__llvm__`, `__VERSION__` and `__GXX_ABI_VERSION` are never defined. Like
-Clang's, these are ordinary macros that `#undef` may remove. OS identity
+and the string `__bcc_version__` from the package version. Every mode also
+claims the pinned Clang exactly as it identifies itself for the selected
+target: `__clang__` `1`, `__clang_major__` `23`, `__clang_minor__` `1`,
+`__clang_patchlevel__` `1`, `__clang_version__`, `__VERSION__`, `__llvm__`
+and the narrow and wide literal encodings (`__clang_wide_literal_encoding__`
+is `"UTF-16"` on the Windows targets). These are frozen with the target
+definitions below, so the macro oracle checks them against the pinned Clang.
+Headers therefore take their Clang paths, such as MinGW-w64's
+`extern inline __attribute__((__gnu_inline__))` `__CRT_INLINE` and glibc's
+`__glibc_clang_prereq` decisions; code that must tell bcc from Clang tests
+`__bcc__`. `__GXX_ABI_VERSION` is never defined. Like Clang's, these are
+ordinary macros that `#undef` may remove. OS identity
 macros such as `__linux__` and `_WIN32` follow the selected target, below. The identity and target definitions are read from the synthetic
 `<built-in>/predefined.h` before user input.
+
+Claiming Clang changes the paths the C libraries take. In glibc,
+`sys/cdefs.h` drops its pre-C11 `_Noreturn` and `_Static_assert` fallbacks
+(bcc accepts both keywords in every mode, as Clang does), marks socket
+address structures `may_alias` (bcc's optimizer makes no type-based alias
+assumptions) and turns `__glibc_macro_warning` into `#pragma GCC warning`;
+`math.h` uses the type-generic classification builtins, `complex.h` defines
+`CMPLX` with `__builtin_complex`, and `bits/floatn.h` enables binary128, as
+described below. With `_FORTIFY_SOURCE` and `__OPTIMIZE__`, which bcc never
+defines itself, glibc selects Clang's fortify wrappers, which need the
+`overloadable`, `pass_object_size` and `diagnose_if` attributes; bcc has none
+of them and rejects those headers. In MinGW-w64, `__CRT_INLINE` becomes
+`extern inline` with `gnu_inline`, `setjmp` passes `__builtin_frame_address (0)`,
+`intrin.h` always includes the x86 intrinsic headers, the printf and strftime
+format archetypes become Clang's, and `intsafe.h` defines its functions as
+`FORCEINLINE` bodies over the overflow builtins. bcc does not inline
+`always_inline` bodies, so a call to one still needs an external definition,
+which MinGW-w64 does not supply for `intsafe.h`. The UCRT's `corecrt.h` uses
+`_Static_assert` for `_STATIC_ASSERT` and wraps itself in `#pragma clang
+diagnostic`, which bcc ignores.
 
 Reserved target-description macros follow the pinned LLVM 23.1.1 Clang for the
 selected `--target` triple. The default remains `x86_64-unknown-linux-gnu`;
@@ -776,7 +805,13 @@ token or directive boundary.
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
 `__atomic_*` and `__sync_*` names, and the [common GCC scalar intrinsic families](#common-gcc-scalar-intrinsics-2026-10-12).
-Unmodeled names return 0. These tables describe the
+Unmodeled names return 0. Clang's `__has_feature` and `__has_extension` share
+`__has_attribute`'s gate: `c_alignas`, `c_alignof`, `c_atomic`,
+`c_generic_selections`, `c_static_assert` and `c_thread_local` are features
+where the C11 feature is native and extensions wherever bcc accepts it, as in
+Clang; `attribute_deprecated_with_message` is a feature in every mode; every
+other name, including Clang features bcc lacks such as `attribute_overloadable`,
+returns 0. These tables describe the
 syntax-front-end subset, not backend effects or a GCC/Clang version. Both GNU
 queries are available through their reserved spellings in strict modes and
 report GNU policy diagnostics.
@@ -852,7 +887,11 @@ absolute path, and the primary source file are not. `#pragma GCC
 system_header` (also through `_Pragma`) makes the rest of the current header
 a system header; in the primary source file it is ignored with a warning, as
 in GCC and Clang. A `#line` directive gives the following lines a new file
-identity that is not a system header.
+identity that is not a system header. `#pragma GCC warning` and `#pragma GCC
+error` report their macro-replaced string operand (optionally parenthesized,
+adjacent literals concatenated) as a warning or an error, as GCC and Clang do;
+any other operand is an error. glibc's `__glibc_macro_warning`, which bcc
+reaches as Clang does, uses the warning form for deprecated macros.
 
 Inside a system header, warnings, extension diagnostics and warning-group
 diagnostics are withheld, the latter two at every severity: under
@@ -998,8 +1037,10 @@ to 72 bytes. Fixes are pending.
 Each name omitted from the pinned Clang target dump is listed individually.
 The first two categories identify separate ownership, rather than unsupported
 C features. `__STDC__`, version/strictness and embed constants remain in the
-existing language-mode builtin mechanism. Target macros do not emulate the
-Clang compiler identity. Feature promises below require further semantic or
+existing language-mode builtin mechanism. Clang's own identity macros
+(`__clang__` and its version, `__llvm__`, `__VERSION__` and the literal
+encodings) are not excluded: bcc claims the pinned Clang, so they are frozen
+with each target. Feature promises below require further semantic or
 backend work before they can be enabled.
 
 | Macro | Reason |
@@ -1078,16 +1119,7 @@ backend work before they can be enabled.
 | `__STDC_VERSION__` | Existing language-mode preprocessor builtin; not a target definition. |
 | `__STDC__` | Existing language-mode preprocessor builtin; not a target definition. |
 | `__STRICT_ANSI__` | Existing language-mode preprocessor builtin; not a target definition. |
-| `__VERSION__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_literal_encoding__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_major__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_minor__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_patchlevel__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_version__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_wide_literal_encoding__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__code_model_small__` | Code generation, relocation and optimization policy are not implemented. |
-| `__llvm__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__pic__` | Code generation, relocation and optimization policy are not implemented. |
 | `__pie__` | Code generation, relocation and optimization policy are not implemented. |
 | `__seg_fs` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
@@ -1139,17 +1171,19 @@ alignment 16. MSVC rejects the explicit type spelling, matching the pinned Clang
 but still accepts binary128 literals and their internal types through `typeof`.
 Clang's target definitions now retain `__SIZEOF_FLOAT128__` on the three GNU
 triples and `__FLOAT128__` on Linux. Clang defines no `__FLT128_*__` macros;
-none are invented. The macro oracle has 94 documented exclusions.
+none are invented. The macro oracle has 80 documented exclusions.
 
 The pinned Clang rejects native `_Float128`, `_Float32`, `_Float64`,
 `_Float32x`, `_Float64x`, and `f128`/`F128` suffixes in C11, C17, GNU17,
 C23 and GNU23. bcc follows that contract: glibc supplies its `_FloatN`
-typedefs. The private resource `bits/floatn.h` chains to glibc and bridges
-its GCC-4.2 version decision to the actual binary128 capability, enabling
-`__HAVE_FLOAT128` and the distinct type without changing compiler identity
-or editing the sysroot. Its complex typedef avoids the unmodeled GNU `mode`
-attribute. Explicit `-isystem` directories still precede resources and can
-bypass this bridge; normal `--sysroot` and `-idirafter` ordering uses it.
+typedefs. Because bcc claims Clang, glibc's own `bits/floatn.h` enables
+`__HAVE_FLOAT128` through `__glibc_clang_prereq (3, 9)` and declares the
+complex type as `_Complex float __attribute__ ((__mode__ (__TC__)))`. The GNU
+`mode` attribute selects real (`SF`, `DF`, `XF`, `TF`, `KF`) and complex
+(`SC`, `DC`, `XC`, `TC`, `KC`) floating modes as Clang resolves them: `T`
+and `K` name binary128 on the targets that spell `__float128`, and `X` the
+x87 format where `long double` uses it. The earlier private `bits/floatn.h`
+bridge, which compensated for the GCC 4.2.1 claim without Clang's, is gone.
 
 `__typeof__`, compatible-type tests, choose-expression selection, generic
 selection, type classification, and real/imaginary components now have
@@ -1208,6 +1242,16 @@ has C11 constraints and completed-declarator storage alignment. Retained layouts
 also support existing `typeof`, `__builtin_types_compatible_p`, `__builtin_offsetof`
 and expression-alignment queries. `__builtin_signbit[f/l]`, `__builtin_isinf[f/l]`,
 `__builtin_copysign[f/l]` and `__builtin_snprintf` are binding-aware builtins.
+The type-generic `__builtin_isnan`, `__builtin_isfinite`, `__builtin_isnormal`,
+`__builtin_isinf_sign` and `__builtin_fpclassify`, which glibc's `<math.h>`
+selects for Clang, fold constants and lower to ordered comparisons.
+`__builtin_complex`, which glibc's C11 `CMPLX` uses for Clang, takes a real and
+an imaginary part of one real floating type, without promotion, and folds two
+constants into a complex constant; like every complex value, it is not lowered
+yet.
+`__builtin_frame_address` and `__builtin_return_address` take a constant level
+and lower level 0 (MinGW-w64's Clang `setjmp` passes the frame address);
+`__builtin_extract_return_addr` is the identity.
 
 GCC contracts: [common attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html),
 [union casts](https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html),

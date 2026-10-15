@@ -121,6 +121,7 @@ pub(crate) use results::{
     Definition,
     DefinitionKind,
     Duration,
+    EntityReference,
     FunctionRecord,
     Linkage,
     Scope,
@@ -260,6 +261,8 @@ pub(crate) fn analyze<'tu>(
                 },
             ));
     SemanticTranslationUnit {
+        declarator_functions: analyzer.declarator_functions.leak(),
+        references: analyzer.references.leak(),
         resolved: analyzer.resolved.retain(),
         correspondence: analyzer.correspondence.retain(),
         sizes,
@@ -479,17 +482,22 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::InitializeDeclaration(declarator, initializer) => {
                 self.correspondence.initializer(declarator, initializer);
+                self.work
+                    .push(Work::RestoreReferenceOwner(self.functions.initializer));
                 if let Some(entry) = declarator
                     .identifier()
                     .and_then(|n| self.lookup(Namespace::Ordinary, n.name))
                 {
                     self.work
                         .push(Work::InitializeDone(entry.binding, initializer));
+                    self.functions.initializer = Some(entry.binding);
                 }
                 self.work.push(Work::Initializer(initializer));
             },
             | Work::InitializeDone(binding, initializer) =>
                 self.initialize_declaration(binding, initializer),
+            | Work::RestoreReferenceOwner(owner) => self.functions.initializer = owner,
+            | Work::RestoreReferenceFunction(owner) => self.functions.reference_function = owner,
             | Work::Condition(slot, integer) => self.check_condition(slot, integer),
             | Work::RequireConstant(e, assertion, before) => {
                 let value = self.integers.pop().flatten();
@@ -728,6 +736,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     })
                 {
                     self.declarators.push(d);
+                    self.declarator_functions
+                        .push(self.functions.reference_function);
                 }
                 for level in d.pointer.levels {
                     if !(level.qualifiers
@@ -1525,6 +1535,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 // record/function types.
 #[derive(Clone, Copy)]
 enum Work<'tu, 's> {
+    RestoreReferenceFunction(Option<usize>),
+    RestoreReferenceOwner(Option<usize>),
     DeclaredAlignment(Option<&'tu SpecifierExtension<'tu>>, TypeId, bool),
     Root(ExternalDeclaration<'tu>),
     Declaration(&'tu Declaration<'tu>),
@@ -1664,6 +1676,8 @@ enum Work<'tu, 's> {
 }
 
 struct Analyzer<'a, 'tu, 's> {
+    declarator_functions:    ArenaVec<'tu, Option<usize>>,
+    references:              ArenaVec<'tu, EntityReference>,
     // Deterministic scaling-test counts: VM ancestors, offset members,
     // initializer type nodes. They are absent from production compilation.
     #[cfg(test)]

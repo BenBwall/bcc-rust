@@ -793,7 +793,11 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                 self.builder.constant(opcode, ty, bits)
             },
             | Opcode::Poison => InstData::Nullary { opcode, ty },
-            | Opcode::Null | Opcode::Trap | Opcode::StackSave => InstData::Nullary {
+            | Opcode::Null
+            | Opcode::Trap
+            | Opcode::StackSave
+            | Opcode::FrameAddress
+            | Opcode::ReturnAddress => InstData::Nullary {
                 opcode,
                 ty: Type::Ptr,
             },

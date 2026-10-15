@@ -827,6 +827,20 @@ Internal-linkage expression uses require a definition, except operands of
 constant `sizeof` results (§6.9p3, printed p. 140, PDF p. 152). Persistent
 sizeof contexts are resolved after typing, so runtime VLA-size uses still count.
 Used undefined static functions are errors; unused undefined declarations warn.
+Resolved entity uses are retained in `SemanticTranslationUnit.references` with
+their owning function definition or object initializer. Parameter type-site
+uses belong to the function whose entry executes them, even before its binding
+is installed. The producer excludes constant `sizeof`, `alignof` and
+non-VM `typeof` operands after typing, using retained typeof execution facts;
+linked redeclarations keep their binding identities. The module-item planner
+joins those identities by emitted symbol and computes the closure of external
+definitions with an explicit worklist. Semantic definition constraints still
+apply to every analyzed definition, including bodies omitted from emission.
+Retained assembler-label declarators and attribute capability refusals also
+identify their enclosing function definition. Lowering reports a refusal or
+label error only when that definition is emitted; file declarations remain
+checked. A `cleanup(f)` variable records a use of `f` by its body. Symbol
+aliases are resolved before the planner joins linked entities.
 Inline restrictions are deferred until all file-scope declarations are known:
 a later non-inline or `extern` declaration can make the body an external
 definition (§6.7.4p3,p6, printed p. 112, PDF p. 124). Inline-only external bodies
@@ -1265,7 +1279,8 @@ rejected on MSVC. Clang nevertheless accepts `q` literals and a `typeof`
 type derived from them on MSVC; bcc preserves that distinction. The target
 macros mirror the pinned Clang exactly: `__SIZEOF_FLOAT128__` on the GNU
 triples, `__FLOAT128__` on Linux, no `__FLT128_*__` inventory and no MSVC
-capability advertisement. GCC 4.2.1 identity remains unchanged.
+capability advertisement. GCC 4.2.1 identity remains unchanged (bcc later also
+claimed Clang 23.1.1).
 
 Native `_Float128` and `f128`/`F128` literals are deliberately not added:
 Clang 23.1.1 rejects them in every tested mode (C11/C17/GNU17/C23/GNU23).
@@ -1273,7 +1288,9 @@ The reachable glibc path supplies `_Float32`, `_Float64`, `_Float32x` and
 `_Float64x` as typedefs of the existing standard types. A private embedded
 `bits/floatn.h` uses `include_next` and adjusts glibc's old-GCC binary128
 capability decision, providing its `_Float128` and complex typedefs, suffix
-macro and old-compiler builtin aliases. System headers stay read-only.
+macro and old-compiler builtin aliases. (Since 2026-10-15 bcc claims Clang,
+glibc's own `bits/floatn.h` takes its Clang path and the bridge is gone; see
+[language-standards.md](language-standards.md).) System headers stay read-only.
 GNU-source math and stdlib probes cover quad sqrt/pow/fabs, complex sin,
 `strtof128`, binary128 infinity/NaN initializers, fabs/copy-sign builtins,
 and the standard float/double/long-double selections. Clang accepts the

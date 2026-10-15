@@ -5,6 +5,8 @@
 //! report results and manage memory, and captures their output in an arena
 //! buffer.
 
+mod math;
+
 use std::fmt::{
     self,
     Write as _,
@@ -92,15 +94,17 @@ pub(crate) enum HostReturn {
 /// C99: §7.21.6.3, p. 334; PDF p. 346.
 /// C99: §7.19.6.6, p. 291; PDF p. 303 (`sprintf`).
 /// C99: §7.20.6.1, p. 320; PDF p. 332 (`abs`).
-/// C99: §7.12.7.2 and §7.12.9.2, pp. 228 and 232; PDF pp. 240 and 244
-/// (`fabs` and `floor`).
+/// C99: §7.12.4-§7.12.13, pp. 218-239; PDF pp. 230-251 (real math).
 /// C99: §7.4.1.8, p. 183; PDF p. 195 (`isprint` in the initial C locale).
 pub(crate) struct DefaultHost<'a> {
-    output:     ArenaVec<'a, u8>,
-    scratch:    ArenaVec<'a, u8>,
-    text:       ArenaVec<'a, u8>,
+    output:      ArenaVec<'a, u8>,
+    scratch:     ArenaVec<'a, u8>,
+    text:        ArenaVec<'a, u8>,
     /// The width of `long` in bits, which `printf`'s `l` modifier reads.
-    long_width: u32,
+    long_width:  u32,
+    /// The target's existing long double representation (f64 or unsupported
+    /// f80).
+    long_double: Type,
 }
 
 impl Host for DefaultHost<'_> {
@@ -110,6 +114,15 @@ impl Host for DefaultHost<'_> {
 
     fn call(&mut self, call: HostCall<'_>, memory: &mut Memory<'_>) -> Result<HostReturn, Fault> {
         check_signature(call)?;
+        if let Some(value) = math::call(
+            call,
+            memory,
+            self.long_double,
+            self.long_width,
+            &mut self.text,
+        ) {
+            return value.map(|value| HostReturn::Value(Some(value)));
+        }
         let args = call.args;
         let arg = |index: usize| args.get(index).copied().unwrap_or(RuntimeValue::Poison);
         let value = match call.name {
@@ -280,16 +293,6 @@ impl Host for DefaultHost<'_> {
                     RuntimeValue::Int(value.unsigned_abs())
                 }
             },
-            | "fabs" | "floor" => {
-                let RuntimeValue::F64(value) = arg(0) else {
-                    return Err(UbKind::PoisonInHostCall.into());
-                };
-                RuntimeValue::F64(if call.name == "fabs" {
-                    value.abs()
-                } else {
-                    value.floor()
-                })
-            },
             | "isprint" => {
                 let value = super::arithmetic::sext(Type::I32, integer(arg(0))?);
                 RuntimeValue::Int(u128::from((32..=126).contains(&value)))
@@ -322,7 +325,6 @@ const HOST_FUNCTIONS: [&str; 26] = [
 /// C99: §6.5.2.2 paragraphs 6 and 9, pp. 71-72; PDF pp. 83-84.
 fn check_signature(call: HostCall<'_>) -> Result<(), Fault> {
     use Type::{
-        F64,
         I32,
         I64,
         Ptr,
@@ -343,7 +345,6 @@ fn check_signature(call: HostCall<'_>) -> Result<(), Fault> {
         | "memchr" | "memset" => (&[Ptr, I32, I64], Some(Ptr), false),
         | "strchr" | "strrchr" => (&[Ptr, I32], Some(Ptr), false),
         | "strlen" => (&[Ptr], Some(I64), false),
-        | "fabs" | "floor" => (&[F64], Some(F64), false),
         | "exit" => (&[I32], None, false),
         | "abort" => (&[], None, false),
         | _ => return Ok(()),
@@ -480,6 +481,28 @@ impl DefaultHost<'_> {
                     digits.bytes[0] = truncate_u8(integer(arg)?);
                     &digits.bytes[..1]
                 },
+                | b'f' | b'F' => {
+                    let RuntimeValue::F64(value) = arg else {
+                        return Err(UbKind::PoisonInHostCall.into());
+                    };
+                    // C99 §7.19.6.1p8: variadic float is promoted to double;
+                    // the default f conversion has six fractional digits.
+                    if value.is_nan() || value.is_infinite() {
+                        spec.zero = false;
+                        let name = match (value.is_nan(), conversion) {
+                            | (true, b'F') => "NAN",
+                            | (true, _) => "nan",
+                            | (false, b'F') => "INF",
+                            | (false, _) => "inf",
+                        };
+                        digits.format(format_args!(
+                            "{}{name}",
+                            if value.is_sign_negative() { "-" } else { "" }
+                        ))
+                    } else {
+                        digits.format(format_args!("{value:.6}"))
+                    }
+                },
                 | b'p' => {
                     let RuntimeValue::Ptr(pointer) = arg else {
                         return Err(UbKind::PoisonInHostCall.into());
@@ -548,14 +571,16 @@ impl Spec {
 
 /// The text of one numeric conversion, formatted without allocating.
 struct Digits {
-    bytes: [u8; 48],
+    // A maximum finite binary64 f conversion needs 309 integer digits,
+    // a sign, a decimal point and six fractional digits.
+    bytes: [u8; 320],
     len:   usize,
 }
 
 impl Default for Digits {
     fn default() -> Self {
         Self {
-            bytes: [0; 48],
+            bytes: [0; 320],
             len:   0,
         }
     }
@@ -566,7 +591,7 @@ impl Digits {
     fn format(&mut self, value: fmt::Arguments<'_>) -> &[u8] {
         self.len = 0;
         self.write_fmt(value)
-            .expect("a 128-bit number fits in the buffer");
+            .expect("integer and default binary64 f conversions fit in the buffer");
         &self.bytes[..self.len]
     }
 }
@@ -634,10 +659,11 @@ impl<'a> DefaultHost<'a> {
     /// A host whose output and scratch space live in `arena`.
     pub(crate) fn new_in(arena: &'a Bump) -> Self {
         Self {
-            output:     ArenaVec::new_in(arena),
-            scratch:    ArenaVec::new_in(arena),
-            text:       ArenaVec::new_in(arena),
-            long_width: 64,
+            output:      ArenaVec::new_in(arena),
+            scratch:     ArenaVec::new_in(arena),
+            text:        ArenaVec::new_in(arena),
+            long_width:  64,
+            long_double: Type::F80,
         }
     }
 
@@ -650,6 +676,11 @@ impl<'a> DefaultHost<'a> {
             .map_or(64, |(bits, _)| bits);
         Self {
             long_width,
+            long_double: if target.layout().long_double_is_double() {
+                Type::F64
+            } else {
+                Type::F80
+            },
             ..Self::new_in(arena)
         }
     }

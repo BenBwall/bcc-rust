@@ -519,6 +519,14 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// C99: implementation-defined pragma behavior, §6.10.6p1, p. 159;
     /// PDF p. 171.
     DeprecatedMacro(&'tu DeprecatedMacroDiagnostic<'tu>),
+    /// The message of `#pragma GCC warning` (`error` false) or `#pragma GCC
+    /// error` (`error` true); only the error fails translation, as in GCC
+    /// and Clang. C99: implementation-defined pragma behavior, §6.10.6p1,
+    /// p. 159; PDF p. 171. GCC: "Diagnostic Pragmas".
+    PragmaMessage {
+        error:   bool,
+        message: &'tu str,
+    },
 }
 
 /// Owned related locations for Clang's implementation-defined pragma warning.
@@ -1383,6 +1391,12 @@ impl PreprocessorErrorType<'_> {
                 })
                 .label("`#error` directive")
             },
+            | Self::PragmaMessage { error, message } =>
+                new(format_in!(arena, "{message}")).label(if *error {
+                    "`#pragma GCC error`"
+                } else {
+                    "`#pragma GCC warning`"
+                }),
         }
     }
 }
@@ -1591,6 +1605,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::UnterminatedVaOpt
             | PreprocessorErrorType::HashHashAtVaOptBoundary
             | PreprocessorErrorType::ErrorDirective(..)
+            | PreprocessorErrorType::PragmaMessage { error: true, .. }
              => ErrorSeverity::Error,
             | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(severity)
             | PreprocessorErrorType::DefinedFromFunctionLikeMacroExpansion(severity)
@@ -1629,6 +1644,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::ExtraTokensAfterIfndefDirective(_)
             | PreprocessorErrorType::WarningDirective(..)
             | PreprocessorErrorType::DeprecatedMacro(..)
+            | PreprocessorErrorType::PragmaMessage { error: false, .. }
             | PreprocessorErrorType::PragmaOnceInNonHeader
             | PreprocessorErrorType::SystemHeaderPragmaInMainFile
             | PreprocessorErrorType::IncludeNextInPrimarySource(..)

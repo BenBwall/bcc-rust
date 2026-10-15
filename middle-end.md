@@ -525,7 +525,19 @@ Inline body emission is decided by semantic analysis and consumed by lowering:
 C99 inline-only bodies and GNU89 `extern inline` bodies remain external
 declarations in IR, so uninlined calls and addresses refer to the external
 symbol. Plain GNU89 `inline` and `static inline` bodies are lowered normally.
-The interpreter and LLVM therefore share the same decision. See
+The interpreter and LLVM therefore share the same decision. Internal functions
+and objects are planned in `lowering/module_items/reachability.rs`: external
+definitions seed an explicit worklist over retained semantic entity references,
+as do constructors, destructors, aliases and their targets, and `used`
+entities, which Clang emits without references.
+Calls, function addresses and object initializer references reach internal
+definitions transitively. Unreferenced static objects do not seed the worklist;
+their initializers therefore do not force function emission. Unreachable
+function signatures and bodies are not lowered, so unsupported vector or
+assembly implementations in system headers do not refuse otherwise supported
+programs. Unevaluated `sizeof`, `alignof` and `typeof` references are excluded
+by semantic analysis; VM typeof operands retain their runtime references.
+See
 `language-standards.md` for mode overrides and the per-function `gnu_inline`
 attribute. C99 §6.7.4p6-7 (pp. 112-113; PDF pp. 124-125), §6.9p5 (p. 140;
 PDF p. 152), and [GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html).
@@ -880,6 +892,15 @@ programs can report results. It is the oracle for differential tests: a program
 must print the same output when interpreted before optimization, interpreted
 after optimization, and compiled through each LLVM arm.
 
+The default host also implements the C99 real `<math.h>` function families in
+float, double and long double spellings, including pointer outputs, integer
+results and NaN constructors. Native libm evaluates float and double in their
+own precision; guest pointers stay in interpreter memory. Long double follows
+the target representation: binary64 on MSVC is supported, while GNU `f80`
+execution retains the existing unsupported-operation trap. `%f` output uses
+the default six fractional digits. Guest errno and floating-environment APIs
+remain outside the host implementation.
+
 ### Native back end (later)
 
 Instruction selection from the post-ABI IR, register allocation (evaluate the
@@ -909,6 +930,7 @@ bcc-rust x.c --emit=ir              print the bcc IR (after the optimizer, if it
 bcc-rust x.c --emit=ir-abi          print the bcc IR after ABI lowering
 bcc-rust x.c --emit=llvm            print the LLVM IR
 bcc-rust x.c --interpret            run main in the interpreter; exit with its status
+    [--interpret-step-limit=N]      instruction limit; default 100000000, 0 unlimited
 bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with clang
     [--opt=none|bcc]                the bcc optimizer; none is the default
     [--passes=fold,dce,simplify-cfg] an explicit pass list, run once (implies bcc)

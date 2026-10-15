@@ -124,6 +124,8 @@ pub(crate) enum ConstraintDiagnostic {
     Probability,
     PrefetchReadWrite,
     PrefetchLocality,
+    /// A frame level that is not an integer constant.
+    FrameLevel,
     VaList,
     VaArgType,
 }
@@ -154,7 +156,15 @@ pub(crate) enum BuiltinOperation {
     Constant,
     ObjectSize(bool),
     Alloca,
+    /// GNU frame (`false`) or return (`true`) address of a constant frame
+    /// level. <https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html>
+    Address(bool),
+    /// GNU: the return address as an address; the identity on x86-64.
+    ExtractReturnAddress,
     Overflow(OverflowOperation, Option<Scalar>, bool),
+    /// GNU: the complex value of a real and an imaginary part of one real
+    /// floating type. <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    Complex,
     Library,
     Offsetof,
 }
@@ -172,6 +182,27 @@ pub(crate) enum FloatOperation {
     Signbit,
     Isinf,
     Copysign,
+    /// The type-generic classification macros of C99 §7.12.3, pp. 216-217;
+    /// PDF pp. 228-229, as GCC and Clang builtins.
+    Isnan,
+    Isfinite,
+    Isnormal,
+    /// GNU: -1, 0 or 1 for negative infinity, non-infinity or infinity.
+    IsinfSign,
+    /// GNU: five `int` results (NaN, infinite, normal, subnormal, zero),
+    /// then the classified operand. C99: §7.12.3.1, p. 216; PDF p. 228.
+    Fpclassify,
+}
+
+impl FloatOperation {
+    /// The index of the floating operand among the call's arguments.
+    pub(crate) const fn operand_index(self) -> usize {
+        if matches!(self, Self::Fpclassify) {
+            5
+        } else {
+            0
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

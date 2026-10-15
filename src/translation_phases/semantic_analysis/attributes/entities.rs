@@ -490,6 +490,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             return;
         }
+        // The variable's scope calls the function, so the enclosing body
+        // uses it: it needs a definition and keeps it reachable.
+        // C99: §6.9p3, p. 140; PDF p. 152.
+        self.record_binding_use(
+            entry.binding,
+            crate::translation_phases::parsing::syntax::Identifier {
+                name:           identifier.contents,
+                source_vectors: identifier.source_vectors,
+            },
+        );
         _ = self.attributes.pending_cleanups.insert(
             declarator,
             (binding, entry.binding, variable.name.source_vectors),

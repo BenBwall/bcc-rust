@@ -98,6 +98,10 @@ pub(crate) enum InitFunctionKind {
 pub(crate) struct AttributeRefusal {
     pub(crate) capability: UnsupportedAttribute,
     pub(crate) source:     SourceVectors,
+    /// The function definition whose body wrote it, or None outside any
+    /// body. Lowering reports a refusal only when the module emits its
+    /// owner, so an unreachable body refuses nothing.
+    pub(crate) owner:      Option<usize>,
 }
 
 /// The unsupported attribute meanings, each named in lowering diagnostics.

@@ -97,6 +97,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Float(operation, scalar) => {
                 return Some(self.floating_builtin(e, args, operation, scalar));
             },
+            | CommonBuiltin::Complex => return Some(self.complex_builtin(e, args)),
             | CommonBuiltin::Constant => {
                 let operand = self.expression_info(args[0]);
                 info.integer = Some(Integer::int(i128::from(
@@ -189,6 +190,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Aligned
             | CommonBuiltin::Prefetch
             | CommonBuiltin::Alloca
+            | CommonBuiltin::Address(_)
+            | CommonBuiltin::ExtractReturnAddress
             | CommonBuiltin::Unreachable
             | CommonBuiltin::Trap
             | CommonBuiltin::Varargs(_)
@@ -262,7 +265,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Reports incompatible types before checking dependent value constraints.
     /// C99: §6.5.2.2p2,p7, pp. 71-72; PDF pp. 83-84.
-    fn common_argument(&mut self, e: &'tu Expression<'tu>, ty: TypeId) -> bool {
+    pub(super) fn common_argument(&mut self, e: &'tu Expression<'tu>, ty: TypeId) -> bool {
         let info = self.expression_info(e);
         let compatible = !self.types.unanalyzed(info.ty) && self.assignment_compatible(ty, info);
         if !self.types.unanalyzed(info.ty) && !compatible {

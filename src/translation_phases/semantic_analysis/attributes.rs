@@ -215,9 +215,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// Retains an accepted attribute whose meaning code generation lacks.
     pub(super) fn refuse(&mut self, capability: UnsupportedAttribute, source: SourceVectors) {
         if !self.tainted {
-            self.attributes
-                .refusals
-                .push(AttributeRefusal { capability, source });
+            self.attributes.refusals.push(AttributeRefusal {
+                capability,
+                source,
+                owner: self.functions.reference_function,
+            });
         }
     }
 

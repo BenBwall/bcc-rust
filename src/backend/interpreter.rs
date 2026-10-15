@@ -148,6 +148,7 @@ pub(crate) fn run(
 /// returns or the program calls `exit`, in the order `startup` gives.
 /// C99: §5.1.2.2.1 paragraphs 1-2, p. 12; PDF p. 24; §5.1.2.2.3, p. 13;
 /// PDF p. 25.
+#[cfg(test)]
 pub(crate) fn run_main(module: &Module<'_>, host: &mut dyn Host) -> Result<Outcome, Trap> {
     run_main_with_limits(module, host, Limits::default())
 }
@@ -196,10 +197,11 @@ impl Machine<'_, '_, '_> {
     /// Executes an entered program until it terminates or traps.
     fn run(&mut self, host: &mut dyn Host) -> Result<Outcome, Trap> {
         loop {
-            if self.steps == self.limits.steps {
+            if self.limits.steps != 0 && self.steps == self.limits.steps {
                 return Err(Trap::StepLimit);
             }
-            self.steps += 1;
+            // Unlimited execution must not overflow its observation counter.
+            self.steps = self.steps.saturating_add(1);
             let (location, inst) = self.fetch();
             match self.execute(inst, host) {
                 | Ok(None) => {},

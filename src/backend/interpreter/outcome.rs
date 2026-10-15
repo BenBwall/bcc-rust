@@ -32,7 +32,7 @@ pub(crate) enum Termination {
 /// The bounds a run may not exceed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Limits {
-    /// The most instructions a run may execute.
+    /// The most instructions a run may execute; zero disables this limit.
     pub(crate) steps:           u64,
     /// The most frames the call stack may hold.
     pub(crate) stack_depth:     usize,
