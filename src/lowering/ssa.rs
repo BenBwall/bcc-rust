@@ -46,6 +46,9 @@ use crate::{
 pub(super) struct Draft<'s> {
     scratch:           &'s Bump,
     pub(super) blocks: ArenaVec<'s, DraftBlock<'s>>,
+    /// The block of each IR label, in label order: the function's
+    /// address-taken C labels. GNU extension: GCC "Labels as Values".
+    pub(super) labels: ArenaVec<'s, Block>,
     pub(super) values: ArenaVec<'s, DraftValue>,
     pub(super) slots:  ArenaVec<'s, StackSlotData>,
     constants:         ArenaVec<'s, i128>,
@@ -120,6 +123,9 @@ pub(super) enum Terminator<'s> {
         cases:   ArenaVec<'s, (i128, Edge<'s>)>,
     },
     Return(Option<Value>),
+    /// A computed goto's dispatch: continue at the listed label block whose
+    /// address the value is. GNU extension: GCC "Labels as Values".
+    IndirectBr(Value, ArenaVec<'s, Edge<'s>>),
     Unreachable,
 }
 
@@ -444,12 +450,14 @@ impl<'s> Draft<'s> {
 }
 
 impl<'s> Terminator<'s> {
-    /// Every edge, in the order the IR lists them: a `brif`'s targets, or a
-    /// `switch`'s default and then its cases.
+    /// Every edge, in the order the IR lists them: a `brif`'s targets, a
+    /// `switch`'s default and then its cases, or an indirect branch's
+    /// targets.
     pub(super) fn edges(&self) -> impl Iterator<Item = &Edge<'s>> {
         let (first, rest): (&[Edge<'s>], &[(i128, Edge<'s>)]) = match self {
             | Self::Jump(edge) => (std::slice::from_ref(edge), &[]),
             | Self::Brif(_, edges) => (edges, &[]),
+            | Self::IndirectBr(_, edges) => (edges, &[]),
             | Self::Switch { default, cases, .. } => (std::slice::from_ref(default), cases),
             | Self::Return(_) | Self::Unreachable => (&[], &[]),
         };
@@ -461,6 +469,7 @@ impl<'s> Terminator<'s> {
         match self {
             | Self::Jump(edge) if index == 0 => edge,
             | Self::Brif(_, edges) => &mut edges[index],
+            | Self::IndirectBr(_, edges) => &mut edges[index],
             | Self::Switch { default, .. } if index == 0 => default,
             | Self::Switch { cases, .. } => &mut cases[index - 1].1,
             | _ => unreachable!("edge {index} does not exist"),
@@ -474,6 +483,7 @@ impl<'s> Draft<'s> {
         let mut draft = Self {
             scratch,
             blocks: ArenaVec::new_in(scratch),
+            labels: ArenaVec::new_in(scratch),
             values: ArenaVec::new_in(scratch),
             slots: ArenaVec::new_in(scratch),
             constants: ArenaVec::new_in(scratch),

@@ -32,6 +32,8 @@ use crate::{
     ir::{
         AggregateParam,
         Align,
+        BlockLabel,
+        Entity,
         ExtendedParam,
         FuncId,
         GlobalDecl,
@@ -41,6 +43,7 @@ use crate::{
         Module,
         ParamAbi,
         Relocation,
+        RelocationTarget,
         SigId,
         Signature,
         Symbol,
@@ -70,9 +73,11 @@ use crate::{
         },
         semantic_analysis::{
             Binding,
+            ConstantClass,
             DefinitionKind,
             FunctionRecord,
             Integer,
+            LabelId,
             Linkage,
             ScopeKind,
             SemanticTranslationUnit,
@@ -852,7 +857,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     bytes[start..end].fill(0);
                     // C99 §6.7.8p19: replacement also discards old addresses.
                     relocations.retain(|relocation: &Relocation| {
-                        relocation.offset + 8 <= offset || relocation.offset >= offset + size
+                        relocation.offset + relocation.size() <= offset
+                            || relocation.offset >= offset + size
                     });
                 },
                 | Leaf::Scalar {
@@ -878,7 +884,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     let count = string.len().min(size);
                     bytes[start..start + size].fill(0);
                     relocations.retain(|relocation| {
-                        relocation.offset + 8 <= offset || relocation.offset >= offset + size as u64
+                        relocation.offset + relocation.size() <= offset
+                            || relocation.offset >= offset + size as u64
                     });
                     bytes[start..start + count].copy_from_slice(&string[..count]);
                 },
@@ -924,7 +931,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         // C99 §6.7.8p19: a later write replaces overlapping addresses,
         // including a scalar member that overwrites only part of a pointer.
         relocations.retain(|relocation| {
-            relocation.offset + 8 <= offset || relocation.offset >= offset + written
+            relocation.offset + relocation.size() <= offset || relocation.offset >= offset + written
         });
         let integer = info.integer.filter(|_| {
             representation == Repr::Pointer
@@ -983,30 +990,99 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             bytes[start..start + size].copy_from_slice(&value.to_le_bytes()[..size]);
             return Ok(());
         }
+        if info.constant == ConstantClass::LabelDifference
+            && let Repr::Int { ty: width, .. } = representation
+            && bit_field.is_none()
+        {
+            let target = self.label_difference(expression, width)?;
+            bytes[start..start + size].fill(0);
+            relocations.push(Relocation {
+                offset,
+                target,
+                addend: 0,
+            });
+            return Ok(());
+        }
         if representation != Repr::Pointer || bit_field.is_some() {
             return Err(unsupported());
         }
-        let (symbol, addend) = self.address_constant(expression)?;
+        let (target, addend) = self.address_constant(expression)?;
         // Symbolic bytes replace any older scalar representation too;
         // that representation must not reappear if a later write drops the
         // relocation.
         bytes[start..start + size].fill(0);
         relocations.push(Relocation {
             offset,
-            symbol,
+            target,
             addend,
         });
         Ok(())
     }
 
+    /// The relocation of a constant label difference `&&label - &&base`,
+    /// truncated to `width`, from the labels semantic analysis retained.
+    /// GNU extension: GCC "Labels as Values".
+    fn label_difference(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        width: Type,
+    ) -> Result<RelocationTarget, LoweringError> {
+        let source = expression.source_vectors;
+        if !matches!(width, Type::I32 | Type::I64) {
+            return Err(LoweringError::missing(
+                "a label difference has a width semantic analysis refuses",
+                source,
+            ));
+        }
+        let (label, base) = self
+            .sema
+            .control
+            .label_difference(expression)
+            .ok_or_else(|| {
+                LoweringError::missing("a label difference has no retained labels", source)
+            })?;
+        let (func, label) = self.label_target(label, source)?;
+        let (_, base) = self.label_target(base, source)?;
+        Ok(RelocationTarget::LabelDifference {
+            func,
+            label,
+            base,
+            width,
+        })
+    }
+
+    /// The IR function and label of an address-taken C label: the label's
+    /// position among its function's address-taken labels, which that
+    /// function's body numbers its IR labels by.
+    /// GNU extension: GCC "Labels as Values".
+    fn label_target(
+        &mut self,
+        label: LabelId,
+        source: SourceVectors,
+    ) -> Result<(FuncId, BlockLabel), LoweringError> {
+        let facts = self.sema.control.labels[label.0];
+        let record =
+            self.sema.functions.get(facts.function.0).ok_or_else(|| {
+                LoweringError::missing("a label's function has no record", source)
+            })?;
+        let binding = record
+            .binding
+            .ok_or_else(|| LoweringError::missing("a label's function has no binding", source))?;
+        let func = self.function(binding).map_err(|kind| at(kind, source))?;
+        let index = facts.address.ok_or_else(|| {
+            LoweringError::missing("an addressed label has no address index", source)
+        })?;
+        Ok((func, BlockLabel::new(index as usize)))
+    }
+
     /// The symbol and byte offset an address constant designates: a static
-    /// object, function or string literal, optionally with a constant
-    /// subscript, member offset or integer added.
+    /// object, function, string literal or, as a GNU extension, label,
+    /// optionally with a constant subscript, member offset or integer added.
     /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
     fn address_constant(
         &mut self,
         mut expression: &'tu Expression<'tu>,
-    ) -> Result<(Symbol, i64), LoweringError> {
+    ) -> Result<(RelocationTarget, i64), LoweringError> {
         let unsupported =
             || LoweringError::unsupported(Construct::StaticInitializer, expression.source_vectors);
         let mut addend = 0_i64;
@@ -1025,7 +1101,17 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             match expression.kind {
                 | ExpressionType::CompoundLiteral { initializer, .. } => {
                     let global = self.static_compound_literal(expression, initializer, info.ty)?;
-                    return Ok((Symbol::Global(global), addend));
+                    return Ok((RelocationTarget::Symbol(Symbol::Global(global)), addend));
+                },
+                // GNU extension: GCC "Labels as Values" tables, as in Lua's
+                // threaded `luaV_execute`.
+                | ExpressionType::LabelAddress(_) if !place => {
+                    let source = expression.source_vectors;
+                    let label = self.sema.control.label_address(expression).ok_or_else(|| {
+                        LoweringError::missing("a label address has no resolved label", source)
+                    })?;
+                    let (func, label) = self.label_target(label, source)?;
+                    return Ok((RelocationTarget::Label { func, label }, addend));
                 },
                 | ExpressionType::Unary {
                     operator: UnaryOperator::Indirection,
@@ -1064,10 +1150,13 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     } else {
                         return Err(unsupported());
                     };
-                    return Ok((symbol, addend));
+                    return Ok((RelocationTarget::Symbol(symbol), addend));
                 },
                 | ExpressionType::StringLiteral(_) =>
-                    return Ok((Symbol::Global(self.string(expression)?), addend)),
+                    return Ok((
+                        RelocationTarget::Symbol(Symbol::Global(self.string(expression)?)),
+                        addend,
+                    )),
                 | ExpressionType::DirectMember {
                     base_expression, ..
                 } if place || matches!(self.sema.types.kind(info.ty), TypeKind::Array(..)) => {
@@ -1117,12 +1206,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     let index = index.and_then(Integer::to_i128).ok_or_else(unsupported)?;
                     let element =
                         types::target_type(&self.sema.types, pointer).ok_or_else(unsupported)?;
-                    let size = self
-                        .sema
-                        .types
-                        .layout(element)
-                        .ok_or_else(unsupported)?
-                        .size;
+                    let size = types::arithmetic_size(&self.sema.types, element)
+                        .ok_or_else(unsupported)?;
                     let scaled = index
                         .checked_mul(i128::from(size))
                         .and_then(|scaled| i64::try_from(scaled).ok())

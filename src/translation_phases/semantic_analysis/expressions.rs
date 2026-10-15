@@ -244,6 +244,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     expression: e,
                     ..self.expression_info(expression)
                 };
+                if let Some(labels) = self.control.difference_labels(expression) {
+                    self.control.record_difference(e, labels);
+                }
+            },
+            | E::LabelAddress(_) => {
+                // GNU extension: GCC "Labels as Values". `&&label` is a
+                // `void *` address constant of the enclosing function.
+                let void = self.types.scalar(Scalar::Void);
+                info.ty = self.types.intern(TypeKind::Pointer(void));
+                info.constant = ConstantClass::Address;
             },
             | E::Generic(generic) => info = self.type_generic(e, generic),
             | E::Unary {

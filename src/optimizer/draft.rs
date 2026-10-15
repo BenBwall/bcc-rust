@@ -29,6 +29,12 @@
 //! - **removing a stack slot** drops it from the lowered body, whose remaining
 //!   slots are renumbered.
 //!
+//! Labeled blocks, whose address `block_addr` or a global relocation takes,
+//! keep their identity: no pass removes or merges one, and a labeled block
+//! the entry no longer reaches is emptied to an `unreachable` stub by
+//! [`Draft::retire_block`] instead, so every address stays valid. No pass
+//! redirects an edge of an `indirect_br`, whose targets are those blocks.
+//!
 //! The original body is never mutated, so ids into it and the pool handles of
 //! instructions that were not touched stay valid for the whole run. [`lower`]
 //! writes a fresh body with blocks, values and instructions renumbered
@@ -97,6 +103,11 @@ pub(super) struct Draft<'b, 's> {
     /// Owned bits for copied wide constants; foreign pool handles are never
     /// read.
     constant_bits:      ArenaVec<'s, Option<u128>>,
+    /// The block each label of the body names, by label index.
+    labels:             &'s [Block],
+    /// Whether a label names each block, by block index; added blocks have
+    /// none.
+    labeled:            ArenaVec<'s, bool>,
 }
 
 /// A block of a draft.
@@ -127,6 +138,11 @@ pub(super) enum Term<'s> {
         cases:   ArenaVec<'s, (u128, Edge<'s>)>,
     },
     Return(Option<Value>),
+    /// An `indirect_br` and its listed edges, which no pass redirects.
+    IndirectBr {
+        addr:  Value,
+        dests: ArenaVec<'s, Edge<'s>>,
+    },
     Unreachable,
 }
 
@@ -182,6 +198,12 @@ impl<'b, 's> Draft<'b, 's> {
         call_args.resize(body.inst_count(), None);
         let mut removed_slots = ArenaVec::with_capacity_in(body.stack_slot_count(), scratch);
         removed_slots.resize(body.stack_slot_count(), false);
+        let labels = scratch.alloc_slice_fill_iter(body.labels().map(|(_, block)| block));
+        let mut labeled = ArenaVec::with_capacity_in(body.block_count(), scratch);
+        labeled.resize(body.block_count(), false);
+        for &block in &*labels {
+            labeled[block.index()] = true;
+        }
         Self {
             body,
             scratch,
@@ -200,6 +222,8 @@ impl<'b, 's> Draft<'b, 's> {
                 bits.resize(body.inst_count(), None);
                 bits
             },
+            labels,
+            labeled,
         }
     }
 
@@ -553,11 +577,43 @@ impl<'b, 's> Draft<'b, 's> {
         Block::new(0)
     }
 
+    /// Whether a label names `block`, so its identity must survive.
+    pub(super) fn is_labeled(&self, block: Block) -> bool {
+        self.labeled.get(block.index()).copied().unwrap_or(false)
+    }
+
+    /// The block each label names, in label order.
+    pub(super) fn labels(&self) -> &[Block] {
+        self.labels
+    }
+
+    /// Takes an unreachable block out of the function: removes it, or, for a
+    /// labeled block, whose address must stay valid, empties it to an
+    /// `unreachable` stub. Nothing reaches it, so no `indirect_br` lists it
+    /// on an executed path and the stub never runs. Returns whether the block
+    /// changed.
+    pub(super) fn retire_block(&mut self, block: Block) -> bool {
+        let labeled = self.is_labeled(block);
+        let data = self.block_mut(block);
+        if !labeled {
+            let changed = data.alive;
+            data.alive = false;
+            return changed;
+        }
+        if data.insts.is_empty() && matches!(data.term, Term::Unreachable) {
+            return false;
+        }
+        data.insts.clear();
+        data.term = Term::Unreachable;
+        true
+    }
+
     /// Appends an empty block that ends in `unreachable`; lowering lays it
     /// out after the body's blocks. The pass gives it a terminator and the
     /// edges into it.
     pub(super) fn add_block(&mut self) -> Block {
         let block = Block::new(self.blocks.len());
+        self.labeled.push(false);
         self.blocks.push(DraftBlock {
             alive:  true,
             params: ArenaVec::new_in(self.scratch),
@@ -590,47 +646,64 @@ impl<'b, 's> Draft<'b, 's> {
 
 impl<'s> Term<'s> {
     /// The terminator's edges: a `brif`'s in order, a `switch`'s default and
-    /// then its cases.
+    /// then its cases, or an `indirect_br`'s listed edges.
     pub(super) fn edges(&self) -> impl Iterator<Item = &Edge<'s>> {
-        let (first, second, rest): (Option<&Edge<'s>>, Option<&Edge<'s>>, &[(u128, Edge<'s>)]) =
-            match self {
-                | Self::Jump(edge) => (Some(edge), None, &[]),
-                | Self::Brif {
-                    then, otherwise, ..
-                } => (Some(then), Some(otherwise), &[]),
-                | Self::Switch { default, cases, .. } => (Some(default), None, cases),
-                | Self::Return(_) | Self::Unreachable => (None, None, &[]),
-            };
+        type Cases<'a, 's> = &'a [(u128, Edge<'s>)];
+        type Listed<'a, 's> = &'a [Edge<'s>];
+        let (first, second, rest, listed): (
+            Option<&Edge<'s>>,
+            Option<&Edge<'s>>,
+            Cases<'_, 's>,
+            Listed<'_, 's>,
+        ) = match self {
+            | Self::Jump(edge) => (Some(edge), None, &[], &[]),
+            | Self::Brif {
+                then, otherwise, ..
+            } => (Some(then), Some(otherwise), &[], &[]),
+            | Self::Switch { default, cases, .. } => (Some(default), None, cases, &[]),
+            | Self::IndirectBr { dests, .. } => (None, None, &[], dests),
+            | Self::Return(_) | Self::Unreachable => (None, None, &[], &[]),
+        };
         first
             .into_iter()
             .chain(second)
             .chain(rest.iter().map(|(_, edge)| edge))
+            .chain(listed)
     }
 
     /// Like [`Term::edges`], mutably.
     pub(super) fn edges_mut(&mut self) -> impl Iterator<Item = &mut Edge<'s>> {
         type Cases<'a, 's> = &'a mut [(u128, Edge<'s>)];
-        let (first, second, rest): (Option<&mut Edge<'s>>, Option<&mut Edge<'s>>, Cases<'_, 's>) =
-            match self {
-                | Self::Jump(edge) => (Some(edge), None, &mut []),
-                | Self::Brif {
-                    then, otherwise, ..
-                } => (Some(then), Some(otherwise), &mut []),
-                | Self::Switch { default, cases, .. } => (Some(default), None, cases),
-                | Self::Return(_) | Self::Unreachable => (None, None, &mut []),
-            };
+        type Listed<'a, 's> = &'a mut [Edge<'s>];
+        let (first, second, rest, listed): (
+            Option<&mut Edge<'s>>,
+            Option<&mut Edge<'s>>,
+            Cases<'_, 's>,
+            Listed<'_, 's>,
+        ) = match self {
+            | Self::Jump(edge) => (Some(edge), None, &mut [], &mut []),
+            | Self::Brif {
+                then, otherwise, ..
+            } => (Some(then), Some(otherwise), &mut [], &mut []),
+            | Self::Switch { default, cases, .. } => (Some(default), None, cases, &mut []),
+            | Self::IndirectBr { dests, .. } => (None, None, &mut [], dests),
+            | Self::Return(_) | Self::Unreachable => (None, None, &mut [], &mut []),
+        };
         first
             .into_iter()
             .chain(second)
             .chain(rest.iter_mut().map(|(_, edge)| edge))
+            .chain(listed.iter_mut())
     }
 
     /// Calls `visit` with the values the terminator uses that are not edge
-    /// arguments: a branch condition, a switch value or a returned value.
+    /// arguments: a branch condition, a switch value, an indirect branch's
+    /// address or a returned value.
     pub(super) fn for_each_control_operand(&self, mut visit: impl FnMut(Value)) {
         match *self {
             | Self::Brif { cond: value, .. }
             | Self::Switch { value, .. }
+            | Self::IndirectBr { addr: value, .. }
             | Self::Return(Some(value)) => visit(value),
             | Self::Jump(_) | Self::Return(None) | Self::Unreachable => {},
         }
@@ -674,6 +747,16 @@ fn lift_terminator<'s>(body: &Body<'_>, terminator: Inst, scratch: &'s Bump) -> 
             }
         },
         | InstData::Return { value } => Term::Return(value),
+        | InstData::IndirectBr { addr, dests } => {
+            let mut lifted = ArenaVec::new_in(scratch);
+            for dest in body.block_list(dests) {
+                lifted.push(lift_edge(body, dest, scratch));
+            }
+            Term::IndirectBr {
+                addr,
+                dests: lifted,
+            }
+        },
         | InstData::Unreachable => Term::Unreachable,
         | _ => unreachable!("a block's last instruction is a terminator"),
     }

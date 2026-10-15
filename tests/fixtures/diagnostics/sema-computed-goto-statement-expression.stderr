@@ -1,0 +1,11 @@
+error: computed goto can enter a statement expression at its possible target: `in`
+ --> sema-computed-goto-statement-expression.c:3:5
+  |
+3 |     goto *p;
+  |     ^^^^^^^^ may jump into a statement expression
+4 |     return ({ in: 1; });
+  |            ------------ statement expression begins here
+  |
+  = note: GCC Statement Exprs: jumping into a statement expression with a computed goto is undefined; GCC Labels as Values: a computed goto may reach every label whose address is taken
+
+1 error generated.

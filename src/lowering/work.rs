@@ -66,6 +66,8 @@ pub(super) enum Task<'tu> {
     Seal(Block),
     /// Pop the operand and return it.
     Return(&'tu Statement<'tu>),
+    /// Pop a computed goto's address and branch to it.
+    IndirectJump(&'tu Statement<'tu>),
     /// Pop the switch's controlling value and dispatch on it.
     Switch {
         statement: &'tu Statement<'tu>,

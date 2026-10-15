@@ -1,0 +1,9 @@
+error: static-storage initializer requires a constant expression
+ --> sema-label-difference-width.c:3:27
+  |
+3 |     static short narrow = &&b - &&a;
+  |                           ^^^^^^^^^ not a constant expression
+  |
+  = note: C99 §6.7.8p4: every expression in an initializer for an object of static storage duration is constant or a string literal
+
+1 error generated.

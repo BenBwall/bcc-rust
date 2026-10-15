@@ -154,6 +154,11 @@ pub(crate) enum Feature {
     QuotedHeaderBackslash,
     /// C23 §6.9.2p5, p. 160; PDF p. 173 permits unnamed definition parameters.
     UnnamedDefinitionParameters,
+    /// Addition, subtraction and increments on `void *`, whose element size
+    /// is 1, extending C99 §6.5.6p2-3, p. 82; PDF p. 94.
+    /// GNU extension: GCC "Pointer Arith",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Pointer-Arith.html>.
+    VoidPointerArithmetic,
 }
 
 impl Feature {
@@ -274,7 +279,8 @@ impl Feature {
             | Self::VectorBuiltins
             | Self::PreprocessorComma
             | Self::MacroExpandedDefined
-            | Self::QuotedHeaderBackslash => FeatureOrigin::Gnu,
+            | Self::QuotedHeaderBackslash
+            | Self::VoidPointerArithmetic => FeatureOrigin::Gnu,
 
             | Self::MsDeclspec => FeatureOrigin::Msvc(MsvcFeature::Declspec),
             | Self::MsIntTypes => FeatureOrigin::Msvc(MsvcFeature::IntTypes),
@@ -412,6 +418,7 @@ impl Feature {
         Self::MacroExpandedDefined,
         Self::QuotedHeaderBackslash,
         Self::UnnamedDefinitionParameters,
+        Self::VoidPointerArithmetic,
     ];
 }
 

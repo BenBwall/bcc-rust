@@ -16,7 +16,10 @@
 //! parameter for each of the header's, which passes them on in a `jump` to
 //! the header, and redirects every edge into the header from outside the
 //! loop to it with the same arguments. Back edges still go to the header.
-//! The preheader is made only when the first instruction moves.
+//! The preheader is made only when the first instruction moves. An edge of an
+//! `indirect_br` cannot be redirected, since its target is an addressed
+//! block, so a loop entered by one keeps its instructions, as LLVM does for a
+//! loop without a preheader.
 //!
 //! ```text
 //! block0(v0: i32, v1: i32):           block0(v0: i32, v1: i32):
@@ -130,6 +133,9 @@ impl Hoisting<'_> {
         lp: Loop,
         report: &mut OptimizationReport,
     ) -> bool {
+        if !self.has_preheader_entries(draft, lp) {
+            return false;
+        }
         let mut blocks = ArenaVec::new_in(draft.scratch);
         blocks.extend(
             self.order
@@ -177,6 +183,19 @@ impl Hoisting<'_> {
                 self.defined_in[value.index()].is_none_or(|block| !self.forest.contains(lp, block));
         });
         invariant
+    }
+
+    /// Whether every edge entering `lp` from outside can be redirected
+    /// through a preheader: none comes from an `indirect_br`.
+    fn has_preheader_entries(&self, draft: &Draft<'_, '_>, lp: Loop) -> bool {
+        let header = self.forest.header(lp);
+        draft.alive_blocks().all(|block| {
+            self.forest.contains(lp, block)
+                || !matches!(
+                    &draft.block(block).term,
+                    Term::IndirectBr { dests, .. } if dests.iter().any(|edge| edge.target == header)
+                )
+        })
     }
 
     /// The preheader of `lp`: the existing one, or a new block that every

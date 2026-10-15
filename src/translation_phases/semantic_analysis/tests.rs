@@ -18,6 +18,7 @@ mod control_facts;
 mod correspondence;
 mod float128;
 mod int128;
+mod labels_as_values;
 mod library_modes;
 mod mingw_inline;
 mod registry;

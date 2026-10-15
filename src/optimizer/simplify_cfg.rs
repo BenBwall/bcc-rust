@@ -13,10 +13,12 @@
 //!    blocks it dominates may use them, and a threaded edge would reach those
 //!    blocks without defining them. An edge is left alone when redirecting it
 //!    would give one terminator two edges to a block with different arguments,
-//!    which the verifier forbids. Block-indexed visit stamps detect cycles; a
-//!    per-round cache composes argument mappings backwards along each path.
-//!    Each forwarding block is resolved once, independently of block layout or
-//!    incoming edge count.
+//!    which the verifier forbids, and so is every edge of an `indirect_br`,
+//!    whose targets are the addressed blocks themselves; a labeled block is
+//!    never skipped, since its address names it. Block-indexed visit stamps
+//!    detect cycles; a per-round cache composes argument mappings backwards
+//!    along each path. Each forwarding block is resolved once, independently of
+//!    block layout or incoming edge count.
 //! 2. **Form selects** for single-entry cheap diamond/triangle arms using
 //!    `select.rs`. Each differing join argument is one bisectable rewrite. Each
 //!    arm costs at most four units; loads, stores, calls, division and
@@ -25,11 +27,13 @@
 //!    `switch` whose edges all agree, becomes a `jump`.
 //! 4. **Remove unreachable blocks**, all at once and counted as one rewrite: a
 //!    block removed on its own could leave a surviving unreachable block using
-//!    its values.
+//!    its values. An unreachable labeled block stays as an `unreachable` stub
+//!    ([`Draft::retire_block`]), so its address remains valid.
 //! 5. **Merge a block into its only predecessor** when that predecessor ends in
-//!    a `jump` to it and the edge is the only one into the block. The block's
-//!    parameters are replaced by the jump's arguments and its instructions and
-//!    terminator are appended to the predecessor.
+//!    a `jump` to it and the edge is the only one into the block, unless a
+//!    label names the block. The block's parameters are replaced by the jump's
+//!    arguments and its instructions and terminator are appended to the
+//!    predecessor.
 //!
 //! Folding a constant branch is the fold pass's job, not this one's; it
 //! leaves the dead arm unreachable for step 4.
@@ -93,7 +97,10 @@ fn thread_jumps(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> b
     let targets = forwarding_targets(draft, &uses, &reachable);
     for index in 0..draft.blocks.len() {
         let block = Block::new(index);
-        if !draft.block(block).alive || !reachable[index] {
+        if !draft.block(block).alive
+            || !reachable[index]
+            || matches!(draft.block(block).term, Term::IndirectBr { .. })
+        {
             continue;
         }
         // Own the terminator while rewriting it so edge traversal stays linear:
@@ -184,6 +191,7 @@ fn forwarding_targets<'s>(
             };
             if !forwarder.alive
                 || target == Draft::entry()
+                || draft.is_labeled(target)
                 || !forwarder.insts.is_empty()
                 || forwarder
                     .params
@@ -301,17 +309,25 @@ fn fold_identical_branches(draft: &mut Draft<'_, '_>, report: &mut OptimizationR
     changed
 }
 
-/// Step 4: drops every block the entry cannot reach, as one rewrite.
+/// Step 4: drops every block the entry cannot reach, as one rewrite. A
+/// labeled block becomes an `unreachable` stub instead; one that already is
+/// one is not a change.
 fn remove_unreachable_blocks(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> bool {
     let reachable = draft.reachable();
-    let unreachable =
-        |draft: &Draft<'_, '_>, index: usize| draft.blocks[index].alive && !reachable[index];
+    let unreachable = |draft: &Draft<'_, '_>, index: usize| {
+        let data = &draft.blocks[index];
+        data.alive
+            && !reachable[index]
+            && !(draft.is_labeled(Block::new(index))
+                && data.insts.is_empty()
+                && matches!(data.term, Term::Unreachable))
+    };
     if !(0..draft.blocks.len()).any(|index| unreachable(draft, index)) || !report.allow() {
         return false;
     }
     for index in 0..draft.blocks.len() {
         if unreachable(draft, index) {
-            draft.blocks[index].alive = false;
+            _ = draft.retire_block(Block::new(index));
         }
     }
     true
@@ -329,6 +345,7 @@ fn merge_into_predecessors(draft: &mut Draft<'_, '_>, report: &mut OptimizationR
             && let Term::Jump(edge) = &draft.block(block).term
             && edge.target != block
             && edge.target != Draft::entry()
+            && !draft.is_labeled(edge.target)
             && draft.block(edge.target).alive
             && incoming[edge.target.index()] == 1
         {

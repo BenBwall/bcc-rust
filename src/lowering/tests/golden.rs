@@ -547,3 +547,23 @@ int f(struct m *p) { p->b = 300; p->d = -2; return p->a + p->b + p->c + p->d; }"
     text.push_str(&ir);
     assert_snapshot("tests/fixtures/lowering/bit_fields_msvc.ir", &text);
 }
+
+#[test]
+fn computed_gotos_branch_through_one_indirect_block() {
+    // GNU extension: GCC "Labels as Values". Address-taken labels become IR
+    // labels in address order, static tables and differences become label
+    // relocations, every `goto *` passes its address to one block ending in
+    // `indirect_br`, and `void *` arithmetic steps by bytes.
+    golden(
+        "computed_goto",
+        "int dispatch(int k, int n) {
+    static const void *const table[] = { &&add, &&twice, &&done };
+    static const int offsets[] = { &&add - &&done, &&done - &&done };
+    int acc = n;
+    goto *table[k];
+add: acc += 1; goto *(&&done + offsets[1]);
+twice: acc *= 2; goto *table[2];
+done: return acc;
+}",
+    );
+}

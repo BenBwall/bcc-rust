@@ -75,6 +75,10 @@ entities! {
     Block => "block";
     /// A fixed-size, fixed-alignment region of a function's frame.
     StackSlot => "slot";
+    /// An address-taken block of one function: a stable name for the block
+    /// that `block_addr` and global relocations use, independent of how
+    /// passes renumber blocks. GNU extension: GCC "Labels as Values".
+    BlockLabel => "label";
     /// A wide constant (`i128`, `f80` or `f128` bits) in a function's pool.
     ConstId => "const";
     /// A function of a module, defined or declared.

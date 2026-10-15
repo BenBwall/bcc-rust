@@ -133,6 +133,25 @@ pub(super) fn generate_code<'tu>(
     };
     drop(reporter.finish(context, stderr));
     let target = context.configuration.target();
+    // The LLVM back end verifies its input; the IR printer and the
+    // interpreter rely on the same invariants, so they verify too rather
+    // than print or run a malformed module.
+    if matches!(options.emit, Some(Emit::Ir | Emit::IrAbi))
+        || (options.emit.is_none() && options.output_path.is_none())
+    {
+        let scratch = Bump::new();
+        let errors = crate::ir::verify_module(&module, profile, &scratch);
+        if !errors.is_empty() {
+            let mut stderr = io::stderr().lock();
+            for error in &errors {
+                drop(writeln!(
+                    stderr,
+                    "error: internal error: invalid bcc IR: {error}"
+                ));
+            }
+            return FAILURE_STATUS;
+        }
+    }
     match (options.emit, &options.output_path) {
         | (Some(Emit::Ir | Emit::IrAbi), _) => print_stdout(format_args!("{module}")),
         | (Some(Emit::Llvm), _) => print_llvm(&module, target),

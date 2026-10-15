@@ -41,6 +41,7 @@ use crate::{
         InstData,
         Module,
         ParamAbi,
+        RelocationTarget,
         Signature,
         Symbol,
         Type,
@@ -473,6 +474,19 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
                 .map_err(|_| Trap::BadEntry(EntryError::GlobalTooLarge))?;
             functions.push(pointer);
         }
+        let mut labels = ArenaVec::new_in(arena);
+        for (func, function) in module.functions() {
+            let count = function.body.as_ref().map_or(0, Body::label_count);
+            labels.push(if count == 0 {
+                None
+            } else {
+                Some(
+                    memory
+                        .allocate(ObjectKind::Labels(func), count as u64, Align::BYTE)
+                        .map_err(|_| Trap::BadEntry(EntryError::GlobalTooLarge))?,
+                )
+            });
+        }
         let mut globals = ArenaVec::new_in(arena);
         for (id, global) in module.globals() {
             let kind = if global.init.is_none() {
@@ -497,9 +511,34 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
             };
             memory.initialize(pointer, bytes);
             for relocation in relocations {
-                let target: Pointer = match relocation.symbol {
-                    | Symbol::Function(func) => functions[func.index()],
-                    | Symbol::Global(global) => globals[global.index()],
+                let target: Pointer = match relocation.target {
+                    | RelocationTarget::Symbol(Symbol::Function(func)) => functions[func.index()],
+                    | RelocationTarget::Symbol(Symbol::Global(global)) => globals[global.index()],
+                    | RelocationTarget::Label { func, label } => {
+                        let base = labels[func.index()].expect("a labeled function");
+                        Pointer {
+                            address:    base.address + label.index() as u64,
+                            provenance: base.provenance,
+                        }
+                    },
+                    | RelocationTarget::LabelDifference {
+                        label, base, width, ..
+                    } => {
+                        // Labels are bytes of one object, so their distance
+                        // is the difference of their numbers. The verifier
+                        // bounds the width; the bytes are sign-extended.
+                        let distance = i128::from(
+                            (label.index() as i64 - base.index() as i64)
+                                .wrapping_add(relocation.addend),
+                        );
+                        let bytes = distance.to_le_bytes();
+                        memory.initialize_bytes(
+                            pointer,
+                            relocation.offset,
+                            &bytes[..(width.bytes() as usize).min(bytes.len())],
+                        );
+                        continue;
+                    },
                 };
                 let value = Pointer {
                     address:    target.address.wrapping_add_signed(relocation.addend),
@@ -521,6 +560,7 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
             arguments: ArenaVec::new_in(arena),
             argument_types: ArenaVec::new_in(arena),
             functions,
+            labels,
             globals,
             steps: 0,
             activations: 0,

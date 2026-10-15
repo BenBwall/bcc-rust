@@ -57,6 +57,11 @@ impl<'s> Draft<'_, 's> {
         for block in self.alive_blocks() {
             numbering.blocks[block.index()] = Some(builder.create_block());
         }
+        // Labels keep their numbers, so `block_addr` and relocations in
+        // globals still name the same blocks.
+        for &block in self.labels() {
+            _ = builder.create_label(numbering.block(block));
+        }
         // Reserve every value first, in listing order, so that an operand
         // defined in a later block (one the draft's layout puts after its
         // user) already has its number.
@@ -177,7 +182,8 @@ impl<'s> Draft<'_, 's> {
                 },
                 | InstData::Nullary { .. }
                 | InstData::GlobalAddr { .. }
-                | InstData::FuncAddr { .. } => original,
+                | InstData::FuncAddr { .. }
+                | InstData::BlockAddr { .. } => original,
                 | InstData::Load {
                     ty,
                     flags,
@@ -233,6 +239,7 @@ impl<'s> Draft<'_, 's> {
                 | InstData::Brif { .. }
                 | InstData::Switch { .. }
                 | InstData::Return { .. }
+                | InstData::IndirectBr { .. }
                 | InstData::Unreachable => unreachable!("terminators are not in a block's list"),
             }
         };
@@ -284,6 +291,16 @@ impl<'s> Draft<'_, 's> {
                 );
             },
             | Term::Return(value) => builder.ret(value.map(map)),
+            | Term::IndirectBr { addr, dests } => {
+                let mut lowered = ArenaVec::with_capacity_in(dests.len(), self.scratch);
+                for edge in dests {
+                    let args: &[Value] = self
+                        .scratch
+                        .alloc_slice_fill_iter(edge.args.iter().map(|&arg| map(arg)));
+                    lowered.push((numbering.block(edge.target), args));
+                }
+                builder.indirect_br(map(*addr), &lowered);
+            },
             | Term::Unreachable => builder.unreachable(),
         }
     }

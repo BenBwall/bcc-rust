@@ -290,6 +290,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 Ok(())
             },
             | Task::Return(statement) => self.return_value(statement),
+            | Task::IndirectJump(statement) => self.indirect_jump(statement),
             | Task::Switch { statement, exit } => self.switch(statement, exit),
             | Task::EndSwitch { statement, exit } => {
                 self.end_switch(statement, exit);
@@ -424,6 +425,8 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     result:             TypeId,
     bounds:             ArenaMap<'s, usize, ssa::Var>,
     vla_tokens:         ArenaMap<'s, RegionId, ssa::Var>,
+    /// The block computed gotos branch through, once one exists.
+    indirect:           Option<Block>,
 }
 
 // Tests

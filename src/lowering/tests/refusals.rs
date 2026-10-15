@@ -52,10 +52,6 @@ fn unsupported_constructs_name_themselves() {
         ("void f(void) { __asm__(\"nop\"); }", "inline assembly"),
         ("_Atomic int a; int f(void) { return a; }", "atomic types"),
         (
-            "int f(void) { void *p = &&l; l: return p != 0; }",
-            "label addresses",
-        ),
-        (
             "_Complex double z; int f(void) { return __real__ z; }",
             "complex arithmetic",
         ),

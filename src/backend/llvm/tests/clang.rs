@@ -628,6 +628,105 @@ block0:
     );
 }
 
+/// Jumps through a static table of label addresses and through label
+/// differences added back to a label, as threaded interpreters do:
+/// 100 + 200 + 300 + 10 + 20 + 30 - 600. The interpreter agrees.
+#[test]
+fn label_tables_and_differences_run() {
+    let program = "global @table internal constant size 24, align 8 = bytes          \
+                   \"000000000000000000000000000000000000000000000000\" relocs [0: \
+                   blockaddress(@select,          label0), 8: blockaddress(@select, label1), 16: \
+                   blockaddress(@select, label2)]
+global @offsets internal constant size 12, align 4 = bytes \"000000000000000000000000\"          \
+                   relocs [0: labeldiff.i32(@offset, label0, label0), 4: labeldiff.i32(@offset, \
+                   label1,          label0), 8: labeldiff.i32(@offset, label2, label0)]
+
+function @select(i64) -> i32 internal {
+    label0 = block_label block1
+    label1 = block_label block2
+    label2 = block_label block3
+block0(v0: i64):
+    v1 = global_addr @table
+    v2 = iconst.i64 8
+    v3 = imul.i64 v0, v2
+    v4 = ptr_add v1, v3
+    v5 = load.ptr v4, align 8
+    v6 = iconst.i32 100
+    indirect_br v5, [block1(v6), block2, block3]
+block1(v7: i32):
+    return v7
+block2:
+    v8 = iconst.i32 200
+    return v8
+block3:
+    v9 = block_addr label0
+    v10 = iconst.i32 300
+    indirect_br v9, [block1(v10), block2, block3]
+}
+
+function @offset(i64) -> i32 internal {
+    label0 = block_label block1
+    label1 = block_label block2
+    label2 = block_label block3
+block0(v0: i64):
+    v1 = global_addr @offsets
+    v2 = iconst.i64 4
+    v3 = imul.i64 v0, v2
+    v4 = ptr_add v1, v3
+    v5 = load.i32 v4, align 4
+    v6 = sext.i64 v5
+    v7 = block_addr label0
+    v8 = ptr_add inbounds v7, v6
+    indirect_br v8, [block1, block2, block3]
+block1:
+    v9 = iconst.i32 10
+    return v9
+block2:
+    v10 = iconst.i32 20
+    return v10
+block3:
+    v11 = iconst.i32 30
+    return v11
+}
+
+function @main() -> i32 external {
+block0:
+    v0 = iconst.i64 0
+    v1 = iconst.i64 1
+    v2 = iconst.i64 2
+    v3 = call @select(v0)
+    v4 = call @select(v1)
+    v5 = call @select(v2)
+    v6 = call @offset(v0)
+    v7 = call @offset(v1)
+    v8 = call @offset(v2)
+    v9 = iadd.i32 v3, v4
+    v10 = iadd.i32 v9, v5
+    v11 = iadd.i32 v10, v6
+    v12 = iadd.i32 v11, v7
+    v13 = iadd.i32 v12, v8
+    v14 = iconst.i32 600
+    v15 = isub.i32 v13, v14
+    return v15
+}
+";
+    let run = crate::backend::interpreter::run_text(program, "main");
+    assert!(
+        matches!(
+            run.result,
+            Ok(crate::backend::interpreter::Outcome {
+                termination: crate::backend::interpreter::Termination::Returned(Some(
+                    crate::backend::interpreter::RuntimeValue::Int(60)
+                )),
+                ..
+            })
+        ),
+        "{:?}",
+        run.result
+    );
+    assert_runs("labels", program, 60, "");
+}
+
 #[test]
 fn objects_and_assembly_are_emitted_in_memory() {
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
