@@ -543,41 +543,57 @@ impl<'id> Session<'id> {
             self.arena,
             "@\"{quoted}\" = thread_local{mode} alias [{size} x i8], ptr null\n\0"
         );
-        let mut source = ptr::null_mut();
-        let mut message = ptr::null_mut();
         // SAFETY: The buffer borrows `text` up to its final NUL, which the IR
-        // lexer requires, and is disposed while `text` lives. The session
-        // owns the live context and module; `LLVMLinkModules2` destroys the
-        // parsed source module.
-        unsafe {
-            let buffer = LLVMCreateMemoryBufferWithMemoryRange(
+        // lexer requires, and is disposed below while `text` lives.
+        let buffer = unsafe {
+            LLVMCreateMemoryBufferWithMemoryRange(
                 text.as_ptr().cast(),
                 text.len() - 1,
                 c"bcc.thread_local_alias".as_ptr(),
                 1,
-            );
-            let failed =
-                LLVMParseIRInContext2(self.context, buffer, &raw mut source, &raw mut message);
-            LLVMDisposeMemoryBuffer(buffer);
-            let message = Message(message);
-            assert!(failed == 0, "thread-local alias IR parses: {message}");
-            // The same layout and triple, so linking has nothing to report.
-            LLVMSetDataLayout(source, LLVMGetDataLayoutStr(self.module));
-            LLVMSetTarget(source, LLVMGetTarget(self.module));
-            assert!(
-                LLVMLinkModules2(self.module, source) == 0,
-                "a fresh thread-local alias links"
-            );
-        }
-        let name = self.name(name);
-        // SAFETY: The alias was linked into this session's module under its
-        // name above, and the aliasee is a global of the same module.
+            )
+        };
+        let mut source = ptr::null_mut();
+        let mut message = ptr::null_mut();
+        // SAFETY: The session owns the live context; the buffer is live, and
+        // the parser does not take it.
+        let failed = unsafe {
+            LLVMParseIRInContext2(self.context, buffer, &raw mut source, &raw mut message)
+        };
+        // SAFETY: This disposes the buffer created above exactly once.
         unsafe {
-            let raw = LLVMGetNamedGlobalAlias(self.module, name.as_ptr(), name.count_bytes());
-            assert!(!raw.is_null(), "the linked alias keeps its name");
-            LLVMAliasSetAliasee(raw, aliasee.0);
-            Val(raw, PhantomData)
+            LLVMDisposeMemoryBuffer(buffer);
         }
+        let message = Message(message);
+        assert!(failed == 0, "thread-local alias IR parses: {message}");
+        // SAFETY: The session's module is live; LLVM returns its layout.
+        let layout = unsafe { LLVMGetDataLayoutStr(self.module) };
+        // SAFETY: The parsed module is live, and LLVM copies the layout.
+        unsafe {
+            LLVMSetDataLayout(source, layout);
+        }
+        // SAFETY: The session's module is live; LLVM returns its triple.
+        let triple = unsafe { LLVMGetTarget(self.module) };
+        // SAFETY: The parsed module is live, and LLVM copies the triple. The
+        // same layout and triple leave linking nothing to report.
+        unsafe {
+            LLVMSetTarget(source, triple);
+        }
+        // SAFETY: Both modules are live in this session's context; linking
+        // destroys the parsed source module.
+        let failed = unsafe { LLVMLinkModules2(self.module, source) };
+        assert!(failed == 0, "a fresh thread-local alias links");
+        let name = self.name(name);
+        // SAFETY: The session's module is live and the name NUL-terminated.
+        let raw =
+            unsafe { LLVMGetNamedGlobalAlias(self.module, name.as_ptr(), name.count_bytes()) };
+        assert!(!raw.is_null(), "the linked alias keeps its name");
+        // SAFETY: The alias and its thread-local aliasee are globals of this
+        // session's module.
+        unsafe {
+            LLVMAliasSetAliasee(raw, aliasee.0);
+        }
+        Val(raw, PhantomData)
     }
 
     /// A constant array of `element` values.
