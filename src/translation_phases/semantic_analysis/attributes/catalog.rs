@@ -107,9 +107,6 @@ fn declspec(name: &str) -> Option<Rule> {
     Some(match name {
         | "align" => Rule::Representation,
         | "allocate" => Rule::Section,
-        // Thread storage duration, which declaration analysis gives the
-        // object (`Analyzer::thread_storage`).
-        | "thread" => Rule::Accepted,
         | "naked" => Rule::Unsupported(UnsupportedAttribute::Naked),
         | "dllimport"
         | "dllexport"
@@ -173,9 +170,6 @@ fn gnu(name: &str) -> Option<Rule> {
         | "no_caller_saved_registers"
         | "no_callee_saved_registers"
         | "interrupt" => Rule::Convention(Convention::Other),
-        // MinGW's `__declspec(thread)`, a macro for this spelling, which
-        // declaration analysis treats as the declspec.
-        | "thread" => Rule::Accepted,
         | "ms_struct" => Rule::RecordLayout { microsoft: true },
         | "gcc_struct" => Rule::RecordLayout { microsoft: false },
         | "ifunc" => Rule::Unsupported(U::Ifunc),
@@ -256,6 +250,10 @@ fn gnu(name: &str) -> Option<Rule> {
         | "no_thread_safety_analysis"
         | "lockable"
         | "scoped_lockable"
+        // MSVC `__declspec(thread)`, also in the GNU spelling MinGW's
+        // `__declspec` macro produces: declaration analysis gives the object
+        // thread storage duration (`Analyzer::thread_storage`).
+        | "thread"
         | "hot"
         | "indirect_branch"
         | "indirect_return"
