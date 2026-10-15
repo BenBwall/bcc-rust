@@ -386,10 +386,12 @@ fn unimplementable_attributes_and_conventions_are_retained_refusals() {
             Target::LinuxGnu,
             Some(UnsupportedAttribute::Naked),
         ),
+        // A declaration that is never called drops nothing; lowering
+        // refuses calls through the entity fact.
         (
             "__attribute__((returns_twice)) int f(void);",
             Target::LinuxGnu,
-            Some(UnsupportedAttribute::ReturnsTwice),
+            None,
         ),
         (
             "void __attribute__((ms_abi)) f(void);",

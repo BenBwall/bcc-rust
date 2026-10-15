@@ -52,6 +52,8 @@ pub(crate) struct EntityAttributes<'tu> {
     pub(crate) code_alignment: u32,
     /// GNU `visibility`, from the declaration that wrote it.
     pub(crate) visibility:     Option<Visibility>,
+    /// GNU `returns_twice`: lowering refuses direct calls to the entity.
+    pub(crate) returns_twice:  bool,
 }
 
 /// ELF symbol visibility; COFF targets ignore it as Clang does.
@@ -109,7 +111,8 @@ pub(crate) enum UnsupportedAttribute {
     Weakref,
     /// GNU/MSVC `naked`: a body without prologue or epilogue.
     Naked,
-    /// GNU `returns_twice` on a user function, as `setjmp` has.
+    /// A direct call to a function declared GNU `returns_twice`, as
+    /// `setjmp` is.
     ReturnsTwice,
     /// Clang `overloadable`: mangled C function names.
     Overloadable,

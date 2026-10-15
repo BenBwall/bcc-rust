@@ -66,6 +66,7 @@ use crate::{
             ExpressionInfo,
             TypeId,
             TypeKind,
+            UnsupportedAttribute,
         },
     },
     util::bump::ArenaVec,
@@ -1432,6 +1433,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             "setjmp" | "_setjmp" | "sigsetjmp" | "__sigsetjmp" | "vfork"
         ) {
             return Err(LoweringError::unsupported(Construct::Setjmp, source));
+        }
+        if self
+            .unit
+            .sema
+            .entity_attributes(binding)
+            .is_some_and(|attributes| attributes.returns_twice)
+        {
+            return Err(LoweringError::unsupported(
+                Construct::Attribute(UnsupportedAttribute::ReturnsTwice),
+                source,
+            ));
         }
         if data.origin.is_intrinsic() && data.origin.library().is_none() {
             return Err(LoweringError::unsupported(Construct::Builtin, source));

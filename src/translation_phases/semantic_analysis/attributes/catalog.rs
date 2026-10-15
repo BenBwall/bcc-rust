@@ -31,6 +31,10 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     Section,
     Used,
     Visibility,
+    /// GNU `returns_twice`: an entity fact that lowering refuses at each
+    /// direct call, so declarations that are never called (as in
+    /// `<setjmp.h>`) stay valid.
+    ReturnsTwice,
     /// A calling convention, checked against the target's default.
     Convention(Convention),
     /// Implemented elsewhere or without a code-generation meaning that bcc
@@ -172,7 +176,7 @@ fn gnu(name: &str) -> Option<Rule> {
         | "ifunc" => Rule::Unsupported(U::Ifunc),
         | "weakref" => Rule::Unsupported(U::Weakref),
         | "naked" => Rule::Unsupported(U::Naked),
-        | "returns_twice" => Rule::Unsupported(U::ReturnsTwice),
+        | "returns_twice" => Rule::ReturnsTwice,
         | "overloadable" => Rule::Unsupported(U::Overloadable),
         | "cpu_dispatch" | "cpu_specific" | "target_version" =>
             Rule::Unsupported(U::Multiversioning),

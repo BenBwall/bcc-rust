@@ -114,6 +114,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | Rule::Constructor | Rule::Destructor =>
                     self.init_attribute(subject, specifier, attribute, rule == Rule::Constructor),
                 | Rule::Cleanup => self.cleanup_attribute(subject, attribute),
+                | Rule::ReturnsTwice => self.returns_twice_attribute(subject, attribute),
                 | _ => {},
             }
         }
@@ -167,6 +168,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | Subject::Parameter => {},
             | Subject::Typedef | Subject::Member => self.ignored(attribute),
+        }
+    }
+
+    /// GCC `returns_twice` on a function. Lowering cannot preserve a
+    /// caller's state across a second return, so it refuses direct calls;
+    /// an uncalled declaration has no effect to drop. Elsewhere it is
+    /// ignored with a warning, as in Clang.
+    /// GNU extension: GCC manual, "Common Function Attributes",
+    /// `returns_twice`.
+    fn returns_twice_attribute(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
+        if !self.no_arguments(attribute) {
+            return;
+        }
+        if let Subject::Function { binding, .. } = subject {
+            let entity = self.entity_of(binding);
+            self.attributes.entity(entity).returns_twice = true;
+        } else {
+            self.ignored(attribute);
         }
     }
 
