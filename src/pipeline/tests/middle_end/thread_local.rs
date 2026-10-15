@@ -110,6 +110,34 @@ fn thread_storage_emits_llvm_thread_locals() {
     }
 }
 
+/// MSVC `__declspec(thread)` lowers like the standard specifier.
+/// MSVC extension: Microsoft Learn, "thread".
+#[test]
+fn declspec_thread_lowers_to_a_thread_local_global() {
+    let source = "__declspec(thread) int counter = 4; int main(void) { return counter; }";
+    for target in [Target::WindowsMsvc, Target::WindowsGnu] {
+        let configuration = CompilerConfiguration::default()
+            .with_target(target)
+            .with_msvc_extensions(true);
+        with_configured_module(
+            source,
+            target,
+            true,
+            Profile::PostAbi,
+            configuration,
+            |module, target| {
+                let mut text = String::new();
+                crate::backend::llvm::emit_module(module, target, &mut text).unwrap();
+                assert!(
+                    text.contains("@counter = thread_local global"),
+                    "{target:?}: {text}"
+                );
+                assert_eq!(interpret(module, target).0, 4);
+            },
+        );
+    }
+}
+
 #[test]
 fn thread_storage_native_arms_match_the_interpreter_and_clang() {
     let Some(target) = host() else { return };
@@ -156,6 +184,8 @@ static void record(int index) {
     results[index] = counter * 10 + (calls == index * 1000 + 1);
 }
 
+static void prepare(void) { counter = 5; }
+
 static int report(void) {
     for (int i = 0; i < 4; i++)
         printf("thread %d: %d\n", i, results[i]);
@@ -172,7 +202,7 @@ int CloseHandle(void *);
 static unsigned long worker(void *arg) { record((int)(long long)arg); return 0; }
 int main(void) {
     void *threads[4];
-    counter = 5;
+    prepare();
     for (int i = 0; i < 4; i++)
         threads[i] = CreateThread(0, 0, worker, (void *)(long long)i, 0, 0);
     for (int i = 0; i < 4; i++) {
@@ -190,7 +220,7 @@ int pthread_join(pthread_t, void **);
 static void *worker(void *arg) { record((int)(long)arg); return 0; }
 int main(void) {
     pthread_t threads[4];
-    counter = 5;
+    prepare();
     for (int i = 0; i < 4; i++)
         pthread_create(&threads[i], 0, worker, (void *)(long)i);
     for (int i = 0; i < 4; i++)
@@ -240,6 +270,56 @@ fn windows_threads_keep_their_own_copies() {
     }
 }
 
+/// Four threads add to `shared`, an `extern _Thread_local` object defined in
+/// the other unit, through its name, through a pointer to it, and through a
+/// function in that unit; each sees its own copy, and the pointer
+/// `shared_address` returns is that thread's own. The defining unit's
+/// thread-local initializers hold addresses of a string literal, a static
+/// object and a function.
+const MULTI_DEFINING: &str = r#"
+static int plain = 7;
+static int five(void) { return 5; }
+_Thread_local int shared = 50;
+_Thread_local const char *name = "tls";
+_Thread_local int *to_plain = &plain;
+_Thread_local int (*function)(void) = five;
+int bump(int by) { shared += by; return shared; }
+int *shared_address(void) { return &shared; }
+"#;
+
+const MULTI_USING: &str = r#"
+int printf(const char *, ...);
+extern _Thread_local int shared;
+extern _Thread_local const char *name;
+extern _Thread_local int *to_plain;
+extern _Thread_local int (*function)(void);
+int bump(int);
+int *shared_address(void);
+int results[4];
+
+static void record(int index) {
+    int *mine = &shared;
+    for (int i = 0; i <= index; i++) {
+        *mine += 10;
+        bump(1);
+    }
+    results[index] = shared_address() == mine
+        ? shared * 100 + *to_plain + function() + (name[0] == 't') : -1;
+}
+
+static void prepare(void) { shared = 5; }
+
+static int report(void) {
+    for (int i = 0; i < 4; i++)
+        printf("thread %d: %d\n", i, results[i]);
+    printf("main: %d\n", shared);
+    return shared == 5 ? 0 : 1;
+}
+"#;
+
+const MULTI_OUTPUT: &str =
+    "thread 0: 6113\nthread 1: 7213\nthread 2: 8313\nthread 3: 9413\nmain: 5\n";
+
 /// `extern _Thread_local` in one translation unit names the other's
 /// definition, and both units compute the same thread's address.
 const DEFINING_UNIT: &str = "
@@ -283,6 +363,66 @@ fn extern_thread_locals_link_across_translation_units() {
     }
 }
 
+/// The two-unit program on Windows threads, from every arm.
+#[test]
+fn windows_threads_keep_their_own_extern_copies() {
+    if !cfg!(all(windows, target_env = "gnu")) {
+        eprintln!("skipping: Windows threads need a Windows GNU host");
+        return;
+    }
+    let target = Target::WindowsGnu;
+    let Ok(toolchain) = Toolchain::bundled(target) else {
+        eprintln!("skipping: no bundled toolchain");
+        return;
+    };
+    let using = format!("{MULTI_USING}{WINDOWS_THREADS}");
+    let directory = TempDir::new("thread-local-windows-units");
+    for arm in &ARMS {
+        let objects = objects(&directory, "multi", arm, target, &[MULTI_DEFINING, &using]);
+        let executable = directory.join(format!("multi-{}.exe", arm.name));
+        let mut link = toolchain.command(
+            &objects[0],
+            &executable,
+            options(arm, target, OutputKind::Executable),
+        );
+        let linked = crate::test_support::native::run_native(link.arg(&objects[1])).unwrap();
+        assert!(linked.status.success(), "{linked:?}");
+        let actual = run_native(&executable);
+        assert_eq!(
+            (actual.0, actual.1.as_str()),
+            (0, MULTI_OUTPUT),
+            "{}",
+            arm.name
+        );
+    }
+}
+
+/// The interpreter runs one thread and has no operation that creates
+/// another, so a program that tries to stops with a trap instead of two
+/// threads silently sharing one copy.
+#[test]
+fn the_interpreter_stops_programs_that_create_threads() {
+    for (target, tail) in [
+        (Target::WindowsGnu, WINDOWS_THREADS),
+        (Target::LinuxGnu, POSIX_THREADS),
+    ] {
+        let source = format!("{THREADS_BODY}{tail}");
+        for (optimize, profile) in STAGES {
+            with_module(&source, target, optimize, profile, |module, target| {
+                let arena = Bump::new();
+                let mut host = DefaultHost::for_target(&arena, target);
+                let trap = interpreter::run(module, "main", &[], &mut host)
+                    .expect_err("the program creates a thread");
+                let message = trap.display_in(module).to_string();
+                assert!(
+                    message.contains("has no definition"),
+                    "{target:?} {optimize} {profile:?}: {message}"
+                );
+            });
+        }
+    }
+}
+
 /// The Linux arms link under WSL with pthreads, beside Clang's objects, and
 /// the two-unit program links there too.
 #[test]
@@ -298,10 +438,13 @@ fn linux_threads_keep_their_own_copies_under_wsl() {
     let toolchain = Toolchain::bundled(target).unwrap();
     let directory = TempDir::new("thread-local-linux");
     let source = format!("{THREADS_BODY}{POSIX_THREADS}");
+    let using = format!("{MULTI_USING}{POSIX_THREADS}");
     let mut programs = Vec::new();
     for arm in &ARMS {
         let threads = objects(&directory, "threads", arm, target, &[&source]);
         programs.push((format!("threads-{}", arm.name), threads, THREADS_OUTPUT.1));
+        let multi = objects(&directory, "multi", arm, target, &[MULTI_DEFINING, &using]);
+        programs.push((format!("multi-{}", arm.name), multi, MULTI_OUTPUT));
         let units = objects(
             &directory,
             "units",
