@@ -13,8 +13,11 @@
 //! enters a loop around its header, and so is a block whose parameters
 //! blocks below it still use, which a threaded path would not define, and an
 //! edge whose new target would
-//! get a second, different set of arguments from one terminator. Poison is
-//! not a constant here: branching on it stays undefined behaviour.
+//! get a second, different set of arguments from one terminator. Only `jump`
+//! and `brif` edges move, never an `indirect_br`'s; a labeled block may lose
+//! its direct edges this way, but it stays, so its address still leads to
+//! the same test. Poison is not a constant here: branching on it stays
+//! undefined behaviour.
 //!
 //! **Merged conditions.** In
 //!
@@ -32,8 +35,11 @@
 //! select-formation cost, no memory, division or call). They keep their
 //! flags: where the first test fails, a poison they produce reaches only the
 //! `select`'s unchosen operand, and every other use stays behind the same
-//! two tests. This is LLVM's `FoldBranchToCommonDest`. With the range-check
-//! rule of `combine`, `c >= 'a' && c <= 'z'` becomes one comparison.
+//! two tests. The arm is deleted, so it must not be labeled: its address
+//! may name it even where no `indirect_br` lists it, as a table entry or a
+//! compared pointer. This is LLVM's `FoldBranchToCommonDest`. With the
+//! range-check rule of `combine`, `c >= 'a' && c <= 'z'` becomes one
+//! comparison.
 //!
 //! Each threaded edge and each merge is one rewrite for bisecting.
 //!
@@ -218,8 +224,11 @@ pub(super) fn merge_branch_conditions(
         // (the arm's edge, the shared edge, whether the arm is the true side)
         for (arm_edge, shared, and) in [(&then, &otherwise, true), (&otherwise, &then, false)] {
             let arm = arm_edge.target;
+            // A labeled arm keeps its identity: its address may still name
+            // it, even where no `indirect_br` lists it.
             if arm == block
                 || arm == Draft::entry()
+                || draft.is_labeled(arm)
                 || !draft.block(arm).alive
                 || incoming[arm.index()] != 1
                 || !cheap_arm_within(draft, arm, MERGE_BUDGET)

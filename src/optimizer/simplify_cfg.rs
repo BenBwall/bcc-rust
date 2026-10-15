@@ -26,9 +26,9 @@
 //!    `select.rs`. Each differing join argument is one bisectable rewrite. Each
 //!    arm costs at most four units; loads, stores, calls, division and
 //!    remainder never speculate. Moved arithmetic loses poison-producing flags.
-//! 4. **Merge conditions** (`thread.rs`): a branch whose single-entry arm only
-//!    tests a second, cheap condition for one of the branch's own destinations
-//!    tests both with one `select`.
+//! 4. **Merge conditions** (`thread.rs`): a branch whose single-entry,
+//!    unlabeled arm only tests a second, cheap condition for one of the
+//!    branch's own destinations tests both with one `select`.
 //! 5. **Fold identical branches**: a `brif` whose two edges agree, or a
 //!    `switch` whose edges all agree, becomes a `jump`.
 //! 6. **Remove unreachable blocks**, all at once and counted as one rewrite: a

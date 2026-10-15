@@ -99,6 +99,88 @@ block2(v4: i32):
     assert_pass_leaves(Pass::SimplifyCfg, input);
 }
 
+/// A labeled arm that only tests a second condition for the branch's other
+/// destination is not merged into the branch: the merge would delete the
+/// block its label names. No `indirect_br` lists it, so it has one
+/// incoming edge, as in `p = &&l; if (x) { l: if (y > 3) return 1; }`.
+#[test]
+fn condition_merging_keeps_labeled_arms() {
+    let input = "\
+function @f(i32, i32) -> ptr external {
+    label0 = block_label block1
+block0(v0: i32, v1: i32):
+    v2 = iconst.i32 0
+    v3 = icmp.i32 ne v0, v2
+    brif v3, block1, block3
+block1:
+    v4 = iconst.i32 3
+    v5 = icmp.i32 sgt v1, v4
+    brif v5, block2, block3
+block2:
+    v6 = block_addr label0
+    return v6
+block3:
+    v7 = null
+    return v7
+}
+";
+    assert_pass_leaves(Pass::SimplifyCfg, input);
+    let (optimized, _) = optimize_text(
+        input,
+        &OptimizerOptions {
+            verify_each: true,
+            ..OptimizerOptions::default()
+        },
+    );
+    assert!(optimized.contains("label0 = block_label"), "{optimized}");
+}
+
+/// A constant reaching a labeled test block on a direct edge skips the test,
+/// while the `indirect_br` edge, which passes a constant too, keeps its
+/// target, and the labeled block stays.
+#[test]
+fn constant_threading_keeps_indirect_edges_and_labeled_blocks() {
+    let input = "\
+function @f(ptr, i1) -> i32 external {
+    label0 = block_label block2
+block0(v0: ptr, v1: i1):
+    v2 = iconst.i1 1
+    brif v1, block2(v2), block1
+block1:
+    v3 = iconst.i1 0
+    indirect_br v0, [block2(v3)]
+block2(v4: i1):
+    brif v4, block3, block4
+block3:
+    v5 = iconst.i32 1
+    return v5
+block4:
+    v6 = iconst.i32 2
+    return v6
+}
+";
+    let expected = "\
+function @f(ptr, i1) -> i32 external {
+    label0 = block_label block2
+block0(v0: ptr, v1: i1):
+    v2 = iconst.i1 1
+    brif v1, block3, block1
+block1:
+    v3 = iconst.i1 0
+    indirect_br v0, [block2(v3)]
+block2(v4: i1):
+    brif v4, block3, block4
+block3:
+    v5 = iconst.i32 1
+    return v5
+block4:
+    v6 = iconst.i32 2
+    return v6
+}
+";
+    assert_pass(Pass::SimplifyCfg, input, expected);
+}
+
 /// An unused parameter of an `indirect_br` target loses its argument on
 /// every edge, the indirect one included.
 #[test]
