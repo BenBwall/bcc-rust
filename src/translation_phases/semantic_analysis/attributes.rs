@@ -1,550 +1,330 @@
-//! Phase-7 GNU representation attributes. Attribute names are read only at
-//! list depth; alignment operands use the semantic constant evaluator after
-//! their expression syntax has been visited by the explicit work stack.
-//! C99: §6.7, p. 97; PDF p. 109; §6.7.2.1p10, p. 102; PDF p. 114.
-//! GNU extension: <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html>.
+//! Phase-7 attribute pass. Each attribute specifier is checked once by name
+//! (`catalog.rs`): unknown names warn as Clang's `-Wunknown-attributes`,
+//! conventions are checked against the target, dropped meanings warn and
+//! unimplementable ones become retained capability refusals. Declarations
+//! then apply the attributes that describe their entity (`entities.rs`):
+//! weak, alias, section, used, visibility, code alignment, constructors,
+//! destructors and cleanup functions, with Clang's applicability
+//! diagnostics. Translation-unit completion resolves aliases and registers
+//! constructor and destructor definitions; `cleanup` opens a control region
+//! after its variable's initializer. Representation attributes (`packed`,
+//! `aligned`, `mode`) stay with type construction in `layout.rs`.
+//!
+//! For `static int n __attribute__((cleanup(drop))) = 1;` in a block, the
+//! name pass accepts `cleanup`; the declaration pass reports that `cleanup`
+//! only applies to automatic variables and ignores it. For an automatic
+//! `int n`, it resolves `drop`, checks that it takes one parameter that
+//! `&n` converts to, and opens the cleanup region once `= 1` is analyzed.
+//!
+//! Read [`Analyzer::check_attribute_list`] and
+//! [`Analyzer::declaration_attributes`] first, then `entities.rs`.
+//!
+//! - `written.rs` splits a specifier into attribute entries;
+//! - `catalog.rs` gives every known name its rule;
+//! - `entities.rs` applies entity attributes and finalizes them;
+//! - `jumps.rs` forbids jumps into cleanup scopes and indirect jumps across
+//!   them;
+//! - `layout.rs` retains packing, alignment and scalar machine modes;
+//! - `transparent.rs` makes qualifying unions transparent.
+//!
+//! C99: §6.7, p. 97; PDF p. 109 (declarations, extended by GNU attributes);
+//! §6.2.2p2, p. 30; PDF p. 42 (linked declarations share one entity).
+//! C23: §6.7.13.2p1-3, pp. 142-143; PDF pp. 155-156.
+//! GNU extension: GCC manual, "Attribute Syntax".
+//! <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+
+mod catalog;
+mod entities;
+mod jumps;
+mod layout;
+mod transparent;
+mod written;
+
+pub(super) use entities::{
+    AttributeState,
+    Subject,
+};
 
 use super::{
     Analyzer,
-    ArenaVec,
     AttributeSpecifier,
     Declarator,
     DirectDeclarator,
     SemanticErrorKind,
     SpecifierExtension,
     SpecifierExtensionKind,
-    types::{
-        Scalar,
-        TagKind,
-        TypeId,
-        TypeKind,
+    facts::{
+        AttributeRefusal,
+        UnsupportedAttribute,
     },
 };
-use crate::translation_phases::{
-    SourceVectors,
-    parsing::declaration_syntax::{
-        DeclarationSpecifiers,
-        TypeSpecifiers,
+use crate::{
+    target::Target,
+    translation_phases::{
+        SourceVectors,
+        preprocessing::KeywordTokenType,
     },
+    util::bump::ArenaVec,
 };
 
-/// Representation facts independent of a declaration's underlying C type.
-#[derive(Clone, Copy, Default)]
-pub(super) struct LayoutAttributes {
-    pub(super) packed:    bool,
-    pub(super) alignment: u32,
+impl<'tu, 's> Analyzer<'_, 'tu, 's> {
+    /// Checks every attribute name of `specifier` once, wherever it appears:
+    /// declarations, type names, pointers, members, tags and statements.
+    /// GNU extension: GCC manual, "Attribute Syntax".
+    pub(super) fn check_attribute_list(&mut self, specifier: &'tu AttributeSpecifier<'tu>) {
+        if specifier.recovered
+            || self
+                .attributes
+                .checked
+                .insert(std::ptr::from_ref(specifier).addr(), ())
+                .is_some()
+        {
+            return;
+        }
+        let windows = matches!(
+            self.context.configuration.target(),
+            Target::WindowsGnu | Target::WindowsMsvc
+        );
+        for attribute in self.written_attributes(specifier) {
+            let Some(rule) = catalog::rule(specifier.syntax, attribute.namespace, attribute.name)
+            else {
+                let spelling = match attribute.namespace {
+                    | Some(namespace) => crate::diagnostics::format_in!(
+                        self.scratch,
+                        "{namespace}::{}",
+                        attribute.name
+                    ),
+                    | None => attribute.name,
+                };
+                let name = self.context.string_cache.intern(spelling);
+                self.error(
+                    SemanticErrorKind::UnknownAttribute,
+                    attribute.source,
+                    Some(name),
+                    None,
+                );
+                continue;
+            };
+            let refusal = match rule {
+                | catalog::Rule::Convention(convention) => match convention {
+                    | catalog::Convention::Default => None,
+                    | catalog::Convention::X86 | catalog::Convention::Pascal => {
+                        if !windows || convention == catalog::Convention::Pascal {
+                            let name = self.context.string_cache.intern(attribute.name);
+                            self.error(
+                                SemanticErrorKind::IgnoredConvention,
+                                attribute.source,
+                                Some(name),
+                                None,
+                            );
+                        }
+                        None
+                    },
+                    | catalog::Convention::Microsoft =>
+                        (!windows).then_some(UnsupportedAttribute::CallingConvention),
+                    | catalog::Convention::SystemV =>
+                        windows.then_some(UnsupportedAttribute::CallingConvention),
+                    | catalog::Convention::Other => Some(UnsupportedAttribute::CallingConvention),
+                },
+                | catalog::Rule::Unsupported(capability) => Some(capability),
+                | catalog::Rule::RecordLayout { microsoft } =>
+                    (microsoft != windows).then_some(UnsupportedAttribute::RecordLayout),
+                | catalog::Rule::Ignored => {
+                    let name = self.context.string_cache.intern(attribute.name);
+                    self.error(
+                        SemanticErrorKind::IgnoredAttribute,
+                        attribute.source,
+                        Some(name),
+                        None,
+                    );
+                    None
+                },
+                | _ => None,
+            };
+            if let Some(capability) = refusal {
+                self.refuse(capability, specifier.source_vectors);
+            }
+        }
+    }
+
+    /// The entries of `specifier`, with names copied to semantic scratch so
+    /// diagnostics can be reported while visiting them.
+    fn written_attributes(
+        &self,
+        specifier: &AttributeSpecifier<'_>,
+    ) -> ArenaVec<'s, written::WrittenAttribute<'s>> {
+        let scratch = self.scratch;
+        let mut list = ArenaVec::new_in(scratch);
+        for attribute in written::written(specifier, self.context) {
+            list.push(written::WrittenAttribute {
+                namespace: attribute.namespace.map(|n| &*scratch.alloc_str(n)),
+                name:      scratch.alloc_str(attribute.name),
+                index:     attribute.index,
+                arguments: attribute
+                    .arguments
+                    .map(|tokens| &*scratch.alloc_slice_copy(tokens)),
+                source:    attribute.source,
+            });
+        }
+        list
+    }
+
+    /// Checks the attribute lists and MSVC modifiers of a specifier chain.
+    pub(super) fn check_extension_chain(
+        &mut self,
+        mut chain: Option<&'tu SpecifierExtension<'tu>>,
+    ) {
+        while let Some(item) = chain {
+            match item.kind {
+                | SpecifierExtensionKind::Attributes(specifier) =>
+                    self.check_attribute_list(specifier),
+                | SpecifierExtensionKind::MsModifier(keyword) =>
+                    self.check_ms_modifier(keyword, item.source_vectors),
+                | _ => {},
+            }
+            chain = item.next;
+        }
+    }
+
+    /// Checks a declarator's own attribute lists, pointer-level lists and
+    /// MSVC modifiers, excluding grouped children (visited on their own).
+    pub(super) fn check_declarator_attributes(&mut self, declarator: Declarator<'tu>) {
+        for level in declarator.pointer.levels {
+            self.check_extension_chain(level.attributes);
+        }
+        for direct in declarator.kind {
+            match *direct {
+                | DirectDeclarator::Attributes(specifier) => self.check_attribute_list(specifier),
+                | DirectDeclarator::MsModifier(keyword, source) =>
+                    self.check_ms_modifier(keyword, source),
+                | _ => {},
+            }
+        }
+    }
+
+    /// `__vectorcall` is not the x86-64 C convention; Clang leaves the other
+    /// MSVC convention keywords at the default there.
+    /// MSVC extension: Microsoft Learn, "Argument Passing and Naming
+    /// Conventions". <https://learn.microsoft.com/en-us/cpp/cpp/argument-passing-and-naming-conventions>
+    fn check_ms_modifier(&mut self, keyword: KeywordTokenType, source: SourceVectors) {
+        if keyword == KeywordTokenType::Vectorcall {
+            self.refuse(UnsupportedAttribute::CallingConvention, source);
+        }
+    }
+
+    /// Retains an accepted attribute whose meaning code generation lacks.
+    pub(super) fn refuse(&mut self, capability: UnsupportedAttribute, source: SourceVectors) {
+        if !self.tainted {
+            self.attributes.refusals.push(AttributeRefusal {
+                capability,
+                source,
+                owner: self.functions.reference_function,
+            });
+        }
+    }
+
+    /// Applies the entity attributes of one declaration: those of its
+    /// specifiers, its declarator, pointer levels and grouped declarators.
+    /// GNU attributes in any of these positions describe the declaration,
+    /// as in Clang. C99: §6.7, p. 97; PDF p. 109.
+    pub(super) fn declaration_attributes(
+        &mut self,
+        subject: Subject,
+        specifiers: Option<&'tu SpecifierExtension<'tu>>,
+        declarator: Option<Declarator<'tu>>,
+    ) {
+        let mut lists = ArenaVec::new_in(self.scratch);
+        let mut chain = specifiers;
+        while let Some(item) = chain {
+            if let SpecifierExtensionKind::Attributes(specifier) = item.kind {
+                lists.push(specifier);
+            }
+            chain = item.next;
+        }
+        // Chains are linked in reverse source order.
+        lists.reverse();
+        let mut declarators = ArenaVec::new_in(self.scratch);
+        declarators.extend(declarator);
+        while let Some(declarator) = declarators.pop() {
+            for level in declarator.pointer.levels {
+                let start = lists.len();
+                let mut chain = level.attributes;
+                while let Some(item) = chain {
+                    if let SpecifierExtensionKind::Attributes(specifier) = item.kind {
+                        lists.push(specifier);
+                    }
+                    chain = item.next;
+                }
+                lists[start..].reverse();
+            }
+            for direct in declarator.kind {
+                match *direct {
+                    | DirectDeclarator::Attributes(specifier) => lists.push(specifier),
+                    | DirectDeclarator::Parenthesized(group) => declarators.push(group.declarator),
+                    | _ => {},
+                }
+            }
+        }
+        if lists.is_empty() {
+            return;
+        }
+        for &specifier in &lists {
+            if !specifier.recovered {
+                self.entity_attribute_list(subject, specifier);
+            }
+        }
+    }
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
-    /// GCC member attributes may follow a complete declarator, including
-    /// grouped declarators. Walk those attribute lists without recursion.
-    pub(super) fn packed_declarator(&mut self, declarator: Declarator<'tu>) -> bool {
-        let mut work = ArenaVec::new_in(self.scratch);
-        work.push(declarator);
-        while let Some(declarator) = work.pop() {
-            for direct in declarator.kind {
-                match direct {
-                    | DirectDeclarator::Attributes(a)
-                        if super::vectors::attribute_names(a, self.context)
-                            .any(|(_, name)| name == "packed") =>
-                        return true,
-                    | DirectDeclarator::Parenthesized(p) => work.push(p.declarator),
-                    | _ => {},
-                }
-            }
-        }
-        false
-    }
-
-    /// Alignment written on this member, separate from its typedef's type
-    /// alignment. Operands have already been checked during type construction;
-    /// this retention step must not issue their diagnostics a second time.
-    /// GCC Common Variable Attributes, packed; C11: §6.7.5p2-6,
-    /// p. 127; PDF p. 145 (explicit _Alignas).
-    pub(super) fn explicit_member_alignment(
+    /// What a bound declaration declares, for its entity attributes. An
+    /// object declaration counts as a definition with an initializer, and at
+    /// file scope also without a storage class (an external tentative
+    /// definition). GCC and Clang accept `alias` on a `static` tentative
+    /// declaration, so it does not count.
+    /// C99: §6.7p5, p. 97; PDF p. 109; §6.9.2p1-2, p. 143; PDF p. 155.
+    pub(super) fn declaration_subject(
         &self,
-        extensions: Option<&'tu SpecifierExtension<'tu>>,
-        attributes: Option<&'tu SpecifierExtension<'tu>>,
-        declarator: Option<Declarator<'tu>>,
-    ) -> u32 {
-        let mut alignment = self
-            .written_alignment(extensions)
-            .max(self.written_alignment(attributes));
-        let mut work = ArenaVec::new_in(self.scratch);
-        if let Some(declarator) = declarator {
-            work.push(declarator);
-        }
-        while let Some(declarator) = work.pop() {
-            for direct in declarator.kind {
-                match direct {
-                    | DirectDeclarator::Attributes(a) =>
-                        alignment = alignment.max(self.written_attribute_alignment(a)),
-                    | DirectDeclarator::Parenthesized(p) => work.push(p.declarator),
-                    | _ => {},
-                }
-            }
-        }
-        alignment
-    }
-
-    fn written_alignment(&self, mut chain: Option<&'tu SpecifierExtension<'tu>>) -> u32 {
-        let mut alignment = 0;
-        while let Some(item) = chain {
-            let requested = match item.kind {
-                | SpecifierExtensionKind::Attributes(a) => self.written_attribute_alignment(a),
-                | SpecifierExtensionKind::Alignment(operand) => {
-                    let value = match operand {
-                        | super::SyntaxOperand::Expression(e) => self
-                            .expression_info(e)
-                            .integer
-                            .and_then(super::Integer::to_u64),
-                        | super::SyntaxOperand::Type(_) =>
-                            self.types.alignment(self.operand_type(operand)),
-                    };
-                    value
-                        .and_then(|value| u32::try_from(value).ok())
-                        .unwrap_or(0)
-                },
-                | _ => 0,
-            };
-            alignment = alignment.max(requested);
-            chain = item.next;
-        }
-        alignment
-    }
-
-    fn written_attribute_alignment(&self, a: &AttributeSpecifier<'tu>) -> u32 {
-        super::vectors::attribute_names(a, self.context)
-            .filter(|(_, name)| *name == "aligned")
-            .filter_map(|(index, _)| self.requested_attribute_alignment(a, index))
-            .filter_map(|value| u32::try_from(value).ok())
-            .max()
-            .unwrap_or(0)
-    }
-
-    fn requested_attribute_alignment(
-        &self,
-        a: &AttributeSpecifier<'tu>,
-        index: usize,
-    ) -> Option<u64> {
-        if a.tokens
-            .get(index + 1)
-            .is_some_and(|token| self.context.string_cache.at(token.contents) == "(")
-        {
-            self.attribute_alignment(a, index)
-        } else {
-            Some(16)
-        }
-    }
-
-    /// Schedule parsed alignment operands before consuming representation
-    /// facts. C99: §6.6p6, p. 95; PDF p. 107 (GNU ICE operand extension).
-    pub(super) fn attribute_operands(&mut self, attribute: &AttributeSpecifier<'tu>) {
-        for argument in attribute.arguments.iter().rev() {
-            self.work.push(super::Work::Expression(argument.expression));
-        }
-    }
-
-    /// Attribute chains share the ordinary iterative expression/type-name
-    /// traversal, including sizeof, alignof, enum constants and arithmetic.
-    pub(super) fn attribute_chain_operands(
-        &mut self,
-        mut chain: Option<&'tu SpecifierExtension<'tu>>,
-    ) {
-        while let Some(item) = chain {
-            if let SpecifierExtensionKind::Attributes(attribute) = item.kind {
-                self.attribute_operands(attribute);
-            }
-            chain = item.next;
-        }
-    }
-
-    /// GNU aligned requires an integer constant expression; the caller also
-    /// checks the positive power-of-two and target-representability rules.
-    /// C99: §6.6p6, p. 95; PDF p. 107.
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html> (aligned).
-    pub(super) fn attribute_alignment(
-        &self,
-        attribute: &AttributeSpecifier<'tu>,
-        index: usize,
-    ) -> Option<u64> {
-        let argument = attribute
-            .arguments
-            .iter()
-            .find(|argument| argument.index == index)?;
-        let info = self.expression_info(argument.expression);
-        info.integer
-            .filter(|_| info.ice)
-            .and_then(super::Integer::to_u64)
-    }
-
-    /// The first GNU `transparent_union` attribute in a specifier chain.
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
-    pub(super) fn transparent_union_request(
-        &self,
-        mut chain: Option<&'tu SpecifierExtension<'tu>>,
-    ) -> Option<SourceVectors> {
-        while let Some(item) = chain {
-            if let SpecifierExtensionKind::Attributes(a) = item.kind
-                && let Some(source) = self.transparent_union_name(a)
-            {
-                return Some(source);
-            }
-            chain = item.next;
-        }
-        None
-    }
-
-    /// A `transparent_union` attribute a typedef declaration writes outside
-    /// a union definition: among its specifiers, after a union specifier
-    /// that only names the union, or after its declarator. Clang applies it
-    /// to the union the typedef names.
-    pub(super) fn typedef_transparent_union(
-        &self,
-        spec: DeclarationSpecifiers<'tu>,
+        binding: usize,
         declarator: Declarator<'tu>,
-    ) -> Option<SourceVectors> {
-        let named = match spec.type_specifiers {
-            | TypeSpecifiers::StructOrUnion(s) if s.struct_declaration_list.is_none() =>
-                self.transparent_union_request(s.attributes),
-            | _ => None,
-        };
-        self.transparent_union_request(spec.extensions)
-            .or(named)
-            .or_else(|| {
-                declarator.kind.iter().find_map(|direct| match direct {
-                    | DirectDeclarator::Attributes(a) => self.transparent_union_name(a),
-                    | _ => None,
-                })
-            })
-    }
-
-    /// Where `a` names `transparent_union`, the position Clang reports.
-    fn transparent_union_name(&self, a: &AttributeSpecifier<'tu>) -> Option<SourceVectors> {
-        super::vectors::attribute_names(a, self.context)
-            .find(|(_, name)| *name == "transparent_union")
-            .map(|(index, _)| a.tokens[index].source_vectors)
-    }
-
-    /// Applies `transparent_union`, written at `source`, to the type `ty`.
-    /// As in Clang, the attribute is ignored with a warning unless `ty` is a
-    /// complete union with at least one member, a first member of neither
-    /// floating nor vector type, and every member of the first member's
-    /// size and at most its alignment; a member of incomplete type ignores
-    /// it silently.
-    /// GNU extension: GCC manual, "Common Type Attributes".
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
-    pub(super) fn make_transparent_union(&mut self, ty: TypeId, source: SourceVectors) {
-        let id = match self.types.nodes[ty.index] {
-            | TypeKind::Tag(id)
-                if self.types.tags[id].kind == TagKind::Union
-                    && self.types.tags[id].complete.get() =>
-                id,
-            | _ if self.types.unanalyzed(ty) => return,
-            | _ => {
-                self.error(
-                    SemanticErrorKind::IgnoredTransparentUnion,
-                    source,
-                    None,
-                    None,
-                );
-                return;
+        specifiers: super::DeclarationSpecifiers<'tu>,
+        initialized: bool,
+    ) -> Subject {
+        let data = self.bindings[binding];
+        match data.kind {
+            | super::BindingKind::Function => Subject::Function {
+                binding,
+                definition: false,
             },
-        };
-        let tag = self.types.tags[id];
-        if tag.tainted.get() {
-            return;
-        }
-        let members = tag.members.get();
-        let at = |member: &super::types::Member| {
-            member
-                .name
-                .map_or(member.source_vectors, |name| name.source_vectors)
-        };
-        let violation = if let Some(first) = members.first() {
-            let floating = self.arithmetic(first.ty) && self.integer_type(first.ty).is_none();
-            if floating || self.vector(first.ty).is_some() {
-                Some(at(first))
-            } else {
-                let Some(expected) = self.types.layout(first.ty) else {
-                    return;
-                };
-                let mut violation = None;
-                for member in members {
-                    let Some(layout) = self.types.layout(member.ty) else {
-                        return;
-                    };
-                    if layout.size != expected.size || layout.align > expected.align {
-                        violation = Some(at(member));
-                        break;
-                    }
-                }
-                violation
-            }
-        } else {
-            Some(source)
-        };
-        if let Some(at) = violation {
-            self.error(SemanticErrorKind::IgnoredTransparentUnion, at, None, None);
-        } else {
-            tag.transparent.set(true);
+            | super::BindingKind::Object => Subject::Object {
+                binding,
+                definition: initialized
+                    || (self.scopes[data.scope].kind == super::ScopeKind::File
+                        && specifiers.storage_class.is_none()),
+                declarator: declarator.kind.as_slice().as_ptr().addr(),
+            },
+            | super::BindingKind::Parameter => Subject::Parameter,
+            | super::BindingKind::Typedef | super::BindingKind::Enumerator => Subject::Typedef,
         }
     }
+}
 
-    /// GCC packed is member/record layout; aligned is a power-of-two byte
-    /// alignment, defaulting to the x86-64 ABI's maximum scalar alignment.
-    pub(super) fn layout_attributes(&mut self, a: &AttributeSpecifier<'tu>) -> LayoutAttributes {
-        let mut result = LayoutAttributes::default();
-        let mut invalid = false;
-        for (index, name) in super::vectors::attribute_names(a, self.context) {
-            if name == "packed" {
-                result.packed = true;
-            } else if name == "aligned" {
-                let value = self.requested_attribute_alignment(a, index);
-                if let Some(value) =
-                    value.filter(|value| value.is_power_of_two() && *value <= 1 << 31)
-                {
-                    result.alignment = result.alignment.max(u32::try_from(value).unwrap_or(0));
-                } else {
-                    invalid = true;
-                }
-            }
-        }
-        if invalid {
-            self.error(
-                SemanticErrorKind::InvalidAlignmentAttribute,
-                a.source_vectors,
-                None,
-                None,
-            );
-        }
-        result
-    }
-
-    /// Combine separate attribute lists without interpreting argument names
-    /// as attributes. GCC Common Attributes: packed and aligned compose.
-    pub(super) fn layout_attribute_chain(
-        &mut self,
-        mut chain: Option<&'tu SpecifierExtension<'tu>>,
-    ) -> LayoutAttributes {
-        let mut result = LayoutAttributes::default();
-        while let Some(item) = chain {
-            if let SpecifierExtensionKind::Attributes(a) = item.kind {
-                let attributes = self.layout_attributes(a);
-                result.packed |= attributes.packed;
-                result.alignment = result.alignment.max(attributes.alignment);
-            }
-            chain = item.next;
-        }
-        result
-    }
-
-    /// GCC mode selects an integer or real scalar representation, preserving
-    /// signedness. Vector/complex modes require their separate subsystems.
-    /// C99: §6.2.5p4-11, pp. 33-34; PDF pp. 45-46 (extended scalar types).
-    pub(super) fn mode_attribute(&mut self, mut ty: TypeId, a: &AttributeSpecifier<'tu>) -> TypeId {
-        let mut invalid = false;
-        for (index, name) in super::vectors::attribute_names(a, self.context) {
-            if name != "mode" {
-                continue;
-            }
-            let mode = a.tokens.get(index + 2).map(|token| {
-                self.context
-                    .string_cache
-                    .at(token.contents)
-                    .trim_matches('_')
-            });
-            let scalar = match self.types.nodes[ty.index] {
-                | TypeKind::Scalar(scalar) => Some(scalar),
-                | _ => None,
-            };
-            let integer = self.integer_type(ty);
-            let mode_bits = match mode {
-                | Some("QI" | "byte") => Some(8),
-                | Some("HI") => Some(16),
-                | Some("SI") => Some(32),
-                | Some("DI" | "word" | "pointer") => Some(64),
-                | Some("TI") => Some(128),
-                | _ => None,
-            };
-            let selected = if let (Some(bits), Some((_, signed))) = (mode_bits, integer) {
-                if scalar == Some(Scalar::Bool) && bits == 8 {
-                    Some(Scalar::Bool)
-                } else if scalar == Some(Scalar::Bool) {
-                    None
-                } else {
-                    Some(match (bits, signed) {
-                        | (8, true) => Scalar::SignedChar,
-                        | (8, false) => Scalar::UnsignedChar,
-                        | (16, true) => Scalar::Short,
-                        | (16, false) => Scalar::UnsignedShort,
-                        | (32, true) => Scalar::Int,
-                        | (32, false) => Scalar::UnsignedInt,
-                        | (64, true) => self.types.target.intmax_t,
-                        | (64, false) => self.types.target.uintmax_t,
-                        | (_, true) => Scalar::Int128,
-                        | (_, false) => Scalar::UnsignedInt128,
-                    })
-                }
-            } else if matches!(
-                scalar,
-                Some(Scalar::Float | Scalar::Double | Scalar::LongDouble)
-            ) {
-                match mode {
-                    | Some("SF") => Some(Scalar::Float),
-                    | Some("DF") => Some(Scalar::Double),
-                    | Some("XF") => Some(Scalar::LongDouble),
-                    | _ => None,
-                }
-            } else {
-                None
-            };
-            let Some(selected) = selected else {
-                invalid = true;
-                break;
-            };
-            ty = self
-                .types
-                .scalar(selected)
-                .qualified(ty.qualifiers)
-                .with_alignment(ty.alignment);
-        }
-        if invalid {
-            self.error(
-                SemanticErrorKind::InvalidModeAttribute,
-                a.source_vectors,
-                None,
-                None,
-            );
-            return self.types.unknown();
-        }
-        ty
-    }
-
-    /// Apply storage/type alignment after the complete declarator. Alignment
-    /// on a function declaration does not change its return type.
-    pub(super) fn align_declared_type(&mut self, ty: TypeId, alignment: u32) -> TypeId {
-        if matches!(self.types.nodes[ty.index], TypeKind::Function { .. }) {
-            return ty;
-        }
-        ty.with_alignment(ty.alignment.max(alignment))
-    }
-
-    /// GCC aligned cannot weaken a variable's requirement. A typedef may
-    /// lower it, and declarations using that typedef inherit its alignment.
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html>
-    pub(super) fn minimum_declared_alignment(
-        &self,
-        ty: TypeId,
-        base: TypeId,
-        can_weaken: bool,
-    ) -> TypeId {
-        if can_weaken || ty.alignment == 0 {
-            return ty;
-        }
-        let minimum = if matches!(
-            self.types.nodes[ty.index],
-            TypeKind::Scalar(_) | TypeKind::Tag(_)
-        ) && base.alignment != 0
-        {
-            self.types.layout(base)
-        } else {
-            self.types.layout(ty.with_alignment(0))
-        };
-        if let Some(minimum) = minimum {
-            u32::try_from(minimum.align).map_or(ty.with_alignment(0), |alignment| {
-                ty.with_alignment(ty.alignment.max(alignment))
-            })
-        } else {
-            ty
-        }
-    }
-
-    /// C11 §6.7.5p2-6 (p. 127; PDF p. 145): alignas zero is
-    /// ineffective; other operands specify valid alignment without weakening
-    /// the natural requirement. Operands were typed by the explicit work stack.
-    pub(super) fn standard_alignment(
-        &mut self,
-        ty: TypeId,
-        mut chain: Option<&'tu SpecifierExtension<'tu>>,
-    ) -> TypeId {
-        // C11 §6.7.5p4,p6: compare the combined request with the original
-        // requirement, not with the alignment strengthened by an earlier
-        // specifier. The effective request is independent of source order.
-        // Array alignment depends on the element type even when a VLA has
-        // no compile-time size; typedefs retain that same requirement.
-        let natural = self.types.alignment(ty);
-        let mut requested = 0;
-        let mut source = None;
-        while let Some(item) = chain {
-            if let SpecifierExtensionKind::Alignment(operand) = item.kind {
-                if matches!(self.types.nodes[ty.index], TypeKind::Function { .. }) {
-                    self.error(
-                        SemanticErrorKind::InvalidStandardAlignment,
-                        item.source_vectors,
-                        None,
-                        None,
-                    );
-                    chain = item.next;
-                    continue;
-                }
-                let value = match operand {
-                    | super::SyntaxOperand::Expression(expression) => self
-                        .expression_info(expression)
-                        .integer
-                        .filter(|_| self.expression_info(expression).ice)
-                        .and_then(super::Integer::to_u64),
-                    | super::SyntaxOperand::Type(_) =>
-                        self.types.alignment(self.operand_type(operand)),
-                };
-                if value != Some(0) {
-                    if let Some(value) =
-                        value.filter(|value| value.is_power_of_two() && *value <= 1 << 31)
-                    {
-                        requested = requested.max(u32::try_from(value).unwrap_or(0));
-                        source = Some(item.source_vectors);
-                    } else {
-                        self.error(
-                            SemanticErrorKind::InvalidStandardAlignment,
-                            item.source_vectors,
-                            None,
-                            None,
-                        );
-                    }
-                }
-            }
-            chain = item.next;
-        }
-        if requested != 0 && natural.is_some_and(|natural| u64::from(requested) < natural) {
-            self.error(
-                SemanticErrorKind::InvalidStandardAlignment,
-                source.unwrap_or_default(),
-                None,
-                None,
-            );
-            ty
-        } else {
-            ty.with_alignment(ty.alignment.max(requested))
-        }
-    }
-
-    /// C11 §6.7.5p2, p. 127; PDF p. 145: alignment is an object
-    /// declaration specifier, forbidden on typedefs, register objects,
-    /// parameters, bit-fields and functions.
-    pub(super) fn reject_standard_alignment(
-        &mut self,
-        mut chain: Option<&'tu SpecifierExtension<'tu>>,
-    ) {
-        while let Some(item) = chain {
-            if matches!(item.kind, SpecifierExtensionKind::Alignment(_)) {
-                self.error(
-                    SemanticErrorKind::InvalidStandardAlignment,
-                    item.source_vectors,
-                    None,
-                    None,
-                );
-            }
-            chain = item.next;
-        }
-    }
+/// Whether a declaration's specifiers or declarator carry any attribute
+/// list, so that its end must be marked for a possible cleanup region.
+pub(super) fn written_on(
+    specifiers: Option<&SpecifierExtension<'_>>,
+    declarator: Declarator<'_>,
+) -> bool {
+    specifiers.is_some()
+        || declarator
+            .pointer
+            .levels
+            .iter()
+            .any(|level| level.attributes.is_some())
+        || declarator.kind.iter().any(|direct| {
+            matches!(
+                direct,
+                DirectDeclarator::Attributes(_) | DirectDeclarator::Parenthesized(_)
+            )
+        })
 }

@@ -164,6 +164,122 @@ fn thread_storage_native_arms_match_the_interpreter_and_clang() {
     }
 }
 
+/// GNU `alias` and `weak` on thread-local objects, as Clang emits them: an
+/// alias of a thread-local object is a `thread_local` alias, a weak
+/// definition is a weak thread-local global, and a weak declaration an
+/// `extern_weak` one.
+/// GNU extension: GCC manual, "Common Variable Attributes" (alias, weak) and
+/// "Thread-Local Storage".
+const ALIASES: &str = r#"
+int printf(const char *, ...);
+__thread int counter = 5;
+extern __thread int counter_alias __attribute__((alias("counter")));
+static __thread long hidden = 3;
+extern __thread long hidden_alias __attribute__((alias("hidden")));
+__attribute__((weak)) __thread int weak_count = 7;
+int *where(void) { return &counter_alias; }
+int main(void) {
+    counter_alias += 2;
+    *where() *= 2;
+    hidden_alias *= 4;
+    weak_count += counter;
+    printf("%d %ld %d %d\n", counter, hidden, weak_count, where() == &counter);
+    return 0;
+}
+"#;
+
+const ALIASES_OUTPUT: (i32, &str) = (0, "14 12 21 1\n");
+
+#[test]
+fn thread_local_aliases_and_weak_objects_match_clang() {
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        for (optimize, profile) in STAGES {
+            let actual = with_module(ALIASES, target, optimize, profile, interpret);
+            assert_eq!(
+                (actual.0, actual.1.as_str()),
+                ALIASES_OUTPUT,
+                "{target:?} {optimize} {profile:?}"
+            );
+        }
+    }
+    let declaration =
+        "extern __thread int maybe __attribute__((weak)); int *where(void) { return &maybe; }";
+    for (target, alias, weak, hidden) in [
+        (
+            Target::LinuxGnu,
+            "@counter_alias = thread_local(localexec) alias [4 x i8], ptr @counter",
+            "@weak_count = weak thread_local(localexec) global",
+            "@hidden_alias = thread_local(localexec) alias [8 x i8], ptr @hidden",
+        ),
+        (
+            Target::WindowsGnu,
+            "@counter_alias = thread_local alias [4 x i8], ptr @counter",
+            "@weak_count = weak thread_local global",
+            // `long` has four bytes on Windows.
+            "@hidden_alias = thread_local alias [4 x i8], ptr @hidden",
+        ),
+    ] {
+        with_module(
+            ALIASES,
+            target,
+            false,
+            Profile::PostAbi,
+            |module, target| {
+                let mut text = String::new();
+                crate::backend::llvm::emit_module(module, target, &mut text).unwrap();
+                for line in [alias, weak, hidden] {
+                    assert!(text.contains(line), "{target:?}: {line}\n{text}");
+                }
+                assert!(
+                    text.contains("@llvm.threadlocal.address.p0(ptr @counter_alias)"),
+                    "{target:?}: {text}"
+                );
+            },
+        );
+        with_module(
+            declaration,
+            target,
+            false,
+            Profile::PostAbi,
+            |module, target| {
+                let mut text = String::new();
+                crate::backend::llvm::emit_module(module, target, &mut text).unwrap();
+                assert!(
+                    text.contains("@maybe = extern_weak thread_local global"),
+                    "{target:?}: {text}"
+                );
+            },
+        );
+    }
+    let Some(target) = host() else { return };
+    let Ok(toolchain) = Toolchain::bundled(target) else {
+        eprintln!("skipping: no bundled toolchain");
+        return;
+    };
+    let directory = TempDir::new("thread-local-aliases");
+    for arm in &ARMS {
+        let executable = directory.join(format!("aliases-{}.exe", arm.name));
+        with_module(ALIASES, target, arm.bcc, Profile::PostAbi, |module, _| {
+            compile_module(
+                module,
+                &executable,
+                options(arm, target, OutputKind::Executable),
+            )
+            .unwrap();
+        });
+        let actual = run_native(&executable);
+        assert_eq!(
+            (actual.0, actual.1.as_str()),
+            ALIASES_OUTPUT,
+            "{}",
+            arm.name
+        );
+    }
+    for (name, output) in clang_runs(&toolchain, &directory, "aliases", ALIASES, target) {
+        assert_eq!((output.0, output.1.as_str()), ALIASES_OUTPUT, "{name}");
+    }
+}
+
 /// Four threads each count in their own `counter` and static-local `calls`
 /// from the initial values, and add the thread-local `scale` through a
 /// pointer to their own counter; main's copy keeps its own value.
@@ -453,6 +569,8 @@ fn linux_threads_keep_their_own_copies_under_wsl() {
             &[DEFINING_UNIT, USING_UNIT],
         );
         programs.push((format!("units-{}", arm.name), units, ""));
+        let aliases = objects(&directory, "aliases", arm, target, &[ALIASES]);
+        programs.push((format!("aliases-{}", arm.name), aliases, ALIASES_OUTPUT.1));
     }
     let input = directory.join("threads.c");
     std::fs::write(&input, &source).unwrap();

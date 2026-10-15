@@ -79,6 +79,7 @@ pub(super) fn diagnostic(identity: ConstraintDiagnostic) -> SemanticErrorKind {
         | ConstraintDiagnostic::Probability => SemanticErrorKind::InvalidBuiltinProbability,
         | ConstraintDiagnostic::PrefetchReadWrite => SemanticErrorKind::InvalidPrefetchReadWrite,
         | ConstraintDiagnostic::PrefetchLocality => SemanticErrorKind::InvalidPrefetchLocality,
+        | ConstraintDiagnostic::FrameLevel => SemanticErrorKind::InvalidFrameLevel,
         | ConstraintDiagnostic::VaList => SemanticErrorKind::InvalidVaList,
         | ConstraintDiagnostic::VaArgType => SemanticErrorKind::InvalidVaArgType,
     }

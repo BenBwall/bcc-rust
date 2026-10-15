@@ -36,6 +36,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         let target = context.configuration.target().layout();
         let pack_alignments = super::packing::states(context, scratch);
         let mut analyzer = Self {
+            declarator_functions: ArenaVec::new_in(tu),
+            references: ArenaVec::new_in(tu),
             #[cfg(test)]
             review_steps: Cell::new([0; 3]),
             context,
@@ -44,7 +46,6 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             pack_alignments,
             bindings: ArenaVec::new_in(tu),
             declarators: ArenaVec::new_in(tu),
-            spec_extensions: ArenaVec::new_in(tu),
             definitions: ArenaVec::new_in(tu),
             function_records: ArenaVec::new_in(tu),
             scopes: ArenaVec::new_in(tu),
@@ -97,6 +98,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             va_list_type: None,
             statements: statements::State::new(scratch),
             control: super::facts::builder::Builder::new(scratch),
+            attributes: super::attributes::AttributeState::new(scratch),
             defining: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             enum_ranges: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         };

@@ -1,5 +1,6 @@
-//! Runtime array bounds and lexical stack cleanup. Bound expressions run on
-//! the ordinary explicit task stack; saved extents are SSA variables so loop
+//! Runtime array bounds and lexical cleanup: VLA stack release and GNU
+//! cleanup calls, innermost first, on every region exit. Bound expressions run
+//! on the ordinary explicit task stack; saved extents are SSA variables so loop
 //! invocations evaluate new bounds without reevaluating a typedef's bound.
 //! C99: §6.7.5.2p5, pp. 116-117; PDF pp. 128-129; §6.5.3.4p2,
 //! p. 80; PDF p. 92; §6.2.4p6, p. 32; PDF p. 44.
@@ -22,6 +23,7 @@ use crate::{
         SourceVectors,
         parsing::syntax::Statement,
         semantic_analysis::{
+            CleanupKind,
             ControlTarget,
             SizeExtent,
             SizeFormula,
@@ -215,22 +217,26 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let common = regions[transition.left.stop_before.0];
         while let Some(region) = cleanup {
             let fact = regions[region.0];
-            debug_assert!(
-                matches!(
-                    fact.cleanup,
-                    crate::translation_phases::semantic_analysis::CleanupKind::AutomaticVla(_)
-                ),
-                "cleanup links select automatic VLA regions"
-            );
             if fact.preorder <= common.preorder {
                 break;
             }
-            let token =
-                self.vla_tokens.get(&region).copied().ok_or_else(|| {
-                    LoweringError::missing("VLA region has no stack token", source)
-                })?;
-            let save = self.draft.use_var(token);
-            self.restore_stack(save);
+            match fact.cleanup {
+                | CleanupKind::AutomaticVla(_) => {
+                    let token = self.vla_tokens.get(&region).copied().ok_or_else(|| {
+                        LoweringError::missing("VLA region has no stack token", source)
+                    })?;
+                    let save = self.draft.use_var(token);
+                    self.restore_stack(save);
+                },
+                | CleanupKind::Call { variable, function } =>
+                    self.call_cleanup(variable.0, function.0, source)?,
+                | CleanupKind::None => {
+                    return Err(LoweringError::missing(
+                        "a cleanup link selects a region without cleanup",
+                        source,
+                    ));
+                },
+            }
             let parent = fact.parent.ok_or_else(|| {
                 LoweringError::missing("transition leaves its function root", source)
             })?;

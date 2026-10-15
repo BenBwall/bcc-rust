@@ -88,15 +88,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Scalar::Int128
                 }),
             | S::Extended(super::ExtendedType::Float128 { complex }) => {
-                if self.context.configuration.target() == crate::target::Target::WindowsMsvc {
-                    self.error(SemanticErrorKind::UnsupportedFloat128, source, None, None);
-                    None
-                } else {
+                if self.context.configuration.target().float128_type() {
                     Some(if *complex {
                         Scalar::ComplexFloat128
                     } else {
                         Scalar::Float128
                     })
+                } else {
+                    self.error(SemanticErrorKind::UnsupportedFloat128, source, None, None);
+                    None
                 }
             },
             | S::Float => Some(Scalar::Float),
@@ -111,6 +111,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         self.work.push(Work::Qualify(q, source));
         if let S::Extended(syntax @ super::ExtendedType::Typeof { operand, .. }) = spec {
+            self.enter_reference_context(Some(syntax));
             self.work.push(Work::TypeofDone(syntax));
             self.syntax_operand(*operand);
             return;
@@ -267,10 +268,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             spec.source_vectors,
             force_tag,
         ));
+        self.check_extension_chain(spec.extensions);
         let mut extension = spec.extensions;
-        if let Some(chain) = extension {
-            self.spec_extensions.push(chain);
-        }
         while let Some(item) = extension {
             if let SpecifierExtensionKind::Alignment(operand) = item.kind {
                 self.syntax_operand(operand);

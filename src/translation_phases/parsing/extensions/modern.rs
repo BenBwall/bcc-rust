@@ -550,8 +550,9 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
         }
     }
 
-    /// GCC aligned has a C integer constant expression operand. Keep unknown
-    /// vendor-prefixed attributes opaque, even if their name is `aligned`.
+    /// GCC aligned, and the constructor/destructor priority, have a C integer
+    /// constant expression operand. Keep unknown vendor-prefixed attributes
+    /// opaque, even if their name is `aligned`.
     /// C99: §6.6p6, p. 95; PDF p. 107 (GNU attribute extension).
     fn start_attribute_argument(&mut self, parser: &mut Parser<'_, 'tu, 'p>) {
         if matches!(
@@ -572,12 +573,12 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
             return;
         }
         if self.tokens.last().is_some_and(|name| {
-            parser
+            let name = parser
                 .context
                 .string_cache
                 .at(name.contents)
-                .trim_matches('_')
-                == "aligned"
+                .trim_matches('_');
+            matches!(name, "aligned" | "constructor" | "destructor")
         }) && parser.cursor.alignment_argument_closes(parser.arena)
         {
             self.argument_index = parser.cursor.consumed - self.attribute_start - 1;

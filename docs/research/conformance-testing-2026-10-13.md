@@ -199,6 +199,167 @@ python scripts/test_mini_m4.py; python scripts/test_conformance_common.py; pytho
 
 Each run directory records the bcc hash, generator versions, options and deadlines in `manifest.json`; a second `run` with the same command resumes and skips finished seeds, and refuses to continue if the options or the bcc build changed. A harness failure (for example Windows refusing to put a process in its job object, or an executable still locked) becomes a `harness-error` row and is retried on resume instead of ending the run.
 
+## Follow-up: reachable definitions and interpreter math (2026-10-14)
+
+Issues #45 and #52 were tested in `claude/conformance-fixes-2` against its
+starting commit `839d1d0eebf7e858731a4d8690539e036a4eedaf`. The baseline
+compiler was built before editing and preserved as
+`target/bcc-base-839d1d0.exe`. Results below concern Windows; Linux execution
+was not repeated in this follow-up.
+
+Semantic analysis now retains resolved entity references with their owning
+function definition or static object initializer. It excludes unevaluated
+`sizeof`, `alignof` and non-VM `typeof` operands after typing and retains references at runtime parameter
+type sites. One module-item planner joins linked redeclarations and assembler
+aliases, seeds external definitions, and walks the reference graph with an
+arena worklist. Only reachable internal definitions and object initializers
+are lowered. Unsupported body/signature constructs and vendor modifiers in
+omitted definitions therefore do not refuse the program. Semantic constraints
+still apply to every analyzed definition. C99 inline classification is
+unchanged: ?6.7.4p6-7 (printed pp. 112-113, PDF pp. 124-125) and ?6.9p3-5
+(printed p. 140, PDF p. 152).
+
+### Clang symbol comparison
+
+Each source also defines `main`. Defined symbols in bcc `--emit=llvm` and
+Clang `-S -emit-llvm -O0` agree in all twelve probes:
+
+| Definition/reference arrangement | Mode | Both defined symbol sets |
+| --- | --- | --- |
+| Unreferenced `static f` | C99 | `main` |
+| Unreferenced `static inline f` | C99 | `main` |
+| `static g` calls `static f`; neither is referenced | C99 | `main` |
+| Address of `static f` in unused `static p` initializer | C99 | `main` |
+| Address of `static f` in external `p` initializer | C99 | `f`, `main`, `p` |
+| Unreferenced `extern inline f` | GNU89 | `main` |
+| Plain `inline f`, without `extern` | C99 | `main` |
+| Plain `inline f`, with an `extern` declaration | C99 | `f`, `main` |
+| External `g` calls plain `inline f` | C99 | `g`, `main`; `f` remains a declaration |
+| Unreferenced static volatile object | C99 | `main` |
+| Address of `static f` only in non-VM `typeof` | GNU99 | `main`, `p` |
+| Call of `static f` only in `alignof` | GNU99 | `main`, `n` |
+
+The durable CLI regression additionally covers constant `sizeof`, forward
+redeclarations, cycles, function tables, used and unused static local
+initializers, unsupported reachable bodies, parameter bound calls and a
+2,000-function chain.
+
+The existing builtin declaration table now gives `__builtin_fabsf` and
+`__builtin_fabsl` their float and long-double signatures alongside
+`__builtin_fabs`.
+
+### Interpreter choices and regression evidence
+
+`--interpret-step-limit=N` keeps the CLI default of 100,000,000 instructions;
+`0` disables that limit. It applies to both supported `main` signatures.
+The random-program harness has the same option and a 10,000,000,000 default,
+100 times the previous limit, while preserving its 120-second interpreter
+timeout. The manifest records the limit; changing it requires the existing
+configuration-change opt-in. Rerunning an old manifest preserves the old
+100,000,000 limit. Its 23 unit tests pass, including default/custom/unlimited
+forwarding only to interpreter arms, negative argument rejection, resume
+configuration and legacy replay. Generated YARPGen/Csmith batches were left
+to the orchestrator as requested, so removal of their I1 stops has not been
+claimed from a new batch run.
+
+The existing interpreter host now covers all 57 C99 real math families, with
+171 double/float/long-double spellings. Native libm evaluates float and double
+in their own precision. Pointer-output functions use native temporary storage
+and checked guest stores; NaN strings are copied from guest memory. Target
+long double retains its existing representation: Windows MSVC uses binary64;
+GNU binary80 execution remains unsupported, including `nexttoward` calls
+with a binary80 direction. Guest errno and the `<fenv.h>` API are not added.
+The C regression compares each family and precision with native Clang output,
+including pointer outputs, integer results, NaNs and a direction that would
+be lost if `nexttowardf` narrowed its second argument. The host also implements
+default six-decimal `%f`/`%F`, needed by I2, including values exceeding the
+old integer formatting buffer.
+
+`mingw_math_h.c`, `windows_h_vector_types.c` and `interpreter_fabsf.c` pass
+all five bcc arms (`interpret`, `interpret-bcc`, A0, A1, A2) against native
+Clang without a `_CRT_NO_INLINE` workaround: 15/15. I2 prints `1.500000`.
+Evidence: `target/conformance/fix2-final-current/results.json`.
+
+### Windows program corpus
+
+Command: `python scripts/run_program_corpus.py --output
+target/conformance/programs-fix2-final-current --programs
+sqlite,sqlite-math,lua,lua-jumptable --jobs 8`.
+
+| Program | bcc compilation | A0 / A1 / A2 workloads |
+| --- | --- | --- |
+| Lua (`LUA_USE_JUMPTABLE=0`) | All 33 translation units pass in each arm | 6/6 in each arm, entirely bcc objects |
+| SQLite | Driver passes; `sqlite3.c` and `shell.c` reach R4 | 5/5 in each arm with Clang objects substituted for refused units |
+| SQLite math variant | Function-to-`void *` initializer constraint (R6) | Not linked |
+| Lua jump-table variant | Label-address static initializer (R8) | Not linked |
+
+The Windows header/vector and unreachable inline-assembly blockers are gone.
+The next SQLite blockers are `INFINITY` expanding to untyped
+`__builtin_inff` (`sqlite3.c:37612`) and `NAN` expanding to untyped
+`__builtin_nanf` (`shell.c:28327`). These are separate builtin facts; this
+change adds only the requested fabs siblings. Mixed SQLite workload success
+is not evidence that bcc compiled its implementation. Evidence and compiler
+identities: `target/conformance/programs-fix2-final-current/results.json` and
+`manifest.json`.
+
+### GCC execute survey and checks
+
+Both baseline and final surveys used 1,677 sources, four arms, eight jobs and
+a ten-second timeout. The final command was exactly:
+
+```powershell
+python scripts/run_gcc_torture_execute.py --source C:\Users\benbw\Documents\GitRepo\bcc-rust\target\compiler-corpus\gcc-15.2.0 --output target/compiler-corpus/execute-fix2 --jobs 8 --timeout 10
+```
+
+| Arm | Baseline passes | Final passes | Newly passing | Previously passing regressions |
+| --- | ---: | ---: | ---: | ---: |
+| interpret | 1,302 | 1,304 | 2 | 0 |
+| interpret-bcc | 1,308 | 1,310 | 2 | 0 |
+| A0 | 1,365 | 1,367 | 2 | 0 |
+| A1 | 1,355 | 1,357 | 2 | 0 |
+
+`921007-1.c` and `980526-1.c` now pass in every arm: eight newly passing
+source/arm pairs. The comparison checks all 6,708 pairs; every previously
+passing pair remains passing, and all other statuses are unchanged. There
+are no compiler crashes or timeouts in the final survey. Existing failures
+remain, including 137 missing-header/front-end refusals and 150 lowering
+refusals per arm, interpreter traps, wrong results and native link failures.
+The survey script consequently exits nonzero; that is its existing aggregate
+failure policy, not a newly introduced failing pair.
+
+The first fixed survey had a native compile timeout for `pr27073.c` while
+compiler builds were running. An isolated recheck and the final complete
+survey both pass all four arms. The final survey took 597.179 seconds;
+baseline took 733.859 seconds. These timings are not a performance claim.
+The baseline is `target/compiler-corpus/execute-base-839d1d0/results.json`;
+final results, compiler hashes and per-pair comparison are under
+`target/compiler-corpus/execute-fix2/` (`results.json`, `manifest.json`,
+`comparison.json`).
+
+All requested checks pass on Windows:
+
+| Command | Result |
+| --- | --- |
+| `cargo test --all-targets` | Pass; 1,689 library tests pass, 3 existing ignores; all integration/benchmark targets pass, including 10 reachability regressions and 37 code-generation tests |
+| `cargo test --features benchmarking-internals --test allocation_count` | 28/28 pass |
+| `cargo +nightly fmt` then `cargo +nightly fmt --check` | Pass |
+| `cargo clippy --all-targets -- -D warnings` | Pass |
+| `cargo clippy --release --all-targets -- -D warnings` | Pass |
+| `cargo clippy --all-targets --features benchmarking-internals -- -D warnings` | Pass |
+| `git diff --check` | Pass |
+| `python scripts/test_random_program_conformance.py` | 23/23 pass |
+| `BCC_DIFFTEST_CASES=1000 cargo test --lib difftest` | Pass; 6 tests pass, 2 existing long sweeps ignored |
+
+The 1,000-case sweep is the existing IR differential harness, not a new
+YARPGen/Csmith campaign. Validation logs are under `target/` with the
+`*-final.log` names. CLI integration tests completed before the feature
+build; the plain CLI is rebuilt with `cargo build --bin bcc-rust` afterward.
+Linux execution and Linux Clippy were not run here; the native math bridge
+links `libm` on Unix, and lint expectations are not restricted to Windows.
+Every changed/new file ends with exactly one newline. Shared LLVM junctions
+were preserved. No files were staged or committed. The whole-file plan is
+`target/commit-plan.md`.
+
 ## 2026-10-14 follow-up: pointer diagnostic defaults (issue #46)
 
 The maintainer decision is to follow the bundled Clang's defaults for each

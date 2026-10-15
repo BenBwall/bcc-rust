@@ -28,8 +28,10 @@ use crate::{
         Inst,
         InstData,
         InstFlags,
+        Module,
         Opcode,
         StackSlot,
+        Symbol,
         Type,
         Value,
         ValueDef,
@@ -41,14 +43,14 @@ use crate::{
 };
 
 /// Available loads and stored values on the current dominator path.
-pub(super) struct MemoryFacts<'s> {
+pub(super) struct MemoryFacts<'s, 'm, 'ir> {
     table:   ArenaMap<'s, Key, Available>,
     undo:    ArenaVec<'s, (Key, Option<Available>)>,
     writes:  ArenaVec<'s, Option<Location>>,
-    aliases: AliasCheck<'s>,
+    aliases: AliasCheck<'s, 'm, 'ir>,
 }
 
-impl<'s> MemoryFacts<'s> {
+impl<'s, 'm, 'ir> MemoryFacts<'s, 'm, 'ir> {
     /// Reuses one non-volatile load, or records the instruction's memory
     /// effect. Every removed load consumes exactly one `allow()` rewrite.
     pub(super) fn number(
@@ -196,12 +198,12 @@ impl<'s> MemoryFacts<'s> {
         self.undo.push((key, previous));
     }
 
-    pub(super) fn new(draft: &Draft<'_, 's>) -> Self {
+    pub(super) fn new(draft: &Draft<'_, 's>, module: &'m Module<'ir>) -> Self {
         Self {
             table:   ArenaMap::with_hasher_in(FxBuildHasher, draft.scratch),
             undo:    ArenaVec::new_in(draft.scratch),
             writes:  ArenaVec::new_in(draft.scratch),
-            aliases: AliasCheck::compute(draft),
+            aliases: AliasCheck::compute(draft, module),
         }
     }
 }
@@ -230,12 +232,18 @@ struct Available {
 /// parameters) counts as escape. Only address derivation and direct memory
 /// accesses are whitelisted; this also catches stored, returned, call and
 /// integer-converted addresses, even when the escape occurs later in the CFG.
-struct AliasCheck<'s> {
+///
+/// An alias global names its target's storage, so global identities compare
+/// after following the alias (GNU extension: GCC manual, "Common Variable
+/// Attributes", alias).
+struct AliasCheck<'s, 'm, 'ir> {
     escaped: ArenaVec<'s, bool>,
+    module:  &'m Module<'ir>,
 }
 
-impl<'s> AliasCheck<'s> {
+impl<'s, 'm, 'ir> AliasCheck<'s, 'm, 'ir> {
     fn may_alias(&self, a: Location, b: Location) -> bool {
+        let (a, b) = (self.canonical(a), self.canonical(b));
         match (a.base, b.base) {
             | (Base::Stack(a), Base::Stack(b)) if a != b => return false,
             | (Base::Global(a), Base::Global(b)) if a != b => return false,
@@ -258,7 +266,17 @@ impl<'s> AliasCheck<'s> {
         true
     }
 
-    fn compute(draft: &Draft<'_, 's>) -> Self {
+    /// The location with an alias global replaced by its target.
+    fn canonical(&self, mut location: Location) -> Location {
+        if let Base::Global(global) = location.base
+            && let Some(Symbol::Global(target)) = self.module.global(global).attributes.alias
+        {
+            location.base = Base::Global(target);
+        }
+        location
+    }
+
+    fn compute(draft: &Draft<'_, 's>, module: &'m Module<'ir>) -> Self {
         let mut escaped = ArenaVec::new_in(draft.scratch);
         escaped.resize(draft.stack_slot_count(), false);
         let mut escape = |value| {
@@ -297,7 +315,7 @@ impl<'s> AliasCheck<'s> {
                 }
             }
         }
-        Self { escaped }
+        Self { escaped, module }
     }
 }
 

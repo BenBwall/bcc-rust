@@ -26,7 +26,7 @@ use crate::{
         RuntimeValue,
         Termination,
         Trap,
-        run_with_limits,
+        run_main_with_limits,
     },
     ir::{
         Module,
@@ -360,7 +360,7 @@ pub(super) fn observe(module: &Module<'_>) -> Observation {
         steps: STEP_LIMIT,
         ..Limits::default()
     };
-    let result = run_with_limits(module, "main", &[], &mut host, limits);
+    let result = run_main_with_limits(module, &mut host, limits);
     Observation {
         result,
         output: host.output().to_vec(),

@@ -102,7 +102,11 @@ use crate::{
 };
 
 /// Numbers the values of one function. Returns whether it replaced anything.
-pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> bool {
+pub(super) fn run(
+    draft: &mut Draft<'_, '_>,
+    module: &crate::ir::Module<'_>,
+    report: &mut OptimizationReport,
+) -> bool {
     let scratch = draft.scratch;
     let cfg = draft.control_flow_graph();
     let tree = DominatorTree::from_cfg(&cfg, scratch);
@@ -111,7 +115,7 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
     // The keys added since each open scope began, newest last.
     let mut added: ArenaVec<'_, Key> = ArenaVec::new_in(scratch);
     let mut stack = ArenaVec::new_in(scratch);
-    let mut memory = MemoryFacts::new(draft);
+    let mut memory = MemoryFacts::new(draft, module);
     let mut regions = Regions::new(draft.blocks.len(), scratch);
     if let Some(&entry) = tree.reverse_post_order().first() {
         stack.push(Visit::Enter(entry));
@@ -222,7 +226,7 @@ fn number_block(
     block: Block,
     table: &mut ArenaMap<'_, Key, Inst>,
     added: &mut ArenaVec<'_, Key>,
-    memory: &mut MemoryFacts<'_>,
+    memory: &mut MemoryFacts<'_, '_, '_>,
     report: &mut OptimizationReport,
 ) -> bool {
     let mut changed = false;

@@ -409,14 +409,22 @@ because a load of bytes never written is poison as a whole.
 
 ### Module
 
-A module holds its functions, its globals, its interned signatures and the
-target. A function has a name, a signature, a linkage (`external`, `internal`),
-and, if defined, a body. A global has a name, a linkage, size, alignment, a
-`constant` flag, a `thread_local` flag, and an initializer: zero, or bytes
-plus relocations `(offset, target, addend)` for address constants. A target
-is a function or global (eight bytes), a label of a defined function (eight
-bytes, `blockaddress(@f, label0)`), or a label difference truncated to
-`i8`-`i64` (`labeldiff.i32(@f, label1, label0)`).
+A module holds its functions, its globals, its interned signatures, its
+constructor and destructor list and the target. A function has a name, a
+signature, a linkage (`external`, `internal`, `weak`), an optional code
+alignment, symbol attributes and, if defined, a body. A global has a name, a
+linkage, size, alignment, a `constant` flag, a `thread_local` flag, symbol
+attributes and an initializer: zero, or bytes plus relocations
+`(offset, target, addend)` for address constants. A target is a function or
+global (eight bytes), a label of a defined function (eight bytes,
+`blockaddress(@f, label0)`), or a label difference truncated to `i8`-`i64`
+(`labeldiff.i32(@f, label1, label0)`). A `weak` definition may be replaced by
+a strong one at link time; a `weak` declaration may stay undefined with a null
+address. Symbol attributes are an alias target (another definition of the
+same kind, not itself an alias; the alias has no body or initializer), a
+section, `used` retention and `hidden`/`protected` visibility. Constructors
+and destructors are parameterless defined functions with a 16-bit priority,
+kept in registration order. See [GNU entity attributes](#gnu-entity-attributes-2026-10-14).
 
 A `thread_local` global (`global @g external thread_local size 4, align 4`)
 has one copy per thread, initialized from its initializer when the thread
@@ -520,7 +528,19 @@ Inline body emission is decided by semantic analysis and consumed by lowering:
 C99 inline-only bodies and GNU89 `extern inline` bodies remain external
 declarations in IR, so uninlined calls and addresses refer to the external
 symbol. Plain GNU89 `inline` and `static inline` bodies are lowered normally.
-The interpreter and LLVM therefore share the same decision. See
+The interpreter and LLVM therefore share the same decision. Internal functions
+and objects are planned in `lowering/module_items/reachability.rs`: external
+definitions seed an explicit worklist over retained semantic entity references,
+as do constructors, destructors, aliases and their targets, and `used`
+entities, which Clang emits without references.
+Calls, function addresses and object initializer references reach internal
+definitions transitively. Unreferenced static objects do not seed the worklist;
+their initializers therefore do not force function emission. Unreachable
+function signatures and bodies are not lowered, so unsupported vector or
+assembly implementations in system headers do not refuse otherwise supported
+programs. Unevaluated `sizeof`, `alignof` and `typeof` references are excluded
+by semantic analysis; VM typeof operands retain their runtime references.
+See
 `language-standards.md` for mode overrides and the per-function `gnu_inline`
 attribute. C99 §6.7.4p6-7 (pp. 112-113; PDF pp. 124-125), §6.9p5 (p. 140;
 PDF p. 152), and [GCC Inline](https://gcc.gnu.org/onlinedocs/gcc/Inline.html).
@@ -900,6 +920,15 @@ programs can report results. It is the oracle for differential tests: a program
 must print the same output when interpreted before optimization, interpreted
 after optimization, and compiled through each LLVM arm.
 
+The default host also implements the C99 real `<math.h>` function families in
+float, double and long double spellings, including pointer outputs, integer
+results and NaN constructors. Native libm evaluates float and double in their
+own precision; guest pointers stay in interpreter memory. Long double follows
+the target representation: binary64 on MSVC is supported, while GNU `f80`
+execution retains the existing unsupported-operation trap. `%f` output uses
+the default six fractional digits. Guest errno and floating-environment APIs
+remain outside the host implementation.
+
 ### Native back end (later)
 
 Instruction selection from the post-ABI IR, register allocation (evaluate the
@@ -929,6 +958,7 @@ bcc-rust x.c --emit=ir              print the bcc IR (after the optimizer, if it
 bcc-rust x.c --emit=ir-abi          print the bcc IR after ABI lowering
 bcc-rust x.c --emit=llvm            print the LLVM IR
 bcc-rust x.c --interpret            run main in the interpreter; exit with its status
+    [--interpret-step-limit=N]      instruction limit; default 100000000, 0 unlimited
 bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with clang
     [--opt=none|bcc]                the bcc optimizer; none is the default
     [--passes=fold,dce,simplify-cfg] an explicit pass list, run once (implies bcc)
@@ -1246,6 +1276,56 @@ existing f80/f128 limitation. Bounded formatting shares the existing interpreter
 formatter, writes at most `n-1` characters plus a terminator, avoids the destination
 for `n==0`, and returns the untruncated character count. See the dated torture
 survey for corpus and focused execution results.
+
+## GNU entity attributes (2026-10-14)
+
+Semantic analysis retains validated GNU attributes as facts
+([semantic-analysis.md](semantic-analysis.md#gnu-entity-attributes-and-cleanup-regions-2026-10-14));
+lowering maps them without reading attribute tokens (`lowering/symbols.rs`,
+`lowering/cleanup.rs`):
+
+- **Textual form.** Function headers end in
+  `linkage [align N] [hidden|protected] [section "name"] [used] [alias @target]`,
+  global headers in `linkage [thread_local] [constant] size N, align N
+  [hidden|protected] [section "name"] [used] [alias @target]`. Module lines `constructor @f priority N` and
+  `destructor @f priority N` follow the globals. The verifier checks alias
+  targets (existing, same kind, defined, not an alias, thread-local exactly
+  when the alias is), section names
+  (nonempty, without quote, newline or NUL), default visibility on internal
+  symbols (LLVM rejects any other for local linkage) and
+  constructors/destructors (defined, no parameters).
+- **Lowering.** An external entity with `weak` gets `weak` linkage; every
+  retained alias is declared, even if unused, and points at its target's
+  symbol; section, used, visibility and function alignment go on the symbol
+  when it is declared; constructors and destructors are registered in
+  definition order. A cleanup region's exit calls its function with the
+  variable's address (a stack slot; cleanup variables are address-taken),
+  interleaved with VLA stack restores in the transition's inner-to-outer
+  order, after return values and statement-expression tails are computed.
+- **Optimizer.** `inline` refuses weak callees, whose body a strong definition
+  may replace. GVN's alias check compares alias globals as their targets.
+  Aliases have no body, so they are never inlined either.
+- **Interpreter.** `run_main` (used by the CLI, the difftest oracle and the
+  end-to-end tests) runs constructors before main and destructors after main
+  returns or `exit` (unwinding main's frames first), not after `abort`.
+  Aliases share their target's address and body; an undefined weak function or
+  global has the null address unless the host provides the function, and
+  calling it is undefined behavior.
+- **LLVM.** Weak definitions are `weak`, weak declarations `extern_weak`,
+  aliases LLVM global aliases (a thread-local one `thread_local`, which
+  LLVM-C cannot set on an alias, so it is parsed from textual IR in a module
+  of its own, linked in with `LLVMLinkModules2` and pointed at its target),
+  and `llvm.global_ctors`, `llvm.global_dtors`
+  and `llvm.used` are appending arrays, as bundled Clang emits them on both
+  ELF and COFF targets; sections, visibility and function alignment use the
+  LLVM-C setters.
+
+Evidence: `src/ir/tests/symbols.rs`, `src/backend/interpreter/tests/startup.rs`,
+`backend::llvm::tests::golden::symbol_attributes_match_clang_spellings`, and
+`src/pipeline/tests/middle_end/entity_attributes.rs`, which runs the issue #56
+reproducers and cleanup/priority programs through the interpreter at every
+stage, all four LLVM arms and bundled Clang on the host, and links weak/alias
+units with Clang-compiled units natively (Windows GNU) and under WSL (System V).
 
 ## Labels as values and computed goto (2026-10-14)
 

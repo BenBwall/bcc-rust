@@ -36,10 +36,12 @@ use super::{
     module::{
         Extension,
         GlobalInit,
+        Linkage,
         ParamAbi,
         RelocationTarget,
         Signature,
         Symbol,
+        Visibility,
     },
     types::Type,
 };
@@ -64,7 +66,118 @@ pub(crate) fn verify_module<'m, 's>(
     for (func, _) in module.functions() {
         verify_function_into(module, func, profile, scratch, &mut errors);
     }
+    verify_init_functions(module, &mut errors);
     errors
+}
+
+/// An alias names an existing definition of its own kind that is not itself
+/// an alias, and has no body or initializer of its own; a section name is
+/// nonempty and free of quotes, newlines and NUL, so every back end and the
+/// textual form can carry it; an internal symbol has default visibility, as
+/// LLVM requires of local linkage. An alias is thread-local exactly when its
+/// target is: it names the same storage, one copy per thread or one shared.
+/// GNU extension: GCC manual, "Common Function Attributes", alias/section.
+/// <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
+fn verify_symbol_attributes(
+    module: &Module<'_>,
+    symbol: Symbol,
+    mut error: impl FnMut(VerifierErrorKind),
+) {
+    let attributes = module.symbol_attributes(symbol);
+    let linkage = match symbol {
+        | Symbol::Function(func) => module.function(func).linkage,
+        | Symbol::Global(global) => module.global(global).linkage,
+    };
+    if linkage == Linkage::Internal && attributes.visibility != Visibility::Default {
+        error(VerifierErrorKind::SymbolAttribute(
+            "an internal symbol has default visibility",
+        ));
+    }
+    if let Some(section) = attributes.section
+        && (section.is_empty() || section.contains(['"', '\n', '\r', '\0']))
+    {
+        error(VerifierErrorKind::SymbolAttribute(
+            "a section name is nonempty and has no quote, newline or NUL",
+        ));
+    }
+    let Some(target) = attributes.alias else {
+        return;
+    };
+    let exists = match target {
+        | Symbol::Function(func) => module.get_function(func).is_some(),
+        | Symbol::Global(global) => module.get_global(global).is_some(),
+    };
+    if !exists {
+        error(VerifierErrorKind::SymbolAttribute(
+            "an alias target does not exist",
+        ));
+        return;
+    }
+    let defined = |symbol| match symbol {
+        | Symbol::Function(func) => module.function(func).body.is_some(),
+        | Symbol::Global(global) => module.global(global).init.is_some(),
+    };
+    if matches!(
+        (symbol, target),
+        (Symbol::Function(_), Symbol::Global(_)) | (Symbol::Global(_), Symbol::Function(_))
+    ) {
+        error(VerifierErrorKind::SymbolAttribute(
+            "an alias and its target are both functions or both globals",
+        ));
+    }
+    if defined(symbol) {
+        error(VerifierErrorKind::SymbolAttribute(
+            "an alias has no body or initializer of its own",
+        ));
+    }
+    if !defined(target) || module.symbol_attributes(target).alias.is_some() {
+        error(VerifierErrorKind::SymbolAttribute(
+            "an alias target is a definition that is not itself an alias",
+        ));
+    }
+    let thread_local = |symbol| match symbol {
+        | Symbol::Function(_) => false,
+        | Symbol::Global(global) => module.global(global).thread_local,
+    };
+    if thread_local(symbol) != thread_local(target) {
+        error(VerifierErrorKind::SymbolAttribute(
+            "an alias is thread-local exactly when its target is",
+        ));
+    }
+}
+
+/// Constructors and destructors are existing functions that take no
+/// parameters and are defined in the module, directly or through an alias.
+/// GNU extension: GCC manual, "Common Function Attributes",
+/// constructor/destructor.
+/// <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
+fn verify_init_functions<'m>(module: &'m Module<'_>, errors: &mut ArenaVec<'_, VerifierError<'m>>) {
+    for init in module.init_functions() {
+        let Some(function) = module.get_function(init.func) else {
+            errors.push(VerifierError {
+                item:     "",
+                location: Location::Item,
+                kind:     VerifierErrorKind::InvalidReference(
+                    EntityKind::Function,
+                    init.func.as_u32(),
+                ),
+            });
+            continue;
+        };
+        let defined = function.body.is_some() || function.attributes.alias.is_some();
+        let no_params = module
+            .get_signature(function.signature)
+            .is_some_and(|signature| signature.params.is_empty() && !signature.variadic);
+        if !defined || !no_params {
+            errors.push(VerifierError {
+                item:     function.name,
+                location: Location::Item,
+                kind:     VerifierErrorKind::SymbolAttribute(
+                    "a constructor or destructor is a defined function without parameters",
+                ),
+            });
+        }
+    }
 }
 
 /// Verifies one function, returning the errors in `scratch`.
@@ -94,6 +207,13 @@ fn verify_function_into<'m, 's>(
             kind:     VerifierErrorKind::NulSymbolName,
         });
     }
+    verify_symbol_attributes(module, Symbol::Function(func), |kind| {
+        errors.push(VerifierError {
+            item: function.name,
+            location: Location::Item,
+            kind,
+        });
+    });
     let Some(signature) = module.get_signature(function.signature) else {
         errors.push(VerifierError {
             item:     function.name,
@@ -618,7 +738,10 @@ impl Verifier<'_, '_, '_, '_> {
             },
             | InstData::Nullary { ty, .. } => checker.require(
                 opcode == Opcode::Trap
-                    || (opcode == Opcode::StackSave && ty == Type::Ptr)
+                    || (matches!(
+                        opcode,
+                        Opcode::StackSave | Opcode::FrameAddress | Opcode::ReturnAddress
+                    ) && ty == Type::Ptr)
                     || opcode == Opcode::Poison
                     || (opcode == Opcode::Null && ty == Type::Ptr),
                 ty,
@@ -998,6 +1121,7 @@ fn verify_global<'m>(
     if data.name.contains('\0') {
         error(VerifierErrorKind::NulSymbolName);
     }
+    verify_symbol_attributes(module, Symbol::Global(global), &mut error);
     let Some(GlobalInit::Bytes { bytes, relocations }) = data.init else {
         return;
     };
@@ -1091,6 +1215,9 @@ pub(crate) enum VerifierErrorKind {
     Noundef(&'static str),
     /// LLVM and the native symbol interfaces require NUL-free names.
     NulSymbolName,
+    /// An alias, section, constructor or destructor request breaks the rule
+    /// named.
+    SymbolAttribute(&'static str),
     /// A defined function has no blocks.
     NoBlocks,
     EmptyBlock,
@@ -1281,6 +1408,7 @@ impl fmt::Display for VerifierErrorKind {
                 f.write_str("invalid trailing variadic argument descriptions"),
             | Self::Noundef(problem) => write!(f, "invalid noundef: {problem}"),
             | Self::NulSymbolName => f.write_str("a symbol name contains NUL"),
+            | Self::SymbolAttribute(rule) => write!(f, "invalid symbol attribute: {rule}"),
             | Self::NoBlocks => f.write_str("a defined function has no blocks"),
             | Self::EmptyBlock => f.write_str("the block is empty"),
             | Self::MissingTerminator => f.write_str("the block does not end in a terminator"),

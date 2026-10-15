@@ -76,6 +76,16 @@ pub(super) fn find<'a>(
             _ = taken.insert(binding);
         }
     }
+    // A GNU cleanup function receives its variable's address on every exit.
+    // GNU extension: GCC manual, "Common Variable Attributes", cleanup.
+    for region in sema.control.regions {
+        if let crate::translation_phases::semantic_analysis::CleanupKind::Call {
+            variable, ..
+        } = region.cleanup
+        {
+            _ = taken.insert(variable.0);
+        }
+    }
     // Prototype bound expressions and body uses designate the same parameter
     // object. Propagate the storage requirement before constructing any local.
     // C99: §6.9.1p10, p. 142; PDF p. 154.

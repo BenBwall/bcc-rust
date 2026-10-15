@@ -48,6 +48,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if matches!(e.kind, E::SizeofExpr(_) | E::SizeofType(_)) {
             self.enter_sizeof(e);
         }
+        if matches!(e.kind, E::AlignofExpr(_) | E::AlignofType(_)) {
+            self.enter_reference_context(None);
+        }
         self.taint(
             e.recovered
                 || matches!(e.kind, E::Builtin(b) if !super::builtins::modeled(b.keyword))
@@ -167,7 +170,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             | S::Declaration(d) => self.work.push(Work::Declaration(d)),
-            | S::Attributed(s) => self.work.push(Work::Statement(s.statement, new_scope)),
+            | S::Attributed(s) => {
+                self.check_attribute_list(s.attributes);
+                self.work.push(Work::Statement(s.statement, new_scope));
+            },
             | S::Label(name, child) => {
                 self.label(s, name, true);
                 self.work.push(Work::Statement(child, new_scope));

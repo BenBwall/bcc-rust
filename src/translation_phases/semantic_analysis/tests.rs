@@ -716,6 +716,7 @@ fn gnu_void_and_function_size_constants_remain_accepted() {
 mod declaration_regressions;
 mod declarations;
 mod encoded_literals;
+mod entity_attributes;
 mod expression_regressions;
 mod expressions;
 mod flexible_initializers;

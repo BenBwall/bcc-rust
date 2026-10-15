@@ -284,10 +284,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             })
             .count();
         let start = self.operands.len() - count;
+        // `__builtin_fpclassify` has the most operands, six.
         let mut items = [Item {
             operand: Operand::Void,
             ty:      instance.result_type,
-        }; 3];
+        }; 6];
         items[..count].copy_from_slice(&self.operands[start..]);
         self.operands.truncate(start);
         let source = e.source_vectors;
@@ -295,6 +296,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | CommonBuiltin::Varargs(_) | CommonBuiltin::Library | CommonBuiltin::Offsetof =>
                 return Err(LoweringError::missing(
                     "varargs must use keyword scheduling",
+                    source,
+                )),
+            | CommonBuiltin::Complex =>
+                return Err(LoweringError::unsupported(
+                    super::Construct::ComplexArithmetic,
                     source,
                 )),
             | CommonBuiltin::Constant => {
@@ -313,7 +319,29 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let ty = self.value_type(instance.result_type, source)?;
                 Operand::Value(self.iconst(ty, value.value))
             },
-            | CommonBuiltin::Expect(_) | CommonBuiltin::Aligned => items[0].operand,
+            | CommonBuiltin::Expect(_)
+            | CommonBuiltin::Aligned
+            | CommonBuiltin::ExtractReturnAddress => items[0].operand,
+            // Only the current frame has a defined address everywhere; GCC
+            // calls outer levels unpredictable. GNU extension: GCC "Return
+            // Address". <https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html>
+            | CommonBuiltin::Address(return_address) => {
+                let level = match instance.operands[0].expression {
+                    | Some(level) => self.info(level)?.integer.map(|level| level.value),
+                    | None => None,
+                };
+                if level != Some(0) {
+                    return Err(LoweringError::unsupported(
+                        super::Construct::Builtin,
+                        source,
+                    ));
+                }
+                Operand::Value(self.nullary(if return_address {
+                    Opcode::ReturnAddress
+                } else {
+                    Opcode::FrameAddress
+                }))
+            },
             | CommonBuiltin::Prefetch => Operand::Void,
             | CommonBuiltin::Unreachable | CommonBuiltin::Trap => {
                 if builtin == CommonBuiltin::Trap {

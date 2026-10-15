@@ -220,6 +220,19 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         1,
     ),
     descriptor(
+        Id::Complex,
+        "__builtin_complex",
+        B::Complex,
+        Signature {
+            result:     T::Scalar(S::ComplexDouble),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value), A::value(C::Value)],
+        2,
+    ),
+    descriptor(
         Id::Copysign,
         "__builtin_copysign",
         B::Float(FloatOperation::Copysign, Some(S::Double)),
@@ -370,6 +383,19 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         3,
     ),
     descriptor(
+        Id::ExtractReturnAddr,
+        "__builtin_extract_return_addr",
+        B::ExtractReturnAddress,
+        Signature {
+            result:     T::Pointer(S::Void, false),
+            parameters: &[T::Pointer(S::Void, false)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Pointer(S::Void, false)))],
+        1,
+    ),
+    descriptor(
         Id::Ffs,
         "__builtin_ffs",
         B::Bit(BitOperation::Ffs, S::Int),
@@ -409,9 +435,72 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         1,
     ),
     descriptor(
+        Id::Fpclassify,
+        "__builtin_fpclassify",
+        B::Float(FloatOperation::Fpclassify, None),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::Int))),
+            A::value(C::Parameter(T::Scalar(S::Int))),
+            A::value(C::Parameter(T::Scalar(S::Int))),
+            A::value(C::Parameter(T::Scalar(S::Int))),
+            A::value(C::Parameter(T::Scalar(S::Int))),
+            A::value(C::Value),
+        ],
+        6,
+    ),
+    descriptor(
+        Id::FrameAddress,
+        "__builtin_frame_address",
+        B::Address(false),
+        Signature {
+            result:     T::Pointer(S::Void, false),
+            parameters: &[T::Scalar(S::UnsignedInt)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::constrained(
+            C::Parameter(T::Scalar(S::UnsignedInt)),
+            K::ConvertedIntegerRange(u32::MAX as u64),
+            D::FrameLevel,
+        )],
+        1,
+    ),
+    descriptor(
+        Id::Isfinite,
+        "__builtin_isfinite",
+        B::Float(FloatOperation::Isfinite, None),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value)],
+        1,
+    ),
+    descriptor(
         Id::Isinf,
         "__builtin_isinf",
         B::Float(FloatOperation::Isinf, None),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value)],
+        1,
+    ),
+    descriptor(
+        Id::IsinfSign,
+        "__builtin_isinf_sign",
+        B::Float(FloatOperation::IsinfSign, None),
         Signature {
             result:     T::Scalar(S::Int),
             parameters: &[],
@@ -445,6 +534,32 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
             variadic:   false,
         },
         &[A::value(C::Parameter(T::Scalar(S::LongDouble)))],
+        1,
+    ),
+    descriptor(
+        Id::Isnan,
+        "__builtin_isnan",
+        B::Float(FloatOperation::Isnan, None),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value)],
+        1,
+    ),
+    descriptor(
+        Id::Isnormal,
+        "__builtin_isnormal",
+        B::Float(FloatOperation::Isnormal, None),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value)],
         1,
     ),
     descriptor(
@@ -620,6 +735,23 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
                 D::PrefetchLocality,
             ),
         ],
+        1,
+    ),
+    descriptor(
+        Id::ReturnAddress,
+        "__builtin_return_address",
+        B::Address(true),
+        Signature {
+            result:     T::Pointer(S::Void, false),
+            parameters: &[T::Scalar(S::UnsignedInt)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::constrained(
+            C::Parameter(T::Scalar(S::UnsignedInt)),
+            K::ConvertedIntegerRange(u32::MAX as u64),
+            D::FrameLevel,
+        )],
         1,
     ),
     descriptor(
@@ -1217,7 +1349,7 @@ const fn descriptor(
             None,
             SyntaxForm::Offsetof,
         ),
-        | B::Float(..) => (
+        | B::Float(..) | B::Complex => (
             TypeRule::Floating,
             BuiltinEffectClass::Pure,
             Some(crate::configuration::Feature::GnuBuiltins),
@@ -1233,7 +1365,7 @@ const fn descriptor(
             Some(crate::configuration::Feature::GnuBuiltins),
             SyntaxForm::OrdinaryCall,
         ),
-        | B::Constant | B::ObjectSize(_) => (
+        | B::Constant | B::ObjectSize(_) | B::Address(_) => (
             TypeRule::Fixed,
             BuiltinEffectClass::Query,
             Some(crate::configuration::Feature::GnuBuiltins),
