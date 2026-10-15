@@ -596,6 +596,12 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             let Some(init) = global.init else { continue };
             let name = Name(global.name);
             let section = match (global.constant, init) {
+                // Addresses in a position-independent executable are
+                // relocated at load time, which a read-only section forbids;
+                // the loader write-protects `.data.rel.ro` after relocating.
+                | (true, GlobalInit::Bytes { relocations, .. })
+                    if self.elf && !relocations.is_empty() =>
+                    "\t.section\t.data.rel.ro,\"aw\",@progbits",
                 | (true, _) if self.elf => "\t.section\t.rodata",
                 | (true, _) => "\t.section\t.rdata,\"dr\"",
                 | (false, GlobalInit::Zero) => "\t.bss",

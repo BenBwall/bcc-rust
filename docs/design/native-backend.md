@@ -646,7 +646,7 @@ Sections and symbols per format:
 | code | `.text`; `.type f,@function`, `.size f,.-f` | `.text`; `.def f; .scl 2 (3 static); .type 32; .endef` |
 | zero data | `.bss` | `.bss` |
 | initialized data | `.data` | `.data` |
-| constants | `.section .rodata` | `.section .rdata,"dr"` |
+| constants | `.section .rodata`; `.data.rel.ro` if they hold addresses, which a PIE relocates at load time | `.section .rdata,"dr"` |
 | address constants | `.quad sym+addend` (`R_X86_64_64`) | `.quad sym+addend` (`IMAGE_REL_AMD64_ADDR64`) |
 | defined data reference | `sym(%rip)` (`R_X86_64_PC32`) | `sym(%rip)` (`IMAGE_REL_AMD64_REL32`) |
 | undefined data reference | `movq sym@GOTPCREL(%rip), %r` (`GOTPCRELX`) | `sym(%rip)`; LLD's MinGW auto-import handles DLL data |

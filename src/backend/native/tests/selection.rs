@@ -158,6 +158,30 @@ fn addresses_fold_into_memory_operands() {
     );
 }
 
+#[test]
+fn read_only_addresses_go_where_the_loader_can_relocate_them() {
+    let ir = "abi lowered
+global @text internal constant size 3, align 1 = bytes \"686900\"
+global @table external constant size 16, align 8 = bytes \"00000000000000000000000000000000\" \
+              relocs [0: @text, 8: @text + 1]
+";
+    let text = assembly(ir, Target::LinuxGnu);
+    assert!(
+        text.contains(".section\t.data.rel.ro,\"aw\",@progbits\n\t.globl\ttable\n"),
+        "a PIE relocates the table at load time:\n{text}"
+    );
+    assert!(
+        text.contains(".section\t.rodata\n\t.p2align\t0\n"),
+        "{text}"
+    );
+    let text = assembly(ir, Target::WindowsGnu);
+    assert!(!text.contains(".data.rel.ro"), "{text}");
+    assert!(
+        text.contains(".section\t.rdata,\"dr\"\n\t.globl\ttable\n"),
+        "{text}"
+    );
+}
+
 const CALLS: &str = "abi lowered
 global @fmt internal constant size 4, align 1 = bytes \"25640a00\"
 function @printf(ptr, ...) -> i32 external
