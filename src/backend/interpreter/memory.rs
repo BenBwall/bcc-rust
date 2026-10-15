@@ -523,6 +523,12 @@ impl Memory<'_> {
         })
     }
 
+    /// The address the next allocation starts from. Addresses only grow, so
+    /// it separates every object allocated so far from every later one.
+    pub(crate) const fn next_address(&self) -> u64 {
+        self.next_address
+    }
+
     /// Frees the live object `provenance` names, so every pointer to it
     /// dangles.
     pub(crate) fn free(&mut self, provenance: ObjectRef) {

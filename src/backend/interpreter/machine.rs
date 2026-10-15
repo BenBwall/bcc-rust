@@ -72,6 +72,9 @@ pub(super) struct Frame {
     /// A number no other activation shares, so a `va_list` cursor can tell
     /// whether its frame is still the one that made it.
     pub(super) activation:      u64,
+    /// Where the frame begins: above every object its callers allocated and
+    /// below its own slots.
+    pub(super) frame_address:   u64,
     /// The value in the caller that receives this call's result.
     pub(super) caller_value:    Option<Value>,
     /// Caller destination and private callee area for a register result.
@@ -252,6 +255,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
                 }),
         );
         let slots = self.slots.len();
+        let frame_address = self.memory.next_address();
         for (_, data) in body.stack_slots() {
             let slot = self
                 .memory
@@ -302,6 +306,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             varargs_len: self.varargs.len() - varargs,
             va_backing: None,
             activation: self.activations,
+            frame_address,
             caller_value,
             register_result,
         });

@@ -213,6 +213,62 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         }
     }
 
+    /// glibc's Clang path implements `fpclassify`, `isfinite`, `isnormal`,
+    /// `isnan` and `isinf` with these builtins; MinGW's passes the frame
+    /// address to `_setjmp`. The interpreter has no x87 values, so `long
+    /// double` runs natively only.
+    #[test]
+    fn classification_and_frame_address_builtins_run_in_both_back_ends() {
+        let Some(target) = host() else {
+            return;
+        };
+        let target = format!("--target={target}");
+        let check = |ty: &str, subnormal: &str| {
+            format!(
+                "  {{ volatile {ty} zero = 0, one = 1, tiny = {subnormal};\n    {ty} nan = zero / \
+                 zero, inf = one / zero, values[] = {{ nan, -inf, inf, one, -tiny, zero, -zero \
+                 }};\n    int expected[] = {{ 0, 1, 1, 2, 3, 4, 4 }};\n    for (int i = 0; i < 7; \
+                 i++) {{\n      {ty} v = values[i];\n      int c = __builtin_fpclassify(0, 1, 2, \
+                 3, 4, v);\n      if (c != expected[i] || __builtin_isnan(v) != (c == 0)\n        \
+                 || __builtin_isfinite(v) != (c > 1) || __builtin_isnormal(v) != (c == 2)\n        \
+                 || __builtin_isinf_sign(v) != (c == 1 ? (v < 0 ? -1 : 1) : 0))\n        return \
+                 failures + i + 1;\n    }}\n    failures += 10; }}\n"
+            )
+        };
+        let program = |long_double: bool| {
+            let mut source = String::from(
+                "int main(void) {\n  int failures = -20;\n  void *frame = \
+                 __builtin_frame_address(0);\n  void *ret = \
+                 __builtin_extract_return_addr(__builtin_return_address(0));\n  if (!frame || \
+                 !ret) return 100;\n",
+            );
+            source.push_str(&check("float", "1e-40f"));
+            source.push_str(&check("double", "1e-310"));
+            if long_double {
+                source.push_str(&check("long double", "1e-4940L"));
+                source.push_str("  failures -= 10;\n");
+            }
+            source.push_str("  return failures;\n}\n");
+            source
+        };
+        for opt in ["--opt=none", "--opt=bcc"] {
+            let output = bcc(&program(false), &[&target, opt, "--interpret"]);
+            assert!(output.status.success(), "{opt}: {}", text(&output.stderr));
+        }
+        let executable = temporary("classify.exe");
+        for opt in [&["--llvm-opt=O0"][..], &["--opt=bcc", "--llvm-opt=O2"][..]] {
+            // MSVC's long double is binary64, where the x87 subnormal is 0.
+            let built = bcc(
+                &program(!target.ends_with("msvc")),
+                &[&[&target[..], "-o", executable.to_str().unwrap()][..], opt].concat(),
+            );
+            assert!(built.status.success(), "{opt:?}: {}", text(&built.stderr));
+            let output = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(output.status.code(), Some(0), "{opt:?}");
+        }
+        std::fs::remove_file(executable).unwrap();
+    }
+
     #[test]
     fn inline_modes_emit_bodies_and_run_in_both_back_ends() {
         let Some(target) = host() else {

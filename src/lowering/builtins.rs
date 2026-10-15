@@ -287,7 +287,26 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let ty = self.value_type(info.ty, source)?;
                 Operand::Value(self.iconst(ty, value.value))
             },
-            | CommonBuiltin::Expect(_) | CommonBuiltin::Aligned => items[0].operand,
+            | CommonBuiltin::Expect(_)
+            | CommonBuiltin::Aligned
+            | CommonBuiltin::ExtractReturnAddress => items[0].operand,
+            // Only the current frame has a defined address everywhere; GCC
+            // calls outer levels unpredictable. GNU extension: GCC "Return
+            // Address". <https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html>
+            | CommonBuiltin::Address(return_address) => {
+                let level = self.info(arguments[0])?.integer.map(|level| level.value);
+                if level != Some(0) {
+                    return Err(LoweringError::unsupported(
+                        super::Construct::Builtin,
+                        source,
+                    ));
+                }
+                Operand::Value(self.nullary(if return_address {
+                    Opcode::ReturnAddress
+                } else {
+                    Opcode::FrameAddress
+                }))
+            },
             | CommonBuiltin::Prefetch => Operand::Void,
             | CommonBuiltin::Unreachable | CommonBuiltin::Trap => {
                 if builtin == CommonBuiltin::Trap {

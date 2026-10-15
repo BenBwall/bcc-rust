@@ -56,7 +56,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => Scalar::Void,
         };
         let mut result = self.types.scalar(scalar);
-        if matches!(builtin, CommonBuiltin::Aligned | CommonBuiltin::Alloca) {
+        if matches!(
+            builtin,
+            CommonBuiltin::Aligned
+                | CommonBuiltin::Alloca
+                | CommonBuiltin::Address(_)
+                | CommonBuiltin::ExtractReturnAddress
+        ) {
             result = self.types.intern(TypeKind::Pointer(result));
         }
         let void = self
@@ -82,7 +88,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     prototype = false;
                 },
             | CommonBuiltin::Bit(_, scalar) => parameters.push(self.types.scalar(scalar)),
-            | CommonBuiltin::Bswap(_) => parameters.push(result),
+            | CommonBuiltin::Bswap(_) | CommonBuiltin::ExtractReturnAddress =>
+                parameters.push(result),
             | CommonBuiltin::Expect(probability) => {
                 parameters.extend_from_slice(&[long, long]);
                 if probability {
@@ -99,6 +106,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | CommonBuiltin::ObjectSize(_) => parameters.extend_from_slice(&[const_pointer, int]),
             | CommonBuiltin::Alloca => parameters.push(size),
+            | CommonBuiltin::Address(_) => parameters.push(self.types.scalar(Scalar::UnsignedInt)),
             | CommonBuiltin::Overflow(_, Some(scalar), false) => {
                 let integer = self.types.scalar(scalar);
                 let pointer = self.types.intern(TypeKind::Pointer(integer));
@@ -175,6 +183,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Bswap(_)
             | CommonBuiltin::Constant
             | CommonBuiltin::Alloca
+            | CommonBuiltin::Address(_)
+            | CommonBuiltin::ExtractReturnAddress
             | CommonBuiltin::Float(..) => (1, 1),
             | CommonBuiltin::Expect(true) | CommonBuiltin::Overflow(..) => (3, 3),
             | CommonBuiltin::Aligned => (2, 3),
@@ -340,6 +350,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let ty = self.types.scalar(self.types.target.size_t);
                 _ = self.common_argument(args[0], ty);
             },
+            | CommonBuiltin::Address(_) => {
+                let ty = self.types.scalar(Scalar::UnsignedInt);
+                if self.common_argument(args[0], ty)
+                    && self.common_integer_constant(args[0], ty).is_none()
+                {
+                    self.error(
+                        SemanticErrorKind::InvalidFrameLevel,
+                        args[0].source_vectors,
+                        Some(name.name),
+                        None,
+                    );
+                }
+            },
+            | CommonBuiltin::ExtractReturnAddress => {
+                _ = self.common_argument(args[0], result);
+            },
             | CommonBuiltin::Overflow(operation, scalar, predicate) => {
                 for &arg in &args[..2] {
                     if let Some(scalar) = scalar {
@@ -465,6 +491,11 @@ pub(crate) enum CommonBuiltin {
     Constant,
     ObjectSize(bool),
     Alloca,
+    /// GNU frame (`false`) or return (`true`) address of a constant frame
+    /// level. <https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html>
+    Address(bool),
+    /// GNU: the return address as an address; the identity on x86-64.
+    ExtractReturnAddress,
     Overflow(OverflowOperation, Option<Scalar>, bool),
 }
 
@@ -619,6 +650,9 @@ pub(crate) fn common_builtin(name: &str) -> Option<CommonBuiltin> {
         | "object_size" => B::ObjectSize(false),
         | "dynamic_object_size" => B::ObjectSize(true),
         | "alloca" => B::Alloca,
+        | "frame_address" => B::Address(false),
+        | "return_address" => B::Address(true),
+        | "extract_return_addr" => B::ExtractReturnAddress,
         | _ => return None,
     })
 }
