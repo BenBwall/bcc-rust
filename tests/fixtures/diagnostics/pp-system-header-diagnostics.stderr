@@ -54,4 +54,10 @@ error: 'long long' is a C99 extension
 6 | long long user_long_long;
   |      ^^^^
 
-4 errors and 3 warnings generated.
+error: 'long long' is a C99 extension
+ --> pp-system-header-diagnostics.c:7:1
+  |
+7 | NOISY_WIDE user_from_system_macro;
+  | ^^^^^^^^^^
+
+5 errors and 3 warnings generated.

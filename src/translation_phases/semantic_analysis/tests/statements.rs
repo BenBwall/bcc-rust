@@ -418,15 +418,10 @@ fn internal_definitions_exclude_constant_sizeof_uses() {
         kinds("static int f(void); int g(void) {return f();}"),
         [SemanticErrorKind::UndefinedInternal]
     );
-    assert_eq!(
-        kinds("static int f(void);"),
-        [SemanticErrorKind::UnusedStaticFunction]
-    );
+    // An unused one is reported only under -Wunused-function, as in Clang.
+    clean("static int f(void);");
     clean("static int f(void); int g(void) {return f();} static int f(void) {return 0;}");
-    assert_eq!(
-        kinds("static int f(void); int g(void) {return sizeof &f;}"),
-        [SemanticErrorKind::UnusedStaticFunction]
-    );
+    clean("static int f(void); int g(void) {return sizeof &f;}");
     assert_eq!(
         kinds("static int f(void); void g(int n) {sizeof(int[f()]);}"),
         [SemanticErrorKind::UndefinedInternal]
@@ -741,5 +736,33 @@ fn implicit_old_style_parameters_keep_strict_error_and_gnu_extension_policy() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn unused_static_functions_follow_their_warning_group() {
+    use crate::{
+        configuration::{
+            CompilerConfiguration,
+            DiagnosticGroup,
+            WarningOption,
+        },
+        translation_phases::ErrorSeverity,
+    };
+    for (option, severity) in [
+        (WarningOption::Enable(true), ErrorSeverity::Warning),
+        (WarningOption::Error(true), ErrorSeverity::Error),
+    ] {
+        let configuration = CompilerConfiguration::default()
+            .with_warning_option(DiagnosticGroup::UnusedFunction, option);
+        with_configuration("static int f(void);", configuration, |context, unit| {
+            let errors = context.take_pending_errors();
+            assert!(
+                matches!(errors.as_slice(), [TranslationError::Semantic(error)] if error.kind == SemanticErrorKind::UnusedStaticFunction),
+                "{errors:?}"
+            );
+            assert_eq!(errors[0].configured_severity(context), severity);
+            assert_eq!(unit.errors, usize::from(severity == ErrorSeverity::Error));
+        });
     }
 }

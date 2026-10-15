@@ -27,28 +27,43 @@ impl Analyzer<'_, '_, '_> {
         group: crate::configuration::DiagnosticGroup,
         source_vectors: SourceVectors,
     ) {
+        self.group_diagnostic(
+            group,
+            SemanticErrorKind::PointerConstraint(group),
+            source_vectors,
+            None,
+        );
+    }
+
+    /// Reports `kind` under its warning group's configuration, as Clang
+    /// does for a diagnostic that belongs to a group. Every group is a Clang
+    /// warning, some defaulting to an error, so a system header withholds it
+    /// at any severity. It is reported at its expansion location, as Clang
+    /// reports it.
+    /// C99: §5.1.1.3p1, p. 11; PDF p. 23.
+    pub(super) fn group_diagnostic(
+        &mut self,
+        group: crate::configuration::DiagnosticGroup,
+        kind: SemanticErrorKind,
+        source_vectors: SourceVectors,
+        name: Option<StringCacheId>,
+    ) {
         if self.tainted {
             return;
         }
-        let Some(severity) = self.context.configuration.diagnostic_severity(group) else {
+        let Some(severity) = self.context.group_severity(group, source_vectors) else {
             return;
         };
-        if self.context.withholds(
-            severity,
-            group.default_severity() == crate::translation_phases::ErrorSeverity::Warning,
-            source_vectors,
-        ) {
-            return;
-        }
+        let source_vectors = self.context.file_location(source_vectors);
         let errors = usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
         self.semantic_errors += errors;
         self.error_diagnostics += errors;
         self.context
             .append_pending_errors([TranslationError::Semantic(SemanticError {
                 extension_severity: Some(severity),
-                kind: SemanticErrorKind::PointerConstraint(group),
+                kind,
                 source_vectors,
-                name: None,
+                name,
                 previous: None,
             })]);
     }

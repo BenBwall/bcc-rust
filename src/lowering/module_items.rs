@@ -995,7 +995,11 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             bytes[start..start + size].copy_from_slice(&value.to_le_bytes()[..size]);
             return Ok(());
         }
-        if representation != Repr::Pointer || bit_field.is_some() {
+        // An address converted to a pointer-wide integer keeps its
+        // relocation, as semantic analysis accepted it (§6.6p10).
+        let address_width = representation == Repr::Pointer
+            || (matches!(representation, Repr::Int { .. }) && size == 8);
+        if !address_width || bit_field.is_some() {
             return Err(unsupported());
         }
         let (symbol, addend) = self.address_constant(expression)?;

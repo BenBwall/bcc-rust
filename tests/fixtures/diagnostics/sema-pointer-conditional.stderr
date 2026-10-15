@@ -1,0 +1,57 @@
+warning: pointer type mismatch in conditional expression [-Wpointer-type-mismatch]
+ --> sema-pointer-conditional.c:2:29
+  |
+2 | void sign(int c) { (void)(c ? ip : up); }
+  |                             ^^^^^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: pointer type mismatch in conditional expression [-Wpointer-type-mismatch]
+ --> sema-pointer-conditional.c:3:34
+  |
+3 | void functions(int c) { (void)(c ? f1 : f2); }
+  |                                  ^^^^^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: pointer type mismatch in conditional expression [-Wpointer-type-mismatch]
+ --> sema-pointer-conditional.c:4:38
+  |
+4 | void function_void(int c) { (void)(c ? f1 : vp); }
+  |                                      ^^^^^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: pointer/integer type mismatch in conditional expression [-Wconditional-type-mismatch]
+ --> sema-pointer-conditional.c:5:42
+  |
+5 | void integer(int c, long l) { int *r = c ? ip : l; (void)r; }
+  |                                          ^^^^^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: pointer/integer type mismatch in conditional expression [-Wconditional-type-mismatch]
+ --> sema-pointer-conditional.c:6:38
+  |
+6 | void integer_first(int c) { (void)(c ? 1 : ip); }
+  |                                      ^^^^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: pointer conversion discards qualifiers, including nested pointer qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+ --> sema-pointer-conditional.c:7:31
+  |
+7 | void merged(int c) { int *r = c ? ip : cip; (void)r; }
+  |                               ^^^^^^^^^^^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: pointer type mismatch in conditional expression [-Wpointer-type-mismatch]
+  --> sema-pointer-conditional.c:10:41
+   |
+10 | void array_qualifiers(int c) { (void)(c ? pa : cpa); }
+   |                                         ^^^^^^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+7 warnings generated.

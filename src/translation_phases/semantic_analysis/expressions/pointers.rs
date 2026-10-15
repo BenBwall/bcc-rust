@@ -19,6 +19,7 @@ use crate::{
             Analyzer,
             types::{
                 Scalar,
+                TagKind,
                 TypeId,
                 TypeKind,
             },
@@ -27,8 +28,9 @@ use crate::{
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
-    /// Assignment, scalar initialization, prototype arguments and return share
-    /// this adapter. Intrinsic-specific contracts keep `assignment_compatible`.
+    /// Assignment, scalar initialization, prototype arguments, return and
+    /// atomic builtin value operands share this adapter. Other
+    /// intrinsic-specific contracts keep `assignment_compatible`.
     /// C99: §6.5.16.1p1, p. 92; PDF p. 104; §6.5.2.2p2,p7, pp. 71-72;
     /// PDF pp. 83-84; §6.8.6.4p3, p. 139; PDF p. 151; §6.7.8p11, p. 126;
     /// PDF p. 138.
@@ -172,6 +174,55 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         true
     }
 
+    /// The result type of conditional arms that are a pointer pair or a
+    /// pointer and an integer, after null pointer constants have chosen the
+    /// other arm's type; `None` for every other pairing. As in Clang, a
+    /// void/object pair yields `void *`, compatible targets yield their
+    /// composite, and both carry the union of the targets' qualifiers. The
+    /// rest violate the constraint, which Clang reports as a warning:
+    /// mismatched targets yield an unqualified `void *` and an integer arm
+    /// converts to the pointer arm's type.
+    /// C99: §6.5.15p3,p6, pp. 90-91; PDF pp. 102-103.
+    pub(super) fn conditional_pointers(
+        &mut self,
+        lt: TypeId,
+        rt: TypeId,
+        source: SourceVectors,
+    ) -> Option<TypeId> {
+        let (lp, rp) = match (self.pointer_target(lt), self.pointer_target(rt)) {
+            | (Some(lp), Some(rp)) => (lp, rp),
+            | (Some(_), None) | (None, Some(_)) => {
+                let (pointer, integer) = if self.pointer_target(lt).is_some() {
+                    (lt, rt)
+                } else {
+                    (rt, lt)
+                };
+                _ = self.integer_type(integer)?;
+                self.pointer_diagnostic(DiagnosticGroup::ConditionalTypeMismatch, source);
+                return Some(pointer);
+            },
+            | (None, None) => return None,
+        };
+        // Array element qualifiers stay part of the target here: Clang
+        // reports `int (*)[3]` against `const int (*)[3]` as a mismatch.
+        let target = if self.void_target(lp) && !self.function_target(rp) {
+            lp
+        } else if self.void_target(rp) && !self.function_target(lp) {
+            rp
+        } else if self.types.unanalyzed(lp) || self.types.unanalyzed(rp) {
+            lp
+        } else if let Some(composite) = self.types.composite(lp.unqualified(), rp.unqualified()) {
+            composite
+        } else {
+            self.pointer_diagnostic(DiagnosticGroup::PointerTypeMismatch, source);
+            let void = self.types.scalar(Scalar::Void);
+            return Some(self.types.intern(TypeKind::Pointer(void)));
+        };
+        Some(self.types.intern(TypeKind::Pointer(
+            target.qualified(lp.qualifiers | rp.qualifiers),
+        )))
+    }
+
     /// Walk only pointer/array derivations, never recurse. Qualifiers do not
     /// turn mismatched tags, array extents or function signatures into
     /// warnings.
@@ -195,26 +246,43 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Clang's sign check for otherwise incompatible targets: they differ
+    /// only in sign when they agree after a character type becomes
+    /// `unsigned char` and a signed integer type, or an enumeration whose
+    /// compatible type is signed, becomes the corresponding unsigned type.
+    /// An unsigned enumeration stays itself, so it differs from `int`.
     fn pointer_signedness(&self, to: TypeId, from: TypeId) -> bool {
-        let char_family = |s| matches!(s, Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar);
-        match (self.types.nodes[to.index], self.types.nodes[from.index]) {
-            | (TypeKind::Scalar(to), TypeKind::Scalar(from)) =>
-                (char_family(to) && char_family(from))
-                    || matches!(
-                        (to, from),
-                        (Scalar::Short, Scalar::UnsignedShort)
-                            | (Scalar::UnsignedShort, Scalar::Short)
-                            | (Scalar::Int, Scalar::UnsignedInt)
-                            | (Scalar::UnsignedInt, Scalar::Int)
-                            | (Scalar::Long, Scalar::UnsignedLong)
-                            | (Scalar::UnsignedLong, Scalar::Long)
-                            | (Scalar::LongLong, Scalar::UnsignedLongLong)
-                            | (Scalar::UnsignedLongLong, Scalar::LongLong)
-                            | (Scalar::Int128, Scalar::UnsignedInt128)
-                            | (Scalar::UnsignedInt128, Scalar::Int128)
-                    ),
-            | _ => false,
-        }
+        // Identical kinds were compatible already, so equality here means
+        // integer targets that differ in sign.
+        self.sign_erased(to) == self.sign_erased(from)
+    }
+
+    fn sign_erased(&self, ty: TypeId) -> TypeKind<'tu> {
+        let unsigned = |scalar| match scalar {
+            | Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar =>
+                Some(Scalar::UnsignedChar),
+            | Scalar::Short => Some(Scalar::UnsignedShort),
+            | Scalar::Int => Some(Scalar::UnsignedInt),
+            | Scalar::Long => Some(Scalar::UnsignedLong),
+            | Scalar::LongLong => Some(Scalar::UnsignedLongLong),
+            | Scalar::Int128 => Some(Scalar::UnsignedInt128),
+            | _ => None,
+        };
+        let kind = self.types.nodes[ty.index];
+        let scalar = match kind {
+            | TypeKind::Scalar(scalar) => scalar,
+            | TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Enum => {
+                let compatible = self.types.tags[id].compatible.get();
+                // An enumeration is not a character type, so only a signed
+                // compatible type changes it.
+                if matches!(compatible, Scalar::Char | Scalar::UnsignedChar) {
+                    return kind;
+                }
+                compatible
+            },
+            | _ => return kind,
+        };
+        unsigned(scalar).map_or(kind, TypeKind::Scalar)
     }
 
     fn void_target(&self, ty: TypeId) -> bool {

@@ -241,3 +241,217 @@ fn conversion_errors_suppress_dependent_initializer_errors() {
         assert!(unit.lowerable(context));
     });
 }
+
+/// Asserts the exact pointer groups `source` reports, in order.
+fn assert_groups(source: &str, configuration: CompilerConfiguration, groups: &[DiagnosticGroup]) {
+    with_configuration(source, configuration, |context, unit| {
+        let errors = context.take_pending_errors();
+        let found = errors.iter().map(|error| match error {
+            | TranslationError::Semantic(error) => match error.kind {
+                | SemanticErrorKind::PointerConstraint(group) => Some(group),
+                | _ => None,
+            },
+            | _ => None,
+        });
+        assert!(
+            found.eq(groups.iter().copied().map(Some)),
+            "{source}: {errors:?}"
+        );
+        let expected_errors = groups
+            .iter()
+            .filter(|group| group.default_severity() == ErrorSeverity::Error)
+            .count();
+        assert_eq!(unit.errors, expected_errors, "{source}: {errors:?}");
+    });
+}
+
+#[test]
+#[expect(
+    clippy::disallowed_macros,
+    clippy::disallowed_types,
+    reason = "Test sources are built outside compiler allocation measurements."
+)]
+fn conditional_mismatches_warn_and_take_clang_result_types() {
+    use DiagnosticGroup as G;
+    let declarations = "int *ip; unsigned *up; const int *cip; volatile unsigned *vup; void *vp; \
+                        const void *cvp; int (*f1)(int); int (*f2)(double); long l; int c; int \
+                        (*pa)[3]; const int (*cpa)[3];";
+    for (expression, ty, groups) in [
+        ("c ? ip : up", "void *", &[G::PointerTypeMismatch][..]),
+        ("c ? cip : vup", "void *", &[G::PointerTypeMismatch]),
+        ("c ? f1 : f2", "void *", &[G::PointerTypeMismatch]),
+        ("c ? cvp : f1", "void *", &[G::PointerTypeMismatch]),
+        ("c ? pa : cpa", "void *", &[G::PointerTypeMismatch]),
+        ("c ? ip : l", "int *", &[G::ConditionalTypeMismatch]),
+        ("c ? 1 : f1", "int (*)(int)", &[G::ConditionalTypeMismatch]),
+        ("c ? ip : cip", "const int *", &[]),
+        ("c ? vp : cip", "const void *", &[]),
+        ("c ? ip : 0", "int *", &[]),
+    ] {
+        let source = format!(
+            "{declarations} _Static_assert(_Generic({expression}, {ty}: 1, default: 0), \
+             \"type\"); void use(void) {{ (void)({expression}); }}"
+        );
+        // Once in the static assertion and once in the function.
+        let groups: Vec<_> = groups.iter().chain(groups).copied().collect();
+        assert_groups(&source, CompilerConfiguration::default(), &groups);
+    }
+    // The integer arm of a constant conditional is an address constant.
+    assert_groups(
+        "int i; int *p = 1 ? &i : 5; int *q = 0 ? &i : 5;",
+        CompilerConfiguration::default(),
+        &[G::ConditionalTypeMismatch, G::ConditionalTypeMismatch],
+    );
+    // A real floating arm stays an invalid operand pair.
+    with_source(
+        "int *ip; double d; int c; void f(void) { (void)(c ? ip : d); }",
+        |_, unit| assert_eq!(unit.errors, 1),
+    );
+}
+
+#[test]
+fn conditional_mismatch_groups_follow_options_and_pedantic_errors() {
+    let source =
+        "int *ip; unsigned *up; int c; void f(void) { (void)(c ? ip : up); (void)(c ? ip : 1); }";
+    let deny = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Deny);
+    with_configuration(source, deny, |context, unit| {
+        assert_eq!(unit.errors, 2, "{:?}", context.take_pending_errors());
+    });
+    let quiet = CompilerConfiguration::default()
+        .with_warning_option(
+            DiagnosticGroup::PointerTypeMismatch,
+            WarningOption::Enable(false),
+        )
+        .with_warning_option(
+            DiagnosticGroup::ConditionalTypeMismatch,
+            WarningOption::Enable(false),
+        );
+    assert_groups(source, quiet, &[]);
+}
+
+#[test]
+#[expect(
+    clippy::disallowed_macros,
+    reason = "Test sources are built outside compiler allocation measurements."
+)]
+fn array_element_qualifiers_belong_to_pointer_targets() {
+    use DiagnosticGroup as G;
+    let declarations = "void f(const double m[][3]); void g(int n, const double m[][n]); void \
+                        h(const double (*m)[]); double a[2][3]; int (*pa)[3]; const int \
+                        (*cpa)[3]; int (**ppa)[3]; const int (**pcpa)[3]; const int (**pcpinc)[];";
+    for (body, groups) in [
+        ("f(a); g(3, a); h(a); cpa = pa;", &[][..]),
+        (
+            "(void)(cpa == pa); (void)(cpa < pa); (void)(cpa - pa);",
+            &[],
+        ),
+        ("pa = cpa;", &[G::PointerQualifiers]),
+        // Nested levels still need identical array derivations, as in Clang.
+        ("pcpa = ppa;", &[G::PointerQualifiers]),
+        ("pcpinc = ppa;", &[G::IncompatiblePointerTypes]),
+    ] {
+        for standard in [CStandard::C89, CStandard::C99, CStandard::C23] {
+            let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true);
+            assert_groups(
+                &format!("{declarations} void t(void) {{ {body} }}"),
+                configuration,
+                groups,
+            );
+        }
+    }
+}
+
+#[test]
+#[expect(
+    clippy::disallowed_macros,
+    reason = "Test sources are built outside compiler allocation measurements."
+)]
+fn enumeration_targets_compare_signs_through_their_compatible_type() {
+    use DiagnosticGroup as G;
+
+    use crate::target::Target;
+    let declarations =
+        "enum E { A, B }; enum N { M = -1 }; enum E *pe; enum N *pn; unsigned *pu; int *pi;";
+    for (target, body, groups) in [
+        (Target::LinuxGnu, "pu = pn;", &[G::PointerSign][..]),
+        (Target::LinuxGnu, "pn = pu;", &[G::PointerSign]),
+        (Target::LinuxGnu, "pi = pn;", &[]),
+        (Target::LinuxGnu, "pu = pe;", &[]),
+        // An unsigned enumeration stays distinct from `int`, as in Clang.
+        (Target::LinuxGnu, "pi = pe;", &[G::IncompatiblePointerTypes]),
+        (Target::WindowsMsvc, "pu = pe;", &[G::PointerSign]),
+        (Target::WindowsMsvc, "pe = pu;", &[G::PointerSign]),
+        (Target::WindowsMsvc, "pi = pe;", &[]),
+    ] {
+        assert_groups(
+            &format!("{declarations} void t(void) {{ {body} }}"),
+            CompilerConfiguration::default().with_target(target),
+            groups,
+        );
+    }
+}
+
+#[test]
+#[expect(
+    clippy::disallowed_macros,
+    reason = "Test sources are built outside compiler allocation measurements."
+)]
+fn atomic_value_operands_take_assignment_groups() {
+    use DiagnosticGroup as G;
+    let declarations = "int *ip; unsigned *up; const int *cip; float *fp; int i;";
+    for (body, groups) in [
+        ("__atomic_store_n(&ip, up, 0);", &[G::PointerSign][..]),
+        ("__atomic_store_n(&ip, cip, 0);", &[G::PointerQualifiers]),
+        (
+            "__atomic_store_n(&ip, fp, 0);",
+            &[G::IncompatiblePointerTypes],
+        ),
+        ("(void)__atomic_exchange_n(&ip, up, 0);", &[G::PointerSign]),
+        (
+            "(void)__sync_val_compare_and_swap(&ip, up, ip);",
+            &[G::PointerSign],
+        ),
+        (
+            "__c11_atomic_store((_Atomic(int *) *)&ip, up, 0);",
+            &[G::PointerSign],
+        ),
+        ("__atomic_store_n(&i, ip, 0);", &[G::IntConversion]),
+    ] {
+        assert_groups(
+            &format!("{declarations} void t(void) {{ {body} }}"),
+            CompilerConfiguration::default(),
+            groups,
+        );
+    }
+}
+
+#[test]
+fn static_addresses_fit_only_pointer_wide_integers() {
+    use crate::target::Target;
+    let demoted = |target| {
+        CompilerConfiguration::default()
+            .with_target(target)
+            .with_warning_option(DiagnosticGroup::IntConversion, WarningOption::Enable(false))
+    };
+    for (target, source, constant) in [
+        (Target::LinuxGnu, "int x; long s = &x;", true),
+        (Target::LinuxGnu, "int x; unsigned long s = &x + 1;", true),
+        (Target::LinuxGnu, "int x; long s = (long)&x;", true),
+        (
+            Target::LinuxGnu,
+            "int x; void f(void) { static long s = &x; }",
+            true,
+        ),
+        (Target::LinuxGnu, "int x; int s = &x;", false),
+        (Target::LinuxGnu, "int x; short s = &x;", false),
+        (Target::WindowsMsvc, "int x; long s = &x;", false),
+        (Target::WindowsMsvc, "int x; long long s = &x;", true),
+    ] {
+        with_configuration(source, demoted(target), |context, unit| {
+            let errors = context.take_pending_errors();
+            assert_eq!(unit.errors, usize::from(!constant), "{source}: {errors:?}");
+            assert_eq!(unit.lowerable(context), constant, "{source}");
+        });
+    }
+}

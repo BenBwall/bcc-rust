@@ -35,9 +35,10 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   diagnostics within its owning declaration or expression. Lexical diagnostics
   (dollar identifiers, `//` comments, digraphs), directives and macro
   definitions stay outside its scope.
-- An extension diagnostic raised in a macro expansion may underline the
-  replacement in the macro definition, and a conditional-expression diagnostic
-  may keep only the definition location; no expansion backtrace is rendered.
+- A preprocessing extension diagnostic raised in a macro expansion may
+  underline the replacement in the macro definition. Parser and semantic
+  extension diagnostics and warning-group diagnostics point at the outermost
+  invocation instead, as Clang does; no expansion backtrace is rendered.
   Preprocessing diagnostics precede parser diagnostics by pipeline design.
 - The added syntax costs parser time and retained memory; see
   [Performance](#performance).
@@ -821,24 +822,33 @@ a system header; in the primary source file it is ignored with a warning, as
 in GCC and Clang. A `#line` directive gives the following lines a new file
 identity that is not a system header.
 
-Inside a system header, warnings and extension diagnostics are withheld, the
-latter at every policy level: under `-pedantic-errors` an extension in a system
-header is not reported, matching Clang, where such diagnostics are warnings
-promoted to errors and are not emitted from system headers. Policy-governed
+Inside a system header, warnings, extension diagnostics and warning-group
+diagnostics are withheld, the latter two at every severity: under
+`-pedantic-errors` an extension in a system header is not reported, and
+neither is an `-Wincompatible-pointer-types`, `-Wint-conversion` or
+`-Wincompatible-function-pointer-types` error, matching Clang, where such
+diagnostics are warnings that default to or are promoted to errors and are
+not emitted from system headers. Policy-governed
 preprocessor diagnostics (macro redefinitions, `__VA_ARGS__` and `__VA_OPT__`
 outside a variadic macro, empty variadic arguments, the `#if` comma operator,
 `defined` produced by a function-like macro, a backslash in a quoted header
 name) count as extensions. Errors, such as syntax errors, constraint violations
 that are errors by default, and `#error`, are always reported.
 
-The diagnostic's location decides: its first source vector, which for a token
-produced by macro expansion is where the token is spelled in the macro's
-replacement list. This matches Clang's rule for its spelling location. A
-diagnostic in user code about something a system header declared or defined,
-such as a redefinition of the header's macro, is reported, while a construct
-that a system header's macro spells, like a `long long` it supplies to C89
-code, is not. Suppression happens when the diagnostic is reported, so withheld
-diagnostics are not counted.
+The diagnostic's expansion location decides, as in Clang: for a token that a
+macro expansion produced, where the outermost invocation begins, and
+otherwise the token itself. The preprocessor records that location for every
+output token it expands from a macro (`Context::record_expansion_start`), and
+the record lasts for the whole translation unit, so semantic analysis reads
+it too. A diagnostic in user code about something a system header declared or
+defined, such as a redefinition of the header's macro, is reported, and so is
+a construct that a system header's macro supplies to user code, like a
+`long long` in C89 code or `SYS_SET(ip)` assigning an `unsigned *`, which is
+reported at the user's invocation; a user macro expanded inside a system
+header is withheld. Tokens of a macro argument take the invocation too, where
+Clang would point at the argument's spelling; that changes only the column.
+Preprocessing diagnostics keep their own locations. Suppression happens when
+the diagnostic is reported, so withheld diagnostics are not counted.
 
 ## Decisions
 
@@ -1252,7 +1262,8 @@ groups; each group's options control its diagnostic independently.
 pointer constraint warnings, following Clang. Explicit group options can
 suppress or demote those constraint diagnostics. `-pedantic` leaves their
 defaults unchanged. Warnings retain ordinary pointer conversion facts and
-permit lowering; errors block it. Intrinsic-specific contracts remain strict.
+permit lowering; errors block it. Atomic builtin value operands use the
+assignment groups; other intrinsic-specific contracts remain strict.
 The `float *` to `char *` argument execution regression explicitly uses
 `-Wno-error=incompatible-pointer-types`; accepting it by default would
 contradict the observed Clang behavior. Function/void pointer conversions
@@ -1267,3 +1278,56 @@ These defaults satisfy the diagnostic requirement of C99 §5.1.1.3p1
 (p. 92; PDF p. 104), §6.5.9p2 (p. 86; PDF p. 98), §6.5.8p2
 (p. 85; PDF p. 97), §6.5.2.2p2/p7 (pp. 71-72; PDF pp. 83-84),
 §6.8.6.4p3 (p. 139; PDF p. 151), and §6.7.8p11 (p. 126; PDF p. 138).
+
+### PR #44 review fixes (2026-10-14)
+
+Each rule below was checked against the same bundled Clang on
+`x86_64-unknown-linux-gnu`, `x86_64-w64-windows-gnu` and
+`x86_64-pc-windows-msvc` in `c89`, `c99`, `gnu17` and `c23`, with
+`target/review/cmp.py`; the shared classifier in
+`semantic_analysis/expressions/pointers.rs` and the group table in
+`configuration/diagnostics.rs` own them.
+
+| Construct | Clang group | Default | Result or decision |
+| --- | --- | --- | --- |
+| `c ? ip : up`, `c ? f1 : f2`, `c ? f1 : vp`, `c ? pa : cpa` | `pointer-type-mismatch` | **warning** | Unqualified `void *`. Clang 23 does not merge the targets' qualifiers here (`_Generic(c ? cip : vup, void *: 1)` selects `void *`), so neither does bcc. |
+| `c ? ip : l`, `c ? 1 : f1` | `conditional-type-mismatch` | **warning** | The pointer arm's type; the integer converts to it, and a constant integer arm stays an address constant. |
+| `c ? ip : cip`, `c ? vp : cip` | none | silent | Composite or `void` target with the union of qualifiers (C99 §6.5.15p6). |
+| `cpa = pa`, `f(a)` for `const double m[][3]`, `[n]` and `(*)[]` parameters, `cpa == pa` | none | silent | An array target's element qualifiers count as the array's own when pointer targets are compared for qualifier inclusion and compatibility (C23 §6.7.4.1p10, which Clang applies in every mode). The conditional operator keeps them part of the target, as Clang does. |
+| `pa = cpa` | `incompatible-pointer-types-discards-qualifiers` | **warning** | Only dropping a qualifier warns. |
+| `const int (**)[]` from `int (**)[3]` | `incompatible-pointer-types` | **error** | Below the first pointer level Clang requires identical array derivations, so the nested-qualifier walk keeps exact bounds. |
+| `unsigned *` from `enum N *` (`N` has a negative enumerator) | `pointer-sign` | **warning** | Clang compares targets after a character type becomes `unsigned char` and a signed integer type, or an enumeration with a signed compatible type, becomes its unsigned counterpart. An enumeration with an unsigned compatible type stays itself, so `int *` from `enum E *` is an error on Linux, while MSVC (enums are `int`) makes `unsigned *` from `enum E *` a `pointer-sign` warning. |
+| `__atomic_store_n(&ip, up, 0)`, `__atomic_exchange_n`, `__sync_val_compare_and_swap`, `__c11_atomic_store` | the assignment groups | as assignment | Atomic builtin value operands convert through the assignment adapter; address and buffer contracts stay builtin errors. |
+| `long s = &x;` with int-conversion demoted | `int-conversion` | as configured | An address constant in an integer type exactly as wide as a pointer (also through an explicit cast) is a static initializer and lowers to a relocation; narrower types, including MSVC's 32-bit `long`, report that the initializer is not constant, as Clang does. |
+
+`-Wpointer-type-mismatch` and `-Wconditional-type-mismatch` accept the same
+option forms as the other groups, are promoted by `-Werror` and
+`-pedantic-errors` and are withheld by `-w`. `DiagnosticGroup::ALL`, `COUNT`,
+the names and `parse` come from one `diagnostic_groups!` table, which also
+records each group's default and whether `-pedantic-errors` promotes it.
+
+The system-header rule uses the expansion location, so a system macro
+expanded in user code reports its pointer diagnostics at the user's
+invocation, and every warning group, including the three that default to
+errors, is withheld inside a system header at any severity
+(`sema-pointer-system-header`). Clang 23 also reports a `long long` that a
+system macro supplies to C89 user code at the invocation, which the
+`pp-system-header-diagnostics` snapshot now shows.
+
+Warnings that Clang does not report by default are off by default in bcc as
+well, so `-Werror` rejects nothing that Clang accepts. Each has a group that
+enables it, `-Werror=GROUP` included, and a system header withholds it:
+
+| Diagnostic | Group | Clang |
+| --- | --- | --- |
+| Missing or escaped final newline | `newline-eof` | Off; Clang has no escaped-newline warning. |
+| Identifier evaluated as 0 in `#if` | `undef` | Off. |
+| Unknown `#pragma` | `unknown-pragmas` | Off (an unknown `STDC` pragma keeps its own diagnostic). |
+| Unused undefined `static` function | `unused-function` | Off. |
+| Constant that takes a wider type of its list | `constant-promotion` (bcc only) | Not diagnosed. |
+
+`__VA_ARGS__` outside a variadic replacement list, `#line 0` and a `#line`
+number from 2147483648 to 4294967295 are reported only under `-pedantic`, as
+Clang reports them. The line number applies, as in Clang, and a later line
+past 4294967295 wraps to 0; a larger `#line` number is an error and is
+ignored (C99 §6.10.4p3, p. 158; PDF p. 170, leaves these values undefined).

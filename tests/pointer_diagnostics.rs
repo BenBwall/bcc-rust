@@ -29,6 +29,36 @@ mod tests {
                             char)p[3]==63; }\nint main(void) { float x=1.0f; return \
                             inspect(&x)-1; }\n";
 
+    /// Conditional mismatches, enum signs and array-element qualifiers that
+    /// Clang accepts with warnings (or silently) and bcc used to reject.
+    const MISMATCHES: &str = concat!(
+        "enum N { M = -1 }; int x = 7; unsigned ux = 9; int a[2][3] = {{1,2,3},{4,5,6}};\n",
+        "static int sum(const int (*m)[3], int n) {\n",
+        "    int s = 0;\n",
+        "    for (int i = 0; i < n; i++) for (int j = 0; j < 3; j++) s += m[i][j];\n",
+        "    return s;\n",
+        "}\n",
+        "int main(void) {\n",
+        "    int *ip = &x; unsigned *up = &ux; enum N n = M; enum N *pn = &n; unsigned *pu = pn;\n",
+        "    int c = x == 7; int *chosen = c ? ip : up; long l = 0; int *q = c ? ip : l;\n",
+        "    const int (*cpa)[3] = a;\n",
+        "    return !(*chosen == 7 && q == ip && *pu == 0xffffffffu\n",
+        "        && sum(a, 2) == 21 && cpa == a);\n",
+        "}\n",
+    );
+    /// Addresses in pointer-wide integers of static storage, accepted when
+    /// int-conversion is not an error, as in Clang.
+    const STATIC_ADDRESSES: &str = concat!(
+        "int x = 5; static int arr[4] = {1, 2, 3, 4};\n",
+        "long long s = &x; long long t = (long long)&x;\n",
+        "unsigned long long u[2] = { &arr[1], &arr[3] };\n",
+        "int main(void) {\n",
+        "    static long long local = &arr[2];\n",
+        "    return !(s == (long long)&x && t == s && (int *)u[1] - (int *)u[0] == 2\n",
+        "        && *(int *)s == 5 && *(int *)local == 3);\n",
+        "}\n",
+    );
+
     fn bcc(source: &str, flags: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
             .args(flags)
@@ -217,6 +247,8 @@ mod tests {
         for (source, extra) in [
             (ACCEPTED, &[][..]),
             (ARGUMENT, &["-Wno-error=incompatible-pointer-types"][..]),
+            (MISMATCHES, &[][..]),
+            (STATIC_ADDRESSES, &["-Wno-int-conversion"][..]),
         ] {
             for flags in [&["--interpret"][..], &["--interpret", "--opt=bcc"][..]] {
                 let output = bcc(source, &[&[target][..], extra, flags].concat());

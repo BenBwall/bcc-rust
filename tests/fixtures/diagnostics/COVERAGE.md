@@ -16,6 +16,36 @@ are tested separately in `semantic_analysis/tests/pointers.rs` and
 `tests/pointer_diagnostics.rs`. The exact Clang oracle is in
 `language-standards.md`; `-Wdiscarded-qualifiers` is not a Clang group.
 
+PR #44 review fixes (2026-10-14): `sema-pointer-conditional` pins
+`-Wpointer-type-mismatch` for conditional arms with incompatible targets
+(signedness, function signatures, function/void and array-element
+qualifiers) and `-Wconditional-type-mismatch` for a pointer/integer pair in
+either order, beside the qualifier warning a merged `const int *` result
+produces and a silent null arm. `sema-pointer-array-qualifiers` shows that
+adding `const` through an array target is silent for parameters with
+constant, variable and unknown bounds, for assignment and for comparison,
+while dropping it warns and nested pointer levels keep Clang's exact-bound
+rule. `sema-pointer-enum-sign` (Linux, unsigned `enum E`) and
+`sema-pointer-enum-sign-msvc` (int-sized enums) pin enumeration pointer
+signedness through the compatible type. `sema-pointer-atomics` gives atomic
+builtin value operands the assignment groups; `sema-atomic-builtin` now shows
+two of its operands as `-Wincompatible-pointer-types` and `-Wint-conversion`
+errors, as Clang reports them. Every pointer-constraint note now also cites
+§6.5.15p3. `sema-pointer-system-header` (`-isystem system-headers`, with
+`system-headers/pointer-macros.h`) withholds every pointer group the header's
+own functions commit, including the default errors, and reports the header's
+macros expanded in the main file at the user's invocation. Each of these matches the bundled Clang's group and line on every
+supported target.
+
+Warnings that Clang does not report by default are off in bcc too, so their
+fixtures enable them: `initial-missing-final-newline` (`-Wnewline-eof`),
+`pp-undefined-identifier-in-preprocessor-expression` (`-Wundef`),
+`pp-unknown-pragma-directive` (`-Wunknown-pragmas`), `sema3-static-unused`
+(`-Wunused-function`) and both `pp-forced-*-promotion` fixtures (the bcc-only
+`-Wconstant-promotion`). `pp-va-args-outside-variadic-macro` and both
+`pp-line-directive-number-*` fixtures pass `-pedantic`, the only mode in which
+Clang reports them.
+
 Round-6 scalar builtin coverage: `sema-builtin-values.c` distinguishes constant
 and value requirements for object-size mode, probability, alignment, and
 prefetch read/write/locality from three incompatible-type controls.
@@ -31,7 +61,7 @@ Run `cargo test --test diagnostics_golden`. Use `BLESS=1 cargo test --test diagn
 
 Snapshots record current behavior, including defects. The guard test rejects panics, internal representations, and raw NUL bytes in any output, so a crash or control-byte leak cannot be blessed into a passing snapshot. Fix the compiler instead of normalizing such output.
 
-`clean.h` supports the include-directive test; `included-error.h` contains the included-file parser error; `include-next-relative.h` is found beside its includer, the primary source file, for the `#include_next` search-start warning; `pragma-system-header.h` and the `system-headers/` directory (`noisy.h`, `beside-noisy.h`) supply the user header with `#pragma GCC system_header` and the system headers of `pp-system-header-diagnostics.c`. The header files are included by C fixtures, not invoked independently.
+`clean.h` supports the include-directive test; `included-error.h` contains the included-file parser error; `include-next-relative.h` is found beside its includer, the primary source file, for the `#include_next` search-start warning; `pragma-system-header.h` and the `system-headers/` directory (`noisy.h`, `beside-noisy.h`) supply the user header with `#pragma GCC system_header` and the system headers of `pp-system-header-diagnostics.c`; `system-headers/pointer-macros.h` is the system header of `sema-pointer-system-header.c`. The header files are included by C fixtures, not invoked independently.
 
 ## Coverage
 
@@ -80,7 +110,7 @@ captured failing output is no longer the current snapshot.
 
 ### Dispatch inventory
 
-There are **391 top-level C inputs and 391 stderr snapshots**, plus seven supporting headers and 148 mode/policy `.args` sidecars. One hundred twenty-six of the inputs cover semantic analysis (twenty-eight for declarations, twenty-nine for expressions and initializers, forty-six for statements and functions, three for 128-bit integers, four for resource intrinsics, two for scalar builtin constraints, six for atomics and generic selection, four for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 123 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
+There are **405 top-level C inputs and 405 stderr snapshots**, plus eight supporting headers and 155 mode/policy `.args` sidecars. One hundred twenty-six of the inputs cover semantic analysis (twenty-eight for declarations, twenty-nine for expressions and initializers, forty-six for statements and functions, three for 128-bit integers, four for resource intrinsics, two for scalar builtin constraints, six for atomics and generic selection, four for binary128 and type selections, four for vector constraints) and are listed in their own tables below. The [machine inventory](coverage.tsv) records **1 initial-processing**, **5 tokenizer**, **142 preprocessor** and **64 parser** variants. These include nineteen folded preprocessor variants and four folded parser variants. The other 123 preprocessor and 60 parser variants have separately rendered messages in that inventory; the parser total exceeds the requested minimum of 40. The per-variant tables below also describe untested and unreachable paths. Shared extension-origin diagnostics are tracked separately below.
 
 The mapping below comes from checking the emitter/dispatch paths and their CLI output. It is not private-enum instrumentation. Variants sharing wording are distinguished by their source trigger; folded variants do not claim an independently rendered golden message. Supplementary EOF, literal, macro, tab, Unicode, include, and operand-position `:` cases may target the same variant more than once.
 
@@ -720,8 +750,8 @@ redefinition of the predefined `__INT64_C` and `long long` are withheld, while
 `#pragma GCC system_header` remains and the ones after it are withheld. The main
 file keeps its own warning and errors, including the redefinition of a system
 header's macro. The `long long` that the system macro `NOISY_WIDE` supplies is
-withheld even where the main file uses it, because it is spelled in the system
-header. A `defined` that the system macros `NOISY_PROLOG` and `NOISY_DEFINED`
+reported where the main file uses it, at that invocation, because the
+expansion location decides, as in Clang 23; the snapshot gained that error. A `defined` that the system macros `NOISY_PROLOG` and `NOISY_DEFINED`
 produce is withheld in `noisy.h` but reported where the main file expands
 them, because that diagnostic is placed at the outermost invocation, as GCC and
 Clang place it; the snapshot gained those two diagnostics and the `#error`

@@ -252,8 +252,8 @@ policy selects severity. Accepted or suppressed diagnostics retain ordinary
 conversion facts, so IR and lowering are unchanged. `-Werror`, `-Wno-error`,
 the eight named groups' enable/disable and error/no-error options, parent/child
 overrides and `-w` are tested. `-pedantic-errors` retains its existing Deny
-policy. C99 requires a diagnostic rather than rejection: Ã‚Â§5.1.1.3p1,
-Ã‚Â§6.5.16.1p1, Ã‚Â§6.5.9p2, Ã‚Â§6.5.8p2, Ã‚Â§6.5.2.2p2/p7, Ã‚Â§6.8.6.4p3 and Ã‚Â§6.7.8p11.
+policy. C99 requires a diagnostic rather than rejection: §5.1.1.3p1,
+§6.5.16.1p1, §6.5.9p2, §6.5.8p2, §6.5.2.2p2/p7, §6.8.6.4p3 and §6.7.8p11.
 Semantic tests and five golden fixture families cover every constraint group,
 default errors and promotion/demotion. Execution regressions check actual
 values in both interpreters and A0/A1/A2, including the float-to-char argument
@@ -261,7 +261,7 @@ with explicit `-Wno-error=incompatible-pointer-types`.
 
 ### Fresh default Csmith batch
 
-Csmith 2.4.0 (`0cdc710`), default options, seeds **600001Ã¢â‚¬â€œ600360**, Windows GNU,
+Csmith 2.4.0 (`0cdc710`), default options, seeds **600001–600360**, Windows GNU,
 eight jobs, no time budget. The unchanged compiler at branch base
 `6118c37be1fa6dc6b52424f2e74f26a8b1f3702f` was built before implementation and
 preserved as `target/bcc-pointer-baseline.exe`. The same seed batch was run with
@@ -338,19 +338,19 @@ before comparing every arm's status. **No previously passing source/arm pair
 regressed after rechecking four compilation timeouts; 22 pairs gained a pass
 across six sources.** Final pass counts below include those focused rechecks.
 
-| Arm | Baseline passes | Final passes | Wrong results, baseline Ã¢â€ â€™ final |
+| Arm | Baseline passes | Final passes | Wrong results, baseline → final |
 | --- | ---: | ---: | --- |
-| interpret | 1,302 | 1,307 | 12 Ã¢â€ â€™ 12 |
-| interpret-bcc | 1,308 | 1,313 | 13 Ã¢â€ â€™ 13 |
-| A0 | 1,365 | 1,371 | 13 Ã¢â€ â€™ 13 |
-| A1 | 1,355 | 1,361 | 23 Ã¢â€ â€™ 23 |
+| interpret | 1,302 | 1,307 | 12 → 12 |
+| interpret-bcc | 1,308 | 1,313 | 13 → 13 |
+| A0 | 1,365 | 1,371 | 13 → 13 |
+| A1 | 1,355 | 1,361 | 23 → 23 |
 
 `20001017-2.c`, `20041212-1.c`, `920429-1.c`, `980506-3.c` and `980617-1.c`
 changed from front-end error to pass in all four arms. `20121108-1.c` changed
 from front-end error to native pass in A0/A1 and an interpreter poison trap
 in both interpreter arms. Its signed `int` address construction repeatedly
 shifts left by eight to form `0xc0a8bea0`, exceeding signed representability;
-C99 Ã‚Â§6.5.7p4 (p. 85; PDF p. 97) makes that signed shift undefined. This is
+C99 §6.5.7p4 (p. 85; PDF p. 97) makes that signed shift undefined. This is
 newly reached execution, not a passing-test regression. `pr17377.c` changed
 from front-end error to existing lowering rejection (`type was not analyzed`)
 in every arm.
