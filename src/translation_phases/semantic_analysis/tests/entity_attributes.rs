@@ -344,6 +344,23 @@ fn attribute_diagnostics_match_clang() {
              1; goto *t; } out:; }",
             &[K::IndirectJumpCleanupScope],
         ),
+        // Clang's jump checker: a computed goto may neither enter nor leave
+        // a cleanup scope, whichever address-taken label it reaches.
+        (
+            "void d(int *); void f(void *t) { goto *t; { int x __attribute__((cleanup(d))) = 1; \
+             in:; } void *p = &&in; }",
+            &[K::IndirectJumpCleanupScope],
+        ),
+        (
+            "void d(int *); void f(void) { { void *t = &&l; l:; int x __attribute__((cleanup(d))) \
+             = 1; goto *t; } }",
+            &[K::IndirectJumpCleanupScope],
+        ),
+        (
+            "void d(int *); void f(void) { { int x __attribute__((cleanup(d))) = 1; void *t = \
+             &&m; { int y __attribute__((cleanup(d))) = 2; goto *t; } m:; } }",
+            &[K::IndirectJumpCleanupScope],
+        ),
         (
             "void stdcall_f(void) __attribute__((stdcall));",
             &[K::IgnoredConvention],
@@ -368,6 +385,12 @@ fn valid_cleanup_signatures_and_jumps_are_accepted() {
         "void d(int *); int f(void) { return ({ int x __attribute__((cleanup(d))) = 3; x; }); }",
         "void d(int *); void f(void) { void *t = &&out; goto *t; out:; { int x \
          __attribute__((cleanup(d))); } }",
+        // Every target inside the goto's own cleanup scope, or a cleanup
+        // scope elsewhere in the function, as Clang accepts.
+        "void d(int *); void f(int i) { { int x __attribute__((cleanup(d))) = 1; void *t[] = \
+         {&&a, &&b}; goto *t[i]; a:; b:; } }",
+        "void d(int *); void f(int i) { void *t[] = {&&a, &&b}; { int x \
+         __attribute__((cleanup(d))) = 1; } goto *t[i]; a:; b:; }",
     ] {
         assert_eq!(kinds(source, Target::LinuxGnu), [], "{source}");
     }
