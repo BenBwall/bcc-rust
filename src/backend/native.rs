@@ -63,9 +63,10 @@ use crate::{
     util::bump::Bump,
 };
 
-/// Symbols the back end calls on its own; a module may not define them
-/// internally, since those calls would bind to its definition.
-pub(crate) const RUNTIME_SYMBOLS: [&str; 10] = [
+/// Symbols the back end calls or reads on its own (`_tls_index` is the
+/// Windows image's TLS index); a module may not define them internally,
+/// since those references would bind to its definition.
+pub(crate) const RUNTIME_SYMBOLS: [&str; 11] = [
     "memmove",
     "__main",
     "___chkstk_ms",
@@ -76,6 +77,7 @@ pub(crate) const RUNTIME_SYMBOLS: [&str; 10] = [
     "__udivti3",
     "__modti3",
     "__umodti3",
+    "_tls_index",
 ];
 
 /// Writes the module's assembly for `target`, or refuses it.

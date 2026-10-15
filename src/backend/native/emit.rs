@@ -24,6 +24,7 @@
 //! block its address names; `block_addr` takes it RIP-relative, and global
 //! relocations write it (`.quad`) or a difference of two such labels in one
 //! function (`.long a-b`), as Clang does for GCC's "Labels as Values".
+//! Thread-local globals go in `.tdata`/`.tbss` on ELF and `.tls$` on COFF.
 
 use std::fmt::{
     self,
@@ -597,6 +598,20 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 },
             | MInst::JmpIndirect { target, .. } =>
                 writeln!(out, "\tjmpq\t*{}", reg(target, Width::B64)),
+            | MInst::ThreadPointer { dst } => {
+                let pointer = if self.elf { "%fs:0" } else { "%gs:88" };
+                writeln!(out, "\tmovq\t{pointer}, {}", reg(dst, Width::B64))
+            },
+            | MInst::TlsLea { dst, base, symbol } => {
+                let offset = if self.elf { "TPOFF" } else { "SECREL32" };
+                writeln!(
+                    out,
+                    "\tleaq\t{}@{offset}({}), {}",
+                    symbol_name(self.module, symbol),
+                    reg(base, Width::B64),
+                    reg(dst, Width::B64)
+                )
+            },
             | MInst::Ret { .. } => self.epilogue(frame),
             | MInst::Ud2 => writeln!(out, "\tud2"),
         }
@@ -645,6 +660,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             let Some(init) = global.init else { continue };
             let name = Name(global.name);
             let section = match (global.constant, init) {
+                | _ if global.thread_local && !self.elf => "\t.section\t.tls$,\"dw\"",
+                | (_, GlobalInit::Zero) if global.thread_local =>
+                    "\t.section\t.tbss,\"awT\",@nobits",
+                | _ if global.thread_local => "\t.section\t.tdata,\"awT\",@progbits",
                 // Addresses in a position-independent executable are
                 // relocated at load time, which a read-only section forbids;
                 // the loader write-protects `.data.rel.ro` after relocating.
@@ -841,6 +860,8 @@ impl fmt::Display for Op<'_, '_, '_> {
                     },
                     | Base::Got(symbol) =>
                         write!(f, "{}@GOTPCREL(%rip)", symbol_name(module, symbol)),
+                    | Base::GotTpoff(symbol) =>
+                        write!(f, "{}@GOTTPOFF(%rip)", symbol_name(module, symbol)),
                     | Base::Label(label) => {
                         write!(f, "{}", BlockLabel(self.func, label))?;
                         if disp != 0 {

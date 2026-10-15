@@ -5,6 +5,15 @@
 //! memory operand. On ELF a symbol the module does not define is reached
 //! through its GOT entry, since executables are position-independent.
 //!
+//! A thread-local global's address is computed where `global_addr` names
+//! it, with the sequences Clang emits. ELF uses the thread pointer at
+//! `%fs:0` and the local-exec model (`sym@TPOFF`) for globals the module
+//! defines, the initial-exec model (`sym@GOTTPOFF`) for the rest (Drepper,
+//! "ELF Handling For Thread-Local Storage", §4.3.6 and §4.3.5). Windows
+//! indexes the TEB's `ThreadLocalStoragePointer` (`%gs:0x58`) with the
+//! image's `_tls_index` and adds the symbol's offset in the `.tls` section
+//! (`sym@SECREL32`; Microsoft Learn, "PE Format", "The .tls Section").
+//!
 //! `copy` and `fill` of at most [`INLINE_BYTES`] constant bytes become
 //! loads and stores; a `copy` loads every piece before storing any, which is
 //! correct for any overlap. Longer non-overlapping copies use `rep movsb`,
@@ -32,12 +41,14 @@ use crate::{
             Operand,
             PReg,
             Reg,
+            ShiftOp,
             SymbolRef,
             Width,
         },
         support::Construct,
     },
     ir::{
+        GlobalId,
         Inst,
         InstData,
         InstFlags,
@@ -50,6 +61,9 @@ use crate::{
     target::Target,
 };
 
+/// The Windows image's TLS index, which the CRT's TLS directory names.
+pub(in crate::backend::native) const TLS_INDEX: &str = "_tls_index";
+
 /// The longest constant `copy` or `fill` expanded into moves.
 pub(super) const INLINE_BYTES: u64 = 64;
 
@@ -58,6 +72,55 @@ pub(super) const INLINE_BYTES: u64 = 64;
 const MAX_DISP: i64 = 1 << 30;
 
 impl Selector<'_, '_, '_> {
+    /// `dst ←` the evaluating thread's copy of the thread-local `global`.
+    pub(super) fn thread_local_address(&mut self, dst: Reg, global: GlobalId) {
+        let symbol = SymbolRef::Ir(Symbol::Global(global));
+        if matches!(self.target, Target::WindowsGnu | Target::WindowsMsvc) {
+            let index = self.vreg();
+            self.emit(MInst::Mov {
+                width: Width::B32,
+                dst:   index,
+                src:   Operand::Mem(Mem::new(Base::Symbol(SymbolRef::Runtime(TLS_INDEX)), 0)),
+            });
+            let slots = self.vreg();
+            self.emit(MInst::ThreadPointer { dst: slots });
+            self.shift_imm(ShiftOp::Shl, Width::B64, index, 3);
+            self.emit(MInst::Alu {
+                op:    AluOp::Add,
+                width: Width::B64,
+                dst:   slots,
+                src:   Operand::Reg(index),
+            });
+            let block = self.vreg();
+            self.emit(MInst::Mov {
+                width: Width::B64,
+                dst:   block,
+                src:   Operand::Mem(Mem::new(Base::Reg(slots), 0)),
+            });
+            self.emit(MInst::TlsLea {
+                dst,
+                base: block,
+                symbol,
+            });
+        } else if self.module.global(global).init.is_some() {
+            let pointer = self.vreg();
+            self.emit(MInst::ThreadPointer { dst: pointer });
+            self.emit(MInst::TlsLea {
+                dst,
+                base: pointer,
+                symbol,
+            });
+        } else {
+            self.emit(MInst::ThreadPointer { dst });
+            self.emit(MInst::Alu {
+                op: AluOp::Add,
+                width: Width::B64,
+                dst,
+                src: Operand::Mem(Mem::new(Base::GotTpoff(symbol), 0)),
+            });
+        }
+    }
+
     /// Whether `symbol` can be addressed RIP-relative: on ELF only if the
     /// module defines it.
     pub(in crate::backend::native) fn direct(&self, symbol: Symbol) -> bool {

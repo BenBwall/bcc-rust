@@ -511,6 +511,52 @@ block0(v0: i128, v1: i128):
     assert!(f.contains("callq\t__udivti3@PLT"), "{f}");
 }
 
+/// A defined, a zeroed and a declared thread-local global.
+const THREAD_LOCALS: &str = "abi lowered
+global @seed external thread_local size 4, align 4 = bytes \"07000000\"
+global @zeroed internal thread_local size 8, align 8 = zero
+global @shared external thread_local size 4, align 4
+function @f() -> i32 external {
+block0:
+    v0 = global_addr @seed
+    v1 = load.i32 v0, align 4
+    v2 = global_addr @zeroed
+    v3 = load.i64 v2, align 8
+    v4 = trunc.i32 v3
+    v5 = global_addr @shared
+    v6 = load.i32 v5, align 4
+    v7 = iadd.i32 v1, v4
+    v8 = iadd.i32 v7, v6
+    return v8
+}
+";
+
+#[test]
+fn elf_thread_locals_use_local_exec_for_definitions_and_initial_exec_otherwise() {
+    let text = assembly(THREAD_LOCALS, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    assert_eq!(f.matches("movq\t%fs:0, ").count(), 3, "{f}");
+    assert!(f.contains("leaq\tseed@TPOFF(%"), "{f}");
+    assert!(f.contains("leaq\tzeroed@TPOFF(%"), "{f}");
+    assert!(f.contains("addq\tshared@GOTTPOFF(%rip), %"), "{f}");
+    assert!(
+        text.contains(".section\t.tdata,\"awT\",@progbits"),
+        "{text}"
+    );
+    assert!(text.contains(".section\t.tbss,\"awT\",@nobits"), "{text}");
+}
+
+#[test]
+fn windows_thread_locals_index_the_tls_array() {
+    let text = assembly(THREAD_LOCALS, Target::WindowsGnu);
+    let f = function_text(&text, "f");
+    assert_eq!(f.matches("movl\t_tls_index(%rip), ").count(), 3, "{f}");
+    assert_eq!(f.matches("movq\t%gs:88, ").count(), 3, "{f}");
+    assert!(f.contains("leaq\tseed@SECREL32(%"), "{f}");
+    assert!(f.contains("leaq\tshared@SECREL32(%"), "{f}");
+    assert_eq!(text.matches(".section\t.tls$,\"dw\"").count(), 2, "{text}");
+}
+
 #[test]
 fn block_labels_name_landing_blocks_and_fill_label_tables() {
     let text = assembly(

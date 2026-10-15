@@ -526,4 +526,42 @@ int main(void) {
     return bad;
 }"#,
     },
+    Program {
+        // GNU extensions: GCC "Labels as Values" (label tables, label
+        // differences and `goto *`) and `__thread` objects, initialized,
+        // zeroed, holding an address and reached through a pointer.
+        name:   "computed_goto_and_thread_locals",
+        source: r#"int printf(const char *, ...);
+static int run(const unsigned char *code, int n) {
+    static void *const ops[] = { &&inc, &&dec, &&dbl, &&end };
+    static const int offsets[] = { &&inc - &&inc, &&dec - &&inc, &&dbl - &&inc, &&end - &&inc };
+    int acc = n, pc = 0;
+    long long mix = 1;
+    goto *ops[code[pc++]];
+inc: acc++; mix = mix * 3 + acc; goto *(&&inc + offsets[code[pc++]]);
+dec: acc--; mix ^= acc; goto *ops[code[pc++]];
+dbl: acc *= 2; mix += acc; goto *ops[code[pc++]];
+end: return acc + (int)(mix & 0xff);
+}
+int shared = 40;
+__thread int counter = 7;
+static __thread long zeroed;
+static __thread int table[4] = { 1, 2, 3, 4 };
+static __thread int *pointer = &shared;
+static int *counter_address(void) { return &counter; }
+int main(void) {
+    unsigned char program[] = { 0, 0, 2, 1, 2, 0, 3 };
+    int result = run(program, 5);
+    for (int i = 0; i < 4; i++) { counter += table[i]; zeroed += i; }
+    table[2] += table[1];
+    *pointer += 2;
+    *counter_address() += result;
+    printf("%d %d %ld %d %d %d\n", result, counter, zeroed, table[2], shared,
+           counter_address() == &counter);
+    void *next = &&done;
+    goto *next;
+done:
+    return result & 0x7f;
+}"#,
+    },
 ];

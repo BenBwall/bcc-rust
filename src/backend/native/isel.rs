@@ -10,7 +10,8 @@
 //!   constants) get no register. Each use materializes them on the spot: an
 //!   immediate, a memory operand's base, or a fresh register defined right
 //!   before the use. *Aliases* (`freeze` and the conversions that change no
-//!   bit, such as `trunc`) share their operand's register.
+//!   bit, such as `trunc`) share their operand's register. The address of a
+//!   thread-local global is no leaf: it is computed where it is taken.
 //! - *Address folding*: a load or store through a leaf address or a `ptr_add`
 //!   of a register and a small constant uses one memory operand.
 //! - *Compare fusion*: an `icmp` whose only use is the `brif` or `select` of
@@ -20,9 +21,10 @@
 //! operands are classified before their users, then selects the blocks.
 //! Calls, function entry and returns are in `isel/calls.rs`; branches,
 //! block labels and the parallel copies that replace block parameters in
-//! `isel/edges.rs`; loads, stores, `copy` and `fill` in `isel/memory.rs`;
-//! `f32` and `f64` operations in `isel/float.rs`; `i128` register pairs in
-//! `isel/wide.rs`; dynamic stack allocation in `isel/stack.rs`.
+//! `isel/edges.rs`; loads, stores, `copy`, `fill` and thread-local
+//! addresses in `isel/memory.rs`; `f32` and `f64` operations in
+//! `isel/float.rs`; `i128` register pairs in `isel/wide.rs`; dynamic stack
+//! allocation in `isel/stack.rs`.
 //!
 //! Integer values narrower than 64 bits live in registers whose upper bits
 //! are unspecified, except `i1`, which is always 0 or 1 in the whole
@@ -335,6 +337,9 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 ..
             } => ValueKind::Const(0),
             | InstData::StackAddr { slot } => ValueKind::Addr(AddrBase::Slot(slot.as_u32()), 0),
+            // A thread-local address differs per thread: it is computed.
+            | InstData::GlobalAddr { global } if self.module.global(global).thread_local =>
+                return None,
             | InstData::GlobalAddr { global } =>
                 ValueKind::Addr(AddrBase::Symbol(Symbol::Global(global)), 0),
             | InstData::FuncAddr { func } =>
@@ -566,6 +571,10 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 opcode: Opcode::Trap,
                 ..
             } => self.emit(MInst::Ud2),
+            | InstData::GlobalAddr { global } => {
+                let dst = self.result_reg(result);
+                self.thread_local_address(dst, global);
+            },
             | InstData::BlockAddr { label } => {
                 let dst = self.result_reg(result);
                 self.emit(MInst::Lea {

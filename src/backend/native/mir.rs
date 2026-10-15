@@ -440,6 +440,9 @@ pub(crate) enum Base {
     /// The address of the function's IR block label with this index,
     /// `.LBA…(%rip)`. GNU extension: GCC "Labels as Values".
     Label(u32),
+    /// `sym@GOTTPOFF(%rip)`: the GOT entry holding a thread-local symbol's
+    /// offset from the thread pointer (ELF initial-exec model).
+    GotTpoff(SymbolRef),
 }
 
 /// A frame object, before frame layout gives it an offset.
@@ -814,6 +817,19 @@ pub(crate) enum MInst {
         target: Reg,
         dests:  u32,
     },
+    /// `dst ←` the thread pointer: `%fs:0` on ELF, the TEB's
+    /// `ThreadLocalStoragePointer` (`%gs:0x58`) on Windows.
+    ThreadPointer {
+        dst: Reg,
+    },
+    /// `leaq sym@TPOFF(base), dst` on ELF (local-exec) or
+    /// `leaq sym@SECREL32(base), dst` on Windows: a thread-local symbol's
+    /// address from its thread's block.
+    TlsLea {
+        dst:    Reg,
+        base:   Reg,
+        symbol: SymbolRef,
+    },
     /// An SSE move: a register copy (`movaps`, deleted between equal
     /// registers when `width` is `B64`) or a load (`movss`/`movsd`).
     XMov {
@@ -911,8 +927,14 @@ impl MInst {
                 operand(src, &mut visit);
                 visit(dst, Role::Def);
             },
-            | Self::MovImm64 { dst, .. } | Self::Setcc { dst, .. } | Self::XZero { dst } =>
-                visit(dst, Role::Def),
+            | Self::MovImm64 { dst, .. }
+            | Self::Setcc { dst, .. }
+            | Self::XZero { dst }
+            | Self::ThreadPointer { dst } => visit(dst, Role::Def),
+            | Self::TlsLea { dst, base, .. } => {
+                visit(base, Role::Use);
+                visit(dst, Role::Def);
+            },
             | Self::JmpIndirect { target, .. } => visit(target, Role::Use),
             | Self::XStore { dst, src, .. } => {
                 memory(dst, &mut visit);
