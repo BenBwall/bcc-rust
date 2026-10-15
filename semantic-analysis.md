@@ -186,6 +186,11 @@ structure's only member, a flexible structure nested in a structure, and arrays
 of flexible structures) keep their layout and are reported through the
 `FlexibleArrayExtensions` policy. Supported GNU packed/aligned attributes retain
 their layouts; unmodeled vendor attributes make affected layouts unavailable.
+A union that qualifies for GNU `transparent_union` records `Tag::transparent`;
+a prototyped call whose argument does not have the union type converts it to
+the first member it fits, as Clang selects one, and records an assignment
+conversion to that member followed by a `TransparentUnion` conversion, which
+lowering turns into a union temporary holding the value.
 Windows records use Microsoft's bit-field layout on both MinGW and MSVC,
 matching Clang's MinGW default `-mms-bitfields`. Consecutive nonzero fields share
 an entire reserved storage unit only when their base-type sizes match and they

@@ -30,6 +30,7 @@ mod runtime_calls;
 mod scalar_builtins;
 mod statement_expressions;
 mod torture_sema;
+mod transparent_unions;
 mod union_initializers;
 mod vla;
 

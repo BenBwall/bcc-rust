@@ -335,6 +335,13 @@ pub(crate) enum SemanticErrorKind {
     InvalidAlignmentAttribute,
     InvalidStandardAlignment,
     InvalidModeAttribute,
+    /// A `transparent_union` attribute ignored, as Clang warns: it names no
+    /// union definition, or the union has no member, a floating or vector
+    /// first member, or a member whose size differs from the first's or
+    /// whose alignment exceeds it.
+    /// GNU extension: GCC manual, "Common Type Attributes".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    IgnoredTransparentUnion,
     /// GCC Vector Extensions: compatible lanes and safe scalar splats.
     /// GNU extension: GCC manual, "Vector Extensions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
@@ -364,6 +371,7 @@ impl SemanticErrorKind {
             | Self::InvalidAlignmentAttribute => "alignment must be a power-of-two constant",
             | Self::InvalidStandardAlignment => "invalid alignment specifier",
             | Self::InvalidModeAttribute => "invalid scalar machine mode",
+            | Self::IgnoredTransparentUnion => "this union cannot be made transparent",
             | Self::InvalidVectorOperand => "invalid vector operands",
             | Self::InvalidVectorBuiltin => "invalid vector builtin operands",
             | Self::InvalidImmediate => "expected an integer constant expression in range",
@@ -578,6 +586,12 @@ impl SemanticErrorKind {
             | Self::InvalidModeAttribute => (
                 "invalid mode attribute",
                 "GCC mode requires an eligible scalar type and a supported scalar machine mode",
+            ),
+            | Self::IgnoredTransparentUnion => (
+                "transparent_union attribute ignored",
+                "GNU transparent_union applies to a union definition with at least one member, a \
+                 first member of neither floating nor vector type, and every member of the first \
+                 member's size and at most its alignment",
             ),
             | Self::InvalidVectorOperand => (
                 "invalid vector operation",
@@ -1152,6 +1166,7 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::InvalidAtomicOrder
                 | SemanticErrorKind::InvalidAtomicFailureOrder
                 | SemanticErrorKind::AtomicBufferQualifiers
+                | SemanticErrorKind::IgnoredTransparentUnion
         ) {
             ErrorSeverity::Warning
         } else {

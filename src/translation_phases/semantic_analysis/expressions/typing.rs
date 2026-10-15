@@ -665,6 +665,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let info = self.expression_info(argument);
             failed |= self.types.unanalyzed(info.ty);
             if prototype && let Some(&parameter) = parameters.get(index) {
+                if let Some(member) = self.transparent_union_member(parameter, info) {
+                    _ = self.converted(info);
+                    self.convert(argument, member, ConversionKind::Assignment);
+                    self.convert(argument, parameter, ConversionKind::TransparentUnion);
+                    continue;
+                }
                 if !self.assignment_conversion(parameter, info) {
                     failed = true;
                     self.error(
@@ -711,6 +717,58 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return self.invalid_expression(e, SemanticErrorKind::InvalidCall);
         }
         Self::expression_result(e, result.unqualified())
+    }
+
+    /// The member of a transparent union parameter that a prototyped call's
+    /// argument initializes instead of the union, as Clang selects it: the
+    /// first member that is a pointer when the argument is a void pointer or
+    /// a null pointer constant, or to which the argument is assignable
+    /// without a diagnostic. `None` when the parameter is no transparent
+    /// union or the argument already has its type.
+    /// GNU extension: GCC manual, "Common Type Attributes".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    /// C99: §6.5.2.2p7, p. 72; PDF p. 84; §6.5.16.1p1, p. 92; PDF p. 104.
+    fn transparent_union_member(
+        &mut self,
+        parameter: TypeId,
+        argument: ExpressionInfo<'tu>,
+    ) -> Option<TypeId> {
+        let TypeKind::Tag(id) = self.types.nodes[parameter.index] else {
+            return None;
+        };
+        if !self.types.tags[id].transparent.get() || self.types.unanalyzed(argument.ty) {
+            return None;
+        }
+        let (from, _) = self.value_conversion(argument);
+        if self
+            .types
+            .composite(parameter.unqualified(), from.unqualified())
+            .is_some()
+        {
+            return None;
+        }
+        let void_pointer = self.pointer_target(from).is_some_and(|target| {
+            matches!(
+                self.types.nodes[target.index],
+                TypeKind::Scalar(Scalar::Void)
+            )
+        });
+        for member in self.types.tags[id].members.get() {
+            // A bit-field cannot hold the argument's whole value.
+            if member.invalid || member.width.is_some() {
+                continue;
+            }
+            let ty = member.ty.unqualified();
+            if self.pointer_target(ty).is_some()
+                && (void_pointer || self.null_pointer_constant(argument))
+            {
+                return Some(ty);
+            }
+            if self.assignable(ty, argument, from) {
+                return Some(ty);
+            }
+        }
+        None
     }
 
     /// C99: §6.5.2.3p1-4, pp. 72-73; PDF pp. 84-85.
@@ -1477,8 +1535,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         target: TypeId,
         source: ExpressionInfo<'tu>,
     ) -> bool {
-        let target = self.types.non_atomic(target);
         let from = self.converted(source);
+        self.assignable(target, source, from)
+    }
+
+    /// Whether `source`, whose value conversion has type `from`, may be
+    /// assigned to `target` without a diagnostic. Records no conversion.
+    /// C99: §6.5.16.1p1, p. 92; PDF p. 104.
+    fn assignable(&mut self, target: TypeId, source: ExpressionInfo<'tu>, from: TypeId) -> bool {
+        let target = self.types.non_atomic(target);
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
             return true;
         }

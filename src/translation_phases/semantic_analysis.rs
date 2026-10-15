@@ -1612,6 +1612,9 @@ struct Analyzer<'a, 'tu, 's> {
     expression_indices:  ArenaMap<'s, usize, usize>,
     string_initializers: ArenaMap<'tu, usize, TypeId>,
     flexible_arrays:     ArenaMap<'tu, usize, TypeId>,
+    /// Unions whose definition requests `transparent_union`, until their
+    /// completion decides whether they qualify.
+    transparent_unions:  ArenaMap<'s, usize, SourceVectors>,
     /// Conversion records in the order they were applied, grouped by
     /// expression when analysis ends.
     conversions:         ArenaVec<'s, Conversion<'tu>>,

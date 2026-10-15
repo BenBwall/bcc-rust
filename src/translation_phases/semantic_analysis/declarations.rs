@@ -180,6 +180,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .checked_sub(1)
                         .map_or(0, |index| self.pack_alignments[index].1);
                     self.types.tags[tag].max_member_alignment.set(pack);
+                    // The union qualifies only once its members are known.
+                    if let Some(source) = self.transparent_union_request(s.attributes) {
+                        if kind == TagKind::Union {
+                            _ = self.transparent_unions.insert(tag, source);
+                        } else {
+                            self.error(
+                                SemanticErrorKind::IgnoredTransparentUnion,
+                                source,
+                                None,
+                                None,
+                            );
+                        }
+                    }
                 }
                 if define && self.unmodeled_extension(s.attributes) {
                     self.types.tags[tag].tainted.set(true);
@@ -514,6 +527,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Some(name.name),
                 None,
             );
+        }
+        if typedef && let Some(source) = self.typedef_transparent_union(spec, declarator) {
+            self.make_transparent_union(ty, source);
         }
         let kind = if typedef {
             BindingKind::Typedef
@@ -1073,6 +1089,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     align: alignment,
                 }));
         }
+        if let Some(source) = self.transparent_unions.remove(&id) {
+            let ty = self.types.intern(TypeKind::Tag(id));
+            self.make_transparent_union(ty, source);
+        }
     }
 
     /// The alignment a non-bit-field member requires in Microsoft layout:
@@ -1286,6 +1306,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             contains_flexible: Cell::new(false),
             compatible: Cell::new(Scalar::Int),
             packed: Cell::new(false),
+            transparent: Cell::new(false),
             max_member_alignment: Cell::new(0),
             alignment: Cell::new(0),
             required_alignment: Cell::new(0),

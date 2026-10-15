@@ -27,6 +27,7 @@ mod record_layout;
 mod scalar_builtins;
 mod statement_expressions;
 mod targets;
+mod transparent_unions;
 mod type_generic;
 mod vectors;
 
