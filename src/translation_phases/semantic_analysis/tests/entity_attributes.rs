@@ -28,7 +28,7 @@ fn kinds(source: &str, target: Target) -> Vec<SemanticErrorKind> {
     kinds
 }
 
-fn binding<'a>(context: &Context<'_>, s: &'a SemanticTranslationUnit<'_>, name: &str) -> usize {
+fn binding(context: &Context<'_>, s: &SemanticTranslationUnit<'_>, name: &str) -> usize {
     s.bindings
         .iter()
         .rposition(|b| context.string_cache.at(b.name.name) == name)
@@ -79,7 +79,7 @@ void late(void) {}
                     "real"
                 );
             }
-            assert!(s.symbols.refusals.is_empty());
+            assert_eq!(s.symbols.refusals, []);
         });
     }
 }
@@ -444,7 +444,7 @@ fn unimplementable_attributes_and_conventions_are_retained_refusals() {
 #[test]
 fn system_and_unknown_free_headers_stay_quiet() {
     // Accepted hints and representation attributes produce no diagnostics.
-    let source = r#"
+    let source = r"
 __attribute__((noreturn, nothrow, leaf)) void quit(int);
 __attribute__((format(printf, 1, 2), nonnull(1))) int say(const char *, ...);
 __attribute__((malloc, alloc_size(1), warn_unused_result)) void *grab(unsigned long);
@@ -452,7 +452,7 @@ struct __attribute__((packed, aligned(4))) P { char c; int i; };
 __attribute__((always_inline, gnu_inline)) extern inline int twice(int x) { return 2 * x; }
 [[deprecated, maybe_unused]] static int old;
 [[gnu::unused]] static int quiet;
-"#;
+";
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
         assert_eq!(kinds(source, target), [], "{target:?}");
     }

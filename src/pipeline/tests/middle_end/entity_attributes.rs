@@ -481,7 +481,7 @@ int main(void) {
                 "global @kept external size 4, align 4 hidden section \"mine\" used = bytes",
                 "global @maybe weak size 4, align 4\n",
                 "constructor @init priority 101\ndestructor @fini priority 65535\n",
-                "function @copy(i32) -> i32 weak alias @real\n",
+                "function @copy(i32 noundef) -> i32 weak alias @real\n",
                 "function @aligned_function() external align 32 {",
             ] {
                 assert!(text.contains(expected), "{expected}\n{text}");

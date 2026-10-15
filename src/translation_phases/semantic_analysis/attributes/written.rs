@@ -79,8 +79,7 @@ pub(super) fn written<'a>(
             match spelling(current) {
                 | "(" => depth += 1,
                 | ")" => depth = depth.saturating_sub(1),
-                | "," | ":" | "[" | "]" => {},
-                | "" => {},
+                | "," | ":" | "[" | "]" | "" => {},
                 | text if depth == level => {
                     let mut namespace = None;
                     let mut name_index = current;

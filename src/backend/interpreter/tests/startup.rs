@@ -16,7 +16,7 @@ fn run_program(text: &str) -> (Result<Termination, Trap>, String) {
     let module = parse_module(&arena, text).unwrap_or_else(|error| panic!("{error}\n{text}"));
     let errors: Vec<String> = verify_module(&module, module.profile(), &arena)
         .iter()
-        .map(ToString::to_string)
+        .map(|error| format!("{error}"))
         .collect();
     assert!(errors.is_empty(), "{errors:#?}\n{text}");
     let mut host = DefaultHost::new_in(&arena);

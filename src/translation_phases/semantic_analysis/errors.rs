@@ -409,7 +409,7 @@ impl SemanticErrorKind {
             | Self::IgnoredAttribute => "attribute ignored here",
             | Self::IgnoredConvention => "convention ignored on this target",
             | Self::AttributeArguments => "invalid attribute arguments",
-            | Self::AttributeRequiresConstant => "not an integer constant expression",
+            | Self::AttributeRequiresConstant => "priority is not an integer constant",
             | Self::InvalidPriority => "priority outside 0 to 65535",
             | Self::ReservedPriority => "reserved priority",
             | Self::AttributeSubject => "not a function or global variable",

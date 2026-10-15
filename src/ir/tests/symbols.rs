@@ -116,5 +116,5 @@ fn verifier_rejects_broken_aliases_sections_and_init_functions() {
 fn priorities_beyond_sixteen_bits_are_parse_errors() {
     let arena = Bump::new();
     let text = "function @f() external {\nblock0:\n    return\n}\nconstructor @f priority 65536\n";
-    assert!(parse_module(&arena, text).is_err());
+    _ = parse_module(&arena, text).unwrap_err();
 }

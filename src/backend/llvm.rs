@@ -51,10 +51,7 @@ use crate::{
         SigId,
     },
     target::Target,
-    util::bump::{
-        ArenaVec,
-        Bump,
-    },
+    util::bump::Bump,
 };
 
 /// Prints the LLVM-C module, after checking the ABI and target contracts.
