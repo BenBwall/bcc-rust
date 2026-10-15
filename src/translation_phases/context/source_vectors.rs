@@ -266,9 +266,10 @@ impl Context<'_> {
     pub(crate) fn expansion_location(&self, source: SourceVectors) -> &SourceVector {
         let (arena, start) = SourceArena::decode(source);
         let sites = &self.expansion_starts[arena as usize];
-        sites
-            .get(start)
-            .map_or_else(|| self.first_source_vector(source), |id| &sites.ends[id as usize])
+        sites.get(start).map_or_else(
+            || self.first_source_vector(source),
+            |id| &sites.ends[id as usize],
+        )
     }
 
     /// `source`, or its expansion location when a macro expansion produced

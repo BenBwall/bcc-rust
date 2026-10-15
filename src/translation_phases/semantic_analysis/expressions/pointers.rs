@@ -259,7 +259,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     fn sign_erased(&self, ty: TypeId) -> TypeKind<'tu> {
         let unsigned = |scalar| match scalar {
-            | Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar => Some(Scalar::UnsignedChar),
+            | Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar =>
+                Some(Scalar::UnsignedChar),
             | Scalar::Short => Some(Scalar::UnsignedShort),
             | Scalar::Int => Some(Scalar::UnsignedInt),
             | Scalar::Long => Some(Scalar::UnsignedLong),

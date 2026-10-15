@@ -274,8 +274,8 @@ fn assert_groups(source: &str, configuration: CompilerConfiguration, groups: &[D
 fn conditional_mismatches_warn_and_take_clang_result_types() {
     use DiagnosticGroup as G;
     let declarations = "int *ip; unsigned *up; const int *cip; volatile unsigned *vup; void *vp; \
-                        const void *cvp; int (*f1)(int); int (*f2)(double); long l; int c; \
-                        int (*pa)[3]; const int (*cpa)[3];";
+                        const void *cvp; int (*f1)(int); int (*f2)(double); long l; int c; int \
+                        (*pa)[3]; const int (*cpa)[3];";
     for (expression, ty, groups) in [
         ("c ? ip : up", "void *", &[G::PointerTypeMismatch][..]),
         ("c ? cip : vup", "void *", &[G::PointerTypeMismatch]),
@@ -311,14 +311,17 @@ fn conditional_mismatches_warn_and_take_clang_result_types() {
 
 #[test]
 fn conditional_mismatch_groups_follow_options_and_pedantic_errors() {
-    let source = "int *ip; unsigned *up; int c; void f(void) { (void)(c ? ip : up); (void)(c ? \
-                  ip : 1); }";
+    let source =
+        "int *ip; unsigned *up; int c; void f(void) { (void)(c ? ip : up); (void)(c ? ip : 1); }";
     let deny = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Deny);
     with_configuration(source, deny, |context, unit| {
         assert_eq!(unit.errors, 2, "{:?}", context.take_pending_errors());
     });
     let quiet = CompilerConfiguration::default()
-        .with_warning_option(DiagnosticGroup::PointerTypeMismatch, WarningOption::Enable(false))
+        .with_warning_option(
+            DiagnosticGroup::PointerTypeMismatch,
+            WarningOption::Enable(false),
+        )
         .with_warning_option(
             DiagnosticGroup::ConditionalTypeMismatch,
             WarningOption::Enable(false),
@@ -335,19 +338,21 @@ fn array_element_qualifiers_belong_to_pointer_targets() {
     use DiagnosticGroup as G;
     let declarations = "void f(const double m[][3]); void g(int n, const double m[][n]); void \
                         h(const double (*m)[]); double a[2][3]; int (*pa)[3]; const int \
-                        (*cpa)[3]; int (**ppa)[3]; const int (**pcpa)[3]; const int \
-                        (**pcpinc)[];";
+                        (*cpa)[3]; int (**ppa)[3]; const int (**pcpa)[3]; const int (**pcpinc)[];";
     for (body, groups) in [
         ("f(a); g(3, a); h(a); cpa = pa;", &[][..]),
-        ("(void)(cpa == pa); (void)(cpa < pa); (void)(cpa - pa);", &[]),
+        (
+            "(void)(cpa == pa); (void)(cpa < pa); (void)(cpa - pa);",
+            &[],
+        ),
         ("pa = cpa;", &[G::PointerQualifiers]),
         // Nested levels still need identical array derivations, as in Clang.
         ("pcpa = ppa;", &[G::PointerQualifiers]),
         ("pcpinc = ppa;", &[G::IncompatiblePointerTypes]),
     ] {
         for standard in [CStandard::C89, CStandard::C99, CStandard::C23] {
-            let configuration =
-                CompilerConfiguration::new(standard, ExtensionPolicy::Allow).with_gnu_extensions(true);
+            let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true);
             assert_groups(
                 &format!("{declarations} void t(void) {{ {body} }}"),
                 configuration,
@@ -364,6 +369,7 @@ fn array_element_qualifiers_belong_to_pointer_targets() {
 )]
 fn enumeration_targets_compare_signs_through_their_compatible_type() {
     use DiagnosticGroup as G;
+
     use crate::target::Target;
     let declarations =
         "enum E { A, B }; enum N { M = -1 }; enum E *pe; enum N *pn; unsigned *pu; int *pi;";
@@ -397,10 +403,19 @@ fn atomic_value_operands_take_assignment_groups() {
     for (body, groups) in [
         ("__atomic_store_n(&ip, up, 0);", &[G::PointerSign][..]),
         ("__atomic_store_n(&ip, cip, 0);", &[G::PointerQualifiers]),
-        ("__atomic_store_n(&ip, fp, 0);", &[G::IncompatiblePointerTypes]),
+        (
+            "__atomic_store_n(&ip, fp, 0);",
+            &[G::IncompatiblePointerTypes],
+        ),
         ("(void)__atomic_exchange_n(&ip, up, 0);", &[G::PointerSign]),
-        ("(void)__sync_val_compare_and_swap(&ip, up, ip);", &[G::PointerSign]),
-        ("__c11_atomic_store((_Atomic(int *) *)&ip, up, 0);", &[G::PointerSign]),
+        (
+            "(void)__sync_val_compare_and_swap(&ip, up, ip);",
+            &[G::PointerSign],
+        ),
+        (
+            "__c11_atomic_store((_Atomic(int *) *)&ip, up, 0);",
+            &[G::PointerSign],
+        ),
         ("__atomic_store_n(&i, ip, 0);", &[G::IntConversion]),
     ] {
         assert_groups(
@@ -423,7 +438,11 @@ fn static_addresses_fit_only_pointer_wide_integers() {
         (Target::LinuxGnu, "int x; long s = &x;", true),
         (Target::LinuxGnu, "int x; unsigned long s = &x + 1;", true),
         (Target::LinuxGnu, "int x; long s = (long)&x;", true),
-        (Target::LinuxGnu, "int x; void f(void) { static long s = &x; }", true),
+        (
+            Target::LinuxGnu,
+            "int x; void f(void) { static long s = &x; }",
+            true,
+        ),
         (Target::LinuxGnu, "int x; int s = &x;", false),
         (Target::LinuxGnu, "int x; short s = &x;", false),
         (Target::WindowsMsvc, "int x; long s = &x;", false),

@@ -316,9 +316,9 @@ fn expansion_locations_outlive_compaction_and_follow_copies() {
         length: 7,
         ..SourceVector::default()
     };
-    let expanded = context.push_source_vectors(&[spelled.clone()]);
+    let expanded = context.push_source_vectors(std::slice::from_ref(&spelled));
     context.record_expansion_start(expanded, site.clone());
-    let plain = context.push_source_vectors(&[spelled.clone()]);
+    let plain = context.push_source_vectors(std::slice::from_ref(&spelled));
     let token = context.retain_token_source(expanded);
     let plain_token = context.retain_token_source(plain);
     context.compact_preprocessor_vectors();

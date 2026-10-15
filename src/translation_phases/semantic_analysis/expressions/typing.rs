@@ -548,9 +548,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             lt
         } else if self.pointer_target(rt).is_some() && self.null_pointer_constant(left) {
             rt
-        } else if let Some(ty) =
-            self.conditional_pointers(lt, rt, e.operator_source_vectors.unwrap_or(e.source_vectors))
-        {
+        } else if let Some(ty) = self.conditional_pointers(
+            lt,
+            rt,
+            e.operator_source_vectors.unwrap_or(e.source_vectors),
+        ) {
             ty
         } else if matches!(self.types.nodes[lt.index], TypeKind::Tag(_))
             && self
@@ -601,8 +603,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
                 // An integer arm converted to the pointer result is an
                 // address constant, as an integer cast to a pointer is.
-                if self.pointer_target(ty).is_some() && selected.ice && selected.integer.is_some()
-                {
+                if self.pointer_target(ty).is_some() && selected.ice && selected.integer.is_some() {
                     info.constant = ConstantClass::Address;
                     info.integer = selected.integer.map(|v| v.cast(64, false));
                 }
