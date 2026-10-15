@@ -335,7 +335,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | E::StatementExpression(_) =>
                 self.statement_expression(expression, super::StatementMode::Value)?,
-            | E::LabelAddress(_) | E::Countof(_) | E::Boolean(_) | E::Nullptr | E::Error =>
+            | E::LabelAddress(_) => {
+                let label = self
+                    .unit
+                    .sema
+                    .control
+                    .label_address(expression)
+                    .ok_or_else(|| {
+                        LoweringError::missing("a label address has no resolved label", source)
+                    })?;
+                let label = self.block_label(label, source)?;
+                let address = self.inst(InstData::BlockAddr { label }, Type::Ptr);
+                self.push_item(Operand::Value(address), info.ty);
+            },
+            | E::Countof(_) | E::Boolean(_) | E::Nullptr | E::Error =>
                 return Err(LoweringError::missing(
                     "an expression was not parsed",
                     source,
@@ -1531,14 +1544,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         self.convert(Opcode::Inttoptr, Type::Ptr, wide)
     }
 
-    /// The size of the element a pointer or array type designates.
+    /// The size of the element a pointer or array type designates; 1 for
+    /// `void`, as GNU pointer arithmetic counts it.
+    /// GNU extension: GCC "Pointer Arith".
     fn static_element_size(&self, pointer: TypeId) -> Option<u64> {
         let element = types::target_type(&self.unit.sema.types, pointer)?;
-        self.unit
-            .sema
-            .types
-            .layout(element)
-            .map(|layout| layout.size)
+        types::arithmetic_size(&self.unit.sema.types, element)
     }
 
     /// The saved runtime stride for a variably modified pointer or array.
@@ -1585,11 +1596,37 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 /// The construct an expression form is, if lowering does not support it.
 fn unsupported(expression: &Expression<'_>) -> Option<Construct> {
     Some(match expression.kind {
+        | ExpressionType::CompoundLiteral { type_name, .. } if literal_storage(type_name, true) =>
+            Construct::CompoundLiteralStorage,
         | ExpressionType::Builtin(b) if !matches!(b.keyword,crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaArg|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaStart|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaEnd|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaCopy|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinTypesCompatible|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinOffsetof) => Construct::Builtin,
-        | ExpressionType::LabelAddress(_) => Construct::LabelAddress,
         | ExpressionType::Countof(_) | ExpressionType::Nullptr => Construct::Extension,
         | _ => return None,
     })
+}
+
+/// Whether a compound literal's storage-class specifiers give it a storage
+/// duration lowering does not allocate: `thread_local` anywhere, or
+/// `static` in a function, whose object outlives the block. Lowering refuses
+/// these by name rather than allocating them in the frame.
+/// C23 (N3220): §6.5.3.6 paragraph 7, p. 79; PDF p. 92.
+pub(super) fn literal_storage(
+    type_name: &crate::translation_phases::parsing::declaration_syntax::TypeName<'_>,
+    in_function: bool,
+) -> bool {
+    let specifiers = type_name.declaration_specifiers;
+    let mut extension = specifiers.extensions;
+    while let Some(item) = extension {
+        if matches!(
+            item.kind,
+            crate::translation_phases::parsing::SpecifierExtensionKind::ThreadLocal(_)
+        ) {
+            return true;
+        }
+        extension = item.next;
+    }
+    in_function
+        && specifiers.storage_class
+            == Some(crate::translation_phases::parsing::syntax::StorageClass::Static)
 }
 
 /// The IR comparison of a C relational or equality operator, signed form.

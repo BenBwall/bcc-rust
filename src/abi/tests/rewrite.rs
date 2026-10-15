@@ -480,3 +480,57 @@ block0:
         42,
     );
 }
+
+/// A `va_arg` expansion splits a labeled block after its start, so each
+/// label still names its block and every indirect edge keeps its arguments,
+/// for both conventions. GNU extension: GCC "Labels as Values".
+#[test]
+fn labels_survive_va_arg_expansion() {
+    let text = "\
+function @sum(i32, ...) -> i32 external {
+    slot0 = stack_slot 24, align 8
+    label0 = block_label block1
+    label1 = block_label block2
+block0(v0: i32):
+    v1 = stack_addr slot0
+    va_start v1
+    v2 = iconst.i32 0
+    v3 = block_addr label0
+    indirect_br v3, [block1(v0, v2), block2(v2)]
+block1(v4: i32, v5: i32):
+    v6 = va_arg.i32 v1
+    v7 = iadd.i32 v5, v6
+    v8 = iconst.i32 1
+    v9 = isub.i32 v4, v8
+    v10 = iconst.i32 0
+    v11 = icmp.i32 eq v9, v10
+    v12 = block_addr label1
+    v13 = block_addr label0
+    v14 = select.ptr v11, v12, v13
+    indirect_br v14, [block1(v9, v7), block2(v7)]
+block2(v15: i32):
+    va_end v1
+    return v15
+}
+
+function @main() -> i32 external {
+block0:
+    v0 = iconst.i32 3
+    v1 = iconst.i32 10
+    v2 = iconst.i32 20
+    v3 = iconst.i32 12
+    v4 = call @sum(v0, v1, v2, v3)
+    return v4
+}
+";
+    assert_eq!(main_result(text), 42);
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let text = format!("target triple = \"{}\"\n\n{text}", target.triple());
+        let lowered = lower_text(&text, target);
+        assert!(
+            lowered.contains("    label0 = block_label block1\n    label1 = block_label block2\n"),
+            "{lowered}"
+        );
+        assert_eq!(main_result(&lowered), 42, "{target:?}:\n{lowered}");
+    }
+}

@@ -122,6 +122,27 @@ pub(crate) enum SemanticErrorKind {
     JumpIntoVariableScope,
     /// C99: §6.8.4.2p2, p. 134; PDF p. 146.
     SwitchIntoVariableScope,
+    /// GNU extension: a computed goto may reach every address-taken label,
+    /// so one inside a variably modified scope the goto is outside of is an
+    /// error, as in Clang. C99: §6.8.6.1p1, p. 137; PDF p. 149.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    IndirectJumpIntoVariableScope,
+    /// GNU extension: GCC "Statement Exprs" makes a computed goto into a
+    /// statement expression undefined; Clang rejects a possible one.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+    IndirectJumpIntoStatementExpression,
+    /// GNU extension: a computed goto can only reach labels whose address
+    /// is taken in its function, so without one it has no target; Clang
+    /// rejects it. <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    IndirectGotoWithoutLabels,
+    /// GNU extension: a computed goto's operand converts to `const void *`
+    /// as by simple assignment. C99: §6.5.16.1p1, p. 92; PDF p. 104.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    InvalidComputedGoto,
+    /// GNU extension: `&&label` names a label of the enclosing function, so
+    /// it cannot appear outside a function body.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    LabelAddressOutsideFunction,
     /// C99: §6.8.1p2, p. 131; PDF p. 143.
     CaseOutsideSwitch,
     /// C99: §6.8.4.2p3, p. 134; PDF p. 146.
@@ -216,6 +237,14 @@ pub(crate) enum SemanticErrorKind {
     InvalidStorage,
     /// C99: §6.7.1p5, p. 98; PDF p. 110.
     InvalidFunctionStorage,
+    /// C11: §6.7.1p4, p. 109; PDF p. 127.
+    ThreadLocalFunction,
+    /// C11: §6.7.1p3, p. 109; PDF p. 127.
+    ThreadLocalBlockScope,
+    /// C11: §6.7.1p3, p. 109; PDF p. 127.
+    ThreadLocalAfterNonThreadLocal,
+    /// C11: §6.7.1p3, p. 109; PDF p. 127.
+    NonThreadLocalAfterThreadLocal,
     /// C99: §6.7.8p5, p. 125; PDF p. 137.
     LinkedBlockInitializer,
     /// C99: §6.7.3p2, p. 108; PDF p. 120.
@@ -463,6 +492,10 @@ impl SemanticErrorKind {
             | Self::NonConstantInitializer => "not a constant expression",
             | Self::InvalidStorage => "external declaration",
             | Self::InvalidFunctionStorage => "function declared in a block",
+            | Self::ThreadLocalFunction => "declared as a function",
+            | Self::ThreadLocalBlockScope => "automatic object at block scope",
+            | Self::ThreadLocalAfterNonThreadLocal => "declared thread-local here",
+            | Self::NonThreadLocalAfterThreadLocal => "declared without thread storage here",
             | Self::LinkedBlockInitializer => "initializer is not allowed here",
             | Self::InvalidRestrict => "restrict on a non-object pointer",
             | Self::QualifiedFunction => "function type qualifiers are ignored",
@@ -518,6 +551,11 @@ impl SemanticErrorKind {
                 "jumps into a variably modified scope",
             | Self::JumpIntoStatementExpression | Self::SwitchIntoStatementExpression =>
                 "jumps into a statement expression",
+            | Self::IndirectJumpIntoVariableScope => "may jump into a variably modified scope",
+            | Self::IndirectJumpIntoStatementExpression => "may jump into a statement expression",
+            | Self::InvalidComputedGoto => "not convertible to `const void *`",
+            | Self::IndirectGotoWithoutLabels => "no label of this function has its address taken",
+            | Self::LabelAddressOutsideFunction => "label address outside a function",
             | Self::CaseOutsideSwitch => "not in a switch statement",
             | Self::EmptyCaseRange => "empty case range",
             | Self::BreakOutsideLoopOrSwitch => "not in a loop or switch",
@@ -792,6 +830,33 @@ impl SemanticErrorKind {
                 "C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified \
                  identifier to inside that scope",
             ),
+            | Self::IndirectJumpIntoVariableScope => (
+                "computed goto can enter the scope of a variably modified identifier at its \
+                 possible target",
+                "C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified \
+                 identifier to inside that scope; GCC Labels as Values: a computed goto may reach \
+                 every label whose address is taken",
+            ),
+            | Self::IndirectJumpIntoStatementExpression => (
+                "computed goto can enter a statement expression at its possible target",
+                "GCC Statement Exprs: jumping into a statement expression with a computed goto is \
+                 undefined; GCC Labels as Values: a computed goto may reach every label whose \
+                 address is taken",
+            ),
+            | Self::IndirectGotoWithoutLabels => (
+                "computed goto in a function without label addresses",
+                "GCC Labels as Values: a computed goto may only jump to a label of its own \
+                 function whose address is taken with `&&`",
+            ),
+            | Self::InvalidComputedGoto => (
+                "computed goto operand is not a pointer",
+                "GCC Labels as Values: `goto *expression` converts the operand to `const void *` \
+                 as C99 §6.5.16.1p1 simple assignment does",
+            ),
+            | Self::LabelAddressOutsideFunction => (
+                "label address outside a function body",
+                "GCC Labels as Values: `&&label` names a label of the function that contains it",
+            ),
             | Self::SwitchIntoVariableScope => (
                 "switch dispatch enters the scope of a variably modified identifier",
                 "C99 §6.8.4.2p2: the entire switch is within the scope of every variably modified \
@@ -981,6 +1046,26 @@ impl SemanticErrorKind {
                 "block-scope function declaration has a storage class other than extern",
                 "C99 §6.7.1p5: a function declared in a block has no explicit storage class other \
                  than extern",
+            ),
+            | Self::ThreadLocalFunction => (
+                "thread storage duration applies only to objects",
+                "C11 §6.7.1p4: `_Thread_local` does not appear in the declaration specifiers of \
+                 a function declaration",
+            ),
+            | Self::ThreadLocalBlockScope => (
+                "thread-local object at block scope must be static or extern",
+                "C11 §6.7.1p3: a block-scope declaration with `_Thread_local` also has `static` \
+                 or `extern`",
+            ),
+            | Self::ThreadLocalAfterNonThreadLocal => (
+                "thread-local declaration follows a non-thread-local declaration",
+                "C11 §6.7.1p3: if `_Thread_local` appears in any declaration of an object, it \
+                 appears in every declaration of that object",
+            ),
+            | Self::NonThreadLocalAfterThreadLocal => (
+                "non-thread-local declaration follows a thread-local declaration",
+                "C11 §6.7.1p3: if `_Thread_local` appears in any declaration of an object, it \
+                 appears in every declaration of that object",
             ),
             | Self::LinkedBlockInitializer => (
                 "block-scope declaration with linkage cannot have an initializer",
@@ -1257,10 +1342,12 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::DuplicateLabel | SemanticErrorKind::DuplicateCase =>
                     "previous label is here",
                 | SemanticErrorKind::JumpIntoVariableScope
-                | SemanticErrorKind::SwitchIntoVariableScope =>
+                | SemanticErrorKind::SwitchIntoVariableScope
+                | SemanticErrorKind::IndirectJumpIntoVariableScope =>
                     "variably modified identifier is declared here",
                 | SemanticErrorKind::JumpIntoStatementExpression
-                | SemanticErrorKind::SwitchIntoStatementExpression =>
+                | SemanticErrorKind::SwitchIntoStatementExpression
+                | SemanticErrorKind::IndirectJumpIntoStatementExpression =>
                     "statement expression begins here",
                 | SemanticErrorKind::JumpIntoCleanupScope
                 | SemanticErrorKind::SwitchIntoCleanupScope => "cleanup variable is declared here",

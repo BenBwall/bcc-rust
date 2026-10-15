@@ -51,7 +51,10 @@ use crate::{
         SigId,
     },
     target::Target,
-    util::bump::Bump,
+    util::bump::{
+        ArenaVec,
+        Bump,
+    },
 };
 
 /// Prints the LLVM-C module, after checking the ABI and target contracts.
@@ -97,7 +100,7 @@ fn build_module<'m>(
     if uses_pre_abi_signature(module) {
         return Err(EmitError::NotAbiLowered);
     }
-    let (functions, globals) = symbols::declare(module, api, arena)?;
+    let (functions, globals) = symbols::declare(module, api, target, arena)?;
     symbols::special_arrays(module, api, arena, &functions, &globals);
     let emitter = Emitter {
         module,
@@ -105,12 +108,20 @@ fn build_module<'m>(
         arena,
         functions: &functions,
         globals: &globals,
+        labels: &[],
+    };
+    // Bodies first: a relocation may take the address of a labeled block,
+    // which exists once its function is built.
+    let mut labels = ArenaVec::new_in(arena);
+    for (id, _) in module.functions() {
+        labels.push(emitter.function(id)?);
+    }
+    let emitter = Emitter {
+        labels: &labels,
+        ..emitter
     };
     for (id, _) in module.globals() {
         emitter.global(id)?;
-    }
-    for (id, _) in module.functions() {
-        emitter.function(id)?;
     }
     api.verify()?;
     Ok(())
@@ -122,6 +133,8 @@ struct Emitter<'a, 'id, 'm, 'ir> {
     arena:     &'a Bump,
     functions: &'a [Val<'id>],
     globals:   &'a [Val<'id>],
+    /// The LLVM block of each label of each function, by `FuncId`.
+    labels:    &'a [&'a [api::Block<'id>]],
 }
 
 fn uses_pre_abi_signature(module: &Module<'_>) -> bool {

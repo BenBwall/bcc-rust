@@ -80,10 +80,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut count = 0;
         let before = self.semantic_errors;
         let mut unmodeled = false;
-        work.push(InitWork::Value(ty, initializer));
+        work.push(InitWork::Value(ty, initializer, false));
         while let Some(task) = work.pop() {
             match task {
-                | InitWork::Value(target, init) => {
+                | InitWork::Value(target, init, bit_field) => {
                     if init.recovered || self.initializer_unanalyzed(target, &mut leaves) {
                         continue;
                     }
@@ -127,10 +127,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 {
                                     true
                                 } else if self.arithmetic(target) {
-                                    info.constant == ConstantClass::Arithmetic
+                                    (info.constant == ConstantClass::Arithmetic
                                         && (info.integer.is_some()
                                             || info.floating.is_some()
-                                            || info.unfolded_binary128)
+                                            || info.unfolded_binary128))
+                                        // GNU extension: GCC "Labels as
+                                        // Values"; as in Clang, not into a
+                                        // bit-field.
+                                        || (info.constant == ConstantClass::LabelDifference
+                                            && !bit_field
+                                            && self.label_difference_fits(target, info.ty))
                                 } else {
                                     address || self.null_pointer_constant(info)
                                 };
@@ -161,7 +167,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                     self.types.non_atomic(self.expression_info(e).ty),
                                 )
                             {
-                                work.push(InitWork::Value(target, element.initializer));
+                                work.push(InitWork::Value(target, element.initializer, false));
                                 continue;
                             }
                             // A character array may have its string enclosed in
@@ -360,7 +366,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.scratch.alloc(next),
                         infer,
                     ));
-                    work.push(InitWork::Value(target, element.initializer));
+                    let bit_field = self.bit_field_member(cursor.container, cursor.index);
+                    work.push(InitWork::Value(target, element.initializer, bit_field));
                 },
             }
         }
@@ -428,7 +435,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let ty = self.check_initializer(
             binding.ty,
             initializer,
-            binding.duration == Duration::Static,
+            binding.duration.is_static_or_thread(),
         );
         self.bindings[index].ty = ty;
         if !self.types.unanalyzed(ty) && !self.complete_object(ty) {
@@ -596,6 +603,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.7.8 paragraphs 2-3, p. 125; PDF p. 137.
     /// C99: §6.7.2.1 paragraph 16, p. 103; PDF p. 115.
     /// C99: §6.7.8 paragraph 9, p. 126; PDF p. 138.
+    /// Whether subobject `index` of `ty` is a bit-field member.
+    fn bit_field_member(&self, ty: TypeId, index: u64) -> bool {
+        match self.types.nodes[ty.index] {
+            | TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum => self.types.tags[id]
+                .members
+                .get()
+                .get(usize::try_from(index).unwrap_or(usize::MAX))
+                .is_some_and(|member| member.width.is_some()),
+            | _ => false,
+        }
+    }
+
     fn subobject(&self, ty: TypeId, index: u64) -> Option<TypeId> {
         match self.types.nodes[ty.index] {
             | TypeKind::Vector { element, count, .. } => (index < count).then_some(element),
@@ -706,7 +725,9 @@ struct Current<'s> {
 /// C99: §6.7.8 paragraphs 17-20, pp. 126-127; PDF pp. 138-139.
 #[derive(Clone, Copy)]
 enum InitWork<'tu, 's> {
-    Value(TypeId, &'tu Initializer<'tu>),
+    /// A target type, its initializer, and whether the target is a
+    /// bit-field member.
+    Value(TypeId, &'tu Initializer<'tu>, bool),
     List(
         TypeId,
         &'tu BracedInitializerList<'tu>,

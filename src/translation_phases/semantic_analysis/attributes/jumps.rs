@@ -14,8 +14,7 @@ use super::super::{
     SemanticErrorKind,
     facts::{
         ControlPoint,
-        LabelId,
-        RegionKind,
+        RegionId,
         ancestry::ancestor,
     },
 };
@@ -79,67 +78,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Records an indirect goto for the check at translation-unit end.
-    pub(in crate::translation_phases::semantic_analysis) fn record_indirect_jump(
-        &mut self,
-        source: SourceVectors,
-    ) {
-        if let Some(point) = self.control.point() {
-            self.attributes.indirect_jumps.push((point, source));
-        }
-    }
-
-    /// Records a label whose address is taken, a possible indirect target.
-    pub(in crate::translation_phases::semantic_analysis) fn record_address_label(
-        &mut self,
-        label: LabelId,
-    ) {
-        self.attributes.address_labels.push(label);
-    }
-
-    /// Every indirect goto of a function may reach every label whose
-    /// address the function takes; none of those edges may cross a cleanup
-    /// scope. Functions without cleanup variables cost nothing here.
-    pub(in crate::translation_phases::semantic_analysis) fn check_indirect_cleanup_jumps(
-        &mut self,
-    ) {
-        if self.attributes.indirect_jumps.is_empty()
-            || !self
-                .control
-                .regions
-                .iter()
-                .any(|region| matches!(region.kind, RegionKind::CleanupDeclaration(_)))
-        {
-            return;
-        }
-        for jump in 0..self.attributes.indirect_jumps.len() {
-            let (from, source) = self.attributes.indirect_jumps[jump];
-            for target in 0..self.attributes.address_labels.len() {
-                let label = self.control.labels[self.attributes.address_labels[target].0];
-                let Some(to) = label.point.filter(|to| to.function == from.function) else {
-                    continue;
-                };
-                let regions = &self.control.regions;
-                let ancestry = self.control.ancestry.as_ref().expect("control finalized");
-                let transition = ancestry.transition(regions, from.region, to.region);
-                let common = regions[transition.left.stop_before.0].preorder;
-                let leaves = regions[from.region.0]
-                    .nearest_cleanup_declaration
-                    .is_some_and(|cleanup| regions[cleanup.0].preorder > common);
-                let enters = ancestry
-                    .first_entered_cleanup(regions, transition)
-                    .is_some();
-                if leaves || enters {
-                    let target = label.definition.map_or(source, |s| s.source_vectors);
-                    self.error(
-                        SemanticErrorKind::IndirectJumpCleanupScope,
-                        source,
-                        None,
-                        Some(target),
-                    );
-                    break;
-                }
-            }
-        }
+    /// The innermost cleanup scope that a jump from `from` to `to` enters,
+    /// if any: the target's nearest cleanup declaration when it does not
+    /// enclose `from`, as for variably modified scopes.
+    pub(in crate::translation_phases::semantic_analysis) fn cleanup_entered(
+        &self,
+        from: RegionId,
+        to: RegionId,
+    ) -> Option<RegionId> {
+        let regions = &self.control.regions;
+        regions[to.0]
+            .nearest_cleanup_declaration
+            .filter(|&cleanup| !ancestor(regions, cleanup, from))
     }
 }

@@ -47,7 +47,7 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) sizes:               super::SizeFacts<'tu>,
     pub(crate) runtime_bounds:      &'tu [super::RuntimeBound<'tu>],
     pub(crate) control:             super::ControlFacts<'tu>,
-    pub(crate) expression_effects:  &'tu [super::ExpressionEffects],
+    pub(crate) effects:             super::EffectFacts<'tu>,
     pub(super) expression_actions:  ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
     /// Declarators with vendor modifiers visited by the explicit type stack,
     /// including abstract declarators; lowering reads their assembler labels.
@@ -145,6 +145,19 @@ pub(crate) enum Duration {
     None,
     Automatic,
     Static,
+    /// One object per thread, declared with `_Thread_local`,
+    /// `thread_local` or GNU `__thread`, initialized when its thread starts.
+    /// C11: §6.2.4 paragraph 4, p. 38; PDF p. 56.
+    Thread,
+}
+
+impl Duration {
+    /// Whether the object lives for the whole program or thread and is
+    /// initialized before it starts, so its initializer is constant.
+    /// C11: §6.7.9 paragraph 4, p. 139; PDF p. 157.
+    pub(crate) const fn is_static_or_thread(self) -> bool {
+        matches!(self, Self::Static | Self::Thread)
+    }
 }
 
 /// A function definition with the facts lowering starts from, so that it
@@ -373,18 +386,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         self.expression_actions
             .get(&std::ptr::from_ref(expression).addr())
             .copied()
-    }
-
-    pub(crate) fn effect_pure(&self, expression: &'tu Expression<'tu>, read: bool) -> Option<bool> {
-        self.expression_index(expression)
-            .and_then(|index| self.expression_effects.get(index))
-            .map(|effects| {
-                if read {
-                    effects.value_pure
-                } else {
-                    effects.designation_pure
-                }
-            })
     }
 }
 

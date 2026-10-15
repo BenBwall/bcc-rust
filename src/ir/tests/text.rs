@@ -66,6 +66,9 @@ global @message external constant size 6, align 1 = bytes \"68656c6c6f00\"
 global @table internal constant size 16, align 8 = bytes \"00000000000000000000000000000000\" \
                           relocs [0: @message + 2, 8: @add - 1]
 global @errno external size 4, align 4
+global @tls internal thread_local size 4, align 4 = zero
+global @tls_seed external thread_local constant size 4, align 4 = bytes \"07000000\"
+global @tls_shared external thread_local size 8, align 8
 
 function @add(i32, i32) -> i32 external {
 block0(v0: i32, v1: i32):
@@ -163,10 +166,11 @@ fn symbol_names_round_trip_through_definitions_and_uses() {
         let global = module.declare_global(
             name,
             GlobalDecl {
-                linkage:  Linkage::Internal,
-                size:     8,
-                align:    Align::BYTE,
-                constant: false,
+                linkage:      Linkage::Internal,
+                size:         8,
+                align:        Align::BYTE,
+                constant:     false,
+                thread_local: false,
             },
         );
         module.define_global(
@@ -175,7 +179,7 @@ fn symbol_names_round_trip_through_definitions_and_uses() {
                 bytes:       &[0; 8],
                 relocations: &[Relocation {
                     offset: 0,
-                    symbol: Symbol::Global(global),
+                    target: RelocationTarget::Symbol(Symbol::Global(global)),
                     addend: 0,
                 }],
             },
@@ -327,8 +331,8 @@ fn parsed_module_holds_what_the_text_says() {
     };
     assert_eq!(relocations[1].addend, -1);
     assert_eq!(
-        relocations[1].symbol,
-        module.symbol("add").unwrap(),
+        relocations[1].target,
+        RelocationTarget::Symbol(module.symbol("add").unwrap()),
         "a relocation may name a function declared later"
     );
 }

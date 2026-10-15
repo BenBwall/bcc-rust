@@ -67,7 +67,10 @@ pub(super) fn run(
             continue;
         }
         let Some(body) = &function.body else { continue };
-        if module.function_signature(func).variadic {
+        // A copy of a body whose block addresses are taken would need its
+        // own labels, and its indirect branches the copies' addresses; LLVM
+        // refuses to inline such functions too.
+        if module.function_signature(func).variadic || body.has_indirect_control() {
             continue;
         }
         let leaf = body.blocks().all(|block| {

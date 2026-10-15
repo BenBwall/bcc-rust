@@ -1,5 +1,9 @@
 //! Durable region, statement, label and edge records. No IR or scratch data.
+//! GNU labels as values add each function's address-taken labels, the label
+//! each `&&label` resolves to, the label pair of each constant label
+//! difference, and computed gotos as jumps to [`ControlTarget::IndirectGoto`].
 //! C99: §6.2.4p6, p. 32; PDF p. 44; §6.8.6.1p1, p. 137; PDF p. 149.
+//! GNU extension: GCC "Labels as Values".
 
 use super::super::{
     Integer,
@@ -46,6 +50,19 @@ pub(crate) struct ControlFacts<'tu> {
         ArenaMap<'tu, usize, ControlPoint>,
     pub(in crate::translation_phases::semantic_analysis) vla_regions:
         ArenaMap<'tu, BindingId, RegionId>,
+    /// Each function's address-taken labels, in the order of their first
+    /// `&&label`; a label's position is its [`LabelFacts::address`].
+    pub(in crate::translation_phases::semantic_analysis) address_taken:
+        ArenaMap<'tu, FunctionId, &'tu [LabelId]>,
+    /// The label each `&&label` expression resolves to, by expression
+    /// identity.
+    pub(in crate::translation_phases::semantic_analysis) label_addresses:
+        ArenaMap<'tu, usize, LabelId>,
+    /// The `(label, base)` pair of each constant label difference
+    /// `&&label - &&base`, and of the conversions that keep one constant, by
+    /// expression identity.
+    pub(in crate::translation_phases::semantic_analysis) label_differences:
+        ArenaMap<'tu, usize, (LabelId, LabelId)>,
     #[cfg(test)]
     pub(crate) construction_work: usize,
     #[cfg(test)]
@@ -74,6 +91,32 @@ impl<'tu> ControlFacts<'tu> {
 
     pub(crate) fn vla_region(&self, binding: usize) -> Option<RegionId> {
         self.vla_regions.get(&BindingId(binding)).copied()
+    }
+
+    /// The labels of `function` whose address is taken, in address order:
+    /// every possible target of its computed gotos.
+    pub(crate) fn address_taken(&self, function: FunctionId) -> &'tu [LabelId] {
+        self.address_taken
+            .get(&function)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// The label an `&&label` expression names.
+    pub(crate) fn label_address(&self, expression: &Expression<'_>) -> Option<LabelId> {
+        self.label_addresses
+            .get(&std::ptr::from_ref(expression).addr())
+            .copied()
+    }
+
+    /// The `(label, base)` labels of a constant label difference.
+    pub(crate) fn label_difference(
+        &self,
+        expression: &Expression<'_>,
+    ) -> Option<(LabelId, LabelId)> {
+        self.label_differences
+            .get(&std::ptr::from_ref(expression).addr())
+            .copied()
     }
 }
 
@@ -185,6 +228,11 @@ pub(crate) enum ControlTarget {
     LoopContinue(StatementId),
     SwitchBreak(StatementId),
     FunctionExit(FunctionId),
+    /// A computed goto: any address-taken label of the function. Its
+    /// transition is empty; like Clang, leaving a variable length array's
+    /// scope this way does not release its storage before the function
+    /// returns. GNU extension: GCC "Labels as Values".
+    IndirectGoto(FunctionId),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -201,10 +249,6 @@ pub(crate) struct StatementFacts<'tu> {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LabelFacts<'tu> {
     pub(crate) id:         LabelId,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Retained label name and diagnostic provenance.")
-    )]
     pub(crate) name:       Option<Identifier>,
     pub(crate) function:   FunctionId,
     #[cfg_attr(
@@ -218,6 +262,9 @@ pub(crate) struct LabelFacts<'tu> {
     pub(crate) local:      bool,
     pub(crate) definition: Option<&'tu Statement<'tu>>,
     pub(crate) point:      Option<ControlPoint>,
+    /// The label's position among its function's address-taken labels, if
+    /// some `&&label` names it.
+    pub(crate) address:    Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy)]

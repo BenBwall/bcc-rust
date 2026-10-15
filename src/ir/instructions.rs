@@ -14,6 +14,7 @@ use bitflags::bitflags;
 use super::{
     entities::{
         AccessTag,
+        BlockLabel,
         ConstId,
         FuncId,
         GlobalId,
@@ -105,6 +106,11 @@ pub(crate) enum InstData {
     FuncAddr {
         func: FuncId,
     },
+    /// `block_addr label`: the address of an address-taken block of this
+    /// function, as a `ptr`. GNU extension: GCC "Labels as Values".
+    BlockAddr {
+        label: BlockLabel,
+    },
     Load {
         ty:    Type,
         flags: InstFlags,
@@ -152,6 +158,14 @@ pub(crate) enum InstData {
     Return {
         value: Option<Value>,
     },
+    /// `indirect_br addr, [dest, ...]`: continues at the listed edge whose
+    /// target block's label has the address `addr`. Every target is an
+    /// address-taken block; any other address is undefined behaviour, as for
+    /// LLVM's `indirectbr`. GNU extension: GCC "Labels as Values".
+    IndirectBr {
+        addr:  Value,
+        dests: BlockList,
+    },
     Unreachable,
 }
 
@@ -172,6 +186,7 @@ impl InstData {
             | Self::StackAddr { .. } => Opcode::StackAddr,
             | Self::GlobalAddr { .. } => Opcode::GlobalAddr,
             | Self::FuncAddr { .. } => Opcode::FuncAddr,
+            | Self::BlockAddr { .. } => Opcode::BlockAddr,
             | Self::Load { .. } => Opcode::Load,
             | Self::Store { .. } => Opcode::Store,
             | Self::Call { .. } => Opcode::Call,
@@ -180,6 +195,7 @@ impl InstData {
             | Self::Brif { .. } => Opcode::Brif,
             | Self::Switch { .. } => Opcode::Switch,
             | Self::Return { .. } => Opcode::Return,
+            | Self::IndirectBr { .. } => Opcode::IndirectBr,
             | Self::Unreachable => Opcode::Unreachable,
         }
     }
@@ -315,6 +331,7 @@ named! {
         StackAddr = "stack_addr",
         GlobalAddr = "global_addr",
         FuncAddr = "func_addr",
+        BlockAddr = "block_addr",
         PtrAdd = "ptr_add",
         Load = "load",
         Store = "store",
@@ -331,6 +348,7 @@ named! {
         Brif = "brif",
         Switch = "switch",
         Return = "return",
+        IndirectBr = "indirect_br",
         Unreachable = "unreachable",
     }
 }
@@ -339,7 +357,12 @@ impl Opcode {
     pub(crate) const fn is_terminator(self) -> bool {
         matches!(
             self,
-            Self::Jump | Self::Brif | Self::Switch | Self::Return | Self::Unreachable
+            Self::Jump
+                | Self::Brif
+                | Self::Switch
+                | Self::Return
+                | Self::IndirectBr
+                | Self::Unreachable
         )
     }
 
@@ -416,6 +439,7 @@ impl Opcode {
                 | Self::StackAddr
                 | Self::GlobalAddr
                 | Self::FuncAddr
+                | Self::BlockAddr
                 | Self::PtrAdd
                 | Self::Copy
                 | Self::Fill
@@ -431,6 +455,7 @@ impl Opcode {
                 | Self::Brif
                 | Self::Switch
                 | Self::Return
+                | Self::IndirectBr
                 | Self::Unreachable
                 | Self::Trap
         )
@@ -642,6 +667,11 @@ pub(crate) struct ValueList(pub(super) u32);
 /// arguments for its parameters.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct BlockCall(pub(super) u32);
+
+/// The edges of an `indirect_br` in the function's value pool: one block
+/// call per listed target.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct BlockList(pub(super) u32);
 
 /// The cases of a `switch` in the function's value pool: pairs of a case
 /// constant and an edge.

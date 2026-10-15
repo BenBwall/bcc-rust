@@ -33,7 +33,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !e.recovered
             && let E::LabelAddress(name) = e.kind
         {
-            self.label_address(name);
+            self.label_address(e, name);
         }
         // Reserved builtin designators need their binding even before a
         // compile-time selection becomes a callee, or an address is checked.
@@ -317,10 +317,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | S::Break => self.control_jump(s, false),
             | S::Continue => self.control_jump(s, true),
             | S::Expression(e) => self.expression_slot(e),
-            | S::ComputedGoto(e) => {
-                self.record_indirect_jump(s.source_vectors);
-                self.expression_slot(e);
-            },
+            | S::ComputedGoto(e) => self.computed_goto(s, e),
             | _ => {},
         }
     }

@@ -71,7 +71,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     .map_err(|kind| at(kind, source))?,
             ),
             | BindingKind::Object | BindingKind::Parameter => match data.duration {
-                | Duration::Static => {
+                // A thread-local global's address is the evaluating
+                // thread's copy (C11 §6.2.4p4).
+                | Duration::Static | Duration::Thread => {
                     let global = self.unit.object(binding).map_err(|kind| at(kind, source))?;
                     Place::Memory(self.inst(InstData::GlobalAddr { global }, Type::Ptr))
                 },

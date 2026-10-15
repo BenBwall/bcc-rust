@@ -496,7 +496,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         );
     }
 
-    /// The binding of a function or static-storage object; an automatic
+    /// The binding of a function or static- or thread-storage object (Clang
+    /// places a thread-local object in a named section too); an automatic
     /// object is an error for `section` and a warning for `used`.
     fn static_subject(
         &mut self,
@@ -507,7 +508,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match subject {
             | Subject::Function { binding, .. } => Some(binding),
             | Subject::Object { binding, .. }
-                if self.bindings[binding].duration == Duration::Static =>
+                if matches!(
+                    self.bindings[binding].duration,
+                    Duration::Static | Duration::Thread
+                ) =>
                 Some(binding),
             | Subject::Object { .. } if automatic_error => {
                 let name = self.context.string_cache.intern(attribute.name);
@@ -686,6 +690,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
                 continue;
             }
+            // Clang emits a `thread_local` alias, which LLVM-C cannot mark;
+            // a non-thread-local alias would address the wrong storage.
+            // C11: §6.2.4p4, p. 38; PDF p. 56.
+            if alias.duration == Duration::Thread || definition.duration == Duration::Thread {
+                self.refuse(UnsupportedAttribute::AliasThreadLocal, request.source);
+                continue;
+            }
             if function
                 && !self.types.unanalyzed(alias.ty)
                 && !self.types.unanalyzed(definition.ty)
@@ -766,12 +777,6 @@ pub(in crate::translation_phases::semantic_analysis) struct AttributeState<'tu, 
     /// Validated cleanups by declarator identity, waiting for the end of
     /// their declarator's initializer.
     pending_cleanups: ArenaMap<'s, usize, (usize, usize, SourceVectors)>,
-    /// Indirect gotos and address-taken labels, checked against cleanup
-    /// scopes when the translation unit is complete.
-    pub(in crate::translation_phases::semantic_analysis) indirect_jumps:
-        ArenaVec<'s, (super::super::facts::ControlPoint, SourceVectors)>,
-    pub(in crate::translation_phases::semantic_analysis) address_labels:
-        ArenaVec<'s, super::super::facts::LabelId>,
 }
 
 impl<'tu, 's> AttributeState<'tu, 's> {
@@ -785,8 +790,6 @@ impl<'tu, 's> AttributeState<'tu, 's> {
             aliases:          ArenaVec::new_in(scratch),
             alias_names:      ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             pending_cleanups: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            indirect_jumps:   ArenaVec::new_in(scratch),
-            address_labels:   ArenaVec::new_in(scratch),
         }
     }
 

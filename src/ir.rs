@@ -7,8 +7,10 @@
 //! function's parameters. Values are dense `u32` entities, instruction
 //! records are 16 bytes, and longer operand lists live in a per-function
 //! pool. Memory is explicit: stack slots, loads and stores ordered by their
-//! position, and aggregates that are never values. The IR follows LLVM's
-//! poison semantics without `undef`.
+//! position, and aggregates that are never values. Address-taken blocks have
+//! labels, which `block_addr` and relocations name and an `indirect_br`
+//! targets, so renumbering never invalidates a block address. The IR follows
+//! LLVM's poison semantics without `undef`.
 //!
 //! A [`FunctionBuilder`] appends instructions, [`Module`]'s `Display` prints
 //! the textual form, [`parse_module`] reads it back, [`verify_module`] checks
@@ -78,6 +80,7 @@ pub(crate) use dominators::DominatorTree;
 pub(crate) use entities::{
     AccessTag,
     Block,
+    BlockLabel,
     ConstId,
     Entity,
     FuncId,
@@ -98,6 +101,7 @@ pub(crate) use instructions::{
     Align,
     Bits64,
     BlockCall,
+    BlockList,
     CaseList,
     FloatCC,
     InstData,
@@ -122,6 +126,7 @@ pub(crate) use module::{
     Linkage,
     ParamAbi,
     Relocation,
+    RelocationTarget,
     ResultRegisters,
     Signature,
     Symbol,

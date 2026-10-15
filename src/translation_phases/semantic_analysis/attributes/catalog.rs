@@ -107,7 +107,9 @@ fn declspec(name: &str) -> Option<Rule> {
     Some(match name {
         | "align" => Rule::Representation,
         | "allocate" => Rule::Section,
-        | "thread" => Rule::Unsupported(UnsupportedAttribute::ThreadStorage),
+        // Thread storage duration, which declaration analysis gives the
+        // object (`Analyzer::thread_storage`).
+        | "thread" => Rule::Accepted,
         | "naked" => Rule::Unsupported(UnsupportedAttribute::Naked),
         | "dllimport"
         | "dllexport"
@@ -171,6 +173,9 @@ fn gnu(name: &str) -> Option<Rule> {
         | "no_caller_saved_registers"
         | "no_callee_saved_registers"
         | "interrupt" => Rule::Convention(Convention::Other),
+        // MinGW's `__declspec(thread)`, a macro for this spelling, which
+        // declaration analysis treats as the declspec.
+        | "thread" => Rule::Accepted,
         | "ms_struct" => Rule::RecordLayout { microsoft: true },
         | "gcc_struct" => Rule::RecordLayout { microsoft: false },
         | "ifunc" => Rule::Unsupported(U::Ifunc),

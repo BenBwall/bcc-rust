@@ -506,7 +506,7 @@ const fn gnu_alias(spelling: &'static str, kind: KeywordTokenType) -> KeywordAli
 
 /// Alternate keyword spellings, in the order their IDs follow
 /// [`KeywordTokenType::ALL`] in the reserved interner prefix.
-const KEYWORD_ALIASES: [KeywordAlias; 28] = {
+const KEYWORD_ALIASES: [KeywordAlias; 29] = {
     use KeywordTokenType as K;
     [
         c23_alias("bool", K::Bool),
@@ -535,6 +535,9 @@ const KEYWORD_ALIASES: [KeywordAlias; 28] = {
         gnu_alias("__typeof_unqual", K::TypeofUnqual),
         gnu_alias("__typeof_unqual__", K::TypeofUnqual),
         gnu_alias("__attribute", K::Attribute),
+        // GNU thread-local storage: GCC manual, "Thread-Local Storage".
+        // <https://gcc.gnu.org/onlinedocs/gcc/Thread-Local.html>
+        gnu_alias("__thread", K::ThreadLocal),
         // Not reserved, so an identifier in strict modes.
         alias("asm", K::Asm, AliasGate::GnuExtensions, FeatureOrigin::Gnu),
         alias(

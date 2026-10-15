@@ -466,6 +466,14 @@ impl<'tu, 's> ResolvedBuilder<'tu, 's> {
         }
     }
 
+    /// The call facts retained for expression ordinal `index`, if any.
+    pub(in crate::translation_phases::semantic_analysis) fn call(
+        &self,
+        index: usize,
+    ) -> Option<CallFacts<'tu>> {
+        self.calls.get(&index).copied()
+    }
+
     pub(in crate::translation_phases::semantic_analysis) fn argument_type(
         &self,
         expression: &Expression<'tu>,

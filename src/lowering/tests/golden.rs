@@ -547,3 +547,37 @@ int f(struct m *p) { p->b = 300; p->d = -2; return p->a + p->b + p->c + p->d; }"
     text.push_str(&ir);
     assert_snapshot("tests/fixtures/lowering/bit_fields_msvc.ir", &text);
 }
+
+#[test]
+fn computed_gotos_branch_through_one_indirect_block() {
+    // GNU extension: GCC "Labels as Values". Address-taken labels become IR
+    // labels in address order, static tables and differences become label
+    // relocations, every `goto *` passes its address to one block ending in
+    // `indirect_br`, and `void *` arithmetic steps by bytes.
+    golden(
+        "computed_goto",
+        "int dispatch(int k, int n) {
+    static const void *const table[] = { &&add, &&twice, &&done };
+    static const int offsets[] = { &&add - &&done, &&done - &&done };
+    int acc = n;
+    goto *table[k];
+add: acc += 1; goto *(&&done + offsets[1]);
+twice: acc *= 2; goto *table[2];
+done: return acc;
+}",
+    );
+}
+
+#[test]
+fn thread_storage_becomes_thread_local_globals() {
+    golden(
+        "thread_local",
+        "_Thread_local int counter = 3;
+extern __thread long shared;
+static _Thread_local char name[4] = \"tls\";
+int next(void) { static __thread int calls; extern _Thread_local int counter; calls++; return \
+         counter++ + calls; }
+long *address(void) { return &shared; }
+char first(void) { return name[0]; }",
+    );
+}

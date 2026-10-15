@@ -265,7 +265,15 @@ functions are external unless inheriting prior function linkage. Internal/extern
 mixes are diagnosed (§6.2.2p7). Typedefs, enumerators, members and automatic objects
 have no linkage. Objects at file scope, with linkage, or block static have static
 duration; parameters/other local objects have automatic duration. Functions and
-non-object bindings have no object duration. Same-scope no-linkage duplicates are
+non-object bindings have no object duration. Such an object declared with
+`_Thread_local`, `thread_local` or GNU `__thread` has `Duration::Thread` instead
+(C11 §6.2.4p4), the retained fact lowering turns into a thread-local global; its
+initializer is constant like a static one (C11 §6.7.9p4), and an inline
+definition rejects a modifiable one (C11 §6.7.4p3). The parser rejects thread
+storage beside a storage class other than `static`/`extern` (§6.7.1p2);
+semantic analysis rejects it on functions (§6.7.1p4) and parameters
+(§6.7.6.3p2), on a block-scope object without `static` or `extern`, and on one
+declaration of an object but not another (§6.7.1p3). Same-scope no-linkage duplicates are
 rejected. A typedef repeated with the same, not variably modified, type is
 accepted (C11 §6.7p3); before C11, GNU modes included, it is a C11 extension
 under the pedantic policy, as in GCC and Clang.
@@ -328,7 +336,7 @@ Stage-1 boundaries, with their current disposition:
   `__int16`, `__int32` and `__int64` are not: as in Clang, they are `char`,
   `short`, `int` and `long long`, and `signed` or `unsigned` selects that
   variant. Only alignment
-  specifiers, thread/constexpr storage, MSVC pointer-size modifiers and
+  specifiers, constexpr storage, MSVC pointer-size modifiers and
   attributes naming `align`, `packed`, `mode` or `ext_vector_type`
   (and non-vector `aligned`) make that one declaration's type unavailable; other
   attributes and the calling conventions that x86-64 ignores leave it intact. A
@@ -456,6 +464,7 @@ Unevaluated sizeof operands and unselected logical/conditional arms follow the
 
 Arithmetic constant expressions and address constants govern static-duration
 initializers (§6.6p7-9, pp. 95-96, PDF pp. 107-108; §6.7.8p4, p. 125, PDF p. 137).
+A thread-local object's address is not an address constant (C11 §6.6p9).
 Addresses track static storage/function/string/compound-literal designations,
 including members, subscripts, casts and integer offsets, without reading stored
 object values. This is constant eligibility, not backend relocation lowering:
@@ -598,7 +607,8 @@ continuations use the same explicit work stack as expression typing.
 
 Each function has a separate label map. GNU `__label__` declarations install
 lexically scoped label identities, also available to nested functions. Label
-addresses count as references; computed-goto destinations remain opaque.
+addresses count as references and make their label a possible computed-goto
+target (see [Labels as values](#labels-as-values-2026-10-14)).
 Duplicate labels are diagnosed immediately, and unresolved references after
 the translation unit has been walked. The parser retains ownership of the
 duplicate-default diagnostic, so it is emitted once. Case/default placement
@@ -642,7 +652,8 @@ resolve before goto diagnostics. Switch diagnostics retain their discovery order
 their secondary VM labels are finalized to the outermost entered declaration.
 Entering statement expressions or VM scope reads this same graph, preserving text,
 order and secondary labels. GNU nonlocal jumps retain the existing conservative
-semantic handling and remain unsupported by lowering.
+semantic handling and remain unsupported by lowering. A computed goto is a
+jump to `ControlTarget::IndirectGoto(function)` with an empty transition.
 
 GNU statement-expression tails consume their expression statement's converted
 value: arrays/functions decay, lvalues become values and bit-field identity does
@@ -705,7 +716,7 @@ known calls. Opaque results suppress dependent return-conversion errors.
   runtime VLA allocation/extent evaluation, automatic lifetime cleanup, return
   value lowering and a calling convention. The syntax and conversion graph remain
   available, but statement constraints do not provide an executable control-flow
-  graph or computed-goto target set.
+  graph; the computed-goto target set is retained per function.
 - GNU statement-expression result types, intrinsic signatures, local-label
   nonlocal-jump mechanics, other attributes and calling-convention
   effects remain conservative. The five requested GNU statement forms retain
@@ -1611,7 +1622,7 @@ expression, prefix length and converted result type. Statement continuations
 forward one child's tail result; block reduction inspects only its last immediate
 item. Empty/declaration/nested-compound endings yield void. Labels execute before
 the converted tail value, and aggregate snapshots still precede lifetime cleanup.
-The existing retained expression-effects record describes the block's effects.
+The retained expression-effects record summarizes the block's statements.
 
 Lowering's linear address-use scan and builtin dispatch read retained callee and
 designation records. Call scheduling and completion share `CallFacts`; member
@@ -1669,8 +1680,9 @@ plus reserved builtin type spellings, remain explicit M6 bridges. The named
 capability adapter in `builtins/names.rs` joins the registry with those families;
 `__has_builtin` still uses the existing keyword classifier/semantic capability
 adapter. Exhaustive scalar/library agreement tests cover all current targets,
-strict/GNU modes and hosted/freestanding environments. Sparse evaluation recipes
-remain M5; the external/returns-twice symbol policy remains later work.
+strict/GNU modes and hosted/freestanding environments. M5 later consumed the
+registry's effect classes in the retained expression effects; the
+external/returns-twice symbol policy remains later work.
 
 C99 §6.5.2.2p7, p. 72 (PDF p. 84), §6.2.1p4, pp. 29-30
 (PDF pp. 41-42), §7.15.1, pp. 249-251 (PDF pp. 261-263),
@@ -1779,15 +1791,55 @@ expressions then address the same parameter object.
 
 ## Shared expression effects and entry actions
 
-Semantic analysis produces one `ExpressionEffects` record per expression in
-child-before-parent order, with value-read and designation/effects-only purity.
-ICE eligibility remains separate from purity. Cast type-site actions are normalized
-into `expression_actions`; both the summary producer and value/effect-only lowering
-consume that same record. An evaluated VM typeof operand or new bound therefore
-prevents an overflow predicate from folding away its effects. Short-circuit and
-selected branches preserve conditional execution, and address-only operations keep
-their existing volatile distinctions. There are no per-query semantic purity caches
-or lowering-owned summary caches. Full sparse evaluation recipes remain M5 work.
+**M5 is complete.** `facts/effects.rs` produces one four-byte `ExpressionEffects`
+record per expression ordinal, in child-before-parent order, when
+`retain_expression` runs. It holds two contexts: reading the value and only
+designating it (address-only and effects-only uses). Each context carries an
+`EffectSet` of `WRITE`, `CALL`, `VOLATILE`, `CONTROL`, `LIFETIME` and
+`UNKNOWN`, and a recipe kind. An empty set means the evaluation may be omitted;
+it is not an optimizer promise that arithmetic cannot trap or be poison. Each
+summary combines the retained summaries of the node's immediate children once,
+so production is O(1) per operand edge with no recursion or suffix walk.
+
+- Assignments and increments write; a store to a volatile lvalue is also a
+  volatile access. Ordinary and indirect calls are `CALL`.
+- A volatile read is `VOLATILE` only in the value context; `&v`, `&*vp` and
+  `&p->vm` designate without access. Member bases and address-of operands use
+  the designation context.
+- `_Generic` and `__builtin_choose_expr` forward their retained selection only.
+- Checked builtins use the registry instance: the descriptor's
+  `BuiltinEffectClass` (pure/query none, write, control, allocate as
+  `LIFETIME`, library as `CALL`) plus the operands their evaluation modes
+  evaluate. Unevaluated and type operands contribute nothing; effects-only
+  operands contribute their value context. Temporary M6 bridges are `UNKNOWN`.
+- Constant `sizeof`, and `typeof` outside a VM type site, contribute nothing. A
+  VLA `sizeof` takes its retained size-query operand and new bound expressions;
+  a cast takes its `expression_actions` typeof operands and new bounds.
+- A GNU statement expression opens a body summary; each completed statement
+  adds its own expressions, loops and jumps add `CONTROL`, and declarations and
+  nested definitions add `UNKNOWN`. The block closes the summary.
+- Compound literals and unmodeled forms are conservatively effectful.
+
+ICE eligibility remains separate. The existing rule still clears constant
+eligibility when a cast's evaluated type-site actions are effectful, and an
+overflow predicate folds only when its third operand's value summary is empty.
+
+The same postorder retains effects-only recipes once the node's ICE state is
+final. `EffectRecipe::None` and `EvaluateValue` or `StatementBlock` of the node
+itself live in the dense record. `Sequence` (the node's own type-site actions,
+then child uses) and `Conditional` (a condition evaluated once as a branch and
+optional arm uses) live in a sparse map keyed by ordinal and context. A use
+names a child ordinal and context. Short circuits and conditionals keep a
+branch only when an arm's summary is non-empty; omitted conditionals branch on
+their saved condition. ICE nodes execute nothing; volatile reads evaluate.
+`SemanticTranslationUnit::effect_summary`/`effect_recipe` are the queries. A
+child without a record makes the recipe unavailable, and lowering reports that
+missing fact. The old per-node boolean purity pair and the lowering's
+operator/volatility classification are deleted.
+C99 §5.1.2.3p2, p. 13 (PDF p. 25), §6.7.3p6, p. 109 (PDF p. 121),
+§6.5.3.4p2, p. 80 (PDF p. 92), §6.5.13p4-§6.5.15p4, pp. 89-90 (PDF pp. 101-102);
+[GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html).
+Validation and corpus evidence: [M5 receipt](docs/research/semantic-facts-m5.md).
 
 `FunctionRecord::parameter_facts` keeps each prototype-style entry action with
 its original type and binding correspondence; `parameter_sites` keeps K&R
@@ -1836,9 +1888,8 @@ pass lives in `attributes.rs` and `attributes/`:
   first; `nearest_cleanup_declaration` and `Ancestry::first_entered_cleanup`
   (the VM query, generalized over the link) find entered cleanup scopes in
   O(log R). `attributes/jumps.rs` reports gotos and switch cases entering a
-  cleanup scope and indirect gotos (paired with every address-taken label of
-  their function, only when the unit has cleanup variables) that enter or
-  leave one. Lowering marks cleanup variables address-taken and emits the
+  cleanup scope; the computed-goto check below reports indirect gotos that
+  could enter or leave one. Lowering marks cleanup variables address-taken and emits the
   calls from the same transitions that release VLA storage.
 
 The constructor/destructor priority operand is parsed as an expression, as
@@ -1855,3 +1906,48 @@ name-based `main` end policy, readonly/volatile object predicates, and the
 shared external-signature and returns-twice catalog are unchanged. MSVC
 convention keywords other than `__vectorcall` remain accepted as the default
 convention without a retained `CallingConvention` on types.
+
+#### Labels as values (2026-10-14)
+
+GNU `&&label` ([GCC Labels as Values](https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html))
+types as a `void *` rvalue address constant (`ConstantClass::Address`) and
+resolves through the ordinary label lookup, so GNU local labels keep their
+lexical identity. Outside a function it is `LabelAddressOutsideFunction`.
+The first `&&` of a label numbers it among its function's address-taken labels:
+`ControlFacts::address_taken(function)` lists them in that order,
+`LabelFacts::address` holds each position, and `ControlFacts::label_address`
+maps every `&&label` expression to its `LabelId`. Lowering uses the position as
+the IR label number, so static initializers lowered before the body agree.
+
+`goto *e` records a jump to `ControlTarget::IndirectGoto(function)` with an
+empty transition (like Clang, it releases no VLA storage it leaves) and
+converts `e` to `const void *` under simple-assignment constraints
+(`InvalidComputedGoto` otherwise; C99 §6.5.16.1p1, p. 92; PDF p. 104). After
+the unit is walked, each computed goto is checked against its function's
+address-taken labels as Clang's jump checker does: none at all is
+`IndirectGotoWithoutLabels`; a target inside a statement expression or the
+scope of a variably modified identifier that the goto is outside of is
+`IndirectJumpIntoStatementExpression` or `IndirectJumpIntoVariableScope`
+(C99 §6.8.6.1p1, p. 137; PDF p. 149), reported once per goto at its first
+such target with the region's start as secondary label. As in Clang, whose
+jump checker treats a GNU cleanup scope as one an indirect jump may neither
+enter nor leave, a target inside a cleanup variable's scope that the goto is
+outside of, or any address-taken label outside the innermost cleanup scope
+around the goto, is `IndirectJumpCleanupScope`. Each function's labels inside
+a protecting region, and the first and last of its labels in region
+preorder, are collected once, so the work is O(gotos + labels) plus one check
+per goto and protected label; plain dispatch tables need no pairwise check
+at all.
+
+`&&a - &&b` for two labels of one function is `ConstantClass::LabelDifference`:
+a constant with no folded value whose two labels `ControlFacts::label_difference`
+retains. It survives parentheses and conversions to an integer of 32 to 64
+bits no wider than the converted value, which static initializers accept
+unless the destination is a bit-field, matching Clang; `_Bool`, narrower and
+128-bit types, a narrowed difference widened again and arithmetic on it are not
+constants. GNU `void *` arithmetic
+([GCC Pointer Arith](https://gcc.gnu.org/onlinedocs/gcc/Pointer-Arith.html),
+`Feature::VoidPointerArithmetic`) uses element size 1 for `+`, `-`, increments,
+compound assignment and subscripts, and in address constants and constant
+differences; a `void` subscript is an rvalue that is never read, and `sizeof`
+of `void` is 1 in every mode.

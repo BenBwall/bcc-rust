@@ -403,6 +403,16 @@ pub(super) fn target_type(types: &Types<'_>, ty: TypeId) -> Option<TypeId> {
     }
 }
 
+/// The size pointer arithmetic steps by for an element type: its layout's
+/// size, or 1 for `void`, which semantic analysis accepts only as the GNU
+/// extension. GNU extension: GCC "Pointer Arith".
+pub(super) fn arithmetic_size(types: &Types<'_>, element: TypeId) -> Option<u64> {
+    if let TypeKind::Scalar(Scalar::Void) = types.kind(element) {
+        return Some(1);
+    }
+    types.layout(element).map(|layout| layout.size)
+}
+
 /// The LLVM data layout of a target: little-endian x86-64 with ELF or COFF
 /// symbol mangling, 64-bit `long long`, 16-byte `__int128` and `long
 /// double` storage, and a 16-byte aligned stack. The IR records it so the

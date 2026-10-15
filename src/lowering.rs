@@ -293,6 +293,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 Ok(())
             },
             | Task::Return(statement) => self.return_value(statement),
+            | Task::IndirectJump(statement) => self.indirect_jump(statement),
             | Task::Switch { statement, exit } => self.switch(statement, exit),
             | Task::EndSwitch { statement, exit } => {
                 self.end_switch(statement, exit);
@@ -355,7 +356,8 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.evaluate_raw(expression)
             },
             | Task::EvaluateRaw(expression) => self.evaluate_raw(expression),
-            | Task::BuiltinEffects(expression, read) => self.builtin_effects(expression, read),
+            | Task::BuiltinEffects(expression, context) =>
+                self.builtin_effects(expression, context),
             | Task::SnapshotArgument(expression) => self.snapshot_argument(expression),
             | Task::Convert { expression, skip } => self.convert_recorded(expression, skip),
             | Task::Finish(expression) => self.finish(expression),
@@ -427,6 +429,8 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     result:             TypeId,
     bounds:             ArenaMap<'s, usize, ssa::Var>,
     vla_tokens:         ArenaMap<'s, RegionId, ssa::Var>,
+    /// The block computed gotos branch through, once one exists.
+    indirect:           Option<Block>,
 }
 
 // Tests

@@ -12,10 +12,11 @@ fn symbol_names_cannot_contain_nul() {
     _ = module.declare_global(
         "g\0tail",
         GlobalDecl {
-            linkage:  Linkage::External,
-            size:     4,
-            align:    Align::from_bytes(4).unwrap(),
-            constant: false,
+            linkage:      Linkage::External,
+            size:         4,
+            align:        Align::from_bytes(4).unwrap(),
+            constant:     false,
+            thread_local: false,
         },
     );
     for profile in [Profile::PreAbi, Profile::PostAbi] {
@@ -252,6 +253,20 @@ fn global_errors() {
         (
             "global @g internal size 8, align 8 = bytes \"0000000000000000\" relocs [4: @g]\n",
             &["@g: the relocation at offset 4 does not fit in the global"],
+        ),
+        (
+            "global @t external thread_local size 4, align 4 = zero\nglobal @p external size 8, \
+             align 8 = bytes \"0000000000000000\" relocs [0: @t]\n",
+            &[
+                "@p: the relocation at offset 0 names a thread-local global, whose address is not \
+                 a link-time constant",
+            ],
+        ),
+        (
+            "global @t external thread_local constant size 4, align 4 = bytes \
+             \"05000000\"\nglobal @u external thread_local size 4, align 4\nfunction @f() -> ptr \
+             external {\nblock0:\n    v0 = global_addr @t\n    return v0\n}\n",
+            &[],
         ),
     ]);
 }

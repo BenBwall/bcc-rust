@@ -150,6 +150,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                 | ConstantClass::None => {},
                 | ConstantClass::Arithmetic => out.push_str(" constant=arithmetic"),
                 | ConstantClass::Address => out.push_str(" constant=address"),
+                | ConstantClass::LabelDifference => out.push_str(" constant=label-difference"),
             }
             out.push('\n');
         }
@@ -303,6 +304,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                 | Duration::None => {},
                 | Duration::Automatic => out.push_str(" duration=automatic"),
                 | Duration::Static => out.push_str(" duration=static"),
+                | Duration::Thread => out.push_str(" duration=thread"),
             }
         }
         if matches!(binding.kind, BindingKind::Object | BindingKind::Parameter)

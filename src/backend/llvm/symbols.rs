@@ -10,6 +10,7 @@
 use super::{
     EmitError,
     api::{
+        self,
         Linkage,
         Session,
         Ty,
@@ -29,6 +30,7 @@ use crate::{
         Type,
         Visibility,
     },
+    target::Target,
     util::bump::{
         ArenaVec,
         Bump,
@@ -40,6 +42,7 @@ use crate::{
 pub(super) fn declare<'id, 'a, 'm>(
     module: &'m Module<'_>,
     api: &Session<'id>,
+    platform: Target,
     arena: &'a Bump,
 ) -> Result<(ArenaVec<'a, Val<'id>>, ArenaVec<'a, Val<'id>>), EmitError<'m>> {
     let mut functions = ArenaVec::new_in(arena);
@@ -75,6 +78,18 @@ pub(super) fn declare<'id, 'a, 'm>(
         api.constant_global(value, global.constant);
         if let Some(linkage) = linkage(global.linkage, global.init.is_some()) {
             api.linkage(value, linkage);
+        }
+        if global.thread_local {
+            // Clang marks a definition `dso_local`, so in a position-
+            // independent ELF executable LLVM gives it the local-exec model
+            // and a declaration initial-exec. LLVM-C cannot mark a global
+            // `dso_local`, so a definition (weak ones included, as Clang
+            // marks them `dso_local` too) requests local-exec directly.
+            // Windows has one model, through `_tls_index` and the TEB.
+            api.thread_local(
+                value,
+                global.init.is_some() && api::position_independent(platform),
+            );
         }
         sections(api, value, global.attributes);
         globals.push(value);

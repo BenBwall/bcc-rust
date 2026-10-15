@@ -961,8 +961,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 kind:    DefinitionKind::Object,
             });
         }
+        // C11 §6.7.4p3 extends this to thread storage duration.
         if binding.kind == BindingKind::Object
-            && binding.duration == Duration::Static
+            && binding.duration.is_static_or_thread()
             && (initialized || binding.linkage == Linkage::None)
             && !self.types.unanalyzed(binding.ty)
             && self.inline_object_modifiable(binding.ty)

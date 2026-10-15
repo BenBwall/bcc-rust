@@ -42,6 +42,7 @@ use crate::translation_phases::{
             SpecifierExtension,
             SpecifierExtensionKind,
             SyntaxOperand,
+            ThreadSpelling,
         },
         machine::{
             EnumSpecifierResult,
@@ -330,15 +331,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                         token,
                     );
                 }
-                self.add_extension(
-                    parser,
-                    if keyword == KeywordTokenType::ThreadLocal {
-                        SpecifierExtensionKind::ThreadLocal
-                    } else {
-                        SpecifierExtensionKind::Constexpr
-                    },
-                    token.source_vectors,
-                );
+                self.add_storage_extension(parser, keyword, token);
                 self.consumed = true;
                 return ParseAction::Consume;
             }
@@ -443,6 +436,7 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
                     Some(token),
                 );
             }
+            self.report_storage_after_thread(parser, storage_class, token);
             // Replacing the storage class also discards its C23 `auto` pairing.
             self.specifiers.auto_with_storage_class = false;
             self.specifiers.storage_class = Some(storage_class);
@@ -827,6 +821,118 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
         true
     }
 
+    /// Adds a thread storage-class specifier or `constexpr`, unless it
+    /// repeats one already present.
+    fn add_storage_extension(
+        &mut self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        keyword: KeywordTokenType,
+        token: Token,
+    ) {
+        let kind = if keyword == KeywordTokenType::ThreadLocal {
+            SpecifierExtensionKind::ThreadLocal(thread_spelling(parser, token))
+        } else {
+            SpecifierExtensionKind::Constexpr
+        };
+        if self.report_thread_conflict(parser, kind, token) {
+            parser.merge_source(&mut self.source_vectors, token);
+        } else {
+            self.add_extension(parser, kind, token.source_vectors);
+        }
+    }
+
+    /// Reports a storage class that cannot follow the thread specifier.
+    /// C11: §6.7.1 paragraph 2, p. 109; PDF p. 127.
+    fn report_storage_after_thread(
+        &self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        storage_class: StorageClass,
+        token: Token,
+    ) {
+        if let Some(thread) = self.thread_spelling()
+            && thread_conflicts(parser, storage_class)
+        {
+            parser.report(
+                ParserErrorType::ThreadStorageConflict {
+                    previous:    thread.spelling(),
+                    conflicting: storage_class.spelling(),
+                },
+                Some(token),
+            );
+        }
+    }
+
+    /// The thread storage-class specifier already in the list, if any.
+    fn thread_spelling(&self) -> Option<ThreadSpelling> {
+        let mut extension = self.specifiers.extensions;
+        while let Some(item) = extension {
+            if let SpecifierExtensionKind::ThreadLocal(spelling) = item.kind {
+                return Some(spelling);
+            }
+            extension = item.next;
+        }
+        None
+    }
+
+    /// Whether `constexpr` is already in the list.
+    fn has_constexpr(&self) -> bool {
+        let mut extension = self.specifiers.extensions;
+        while let Some(item) = extension {
+            if item.kind == SpecifierExtensionKind::Constexpr {
+                return true;
+            }
+            extension = item.next;
+        }
+        false
+    }
+
+    /// Reports a thread storage-class specifier or `constexpr` that cannot
+    /// join the specifiers before it. Returns whether `kind` repeats one
+    /// already present, which then adds nothing.
+    /// C11: §6.7.1 paragraph 2, p. 109; PDF p. 127. C23 (N3220): §6.7.2
+    /// paragraph 2, p. 99; PDF p. 112.
+    fn report_thread_conflict(
+        &self,
+        parser: &mut Parser<'_, 'tu, 'p>,
+        kind: SpecifierExtensionKind<'tu>,
+        token: Token,
+    ) -> bool {
+        let previous = self.thread_spelling();
+        let conflict = if let SpecifierExtensionKind::ThreadLocal(spelling) = kind {
+            if let Some(previous) = previous
+                && previous.repeats(spelling)
+            {
+                parser.report(
+                    ParserErrorType::ThreadLocalSpecifiedTwice(spelling.spelling()),
+                    Some(token),
+                );
+                return true;
+            }
+            previous
+                .map(ThreadSpelling::spelling)
+                .or_else(|| self.has_constexpr().then_some("constexpr"))
+                .or_else(|| {
+                    self.specifiers
+                        .storage_class
+                        .filter(|&storage_class| thread_conflicts(parser, storage_class))
+                        .map(StorageClass::spelling)
+                })
+                .map(|previous| (previous, spelling.spelling()))
+        } else {
+            previous.map(|previous| (previous.spelling(), "constexpr"))
+        };
+        if let Some((previous, conflicting)) = conflict {
+            parser.report(
+                ParserErrorType::ThreadStorageConflict {
+                    previous,
+                    conflicting,
+                },
+                Some(token),
+            );
+        }
+        false
+    }
+
     fn add_extension(
         &mut self,
         parser: &mut Parser<'_, 'tu, 'p>,
@@ -1035,6 +1141,32 @@ impl<'tu, 'p> DeclarationSpecifiersFrame<'tu> {
 /// C99: §6.7.1 paragraph 1, p. 98; PDF p. 110. `typedef` is a storage-class
 /// specifier for syntactic convenience only (paragraph 3, p. 98;
 /// PDF p. 110).
+/// How a thread storage-class keyword was written: `_Thread_local` keeps
+/// the keyword's own spelling ID, and the aliases keep theirs.
+/// C11: §6.7.1 paragraph 1, p. 109; PDF p. 127.
+fn thread_spelling(parser: &Parser<'_, '_, '_>, token: Token) -> ThreadSpelling {
+    if token.contents == KeywordTokenType::ThreadLocal.cache_id() {
+        ThreadSpelling::Reserved
+    } else if parser.context.string_cache.at(token.contents) == "__thread" {
+        ThreadSpelling::Gnu
+    } else {
+        ThreadSpelling::Keyword
+    }
+}
+
+/// Whether a storage-class specifier cannot accompany thread storage:
+/// only `static` and `extern` can, and from C23 `auto` too.
+/// C11: §6.7.1 paragraph 2, p. 109; PDF p. 127. C23 (N3220): §6.7.2
+/// paragraph 2, p. 99; PDF p. 112.
+fn thread_conflicts(parser: &Parser<'_, '_, '_>, storage_class: StorageClass) -> bool {
+    match storage_class {
+        | StorageClass::Static | StorageClass::Extern => false,
+        | StorageClass::Auto =>
+            parser.context.configuration.standard() < crate::configuration::CStandard::C23,
+        | StorageClass::Register | StorageClass::Typedef => true,
+    }
+}
+
 fn storage_class(token: TokenType) -> Option<StorageClass> {
     match token {
         | TokenType::Keyword(KeywordTokenType::Auto) => Some(StorageClass::Auto),

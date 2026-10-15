@@ -137,7 +137,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | S::Expression(slot) => {
                 let expression = expression(slot, source)?;
                 if mode == StatementMode::Effects {
-                    self.tasks.push(Task::BuiltinEffects(expression, true));
+                    self.tasks.push(Task::BuiltinEffects(
+                        expression,
+                        crate::translation_phases::semantic_analysis::EffectContext::Value,
+                    ));
                 } else {
                     if mode == StatementMode::Discard {
                         self.tasks.push(Task::Discard);
@@ -422,9 +425,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                                 source,
                             )
                         })?,
-                    | ControlTarget::FunctionExit(_) =>
+                    | ControlTarget::FunctionExit(_) | ControlTarget::IndirectGoto(_) =>
                         return Err(LoweringError::missing(
-                            "goto resolves to a function exit",
+                            "a direct jump resolves to a function exit or an indirect goto",
                             source,
                         )),
                 };
@@ -471,7 +474,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | S::Declaration(declaration) => self.tasks.push(Task::Declaration(declaration)),
             | S::Attributed(attributed) => self.tasks.push(labeled_child(attributed.statement)),
-            | S::Null => {},
+            // GNU local labels only scope label names, which semantic
+            // analysis already resolved to label identities. Jumps to them
+            // from another function need nested functions, which lowering
+            // refuses, so every use here is an ordinary jump.
+            // GNU extension: GCC "Local Labels".
+            | S::Null | S::LocalLabels(_) => {},
             | S::CaseRange(range) => {
                 let label = control.label.ok_or_else(|| {
                     LoweringError::missing("case range identity is not retained", source)
@@ -493,10 +501,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     Construct::StructuredExceptionHandling,
                     source,
                 )),
-            | S::ComputedGoto(_) =>
-                return Err(LoweringError::unsupported(Construct::ComputedGoto, source)),
-            | S::LocalLabels(_) =>
-                return Err(LoweringError::unsupported(Construct::LocalLabel, source)),
+            | S::ComputedGoto(slot) => {
+                self.tasks.push(Task::IndirectJump(statement));
+                self.tasks.push(Task::Evaluate(expression(slot, source)?));
+            },
             | S::NamedBreak(_) | S::NamedContinue(_) =>
                 return Err(LoweringError::unsupported(Construct::NamedJump, source)),
         }
@@ -699,6 +707,72 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         Ok(())
     }
 
+    /// Pops a computed goto's `const void *` operand and passes it to the
+    /// function's one indirect-branch block, as Clang does, so each label
+    /// block has one indirect predecessor however many gotos there are. Like
+    /// Clang, the jump releases no variable length array storage.
+    /// GNU extension: GCC "Labels as Values".
+    pub(super) fn indirect_jump(
+        &mut self,
+        statement: &'tu Statement<'tu>,
+    ) -> Result<(), LoweringError> {
+        let source = statement.source_vectors;
+        let item = self.pop();
+        let address = self.value(item, source)?;
+        if !matches!(
+            self.cleanup_jump(statement)?,
+            ControlTarget::IndirectGoto(_)
+        ) {
+            return Err(LoweringError::missing(
+                "a computed goto has no indirect jump facts",
+                source,
+            ));
+        }
+        let dispatch = self.indirect_block();
+        let edge = self.draft.edge(dispatch, &[address]);
+        self.draft
+            .terminate_and_continue_dead(Terminator::Jump(edge));
+        Ok(())
+    }
+
+    /// The block every computed goto passes its address to, ending in an
+    /// indirect branch to each address-taken label, made on first use.
+    fn indirect_block(&mut self) -> Block {
+        if let Some(block) = self.indirect {
+            return block;
+        }
+        let current = self.draft.current();
+        let block = self.draft.create_block(&[Type::Ptr]);
+        let address = self.draft.block_params(block)[0];
+        let mut edges = ArenaVec::with_capacity_in(self.draft.labels.len(), self.scratch);
+        for index in 0..self.draft.labels.len() {
+            edges.push(self.draft.edge(self.draft.labels[index], &[]));
+        }
+        self.draft.switch_to(block);
+        self.draft.terminate(Terminator::IndirectBr(address, edges));
+        self.draft.switch_to(current);
+        self.indirect = Some(block);
+        block
+    }
+
+    /// The IR label of `label`, an address-taken label of this function.
+    /// A label of another function, which only a GNU nested function could
+    /// name, is unsupported. GNU extension: GCC "Labels as Values".
+    pub(super) fn block_label(
+        &self,
+        label: LabelId,
+        source: SourceVectors,
+    ) -> Result<crate::ir::BlockLabel, LoweringError> {
+        let facts = self.unit.sema.control.labels[label.0];
+        if facts.function != self.record.control.id {
+            return Err(LoweringError::unsupported(Construct::LabelAddress, source));
+        }
+        let index = facts.address.ok_or_else(|| {
+            LoweringError::missing("an addressed label has no address index", source)
+        })?;
+        Ok(crate::ir::BlockLabel::new(index as usize))
+    }
+
     /// Jumps to `target`; what follows is unreachable until a label.
     fn jump_away(&mut self, target: Block) {
         let edge = self.draft.edge(target, &[]);
@@ -802,7 +876,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         if data.kind != BindingKind::Object {
             return Ok(());
         }
-        if data.duration == Duration::Static {
+        if data.duration.is_static_or_thread() {
             if data.linkage == Linkage::None {
                 _ = self
                     .unit
@@ -889,7 +963,16 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             result: record.result.unqualified(),
             bounds: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             vla_tokens: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
+            indirect: None,
         };
+        // Address-taken labels become IR labels in their semantic address
+        // order, so a label's address index is its IR label number, also in
+        // static initializers lowered before this body.
+        // GNU extension: GCC "Labels as Values".
+        for &label in lowerer.unit.sema.control.address_taken(record.control.id) {
+            let block = lowerer.label_block(label);
+            lowerer.draft.labels.push(block);
+        }
         let entry = Draft::entry();
         for (index, &value) in lowerer.draft.block_params(entry).iter().enumerate() {
             if let Some(layout) = signature
