@@ -808,7 +808,11 @@ absolute path, and the primary source file are not. `#pragma GCC
 system_header` (also through `_Pragma`) makes the rest of the current header
 a system header; in the primary source file it is ignored with a warning, as
 in GCC and Clang. A `#line` directive gives the following lines a new file
-identity that is not a system header.
+identity that is not a system header. `#pragma GCC warning` and `#pragma GCC
+error` report their macro-replaced string operand (optionally parenthesized,
+adjacent literals concatenated) as a warning or an error, as GCC and Clang do;
+any other operand is an error. glibc's `__glibc_macro_warning`, which bcc
+reaches as Clang does, uses the warning form for deprecated macros.
 
 Inside a system header, warnings and extension diagnostics are withheld, the
 latter at every policy level: under `-pedantic-errors` an extension in a system
