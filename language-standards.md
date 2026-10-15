@@ -84,9 +84,18 @@ individual `-fms-NAME` groups do not, and a later `-fno-ms-extensions`
 withdraws it. Both GNU and MSVC identity can therefore be claimed at once,
 whereas Clang drops the GNU identity under `-fms-compatibility`. Every mode
 defines `__bcc__` `1`, `__bcc_major__`, `__bcc_minor__`, `__bcc_patchlevel__`
-and the string `__bcc_version__` from the package version. `__clang__`,
-`__llvm__`, `__VERSION__` and `__GXX_ABI_VERSION` are never defined. Like
-Clang's, these are ordinary macros that `#undef` may remove. OS identity
+and the string `__bcc_version__` from the package version. Every mode also
+claims the pinned Clang exactly as it identifies itself for the selected
+target: `__clang__` `1`, `__clang_major__` `23`, `__clang_minor__` `1`,
+`__clang_patchlevel__` `1`, `__clang_version__`, `__VERSION__`, `__llvm__`
+and the narrow and wide literal encodings (`__clang_wide_literal_encoding__`
+is `"UTF-16"` on the Windows targets). These are frozen with the target
+definitions below, so the macro oracle checks them against the pinned Clang.
+Headers therefore take their Clang paths, such as MinGW-w64's
+`extern inline __attribute__((__gnu_inline__))` `__CRT_INLINE` and glibc's
+`__glibc_clang_prereq` decisions; code that must tell bcc from Clang tests
+`__bcc__`. `__GXX_ABI_VERSION` is never defined. Like Clang's, these are
+ordinary macros that `#undef` may remove. OS identity
 macros such as `__linux__` and `_WIN32` follow the selected target, below. The identity and target definitions are read from the synthetic
 `<built-in>/predefined.h` before user input.
 
@@ -930,8 +939,10 @@ to 72 bytes. Fixes are pending.
 Each name omitted from the pinned Clang target dump is listed individually.
 The first two categories identify separate ownership, rather than unsupported
 C features. `__STDC__`, version/strictness and embed constants remain in the
-existing language-mode builtin mechanism. Target macros do not emulate the
-Clang compiler identity. Feature promises below require further semantic or
+existing language-mode builtin mechanism. Clang's own identity macros
+(`__clang__` and its version, `__llvm__`, `__VERSION__` and the literal
+encodings) are not excluded: bcc claims the pinned Clang, so they are frozen
+with each target. Feature promises below require further semantic or
 backend work before they can be enabled.
 
 | Macro | Reason |
@@ -1010,16 +1021,7 @@ backend work before they can be enabled.
 | `__STDC_VERSION__` | Existing language-mode preprocessor builtin; not a target definition. |
 | `__STDC__` | Existing language-mode preprocessor builtin; not a target definition. |
 | `__STRICT_ANSI__` | Existing language-mode preprocessor builtin; not a target definition. |
-| `__VERSION__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_literal_encoding__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_major__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_minor__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_patchlevel__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_version__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_wide_literal_encoding__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__code_model_small__` | Code generation, relocation and optimization policy are not implemented. |
-| `__llvm__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__pic__` | Code generation, relocation and optimization policy are not implemented. |
 | `__pie__` | Code generation, relocation and optimization policy are not implemented. |
 | `__seg_fs` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |

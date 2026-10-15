@@ -224,20 +224,10 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                     match (name, &*operand) {
                         | ("__has_builtin", builtin) =>
                             u64::from(has_builtin(self.context, builtin)),
-                        // EXPERIMENT (variant B): Clang's feature queries answer
-                        // only for C11 features bcc implements; Clang treats
-                        // them as extensions before C11.
-                        | (
-                            "__has_feature",
-                            "c_static_assert" | "c_alignas" | "c_alignof" | "c_generic_selections",
-                        ) => u64::from(
-                            self.context.configuration.standard()
-                                >= crate::configuration::CStandard::C11,
-                        ),
-                        | (
-                            "__has_extension",
-                            "c_static_assert" | "c_alignas" | "c_alignof" | "c_generic_selections",
-                        ) => 1,
+                        | ("__has_feature", feature) =>
+                            u64::from(clang_feature(self.context.configuration, feature, false)),
+                        | ("__has_extension", feature) =>
+                            u64::from(clang_feature(self.context.configuration, feature, true)),
                         // C23 §6.7.13.2p2, p. 143; PDF p. 156: the standard
                         // attributes, `_Noreturn` included (§6.7.13.7p1).
                         | (
@@ -948,6 +938,7 @@ pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
     ("__has_c_attribute", Feature::HasCAttribute),
     ("__has_attribute", Feature::HasAttribute),
     ("__has_builtin", Feature::HasBuiltin),
+    // Clang's other feature-checking macros share `__has_attribute`'s gate.
     ("__has_feature", Feature::HasAttribute),
     ("__has_extension", Feature::HasAttribute),
     ("__pragma", Feature::MsPragma),
@@ -957,11 +948,13 @@ pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
 ];
 
 /// Appends the compiler-identity macros to the target's predefined
-/// `definitions`, as source read before user input. EXPERIMENT (variant B):
-/// every language mode claims GCC 4.2.1 and the pinned Clang 23.1.1 exactly as
-/// that Clang defines them, and `-fms-extensions` claims MSVC 19.33, Clang's
-/// default `-fms-compatibility-version`. `__bcc__` and its version are defined
-/// in every mode. They are ordinary macros, so `#undef` works as in Clang.
+/// `definitions`, as source read before user input. Following Clang, every
+/// language mode claims GCC 4.2.1 with its inline-semantics macro, and
+/// `-fms-extensions` claims MSVC 19.33, Clang's default
+/// `-fms-compatibility-version`. Clang's own identity (`__clang__`, its
+/// version and literal encodings) is frozen with the target's definitions
+/// (`Target::predefined_macros`). `__bcc__` and its version are defined in
+/// every mode. They are ordinary macros, so `#undef` works as in Clang.
 ///
 /// C99: further predefined macro names begin with `__` or `_` and an
 /// uppercase letter, §6.10.8 paragraph 4, p. 161; PDF p. 173; reserved
@@ -982,15 +975,7 @@ pub(super) fn with_identity_macros<'a>(
         env!("CARGO_PKG_VERSION_PATCH"),
         env!("CARGO_PKG_VERSION"),
     );
-    // EXPERIMENT (variant B): Clang's GNU claim plus Clang's own identity,
-    // copied from `clang -dM -E` of the pinned Clang for every target/mode.
     out.push_str("#define __GNUC__ 4\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 1\n");
-    out.push_str(CLANG_IDENTITY);
-    out.push_str(if configuration.target().layout().wide_utf16() {
-        "#define __clang_wide_literal_encoding__ \"UTF-16\"\n"
-    } else {
-        "#define __clang_wide_literal_encoding__ \"UTF-32\"\n"
-    });
     // Identity follows the effective inline mode, including flag overrides.
     out.push_str(if configuration.gnu89_inline() {
         "#define __GNUC_GNU_INLINE__ 1\n"
@@ -1009,20 +994,34 @@ pub(super) fn with_identity_macros<'a>(
     out.into_str()
 }
 
-/// The pinned Clang 23.1.1's target-independent identity macros.
-/// EXPERIMENT (variant B) only.
-const CLANG_IDENTITY: &str = concat!(
-    "#define __clang__ 1\n",
-    "#define __clang_major__ 23\n",
-    "#define __clang_minor__ 1\n",
-    "#define __clang_patchlevel__ 1\n",
-    "#define __clang_version__ \"23.1.1 (https://github.com/rust-lang/llvm-project.git ",
-    "1b9c0d5ff9bbe7634aead059efe6b11a7eeba145)\"\n",
-    "#define __VERSION__ \"Clang 23.1.1 (https://github.com/rust-lang/llvm-project.git ",
-    "1b9c0d5ff9bbe7634aead059efe6b11a7eeba145)\"\n",
-    "#define __llvm__ 1\n",
-    "#define __clang_literal_encoding__ \"UTF-8\"\n",
-);
+/// Clang's `__has_feature` (`extension` false) and `__has_extension` answers
+/// for the features bcc implements, after `__name__` normalization. A C11
+/// language feature is a feature where it is native and an extension wherever
+/// bcc accepts it, as in Clang. Every other name answers 0, including Clang
+/// features bcc lacks (sanitizers, blocks, `overloadable`, nullability), so
+/// headers take their portable paths.
+/// Clang extension: Clang Language Extensions, "`__has_feature` and
+/// `__has_extension`".
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#has-feature-and-has-extension>
+/// Extension to C99 §6.10.1p4, p. 148; PDF p. 160.
+fn clang_feature(configuration: CompilerConfiguration, name: &str, extension: bool) -> bool {
+    let feature = match name {
+        | "c_alignas" => Feature::Alignas,
+        | "c_alignof" => Feature::Alignof,
+        | "c_atomic" => Feature::Atomic,
+        | "c_generic_selections" => Feature::Generic,
+        | "c_static_assert" => Feature::StaticAssert,
+        | "c_thread_local" => Feature::ThreadLocal,
+        // GNU `deprecated` takes an optional message in every mode.
+        | "attribute_deprecated_with_message" => return true,
+        | _ => return false,
+    };
+    if extension {
+        configuration.accepts(feature)
+    } else {
+        configuration.is_native(feature)
+    }
+}
 
 /// GNU builtins can be overridden with a warning, like GCC and Clang. ISO
 /// predefined macros and standard query operators retain their protection.
