@@ -6,7 +6,8 @@
 //!  incoming stack arguments   CFA + home area (Win64: 32 bytes)
 //!  Win64 home area            CFA .. CFA + 32
 //!  return address             CFA - 8
-//!  callee-saved pushes        8 bytes each (`%rbp` among them with a frame pointer)
+//!  callee-saved pushes        8 bytes each (`%rbp` among them with a frame pointer;
+//!                             first, at CFA - 16, when the frame address is taken)
 //!  stack slots                each at its alignment (at most 16)
 //!  register save area         System V variadic functions: 176 bytes
 //!  Win64 SSE saves            16 bytes each for `%xmm6`-`%xmm15`
@@ -75,8 +76,14 @@ impl<'a> Frame<'a> {
         let frame_pointer = func.dynamic;
         let mut saved = ArenaVec::new_in(arena);
         let mut xmm = ArenaVec::new_in(arena);
+        // The frame address is where a frame pointer saves the caller's
+        // `%rbp`, so that register is pushed first.
+        if func.frame_address {
+            saved.push(PReg::Rbp);
+        }
         for register in PReg::ALL {
             let save = conv.callee_saved.contains(register)
+                && !(func.frame_address && register == PReg::Rbp)
                 && (written.contains(register) || (frame_pointer && register == PReg::Rbp));
             match (save, register.class()) {
                 | (true, RegClass::Gpr) => saved.push(register),
@@ -143,6 +150,8 @@ impl<'a> Frame<'a> {
             | FrameObject::OutgoingEnd => return (PReg::Rsp, i64::from(self.outgoing_end)),
             | FrameObject::Spill(slot) => self.spills + 8 * slot,
             | FrameObject::RegisterSave(offset) => self.register_save + offset,
+            | FrameObject::ReturnAddress => self.home - 8,
+            | FrameObject::FrameAddress => self.home - 16,
         };
         let base = if self.rbp_based { PReg::Rbp } else { PReg::Rsp };
         (base, i64::from(offset))

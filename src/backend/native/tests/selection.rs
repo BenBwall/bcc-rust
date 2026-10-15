@@ -279,6 +279,32 @@ block2:
 }
 
 #[test]
+fn frame_and_return_addresses_read_the_frame_a_frame_pointer_would_build() {
+    let text = assembly(
+        "abi lowered
+function @f() -> ptr external {
+block0:
+    v0 = return_address
+    v1 = frame_address
+    v2 = ptr_add v1, v0
+    return v2
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    // `%rbp` is pushed first, at CFA - 16, the frame address; the return
+    // address is at CFA - 8, right above it.
+    let push = f.find("\tpushq\t%rbp").expect(f);
+    assert!(!f[..push].contains("pushq"), "{f}");
+    assert!(f.contains("movq\t8(%rsp), %"), "{f}");
+    assert!(
+        f.contains("leaq\t(%rsp), %") || f.contains("leaq\t0(%rsp), %"),
+        "{f}"
+    );
+}
+
+#[test]
 fn unsupported_constructs_are_refused_with_their_function() {
     let message = refusal(
         "abi lowered

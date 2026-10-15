@@ -52,6 +52,9 @@ pub(crate) struct MFunction<'a> {
     /// Whether the frame holds a System V register save area for
     /// `va_start`.
     pub(crate) register_save: bool,
+    /// Whether the function takes its frame address, so the prologue pushes
+    /// the caller's `%rbp` first, where a frame pointer would save it.
+    pub(crate) frame_address: bool,
     /// The targets of each [`MInst::JmpIndirect`], by its `dests` index.
     pub(crate) indirect:      ArenaVec<'a, ArenaVec<'a, MBlock>>,
     /// Each IR block label with the block its address names: the labeled
@@ -71,6 +74,7 @@ impl<'a> MFunction<'a> {
             calls:         false,
             dynamic:       false,
             register_save: false,
+            frame_address: false,
             indirect:      ArenaVec::new_in(arena),
             labels:        ArenaVec::new_in(arena),
         }
@@ -465,6 +469,11 @@ pub(crate) enum FrameObject {
     /// Just above the outgoing argument area at the current `%rsp`: where a
     /// dynamic allocation starts.
     OutgoingEnd,
+    /// The return address the call pushed, at the CFA minus 8.
+    ReturnAddress,
+    /// Where a frame pointer saves the caller's `%rbp`, the CFA minus 16: the
+    /// value of `__builtin_frame_address (0)` with a frame pointer.
+    FrameAddress,
 }
 
 /// A symbol an instruction refers to.

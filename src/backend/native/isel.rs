@@ -45,6 +45,7 @@ use super::{
         AluOp,
         Base,
         Cond,
+        FrameObject,
         FrameSlotData,
         MBlock,
         MFunction,
@@ -571,6 +572,30 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 opcode: Opcode::Trap,
                 ..
             } => self.emit(MInst::Ud2),
+            // GNU extension: GCC manual, "Getting the Return or Frame
+            // Address of a Function", level 0.
+            | InstData::Nullary {
+                opcode: Opcode::ReturnAddress,
+                ..
+            } => {
+                let dst = self.result_reg(result);
+                self.emit(MInst::Mov {
+                    width: Width::B64,
+                    dst,
+                    src: Operand::Mem(Mem::new(Base::Frame(FrameObject::ReturnAddress), 0)),
+                });
+            },
+            | InstData::Nullary {
+                opcode: Opcode::FrameAddress,
+                ..
+            } => {
+                let dst = self.result_reg(result);
+                self.func.frame_address = true;
+                self.emit(MInst::Lea {
+                    dst,
+                    addr: Mem::new(Base::Frame(FrameObject::FrameAddress), 0),
+                });
+            },
             | InstData::GlobalAddr { global } => {
                 let dst = self.result_reg(result);
                 self.thread_local_address(dst, global);
