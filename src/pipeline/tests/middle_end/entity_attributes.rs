@@ -163,6 +163,29 @@ int main(void) {
          3\nout 4\nout 2\nout 5\nout 1\nvla 42\nout 3\n",
     ),
     (
+        // A computed-goto loop that stays inside a cleanup variable's scope,
+        // as Clang accepts it: the cleanup runs once, after the return
+        // value is computed, and never on an indirect jump.
+        "cleanup_computed_goto",
+        "int printf(const char *, ...);
+static void out(int *p) { printf(\"out %d\\n\", *p); }
+static int run(int n) {
+    int acc __attribute__((cleanup(out))) = 0;
+    static void *const steps[] = {&&add, &&done};
+    int i = 0;
+    goto *steps[0];
+add:
+    acc += ++i;
+    goto *steps[i < n ? 0 : 1];
+done:
+    return acc;
+}
+int main(void) { printf(\"ret %d\\n\", run(4)); return 0; }
+",
+        0,
+        "out 10\nret 10\n",
+    ),
+    (
         "undefined_weak",
         "extern int missing(void) __attribute__((weak));
 extern int missing_object __attribute__((weak));
