@@ -103,6 +103,82 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         result
     }
 
+    /// `__builtin_complex(real, imaginary)`: after lvalue conversion both
+    /// operands have the same real floating type, without promotion, and the
+    /// result has the corresponding complex type. Two arithmetic constants
+    /// form an arithmetic constant, so glibc's `CMPLX` initializes static
+    /// objects. C99: complex types §6.2.5p11, p. 34; PDF p. 46; arithmetic
+    /// constants §6.6p8, p. 96; PDF p. 108; `CMPLX` is C11 §7.3.9.3, p. 197;
+    /// PDF p. 215. GNU extension: GCC "Other Builtins"; Clang rejects
+    /// operands of different types.
+    pub(in crate::translation_phases::semantic_analysis) fn complex_builtin(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        args: &[&'tu Expression<'tu>],
+    ) -> ExpressionInfo<'tu> {
+        let mut parts = [None; 2];
+        for (part, &argument) in parts.iter_mut().zip(args) {
+            let info = self.expression_info(argument);
+            let ty = self.converted(info);
+            if self.types.unanalyzed(ty) {
+                return Self::expression_result(expression, self.types.unknown());
+            }
+            let ty = self.types.non_atomic(ty);
+            let TypeKind::Scalar(
+                scalar @ (Scalar::Float | Scalar::Double | Scalar::LongDouble | Scalar::Float128),
+            ) = self.types.nodes[ty.index]
+            else {
+                self.error(
+                    SemanticErrorKind::InvalidArgumentType,
+                    argument.source_vectors,
+                    None,
+                    None,
+                );
+                return Self::expression_result(expression, self.types.unknown());
+            };
+            *part = Some((scalar, ty, info));
+        }
+        let [Some((scalar, operand, real)), Some((other, _, imaginary))] = parts else {
+            return Self::expression_result(expression, self.types.unknown());
+        };
+        if scalar != other {
+            self.error(
+                SemanticErrorKind::InvalidArgumentType,
+                args[1].source_vectors,
+                None,
+                None,
+            );
+            return Self::expression_result(expression, self.types.unknown());
+        }
+        let complex = match scalar {
+            | Scalar::Float => Scalar::ComplexFloat,
+            | Scalar::Double => Scalar::ComplexDouble,
+            | Scalar::LongDouble => Scalar::ComplexLongDouble,
+            | _ => Scalar::ComplexFloat128,
+        };
+        let mut result = Self::expression_result(expression, self.types.scalar(complex));
+        result.operation_type = Some(operand);
+        if real.constant == ConstantClass::Arithmetic
+            && imaginary.constant == ConstantClass::Arithmetic
+        {
+            let value = |info| {
+                self.floating_value(info)
+                    .and_then(|value| self.round_floating(value, operand))
+            };
+            if self.binary128_type(operand) {
+                result.unfolded_binary128 = true;
+                result.constant = ConstantClass::Arithmetic;
+            } else if let Some((re, im)) = value(real).zip(value(imaginary)) {
+                result.floating = Some(Floating {
+                    real: re.real,
+                    imag: im.real,
+                });
+                result.constant = ConstantClass::Arithmetic;
+            }
+        }
+        result
+    }
+
     /// Folds a classification of a constant already rounded to `operand`,
     /// from its exact x87 parts. A value is normal in its own format when its
     /// exponent reaches that format's minimum: binary32 and binary64

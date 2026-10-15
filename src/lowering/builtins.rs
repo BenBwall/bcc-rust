@@ -273,6 +273,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     "varargs must use keyword scheduling",
                     source,
                 )),
+            | CommonBuiltin::Complex =>
+                return Err(LoweringError::unsupported(
+                    super::Construct::ComplexArithmetic,
+                    source,
+                )),
             | CommonBuiltin::Constant => {
                 let value =
                     self.iconst(Type::I32, info.integer.expect("typed constant query").value);

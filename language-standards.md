@@ -1157,6 +1157,10 @@ and expression-alignment queries. `__builtin_signbit[f/l]`, `__builtin_isinf[f/l
 The type-generic `__builtin_isnan`, `__builtin_isfinite`, `__builtin_isnormal`,
 `__builtin_isinf_sign` and `__builtin_fpclassify`, which glibc's `<math.h>`
 selects for Clang, fold constants and lower to ordered comparisons.
+`__builtin_complex`, which glibc's C11 `CMPLX` uses for Clang, takes a real and
+an imaginary part of one real floating type, without promotion, and folds two
+constants into a complex constant; like every complex value, it is not lowered
+yet.
 `__builtin_frame_address` and `__builtin_return_address` take a constant level
 and lower level 0 (MinGW-w64's Clang `setjmp` passes the frame address);
 `__builtin_extract_return_addr` is the identity.

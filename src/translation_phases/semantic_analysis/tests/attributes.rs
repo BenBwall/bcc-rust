@@ -301,6 +301,60 @@ int checks[__builtin_types_compatible_p(tc, _Complex __float128)
     }
 }
 
+/// glibc's Clang path defines C11 `CMPLX` with `__builtin_complex`.
+#[test]
+fn complex_builtin_types_and_folds_like_clang() {
+    with_configuration(
+        r"
+static const double _Complex z = __builtin_complex(1.0, -0.0);
+int checks[__builtin_types_compatible_p(__typeof__(__builtin_complex(1.0f, 2.0f)), float _Complex)
+    && __builtin_types_compatible_p(__typeof__(__builtin_complex(1.0L, 2.0L)),
+        long double _Complex)
+    && __has_builtin(__builtin_complex) ? 1 : -1];
+void f(double a, const double b, float c, int d) {
+    (void)__builtin_complex(a, b);
+    (void)__builtin_complex(c, a);
+    (void)__builtin_complex(d, d);
+    (void)__builtin_complex(a);
+}
+int following;
+",
+        CompilerConfiguration::default().with_gnu_extensions(true),
+        |context, sema| {
+            let kinds: Vec<_> = context
+                .take_pending_errors()
+                .iter()
+                .filter_map(|error| {
+                    if let TranslationError::Semantic(error) = error {
+                        Some(error.kind)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(
+                kinds,
+                [
+                    SemanticErrorKind::InvalidArgumentType,
+                    SemanticErrorKind::InvalidArgumentType,
+                    SemanticErrorKind::InvalidArgumentCount
+                ],
+            );
+            let constant = sema
+                .expressions
+                .iter()
+                .find(|info| {
+                    info.constant == ConstantClass::Arithmetic
+                        && info.operation_type.is_some()
+                        && info.floating.is_some()
+                })
+                .and_then(|info| info.floating)
+                .expect("the static initializer folds");
+            assert!(constant.imag.is_zero() && constant.imag.x87_parts().unwrap().0);
+        },
+    );
+}
+
 /// glibc's Clang path routes the C99 classification macros to these.
 #[test]
 fn floating_classification_builtins_fold_constants_in_each_format() {

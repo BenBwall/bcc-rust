@@ -53,6 +53,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Expect(_) => Scalar::Long,
             | CommonBuiltin::ObjectSize(_) => self.types.target.size_t,
             | CommonBuiltin::Overflow(..) => Scalar::Bool,
+            | CommonBuiltin::Complex => Scalar::ComplexDouble,
             | _ => Scalar::Void,
         };
         let mut result = self.types.scalar(scalar);
@@ -112,8 +113,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let pointer = self.types.intern(TypeKind::Pointer(integer));
                 parameters.extend_from_slice(&[integer, integer, pointer]);
             },
-            | CommonBuiltin::Constant | CommonBuiltin::Overflow(..) | CommonBuiltin::Varargs(_) =>
-                prototype = false,
+            | CommonBuiltin::Constant
+            | CommonBuiltin::Overflow(..)
+            | CommonBuiltin::Varargs(_)
+            | CommonBuiltin::Complex => prototype = false,
             | CommonBuiltin::Unreachable | CommonBuiltin::Trap => {},
         }
         Some(self.types.intern(TypeKind::Function {
@@ -177,7 +180,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let (min, max) = match builtin {
             | CommonBuiltin::Float(FloatOperation::Copysign, _)
             | CommonBuiltin::Expect(false)
-            | CommonBuiltin::ObjectSize(_) => (2, 2),
+            | CommonBuiltin::ObjectSize(_)
+            | CommonBuiltin::Complex => (2, 2),
             | CommonBuiltin::Float(FloatOperation::Fpclassify, _) => (6, 6),
             | CommonBuiltin::Bit(..)
             | CommonBuiltin::Bswap(_)
@@ -214,6 +218,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Float(operation, scalar) => {
                 return Some(self.floating_builtin(e, args, operation, scalar));
             },
+            | CommonBuiltin::Complex => return Some(self.complex_builtin(e, args)),
             | CommonBuiltin::Bit(_, scalar) => {
                 let ty = self.types.scalar(scalar);
                 _ = self.common_argument(args[0], ty);
@@ -497,6 +502,9 @@ pub(crate) enum CommonBuiltin {
     /// GNU: the return address as an address; the identity on x86-64.
     ExtractReturnAddress,
     Overflow(OverflowOperation, Option<Scalar>, bool),
+    /// GNU: the complex value of a real and an imaginary part of one real
+    /// floating type. <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    Complex,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -653,6 +661,7 @@ pub(crate) fn common_builtin(name: &str) -> Option<CommonBuiltin> {
         | "frame_address" => B::Address(false),
         | "return_address" => B::Address(true),
         | "extract_return_addr" => B::ExtractReturnAddress,
+        | "complex" => B::Complex,
         | _ => return None,
     })
 }
