@@ -410,7 +410,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 {
                     info = self.invalid_expression(e, SemanticErrorKind::InvalidCompoundLiteral);
                 } else {
-                    info.ty = self.check_initializer(ty, initializer, self.scope == 0);
+                    // A compound literal's flexible array member stays empty.
+                    info.ty = self
+                        .check_initializer(ty, initializer, self.scope == 0, false)
+                        .0;
                 }
                 info.category = self.object_category(info.ty);
                 info.static_address = self.scope == 0;

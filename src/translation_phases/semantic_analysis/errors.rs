@@ -222,6 +222,10 @@ pub(crate) enum SemanticErrorKind {
     InvalidInitializer,
     /// C99: §6.7.8p2, p. 125; PDF p. 137.
     ExcessInitializer,
+    /// A flexible array member given elements outside a static object's own
+    /// structure; GNU C allows only that case, and Clang an empty list too.
+    /// C99: §6.7.2.1p16, p. 103; PDF p. 115; §6.7.8p2, p. 125; PDF p. 137.
+    FlexibleArrayInitializer,
     /// C99: §6.7.8p6-7, p. 125; PDF p. 137.
     InvalidDesignator,
     /// C99: §6.7.8p4, p. 125; PDF p. 137.
@@ -396,6 +400,7 @@ impl SemanticErrorKind {
             | Self::FailedAssertion => "assertion is false",
             | Self::InvalidInitializer => "invalid initializer",
             | Self::ExcessInitializer => "no subobject is left to initialize",
+            | Self::FlexibleArrayInitializer => "initializes a flexible array member",
             | Self::InvalidDesignator => "no such subobject",
             | Self::NonConstantInitializer => "not a constant expression",
             | Self::InvalidStorage => "external declaration",
@@ -871,6 +876,12 @@ impl SemanticErrorKind {
                 "excess initializer for the current object",
                 "C99 §6.7.8p2: an initializer shall not provide a value for an object outside the \
                  initialized entity",
+            ),
+            | Self::FlexibleArrayInitializer => (
+                "initialization of flexible array member is not allowed",
+                "C99 §6.7.2.1p16, §6.7.8p2: a flexible array member has no elements; as a GNU \
+                 extension only an object with static storage duration may give the flexible \
+                 array member of its own structure elements",
             ),
             | Self::InvalidDesignator => (
                 "designator does not identify an available subobject",

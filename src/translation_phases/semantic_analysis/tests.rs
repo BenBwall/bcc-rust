@@ -712,6 +712,7 @@ mod declarations;
 mod encoded_literals;
 mod expression_regressions;
 mod expressions;
+mod flexible_initializers;
 mod function_regressions;
 mod operand_regressions;
 mod statements;

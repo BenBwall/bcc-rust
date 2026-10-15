@@ -119,14 +119,18 @@ pub(super) enum Leaf<'tu> {
 }
 
 /// The stores of `initializer` for an object of type `ty`, in source order.
+/// `flexible` is the completed type semantic analysis gave the flexible array
+/// member of a static structure whose initializer fills it (GNU).
 /// C99: §6.7.8 paragraphs 14-19, pp. 126-127; PDF pp. 138-139.
 pub(super) fn leaves<'tu, 's>(
     sema: &SemanticTranslationUnit<'tu>,
     ty: TypeId,
     initializer: &'tu Initializer<'tu>,
+    flexible: Option<TypeId>,
     arena: &'s Bump,
 ) -> Result<ArenaVec<'s, Leaf<'tu>>, LoweringError> {
     let mut walker = Walker {
+        flexible: flexible.map(|flexible| (ty, flexible)),
         sema,
         selected_unions: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
         ranges: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
@@ -212,6 +216,23 @@ pub(super) fn leaves<'tu, 's>(
             _ = frames.pop();
             continue;
         };
+        if walker.incomplete(subobject.ty) {
+            // GNU: an empty list leaves a flexible array member without
+            // elements and stores nothing; semantic analysis completes the
+            // member's type for every other initializer it accepts.
+            if !matches!(
+                element.initializer.kind,
+                InitializerType::InitializerList(inner) if inner.elements.as_slice().is_empty()
+            ) {
+                return Err(LoweringError::missing(
+                    "a flexible array member is initialized without its extent",
+                    element.source_vectors,
+                ));
+            }
+            walker.consume(&mut frames, top, owner, subobject.next);
+            designated = None;
+            continue;
+        }
         walker.select_union(frame, element.source_vectors, &mut leaves)?;
         let offset = frame.offset + subobject.offset;
         match element.initializer.kind {
@@ -339,6 +360,9 @@ struct Subobject {
 }
 
 struct Walker<'a, 'tu, 's> {
+    /// The object's structure and the completed type of its flexible array
+    /// member, which only that structure's own frame reaches.
+    flexible:        Option<(TypeId, TypeId)>,
     arena:           &'s Bump,
     sema:            &'a SemanticTranslationUnit<'tu>,
     /// Selection survives frames closed and reopened by designators. The
@@ -493,11 +517,23 @@ impl<'tu> Walker<'_, 'tu, '_> {
                 else {
                     return Ok(None);
                 };
-                if let TypeKind::Array(_, ArrayBound::Incomplete) = types.kind(member.ty) {
-                    return Err(LoweringError::unsupported(Construct::Initializer, source));
-                }
+                // The flexible array member of the object's own structure has
+                // the extent semantic analysis completed; a structure cannot
+                // contain itself, so its type alone identifies that frame.
+                // Any other flexible array member keeps its incomplete type,
+                // which only an empty list initializes.
+                let member_ty = match self.flexible {
+                    | Some((root, flexible))
+                        if root.index == ty.index
+                            && matches!(
+                                types.kind(member.ty),
+                                TypeKind::Array(_, ArrayBound::Incomplete)
+                            ) =>
+                        flexible,
+                    | _ => member.ty,
+                };
                 Ok(Some(Subobject {
-                    ty:        member.ty.qualified(ty.qualifiers),
+                    ty:        member_ty.qualified(ty.qualifiers),
                     offset:    member.offset,
                     bit_field: member.width.map(|width| BitFieldBits {
                         bit_offset: member.bit_offset,
@@ -618,6 +654,12 @@ impl<'tu> Walker<'_, 'tu, '_> {
         let subobject = self
             .subobject(frame.ty, frame.next, source)?
             .ok_or_else(|| LoweringError::unsupported(Construct::Designator, source))?;
+        if self.incomplete(subobject.ty) {
+            return Err(LoweringError::missing(
+                "a flexible array member is initialized without its extent",
+                source,
+            ));
+        }
         self.select_union(frame, source, leaves)?;
         frames[top].next = subobject.next;
         frames.push(Frame {
@@ -628,6 +670,15 @@ impl<'tu> Walker<'_, 'tu, '_> {
             zero:   frame.zero,
         });
         Ok(())
+    }
+
+    /// Whether a subobject is a flexible array member semantic analysis did
+    /// not complete. C99: §6.7.2.1 paragraph 16, p. 103; PDF p. 115.
+    fn incomplete(&self, ty: TypeId) -> bool {
+        matches!(
+            self.sema.types.kind(ty),
+            TypeKind::Array(_, ArrayBound::Incomplete)
+        )
     }
 
     /// A newly selected union member replaces the previous member, including
@@ -710,7 +761,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         ty: TypeId,
         initializer: &'tu Initializer<'tu>,
     ) -> Result<(), LoweringError> {
-        let leaves = leaves(self.unit.sema, ty, initializer, self.scratch)?;
+        let leaves = leaves(self.unit.sema, ty, initializer, None, self.scratch)?;
         let coverage = CoverageIndex::new(
             &leaves,
             self.unit.sema,

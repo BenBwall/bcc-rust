@@ -595,8 +595,18 @@ explicit list/value continuations and immutable arena cursor paths. Each cursor
 identifies an array element or named record member and its containing cursor;
 brace elision descends and subsequent elements advance or unwind that path.
 Designators reset the current path relative to the containing brace pair.
-Unions initialize one selected member; unnamed bit-fields and flexible-array
-members do not consume ordinary initializer positions. Excess elements,
+Unions initialize one selected member; unnamed bit-fields do not consume
+ordinary initializer positions. As a GNU extension (`FlexibleArrayInitializers`),
+a static object's own list may give its flexible array member elements: the
+binding records the member's completed array type
+(`SemanticTranslationUnit::flexible_array`) and its storage size
+(`flexible_object_size`), the larger of the structure's size and the member's
+end, while its type and `sizeof` stay the structure's. A later list for the
+member overrides an earlier one (§6.7.8p19) but keeps the larger extent, where
+Clang allocates only the last. An empty list may initialize any flexible array
+member, as in Clang; any other initializer of one, in an automatic object, a
+compound literal, a nested structure or through a designator into its
+elements, is an error. Excess elements,
 incompatible scalar values and invalid designators have structured diagnostics.
 Narrow/wide strings initialize their matching character arrays, with optional
 braces and the permitted omitted terminator in an exactly sized array.

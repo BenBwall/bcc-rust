@@ -56,14 +56,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Applies scalar assignment conversion and aggregate current-object rules.
     /// The returned type completes an array of unknown size from its highest
     /// initialized index. C99: §6.7.8p11-22, pp. 126-127; PDF pp. 138-139.
+    ///
+    /// The second result is the completed type of the flexible array member
+    /// the initializer gives elements to; only a static object
+    /// (`static_object`) may initialize its own structure's member, a GNU
+    /// extension. Elsewhere only an empty list may, as in Clang.
+    /// C99: §6.7.2.1 paragraph 16, p. 103; PDF p. 115.
     pub(super) fn check_initializer(
         &mut self,
         ty: TypeId,
         initializer: &'tu Initializer<'tu>,
         static_storage: bool,
-    ) -> TypeId {
+        static_object: bool,
+    ) -> (TypeId, Option<TypeId>) {
         if initializer.recovered || self.types.unanalyzed(ty) {
-            return ty;
+            return (ty, None);
         }
         // §6.7.8p3 excludes variable length array types, not pointers to them.
         if (matches!(self.types.nodes[ty.index], TypeKind::Array(..)) && self.variably_modified(ty))
@@ -79,9 +86,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
                 None,
             );
-            return ty;
+            return (ty, None);
         }
         let mut work = ArenaVec::new_in(self.scratch);
+        // The flexible array member's element type once an element of the
+        // object's own member is reached, and its highest initialized index.
+        let mut flexible: Option<(TypeId, u64)> = None;
         let mut leaves = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut count = 0;
         let before = self.semantic_errors;
@@ -102,6 +112,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             if let Some(extent) = self.initialize_string(target, e) {
                                 if std::ptr::eq(init, initializer) {
                                     count = count.max(extent);
+                                } else if let Some((_, elements)) = &mut flexible
+                                    && self.flexible_array_type(target, ty)
+                                {
+                                    *elements = (*elements).max(extent);
                                 }
                                 continue;
                             }
@@ -192,6 +206,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             {
                                 if std::ptr::eq(init, initializer) {
                                     count = count.max(extent);
+                                } else if let Some((_, elements)) = &mut flexible
+                                    && self.flexible_array_type(target, ty)
+                                {
+                                    *elements = (*elements).max(extent);
                                 }
                                 continue;
                             }
@@ -293,6 +311,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                     valid = false;
                                     break;
                                 };
+                                // Clang: a designator may name the flexible
+                                // array member but not an element inside it.
+                                if self.flexible_member(selected, index)
+                                    && designation
+                                        .designators
+                                        .as_slice()
+                                        .last()
+                                        .is_some_and(|last| !std::ptr::eq(designator, last))
+                                {
+                                    self.error(
+                                        SemanticErrorKind::FlexibleArrayInitializer,
+                                        designator.source_vectors,
+                                        None,
+                                        None,
+                                    );
+                                }
                                 cursor = Current {
                                     container: selected,
                                     index,
@@ -352,6 +386,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     if infer {
                         count = count.max(cursor.root_index.saturating_add(1));
                     }
+                    if self.flexible_member(cursor.container, cursor.index) {
+                        // Only the object's own list reaches its structure's
+                        // member at the outermost level.
+                        let own =
+                            infer && cursor.parent.is_none() && cursor.container.index == ty.index;
+                        let empty = matches!(
+                            element.initializer.kind,
+                            InitializerType::InitializerList(list) if list.elements.as_slice().is_empty()
+                        );
+                        self.enter_flexible_array(
+                            target,
+                            own && static_object,
+                            empty,
+                            element.source_vectors,
+                            &mut flexible,
+                        );
+                    }
                     // Without explicit braces, descend until an expression can
                     // initialize the complete current subobject or a scalar
                     // leaf.
@@ -361,6 +412,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             let Some(child) = self.subobject(target, next_index) else {
                                 break;
                             };
+                            if self.flexible_member(target, next_index) {
+                                self.enter_flexible_array(
+                                    child,
+                                    false,
+                                    false,
+                                    element.source_vectors,
+                                    &mut flexible,
+                                );
+                            }
                             cursor = Current {
                                 container:  target,
                                 index:      next_index,
@@ -368,6 +428,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 root_index: cursor.root_index,
                             };
                             target = child;
+                        }
+                    }
+                    // Brace elision may have descended into an element, so
+                    // the member's own position is on the cursor's path.
+                    if let Some((_, elements)) = &mut flexible {
+                        let mut path = Some(&cursor);
+                        while let Some(current) = path {
+                            if self.flexible_array_type(current.container, ty) {
+                                *elements = (*elements).max(current.index.saturating_add(1));
+                                break;
+                            }
+                            path = current.parent;
                         }
                     }
                     let next = self.advance_current(cursor);
@@ -383,26 +455,113 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         if unmodeled {
-            return self.types.unknown();
+            return (self.types.unknown(), None);
         }
+        let flexible = match flexible {
+            | Some((element, elements)) if self.semantic_errors == before => {
+                if elements > 0
+                    && !self.validate_array_size(
+                        element,
+                        i128::from(elements),
+                        initializer.source_vectors,
+                    )
+                {
+                    return (self.types.unknown(), None);
+                }
+                Some(
+                    self.types
+                        .intern(TypeKind::Array(element, ArrayBound::Constant(elements))),
+                )
+            },
+            | _ => None,
+        };
         if let TypeKind::Array(element, ArrayBound::Incomplete) = self.types.nodes[ty.index] {
             if count == 0 {
                 return if self.semantic_errors > before {
-                    self.types.unknown()
+                    (self.types.unknown(), None)
                 } else {
-                    ty
+                    (ty, None)
                 };
             }
             // C99 §6.7.8p22, p. 127; PDF p. 139: completion produces an
             // object type subject to the same size limit as a declared bound.
             if !self.validate_array_size(element, i128::from(count), initializer.source_vectors) {
-                return self.types.unknown();
+                return (self.types.unknown(), None);
             }
-            self.types
-                .intern(TypeKind::Array(element, ArrayBound::Constant(count)))
+            (
+                self.types
+                    .intern(TypeKind::Array(element, ArrayBound::Constant(count))),
+                None,
+            )
         } else {
-            ty
+            (ty, flexible)
         }
+    }
+
+    /// Whether member `index` of `container` is a flexible array member.
+    /// C99: §6.7.2.1 paragraph 16, p. 103; PDF p. 115.
+    fn flexible_member(&self, container: TypeId, index: u64) -> bool {
+        let TypeKind::Tag(id) = self.types.nodes[container.index] else {
+            return false;
+        };
+        self.types.tags[id].kind != TagKind::Enum
+            && usize::try_from(index)
+                .ok()
+                .and_then(|index| self.types.tags[id].members.get().get(index))
+                .is_some_and(|member| {
+                    matches!(
+                        self.types.nodes[member.ty.index],
+                        TypeKind::Array(_, ArrayBound::Incomplete)
+                    )
+                })
+    }
+
+    /// An initializer reached the flexible array member of type `member`.
+    /// A static object may initialize its own structure's member (`own`),
+    /// and an empty list may initialize any, which Clang accepts as an
+    /// extension (`-Wgnu-flexible-array-initializer`); anything else is an
+    /// error. Starts counting the own member's elements in `flexible`; a
+    /// later initializer of the member overrides an earlier one (§6.7.8p19,
+    /// p. 127; PDF p. 139) but keeps the larger extent so that every listed
+    /// element has storage.
+    /// GNU extension: GCC manual, "Arrays of Length Zero".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Zero-Length.html>
+    fn enter_flexible_array(
+        &mut self,
+        member: TypeId,
+        own: bool,
+        empty: bool,
+        source: super::SourceVectors,
+        flexible: &mut Option<(TypeId, u64)>,
+    ) {
+        if !own && !empty {
+            self.error(
+                SemanticErrorKind::FlexibleArrayInitializer,
+                source,
+                None,
+                None,
+            );
+            return;
+        }
+        self.context.report_extension(
+            crate::configuration::Feature::FlexibleArrayInitializers,
+            "flexible array initialization",
+            source,
+        );
+        if own && let TypeKind::Array(element, _) = self.types.nodes[member.index] {
+            *flexible = Some((element, flexible.map_or(0, |(_, elements)| elements)));
+        }
+    }
+
+    /// Whether `container` is the flexible array member an initializer of an
+    /// object of type `root` is giving elements to: an array of unknown size
+    /// other than the object itself.
+    fn flexible_array_type(&self, container: TypeId, root: TypeId) -> bool {
+        container.index != root.index
+            && matches!(
+                self.types.nodes[container.index],
+                TypeKind::Array(_, ArrayBound::Incomplete)
+            )
     }
 
     /// Checks declaration initialization, completes array types and retains
@@ -443,12 +602,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             return;
         }
-        let ty = self.check_initializer(
+        let (ty, flexible) = self.check_initializer(
             binding.ty,
             initializer,
             binding.duration == Duration::Static,
+            binding.duration == Duration::Static,
         );
         self.bindings[index].ty = ty;
+        if let Some(flexible) = flexible {
+            _ = self.flexible_arrays.insert(index, flexible);
+        }
         if !self.types.unanalyzed(ty) && !self.complete_object(ty) {
             self.error(
                 SemanticErrorKind::IncompleteObject,
@@ -641,13 +804,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .members
                 .get()
                 .get(usize::try_from(index).ok()?)
-                .filter(|m| {
-                    m.initializable()
-                        && !matches!(
-                            self.types.nodes[m.ty.index],
-                            TypeKind::Array(_, ArrayBound::Incomplete)
-                        )
-                })
+                .filter(|m| m.initializable())
                 .map(|m| m.ty),
             | _ => (index == 0).then_some(ty),
         }
