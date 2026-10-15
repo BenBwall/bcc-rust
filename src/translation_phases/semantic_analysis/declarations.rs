@@ -436,7 +436,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if spec
                 .storage_class
                 .is_some_and(|s| s != StorageClass::Register)
-                || thread_storage(spec.extensions).is_some()
+                || self.thread_storage(spec.extensions)
             {
                 self.error(
                     SemanticErrorKind::InvalidParameter,
@@ -537,15 +537,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             Linkage::None
         };
-        let thread = thread_storage(spec.extensions);
-        if thread.is_some() && function && !typedef {
+        let thread = self.thread_storage(spec.extensions);
+        if thread && function && !typedef {
             self.error(
                 SemanticErrorKind::ThreadLocalFunction,
                 name.source_vectors,
                 Some(name.name),
                 None,
             );
-        } else if thread.is_some()
+        } else if thread
             && !file
             && (spec.storage_class.is_none()
                 || (spec.storage_class == Some(StorageClass::Auto)
@@ -568,7 +568,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             // C11 §6.2.4p3-4: `_Thread_local` selects thread storage
             // duration instead of static.
-            if thread.is_some() {
+            if thread {
                 Duration::Thread
             } else {
                 Duration::Static
@@ -1096,6 +1096,34 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         false
     }
 
+    /// Whether the specifiers give thread storage duration: the thread
+    /// storage-class specifier, or MSVC `__declspec(thread)`, which Clang
+    /// and GCC on Windows treat the same way. The declspec is an attribute,
+    /// so it is not subject to the parser's storage-class combination
+    /// checks; the constraints on functions, parameters and block scope
+    /// apply to it here.
+    /// C11: §6.7.1 paragraph 1, p. 109; PDF p. 127.
+    /// MSVC extension: Microsoft Learn, "thread".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/thread>
+    pub(super) fn thread_storage(
+        &self,
+        mut chain: Option<&super::SpecifierExtension<'tu>>,
+    ) -> bool {
+        while let Some(item) = chain {
+            match item.kind {
+                | SpecifierExtensionKind::ThreadLocal(_) => return true,
+                | SpecifierExtensionKind::Attributes(attribute)
+                    if attribute.syntax == super::AttributeSyntax::Msvc
+                        && super::vectors::attribute_names(attribute, self.context)
+                            .any(|(_, name)| name == "thread") =>
+                    return true,
+                | _ => {},
+            }
+            chain = item.next;
+        }
+        false
+    }
+
     /// GNU, standard-syntax vendor and MSVC attributes that change size,
     /// alignment or representation that this analyzer still cannot model.
     /// Names inside arguments never determine attribute semantics.
@@ -1479,18 +1507,4 @@ pub(super) fn compatible_enum_type(
     } else {
         target.intmax_t
     }
-}
-
-/// The thread storage-class specifier among a declaration's specifiers.
-/// C11: §6.7.1 paragraph 1, p. 109; PDF p. 127.
-pub(super) fn thread_storage(
-    mut chain: Option<&super::SpecifierExtension<'_>>,
-) -> Option<super::ThreadSpelling> {
-    while let Some(item) = chain {
-        if let SpecifierExtensionKind::ThreadLocal(spelling) = item.kind {
-            return Some(spelling);
-        }
-        chain = item.next;
-    }
-    None
 }

@@ -870,3 +870,41 @@ fn thread_storage_is_a_duration_with_its_constraints() {
         ]
     );
 }
+
+/// MSVC `__declspec(thread)` is thread storage under another spelling, so
+/// the object is not silently shared between threads; GNU attributes have no
+/// such name.
+/// MSVC extension: Microsoft Learn, "thread".
+/// <https://learn.microsoft.com/en-us/cpp/cpp/thread>
+#[test]
+fn msvc_declspec_thread_is_thread_storage() {
+    let msvc = gnu17().with_msvc_extensions(true);
+    with_configuration(
+        "__declspec(thread) int a = 1; static __declspec(thread) long b; __attribute__((thread)) \
+         int c; int f(void) { static __declspec(thread) int d; return a + d; }",
+        msvc,
+        |context, s| {
+            assert_eq!(context.pending_error_count(), 0);
+            let mut thread = Vec::new();
+            for binding in s.bindings {
+                if binding.duration == Duration::Thread {
+                    thread.push(context.string_cache.at(binding.name.name));
+                }
+            }
+            assert_eq!(thread, ["a", "b", "d"]);
+        },
+    );
+    assert_eq!(
+        kinds(
+            "int x; __declspec(thread) int x; void g(void) { __declspec(thread) int z; } \
+             __declspec(thread) int h(void); int *q = &x; __declspec(thread) int y; int *r = &y;",
+            msvc
+        ),
+        [
+            SemanticErrorKind::ThreadLocalAfterNonThreadLocal,
+            SemanticErrorKind::ThreadLocalBlockScope,
+            SemanticErrorKind::ThreadLocalFunction,
+            SemanticErrorKind::NonConstantInitializer,
+        ]
+    );
+}

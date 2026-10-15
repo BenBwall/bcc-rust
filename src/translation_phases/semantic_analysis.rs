@@ -154,12 +154,12 @@ use super::{
     SourceVectors,
     parsing::{
         AttributeSpecifier,
+        AttributeSyntax,
         ExtendedType,
         ParsedTranslationUnit,
         SpecifierExtension,
         SpecifierExtensionKind,
         SyntaxOperand,
-        ThreadSpelling,
         declaration_syntax::{
             Declaration,
             DeclarationSpecifiers,
@@ -924,7 +924,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 if p.declaration_specifiers
                     .storage_class
                     .is_some_and(|s| s != StorageClass::Register)
-                    || declarations::thread_storage(p.declaration_specifiers.extensions).is_some()
+                    || self.thread_storage(p.declaration_specifiers.extensions)
                 {
                     self.error(
                         SemanticErrorKind::InvalidParameter,

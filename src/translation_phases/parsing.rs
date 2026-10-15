@@ -128,13 +128,13 @@ use machine::{
 };
 pub(crate) use modern::{
     AttributeSpecifier,
+    AttributeSyntax,
     ExtendedType,
     GenericSelection,
     SpecifierExtension,
     SpecifierExtensionKind,
     StaticAssertion,
     SyntaxOperand,
-    ThreadSpelling,
 };
 use recovery::RecoveryState;
 use scope::{
