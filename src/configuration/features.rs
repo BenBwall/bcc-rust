@@ -130,6 +130,11 @@ pub(crate) enum Feature {
     HasBuiltin,
     SignBitShifts,
     FlexibleArrayExtensions,
+    /// Initializing the flexible array member of a static object, which
+    /// grows the object; Clang's `-Wgnu-flexible-array-initializer`.
+    /// GNU extension to C99 §6.7.2.1 paragraph 16, p. 103; PDF p. 115.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Zero-Length.html>
+    FlexibleArrayInitializers,
     ConstantFolding,
     MsDeclspec,
     MsIntTypes,
@@ -154,6 +159,11 @@ pub(crate) enum Feature {
     QuotedHeaderBackslash,
     /// C23 §6.9.2p5, p. 160; PDF p. 173 permits unnamed definition parameters.
     UnnamedDefinitionParameters,
+    /// Addition, subtraction and increments on `void *`, whose element size
+    /// is 1, extending C99 §6.5.6p2-3, p. 82; PDF p. 94.
+    /// GNU extension: GCC "Pointer Arith",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Pointer-Arith.html>.
+    VoidPointerArithmetic,
 }
 
 impl Feature {
@@ -268,13 +278,15 @@ impl Feature {
             | Self::HasBuiltin
             | Self::SignBitShifts
             | Self::FlexibleArrayExtensions
+            | Self::FlexibleArrayInitializers
             | Self::ConstantFolding
             | Self::Float128
             | Self::GnuBuiltins
             | Self::VectorBuiltins
             | Self::PreprocessorComma
             | Self::MacroExpandedDefined
-            | Self::QuotedHeaderBackslash => FeatureOrigin::Gnu,
+            | Self::QuotedHeaderBackslash
+            | Self::VoidPointerArithmetic => FeatureOrigin::Gnu,
 
             | Self::MsDeclspec => FeatureOrigin::Msvc(MsvcFeature::Declspec),
             | Self::MsIntTypes => FeatureOrigin::Msvc(MsvcFeature::IntTypes),
@@ -394,6 +406,7 @@ impl Feature {
         Self::HasBuiltin,
         Self::SignBitShifts,
         Self::FlexibleArrayExtensions,
+        Self::FlexibleArrayInitializers,
         Self::ConstantFolding,
         Self::MsDeclspec,
         Self::MsIntTypes,
@@ -412,6 +425,7 @@ impl Feature {
         Self::MacroExpandedDefined,
         Self::QuotedHeaderBackslash,
         Self::UnnamedDefinitionParameters,
+        Self::VoidPointerArithmetic,
     ];
 }
 

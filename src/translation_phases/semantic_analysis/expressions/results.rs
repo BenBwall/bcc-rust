@@ -6,75 +6,9 @@
 
 use super::ExpressionInfo;
 use crate::translation_phases::{
-    parsing::syntax::{
-        BlockItem,
-        Expression,
-        ExpressionSlot,
-        ExpressionType,
-        Statement,
-        StatementType,
-        UnaryOperator,
-    },
+    parsing::syntax::Expression,
     semantic_analysis::types::TypeId,
 };
-
-/// Follows designation-preserving syntax and retained compile-time selections.
-/// Each step visits a strict child, without recursive syntax traversal.
-/// The callback observes every visited node, including transparent wrappers,
-/// so consumers can check conversions without duplicating the syntax walk.
-/// C99: §6.5.1p5, p. 69; PDF p. 81 (parentheses).
-/// C11: §6.5.1.1p4, p. 79; PDF p. 97 (generic selection).
-/// GNU extension: GCC "Other Builtins", `__builtin_choose_expr`.
-/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
-pub(crate) fn selected_designator<'tu>(
-    mut expression: &'tu Expression<'tu>,
-    mut info: impl FnMut(&'tu Expression<'tu>) -> Option<ExpressionInfo<'tu>>,
-) -> &'tu Expression<'tu> {
-    loop {
-        let selected = info(expression).and_then(|i| i.selected_expression);
-        expression = match expression.kind {
-            | ExpressionType::Parenthesized { expression } => expression,
-            | ExpressionType::Unary {
-                operator: UnaryOperator::Extension,
-                operand_expression,
-            } => operand_expression,
-            | _ => match selected {
-                | Some(selected) => selected,
-                | None => return expression,
-            },
-        };
-    }
-}
-
-/// Finds the final value statement of a GNU statement-expression block.
-/// Labels do not change its value. Return the outer statement too, so lowering
-/// enters every label target before scheduling the expression. A final nested
-/// compound statement has void type; only the owning block is unwrapped.
-/// C99: §6.8.1p4, p. 132; PDF p. 144 (labels preserve control flow).
-/// GNU extension: GCC "Statement Exprs".
-/// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
-pub(crate) fn statement_expression_tail<'tu>(
-    block: &'tu Statement<'tu>,
-) -> Option<(&'tu Statement<'tu>, &'tu Expression<'tu>)> {
-    let StatementType::Compound { items } = block.kind else {
-        return None;
-    };
-    let BlockItem::Statement(outer) = *items.last()? else {
-        return None;
-    };
-    let mut statement = outer;
-    loop {
-        statement = match statement.kind {
-            | StatementType::Label(_, inner)
-            | StatementType::Case(_, inner)
-            | StatementType::Default(inner) => inner,
-            | StatementType::CaseRange(range) => range.statement,
-            | StatementType::Attributed(attributed) => attributed.statement,
-            | StatementType::Expression(ExpressionSlot::Parsed(e)) => return Some((outer, e)),
-            | _ => return None,
-        };
-    }
-}
 
 /// One contextual conversion and its resulting type.
 /// C99: §6.3.2.1 paragraphs 2-4, p. 46; PDF p. 58.
@@ -97,6 +31,11 @@ pub(crate) enum ConversionKind {
     Arithmetic,
     Assignment,
     DefaultArgument,
+    /// A prototyped call's argument, already converted to a member of a
+    /// GNU transparent union parameter, becomes that union with the member
+    /// holding the value.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    TransparentUnion,
 }
 
 /// The category before contextual lvalue conversion or decay.
@@ -117,6 +56,12 @@ pub(crate) enum ConstantClass {
     None,
     Arithmetic,
     Address,
+    /// GNU extension: GCC "Labels as Values". `&&label - &&base` for two
+    /// labels of one function, possibly converted to an integer type of at
+    /// least 32 bits: a constant that only code layout determines, so it has
+    /// no folded value. Static initializers accept it; the control facts
+    /// retain its two labels.
+    LabelDifference,
 }
 
 /// Folding restrictions and GNU address-difference eligibility are separate
@@ -136,13 +81,6 @@ impl ExpressionInfo<'_> {
     pub(crate) fn place_alignment(&self) -> Option<u32> {
         self.place_alignment
             .and_then(|alignment| 1_u32.checked_shl(u32::from(alignment.get() - 1)))
-    }
-
-    /// For `.` and `->` (and records copied from one, such as parentheses),
-    /// the index of the selected member in the record's `Tag::fields`.
-    /// C99: §6.5.2.3 paragraphs 3-4, p. 73; PDF p. 85.
-    pub(crate) fn field_index(&self) -> Option<usize> {
-        self.field.map(|field| field.get() as usize - 1)
     }
 
     pub(in crate::translation_phases::semantic_analysis) fn atomic_cast(self) -> bool {

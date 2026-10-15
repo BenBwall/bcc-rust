@@ -1,0 +1,33 @@
+warning: predefined identifier is only valid inside function: `__func__`
+ --> sema-predefined-outside-function.c:1:20
+  |
+1 | const char *name = __func__;
+  |                    ^^^^^^^^ used outside a function
+  |
+  = note: C99 §6.4.2.2p1: __func__ names the enclosing function; GCC and Clang extend this to __FUNCTION__ and __PRETTY_FUNCTION__ and use an empty or `top level` string outside one
+
+warning: predefined identifier is only valid inside function: `__FUNCTION__`
+ --> sema-predefined-outside-function.c:2:19
+  |
+2 | const char *gnu = __FUNCTION__;
+  |                   ^^^^^^^^^^^^ used outside a function
+  |
+  = note: C99 §6.4.2.2p1: __func__ names the enclosing function; GCC and Clang extend this to __FUNCTION__ and __PRETTY_FUNCTION__ and use an empty or `top level` string outside one
+
+warning: predefined identifier is only valid inside function: `__PRETTY_FUNCTION__`
+ --> sema-predefined-outside-function.c:3:22
+  |
+3 | const char *pretty = __PRETTY_FUNCTION__;
+  |                      ^^^^^^^^^^^^^^^^^^^ used outside a function
+  |
+  = note: C99 §6.4.2.2p1: __func__ names the enclosing function; GCC and Clang extend this to __FUNCTION__ and __PRETTY_FUNCTION__ and use an empty or `top level` string outside one
+
+warning: predefined identifier is only valid inside function: `__PRETTY_FUNCTION__`
+ --> sema-predefined-outside-function.c:4:20
+  |
+4 | char buffer[sizeof __PRETTY_FUNCTION__];
+  |                    ^^^^^^^^^^^^^^^^^^^ used outside a function
+  |
+  = note: C99 §6.4.2.2p1: __func__ names the enclosing function; GCC and Clang extend this to __FUNCTION__ and __PRETTY_FUNCTION__ and use an empty or `top level` string outside one
+
+4 warnings generated.

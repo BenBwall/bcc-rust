@@ -41,6 +41,17 @@ pub(crate) struct SemanticError {
 /// C99: §6.7p3-4, p. 97; PDF p. 109; subsidiary constraints are cited below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SemanticErrorKind {
+    /// Pointer constraints diagnosed with Clang's group/default severity.
+    /// C99: §6.5.16.1p1, p. 92; PDF p. 104; §6.5.9p2, p. 86; PDF p. 98;
+    /// §6.5.8p2, p. 85; PDF p. 97; §6.5.2.2p2,p7, pp. 71-72; PDF pp. 83-84;
+    /// §6.8.6.4p3, p. 139; PDF p. 151; §6.7.8p11, p. 126; PDF p. 138.
+    PointerConstraint(crate::configuration::DiagnosticGroup),
+    /// C99: §6.10.6p1, p. 159; PDF p. 171; GCC/MSVC pragma extension.
+    PragmaPackMalformed,
+    PragmaPackPopEmpty,
+    PragmaPackPopNameAlignment,
+    PragmaPackUnterminated,
+    PragmaPackShow(u32),
     /// C99: §7.15p3, p. 249; PDF p. 261.
     InvalidVaList,
     /// C99: §7.15.1.1p2, pp. 249-250; PDF pp. 261-262.
@@ -122,6 +133,27 @@ pub(crate) enum SemanticErrorKind {
     JumpIntoVariableScope,
     /// C99: §6.8.4.2p2, p. 134; PDF p. 146.
     SwitchIntoVariableScope,
+    /// GNU extension: a computed goto may reach every address-taken label,
+    /// so one inside a variably modified scope the goto is outside of is an
+    /// error, as in Clang. C99: §6.8.6.1p1, p. 137; PDF p. 149.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    IndirectJumpIntoVariableScope,
+    /// GNU extension: GCC "Statement Exprs" makes a computed goto into a
+    /// statement expression undefined; Clang rejects a possible one.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html>
+    IndirectJumpIntoStatementExpression,
+    /// GNU extension: a computed goto can only reach labels whose address
+    /// is taken in its function, so without one it has no target; Clang
+    /// rejects it. <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    IndirectGotoWithoutLabels,
+    /// GNU extension: a computed goto's operand converts to `const void *`
+    /// as by simple assignment. C99: §6.5.16.1p1, p. 92; PDF p. 104.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    InvalidComputedGoto,
+    /// GNU extension: `&&label` names a label of the enclosing function, so
+    /// it cannot appear outside a function body.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html>
+    LabelAddressOutsideFunction,
     /// C99: §6.8.1p2, p. 131; PDF p. 143.
     CaseOutsideSwitch,
     /// C99: §6.8.4.2p3, p. 134; PDF p. 146.
@@ -139,6 +171,9 @@ pub(crate) enum SemanticErrorKind {
     UnknownTypedef,
     /// C99: §6.5.1p2, p. 69; PDF p. 81.
     UndeclaredIdentifier,
+    /// Clang-compatible extension, `-Wpredefined-identifier-outside-function`;
+    /// C99: §6.4.2.2p1, p. 52; PDF p. 64.
+    PredefinedOutsideFunction,
     /// Clang-compatible extension; C99: §6.5.2.2p6,p9, pp. 71-72;
     /// PDF pp. 83-84; §7.1.4p2, p. 167; PDF p. 179.
     ImplicitLibraryFunction(StringCacheId),
@@ -208,6 +243,10 @@ pub(crate) enum SemanticErrorKind {
     InvalidInitializer,
     /// C99: §6.7.8p2, p. 125; PDF p. 137.
     ExcessInitializer,
+    /// A flexible array member given elements outside a static object's own
+    /// structure; GNU C allows only that case, and Clang an empty list too.
+    /// C99: §6.7.2.1p16, p. 103; PDF p. 115; §6.7.8p2, p. 125; PDF p. 137.
+    FlexibleArrayInitializer,
     /// C99: §6.7.8p6-7, p. 125; PDF p. 137.
     InvalidDesignator,
     /// C99: §6.7.8p4, p. 125; PDF p. 137.
@@ -216,6 +255,14 @@ pub(crate) enum SemanticErrorKind {
     InvalidStorage,
     /// C99: §6.7.1p5, p. 98; PDF p. 110.
     InvalidFunctionStorage,
+    /// C11: §6.7.1p4, p. 109; PDF p. 127.
+    ThreadLocalFunction,
+    /// C11: §6.7.1p3, p. 109; PDF p. 127.
+    ThreadLocalBlockScope,
+    /// C11: §6.7.1p3, p. 109; PDF p. 127.
+    ThreadLocalAfterNonThreadLocal,
+    /// C11: §6.7.1p3, p. 109; PDF p. 127.
+    NonThreadLocalAfterThreadLocal,
     /// C99: §6.7.8p5, p. 125; PDF p. 137.
     LinkedBlockInitializer,
     /// C99: §6.7.3p2, p. 108; PDF p. 120.
@@ -317,6 +364,13 @@ pub(crate) enum SemanticErrorKind {
     InvalidAlignmentAttribute,
     InvalidStandardAlignment,
     InvalidModeAttribute,
+    /// A `transparent_union` attribute ignored, as Clang warns: it names no
+    /// union definition, or the union has no member, a floating or vector
+    /// first member, or a member whose size differs from the first's or
+    /// whose alignment exceeds it.
+    /// GNU extension: GCC manual, "Common Type Attributes".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    IgnoredTransparentUnion,
     /// GCC Vector Extensions: compatible lanes and safe scalar splats.
     /// GNU extension: GCC manual, "Vector Extensions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
@@ -335,16 +389,24 @@ impl SemanticErrorKind {
     /// The primary label names what is wrong at the labeled source.
     const fn label(self) -> &'static str {
         match self {
+            | Self::PointerConstraint(_) => "pointer constraint violation",
+            | Self::PragmaPackMalformed
+            | Self::PragmaPackPopEmpty
+            | Self::PragmaPackPopNameAlignment
+            | Self::PragmaPackUnterminated
+            | Self::PragmaPackShow(_) => "packing directive",
             | Self::UnsupportedFloat128 => "unsupported floating type",
             | Self::InvalidVectorAttribute => "invalid vector size or element type",
             | Self::InvalidAlignmentAttribute => "alignment must be a power-of-two constant",
             | Self::InvalidStandardAlignment => "invalid alignment specifier",
             | Self::InvalidModeAttribute => "invalid scalar machine mode",
+            | Self::IgnoredTransparentUnion => "this union cannot be made transparent",
             | Self::InvalidVectorOperand => "invalid vector operands",
             | Self::InvalidVectorBuiltin => "invalid vector builtin operands",
             | Self::InvalidImmediate => "expected an integer constant expression in range",
             | Self::UnknownTypedef => "not a typedef name in this scope",
             | Self::UndeclaredIdentifier => "not declared",
+            | Self::PredefinedOutsideFunction => "used outside a function",
             | Self::ImplicitLibraryFunction(_) => "library prototype used here",
             | Self::InvalidAddressOperand => "cannot take this address",
             | Self::BuiltinRequiresCall => "builtin must be directly called",
@@ -375,10 +437,15 @@ impl SemanticErrorKind {
             | Self::FailedAssertion => "assertion is false",
             | Self::InvalidInitializer => "invalid initializer",
             | Self::ExcessInitializer => "no subobject is left to initialize",
+            | Self::FlexibleArrayInitializer => "initializes a flexible array member",
             | Self::InvalidDesignator => "no such subobject",
             | Self::NonConstantInitializer => "not a constant expression",
             | Self::InvalidStorage => "external declaration",
             | Self::InvalidFunctionStorage => "function declared in a block",
+            | Self::ThreadLocalFunction => "declared as a function",
+            | Self::ThreadLocalBlockScope => "automatic object at block scope",
+            | Self::ThreadLocalAfterNonThreadLocal => "declared thread-local here",
+            | Self::NonThreadLocalAfterThreadLocal => "declared without thread storage here",
             | Self::LinkedBlockInitializer => "initializer is not allowed here",
             | Self::InvalidRestrict => "restrict on a non-object pointer",
             | Self::QualifiedFunction => "function type qualifiers are ignored",
@@ -434,6 +501,11 @@ impl SemanticErrorKind {
                 "jumps into a variably modified scope",
             | Self::JumpIntoStatementExpression | Self::SwitchIntoStatementExpression =>
                 "jumps into a statement expression",
+            | Self::IndirectJumpIntoVariableScope => "may jump into a variably modified scope",
+            | Self::IndirectJumpIntoStatementExpression => "may jump into a statement expression",
+            | Self::InvalidComputedGoto => "not convertible to `const void *`",
+            | Self::IndirectGotoWithoutLabels => "no label of this function has its address taken",
+            | Self::LabelAddressOutsideFunction => "label address outside a function",
             | Self::CaseOutsideSwitch => "not in a switch statement",
             | Self::EmptyCaseRange => "empty case range",
             | Self::BreakOutsideLoopOrSwitch => "not in a loop or switch",
@@ -459,6 +531,32 @@ impl SemanticErrorKind {
     )]
     fn explanation(self) -> (&'static str, &'static str) {
         match self {
+            | Self::PointerConstraint(group) => (
+                match group {
+                    | crate::configuration::DiagnosticGroup::CompareDistinctPointerTypes => "comparison of distinct pointer types",
+                    | crate::configuration::DiagnosticGroup::IncompatiblePointerTypes => "incompatible pointer types in conversion",
+                    | crate::configuration::DiagnosticGroup::PointerSign => "conversion between pointers to integer types with different sign",
+                    | crate::configuration::DiagnosticGroup::PointerQualifiers => "pointer conversion discards qualifiers, including nested pointer qualifiers",
+                    | crate::configuration::DiagnosticGroup::IncompatibleFunctionPointerTypes => "incompatible function pointer types in conversion",
+                    | crate::configuration::DiagnosticGroup::IntConversion => "incompatible integer and pointer conversion",
+                    | crate::configuration::DiagnosticGroup::PointerIntegerCompare => "comparison between pointer and integer",
+                    | crate::configuration::DiagnosticGroup::OrderedCompareFunctionPointers => "ordered comparison of function pointers",
+                    | crate::configuration::DiagnosticGroup::OrderedPointerIntegerCompare => "ordered comparison between pointer and integer",
+                    | crate::configuration::DiagnosticGroup::PointerTypeMismatch => "pointer type mismatch in conditional expression",
+                    | crate::configuration::DiagnosticGroup::ConditionalTypeMismatch => "pointer/integer type mismatch in conditional expression",
+                    | crate::configuration::DiagnosticGroup::NewlineEof
+                    | crate::configuration::DiagnosticGroup::Undef
+                    | crate::configuration::DiagnosticGroup::UnknownPragmas
+                    | crate::configuration::DiagnosticGroup::UnusedFunction
+                    | crate::configuration::DiagnosticGroup::ConstantPromotion => "warning-group diagnostic",
+                },
+                "C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1",
+            ),
+            | Self::PragmaPackMalformed => ("malformed #pragma pack ignored", "C99 §6.10.6p1: implementation-defined GCC/MSVC packing pragma"),
+            | Self::PragmaPackPopEmpty => ("#pragma pack(pop, ...) failed: stack empty", "GCC/MSVC pack restores a saved alignment from its stack"),
+            | Self::PragmaPackPopNameAlignment => ("specifying both a name and alignment to 'pop' is undefined", "Clang warns and applies the named pop followed by the alignment"),
+            | Self::PragmaPackUnterminated => ("unterminated '#pragma pack(push, ...)' at end of file", "restore the saved packing state with #pragma pack(pop)"),
+            | Self::PragmaPackShow(_) => ("current #pragma pack alignment value", "GCC/MSVC packing state at this directive"),
             | Self::BuiltinRequiresCall => (
                 "builtin functions must be directly called",
                 "GNU extension: intrinsic-only builtins have no addressable external function; parentheses and compile-time selections preserve callee designation",
@@ -533,6 +631,12 @@ impl SemanticErrorKind {
             | Self::InvalidModeAttribute => (
                 "invalid mode attribute",
                 "GCC mode requires an eligible scalar type and a supported scalar machine mode",
+            ),
+            | Self::IgnoredTransparentUnion => (
+                "transparent_union attribute ignored",
+                "GNU transparent_union applies to a union definition with at least one member, a \
+                 first member of neither floating nor vector type, and every member of the first \
+                 member's size and at most its alignment",
             ),
             | Self::InvalidVectorOperand => (
                 "invalid vector operation",
@@ -685,6 +789,33 @@ impl SemanticErrorKind {
                 "C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified \
                  identifier to inside that scope",
             ),
+            | Self::IndirectJumpIntoVariableScope => (
+                "computed goto can enter the scope of a variably modified identifier at its \
+                 possible target",
+                "C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified \
+                 identifier to inside that scope; GCC Labels as Values: a computed goto may reach \
+                 every label whose address is taken",
+            ),
+            | Self::IndirectJumpIntoStatementExpression => (
+                "computed goto can enter a statement expression at its possible target",
+                "GCC Statement Exprs: jumping into a statement expression with a computed goto is \
+                 undefined; GCC Labels as Values: a computed goto may reach every label whose \
+                 address is taken",
+            ),
+            | Self::IndirectGotoWithoutLabels => (
+                "computed goto in a function without label addresses",
+                "GCC Labels as Values: a computed goto may only jump to a label of its own \
+                 function whose address is taken with `&&`",
+            ),
+            | Self::InvalidComputedGoto => (
+                "computed goto operand is not a pointer",
+                "GCC Labels as Values: `goto *expression` converts the operand to `const void *` \
+                 as C99 §6.5.16.1p1 simple assignment does",
+            ),
+            | Self::LabelAddressOutsideFunction => (
+                "label address outside a function body",
+                "GCC Labels as Values: `&&label` names a label of the function that contains it",
+            ),
             | Self::SwitchIntoVariableScope => (
                 "switch dispatch enters the scope of a variably modified identifier",
                 "C99 §6.8.4.2p2: the entire switch is within the scope of every variably modified \
@@ -716,6 +847,12 @@ impl SemanticErrorKind {
                 "identifier has no visible declaration",
                 "C99 §6.5.1p2: an identifier expression designates a declared object, function or \
                  enumeration constant",
+            ),
+            | Self::PredefinedOutsideFunction => (
+                "predefined identifier is only valid inside function",
+                "C99 §6.4.2.2p1: __func__ names the enclosing function; GCC and Clang extend this \
+                 to __FUNCTION__ and __PRETTY_FUNCTION__ and use an empty or `top level` string \
+                 outside one",
             ),
             | Self::InvalidAddressOperand => (
                 "address operator requires an addressable object or function",
@@ -826,6 +963,12 @@ impl SemanticErrorKind {
                 "C99 §6.7.8p2: an initializer shall not provide a value for an object outside the \
                  initialized entity",
             ),
+            | Self::FlexibleArrayInitializer => (
+                "initialization of flexible array member is not allowed",
+                "C99 §6.7.2.1p16, §6.7.8p2: a flexible array member has no elements; as a GNU \
+                 extension only an object with static storage duration may give the flexible \
+                 array member of its own structure elements",
+            ),
             | Self::InvalidDesignator => (
                 "designator does not identify an available subobject",
                 "C99 §6.7.8p6-7: array indices are nonnegative integer constants within bounds \
@@ -874,6 +1017,26 @@ impl SemanticErrorKind {
                 "block-scope function declaration has a storage class other than extern",
                 "C99 §6.7.1p5: a function declared in a block has no explicit storage class other \
                  than extern",
+            ),
+            | Self::ThreadLocalFunction => (
+                "thread storage duration applies only to objects",
+                "C11 §6.7.1p4: `_Thread_local` does not appear in the declaration specifiers of \
+                 a function declaration",
+            ),
+            | Self::ThreadLocalBlockScope => (
+                "thread-local object at block scope must be static or extern",
+                "C11 §6.7.1p3: a block-scope declaration with `_Thread_local` also has `static` \
+                 or `extern`",
+            ),
+            | Self::ThreadLocalAfterNonThreadLocal => (
+                "thread-local declaration follows a non-thread-local declaration",
+                "C11 §6.7.1p3: if `_Thread_local` appears in any declaration of an object, it \
+                 appears in every declaration of that object",
+            ),
+            | Self::NonThreadLocalAfterThreadLocal => (
+                "non-thread-local declaration follows a thread-local declaration",
+                "C11 §6.7.1p3: if `_Thread_local` appears in any declaration of an object, it \
+                 appears in every declaration of that object",
             ),
             | Self::LinkedBlockInitializer => (
                 "block-scope declaration with linkage cannot have an initializer",
@@ -1024,12 +1187,21 @@ impl ToDiagnostic for SemanticError {
                 quote_spelling(self.name.map_or("", |name| context.string_cache.at(name))),
                 context.string_cache.at(ty)
             )
+        } else if let SemanticErrorKind::PragmaPackShow(value) = self.kind {
+            format_in!(arena, "value of #pragma pack(show) == {value}")
         } else if let Some(name) = self.name {
             format_in!(
                 arena,
                 "{message}: {}",
                 quote_spelling(context.string_cache.at(name))
             )
+        } else {
+            message
+        };
+        let message = if let SemanticErrorKind::PointerConstraint(group) = self.kind
+            && let Some(group) = group.name()
+        {
+            format_in!(arena, "{message} [-W{group}]")
         } else {
             message
         };
@@ -1042,10 +1214,12 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::DuplicateLabel | SemanticErrorKind::DuplicateCase =>
                     "previous label is here",
                 | SemanticErrorKind::JumpIntoVariableScope
-                | SemanticErrorKind::SwitchIntoVariableScope =>
+                | SemanticErrorKind::SwitchIntoVariableScope
+                | SemanticErrorKind::IndirectJumpIntoVariableScope =>
                     "variably modified identifier is declared here",
                 | SemanticErrorKind::JumpIntoStatementExpression
-                | SemanticErrorKind::SwitchIntoStatementExpression =>
+                | SemanticErrorKind::SwitchIntoStatementExpression
+                | SemanticErrorKind::IndirectJumpIntoStatementExpression =>
                     "statement expression begins here",
                 | _ => "previous declaration is here",
             };
@@ -1075,11 +1249,18 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::MainSignature
                 | SemanticErrorKind::TentativeArrayAssumedOne
                 | SemanticErrorKind::UnusedStaticFunction
+                | SemanticErrorKind::PragmaPackMalformed
+                | SemanticErrorKind::PragmaPackPopEmpty
+                | SemanticErrorKind::PragmaPackPopNameAlignment
+                | SemanticErrorKind::PragmaPackUnterminated
+                | SemanticErrorKind::PragmaPackShow(_)
                 | SemanticErrorKind::EmptyCaseRange
                 | SemanticErrorKind::MissingReturnValueWarning
+                | SemanticErrorKind::PredefinedOutsideFunction
                 | SemanticErrorKind::InvalidAtomicOrder
                 | SemanticErrorKind::InvalidAtomicFailureOrder
                 | SemanticErrorKind::AtomicBufferQualifiers
+                | SemanticErrorKind::IgnoredTransparentUnion
         ) {
             ErrorSeverity::Warning
         } else {

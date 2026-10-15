@@ -156,6 +156,10 @@ pub(crate) enum UbKind {
     Unreachable,
     /// `call_indirect` through a pointer that is not a function's address.
     CallThroughNonFunction,
+    /// `indirect_br` to an address that is not the address of one of the
+    /// blocks it lists. GNU extension: GCC "Labels as Values" leaves a jump
+    /// to any other address undefined.
+    IndirectBranch,
     /// `call_indirect` with a signature that differs from the callee's.
     SignatureMismatch,
     /// `va_start` in a function that is not variadic.
@@ -190,11 +194,13 @@ impl fmt::Display for UbKind {
             | Self::OutOfBounds => "out-of-bounds access",
             | Self::MisalignedAccess => "misaligned access",
             | Self::WriteToConstant => "write to a constant global",
-            | Self::NotData => "data access to a function or va_list cursor",
+            | Self::NotData => "data access to a function, label or va_list cursor",
             | Self::OverlappingCopy => "overlapping copy",
             | Self::InvalidFree => "free of a pointer that is not a live heap allocation",
             | Self::Unreachable => "reached unreachable",
             | Self::CallThroughNonFunction => "indirect call through a non-function pointer",
+            | Self::IndirectBranch =>
+                "computed goto to an address that is not a label of the executing function",
             | Self::SignatureMismatch => "indirect call with the wrong signature",
             | Self::VaStartOutsideVariadic => "va_start in a function that is not variadic",
             | Self::InvalidVaList => "va_list operation on an invalid va_list",

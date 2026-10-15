@@ -2,8 +2,10 @@
 //!
 //! [`generate`] writes textual IR directly. Each function is built from
 //! structured statements (integer and floating arithmetic, comparisons,
-//! `select`, `freeze`, conversions, loads, stores and copies, direct and
-//! indirect calls, output through `putchar` and `printf`, diamonds, counted
+//! `select`, `freeze`, conversions, loads, stores and copies, accesses and
+//! copies of structure-like *record* slots, range checks and lowered `&&`
+//! and `||` conditions, direct and indirect calls,
+//! output through `putchar` and `printf`, diamonds, counted
 //! loops and switches), so every use is dominated by its
 //! definition by construction: the generator keeps a scope of the values
 //! that dominate the current point, and drops the values of a region when it
@@ -117,6 +119,16 @@ block0(v0: i32):
 /// halves of `@g1` never overlap.
 const DATA_GLOBALS: [(&str, u64); 3] = [("@g0", 16), ("@g1", 64), ("@table", 32)];
 
+/// The fields of a record slot, by offset, with padding at 5..8: a
+/// structure that is only accessed member by member and copied whole, as
+/// `sroa` splits it.
+const RECORD_FIELDS: [(u64, Ty); 4] = [(0, Ty::I32), (4, Ty::I8), (8, Ty::F64), (16, Ty::I64)];
+const RECORD_SIZE: u64 = 24;
+
+/// The byte ranges record copies move: the whole record, or runs of whole
+/// fields with their padding.
+const RECORD_RANGES: [(u64, u64); 5] = [(0, 24), (0, 24), (0, 8), (8, 16), (16, 8)];
+
 /// The most a non-`main` function may cost, in estimated instructions
 /// executed per call.
 const FUNCTION_BUDGET: u64 = 4_000;
@@ -159,6 +171,8 @@ struct FunctionGen<'g> {
     /// The values that dominate the current point.
     scope:       Vec<Val>,
     slots:       Vec<u64>,
+    /// How many record slots follow the plain ones.
+    records:     usize,
     /// The product of the trip counts of the enclosing loops.
     multiplier:  u64,
     cost:        u64,
@@ -190,6 +204,10 @@ impl FunctionGen<'_> {
                 address.id, byte.id, size.id
             ));
         }
+        self.records = self.rng.index(3);
+        for record in 0..self.records {
+            self.initialize_record(record);
+        }
         let statements = if main { 12 } else { 4 + self.rng.below(10) };
         self.statements(statements);
         if main {
@@ -219,6 +237,9 @@ impl FunctionGen<'_> {
     /// One random statement.
     fn statement(&mut self) {
         let nested = self.nesting < MAX_DEPTH;
+        if self.records > 0 && self.rng.chance(8) {
+            return self.record_statement();
+        }
         loop {
             match self.rng.below(100) {
                 | 0..30 => return self.arithmetic(),
@@ -673,6 +694,117 @@ impl FunctionGen<'_> {
             "copy v{}, v{}, v{}, align 8",
             destination.id, source.id, size.id
         ));
+    }
+
+    /// Fills a record slot with a byte, or stores its fields (all but one at
+    /// times, so that loads of an unset field read poison).
+    fn initialize_record(&mut self, record: usize) {
+        if self.rng.chance(50) {
+            let address = self.record_address(record, 0);
+            let byte = if self.rng.chance(50) {
+                0
+            } else {
+                self.rng.int(256) - 128
+            };
+            let byte = self.constant_value(Ty::I8, byte);
+            let size = self.constant_value(Ty::I64, i128::from(RECORD_SIZE));
+            self.line(format_args!(
+                "fill v{}, v{}, v{}, align 8",
+                address.id, byte.id, size.id
+            ));
+            return;
+        }
+        let unset = self
+            .rng
+            .chance(25)
+            .then(|| self.rng.index(RECORD_FIELDS.len()));
+        for (field, &(offset, ty)) in RECORD_FIELDS.iter().enumerate() {
+            if unset != Some(field) {
+                self.store_record_field(record, offset, ty);
+            }
+        }
+    }
+
+    /// A load or store of a record field, or a copy of a run of fields
+    /// between two records, into a record from `@g1` or out of one to `@g1`.
+    fn record_statement(&mut self) {
+        let record = self.rng.index(self.records);
+        let (offset, ty) = self.rng.pick(&RECORD_FIELDS);
+        match self.rng.below(10) {
+            | 0..4 => self.store_record_field(record, offset, ty),
+            | 4..8 => {
+                let address = self.record_address(record, offset);
+                let align = if offset == 0 { 8 } else { ty.bytes() };
+                let range = if ty.is_int() {
+                    Range::full(ty)
+                } else {
+                    Range::FULL_PTR
+                };
+                _ = self.def(
+                    ty,
+                    range,
+                    format_args!("load.{ty} v{}, align {align}", address.id),
+                );
+            },
+            | 8 if self.records > 1 => {
+                let other = (record + 1 + self.rng.index(self.records - 1)) % self.records;
+                let (start, size) = self.rng.pick(&RECORD_RANGES);
+                let destination = self.record_address(record, start);
+                let source = self.record_address(other, start);
+                self.copy_record(destination, source, size);
+            },
+            | _ => {
+                let (start, size) = self.rng.pick(&RECORD_RANGES);
+                let record = self.record_address(record, start);
+                let global = self.def(Ty::Ptr, Range::FULL_PTR, format_args!("global_addr @g1"));
+                if self.rng.chance(50) {
+                    self.copy_record(record, global, size);
+                } else {
+                    self.copy_record(global, record, size);
+                }
+            },
+        }
+    }
+
+    fn store_record_field(&mut self, record: usize, offset: u64, ty: Ty) {
+        let value = if ty.is_int() {
+            self.operand(ty)
+        } else {
+            self.float_operand(ty)
+        };
+        let address = self.record_address(record, offset);
+        let align = if offset == 0 { 8 } else { ty.bytes() };
+        self.line(format_args!(
+            "store.{ty} v{}, v{}, align {align}",
+            value.id, address.id
+        ));
+    }
+
+    fn copy_record(&mut self, destination: Val, source: Val, size: u64) {
+        let size = self.constant_value(Ty::I64, i128::from(size));
+        self.line(format_args!(
+            "copy v{}, v{}, v{}, align 8",
+            destination.id, source.id, size.id
+        ));
+    }
+
+    /// The address of byte `offset` of record slot `record`.
+    fn record_address(&mut self, record: usize, offset: u64) -> Val {
+        let slot = self.slots.len() + record;
+        let base = self.def(
+            Ty::Ptr,
+            Range::FULL_PTR,
+            format_args!("stack_addr slot{slot}"),
+        );
+        if offset == 0 {
+            return base;
+        }
+        let offset = self.constant_value(Ty::I64, i128::from(offset));
+        self.def(
+            Ty::Ptr,
+            Range::FULL_PTR,
+            format_args!("ptr_add inbounds v{}, v{}", base.id, offset.id),
+        )
     }
 
     /// The address of an aligned element of type `ty` in a stack slot or a
@@ -1237,19 +1369,122 @@ impl FunctionGen<'_> {
         self.line(format_args!("return v{}", sum.id));
     }
 
-    /// A condition: one in scope, a new comparison, or a constant.
+    /// A condition: one in scope, a new comparison, a range check, a lowered
+    /// `&&` or `||`, or a constant.
     fn condition(&mut self) -> Val {
-        match self.rng.below(10) {
+        match self.rng.below(12) {
             | 0..5 => match self.pick(Ty::I1) {
                 | Some(value) => value,
                 | None => self.new_condition(),
             },
-            | 5..9 => self.new_condition(),
+            | 8 => self.range_condition(),
+            | 9 if self.nesting < MAX_DEPTH => self.short_circuit(),
+            | 5..11 => self.new_condition(),
             | _ => {
                 let value = self.rng.int(2);
                 self.constant_value(Ty::I1, value)
             },
         }
+    }
+
+    /// Two comparisons of one value with constants, combined as `and`, `or`
+    /// or the selects that lowered `&&` and `||` become: a range check.
+    fn range_condition(&mut self) -> Val {
+        let ty = self.rng.pick(&[Ty::I8, Ty::I32, Ty::I64]);
+        let value = self.operand(ty);
+        let low = self.rng.int(41) - 20;
+        let high = low + self.rng.int(30) - 5;
+        let low = self.constant_value(ty, low);
+        let high = self.constant_value(ty, high);
+        let lower = self.rng.pick(&["sge", "sgt", "uge", "ugt", "sle"]);
+        let upper = self.rng.pick(&["sle", "slt", "ule", "ult", "sge"]);
+        let first = self.def(
+            Ty::I1,
+            Range::new(0, 1),
+            format_args!("icmp.{ty} {lower} v{}, v{}", value.id, low.id),
+        );
+        let second = self.def(
+            Ty::I1,
+            Range::new(0, 1),
+            format_args!("icmp.{ty} {upper} v{}, v{}", value.id, high.id),
+        );
+        let range = Range::new(0, 1);
+        match self.rng.below(4) {
+            | 0 => self.def(
+                Ty::I1,
+                range,
+                format_args!("and.i1 v{}, v{}", first.id, second.id),
+            ),
+            | 1 => self.def(
+                Ty::I1,
+                range,
+                format_args!("or.i1 v{}, v{}", first.id, second.id),
+            ),
+            | 2 => {
+                let no = self.constant_value(Ty::I1, 0);
+                self.def(
+                    Ty::I1,
+                    range,
+                    format_args!("select.i1 v{}, v{}, v{}", first.id, second.id, no.id),
+                )
+            },
+            | _ => {
+                let yes = self.constant_value(Ty::I1, 1);
+                self.def(
+                    Ty::I1,
+                    range,
+                    format_args!("select.i1 v{}, v{}, v{}", first.id, yes.id, second.id),
+                )
+            },
+        }
+    }
+
+    /// A lowered `a && b` or `a || b`: a branch on `a` to a block that
+    /// computes `b`, joined with the constant the first test decides, and
+    /// sometimes widened and compared with zero as a C condition is.
+    fn short_circuit(&mut self) -> Val {
+        let first = self.new_condition();
+        let and = self.rng.chance(50);
+        let decided = self.constant_value(Ty::I1, i128::from(!and));
+        let (second_block, _) = self.new_block(&[]);
+        let (merge, params) = self.new_block(&[Ty::I1]);
+        let join = block_call(merge, &[decided]);
+        if and {
+            self.line(format_args!(
+                "brif v{}, block{second_block}, {join}",
+                first.id
+            ));
+        } else {
+            self.line(format_args!(
+                "brif v{}, {join}, block{second_block}",
+                first.id
+            ));
+        }
+        self.current = second_block;
+        let mark = self.scope.len();
+        let second = if self.rng.chance(50) {
+            self.range_condition()
+        } else {
+            self.new_condition()
+        };
+        self.line(format_args!("jump {}", block_call(merge, &[second])));
+        self.scope.truncate(mark);
+        self.enter_merge(merge, &params, &[vec![decided], vec![second]]);
+        let joined = *self.scope.last().expect("the merge parameter is in scope");
+        if self.rng.chance(50) {
+            return joined;
+        }
+        let widened = self.def(
+            Ty::I32,
+            Range::new(0, 1),
+            format_args!("zext.i32 v{}", joined.id),
+        );
+        let zero = self.constant_value(Ty::I32, 0);
+        self.def(
+            Ty::I1,
+            Range::new(0, 1),
+            format_args!("icmp.i32 ne v{}, v{}", widened.id, zero.id),
+        )
     }
 
     /// An `icmp` of two operands, or of one operand with itself.
@@ -1421,6 +1656,10 @@ impl FunctionGen<'_> {
         );
         for (slot, size) in self.slots.iter().enumerate() {
             let _ = writeln!(out, "    slot{slot} = stack_slot {size}, align 8");
+        }
+        for record in 0..self.records {
+            let slot = self.slots.len() + record;
+            let _ = writeln!(out, "    slot{slot} = stack_slot {RECORD_SIZE}, align 8");
         }
         for (number, block) in self.blocks.iter().enumerate() {
             let _ = write!(out, "block{number}");
@@ -1769,6 +2008,7 @@ impl<'g> FunctionGen<'g> {
             current: 0,
             scope: Vec::new(),
             slots: Vec::new(),
+            records: 0,
             multiplier: 1,
             cost: 0,
             budget: if main { MAIN_BUDGET } else { FUNCTION_BUDGET },

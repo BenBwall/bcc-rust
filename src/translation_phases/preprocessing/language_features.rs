@@ -235,7 +235,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                             "__has_attribute",
                             "unused" | "deprecated" | "aligned" | "packed" | "noreturn" | "weak"
                             | "section" | "visibility" | "format" | "always_inline" | "noinline"
-                            | "gnu_inline",
+                            | "gnu_inline" | "transparent_union",
                         ) => 1,
                         | _ => 0,
                     }

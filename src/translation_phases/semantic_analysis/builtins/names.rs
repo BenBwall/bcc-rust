@@ -15,9 +15,16 @@ use crate::translation_phases::semantic_analysis::{
 /// Builtins parsed as ordinary calls, queried by the preprocessor.
 /// GCC/Clang extensions to C99 §6.5.2.2, pp. 71-72; PDF pp. 83-84.
 pub(crate) fn named_builtin(name: &str) -> bool {
-    (name.starts_with("__builtin_") && super::common_builtin(name).is_some())
-        || super::library::library_builtin_name(name).is_some()
-        || type_generic::named_builtin(name)
+    crate::builtins::lookup(name).is_some_and(|descriptor| {
+        descriptor.syntax == crate::builtins::SyntaxForm::OrdinaryCall
+            && descriptor.availability.naming == crate::builtins::NamingPolicy::Reserved
+    }) || legacy_named_builtin(name)
+}
+
+/// Explicit temporary M6 bridge. Scalar/library contracts are exclusively
+/// registry-owned.
+pub(in crate::translation_phases::semantic_analysis) fn legacy_named_builtin(name: &str) -> bool {
+    type_generic::named_builtin(name)
         || vectors::named_builtin(name)
         || atomic_builtin(name)
         || x86_builtins::known(name)

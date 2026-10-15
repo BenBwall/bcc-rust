@@ -1,0 +1,107 @@
+//! Semantic projection of neutral registry signatures and diagnostic
+//! identities. C99: §6.5.2.2p2,p7, pp. 71-72; PDF pp. 83-84.
+
+use crate::{
+    builtins::{
+        BuiltinDescriptor,
+        ConstraintDiagnostic,
+        SignatureType,
+    },
+    translation_phases::{
+        parsing::declaration_syntax::TypeQualifiers,
+        semantic_analysis::{
+            Analyzer,
+            Scalar,
+            SemanticErrorKind,
+            TypeId,
+            TypeKind,
+        },
+    },
+    util::bump::ArenaVec,
+};
+
+impl Analyzer<'_, '_, '_> {
+    pub(in crate::translation_phases::semantic_analysis) fn descriptor_type(
+        &mut self,
+        descriptor: &BuiltinDescriptor,
+    ) -> TypeId {
+        let signature = descriptor.signature;
+        let result = self.signature_type(signature.result);
+        let mut parameters = ArenaVec::new_in(self.types.tu);
+        for &parameter in signature.parameters {
+            parameters.push(self.signature_type(parameter));
+        }
+        self.types.intern(TypeKind::Function {
+            result,
+            parameters: parameters.leak(),
+            prototype: signature.prototype,
+            variadic: signature.variadic,
+        })
+    }
+
+    pub(in crate::translation_phases::semantic_analysis) fn signature_type(
+        &mut self,
+        pattern: SignatureType,
+    ) -> TypeId {
+        match pattern {
+            | SignatureType::Scalar(scalar) => self.types.scalar(scalar),
+            | SignatureType::Size => self.types.scalar(self.types.target.size_t),
+            | SignatureType::Unsigned(bits) => {
+                let scalar = match bits {
+                    | 16 => Scalar::UnsignedShort,
+                    | 32 => Scalar::UnsignedInt,
+                    | _ if self
+                        .types
+                        .target
+                        .integer(Scalar::UnsignedLong)
+                        .is_some_and(|(bits, _)| bits == 64) =>
+                        Scalar::UnsignedLong,
+                    | _ => Scalar::UnsignedLongLong,
+                };
+                self.types.scalar(scalar)
+            },
+            | SignatureType::Pointer(scalar, constant) => {
+                let mut ty = self.types.scalar(scalar);
+                if constant {
+                    ty = ty.qualified(TypeQualifiers::CONST);
+                }
+                self.types.intern(TypeKind::Pointer(ty))
+            },
+        }
+    }
+}
+
+pub(super) fn diagnostic(identity: ConstraintDiagnostic) -> SemanticErrorKind {
+    match identity {
+        | ConstraintDiagnostic::ArgumentType => SemanticErrorKind::InvalidArgumentType,
+        | ConstraintDiagnostic::ObjectSizeMode => SemanticErrorKind::InvalidObjectSizeMode,
+        | ConstraintDiagnostic::Alignment => SemanticErrorKind::InvalidBuiltinAlignment,
+        | ConstraintDiagnostic::Probability => SemanticErrorKind::InvalidBuiltinProbability,
+        | ConstraintDiagnostic::PrefetchReadWrite => SemanticErrorKind::InvalidPrefetchReadWrite,
+        | ConstraintDiagnostic::PrefetchLocality => SemanticErrorKind::InvalidPrefetchLocality,
+        | ConstraintDiagnostic::VaList => SemanticErrorKind::InvalidVaList,
+        | ConstraintDiagnostic::VaArgType => SemanticErrorKind::InvalidVaArgType,
+    }
+}
+
+/// Adapter from the parser's sole keyword classifier to neutral special forms.
+/// Type-generic and vector keyword contracts remain explicit M6 bridges.
+pub(in crate::translation_phases::semantic_analysis) fn keyword_descriptor(
+    keyword: crate::translation_phases::preprocessing::KeywordTokenType,
+) -> Option<&'static BuiltinDescriptor> {
+    use crate::{
+        builtins::BuiltinId as I,
+        translation_phases::preprocessing::KeywordTokenType as K,
+    };
+    Some(
+        match keyword {
+            | K::BuiltinVaStart => I::VaStart,
+            | K::BuiltinVaEnd => I::VaEnd,
+            | K::BuiltinVaCopy => I::VaCopy,
+            | K::BuiltinVaArg => I::VaArg,
+            | K::BuiltinOffsetof => I::Offsetof,
+            | _ => return None,
+        }
+        .descriptor(),
+    )
+}

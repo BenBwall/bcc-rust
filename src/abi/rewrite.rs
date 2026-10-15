@@ -158,6 +158,11 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
         for _ in old.blocks() {
             _ = self.builder.create_block();
         }
+        // Blocks keep their numbers, and expansions split a block only after
+        // its start, so each label still names its block.
+        for (_, block) in old.labels() {
+            _ = self.builder.create_label(block);
+        }
         for block in old.blocks().skip(1) {
             for &param in old.block_params(block) {
                 self.builder
@@ -387,6 +392,14 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                     default,
                     cases,
                 });
+            },
+            | InstData::IndirectBr { addr, dests } => {
+                let mut list =
+                    ArenaVec::with_capacity_in(old.block_list(dests).len(), self.scratch);
+                for dest in old.block_list(dests) {
+                    list.push(old.block_call(dest));
+                }
+                self.builder.indirect_br(addr, &list);
             },
             | _ => _ = self.builder.insert_with_result(data, result),
         }

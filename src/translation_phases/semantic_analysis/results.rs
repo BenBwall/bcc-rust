@@ -12,7 +12,6 @@ use super::{
     integer::Integer,
     types::{
         Field,
-        Parameter,
         TypeId,
         TypeKind,
         Types,
@@ -21,7 +20,6 @@ use super::{
 use crate::{
     translation_phases::{
         Context,
-        SourceVectors,
         parsing::{
             SpecifierExtension,
             declaration_syntax::{
@@ -31,7 +29,6 @@ use crate::{
             },
             syntax::{
                 Expression,
-                ExpressionType,
                 FunctionDefinition,
                 Identifier,
             },
@@ -46,9 +43,12 @@ use crate::{
 /// Durable semantic output. Working maps/stacks are gone when this is returned.
 #[derive(Debug)]
 pub(crate) struct SemanticTranslationUnit<'tu> {
-    pub(super) binding_bounds:      ArenaMap<'tu, usize, &'tu [usize]>,
+    pub(crate) resolved:            super::ResolvedFacts<'tu>,
+    pub(crate) correspondence:      super::CorrespondenceFacts<'tu>,
+    pub(crate) sizes:               super::SizeFacts<'tu>,
+    pub(crate) runtime_bounds:      &'tu [super::RuntimeBound<'tu>],
     pub(crate) control:             super::ControlFacts<'tu>,
-    pub(crate) expression_effects:  &'tu [super::ExpressionEffects],
+    pub(crate) effects:             super::EffectFacts<'tu>,
     pub(super) expression_actions:  ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
     /// Declarators with vendor modifiers visited by the explicit type stack,
     /// including abstract declarators, retained for the lowering gate.
@@ -64,19 +64,10 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     /// included, with its binding, body and parameter bindings.
     pub(crate) functions:           &'tu [FunctionRecord<'tu>],
     pub(crate) scopes:              &'tu [Scope],
-    pub(crate) type_names:          &'tu [(SourceVectors, TypeId)],
+    pub(crate) type_names:          &'tu [super::TypeNameFacts<'tu>],
+    pub(super) type_name_indices:   ArenaMap<'tu, usize, super::TypeNameId>,
     pub(super) declaration_sites:   ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Retained written type-site query; execution uses its normalized expression \
-                      actions."
-        )
-    )]
-    pub(super) type_name_sites:     ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    pub(super) size_query_sites:    ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
-    pub(crate) parameters:          &'tu [(SourceVectors, &'tu [Parameter])],
+    pub(super) size_query_sites:    ArenaMap<'tu, usize, super::SizeQueryFacts<'tu>>,
     /// Typed results in child-before-parent order; an expression's ordinal
     /// is its index here.
     pub(crate) expressions:         &'tu [ExpressionInfo<'tu>],
@@ -86,6 +77,11 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     /// String initializer syntax to its destination element type, independent
     /// of array completion. C99: §6.7.8p14-15, p. 126; PDF p. 138.
     pub(super) string_initializers: ArenaMap<'tu, usize, TypeId>,
+    /// A static object's binding to the completed type of the flexible
+    /// array member its initializer initializes, which extends the object
+    /// past its structure (GNU extension; C99 §6.7.2.1p16, p. 103; PDF
+    /// p. 115). See [`Self::flexible_array`].
+    pub(super) flexible_arrays:     ArenaMap<'tu, usize, TypeId>,
     /// Conversion records grouped by expression ordinal, each run in the
     /// order its conversions were applied; see [`Self::conversions_of`].
     pub(crate) conversions:         &'tu [Conversion<'tu>],
@@ -115,9 +111,9 @@ pub(crate) struct BoundSiteFacts<'tu> {
 /// C99: §6.7p3-4, p. 97; PDF p. 109.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Binding {
-    /// Introduced by intrinsic lookup, rather than a user declaration.
+    /// User, intrinsic or implicit-ordinary origin retained at lookup.
     /// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42 (shadowing).
-    pub(crate) builtin:  bool,
+    pub(crate) origin:   BindingOrigin,
     pub(crate) name:     Identifier,
     pub(crate) ty:       TypeId,
     pub(crate) scope:    usize,
@@ -155,6 +151,19 @@ pub(crate) enum Duration {
     None,
     Automatic,
     Static,
+    /// One object per thread, declared with `_Thread_local`,
+    /// `thread_local` or GNU `__thread`, initialized when its thread starts.
+    /// C11: §6.2.4 paragraph 4, p. 38; PDF p. 56.
+    Thread,
+}
+
+impl Duration {
+    /// Whether the object lives for the whole program or thread and is
+    /// initialized before it starts, so its initializer is constant.
+    /// C11: §6.7.9 paragraph 4, p. 139; PDF p. 157.
+    pub(crate) const fn is_static_or_thread(self) -> bool {
+        matches!(self, Self::Static | Self::Thread)
+    }
 }
 
 /// A function definition with the facts lowering starts from, so that it
@@ -164,8 +173,10 @@ pub(crate) enum Duration {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FunctionRecord<'tu> {
     pub(crate) control:           super::FunctionControl,
+    pub(crate) parameter_facts:   &'tu [super::ParameterFacts<'tu>],
     /// Source-ordered entry actions, before each parameter's new bounds.
     /// GNU extension: GCC Typeof; C99: §6.9.1p10, p. 142; PDF p. 154.
+    pub(crate) old_style:         bool,
     pub(crate) parameter_sites:   &'tu [BoundSiteFacts<'tu>],
     pub(crate) syntax:            &'tu FunctionDefinition<'tu>,
     /// The function's binding; its type is the composite function type,
@@ -185,16 +196,6 @@ pub(crate) struct FunctionRecord<'tu> {
         )
     )]
     pub(crate) scope:             usize,
-    /// One entry per declared parameter in the declarator's order (the
-    /// identifier list for an old-style definition), each the parameter's
-    /// body binding. A lone `void` gives no entries. An unnamed parameter or
-    /// a repeated name has `None`. A binding's own type is the declared
-    /// type, which an old-style definition converts to from the promoted
-    /// argument type on entry (§6.9.1p10).
-    pub(crate) parameters:        &'tu [Option<usize>],
-    /// Unadjusted definition parameter types, including evaluated outer bounds.
-    /// C99: §6.9.1p10, p. 142; PDF p. 154.
-    pub(crate) parameter_types:   &'tu [TypeId],
     /// Prototype bindings referenced by bounds and their corresponding body
     /// bindings, retained when replaying the definition's prototype scope.
     /// C99: §6.9.1p10, p. 142; PDF p. 154.
@@ -229,7 +230,15 @@ pub(crate) enum DefinitionKind {
     Function,
     Inline,
     Tentative,
+    /// The contents of `__func__` and `__FUNCTION__`: the function's name, or
+    /// the empty string outside a function.
     FunctionName(StringCacheId),
+    /// GNU extension: the contents of `__PRETTY_FUNCTION__`, Clang's
+    /// signature spelling, or `top level` outside a function.
+    PrettyFunctionName {
+        function: Option<StringCacheId>,
+        text:     StringCacheId,
+    },
 }
 
 /// A completed object or function definition and its declaration binding.
@@ -260,19 +269,59 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         )
     )]
     pub(crate) fn type_name_site(&self, name: &TypeName<'tu>) -> Option<BoundSiteFacts<'tu>> {
-        self.type_name_sites
-            .get(&std::ptr::from_ref(name).addr())
-            .copied()
+        self.type_name_fact(name)?
+            .size_query
+            .map(|query| query.site)
+    }
+
+    pub(crate) fn type_name_fact(
+        &self,
+        name: &TypeName<'tu>,
+    ) -> Option<&super::TypeNameFacts<'tu>> {
+        let id = self
+            .type_name_indices
+            .get(&super::type_name_identity(name))?;
+        let fact = self.type_names.get(id.0)?;
+        debug_assert_eq!(fact.id, *id, "type-name indices select their own records");
+        debug_assert!(
+            std::ptr::eq(fact.syntax, name),
+            "type-name lookup preserves syntax identity"
+        );
+        Some(fact)
     }
 
     /// Size-query execution includes the surrounding sizeof evaluation mode.
     pub(crate) fn size_query_site(
         &self,
         expression: &Expression<'tu>,
-    ) -> Option<BoundSiteFacts<'tu>> {
+    ) -> Option<super::SizeQueryFacts<'tu>> {
         self.size_query_sites
             .get(&std::ptr::from_ref(expression).addr())
             .copied()
+    }
+
+    /// The completed array type of the flexible array member that the
+    /// initializer of static object `binding` initializes. The object's
+    /// storage extends to the end of that array; its type and `sizeof` stay
+    /// the structure's.
+    /// GNU extension: GCC manual, "Arrays of Length Zero".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Zero-Length.html>
+    pub(crate) fn flexible_array(&self, binding: usize) -> Option<TypeId> {
+        self.flexible_arrays.get(&binding).copied()
+    }
+
+    /// The storage size of static object `binding` whose initializer gives
+    /// its flexible array member elements: the end of that member's
+    /// completed array, or the structure's size if that is larger, as GCC
+    /// and Clang allocate it. `None` for every other object, whose storage
+    /// is its type's size.
+    pub(crate) fn flexible_object_size(&self, binding: usize) -> Option<u64> {
+        let array = self.flexible_array(binding)?;
+        let ty = self.bindings.get(binding)?.ty;
+        let size = self.types.layout(ty)?.size;
+        let member = self.types.tag(ty)?.members.get().last()?;
+        let end = member.offset.checked_add(self.types.layout(array)?.size)?;
+        Some(size.max(end))
     }
 
     /// Whether analysis classified this expression as initializing the whole
@@ -324,25 +373,13 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     /// C99: §6.5.2.3 paragraphs 3-4, p. 73; PDF p. 85.
     /// C11: §6.7.2.1 paragraph 13, p. 115; PDF p. 133 (anonymous members).
     pub(crate) fn selected_field(&self, member: &'tu Expression<'tu>) -> Option<&'tu Field<'tu>> {
-        let index = self.expression_info(member)?.field_index()?;
-        let member = super::selected_designator(member, |e| self.expression_info(e).copied());
-        let (base, indirect) = match member.kind {
-            | ExpressionType::DirectMember {
-                base_expression, ..
-            } => (base_expression, false),
-            | ExpressionType::IndirectMember {
-                base_expression, ..
-            } => (base_expression, true),
-            | _ => return None,
-        };
-        let mut record = self.expression_info(base)?.ty;
-        if indirect {
-            record = match self.types.kind(self.types.non_atomic(record)) {
-                | TypeKind::Pointer(target) | TypeKind::Array(target, _) => target,
-                | _ => return None,
-            };
-        }
-        self.types.tag(record)?.fields.get().get(index)
+        let facts = self.member_facts(member)?;
+        self.types
+            .tags
+            .get(facts.tag)?
+            .fields
+            .get()
+            .get(facts.field)
     }
 
     /// The conversions applied to `expression`, empty when it has no record.
@@ -367,10 +404,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
 }
 
 impl<'tu> SemanticTranslationUnit<'tu> {
-    pub(crate) fn binding_bound_actions(&self, binding: usize) -> Option<&'tu [usize]> {
-        self.binding_bounds.get(&binding).copied()
-    }
-
     pub(crate) fn expression_actions(
         &self,
         expression: &Expression<'_>,
@@ -379,16 +412,38 @@ impl<'tu> SemanticTranslationUnit<'tu> {
             .get(&std::ptr::from_ref(expression).addr())
             .copied()
     }
+}
 
-    pub(crate) fn effect_pure(&self, expression: &'tu Expression<'tu>, read: bool) -> Option<bool> {
-        self.expression_index(expression)
-            .and_then(|index| self.expression_effects.get(index))
-            .map(|effects| {
-                if read {
-                    effects.value_pure
-                } else {
-                    effects.designation_pure
-                }
-            })
+/// Lookup origin, independent of spelling and user assembler labels.
+/// C99: §6.2.1p4, pp. 29-30; PDF pp. 41-42 (user shadowing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BindingOrigin {
+    User,
+    Intrinsic(crate::builtins::BuiltinId),
+    ImplicitOrdinary,
+    /// Temporary M6 recognition bridge: atomic/x86/vector/type-generic
+    /// families.
+    LegacyIntrinsic,
+    /// Unknown reserved names retain opaque signatures and bounded refusals.
+    OpaqueIntrinsic,
+}
+
+impl BindingOrigin {
+    pub(crate) fn is_intrinsic(self) -> bool {
+        matches!(
+            self,
+            Self::Intrinsic(_) | Self::LegacyIntrinsic | Self::OpaqueIntrinsic
+        )
+    }
+
+    pub(crate) fn descriptor(self) -> Option<&'static crate::builtins::BuiltinDescriptor> {
+        match self {
+            | Self::Intrinsic(id) => Some(id.descriptor()),
+            | _ => None,
+        }
+    }
+
+    pub(crate) fn library(self) -> Option<&'static str> {
+        self.descriptor().and_then(|descriptor| descriptor.library)
     }
 }

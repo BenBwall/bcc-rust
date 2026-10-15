@@ -5,6 +5,7 @@
 //! result, and compares the printed result with the expected text. After a
 //! pass, the printed values are numbered from 0 in listing order.
 
+mod combine;
 mod dce;
 mod draft;
 mod equivalence;
@@ -12,6 +13,7 @@ mod fold;
 mod gvn;
 mod inline;
 mod known_bits;
+mod labels;
 mod licm;
 mod loops;
 mod memory;
@@ -21,7 +23,9 @@ mod promote;
 mod sccp;
 mod select;
 mod simplify_cfg;
+mod sroa;
 mod ssa_pipeline;
+mod thread;
 
 use super::*;
 use crate::ir::{
@@ -58,7 +62,7 @@ fn optimize_text(text: &str, options: &OptimizerOptions<'_>) -> (String, Optimiz
 }
 
 /// The options that run `passes` once each.
-fn only(passes: &[Pass]) -> OptimizerOptions<'static> {
+fn only<'a>(passes: &[Pass]) -> OptimizerOptions<'a> {
     OptimizerOptions {
         passes: PassList::new(passes),
         verify_each: true,

@@ -10,6 +10,7 @@ use super::{
     Module,
     entities::{
         Block,
+        BlockLabel,
         ConstId,
         Entity,
         GlobalId,
@@ -29,6 +30,7 @@ use super::{
         Align,
         Bits64,
         BlockCall,
+        BlockList,
         CaseList,
         FloatCC,
         InstData,
@@ -120,6 +122,17 @@ impl FunctionBuilder<'_, '_> {
         self.body.stack_slots.push(StackSlotData { size, align })
     }
 
+    /// Names `block` with a new label, so its address can be taken.
+    pub(crate) fn create_label(&mut self, block: Block) -> BlockLabel {
+        self.body.labels.push(block)
+    }
+
+    /// Points an existing label at `block`, as the textual parser does once
+    /// it reads the label's definition.
+    pub(crate) fn define_label(&mut self, label: BlockLabel, block: Block) {
+        self.body.labels[label] = block;
+    }
+
     // Pool entries
 
     pub(crate) fn value_list(&mut self, values: &[Value]) -> ValueList {
@@ -135,6 +148,16 @@ impl FunctionBuilder<'_, '_> {
         self.body.pool.push(Value::new(block.index()));
         self.body.pool.extend_from_slice(args);
         BlockCall(start)
+    }
+
+    /// The edges of an `indirect_br`, each already in the pool.
+    pub(crate) fn block_list(&mut self, calls: &[BlockCall]) -> BlockList {
+        let start = self.pool_start();
+        self.body.pool.push(Value::new(calls.len()));
+        for &call in calls {
+            self.body.pool.push(Value::new(call.0 as usize));
+        }
+        BlockList(start)
     }
 
     pub(crate) fn case_list(&mut self, cases: &[(ConstId, BlockCall)]) -> CaseList {
@@ -282,6 +305,11 @@ impl FunctionBuilder<'_, '_> {
 
     pub(crate) fn func_addr(&mut self, func: FuncId) -> Value {
         self.insert_value(InstData::FuncAddr { func })
+    }
+
+    /// The address of the block `label` names.
+    pub(crate) fn block_addr(&mut self, label: BlockLabel) -> Value {
+        self.insert_value(InstData::BlockAddr { label })
     }
 
     /// `base` plus the `i64` byte `offset`.
@@ -446,6 +474,27 @@ impl FunctionBuilder<'_, '_> {
             value,
             default,
             cases: CaseList(start),
+        });
+    }
+
+    /// Branches to the listed edge whose target block has the address
+    /// `addr`.
+    pub(crate) fn indirect_br(&mut self, addr: Value, dests: &[(Block, &[Value])]) {
+        // The edges go first, one after another, so the list that follows
+        // can name each by its position, as for a switch.
+        let mut call = self.pool_start();
+        for &(block, args) in dests {
+            _ = self.block_call(block, args);
+        }
+        let start = self.pool_start();
+        self.body.pool.push(Value::new(dests.len()));
+        for &(_, args) in dests {
+            self.body.pool.push(Value::new(call as usize));
+            call += u32::try_from(2 + args.len()).expect("the value pool exceeds u32 indices");
+        }
+        _ = self.insert(InstData::IndirectBr {
+            addr,
+            dests: BlockList(start),
         });
     }
 

@@ -9,6 +9,44 @@ use super::{
 use crate::backend::llvm::Toolchain;
 
 #[test]
+fn pragma_pack_layout_matches_clang() {
+    check(
+        "pragma_pack_layout_matches_clang",
+        include_str!("../../../tests/fixtures/targets/pragma-pack.c"),
+    );
+}
+
+#[test]
+fn bit_field_value_promotion_matches_clang() {
+    check(
+        "bit_field_value_promotion_matches_clang",
+        r#"
+struct B { unsigned f:17; unsigned full:32; } b={308,308};
+struct Wide { unsigned long a:17; unsigned long full:32; unsigned long long b:17; unsigned long long full64:32; } wide;
+_Static_assert(_Generic(+(0,wide.a), int:1, default:0) && _Generic(+(wide.b=308), int:1, default:0), "extended narrow promotion");
+_Static_assert(_Generic(+wide.full, unsigned int:1, default:0) && _Generic(+wide.full64, unsigned int:1, default:0), "extended full promotion");
+int one=1;
+_Static_assert(sizeof((0,b.f))==sizeof(unsigned), "comma has declared size");
+_Static_assert(sizeof(b.f=308)==sizeof(unsigned), "assignment has declared size");
+_Static_assert(_Generic((0,b.f), unsigned:1, default:0), "comma generic type");
+_Static_assert(_Generic(b.f=308, unsigned:1, default:0), "assignment generic type");
+_Static_assert(_Generic(+(one?b.f:b.f), int:1, default:0), "conditional promotion");
+_Static_assert(_Generic(+(b.f++), unsigned:1, default:0), "postfix declared type");
+_Static_assert(_Generic(+((unsigned)b.f), unsigned:1, default:0), "cast clears width");
+_Static_assert(_Generic(+(0,b.full), unsigned:1, default:0), "full width unsigned");
+int main(void) {
+ if(!(((0,b.f)&1L)>=-7L) || !(((b.f=308)&1L)>=-7L)) return 1;
+ if(!(((one?b.f:b.f)&1L)>=-7L) || !((b.f&1L)>=-7L)) return 2;
+ if(!((0,b.f)-400<0) || !((b.f=308)-400<0)) return 3;
+ if(!((b.f+=1)-400<0) || !((++b.f)-400<0)) return 4;
+ if((b.f++)-400<0 || ((unsigned)b.f)-400<0) return 5;
+ return (0,b.full)-400<0;
+}
+"#,
+    );
+}
+
+#[test]
 fn round4_zero_width_explicit_alignment() {
     check(
         "round4_zero_width_explicit_alignment",

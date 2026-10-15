@@ -1,0 +1,49 @@
+warning: conversion between pointers to integer types with different sign [-Wpointer-sign]
+ --> sema-pointer-atomics.c:2:41
+  |
+2 | void sign(void) { __atomic_store_n(&ip, up, 0); }
+  |                                         ^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: pointer conversion discards qualifiers, including nested pointer qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+ --> sema-pointer-atomics.c:3:44
+  |
+3 | void discard(void) { __atomic_store_n(&ip, cip, 0); }
+  |                                            ^^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
+ --> sema-pointer-atomics.c:4:49
+  |
+4 | void incompatible(void) { __atomic_store_n(&ip, fp, 0); }
+  |                                                 ^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: conversion between pointers to integer types with different sign [-Wpointer-sign]
+ --> sema-pointer-atomics.c:5:54
+  |
+5 | void exchange(void) { (void)__atomic_exchange_n(&ip, up, 0); }
+  |                                                      ^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: conversion between pointers to integer types with different sign [-Wpointer-sign]
+ --> sema-pointer-atomics.c:6:58
+  |
+6 | void sync(void) { (void)__sync_val_compare_and_swap(&ip, up, ip); }
+  |                                                          ^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: conversion between pointers to integer types with different sign [-Wpointer-sign]
+ --> sema-pointer-atomics.c:7:53
+  |
+7 | void c11(_Atomic(int *) *a) { __c11_atomic_store(a, up, 0); }
+  |                                                     ^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+1 error and 5 warnings generated.

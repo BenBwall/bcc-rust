@@ -301,3 +301,35 @@ fn macro_locations_survive_compaction_without_retaining_temporary_metadata() {
         assert_eq!(context.user_source_end(retained), Some(site));
     }
 }
+
+#[test]
+fn expansion_locations_outlive_compaction_and_follow_copies() {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let spelled = SourceVector {
+        length: 1,
+        ..SourceVector::default()
+    };
+    let site = SourceVector {
+        index: 40,
+        line: 3,
+        length: 7,
+        ..SourceVector::default()
+    };
+    let expanded = context.push_source_vectors(std::slice::from_ref(&spelled));
+    context.record_expansion_start(expanded, site.clone());
+    let plain = context.push_source_vectors(std::slice::from_ref(&spelled));
+    let token = context.retain_token_source(expanded);
+    let plain_token = context.retain_token_source(plain);
+    context.compact_preprocessor_vectors();
+    // A later parser merge copies both tokens into the retained arena.
+    let merged = context.merge_vectors(plain_token, token);
+    let merged_expanded = context.merge_vectors(token, plain_token);
+    assert_eq!(context.expansion_location(token), &site);
+    assert_eq!(context.expansion_location(plain_token), &spelled);
+    assert_eq!(context.expansion_location(merged), &spelled);
+    assert_eq!(context.expansion_location(merged_expanded), &site);
+    let shown = context.file_location(token);
+    assert_eq!(context.get_source_vectors(shown)[0].index, site.index);
+    assert_eq!(context.file_location(plain_token), plain_token);
+}

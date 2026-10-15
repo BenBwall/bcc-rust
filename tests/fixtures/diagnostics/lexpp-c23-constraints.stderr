@@ -32,4 +32,12 @@ error: resource and C attribute queries require a preprocessing conditional expr
 5 | int query = __has_include("missing.h");
   |             ^^^^^^^^^^^^^
 
-5 errors generated.
+error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
+ --> lexpp-c23-constraints.c:1:11
+  |
+1 | char *a = u"a" U"b";
+  |           ^^^^^^^^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+6 errors generated.

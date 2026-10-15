@@ -6,15 +6,21 @@
 //! Error creation remains the responsibility of each translation phase.
 
 use super::Context;
-use crate::translation_phases::{
-    ErrorSeverity,
-    GetSeverity,
-    TranslationError,
-    initial_processing::InitialProcessorError,
-    parsing::ParserError,
-    preprocessing::PreprocessorError,
-    preprocessor_tokenizer::PreprocessorTokenizerError,
-    provenance::SourceVector,
+use crate::{
+    configuration::DiagnosticGroup,
+    translation_phases::{
+        ErrorSeverity,
+        GetSeverity,
+        TranslationError,
+        initial_processing::InitialProcessorError,
+        parsing::ParserError,
+        preprocessing::PreprocessorError,
+        preprocessor_tokenizer::PreprocessorTokenizerError,
+        provenance::{
+            SourceVector,
+            SourceVectors,
+        },
+    },
 };
 
 impl<'tu> Context<'tu> {
@@ -69,10 +75,23 @@ impl<'tu> Context<'tu> {
             if matches!(&error, TranslationError::Extension(x) if x.suppressed.get()) {
                 self.suppressed_errors -= 1;
             } else {
-                self.drained_errors += usize::from(error.severity() == ErrorSeverity::Error);
+                self.drained_errors +=
+                    usize::from(error.configured_severity(self) == ErrorSeverity::Error);
                 return Some(error);
             }
         }
+    }
+
+    /// The severity of a warning-group diagnostic at `source`, or `None`
+    /// when the group is off or a system header withholds it.
+    /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
+    pub(crate) fn group_severity(
+        &self,
+        group: DiagnosticGroup,
+        source: SourceVectors,
+    ) -> Option<ErrorSeverity> {
+        let severity = self.configuration.diagnostic_severity(group)?;
+        (!self.withholds(severity, true, source)).then_some(severity)
     }
 
     pub(crate) fn ignore_tokenizer_errors(&self) -> bool {
@@ -83,9 +102,16 @@ impl<'tu> Context<'tu> {
         self.ignore_tokenizer_errors = value;
     }
 
+    /// Off unless `-Wnewline-eof` asks for it, as in Clang.
     #[inline(always)]
     pub(crate) fn missing_final_newline(&mut self, vector: SourceVector) {
-        if !self.ignore_tokenizer_errors() && !self.in_system_header(&vector) {
+        if !self.ignore_tokenizer_errors()
+            && !self.in_system_header(&vector)
+            && self
+                .configuration
+                .diagnostic_severity(DiagnosticGroup::NewlineEof)
+                .is_some()
+        {
             self.pending_errors
                 .push_back(TranslationError::InitialProcessing(
                     InitialProcessorError::MissingFinalNewline(vector),
@@ -93,8 +119,15 @@ impl<'tu> Context<'tu> {
         }
     }
 
+    /// Clang has no such diagnostic; bcc reports it with `-Wnewline-eof`.
     pub(crate) fn escaped_final_newline(&mut self, vector: SourceVector) {
-        if !self.ignore_tokenizer_errors() && !self.in_system_header(&vector) {
+        if !self.ignore_tokenizer_errors()
+            && !self.in_system_header(&vector)
+            && self
+                .configuration
+                .diagnostic_severity(DiagnosticGroup::NewlineEof)
+                .is_some()
+        {
             self.pending_errors
                 .push_back(TranslationError::InitialProcessing(
                     InitialProcessorError::EscapedFinalNewline(vector),
@@ -127,7 +160,7 @@ impl<'tu> Context<'tu> {
                 .iter()
                 .filter(|error| {
                     !matches!(error, TranslationError::Extension(x) if x.suppressed.get())
-                        && error.severity() == ErrorSeverity::Error
+                        && error.configured_severity(self) == ErrorSeverity::Error
                 })
                 .count()
     }

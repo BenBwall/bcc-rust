@@ -582,7 +582,7 @@ fn user_alloca_declarations_keep_their_type_in_strict_and_gnu_modes() {
             with_configuration(source, config, |context, unit| {
                 assert_eq!(unit.errors, 0, "{:?}", context.take_pending_errors());
                 let callee = unit.expressions.iter().find(|i| matches!(i.expression.kind,ExpressionType::Identifier(name) if context.string_cache.at(name.name)=="alloca")).unwrap();
-                assert!(!unit.bindings[callee.binding.unwrap()].builtin);
+                assert!(!unit.bindings[callee.binding.unwrap()].origin.is_intrinsic());
             });
         }
     }

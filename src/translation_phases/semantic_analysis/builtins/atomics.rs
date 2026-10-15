@@ -50,7 +50,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         arguments: ArenaList<'tu, &'tu Expression<'tu>>,
     ) -> Option<ExpressionInfo<'tu>> {
         use Operation as O;
-        let callee = super::super::selected_designator(callee, |e| Some(self.expression_info(e)));
+        let callee = self.selected_designator(callee);
         let ExpressionType::Identifier(name) = callee.kind else {
             return None;
         };
@@ -58,7 +58,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !self
             .expression_info(callee)
             .binding
-            .is_some_and(|id| self.bindings[id].builtin)
+            .is_some_and(|id| self.bindings[id].origin.is_intrinsic())
         {
             return None;
         }
@@ -268,10 +268,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Checks and retains assignment conversion for an atomic value argument.
+    /// The operand converts as a prototype argument does, so pointer
+    /// constraint violations take their diagnostic groups, as in Clang.
     /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
     /// C99: §6.5.2.2 paragraph 7, p. 72; PDF p. 84.
     fn atomic_value_argument(&mut self, e: &'tu Expression<'tu>, target: TypeId) {
-        if !self.assignment_compatible(target, self.expression_info(e)) {
+        let info = self.expression_info(e);
+        if !self.assignment_conversion(target, info) {
             self.error(
                 SemanticErrorKind::InvalidAtomicOperand,
                 e.source_vectors,

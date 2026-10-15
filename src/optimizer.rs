@@ -12,9 +12,11 @@
 //! earlier, when the verifier or a printer asks to see the function after a
 //! pass).
 //!
-//! The default pipeline is `inline`, `promote`, `fold`, `simplify-cfg`, `sccp`,
-//! `known-bits`, `gvn`, `licm`, `dce` (promotion first, so the others see SSA
-//! values instead of loads and stores; value numbering before code motion, so
+//! The default pipeline is `inline`, `sroa`, `promote`, `fold`, `combine`,
+//! `simplify-cfg`, `sccp`, `known-bits`, `gvn`, `licm`, `dce` (scalar
+//! replacement and promotion first, so the others see SSA values instead of
+//! loads and stores; combining before CFG simplification, so its threading
+//! sees plain booleans; value numbering before code motion, so
 //! one copy of a repeated invariant moves; and dead code last, so it sweeps
 //! what the others leave). Inlining runs once per function, using already
 //! optimized callees; the remaining passes repeat until a round changes nothing
@@ -57,13 +59,16 @@
 //!   natural loops and their nesting, `frontiers.rs` dominance frontiers;
 //!   `memory.rs` tracks scoped memory generations and conservative aliases.
 //! - Passes: `fold.rs` (with `fold/eval.rs`, exact integer evaluation),
-//!   `dce.rs`, `simplify_cfg.rs` (with `simplify_cfg/select.rs`, bounded select
-//!   formation), `inline.rs` (module call graph and direct-call expansion),
-//!   `promote.rs` (stack-slot promotion), `sccp.rs` (sparse conditional
-//!   constant propagation), `known_bits.rs` (integer facts from dominating
-//!   conditions and division rewrites), `gvn.rs` (value numbering over the
-//!   dominator tree, including load reuse and store forwarding) and `licm.rs`
-//!   (loop-invariant code motion).
+//!   `combine.rs` (peephole combining), `dce.rs`, `simplify_cfg.rs` (with
+//!   `simplify_cfg/select.rs`, bounded select formation, and
+//!   `simplify_cfg/thread.rs`, branch threading), `inline.rs` (module call
+//!   graph and direct-call expansion), `sroa.rs` (scalar replacement of
+//!   aggregates, with `sroa/plan.rs` and `sroa/rewrite.rs`), `promote.rs`
+//!   (stack-slot promotion), `sccp.rs` (sparse conditional constant
+//!   propagation), `known_bits.rs` (integer facts from dominating conditions
+//!   and division rewrites), `gvn.rs` (value numbering over the dominator tree,
+//!   including load reuse and store forwarding) and `licm.rs` (loop-invariant
+//!   code motion).
 //! - `tests.rs` and `tests/` exercise each pass on textual IR, the pipeline as
 //!   a whole, and run programs in the interpreter before and after
 //!   optimization.
@@ -90,6 +95,7 @@ mod loops;
 mod memory;
 
 // Passes
+mod combine;
 mod dce;
 mod fold;
 mod gvn;
@@ -99,6 +105,7 @@ mod licm;
 mod promote;
 mod sccp;
 mod simplify_cfg;
+mod sroa;
 
 // Tests
 #[cfg(test)]
@@ -185,6 +192,9 @@ fn optimize_with_function_scratch(
         function_scratch.reset();
         report.functions += 1;
     }
+    if let Some(sink) = options.time_passes {
+        _ = write!(sink.borrow_mut(), "{report}");
+    }
     report
 }
 
@@ -268,10 +278,12 @@ fn run_pass(
     let changed = match pass {
         | Pass::Inline => inline::run(draft, module, graph, report),
         | Pass::Fold => fold::run(draft, module.function_signature(func), report),
+        | Pass::Combine => combine::run(draft, report),
         | Pass::Dce => dce::run(draft, report),
         | Pass::SimplifyCfg => simplify_cfg::run(draft, report),
         | Pass::Gvn => gvn::run(draft, report),
         | Pass::Licm => licm::run(draft, report),
+        | Pass::Sroa => sroa::run(draft, report),
         | Pass::Promote => promote::run(draft, report),
         | Pass::Sccp => sccp::run(draft, report),
         | Pass::KnownBits => known_bits::run(draft, report),

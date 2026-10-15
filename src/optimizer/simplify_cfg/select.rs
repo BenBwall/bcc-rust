@@ -49,6 +49,7 @@ fn run_in(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport, analysis: 
             | Term::Jump(next)
                 if edge.target != block
                     && edge.target != Draft::entry()
+                    && !draft.is_labeled(edge.target)
                     && cheap_arm(draft, edge.target) =>
                 Some(next.target),
             | _ => None,
@@ -206,8 +207,14 @@ fn run_in(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport, analysis: 
 }
 
 /// LLVM's two-entry phi folding budget is four cost units per arm.
-/// Constants and addresses cost zero; each permitted computation costs one.
 fn cheap_arm(draft: &Draft<'_, '_>, block: Block) -> bool {
+    cheap_arm_within(draft, block, 4)
+}
+
+/// Whether `block`'s instructions are safe to speculate and cost at most
+/// `budget` units. Constants and addresses cost zero; each permitted
+/// computation costs one.
+pub(super) fn cheap_arm_within(draft: &Draft<'_, '_>, block: Block, budget: u32) -> bool {
     let mut cost = 0;
     for &inst in &draft.block(block).insts {
         if draft.is_removed(inst) {
@@ -255,7 +262,7 @@ fn cheap_arm(draft: &Draft<'_, '_>, block: Block) -> bool {
             | _ => return false,
         };
         cost += unit;
-        if cost > 4 {
+        if cost > budget {
             return false;
         }
     }

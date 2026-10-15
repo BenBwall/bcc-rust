@@ -1,0 +1,31 @@
+-- String library: format, patterns, byte/char, rep, utf8, pack.
+print(string.format("%5d|%-5d|%05d|%+d|%x|%X|%o|%c", 42, 42, 42, 42, 255, 255, 8, 65))
+print(string.format("%10.3f|%-10.2e|%g|%g|%g", 3.14159265, 12345.6789, 0.0001, 1e20, 100))
+print(string.format("%s|%10s|%-10s|%.3s|%q", "str", "right", "left", "truncate", 'quo"te\n'))
+print(string.format("%i %u", -7, 7), string.format("%%"), string.format("%a", 1.0))
+print(("hello world"):upper(), ("HeLLo"):lower(), ("abc"):reverse(), ("ab"):rep(3, "-"), #("x"):rep(1000))
+print(("hello"):sub(2, 4), ("hello"):sub(-3), ("hello"):sub(10), ("hello"):byte(1, -1))
+print(string.char(72, 101, 108, 108, 111), ("x"):byte(), ("\0a"):len())
+print(("a,b,,c"):find(",", 1, true), ("a.b"):find("."), ("hello"):find("l+"), ("hello"):find("xyz"))
+print(("key = value"):match("^(%w+)%s*=%s*(%w+)$"))
+print(("2024-03-15"):match("(%d+)-(%d+)-(%d+)"))
+print(("hello world from lua"):gsub("%w+", string.upper))
+print(("abc"):gsub("", "-"), ("hello"):gsub("l", {l = "L"}), ("abc"):gsub("%w", "%0%0"))
+print(("  trim me  "):match("^%s*(.-)%s*$") .. "|")
+for k, v in string.gmatch("a=1, b=22, c=333", "(%w+)=(%w+)") do io.write(k, ":", v, ";") end
+print()
+print(("f(a,b)"):find("%((.-)%)"), ("[[x]]"):find("[[]"), ("%d"):gsub("%%", "%%%%"))
+print(("THE (quick) fox"):find("%((%a+)%)"), ("x"):rep(0) == "", ("abc") < ("abd"), ("Z") < ("a"))
+print(#string.format("%099d", 7), tostring(12):rep(2), tostring(1e15), tostring(2^63), tostring(-0.0))
+print(utf8.char(72, 228, 8364, 128512), utf8.len("häl€"), #utf8.char(0x10FFFF))
+for p, c in utf8.codes("aé€") do io.write(p, "=", c, " ") end
+print()
+print(utf8.codepoint("héllo", 1, -1))
+print(tostring(nil), tostring(true), tonumber("0x1F"), tonumber("  12  "), tonumber("1e2"), tonumber("abc"), tonumber("z", 36), tonumber("7", 8))
+print(table.concat({1, 2.5, "x"}, "|"), #tostring(print) > 0, ("x"):format())
+local parts = {}
+for i = 1, 200 do parts[#parts + 1] = string.format("%03d", i) end
+local joined = table.concat(parts)
+print(#joined, joined:sub(1, 12), joined:sub(-6), select(2, joined:gsub("0", "")))
+print(#string.pack("i4 i8 d", 1, 2, 3.5), string.unpack("<I2", "\1\2"))
+print(("abc"):find("b", 1, true), ("a\nb"):match("a.b") ~= nil, ("x"):rep(3, ","))

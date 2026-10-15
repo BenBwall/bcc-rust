@@ -34,24 +34,26 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
     pub(super) fn new(context: &'c mut Context<'tu>, scratch: &'s Bump) -> Self {
         let tu = context.tu_arena();
         let target = context.configuration.target().layout();
+        let pack_alignments = super::packing::states(context, scratch);
         let mut analyzer = Self {
             #[cfg(test)]
             review_steps: Cell::new([0; 3]),
             context,
             scratch,
             types: TypeInterner::new(tu, scratch, &target),
+            pack_alignments,
             bindings: ArenaVec::new_in(tu),
             declarators: ArenaVec::new_in(tu),
             spec_extensions: ArenaVec::new_in(tu),
             definitions: ArenaVec::new_in(tu),
             function_records: ArenaVec::new_in(tu),
             scopes: ArenaVec::new_in(tu),
-            type_names: ArenaVec::new_in(tu),
+            type_names: ArenaVec::new_in(scratch),
+            retained_type_names: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             declaration_sites: ArenaMap::with_hasher_in(FxBuildHasher, tu),
-            type_name_sites: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            type_name_sites: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             size_query_sites: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             typeof_sites: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            parameter_lists: ArenaVec::new_in(tu),
             scope: 0,
             entries: ArenaVec::new_in(scratch),
             visible: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
@@ -72,14 +74,21 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             tag_declarations: ArenaVec::new_in(tu),
             resolved_type_names: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             integer_models: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            resolved: super::facts::resolved::ResolvedBuilder::new(tu, scratch),
             expressions: ArenaVec::new_in(tu),
-            expression_effects: ArenaVec::new_in(tu),
+            effects: super::facts::effects::EffectBuilder::new(tu, scratch),
             expression_actions: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             binding_bounds: ArenaMap::with_hasher_in(FxBuildHasher, tu),
-            parameter_sites: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            correspondence: super::facts::correspondence::CorrespondenceBuilder::new(tu, scratch),
+            runtime_bounds: ArenaVec::new_in(tu),
+            bound_origins: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            bound_expression_starts: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            next_parameter: 0,
             function_controls: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             expression_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             string_initializers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            flexible_arrays: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            transparent_unions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             conversions: ArenaVec::new_in(scratch),
             const_members: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             register_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
@@ -109,6 +118,10 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
         debug_assert!(
             self.integers.is_empty(),
             "no integer value outlives its root"
+        );
+        debug_assert!(
+            self.effects.is_balanced(),
+            "no statement-expression effect summary outlives its root"
         );
     }
 

@@ -60,13 +60,12 @@ use crate::{
             UnaryOperator,
         },
         semantic_analysis::{
-            BindingKind,
+            CallFacts,
+            Callee,
             ConversionKind,
             ExpressionInfo,
             TypeId,
             TypeKind,
-            library_builtin_name,
-            named_builtin,
         },
     },
     util::bump::ArenaVec,
@@ -218,16 +217,48 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 function_expression,
                 arguments,
             } => {
-                if self.schedule_builtin(expression, function_expression, arguments) {
+                let call = self.call_facts(expression)?;
+                if call.arguments.len() != arguments.len() {
+                    return Err(LoweringError::missing(
+                        "call argument facts are not retained",
+                        source,
+                    ));
+                }
+                if self.schedule_builtin(expression)? {
                     return Ok(());
                 }
                 self.tasks.push(Task::Finish(expression));
-                for &argument in arguments.iter().rev() {
-                    self.tasks.push(Task::SnapshotArgument(argument));
-                    self.tasks.push(Task::Evaluate(argument));
+                for argument in call.arguments.iter().rev() {
+                    let expression = self
+                        .unit
+                        .sema
+                        .expressions
+                        .get(argument.expression.0)
+                        .ok_or_else(|| {
+                            LoweringError::missing("a call argument is not retained", source)
+                        })?
+                        .expression;
+                    self.tasks.push(Task::SnapshotArgument(expression));
+                    self.tasks.push(Task::Evaluate(expression));
                 }
-                if self.direct_callee(function_expression)?.is_none() {
-                    self.tasks.push(Task::Evaluate(function_expression));
+                if self
+                    .resolved_direct_callee(call, function_expression.source_vectors)?
+                    .is_none()
+                {
+                    let Callee::Indirect(index) = call.callee else {
+                        self.tasks.push(Task::Evaluate(function_expression));
+                        return Ok(());
+                    };
+                    let callee = self
+                        .unit
+                        .sema
+                        .expressions
+                        .get(index.0)
+                        .ok_or_else(|| {
+                            LoweringError::missing("an indirect callee is not retained", source)
+                        })?
+                        .expression;
+                    self.tasks.push(Task::Evaluate(callee));
                 }
             },
             | E::DirectMember {
@@ -264,22 +295,22 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     otherwise,
                 });
             },
-            | E::SizeofType(_) => {
-                let site = self.unit.sema.size_query_site(expression).ok_or_else(|| {
-                    LoweringError::missing("sizeof type-site facts are not retained", source)
+            | E::SizeofType(_) | E::SizeofExpr(_) => {
+                let query = self.unit.sema.size_query_site(expression).ok_or_else(|| {
+                    LoweringError::missing("sizeof evaluation facts are not retained", source)
                 })?;
-                let object = site.ty;
-                self.tasks.push(Task::Sizeof(object, info.ty, source));
+                let formula = query.formula.ok_or_else(|| {
+                    LoweringError::missing("sizeof size formula is not retained", source)
+                })?;
+                self.tasks.push(Task::Sizeof(formula, info.ty, source));
                 let mut tasks = ArenaVec::new_in(self.scratch);
-                Self::prepare_site_tasks(site, &mut tasks);
-                self.prepare_bound_tasks(site.bounds, &mut tasks);
+                Self::prepare_site_tasks(query.site, &mut tasks);
+                self.prepare_bound_tasks(query.site.bounds, &mut tasks, source)?;
+                if let Some(operand) = query.operand {
+                    tasks.push(Task::EvaluateRaw(operand));
+                    tasks.push(Task::Discard);
+                }
                 self.push_all(&tasks);
-            },
-            | E::SizeofExpr(operand) => {
-                let object = self.info(operand)?.ty;
-                self.tasks.push(Task::Sizeof(object, info.ty, source));
-                self.tasks.push(Task::Discard);
-                self.tasks.push(Task::EvaluateRaw(operand));
             },
             | E::AlignofType(_) | E::AlignofExpr(_) =>
                 return Err(LoweringError::unsupported(
@@ -301,9 +332,22 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 });
                 self.tasks.push(Task::EvaluateRaw(c.condition_expression));
             },
-            | E::StatementExpression(statement) =>
-                self.statement_expression(statement, info.ty, super::StatementMode::Value)?,
-            | E::LabelAddress(_) | E::Countof(_) | E::Boolean(_) | E::Nullptr | E::Error =>
+            | E::StatementExpression(_) =>
+                self.statement_expression(expression, super::StatementMode::Value)?,
+            | E::LabelAddress(_) => {
+                let label = self
+                    .unit
+                    .sema
+                    .control
+                    .label_address(expression)
+                    .ok_or_else(|| {
+                        LoweringError::missing("a label address has no resolved label", source)
+                    })?;
+                let label = self.block_label(label, source)?;
+                let address = self.inst(InstData::BlockAddr { label }, Type::Ptr);
+                self.push_item(Operand::Value(address), info.ty);
+            },
+            | E::Countof(_) | E::Boolean(_) | E::Nullptr | E::Error =>
                 return Err(LoweringError::missing(
                     "an expression was not parsed",
                     source,
@@ -368,10 +412,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.operands.push(result);
             },
             | E::Unary { operator, .. } => self.unary(operator, info, source)?,
-            | E::Call {
-                function_expression,
-                arguments,
-            } => self.call(function_expression, arguments.len(), info, source)?,
+            | E::Call { arguments, .. } => self.call(arguments.len(), info, source)?,
             | E::DirectMember { .. } | E::IndirectMember { .. } => {
                 let base = self.pop();
                 let base_ty = base.ty;
@@ -388,9 +429,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                             source,
                         )),
                 };
-                let guaranteed = info.place_alignment().ok_or_else(|| {
-                    LoweringError::missing("a member access has no place alignment", source)
+                let member = self.unit.sema.member_facts(expression).ok_or_else(|| {
+                    LoweringError::missing("member facts are not retained", source)
                 })?;
+                let guaranteed = member.alignment;
+                debug_assert_eq!(
+                    member.bit_field, field.width,
+                    "member access retains its field width"
+                );
                 self.member_base(base, base_ty, source)?;
                 let address = self.offset_address(base, field.offset);
                 let align = self.place_alignment(
@@ -398,7 +444,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     Align::from_bytes(u64::from(guaranteed)).unwrap_or(Align::BYTE),
                 );
                 self.retain_alignment(address, align);
-                let access_ty = info.ty;
+                let access_ty = member.access_type;
                 let place = if let Some(width) = field.width {
                     let bits = BitFieldBits {
                         bit_offset: field.bit_offset,
@@ -505,10 +551,37 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 | ConversionKind::Assignment
                 | ConversionKind::DefaultArgument =>
                     self.convert_value(item, conversion.ty, source)?,
+                | ConversionKind::TransparentUnion =>
+                    self.transparent_union(item, conversion.ty, source)?,
             };
         }
         self.operands.push(item);
         Ok(())
+    }
+
+    /// A union of type `union` whose member at offset zero, of the type of
+    /// `item`, holds the value of `item`: a GNU transparent union argument.
+    /// Every member of a union starts at its beginning (§6.7.2.1p14, p. 103;
+    /// PDF p. 115), and semantic analysis selected the member.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    fn transparent_union(
+        &mut self,
+        item: Item,
+        union: TypeId,
+        source: SourceVectors,
+    ) -> Result<Item, LoweringError> {
+        let layout =
+            types::layout(&self.unit.sema.types, union).map_err(|kind| at(kind, source))?;
+        let address = self.fresh_object(layout.size, types::align(layout), source)?;
+        let member = Item {
+            operand: Operand::Place(Place::Memory(address)),
+            ty:      item.ty,
+        };
+        _ = self.write(member, item, source)?;
+        Ok(Item {
+            operand: Operand::Aggregate(address),
+            ty:      union,
+        })
     }
 
     /// Converts a value to type `to` as by assignment (§6.3.1.2-§6.3.1.4,
@@ -1219,7 +1292,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// C99: §6.5.2.2 paragraphs 4-7, pp. 71-72; PDF pp. 83-84.
     fn call(
         &mut self,
-        callee: &'tu Expression<'tu>,
         count: usize,
         info: &ExpressionInfo<'tu>,
         source: SourceVectors,
@@ -1228,38 +1300,42 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let mut items = ArenaVec::with_capacity_in(count, self.scratch);
         items.extend_from_slice(&self.operands[start..]);
         self.operands.truncate(start);
-        let direct = self.direct_callee(callee)?;
-        let (function_type, callee_value) = match direct {
-            | Some(binding) => (self.unit.sema.bindings[binding].ty, None),
-            | None => {
-                let item = self.pop();
-                let pointer = self.value(item, source)?;
-                let target = types::target_type(&self.unit.sema.types, item.ty)
-                    .ok_or_else(|| LoweringError::missing("a callee is not a pointer", source))?;
-                (target, Some(pointer))
-            },
+        let call = self.call_facts(info.expression)?;
+        let direct = self.resolved_direct_callee(call, source)?;
+        let callee_value = if direct.is_some() {
+            None
+        } else {
+            let item = self.pop();
+            Some(self.value(item, source)?)
         };
-        let TypeKind::Function {
-            result,
-            parameters,
-            prototype,
-            variadic,
-        } = self.unit.sema.types.kind(function_type)
+        let function_type = call.function_type.ok_or_else(|| {
+            LoweringError::missing("a call has no point-of-use function type", source)
+        })?;
+        let TypeKind::Function { result, .. } = self
+            .unit
+            .sema
+            .types
+            .kind(self.unit.sema.types.non_atomic(function_type))
         else {
             return Err(LoweringError::missing(
-                "a callee has no function type",
+                "a call has no function type",
                 source,
             ));
         };
+        if items.len() != call.arguments.len()
+            || items
+                .iter()
+                .zip(call.arguments)
+                .any(|(item, argument)| item.ty != argument.ty)
+        {
+            return Err(LoweringError::missing(
+                "call argument conversions are not retained",
+                source,
+            ));
+        }
         let open_external = direct.is_some_and(|binding| self.unit.unprototyped_external(binding));
-        let fixed = if open_external {
-            0
-        } else if prototype {
-            parameters.len().min(items.len())
-        } else {
-            items.len()
-        };
-        let variadic = open_external || (prototype && variadic);
+        let fixed = if open_external { 0 } else { call.fixed };
+        let variadic = open_external || (call.prototype && call.variadic);
         let described = items[fixed..]
             .iter()
             .any(|item| repr(&self.unit.sema.types, item.ty) == Ok(Repr::Aggregate));
@@ -1362,61 +1438,45 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         Ok(Operand::Aggregate(copy))
     }
 
-    /// The function binding a callee names directly, if it is an
-    /// identifier through transparent syntax or a compile-time selection
-    /// that decays to its function. GNU extension: GCC "Other Builtins".
-    /// C99: §6.5.1p5, p. 69; PDF p. 81 (parentheses).
-    fn direct_callee(&self, callee: &'tu Expression<'tu>) -> Result<Option<usize>, LoweringError> {
-        let conversions = self.conversions(callee);
-        if conversions.len() != 1 || conversions[0].kind != ConversionKind::FunctionDecay {
+    fn call_facts(&self, call: &'tu Expression<'tu>) -> Result<CallFacts<'tu>, LoweringError> {
+        self.unit.sema.call_facts(call).ok_or_else(|| {
+            LoweringError::missing("call facts are not retained", call.source_vectors)
+        })
+    }
+
+    /// Backend capability checks use the retained callee classification.
+    /// Returns-twice and builtin spelling contracts move to M4/M7.
+    /// C99: §7.13.1.1p2, p. 243; PDF p. 255.
+    fn resolved_direct_callee(
+        &self,
+        call: CallFacts<'tu>,
+        source: SourceVectors,
+    ) -> Result<Option<usize>, LoweringError> {
+        let (Callee::Direct { binding, entity }
+        | Callee::Builtin {
+            binding: Some(binding),
+            direct: Some(entity),
+            ..
+        }) = call.callee
+        else {
             return Ok(None);
+        };
+        let data = self.unit.sema.bindings[binding];
+        debug_assert_eq!(
+            data.name.name, self.unit.sema.bindings[entity.0].name.name,
+            "direct calls retain their binding entity"
+        );
+        let text = self.unit.context.string_cache.at(data.name.name);
+        if matches!(
+            text,
+            "setjmp" | "_setjmp" | "sigsetjmp" | "__sigsetjmp" | "vfork"
+        ) {
+            return Err(LoweringError::unsupported(Construct::Setjmp, source));
         }
-        let mut converted_child = false;
-        let inner =
-            crate::translation_phases::semantic_analysis::selected_designator(callee, |e| {
-                if !std::ptr::eq(e, callee) && !self.conversions(e).is_empty() {
-                    converted_child = true;
-                }
-                self.info(e).ok().copied()
-            });
-        if converted_child {
-            return Ok(None);
+        if data.origin.is_intrinsic() && data.origin.library().is_none() {
+            return Err(LoweringError::unsupported(Construct::Builtin, source));
         }
-        match inner.kind {
-            | ExpressionType::Identifier(name) => {
-                let Some(binding) = self.info(inner)?.binding else {
-                    return Ok(None);
-                };
-                if self.unit.sema.bindings[binding].kind != BindingKind::Function {
-                    return Ok(None);
-                }
-                // A function that returns twice needs facts the IR does
-                // not carry yet (C99 §7.13).
-                let text = self.unit.context.string_cache.at(name.name);
-                if matches!(
-                    text,
-                    "setjmp" | "_setjmp" | "sigsetjmp" | "__sigsetjmp" | "vfork"
-                ) {
-                    return Err(LoweringError::unsupported(
-                        Construct::Setjmp,
-                        callee.source_vectors,
-                    ));
-                }
-                // A typed compiler builtin is an operation, not a symbol
-                // to call.
-                if self.unit.sema.bindings[binding].builtin
-                    && (text.starts_with("__builtin_") || named_builtin(text))
-                    && library_builtin_name(text).is_none()
-                {
-                    return Err(LoweringError::unsupported(
-                        Construct::Builtin,
-                        callee.source_vectors,
-                    ));
-                }
-                Ok(Some(binding))
-            },
-            | _ => Ok(None),
-        }
+        Ok(Some(binding))
     }
 
     /// `pointer` moved by `index` elements, backwards if `subtract`.
@@ -1499,14 +1559,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         self.convert(Opcode::Inttoptr, Type::Ptr, wide)
     }
 
-    /// The size of the element a pointer or array type designates.
+    /// The size of the element a pointer or array type designates; 1 for
+    /// `void`, as GNU pointer arithmetic counts it.
+    /// GNU extension: GCC "Pointer Arith".
     fn static_element_size(&self, pointer: TypeId) -> Option<u64> {
         let element = types::target_type(&self.unit.sema.types, pointer)?;
-        self.unit
-            .sema
-            .types
-            .layout(element)
-            .map(|layout| layout.size)
+        types::arithmetic_size(&self.unit.sema.types, element)
     }
 
     /// The saved runtime stride for a variably modified pointer or array.
@@ -1553,11 +1611,37 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 /// The construct an expression form is, if lowering does not support it.
 fn unsupported(expression: &Expression<'_>) -> Option<Construct> {
     Some(match expression.kind {
+        | ExpressionType::CompoundLiteral { type_name, .. } if literal_storage(type_name, true) =>
+            Construct::CompoundLiteralStorage,
         | ExpressionType::Builtin(b) if !matches!(b.keyword,crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaArg|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaStart|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaEnd|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaCopy|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinTypesCompatible|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinOffsetof) => Construct::Builtin,
-        | ExpressionType::LabelAddress(_) => Construct::LabelAddress,
         | ExpressionType::Countof(_) | ExpressionType::Nullptr => Construct::Extension,
         | _ => return None,
     })
+}
+
+/// Whether a compound literal's storage-class specifiers give it a storage
+/// duration lowering does not allocate: `thread_local` anywhere, or
+/// `static` in a function, whose object outlives the block. Lowering refuses
+/// these by name rather than allocating them in the frame.
+/// C23 (N3220): §6.5.3.6 paragraph 7, p. 79; PDF p. 92.
+pub(super) fn literal_storage(
+    type_name: &crate::translation_phases::parsing::declaration_syntax::TypeName<'_>,
+    in_function: bool,
+) -> bool {
+    let specifiers = type_name.declaration_specifiers;
+    let mut extension = specifiers.extensions;
+    while let Some(item) = extension {
+        if matches!(
+            item.kind,
+            crate::translation_phases::parsing::SpecifierExtensionKind::ThreadLocal(_)
+        ) {
+            return true;
+        }
+        extension = item.next;
+    }
+    in_function
+        && specifiers.storage_class
+            == Some(crate::translation_phases::parsing::syntax::StorageClass::Static)
 }
 
 /// The IR comparison of a C relational or equality operator, signed form.

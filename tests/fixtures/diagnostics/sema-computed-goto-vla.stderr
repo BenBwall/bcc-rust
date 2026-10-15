@@ -1,0 +1,12 @@
+error: computed goto can enter the scope of a variably modified identifier at its possible target: `inside`
+ --> sema-computed-goto-vla.c:3:5
+  |
+3 |     goto *p;
+  |     ^^^^^^^^ may jump into a variably modified scope
+4 |     {
+5 |         int vla[n];
+  |             --- variably modified identifier is declared here
+  |
+  = note: C99 §6.8.6.1p1: a goto cannot jump from outside the scope of a variably modified identifier to inside that scope; GCC Labels as Values: a computed goto may reach every label whose address is taken
+
+1 error generated.

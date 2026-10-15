@@ -142,10 +142,7 @@ fn null_pointer_alternatives_precede_pointer_pair_rules() {
             assert!(target.qualifiers.contains(TypeQualifiers::CONST));
         },
     );
-    rejects(
-        "int f(void); void g(void *p) { f==p; }",
-        SemanticErrorKind::InvalidComparisonOperands,
-    );
+    clean("int f(void); void g(void *p) { f==p; }");
 }
 
 #[test]

@@ -1,8 +1,8 @@
 //! Splits the textual form into tokens.
 //!
-//! Entity names (`v3`, `block1`, `slot0`) become their own tokens, and each
-//! token records whether it starts its line, which is how the parser tells a
-//! block header or a named result from an operand.
+//! Entity names (`v3`, `block1`, `slot0`, `label0`) become their own tokens,
+//! and each token records whether it starts its line, which is how the parser
+//! tells a block header or a named result from an operand.
 
 use super::{
     ParseError,
@@ -58,6 +58,8 @@ pub(super) enum TokenKind<'t> {
     Block(u32),
     /// `slot<n>`.
     Slot(u32),
+    /// `label<n>`.
+    Label(u32),
     /// `@name`, holding the name without `@`.
     Symbol(&'t str),
     /// `@"name"`, holding the contents with escapes still encoded.
@@ -196,7 +198,7 @@ impl<'t> Lexer<'t> {
 
     /// Classifies an identifier: an entity name or a plain word.
     fn word(&self, word: &'t str, start: usize) -> Result<TokenKind<'t>, ParseError<'t>> {
-        for (index, prefix) in ["block", "slot", "v"].into_iter().enumerate() {
+        for (index, prefix) in ["block", "slot", "label", "v"].into_iter().enumerate() {
             if let Some(digits) = word.strip_prefix(prefix)
                 && !digits.is_empty()
                 && digits.bytes().all(|byte| byte.is_ascii_digit())
@@ -207,6 +209,7 @@ impl<'t> Lexer<'t> {
                 return Ok(match index {
                     | 0 => TokenKind::Block(number),
                     | 1 => TokenKind::Slot(number),
+                    | 2 => TokenKind::Label(number),
                     | _ => TokenKind::Value(number),
                 });
             }

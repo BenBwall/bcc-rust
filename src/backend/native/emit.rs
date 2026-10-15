@@ -49,6 +49,8 @@ use crate::{
         GlobalInit,
         Linkage,
         Module,
+        Relocation,
+        RelocationTarget,
         Symbol,
     },
     target::Target,
@@ -590,6 +592,43 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         }
     }
 
+    /// One relocation's bytes: a symbol's or label's address, or a
+    /// difference of two labels.
+    fn relocation(&mut self, relocation: &Relocation) -> fmt::Result {
+        match relocation.target {
+            | RelocationTarget::Symbol(symbol) => write!(
+                self.out,
+                "\t.quad\t{}",
+                symbol_name(self.module, SymbolRef::Ir(symbol))
+            )?,
+            | RelocationTarget::Label { func, label } =>
+                write!(self.out, "\t.quad\t{}", BlockLabel(func, label.as_u32()))?,
+            | RelocationTarget::LabelDifference {
+                func,
+                label,
+                base,
+                width,
+            } => {
+                let directive = match width.bits() {
+                    | 8 => "byte",
+                    | 16 => "short",
+                    | 32 => "long",
+                    | _ => "quad",
+                };
+                write!(
+                    self.out,
+                    "\t.{directive}\t{}-{}",
+                    BlockLabel(func, label.as_u32()),
+                    BlockLabel(func, base.as_u32())
+                )?;
+            },
+        }
+        if relocation.addend != 0 {
+            write!(self.out, "{:+}", relocation.addend)?;
+        }
+        writeln!(self.out)
+    }
+
     /// Every defined global, in its section, and the file trailer.
     pub(crate) fn globals(&mut self) -> fmt::Result {
         for (_, global) in self.module.globals() {
@@ -624,13 +663,8 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                     if let Some(relocation) =
                         relocations.next_if(|relocation| relocation.offset == offset as u64)
                     {
-                        let target = symbol_name(self.module, SymbolRef::Ir(relocation.symbol));
-                        write!(self.out, "\t.quad\t{target}")?;
-                        if relocation.addend != 0 {
-                            write!(self.out, "{:+}", relocation.addend)?;
-                        }
-                        writeln!(self.out)?;
-                        offset += 8;
+                        self.relocation(relocation)?;
+                        offset += usize::try_from(relocation.size()).map_err(|_| fmt::Error)?;
                         continue;
                     }
                     let end = relocations
@@ -732,6 +766,15 @@ struct Label(FuncId, MBlock);
 impl fmt::Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, ".LBB{}_{}", self.0.index(), self.1.index())
+    }
+}
+
+/// An IR block label's symbol: the address `block_addr` takes.
+struct BlockLabel(FuncId, u32);
+
+impl fmt::Display for BlockLabel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, ".LBA{}_{}", self.0.index(), self.1)
     }
 }
 

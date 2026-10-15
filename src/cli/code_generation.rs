@@ -140,6 +140,26 @@ pub(super) fn generate_code<'tu>(
         report_stderr(format_args!("error: {conflict}"));
         return FAILURE_STATUS;
     }
+    // The LLVM back end verifies its input; the IR printer, the interpreter
+    // and the native back end rely on the same invariants, so they verify
+    // too rather than print, run or compile a malformed module.
+    if matches!(options.emit, Some(Emit::Ir | Emit::IrAbi | Emit::Asm))
+        || (options.emit.is_none() && options.output_path.is_none())
+        || (options.emit.is_none() && options.backend == BackEnd::Native)
+    {
+        let scratch = Bump::new();
+        let errors = crate::ir::verify_module(&module, profile, &scratch);
+        if !errors.is_empty() {
+            let mut stderr = io::stderr().lock();
+            for error in &errors {
+                drop(writeln!(
+                    stderr,
+                    "error: internal error: invalid bcc IR: {error}"
+                ));
+            }
+            return FAILURE_STATUS;
+        }
+    }
     match (options.emit, &options.output_path) {
         | (Some(Emit::Ir | Emit::IrAbi), _) => print_stdout(format_args!("{module}")),
         | (Some(Emit::Llvm), _) => print_llvm(&module, target),
@@ -213,6 +233,10 @@ pub(super) struct CodeGeneration {
     /// --opt=bcc).
     #[arg(long, requires = "back_end")]
     pub(super) print_after_all:   bool,
+    /// Print the bcc optimizer's per-pass runs, rewrites and times to
+    /// stderr when it finishes (implies --opt=bcc).
+    #[arg(long, requires = "back_end")]
+    pub(super) time_passes:       bool,
     /// Select the LLVM IR pipeline and code generation level; none means O0.
     #[arg(long, value_enum, default_value = "none", requires = "back_end")]
     pub(super) llvm_opt:          LlvmOpt,
@@ -316,7 +340,8 @@ impl CodeGeneration {
         let enabled = self.opt == MiddleEnd::Bcc
             || self.passes.is_some()
             || self.opt_bisect_limit.is_some()
-            || self.print_after_all;
+            || self.print_after_all
+            || self.time_passes;
         #[cfg_attr(
             not(test),
             expect(
@@ -329,6 +354,7 @@ impl CodeGeneration {
             let mut options = OptimizerOptions::default();
             options.passes = self.passes;
             options.print_after_all = self.print_after_all.then_some(print_after_all);
+            options.time_passes = self.time_passes.then_some(print_after_all);
             options.bisect_limit = self.opt_bisect_limit;
             options
         })

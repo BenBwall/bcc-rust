@@ -285,6 +285,8 @@ impl<'s> Solver<'_, '_, 's> {
                 | Lattice::Overdefined => self.mark_all_edges(block),
                 | Lattice::Unknown | Lattice::Poison => {},
             },
+            // Every listed target may be the address; no pass narrows them.
+            | Term::IndirectBr { .. } => self.mark_all_edges(block),
             | Term::Return(_) | Term::Unreachable => {},
         }
         let start = self.edge_starts[block.index()] as usize;
@@ -339,7 +341,8 @@ impl<'s> Solver<'_, '_, 's> {
             }
             let condition = match draft.block(block).term {
                 | Term::Brif { cond: value, .. } | Term::Switch { value, .. } => value,
-                | Term::Jump(_) | Term::Return(_) | Term::Unreachable => continue,
+                | Term::Jump(_) | Term::IndirectBr { .. } | Term::Return(_) | Term::Unreachable =>
+                    continue,
             };
             if matches!(self.state(condition), Lattice::Unknown | Lattice::Poison) {
                 let start = self.edge_starts[block.index()] as usize;
@@ -693,7 +696,8 @@ impl<'s> Rewriter<'s> {
                     ),
                     | _ => None,
                 },
-                | Term::Jump(_) | Term::Return(_) | Term::Unreachable => None,
+                | Term::Jump(_) | Term::IndirectBr { .. } | Term::Return(_) | Term::Unreachable =>
+                    None,
             };
             let Some(edge) = chosen.cloned() else {
                 continue;

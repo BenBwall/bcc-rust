@@ -4,6 +4,7 @@
 use super::{
     super::{
         Analyzer,
+        LabelId,
         integer::Integer,
         types::{
             TypeId,
@@ -36,7 +37,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> Option<(AddressBase<'tu>, i128)> {
         let mut offset = 0_i128;
         loop {
-            e = super::selected_designator(e, |e| Some(self.expression_info(e)));
+            e = self.selected_designator(e);
             let info = self.expression_info(e);
             if !lvalue {
                 if matches!(
@@ -88,7 +89,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         };
                         let index = index.integer.filter(|_| index.ice)?.to_i128()?;
                         let target = self.pointer_target(info.ty)?;
-                        let size = i128::from(self.types.layout(target)?.size);
+                        let size = i128::from(self.arithmetic_size(target)?);
                         let step = index.checked_mul(size)?;
                         offset = if operator == BinaryOperator::Addition {
                             offset.checked_add(step)?
@@ -148,7 +149,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         (right, left)
                     };
                     let index = index.integer.filter(|_| index.ice)?.to_i128()?;
-                    let size = i128::from(self.types.layout(info.ty)?.size);
+                    let size = i128::from(self.arithmetic_size(info.ty)?);
                     offset = offset.checked_add(index.checked_mul(size)?)?;
                     lvalue = false;
                     e = pointer.expression;
@@ -175,7 +176,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> Option<Integer> {
         let (left_base, left_offset) = self.address_parts(left.expression, false)?;
         let (right_base, right_offset) = self.address_parts(right.expression, false)?;
-        let size = self.types.layout(target)?.size;
+        let size = self.arithmetic_size(target)?;
         let bytes = left_offset.checked_sub(right_offset)?;
         // Divide 64-bit magnitudes; i128 division is unavailable (see
         // integer.rs).
@@ -185,6 +186,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let elements = i128::from(magnitude / size);
         Some(Integer::int(if bytes < 0 { -elements } else { elements }).cast(64, true))
+    }
+
+    /// The labels of `&&label - &&base` when both name labels of one
+    /// function: a constant whose value only code layout determines.
+    /// GNU extension: GCC "Labels as Values".
+    pub(super) fn label_difference(
+        &self,
+        left: ExpressionInfo<'tu>,
+        right: ExpressionInfo<'tu>,
+    ) -> Option<(LabelId, LabelId)> {
+        let label = |mut e: &'tu Expression<'tu>| {
+            while let ExpressionType::Parenthesized { expression } = e.kind {
+                e = expression;
+            }
+            self.control.address_label(e)
+        };
+        let (label, base) = (label(left.expression)?, label(right.expression)?);
+        (self.control.labels[label.0].function == self.control.labels[base.0].function)
+            .then_some((label, base))
     }
 
     /// Determines whether an expression forms an address constant without
@@ -233,6 +253,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     ExpressionType::StringLiteral(StringTokenType::WideString(l)),
                     ExpressionType::StringLiteral(StringTokenType::WideString(r)),
                 ) => self.context.literal_units(l) == self.context.literal_units(r),
+                | (
+                    ExpressionType::StringLiteral(StringTokenType::EncodedString(l, left)),
+                    ExpressionType::StringLiteral(StringTokenType::EncodedString(r, right)),
+                ) =>
+                    left == right && self.context.literal_units(l) == self.context.literal_units(r),
                 | _ => false,
             },
             | _ => false,

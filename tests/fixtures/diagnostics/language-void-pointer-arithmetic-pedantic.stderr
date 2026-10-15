@@ -1,0 +1,37 @@
+warning: 'arithmetic on a pointer to void' is a GNU extension
+ --> language-void-pointer-arithmetic-pedantic.c:2:17
+  |
+2 | static long d = (void *)&arr[3] - (void *)&arr[0];
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: 'subscript of a pointer to void' is a GNU extension
+ --> language-void-pointer-arithmetic-pedantic.c:4:16
+  |
+4 |     void *q = &p[2];
+  |                ^^^^
+
+warning: 'arithmetic on a pointer to void' is a GNU extension
+ --> language-void-pointer-arithmetic-pedantic.c:5:5
+  |
+5 |     q += 1;
+  |     ^^^^^^
+
+warning: 'sizeof of void' is a GNU extension
+ --> language-void-pointer-arithmetic-pedantic.c:6:17
+  |
+6 |     return (int)sizeof(p[1]) + (int)(q - p) + (int)d;
+  |                 ^^^^^^^^^^^^
+
+warning: 'subscript of a pointer to void' is a GNU extension
+ --> language-void-pointer-arithmetic-pedantic.c:6:24
+  |
+6 |     return (int)sizeof(p[1]) + (int)(q - p) + (int)d;
+  |                        ^^^^
+
+warning: 'arithmetic on a pointer to void' is a GNU extension
+ --> language-void-pointer-arithmetic-pedantic.c:6:38
+  |
+6 |     return (int)sizeof(p[1]) + (int)(q - p) + (int)d;
+  |                                      ^^^^^
+
+6 warnings generated.

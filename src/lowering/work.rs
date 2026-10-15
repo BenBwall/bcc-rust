@@ -46,7 +46,11 @@ pub(super) enum Task<'tu> {
         crate::translation_phases::SourceVectors,
     ),
     FinishBound(usize),
-    Sizeof(TypeId, TypeId, crate::translation_phases::SourceVectors),
+    Sizeof(
+        crate::translation_phases::semantic_analysis::SizeFormulaId,
+        TypeId,
+        crate::translation_phases::SourceVectors,
+    ),
     CleanupNormal(&'tu Statement<'tu>),
 
     /// Enter `block`: it is sealed if all its predecessors are known.
@@ -62,6 +66,8 @@ pub(super) enum Task<'tu> {
     Seal(Block),
     /// Pop the operand and return it.
     Return(&'tu Statement<'tu>),
+    /// Pop a computed goto's address and branch to it.
+    IndirectJump(&'tu Statement<'tu>),
     /// Pop the switch's controlling value and dispatch on it.
     Switch {
         statement: &'tu Statement<'tu>,
@@ -122,8 +128,11 @@ pub(super) enum Task<'tu> {
     /// Evaluate an expression without its conversions, leaving a place for
     /// an lvalue.
     EvaluateRaw(&'tu Expression<'tu>),
-    /// Overflow predicates retain only third-operand effects, with no item.
-    BuiltinEffects(&'tu Expression<'tu>, bool),
+    /// Interpret an expression's retained effects-only recipe, with no item.
+    BuiltinEffects(
+        &'tu Expression<'tu>,
+        crate::translation_phases::semantic_analysis::EffectContext,
+    ),
     /// Apply the conversions recorded on an expression, from the `skip`th.
     Convert {
         expression: &'tu Expression<'tu>,
@@ -131,10 +140,6 @@ pub(super) enum Task<'tu> {
     },
     /// Complete an operator whose operands are on the stack.
     Finish(&'tu Expression<'tu>),
-    FinishKeyword(
-        &'tu Expression<'tu>,
-        &'tu crate::translation_phases::parsing::Builtin<'tu>,
-    ),
     OmittedConditional {
         expression:  &'tu Expression<'tu>,
         conditional: &'tu ConditionalExpression<'tu>,
@@ -143,7 +148,7 @@ pub(super) enum Task<'tu> {
     },
     FinishBuiltin(
         &'tu Expression<'tu>,
-        crate::translation_phases::semantic_analysis::CommonBuiltin,
+        &'tu crate::translation_phases::semantic_analysis::BuiltinCallFacts<'tu>,
     ),
     /// Copy the place on top of the stack and convert the copy, as a
     /// compound assignment or increment reads its operand.

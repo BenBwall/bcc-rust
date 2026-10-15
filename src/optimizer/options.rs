@@ -23,6 +23,9 @@ pub(crate) struct OptimizerOptions<'a> {
     /// (`--print-after-all`). It is a `RefCell` so that the options stay
     /// shared while the optimizer writes.
     pub(crate) print_after_all: Option<&'a RefCell<dyn fmt::Write + 'a>>,
+    /// Where to print the per-pass report when the run ends
+    /// (`--time-passes`).
+    pub(crate) time_passes:     Option<&'a RefCell<dyn fmt::Write + 'a>>,
     /// The number of rewrites to apply before stopping, in pipeline order
     /// (`--opt-bisect-limit`). With `Some(n)`, the first `n` rewrites happen
     /// and every later one is skipped, so a miscompile can be bisected on `n`.
@@ -40,6 +43,7 @@ impl Default for OptimizerOptions<'_> {
             passes:                None,
             verify_each:           cfg!(debug_assertions),
             print_after_all:       None,
+            time_passes:           None,
             bisect_limit:          None,
             #[cfg(test)]
             injected:              None,
@@ -54,6 +58,8 @@ pub(crate) enum Pass {
     Inline,
     /// Constant folding and algebraic simplification.
     Fold,
+    /// Peephole combining of instruction chains.
+    Combine,
     /// Dead code elimination.
     Dce,
     /// Control-flow graph simplification.
@@ -62,6 +68,8 @@ pub(crate) enum Pass {
     Gvn,
     /// Loop-invariant code motion.
     Licm,
+    /// Scalar replacement of aggregates: splits stack slots into fields.
+    Sroa,
     /// Stack-slot promotion (mem2reg).
     Promote,
     /// Sparse conditional constant propagation.
@@ -74,8 +82,10 @@ impl Pass {
     /// Every pass, in default pipeline order.
     pub(crate) const ALL: [Self; Self::COUNT] = [
         Self::Inline,
+        Self::Sroa,
         Self::Promote,
         Self::Fold,
+        Self::Combine,
         Self::SimplifyCfg,
         Self::Sccp,
         Self::KnownBits,
@@ -83,18 +93,20 @@ impl Pass {
         Self::Licm,
         Self::Dce,
     ];
-    pub(crate) const COUNT: usize = 9;
+    pub(crate) const COUNT: usize = 11;
 
     /// The name `--passes` and reports use.
     pub(crate) const fn name(self) -> &'static str {
         match self {
             | Self::Inline => "inline",
             | Self::Fold => "fold",
+            | Self::Combine => "combine",
             | Self::Dce => "dce",
             | Self::SimplifyCfg => "simplify-cfg",
             | Self::Gvn => "gvn",
             | Self::Licm => "licm",
             | Self::Promote => "promote",
+            | Self::Sroa => "sroa",
             | Self::Sccp => "sccp",
             | Self::KnownBits => "known-bits",
         }
@@ -116,6 +128,8 @@ impl Pass {
             | Self::Promote => 5,
             | Self::Sccp => 6,
             | Self::KnownBits => 7,
+            | Self::Sroa => 9,
+            | Self::Combine => 10,
         }
     }
 }
@@ -175,12 +189,12 @@ pub(crate) fn parse_pass_list(text: &str) -> Result<PassList, PassListError<'_>>
 /// A `--passes` value that is not a list of known passes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Error)]
 pub(crate) enum PassListError<'a> {
-    /// A name that is empty or not a pass; the known passes are `fold`,
-    /// `dce`, `simplify-cfg`, `gvn`, `licm`, `promote`, `sccp` and
-    /// `known-bits` and `inline`.
+    /// A name that is empty or not a pass; the known passes are `inline`,
+    /// `sroa`, `promote`, `fold`, `combine`, `simplify-cfg`, `sccp`,
+    /// `known-bits`, `gvn`, `licm` and `dce`.
     #[error(
-        "unknown pass `{0}` (the passes are fold, dce, simplify-cfg, gvn, licm, promote, sccp and \
-         known-bits and inline)"
+        "unknown pass `{0}` (the passes are inline, sroa, promote, fold, combine, simplify-cfg, \
+         sccp, known-bits, gvn, licm and dce)"
     )]
     Unknown(&'a str),
     #[error("a pass list holds at most {} passes", PassList::CAPACITY)]
@@ -193,6 +207,7 @@ impl fmt::Debug for OptimizerOptions<'_> {
             .field("passes", &self.passes)
             .field("verify_each", &self.verify_each)
             .field("print_after_all", &self.print_after_all.is_some())
+            .field("time_passes", &self.time_passes.is_some())
             .field("bisect_limit", &self.bisect_limit)
             .finish_non_exhaustive()
     }

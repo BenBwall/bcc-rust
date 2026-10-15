@@ -23,6 +23,13 @@ use super::{
     types,
 };
 use crate::{
+    builtins::{
+        ArgumentEvaluation,
+        BitOperation,
+        BuiltinOperation as CommonBuiltin,
+        OverflowOperation,
+        VaOperation,
+    },
     ir::{
         InstData,
         InstFlags,
@@ -32,33 +39,24 @@ use crate::{
         Value,
     },
     translation_phases::{
-        parsing::syntax::{
-            Expression,
-            ExpressionType,
-        },
+        parsing::syntax::Expression,
         semantic_analysis::{
-            BitOperation,
-            CommonBuiltin,
-            OverflowOperation,
+            BuiltinCallFacts,
+            BuiltinOperand,
             TypeId,
-            common_builtin,
         },
     },
-    util::arena_list::ArenaList,
 };
 
 impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
-    /// C99 header intrinsics already have semantic types and IR operations.
-    /// C99: §7.15.1, pp. 249-251; PDF pp. 261-263.
+    /// Only type-generic/vector special forms retain the explicit M6 syntax
+    /// bridge. C99: §7.15.1, pp. 249-251; PDF pp. 261-263.
     pub(super) fn schedule_keyword(
         &mut self,
         e: &'tu Expression<'tu>,
         b: &'tu crate::translation_phases::parsing::Builtin<'tu>,
     ) -> Result<(), LoweringError> {
-        use crate::translation_phases::{
-            parsing::SyntaxOperand,
-            preprocessing::KeywordTokenType as K,
-        };
+        use crate::translation_phases::preprocessing::KeywordTokenType as K;
         if b.keyword == K::BuiltinChooseExpr {
             let selected = self.info(e)?.selected_expression.ok_or_else(|| {
                 LoweringError::missing("choose_expr has no selected operand", e.source_vectors)
@@ -66,40 +64,45 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             self.tasks.push(Task::EvaluateRaw(selected));
             return Ok(());
         }
-        if !matches!(
+        if matches!(
             b.keyword,
-            K::BuiltinVaStart | K::BuiltinVaEnd | K::BuiltinVaCopy | K::BuiltinVaArg
+            K::BuiltinVaStart
+                | K::BuiltinVaEnd
+                | K::BuiltinVaCopy
+                | K::BuiltinVaArg
+                | K::BuiltinOffsetof
         ) {
-            return Err(LoweringError::unsupported(
-                super::Construct::Builtin,
-                e.source_vectors,
-            ));
+            let instance = self.unit.sema.builtin_call_facts(e).ok_or_else(|| {
+                LoweringError::missing("checked keyword builtin is not retained", e.source_vectors)
+            })?;
+            return self.schedule_instance(e, instance);
         }
-        self.tasks.push(Task::FinishKeyword(e, b));
-        let count = if b.keyword == K::BuiltinVaCopy { 2 } else { 1 };
-        for &operand in b.operands.iter().take(count).rev() {
-            if let SyntaxOperand::Expression(e) = operand {
-                self.tasks.push(Task::EvaluateRaw(e));
-            }
-        }
-        Ok(())
+        Err(LoweringError::unsupported(
+            super::Construct::Builtin,
+            e.source_vectors,
+        ))
     }
 
     /// The IR takes the address of `va_list` storage on both target families.
     /// Its pointer representation on Win64 is therefore not read as a value.
     /// C99: §7.15.1, pp. 249-251; PDF pp. 261-263.
-    pub(super) fn finish_keyword(
+    fn finish_varargs(
         &mut self,
         e: &'tu Expression<'tu>,
-        b: &'tu crate::translation_phases::parsing::Builtin<'tu>,
+        instance: &'tu BuiltinCallFacts<'tu>,
     ) -> Result<(), LoweringError> {
-        use crate::translation_phases::preprocessing::KeywordTokenType as K;
+        let CommonBuiltin::Varargs(operation) = instance.operation else {
+            return Err(LoweringError::missing(
+                "varargs operation is absent",
+                e.source_vectors,
+            ));
+        };
         let source = e.source_vectors;
-        let second = (b.keyword == K::BuiltinVaCopy).then(|| self.pop());
+        let second = (operation == VaOperation::Copy).then(|| self.pop());
         let first = self.pop();
-        let first = self.va_list_address(first, source)?;
-        let ty = self.info(e)?.ty;
-        let operand = if b.keyword == K::BuiltinVaArg {
+        let first = self.va_list_address(first, &instance.operands[0], source)?;
+        let ty = instance.result_type;
+        let operand = if operation == VaOperation::Arg {
             if types::repr(&self.unit.sema.types, ty).is_ok_and(|r| r == types::Repr::Aggregate) {
                 let signature = self
                     .unit
@@ -127,11 +130,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     opcode: Opcode::VaCopy,
                     ty:     Type::Ptr,
                     flags:  InstFlags::empty(),
-                    args:   [first, self.va_list_address(second, source)?],
+                    args:   [
+                        first,
+                        self.va_list_address(second, &instance.operands[1], source)?,
+                    ],
                 }
             } else {
                 InstData::Unary {
-                    opcode: if b.keyword == K::BuiltinVaStart {
+                    opcode: if operation == VaOperation::Start {
                         Opcode::VaStart
                     } else {
                         Opcode::VaEnd
@@ -153,14 +159,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     fn va_list_address(
         &mut self,
         item: Item,
+        operand: &BuiltinOperand<'tu>,
         source: crate::translation_phases::SourceVectors,
     ) -> Result<Value, LoweringError> {
-        if !self.unit.sema.types.target.va_list_is_pointer
-            && matches!(
-                self.unit.sema.types.nodes[item.ty.index],
-                crate::translation_phases::semantic_analysis::TypeKind::Pointer(_)
-            )
-        {
+        if operand.evaluation == ArgumentEvaluation::AdjustedPointer {
             let item = if let Operand::Place(place) = item.operand {
                 self.read(place, item.ty, item.ty, source)?
             } else {
@@ -174,66 +176,88 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
     }
 
-    /// Ordinary calls must pass this dispatch before direct callee lookup.
-    /// GNU extension: GCC manuals linked in this module's documentation.
+    /// Dispatch only the semantic instance; M6 families have no instance yet.
     pub(super) fn schedule_builtin(
         &mut self,
         e: &'tu Expression<'tu>,
-        callee: &'tu Expression<'tu>,
-        args: ArenaList<'tu, &'tu Expression<'tu>>,
-    ) -> bool {
-        let callee =
-            crate::translation_phases::semantic_analysis::selected_designator(callee, |e| {
-                self.info(e).ok().copied()
-            });
-        let ExpressionType::Identifier(name) = callee.kind else {
-            return false;
+    ) -> Result<bool, LoweringError> {
+        let call = self.unit.sema.call_facts(e).ok_or_else(|| {
+            LoweringError::missing("call facts are not retained", e.source_vectors)
+        })?;
+        let crate::translation_phases::semantic_analysis::Callee::Builtin {
+            binding, instance, ..
+        } = call.callee
+        else {
+            return Ok(false);
         };
-        let Some(builtin) = common_builtin(self.unit.context.string_cache.at(name.name)) else {
-            return false;
-        };
-        if !self.info(callee).is_ok_and(|info| {
-            info.binding
-                .is_some_and(|id| self.unit.sema.bindings[id].builtin)
-        }) {
-            return false;
-        }
-        if let CommonBuiltin::Varargs(keyword) = builtin {
-            let b = crate::translation_phases::semantic_analysis::keyword_call(
-                self.unit.context.tu_arena(),
-                e,
-                keyword,
-                args,
-            );
-            // This recognized variant cannot fail keyword scheduling.
-            self.tasks.push(Task::FinishKeyword(e, b));
-            let count = if keyword
-                == crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaCopy
-            {
-                2
-            } else {
-                1
-            };
-            for &arg in args.iter().take(count).rev() {
-                self.tasks.push(Task::EvaluateRaw(arg));
+        let Some(instance) = instance else {
+            if binding.is_some_and(|binding| {
+                self.unit.sema.bindings[binding]
+                    .origin
+                    .descriptor()
+                    .is_some()
+            }) {
+                return Err(LoweringError::missing(
+                    "checked named builtin is not retained",
+                    e.source_vectors,
+                ));
             }
-            return true;
+            return Ok(false); // Explicit temporary M6/opaque-reserved bridge.
+        };
+        if instance.operation == CommonBuiltin::Library {
+            return Ok(false);
         }
-        self.tasks.push(Task::FinishBuiltin(e, builtin));
-        // GCC object_size and constant_p discard even operand side effects.
-        if !matches!(
-            builtin,
-            CommonBuiltin::ObjectSize(_) | CommonBuiltin::Constant
-        ) {
-            for (index, &arg) in args.iter().enumerate().rev() {
-                if matches!(builtin, CommonBuiltin::Overflow(_, _, true)) && index == 2 {
-                    self.tasks.push(Task::BuiltinEffects(arg, true));
-                } else {
-                    self.tasks.push(Task::Evaluate(arg));
+        self.schedule_instance(e, instance)?;
+        Ok(true)
+    }
+
+    fn schedule_instance(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        instance: &'tu BuiltinCallFacts<'tu>,
+    ) -> Result<(), LoweringError> {
+        let descriptor = instance.descriptor.descriptor();
+        if instance.operation != descriptor.operation || instance.effects != descriptor.effects {
+            return Err(LoweringError::missing(
+                "checked builtin contract is inconsistent",
+                e.source_vectors,
+            ));
+        }
+        if instance.operation == CommonBuiltin::Offsetof {
+            return Err(LoweringError::unsupported(
+                super::Construct::Builtin,
+                e.source_vectors,
+            ));
+        }
+        if !(descriptor.arity.0..=descriptor.arity.1).contains(&instance.operands.len()) {
+            return Err(LoweringError::missing(
+                "checked builtin operands are not retained",
+                e.source_vectors,
+            ));
+        }
+        self.tasks.push(Task::FinishBuiltin(e, instance));
+        for operand in instance.operands.iter().rev() {
+            let Some(expression) = operand.expression else {
+                if operand.evaluation != ArgumentEvaluation::Type {
+                    return Err(LoweringError::missing(
+                        "a checked builtin operand is not retained",
+                        e.source_vectors,
+                    ));
                 }
+                continue;
+            };
+            match operand.evaluation {
+                | ArgumentEvaluation::Value => self.tasks.push(Task::Evaluate(expression)),
+                | ArgumentEvaluation::StorageAddress | ArgumentEvaluation::AdjustedPointer =>
+                    self.tasks.push(Task::EvaluateRaw(expression)),
+                | ArgumentEvaluation::EffectsOnly => self.tasks.push(Task::BuiltinEffects(
+                    expression,
+                    crate::translation_phases::semantic_analysis::EffectContext::Value,
+                )),
+                | ArgumentEvaluation::Unevaluated | ArgumentEvaluation::Type => {},
             }
         }
-        true
+        Ok(())
     }
 
     /// Completes one intrinsic from its evaluated scalar operands.
@@ -241,49 +265,52 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     pub(super) fn finish_builtin(
         &mut self,
         e: &'tu Expression<'tu>,
-        builtin: CommonBuiltin,
+        instance: &'tu BuiltinCallFacts<'tu>,
     ) -> Result<(), LoweringError> {
-        let ExpressionType::Call { arguments, .. } = e.kind else {
-            return Err(LoweringError::missing(
-                "builtin is not a call",
-                e.source_vectors,
-            ));
-        };
-        let info = self.info(e)?;
-        let count = if matches!(
-            builtin,
-            CommonBuiltin::ObjectSize(_) | CommonBuiltin::Constant
-        ) {
-            0
-        } else {
-            arguments.len() - usize::from(matches!(builtin, CommonBuiltin::Overflow(_, _, true)))
-        };
+        let builtin = instance.operation;
+        if matches!(builtin, CommonBuiltin::Varargs(_)) {
+            return self.finish_varargs(e, instance);
+        }
+        let count = instance
+            .operands
+            .iter()
+            .filter(|operand| {
+                matches!(
+                    operand.evaluation,
+                    ArgumentEvaluation::Value
+                        | ArgumentEvaluation::StorageAddress
+                        | ArgumentEvaluation::AdjustedPointer
+                )
+            })
+            .count();
         let start = self.operands.len() - count;
         let mut items = [Item {
             operand: Operand::Void,
-            ty:      info.ty,
+            ty:      instance.result_type,
         }; 3];
         items[..count].copy_from_slice(&self.operands[start..]);
         self.operands.truncate(start);
         let source = e.source_vectors;
         let result = match builtin {
-            | CommonBuiltin::Varargs(_) =>
+            | CommonBuiltin::Varargs(_) | CommonBuiltin::Library | CommonBuiltin::Offsetof =>
                 return Err(LoweringError::missing(
                     "varargs must use keyword scheduling",
                     source,
                 )),
             | CommonBuiltin::Constant => {
-                let value =
-                    self.iconst(Type::I32, info.integer.expect("typed constant query").value);
+                let value = self.iconst(
+                    Type::I32,
+                    instance.integer.expect("typed constant query").value,
+                );
                 Operand::Value(value)
             },
             | CommonBuiltin::ObjectSize(_) => {
                 // Sema folded the query using the converted int mode.
                 // C99 §6.5.2.2p7, p. 72; PDF p. 84.
-                let value = info.integer.ok_or_else(|| {
+                let value = instance.integer.ok_or_else(|| {
                     LoweringError::missing("object size query has no folded value", source)
                 })?;
-                let ty = self.value_type(info.ty, source)?;
+                let ty = self.value_type(instance.result_type, source)?;
                 Operand::Value(self.iconst(ty, value.value))
             },
             | CommonBuiltin::Expect(_) | CommonBuiltin::Aligned => items[0].operand,
@@ -346,17 +373,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | CommonBuiltin::Float(operation, _) => self.floating_builtin(
                 operation,
                 &items[..count],
-                info.operation_type.ok_or_else(|| {
+                instance.operation_type.ok_or_else(|| {
                     LoweringError::missing("a floating builtin has no operand type", source)
                 })?,
                 source,
             )?,
             | CommonBuiltin::Overflow(op, _, predicate) => {
-                let destination = info.operation_type.ok_or_else(|| {
+                let destination = instance.operation_type.ok_or_else(|| {
                     LoweringError::missing("overflow destination is absent", source)
                 })?;
                 let width = if predicate {
-                    self.info(arguments[2])?.bit_field
+                    instance.operands[2].bit_field
                 } else {
                     None
                 };
@@ -369,7 +396,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 Operand::Value(self.extend(overflow, false, Type::I8))
             },
         };
-        self.push_item(result, info.ty);
+        self.push_item(result, instance.result_type);
         Ok(())
     }
 

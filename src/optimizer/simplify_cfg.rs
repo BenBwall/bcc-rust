@@ -1,6 +1,6 @@
 //! Control-flow graph simplification.
 //!
-//! One round runs five steps in order, and the pass repeats rounds until
+//! One round runs seven steps in order, and the pass repeats rounds until
 //! nothing changes, because each step exposes work for the others:
 //!
 //! 1. **Thread jumps** through forwarding blocks: a block with no instructions
@@ -13,31 +13,42 @@
 //!    blocks it dominates may use them, and a threaded edge would reach those
 //!    blocks without defining them. An edge is left alone when redirecting it
 //!    would give one terminator two edges to a block with different arguments,
-//!    which the verifier forbids. Block-indexed visit stamps detect cycles; a
-//!    per-round cache composes argument mappings backwards along each path.
-//!    Each forwarding block is resolved once, independently of block layout or
-//!    incoming edge count.
-//! 2. **Form selects** for single-entry cheap diamond/triangle arms using
+//!    which the verifier forbids, and so is every edge of an `indirect_br`,
+//!    whose targets are the addressed blocks themselves; a labeled block is
+//!    never skipped, since its address names it. Block-indexed visit stamps
+//!    detect cycles; a per-round cache composes argument mappings backwards
+//!    along each path. Each forwarding block is resolved once, independently of
+//!    block layout or incoming edge count.
+//! 2. **Thread constant conditions** (`thread.rs`): an edge passing a constant
+//!    to an empty block that branches on that parameter goes straight to the
+//!    chosen successor.
+//! 3. **Form selects** for single-entry cheap diamond/triangle arms using
 //!    `select.rs`. Each differing join argument is one bisectable rewrite. Each
 //!    arm costs at most four units; loads, stores, calls, division and
 //!    remainder never speculate. Moved arithmetic loses poison-producing flags.
-//! 3. **Fold identical branches**: a `brif` whose two edges agree, or a
+//! 4. **Merge conditions** (`thread.rs`): a branch whose single-entry,
+//!    unlabeled arm only tests a second, cheap condition for one of the
+//!    branch's own destinations tests both with one `select`.
+//! 5. **Fold identical branches**: a `brif` whose two edges agree, or a
 //!    `switch` whose edges all agree, becomes a `jump`.
-//! 4. **Remove unreachable blocks**, all at once and counted as one rewrite: a
+//! 6. **Remove unreachable blocks**, all at once and counted as one rewrite: a
 //!    block removed on its own could leave a surviving unreachable block using
-//!    its values.
-//! 5. **Merge a block into its only predecessor** when that predecessor ends in
-//!    a `jump` to it and the edge is the only one into the block. The block's
-//!    parameters are replaced by the jump's arguments and its instructions and
-//!    terminator are appended to the predecessor.
+//!    its values. An unreachable labeled block stays as an `unreachable` stub
+//!    ([`Draft::retire_block`]), so its address remains valid.
+//! 7. **Merge a block into its only predecessor** when that predecessor ends in
+//!    a `jump` to it and the edge is the only one into the block, unless a
+//!    label names the block. The block's parameters are replaced by the jump's
+//!    arguments and its instructions and terminator are appended to the
+//!    predecessor.
 //!
 //! Folding a constant branch is the fold pass's job, not this one's; it
-//! leaves the dead arm unreachable for step 4.
+//! leaves the dead arm unreachable for step 6.
 //!
 //! C99: §5.1.2.3 paragraph 5, pp. 13-14; PDF pp. 25-26 (only the program's
 //! observable behaviour must be kept, not its control-flow shape).
 
 mod select;
+mod thread;
 
 use super::{
     draft::{
@@ -69,7 +80,9 @@ pub(super) fn run(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) ->
     let mut changed = false;
     for _ in 0..MAX_ROUNDS {
         let mut round = thread_jumps(draft, report);
+        round |= thread::thread_constant_branches(draft, report);
         round |= select::run(draft, report);
+        round |= thread::merge_branch_conditions(draft, report);
         round |= fold_identical_branches(draft, report);
         round |= remove_unreachable_blocks(draft, report);
         round |= merge_into_predecessors(draft, report);
@@ -93,7 +106,10 @@ fn thread_jumps(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> b
     let targets = forwarding_targets(draft, &uses, &reachable);
     for index in 0..draft.blocks.len() {
         let block = Block::new(index);
-        if !draft.block(block).alive || !reachable[index] {
+        if !draft.block(block).alive
+            || !reachable[index]
+            || matches!(draft.block(block).term, Term::IndirectBr { .. })
+        {
             continue;
         }
         // Own the terminator while rewriting it so edge traversal stays linear:
@@ -184,6 +200,7 @@ fn forwarding_targets<'s>(
             };
             if !forwarder.alive
                 || target == Draft::entry()
+                || draft.is_labeled(target)
                 || !forwarder.insts.is_empty()
                 || forwarder
                     .params
@@ -272,7 +289,7 @@ fn threaded<'s>(
     Some((target, args))
 }
 
-/// Step 3: turns branches whose edges all agree into jumps.
+/// Step 5: turns branches whose edges all agree into jumps.
 fn fold_identical_branches(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> bool {
     let mut changed = false;
     for index in 0..draft.blocks.len() {
@@ -301,23 +318,31 @@ fn fold_identical_branches(draft: &mut Draft<'_, '_>, report: &mut OptimizationR
     changed
 }
 
-/// Step 4: drops every block the entry cannot reach, as one rewrite.
+/// Step 6: drops every block the entry cannot reach, as one rewrite. A
+/// labeled block becomes an `unreachable` stub instead; one that already is
+/// one is not a change.
 fn remove_unreachable_blocks(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> bool {
     let reachable = draft.reachable();
-    let unreachable =
-        |draft: &Draft<'_, '_>, index: usize| draft.blocks[index].alive && !reachable[index];
+    let unreachable = |draft: &Draft<'_, '_>, index: usize| {
+        let data = &draft.blocks[index];
+        data.alive
+            && !reachable[index]
+            && !(draft.is_labeled(Block::new(index))
+                && data.insts.is_empty()
+                && matches!(data.term, Term::Unreachable))
+    };
     if !(0..draft.blocks.len()).any(|index| unreachable(draft, index)) || !report.allow() {
         return false;
     }
     for index in 0..draft.blocks.len() {
         if unreachable(draft, index) {
-            draft.blocks[index].alive = false;
+            _ = draft.retire_block(Block::new(index));
         }
     }
     true
 }
 
-/// Step 5: appends a block to its only predecessor.
+/// Step 7: appends a block to its only predecessor.
 fn merge_into_predecessors(draft: &mut Draft<'_, '_>, report: &mut OptimizationReport) -> bool {
     let mut changed = false;
     let incoming = draft.incoming_edge_counts();
@@ -329,6 +354,7 @@ fn merge_into_predecessors(draft: &mut Draft<'_, '_>, report: &mut OptimizationR
             && let Term::Jump(edge) = &draft.block(block).term
             && edge.target != block
             && edge.target != Draft::entry()
+            && !draft.is_labeled(edge.target)
             && draft.block(edge.target).alive
             && incoming[edge.target.index()] == 1
         {

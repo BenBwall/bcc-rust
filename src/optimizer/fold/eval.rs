@@ -29,7 +29,7 @@ pub(in crate::optimizer) enum Folded {
 }
 
 /// `bits` of type `ty` as a signed number.
-pub(super) const fn signed(bits: u128, ty: Type) -> i128 {
+pub(in crate::optimizer) const fn signed(bits: u128, ty: Type) -> i128 {
     let shift = 128 - ty.bits();
     ((bits << shift) as i128) >> shift
 }
