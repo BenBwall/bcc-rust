@@ -28,7 +28,8 @@
 //! - Retained facts: `facts/` records lexical/VM/block-expression regions and
 //!   resolved destinations on the same work stack, then finalizes compact
 //!   transitions using iterative heavy-light indexing. It also retains
-//!   declaration/parameter correspondence, typed bound sites and size DAGs.
+//!   declaration/parameter correspondence, typed bound sites, size DAGs,
+//!   expression effect summaries and effects-only evaluation recipes.
 //! - Types and values: `types.rs` interns and compares types and computes
 //!   layouts; `integer.rs` evaluates integer constants; `constants.rs` folds
 //!   floating values.
