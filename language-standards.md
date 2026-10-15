@@ -726,7 +726,13 @@ token or directive boundary.
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
 `__atomic_*` and `__sync_*` names, and the [common GCC scalar intrinsic families](#common-gcc-scalar-intrinsics-2026-10-12).
-Unmodeled names return 0. These tables describe the
+Unmodeled names return 0. Clang's `__has_feature` and `__has_extension` share
+`__has_attribute`'s gate: `c_alignas`, `c_alignof`, `c_atomic`,
+`c_generic_selections`, `c_static_assert` and `c_thread_local` are features
+where the C11 feature is native and extensions wherever bcc accepts it, as in
+Clang; `attribute_deprecated_with_message` is a feature in every mode; every
+other name, including Clang features bcc lacks such as `attribute_overloadable`,
+returns 0. These tables describe the
 syntax-front-end subset, not backend effects or a GCC/Clang version. Both GNU
 queries are available through their reserved spellings in strict modes and
 report GNU policy diagnostics.
@@ -1144,6 +1150,12 @@ has C11 constraints and completed-declarator storage alignment. Retained layouts
 also support existing `typeof`, `__builtin_types_compatible_p`, `__builtin_offsetof`
 and expression-alignment queries. `__builtin_signbit[f/l]`, `__builtin_isinf[f/l]`,
 `__builtin_copysign[f/l]` and `__builtin_snprintf` are binding-aware builtins.
+The type-generic `__builtin_isnan`, `__builtin_isfinite`, `__builtin_isnormal`,
+`__builtin_isinf_sign` and `__builtin_fpclassify`, which glibc's `<math.h>`
+selects for Clang, fold constants and lower to ordered comparisons.
+`__builtin_frame_address` and `__builtin_return_address` take a constant level
+and lower level 0 (MinGW-w64's Clang `setjmp` passes the frame address);
+`__builtin_extract_return_addr` is the identity.
 
 GCC contracts: [common attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html),
 [union casts](https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html),
