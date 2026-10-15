@@ -36,9 +36,11 @@ use super::{
     module::{
         Extension,
         GlobalInit,
+        Linkage,
         ParamAbi,
         Signature,
         Symbol,
+        Visibility,
     },
     types::Type,
 };
@@ -70,7 +72,8 @@ pub(crate) fn verify_module<'m, 's>(
 /// An alias names an existing definition of its own kind that is not itself
 /// an alias, and has no body or initializer of its own; a section name is
 /// nonempty and free of quotes, newlines and NUL, so every back end and the
-/// textual form can carry it.
+/// textual form can carry it; an internal symbol has default visibility, as
+/// LLVM requires of local linkage.
 /// GNU extension: GCC manual, "Common Function Attributes", alias/section.
 /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
 fn verify_symbol_attributes(
@@ -79,6 +82,15 @@ fn verify_symbol_attributes(
     mut error: impl FnMut(VerifierErrorKind),
 ) {
     let attributes = module.symbol_attributes(symbol);
+    let linkage = match symbol {
+        | Symbol::Function(func) => module.function(func).linkage,
+        | Symbol::Global(global) => module.global(global).linkage,
+    };
+    if linkage == Linkage::Internal && attributes.visibility != Visibility::Default {
+        error(VerifierErrorKind::SymbolAttribute(
+            "an internal symbol has default visibility",
+        ));
+    }
     if let Some(section) = attributes.section
         && (section.is_empty() || section.contains(['"', '\n', '\r', '\0']))
     {

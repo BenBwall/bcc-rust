@@ -45,6 +45,7 @@ extern int value __attribute__((weak));
 __attribute__((section(".data.mine"), used)) int stored = 1;
 static int keep __attribute__((used));
 __attribute__((visibility("hidden"))) int hidden_object;
+__attribute__((visibility("hidden"))) static int internal_object;
 __attribute__((aligned(32))) void aligned_function(void) {}
 void late(void);
 void late(void) __attribute__((weak));
@@ -69,6 +70,8 @@ void late(void) {}
                 attributes("hidden_object").unwrap().visibility,
                 Some(Visibility::Hidden)
             );
+            // Internal linkage has no symbol visibility; Clang is silent.
+            assert!(attributes("internal_object").is_none());
             assert_eq!(attributes("aligned_function").unwrap().code_alignment, 32);
             assert!(attributes("real").is_none());
             // Chains resolve to the final definition.

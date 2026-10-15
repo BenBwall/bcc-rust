@@ -266,7 +266,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// GCC `visibility("default" | "hidden" | "internal" | "protected")`;
-    /// `internal` is hidden, as in Clang.
+    /// `internal` is hidden, as in Clang. An entity with internal linkage
+    /// has no symbol visibility: Clang accepts the attribute there silently
+    /// and emits the symbol with default visibility.
     fn visibility_attribute(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
         let Some(value) = self.string_argument(attribute) else {
             return;
@@ -289,10 +291,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match subject {
             | Subject::Function { binding, .. } | Subject::Object { binding, .. }
                 if self.bindings[binding].linkage != Linkage::None =>
-            {
-                let entity = self.entity_of(binding);
-                self.attributes.entity(entity).visibility = Some(visibility);
-            },
+                if self.bindings[binding].linkage == Linkage::External {
+                    let entity = self.entity_of(binding);
+                    self.attributes.entity(entity).visibility = Some(visibility);
+                },
             | _ => self.ignored(attribute),
         }
     }

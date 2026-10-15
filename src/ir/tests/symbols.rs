@@ -85,6 +85,14 @@ fn verifier_rejects_broken_aliases_sections_and_init_functions() {
             )],
         ),
         (
+            "global @g internal size 4, align 4 hidden = zero\nfunction @f() internal protected \
+             {\nblock0:\n    return\n}\n",
+            &[
+                rule("g", "an internal symbol has default visibility"),
+                rule("f", "an internal symbol has default visibility"),
+            ],
+        ),
+        (
             "global @g external size 4, align 4 section \"\" = zero\n",
             &[rule(
                 "g",
