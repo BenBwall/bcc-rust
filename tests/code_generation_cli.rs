@@ -1261,6 +1261,80 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         std::fs::remove_file(object).unwrap();
     }
 
+    /// The MinGW-w64 installation root and its C library include directory,
+    /// from a `gcc.exe` on `PATH`, as the conformance harness finds them.
+    fn mingw() -> Option<(PathBuf, PathBuf)> {
+        let path = env::var_os("PATH")?;
+        env::split_paths(&path).find_map(|directory| {
+            let root = directory.parent()?;
+            let include = root.join("x86_64-w64-mingw32/include");
+            (directory.join("gcc.exe").is_file() && include.join("_mingw.h").is_file())
+                .then(|| (root.to_path_buf(), include))
+        })
+    }
+
+    /// GitHub issue #57: MinGW-w64's `_mingw.h` declares its `__CRT_INLINE`
+    /// helpers `extern inline __attribute__((__gnu_inline__))` only for GCC
+    /// 4.3 or later or for Clang. bcc claims Clang, so two translation units
+    /// that include `<string.h>` emit no external `strncasecmp` and link.
+    #[test]
+    fn mingw_crt_inline_helpers_link_from_two_translation_units() {
+        if host() != Some("x86_64-w64-windows-gnu") {
+            eprintln!("skipping: the host is not Windows GNU");
+            return;
+        }
+        let Some((root, include)) = mingw() else {
+            eprintln!("skipping: no MinGW-w64 gcc on PATH");
+            return;
+        };
+        let units = [
+            "#include <string.h>\nint one(void) { return strcasecmp(\"a\", \"A\"); }\n",
+            "#include <stdio.h>\n#include <string.h>\nint one(void);\nint main(void) {\n  \
+             printf(\"%d %d\\n\", one(), strncasecmp(\"ab\", \"AB\", 2));\n  return 0;\n}\n",
+        ];
+        let flags = [
+            "--target=x86_64-w64-windows-gnu",
+            "--idirafter",
+            include.to_str().unwrap(),
+        ];
+        let mut objects = Vec::new();
+        for (index, unit) in units.iter().enumerate() {
+            let llvm = bcc(unit, &[&flags[..], &["--emit=llvm"]].concat());
+            assert!(llvm.status.success(), "{}", text(&llvm.stderr));
+            let module = text(&llvm.stdout);
+            assert!(
+                !module.lines().any(|line| line.starts_with("define")
+                    && (line.contains("@strcasecmp(") || line.contains("@strncasecmp("))),
+                "unit {index} defines a CRT inline helper:\n{module}"
+            );
+            let object = temporary(&format!("crt-inline-{index}.o"));
+            let compiled = bcc(
+                unit,
+                &[&flags[..], &["-c", "-o", object.to_str().unwrap()]].concat(),
+            );
+            assert!(compiled.status.success(), "{}", text(&compiled.stderr));
+            objects.push(object);
+        }
+        let executable = temporary("crt-inline.exe");
+        let linked =
+            Command::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("target/llvm/bin/clang.exe"))
+                .arg("--target=x86_64-w64-windows-gnu")
+                .arg(format!("--sysroot={}", root.display()))
+                .arg("-fuse-ld=lld")
+                .args(&objects)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap();
+        assert!(linked.status.success(), "{}", text(&linked.stderr));
+        let run = run_native(&mut Command::new(&executable)).unwrap();
+        assert_eq!(run.status.code(), Some(0));
+        assert_eq!(text(&run.stdout), "0 0\n");
+        for path in objects.into_iter().chain([executable]) {
+            drop(std::fs::remove_file(path));
+        }
+    }
+
     #[test]
     fn looping_native_program_reports_timeout() {
         let Some(target) = host() else {
