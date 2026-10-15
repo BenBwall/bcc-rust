@@ -128,8 +128,11 @@ pub(super) enum Task<'tu> {
     /// Evaluate an expression without its conversions, leaving a place for
     /// an lvalue.
     EvaluateRaw(&'tu Expression<'tu>),
-    /// Overflow predicates retain only third-operand effects, with no item.
-    BuiltinEffects(&'tu Expression<'tu>, bool),
+    /// Interpret an expression's retained effects-only recipe, with no item.
+    BuiltinEffects(
+        &'tu Expression<'tu>,
+        crate::translation_phases::semantic_analysis::EffectContext,
+    ),
     /// Apply the conversions recorded on an expression, from the `skip`th.
     Convert {
         expression: &'tu Expression<'tu>,

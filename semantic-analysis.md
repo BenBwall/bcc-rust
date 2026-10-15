@@ -1613,7 +1613,7 @@ expression, prefix length and converted result type. Statement continuations
 forward one child's tail result; block reduction inspects only its last immediate
 item. Empty/declaration/nested-compound endings yield void. Labels execute before
 the converted tail value, and aggregate snapshots still precede lifetime cleanup.
-The existing retained expression-effects record describes the block's effects.
+The retained expression-effects record summarizes the block's statements.
 
 Lowering's linear address-use scan and builtin dispatch read retained callee and
 designation records. Call scheduling and completion share `CallFacts`; member
@@ -1671,8 +1671,9 @@ plus reserved builtin type spellings, remain explicit M6 bridges. The named
 capability adapter in `builtins/names.rs` joins the registry with those families;
 `__has_builtin` still uses the existing keyword classifier/semantic capability
 adapter. Exhaustive scalar/library agreement tests cover all current targets,
-strict/GNU modes and hosted/freestanding environments. Sparse evaluation recipes
-remain M5; the external/returns-twice symbol policy remains later work.
+strict/GNU modes and hosted/freestanding environments. M5 later consumed the
+registry's effect classes in the retained expression effects; the
+external/returns-twice symbol policy remains later work.
 
 C99 §6.5.2.2p7, p. 72 (PDF p. 84), §6.2.1p4, pp. 29-30
 (PDF pp. 41-42), §7.15.1, pp. 249-251 (PDF pp. 261-263),
@@ -1781,15 +1782,55 @@ expressions then address the same parameter object.
 
 ## Shared expression effects and entry actions
 
-Semantic analysis produces one `ExpressionEffects` record per expression in
-child-before-parent order, with value-read and designation/effects-only purity.
-ICE eligibility remains separate from purity. Cast type-site actions are normalized
-into `expression_actions`; both the summary producer and value/effect-only lowering
-consume that same record. An evaluated VM typeof operand or new bound therefore
-prevents an overflow predicate from folding away its effects. Short-circuit and
-selected branches preserve conditional execution, and address-only operations keep
-their existing volatile distinctions. There are no per-query semantic purity caches
-or lowering-owned summary caches. Full sparse evaluation recipes remain M5 work.
+**M5 is complete.** `facts/effects.rs` produces one four-byte `ExpressionEffects`
+record per expression ordinal, in child-before-parent order, when
+`retain_expression` runs. It holds two contexts: reading the value and only
+designating it (address-only and effects-only uses). Each context carries an
+`EffectSet` of `WRITE`, `CALL`, `VOLATILE`, `CONTROL`, `LIFETIME` and
+`UNKNOWN`, and a recipe kind. An empty set means the evaluation may be omitted;
+it is not an optimizer promise that arithmetic cannot trap or be poison. Each
+summary combines the retained summaries of the node's immediate children once,
+so production is O(1) per operand edge with no recursion or suffix walk.
+
+- Assignments and increments write; a store to a volatile lvalue is also a
+  volatile access. Ordinary and indirect calls are `CALL`.
+- A volatile read is `VOLATILE` only in the value context; `&v`, `&*vp` and
+  `&p->vm` designate without access. Member bases and address-of operands use
+  the designation context.
+- `_Generic` and `__builtin_choose_expr` forward their retained selection only.
+- Checked builtins use the registry instance: the descriptor's
+  `BuiltinEffectClass` (pure/query none, write, control, allocate as
+  `LIFETIME`, library as `CALL`) plus the operands their evaluation modes
+  evaluate. Unevaluated and type operands contribute nothing; effects-only
+  operands contribute their value context. Temporary M6 bridges are `UNKNOWN`.
+- Constant `sizeof`, and `typeof` outside a VM type site, contribute nothing. A
+  VLA `sizeof` takes its retained size-query operand and new bound expressions;
+  a cast takes its `expression_actions` typeof operands and new bounds.
+- A GNU statement expression opens a body summary; each completed statement
+  adds its own expressions, loops and jumps add `CONTROL`, and declarations and
+  nested definitions add `UNKNOWN`. The block closes the summary.
+- Compound literals and unmodeled forms are conservatively effectful.
+
+ICE eligibility remains separate. The existing rule still clears constant
+eligibility when a cast's evaluated type-site actions are effectful, and an
+overflow predicate folds only when its third operand's value summary is empty.
+
+The same postorder retains effects-only recipes once the node's ICE state is
+final. `EffectRecipe::None` and `EvaluateValue` or `StatementBlock` of the node
+itself live in the dense record. `Sequence` (the node's own type-site actions,
+then child uses) and `Conditional` (a condition evaluated once as a branch and
+optional arm uses) live in a sparse map keyed by ordinal and context. A use
+names a child ordinal and context. Short circuits and conditionals keep a
+branch only when an arm's summary is non-empty; omitted conditionals branch on
+their saved condition. ICE nodes execute nothing; volatile reads evaluate.
+`SemanticTranslationUnit::effect_summary`/`effect_recipe` are the queries. A
+child without a record makes the recipe unavailable, and lowering reports that
+missing fact. The old per-node boolean purity pair and the lowering's
+operator/volatility classification are deleted.
+C99 §5.1.2.3p2, p. 13 (PDF p. 25), §6.7.3p6, p. 109 (PDF p. 121),
+§6.5.3.4p2, p. 80 (PDF p. 92), §6.5.13p4-§6.5.15p4, pp. 89-90 (PDF pp. 101-102);
+[GCC Statement Exprs](https://gcc.gnu.org/onlinedocs/gcc/Statement-Exprs.html).
+Validation and corpus evidence: [M5 receipt](docs/research/semantic-facts-m5.md).
 
 `FunctionRecord::parameter_facts` keeps each prototype-style entry action with
 its original type and binding correspondence; `parameter_sites` keeps K&R

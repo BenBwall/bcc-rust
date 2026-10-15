@@ -554,14 +554,26 @@ type-generic recognition/keyword handlers are explicit temporary M6 bridges;
 preprocessing retains its capability adapter until that migration. Scalar/library
 support is tested against the registry on every current target and environment.
 
-Initializer placement plans, sparse effect recipes, symbolic constants, remaining
-builtin families and final symbol/function policies remain later migration work.
+**M5 is complete.** Effects-only evaluation (an overflow predicate's third operand
+and the statements of a GNU block inside it) interprets retained
+`EffectRecipe`s: nothing, evaluate-and-discard, the node's type-site actions and
+child uses, a single branch on a condition with optional arms, or the
+statement-expression body in effects mode. `builtin_effects.rs` no longer
+inspects operators, volatility, ICE state or selections, and never consults a
+purity predicate. A branch with one empty arm uses one effects block and the merge
+block, the same shape short circuits already had; an omitted conditional, or a
+conditional with one effect-free arm, now takes that shape too. A missing summary
+or recipe is a provenance-bearing `MissingFact`.
+
+Initializer placement plans, symbolic constants, remaining builtin families and
+final symbol/function policies remain later migration work.
 Some consumers therefore still inspect syntax in those families. See
 [semantic-analysis.md](semantic-analysis.md) for producer/query contracts and the
 [M1 receipt](docs/research/semantic-facts-m1.md),
 [M2 receipt](docs/research/semantic-facts-m2.md),
-[M3 receipt](docs/research/semantic-facts-m3.md), and
-[M4 receipt](docs/research/semantic-facts-m4.md) for checks and corpus comparisons.
+[M3 receipt](docs/research/semantic-facts-m3.md),
+[M4 receipt](docs/research/semantic-facts-m4.md), and
+[M5 receipt](docs/research/semantic-facts-m5.md) for checks and corpus comparisons.
 
 ### Algorithm
 
@@ -1128,9 +1140,9 @@ source order after parameter initialization and alias installation. Saved bounds
 remain SSA extents. A bound owned by an evaluated typeof operand is scheduled by
 that operand's declaration, preventing premature reservation of its SSA variable.
 Both ordinary expression lowering and effects-only overflow operands consume the
-same normalized type-site actions and semantic dual-context purity summaries.
-Allocation, sizeof and pointer/subscript/increment strides consume the shared
-semantic size-formula DAG. M5 sparse effect recipes remain a later step.
+same normalized type-site actions. Effects-only operands interpret the retained M5
+recipes. Allocation, sizeof and pointer/subscript/increment strides consume the
+shared semantic size-formula DAG.
 
 `stack_save` returns an opaque `ptr` token for the current dynamic stack position;
 `stack_restore` takes such a token from the current invocation and releases later

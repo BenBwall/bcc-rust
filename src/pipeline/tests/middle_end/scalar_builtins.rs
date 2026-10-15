@@ -43,6 +43,10 @@ const PROGRAMS: &[(&str, &str)] = &[
         include_str!("../../../../tests/fixtures/semantic/labeled-overflow-effects.c"),
     ),
     (
+        "selected_overflow_effects",
+        include_str!("../../../../tests/fixtures/semantic/selected-overflow-effects.c"),
+    ),
+    (
         "selected_callees",
         include_str!("../../../../tests/fixtures/semantic/builtin-selected-callees.c"),
     ),
@@ -322,18 +326,18 @@ fn overflow_predicate_effect_analysis_has_linear_work() {
         "x&&(".repeat(DEPTH),
         ")".repeat(DEPTH)
     );
-    crate::test_support::OVERFLOW_EFFECT_VISITS.with(|visits| visits.set(0));
+    crate::test_support::EFFECT_RECIPE_STEPS.with(|steps| steps.set(0));
     with_module(
         &source,
         Target::LinuxGnu,
         false,
         Profile::PreAbi,
         |module, target| {
-            let visits = crate::test_support::OVERFLOW_EFFECT_VISITS.with(std::cell::Cell::get);
-            eprintln!("overflow effect analysis: {visits} visits for depth {DEPTH}");
+            let steps = crate::test_support::EFFECT_RECIPE_STEPS.with(std::cell::Cell::get);
+            eprintln!("overflow effect recipes: {steps} lowering steps for depth {DEPTH}");
             assert!(
-                visits <= 16 * DEPTH,
-                "effect analysis visited {visits} expressions for a {DEPTH}-deep chain"
+                steps <= 4 * DEPTH,
+                "effect recipes took {steps} lowering steps for a {DEPTH}-deep chain"
             );
             assert_eq!(interpret(module, target).0, 0);
         },

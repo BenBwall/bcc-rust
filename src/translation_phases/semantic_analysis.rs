@@ -28,7 +28,8 @@
 //! - Retained facts: `facts/` records lexical/VM/block-expression regions and
 //!   resolved destinations on the same work stack, then finalizes compact
 //!   transitions using iterative heavy-light indexing. It also retains
-//!   declaration/parameter correspondence, typed bound sites and size DAGs.
+//!   declaration/parameter correspondence, typed bound sites, size DAGs,
+//!   expression effect summaries and effects-only evaluation recipes.
 //! - Types and values: `types.rs` interns and compares types and computes
 //!   layouts; `integer.rs` evaluates integer constants; `constants.rs` folds
 //!   floating values.
@@ -89,7 +90,6 @@ mod inspection;
 use std::cell::Cell;
 
 pub(crate) use builtins::{
-    ExpressionEffects,
     implemented_builtin,
     named_builtin,
 };
@@ -259,7 +259,7 @@ pub(crate) fn analyze<'tu>(
         sizes,
         runtime_bounds: analyzer.runtime_bounds.leak(),
         control: analyzer.control.retain(analyzer.types.tu),
-        expression_effects: analyzer.expression_effects.leak(),
+        effects: analyzer.effects.retain(),
         expression_actions: analyzer.expression_actions,
         declarators: analyzer.declarators.leak(),
         spec_extensions: analyzer.spec_extensions.leak(),
@@ -438,9 +438,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::FunctionBody(f) => self.function_body(f),
             | Work::OldSignature(f) => self.old_signature(f),
             | Work::BlockItem(item) => match item {
-                | BlockItem::Declaration(d) => self.work.push(Work::Declaration(d)),
+                | BlockItem::Declaration(d) => {
+                    self.unsummarized_block_item();
+                    self.work.push(Work::Declaration(d));
+                },
                 | BlockItem::Statement(s) => self.work.push(Work::Statement(s, true)),
-                | BlockItem::FunctionDefinition(f) => self.work.push(Work::Function(f)),
+                | BlockItem::FunctionDefinition(f) => {
+                    self.unsummarized_block_item();
+                    self.work.push(Work::Function(f));
+                },
             },
             | Work::Statement(statement, new_scope) => self.statement(statement, new_scope),
             | Work::Expression(expression) => self.expression(expression),
@@ -1671,7 +1677,7 @@ struct Analyzer<'a, 'tu, 's> {
     integer_models:          ArenaMap<'s, usize, Option<(u32, bool)>>,
     resolved:                resolved::ResolvedBuilder<'tu, 's>,
     expressions:             ArenaVec<'tu, ExpressionInfo<'tu>>,
-    expression_effects:      ArenaVec<'tu, ExpressionEffects>,
+    effects:                 effects::EffectBuilder<'tu, 's>,
     expression_actions:      ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
     binding_bounds:          ArenaMap<'tu, usize, &'tu [usize]>,
     next_parameter:          usize,

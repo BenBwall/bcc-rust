@@ -5,6 +5,7 @@
 //! lowering refuses (`refusals.rs`).
 
 mod correspondence;
+mod effects;
 mod extensions;
 mod floats;
 mod golden;

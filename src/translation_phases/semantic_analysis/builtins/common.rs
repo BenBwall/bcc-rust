@@ -166,7 +166,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         let b = self.expression_info(args[1]);
                         if a.ice
                             && b.ice
-                            && self.effect_pure(args[2], true)
+                            && self.effects_pure(
+                                args[2],
+                                crate::translation_phases::semantic_analysis::EffectContext::Value,
+                            )
                             && let Some((a, b)) = a.integer.zip(b.integer)
                         {
                             let (bits, signed) = self.integer_type(destination)?;
