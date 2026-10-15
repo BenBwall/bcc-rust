@@ -497,4 +497,33 @@ int main(void) {
     return 0;
 }"#,
     },
+    Program {
+        // An over-aligned dynamic block must not reach into the outgoing
+        // arguments (`printf`'s stack arguments, and on Win64 the home area
+        // it saves its registers into); a leaf's blocks are 16-byte aligned
+        // too.
+        name:   "aligned_dynamic_stack",
+        source: r#"int printf(const char *, ...);
+typedef struct { int x; } __attribute__((aligned(64))) Wide;
+static int aligned(int n) {
+    Wide v[n];
+    int bad = (int)((unsigned long long)v & 63) != 0;
+    for (int i = 0; i < n; i++) v[i].x = 1000 + i;
+    printf("%d %d %d %d %d %d %d %d\n", n, 2, 3, 4, 5, 6, 7, 8);
+    for (int i = 0; i < n; i++) bad |= (v[i].x != 1000 + i) << 1;
+    return bad;
+}
+static int leaf(int n) {
+    volatile int k = n;
+    long long v[n];
+    v[0] = k;
+    return (int)((unsigned long long)v & 15) + (int)v[0] - n;
+}
+int main(void) {
+    int bad = 0;
+    for (int n = 1; n < 6; n++) bad |= aligned(n) | leaf(n) << 2;
+    printf("%d\n", bad);
+    return bad;
+}"#,
+    },
 ];

@@ -430,7 +430,10 @@ block0(v0: i64):
         f.contains("callq\t___chkstk_ms\n\tsubq\t"),
         "dynamic pages are probed:\n{f}"
     );
-    assert!(f.contains("andq\t$-32, "), "{f}");
+    // The block starts 16-byte aligned above the outgoing arguments; the
+    // address rounds up into its 16 spare bytes, never down below it.
+    let round_up = f.find("addq\t$16, %").expect(f);
+    assert!(f[round_up..].contains("andq\t$-32, "), "{f}");
     assert!(
         f.contains("(%rbp)"),
         "the fixed frame is addressed from %rbp:\n{f}"
@@ -440,6 +443,27 @@ block0(v0: i64):
     let f = function_text(&text, "f");
     assert!(f.contains(".cfi_def_cfa_register %rbp"), "{f}");
     assert!(!f.contains("chkstk"), "{f}");
+}
+
+#[test]
+fn dynamic_allocation_in_a_leaf_keeps_the_stack_aligned() {
+    // No call, no 16-byte slot: only the dynamic block needs `%rsp`
+    // aligned, which with `%rbp` pushed takes 8 bytes of padding.
+    let ir = "abi lowered
+function @f(i64) -> i64 external {
+    slot0 = stack_slot 8, align 8
+block0(v0: i64):
+    v1 = stack_addr slot0
+    store.i64 v0, v1, align 8
+    v2 = dyn_alloca.i64 v0, align 16
+    v3 = ptrtoint.i64 v2
+    return v3
+}
+";
+    let text = assembly(ir, Target::LinuxGnu);
+    let f = function_text(&text, "f");
+    assert!(f.contains("pushq\t%rbp\n"), "{f}");
+    assert!(f.contains("subq\t$16, %rsp\n"), "{f}");
 }
 
 #[test]

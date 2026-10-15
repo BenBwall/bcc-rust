@@ -7,8 +7,10 @@
 //! outgoing argument area, which stays at the bottom of the stack for the
 //! calls that follow. On Windows the new pages are probed first, through
 //! `___chkstk_ms` (MinGW) or `__chkstk` (MSVC), which read the size in
-//! `%rax` and change no register ("x64 stack usage"). An alignment above 16
-//! allocates `align - 16` extra bytes and rounds the address down.
+//! `%rax` and change no register ("x64 stack usage"). The frame keeps `%rsp`
+//! 16-byte aligned, so the block starts aligned to 16; an alignment above 16
+//! allocates `align - 16` extra bytes and rounds the address up within them,
+//! never down into the outgoing arguments a callee may write.
 //! `stack_save` reads `%rsp`; `stack_restore` writes it back, releasing
 //! every later allocation (C99 §6.2.4p6, p. 32; PDF p. 44).
 
@@ -97,6 +99,14 @@ impl Selector<'_, '_, '_> {
             addr: Mem::new(Base::Frame(FrameObject::OutgoingEnd), 0),
         });
         if extra > 0 {
+            // The block starts 16-byte aligned and has `extra` spare bytes,
+            // so the next multiple of `align` is at most `extra` above it.
+            self.emit(MInst::Alu {
+                op: AluOp::Add,
+                width: Width::B64,
+                dst,
+                src: Operand::Imm(i32::try_from(extra).expect("the IR bounds alignments by 2^31")),
+            });
             let mask = i32::try_from(-i64::try_from(align.bytes()).expect("alignments fit i64"))
                 .expect("the IR bounds alignments by 2^31");
             self.emit(MInst::Alu {

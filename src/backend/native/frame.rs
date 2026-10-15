@@ -17,10 +17,10 @@
 //! A function whose `%rsp` moves at run time (`dyn_alloca`) keeps a frame
 //! pointer: `%rbp` is set to `%rsp` right after the prologue's allocation, so
 //! every fixed object keeps its offset from `%rbp`, while outgoing arguments
-//! stay at the bottom of the current `%rsp`. When the function calls or has
-//! a 16-byte-aligned object, the size subtracted after the pushes makes
-//! `%rsp` a multiple of 16: at entry `%rsp + 8` is one (psABI §3.2.2;
-//! Microsoft Learn, "x64 stack usage").
+//! stay at the bottom of the current `%rsp`. When the function calls, has a
+//! 16-byte-aligned object or allocates dynamically, the size subtracted
+//! after the pushes makes `%rsp` a multiple of 16: at entry `%rsp + 8` is one
+//! (psABI §3.2.2; Microsoft Learn, "x64 stack usage").
 
 use super::{
     conv::CallConv,
@@ -84,7 +84,8 @@ impl<'a> Frame<'a> {
                 | (false, _) => {},
             }
         }
-        let mut aligned = func.calls || !xmm.is_empty() || func.register_save;
+        // A dynamic block is 16-byte aligned only if `%rsp` is.
+        let mut aligned = func.calls || !xmm.is_empty() || func.register_save || func.dynamic;
         // Dynamic allocations start right above the outgoing arguments and
         // keep 16-byte alignment.
         let outgoing_end = func.outgoing.next_multiple_of(16);
