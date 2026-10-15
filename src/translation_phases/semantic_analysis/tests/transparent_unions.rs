@@ -124,11 +124,8 @@ fn prefixed_transparent_union_is_the_same_rule() {
     with_configuration(
         "union [[gnu::transparent_union]] u { int *ip; long *lp; };
          int f(union u); int g(int *p) { return f(p); }",
-        CompilerConfiguration::new(
-            crate::configuration::CStandard::C23,
-            crate::configuration::ExtensionPolicy::Warn,
-        )
-        .with_gnu_extensions(true),
+        CompilerConfiguration::new(CStandard::C23, crate::configuration::ExtensionPolicy::Warn)
+            .with_gnu_extensions(true),
         |context, s| {
             assert!(context.take_pending_errors().is_empty());
             assert_eq!(
