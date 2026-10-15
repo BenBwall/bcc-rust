@@ -58,7 +58,11 @@ use self::{
     frame::Frame,
 };
 use crate::{
-    ir::Module,
+    ir::{
+        Linkage,
+        Module,
+        Symbol,
+    },
     target::Target,
     util::bump::Bump,
 };
@@ -79,6 +83,32 @@ pub(crate) const RUNTIME_SYMBOLS: [&str; 11] = [
     "__umodti3",
     "_tls_index",
 ];
+
+/// Whether the module defines `symbol`: a function body, a global's
+/// initializer, or an alias, which names a definition.
+pub(crate) fn defines(module: &Module<'_>, symbol: Symbol) -> bool {
+    match symbol {
+        | Symbol::Function(func) => {
+            let function = module.function(func);
+            function.body.is_some() || function.attributes.alias.is_some()
+        },
+        | Symbol::Global(global) => {
+            let global = module.global(global);
+            global.init.is_some() || global.attributes.alias.is_some()
+        },
+    }
+}
+
+/// Whether `symbol` is a weak declaration, which may stay undefined: its
+/// address is then null. GNU extension: GCC manual, "Common Function
+/// Attributes", weak.
+pub(crate) fn weak_declaration(module: &Module<'_>, symbol: Symbol) -> bool {
+    let linkage = match symbol {
+        | Symbol::Function(func) => module.function(func).linkage,
+        | Symbol::Global(global) => module.global(global).linkage,
+    };
+    linkage == Linkage::Weak && !defines(module, symbol)
+}
 
 /// Writes the module's assembly for `target`, or refuses it.
 pub(crate) fn emit_assembly<'m>(

@@ -1,9 +1,11 @@
 //! Addresses, loads, stores, `copy` and `fill`.
 //!
 //! An address operand folds a frame slot, a symbol the module defines (any
-//! symbol on COFF), or a register plus a constant `ptr_add` offset into one
-//! memory operand. On ELF a symbol the module does not define is reached
-//! through its GOT entry, since executables are position-independent.
+//! symbol on COFF but a weak declaration), or a register plus a constant
+//! `ptr_add` offset into one memory operand. On ELF a symbol the module does
+//! not define is reached through its GOT entry, since executables are
+//! position-independent; on COFF a weak declaration, whose address may be
+//! null, through a `.refptr` stub holding its address, as Clang does.
 //!
 //! A thread-local global's address is computed where `global_addr` names
 //! it, with the sequences Clang emits. ELF uses the thread pointer at
@@ -31,6 +33,7 @@ use super::{
 };
 use crate::{
     backend::native::{
+        defines,
         mir::{
             AluOp,
             Base,
@@ -46,6 +49,7 @@ use crate::{
             Width,
         },
         support::Construct,
+        weak_declaration,
     },
     ir::{
         GlobalId,
@@ -102,7 +106,7 @@ impl Selector<'_, '_, '_> {
                 base: block,
                 symbol,
             });
-        } else if self.module.global(global).init.is_some() {
+        } else if defines(self.module, Symbol::Global(global)) {
             let pointer = self.vreg();
             self.emit(MInst::ThreadPointer { dst: pointer });
             self.emit(MInst::TlsLea {
@@ -122,15 +126,13 @@ impl Selector<'_, '_, '_> {
     }
 
     /// Whether `symbol` can be addressed RIP-relative: on ELF only if the
-    /// module defines it.
+    /// module defines it, on COFF unless it is a weak declaration, whose
+    /// address may be null and so is loaded from a `.refptr` stub.
     pub(in crate::backend::native) fn direct(&self, symbol: Symbol) -> bool {
         if matches!(self.target, Target::WindowsGnu | Target::WindowsMsvc) {
-            return true;
+            return !weak_declaration(self.module, symbol);
         }
-        match symbol {
-            | Symbol::Function(func) => self.module.function(func).body.is_some(),
-            | Symbol::Global(global) => self.module.global(global).init.is_some(),
-        }
+        defines(self.module, symbol)
     }
 
     /// `dst ← base + disp` for a constant address.

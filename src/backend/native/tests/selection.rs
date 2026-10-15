@@ -279,6 +279,21 @@ block2:
 }
 
 #[test]
+fn thread_locals_in_named_sections_are_refused() {
+    let message = refusal(
+        "abi lowered
+global @t external thread_local size 4, align 4 section \"tls_here\" = zero
+",
+        Target::LinuxGnu,
+    );
+    assert_eq!(
+        message,
+        "not yet supported by the native back end: a thread-local global in a named section (in \
+         @t)"
+    );
+}
+
+#[test]
 fn frame_and_return_addresses_read_the_frame_a_frame_pointer_would_build() {
     let text = assembly(
         "abi lowered
@@ -302,6 +317,64 @@ block0:
         f.contains("leaq\t(%rsp), %") || f.contains("leaq\t0(%rsp), %"),
         "{f}"
     );
+}
+
+#[test]
+fn symbol_attributes_become_directives() {
+    let ir = "abi lowered
+global @value external size 4, align 4 hidden section \"mine\" = bytes \"05000000\"
+global @other external size 4, align 4 alias @value
+global @maybe weak size 4, align 4
+constructor @init priority 101
+destructor @init priority 65535
+function @init() internal align 64 {
+block0:
+    return
+}
+function @fini() weak section \"text_fini\" {
+block0:
+    v0 = global_addr @maybe
+    v1 = load.i32 v0, align 4
+    v2 = call @missing()
+    return
+}
+function @copy() weak alias @init
+function @missing() -> i32 weak
+";
+    let elf = assembly(ir, Target::LinuxGnu);
+    for line in [
+        "\t.section\tmine,\"aw\",@progbits\n\t.globl\tvalue\n\t.hidden\tvalue\n",
+        "\t.globl\tother\nother = value\n",
+        "\t.weak\tcopy\n\t.type\tcopy,@function\ncopy = init\n",
+        "\t.weak\tmaybe\n",
+        "\t.weak\tmissing\n",
+        "\t.p2align\t6, 0x90\n\t.type\tinit,@function\n",
+        "\t.section\ttext_fini,\"ax\",@progbits\n\t.weak\tfini\n",
+        "\t.section\t.init_array.101,\"aw\",@init_array\n\t.p2align\t3\n\t.quad\tinit\n",
+        "\t.section\t.fini_array,\"aw\",@fini_array\n",
+        "maybe@GOTPCREL(%rip)",
+        "callq\tmissing@PLT",
+    ] {
+        assert!(elf.contains(line), "{line}\n{elf}");
+    }
+    let coff = assembly(ir, Target::WindowsGnu);
+    for line in [
+        "\t.section\t.ctors.65434,\"dw\"\n",
+        "\t.section\t.dtors,\"dw\"\n",
+        "\t.section\t.rdata$.refptr.maybe,\"dr\",discard,.refptr.maybe\n",
+        "movq\t.refptr.maybe(%rip), %",
+        "callq\t*.refptr.missing(%rip)",
+        "\t.section\ttext_fini,\"xr\"\n",
+    ] {
+        assert!(coff.contains(line), "{line}\n{coff}");
+    }
+    assert!(!coff.contains(".hidden"), "{coff}");
+    let msvc = assembly(ir, Target::WindowsMsvc);
+    assert!(
+        msvc.contains("\t.section\t.CRT$XCA00101,\"dr\"\n"),
+        "{msvc}"
+    );
+    assert!(msvc.contains("\t.section\t.CRT$XTX,\"dr\"\n"), "{msvc}");
 }
 
 #[test]

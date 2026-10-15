@@ -25,6 +25,15 @@
 //! relocations write it (`.quad`) or a difference of two such labels in one
 //! function (`.long a-b`), as Clang does for GCC's "Labels as Values".
 //! Thread-local globals go in `.tdata`/`.tbss` on ELF and `.tls$` on COFF.
+//!
+//! The GNU symbol attributes (GCC manual, "Common Function Attributes" and
+//! "Common Variable Attributes") become what Clang writes: `.weak` for weak
+//! definitions and declarations, `name = target` for aliases, the requested
+//! section and alignment, `.hidden`/`.protected` on ELF, and constructors
+//! and destructors in `.init_array`/`.fini_array` (ELF), `.ctors`/`.dtors`
+//! (MinGW) or `.CRT$XC*`/`.CRT$XT*` (MSVC), suffixed by priority. COFF
+//! reaches a weak declaration through a `.refptr` stub. `used` needs
+//! nothing, since every symbol is emitted.
 
 use std::fmt::{
     self,
@@ -32,6 +41,7 @@ use std::fmt::{
 };
 
 use super::{
+    defines,
     frame::Frame,
     mir::{
         Base,
@@ -47,17 +57,20 @@ use super::{
         SymbolRef,
         Width,
     },
+    weak_declaration,
 };
 use crate::{
     ir::{
         Entity,
         FuncId,
         GlobalInit,
+        InitKind,
         Linkage,
         Module,
         Relocation,
         RelocationTarget,
         Symbol,
+        Visibility,
     },
     target::Target,
 };
@@ -95,26 +108,23 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
     ) -> fmt::Result {
         let function = self.module.function(id);
         let name = Name(function.name);
-        let external = function.linkage == Linkage::External;
-        writeln!(self.out, "\t.text")?;
+        let align = function.align.map_or(4, |align| align.log2().max(4));
+        match function.attributes.section {
+            | Some(section) if self.elf =>
+                writeln!(self.out, "\t.section\t{},\"ax\",@progbits", Name(section))?,
+            | Some(section) => writeln!(self.out, "\t.section\t{},\"xr\"", Name(section))?,
+            | None => writeln!(self.out, "\t.text")?,
+        }
         if self.elf {
-            if external {
-                writeln!(self.out, "\t.globl\t{name}")?;
-            }
-            writeln!(self.out, "\t.p2align\t4, 0x90")?;
+            self.binding(name, function.linkage, function.attributes.visibility)?;
+            writeln!(self.out, "\t.p2align\t{align}, 0x90")?;
             writeln!(self.out, "\t.type\t{name},@function")?;
             writeln!(self.out, "{name}:")?;
             writeln!(self.out, "\t.cfi_startproc")?;
         } else {
-            let class = if external { 2 } else { 3 };
-            writeln!(
-                self.out,
-                "\t.def\t{name};\n\t.scl\t{class};\n\t.type\t32;\n\t.endef"
-            )?;
-            if external {
-                writeln!(self.out, "\t.globl\t{name}")?;
-            }
-            writeln!(self.out, "\t.p2align\t4, 0x90")?;
+            self.coff_function(name, function.linkage)?;
+            self.binding(name, function.linkage, function.attributes.visibility)?;
+            writeln!(self.out, "\t.p2align\t{align}, 0x90")?;
             writeln!(self.out, "{name}:")?;
             writeln!(self.out, "\t.seh_proc\t{name}")?;
         }
@@ -157,6 +167,31 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             }
         }
         Ok(())
+    }
+
+    /// A symbol's binding and, on ELF, its visibility: `.globl` for an
+    /// external one, `.weak` for a weak one, nothing for an internal one.
+    fn binding(&mut self, name: Name<'_>, linkage: Linkage, visibility: Visibility) -> fmt::Result {
+        match linkage {
+            | Linkage::External => writeln!(self.out, "\t.globl\t{name}")?,
+            | Linkage::Weak => writeln!(self.out, "\t.weak\t{name}")?,
+            | Linkage::Internal => {},
+        }
+        match visibility {
+            | Visibility::Hidden if self.elf => writeln!(self.out, "\t.hidden\t{name}"),
+            | Visibility::Protected if self.elf => writeln!(self.out, "\t.protected\t{name}"),
+            | _ => Ok(()),
+        }
+    }
+
+    /// The COFF symbol record of a function: external storage class 2, or
+    /// static 3, and the function type 32.
+    fn coff_function(&mut self, name: Name<'_>, linkage: Linkage) -> fmt::Result {
+        let class = if linkage == Linkage::Internal { 3 } else { 2 };
+        writeln!(
+            self.out,
+            "\t.def\t{name};\n\t.scl\t{class};\n\t.type\t32;\n\t.endef"
+        )
     }
 
     fn prologue(&mut self, frame: &Frame<'_>) -> fmt::Result {
@@ -272,6 +307,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             frame,
             module: self.module,
             func,
+            elf: self.elf,
         };
         let reg = |reg: Reg, width: Width| RegName(reg.phys(), width);
         match *inst {
@@ -435,6 +471,13 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 reg(dst, width)
             ),
             | MInst::Call { callee, .. } => match callee {
+                | Callee::Symbol(SymbolRef::Ir(symbol))
+                    if !self.elf && weak_declaration(self.module, symbol) =>
+                    writeln!(
+                        out,
+                        "\tcallq\t*{}(%rip)",
+                        RefPtr(self.module.symbol_name(symbol))
+                    ),
                 | Callee::Symbol(symbol) => {
                     let name = symbol_name(self.module, symbol);
                     let plt = self.elf && !defined(self.module, symbol);
@@ -659,7 +702,22 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         for (_, global) in self.module.globals() {
             let Some(init) = global.init else { continue };
             let name = Name(global.name);
+            let relocated =
+                matches!(init, GlobalInit::Bytes { relocations, .. } if !relocations.is_empty());
+            if let Some(section) = global.attributes.section {
+                let section = Name(section);
+                // A position-independent executable relocates addresses at
+                // load time, so a relocated constant needs a writable section.
+                match (self.elf, global.constant && !relocated) {
+                    | (true, true) => writeln!(self.out, "\t.section\t{section},\"a\",@progbits")?,
+                    | (true, false) =>
+                        writeln!(self.out, "\t.section\t{section},\"aw\",@progbits")?,
+                    | (false, true) => writeln!(self.out, "\t.section\t{section},\"dr\"")?,
+                    | (false, false) => writeln!(self.out, "\t.section\t{section},\"dw\"")?,
+                }
+            }
             let section = match (global.constant, init) {
+                | _ if global.attributes.section.is_some() => "",
                 | _ if global.thread_local && !self.elf => "\t.section\t.tls$,\"dw\"",
                 | (_, GlobalInit::Zero) if global.thread_local =>
                     "\t.section\t.tbss,\"awT\",@nobits",
@@ -675,10 +733,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 | (false, GlobalInit::Zero) => "\t.bss",
                 | (false, GlobalInit::Bytes { .. }) => "\t.data",
             };
-            writeln!(self.out, "{section}")?;
-            if global.linkage == Linkage::External {
-                writeln!(self.out, "\t.globl\t{name}")?;
+            if !section.is_empty() {
+                writeln!(self.out, "{section}")?;
             }
+            self.binding(name, global.linkage, global.attributes.visibility)?;
             writeln!(self.out, "\t.p2align\t{}", global.align.log2())?;
             if self.elf {
                 writeln!(self.out, "\t.type\t{name},@object")?;
@@ -720,18 +778,150 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 writeln!(self.out, "\t.size\t{name}, {}", global.size)?;
             }
         }
+        self.aliases()?;
+        self.weak_declarations()?;
+        self.init_functions()?;
         if self.elf {
             writeln!(self.out, "\t.section\t.note.GNU-stack,\"\",@progbits")?;
         }
         Ok(())
+    }
+
+    /// Each alias as `name = target`, with its binding and, for a function,
+    /// its symbol type.
+    fn aliases(&mut self) -> fmt::Result {
+        let module = self.module;
+        let functions = module.functions().filter_map(|(_, function)| {
+            let target = function.attributes.alias?;
+            Some((
+                function.name,
+                function.linkage,
+                function.attributes,
+                target,
+                true,
+            ))
+        });
+        let globals = module.globals().filter_map(|(_, global)| {
+            let target = global.attributes.alias?;
+            Some((
+                global.name,
+                global.linkage,
+                global.attributes,
+                target,
+                false,
+            ))
+        });
+        for (name, linkage, attributes, target, function) in functions.chain(globals) {
+            let name = Name(name);
+            if function && !self.elf {
+                self.coff_function(name, linkage)?;
+            }
+            self.binding(name, linkage, attributes.visibility)?;
+            if function && self.elf {
+                writeln!(self.out, "\t.type\t{name},@function")?;
+            }
+            writeln!(self.out, "{name} = {}", Name(module.symbol_name(target)))?;
+        }
+        Ok(())
+    }
+
+    /// `.weak` for each weak declaration, and on COFF the `.refptr` stub
+    /// through which code reaches it, as Clang writes it.
+    fn weak_declarations(&mut self) -> fmt::Result {
+        let module = self.module;
+        let functions = module.functions().map(|(id, _)| Symbol::Function(id));
+        let globals = module.globals().map(|(id, _)| Symbol::Global(id));
+        for symbol in functions.chain(globals) {
+            if !weak_declaration(module, symbol) {
+                continue;
+            }
+            let name = module.symbol_name(symbol);
+            writeln!(self.out, "\t.weak\t{}", Name(name))?;
+            if !self.elf {
+                let stub = RefPtr(name);
+                writeln!(self.out, "\t.section\t.rdata${stub},\"dr\",discard,{stub}")?;
+                writeln!(self.out, "\t.p2align\t3\n\t.globl\t{stub}\n{stub}:")?;
+                writeln!(self.out, "\t.quad\t{}", Name(name))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The constructor and destructor arrays, in registration order within
+    /// each priority's section, in the sections Clang uses.
+    fn init_functions(&mut self) -> fmt::Result {
+        for init in self.module.init_functions() {
+            let constructor = init.kind == InitKind::Constructor;
+            let priority = init.priority;
+            let default = priority == DEFAULT_PRIORITY;
+            match self.target {
+                | Target::LinuxGnu | Target::LinuxMusl => {
+                    let (section, kind) = if constructor {
+                        (".init_array", "@init_array")
+                    } else {
+                        (".fini_array", "@fini_array")
+                    };
+                    write!(self.out, "\t.section\t{section}")?;
+                    if !default {
+                        write!(self.out, ".{priority}")?;
+                    }
+                    writeln!(self.out, ",\"aw\",{kind}")?;
+                },
+                | Target::WindowsGnu => {
+                    let section = if constructor { ".ctors" } else { ".dtors" };
+                    write!(self.out, "\t.section\t{section}")?;
+                    if !default {
+                        write!(self.out, ".{:05}", DEFAULT_PRIORITY - priority)?;
+                    }
+                    writeln!(self.out, ",\"dw\"")?;
+                },
+                | Target::WindowsMsvc => {
+                    // Sections sort by name: `A` before the CRT's `L`
+                    // entries, `C` and `T` around them, `U`/`X` last.
+                    let kind = if constructor { 'C' } else { 'T' };
+                    let (letter, suffix) = match priority {
+                        | DEFAULT_PRIORITY => (if constructor { 'U' } else { 'X' }, false),
+                        | ..200 => ('A', true),
+                        | 200 => ('C', false),
+                        | 201..400 => ('C', true),
+                        | 400 => ('L', false),
+                        | _ => ('T', true),
+                    };
+                    write!(self.out, "\t.section\t.CRT$X{kind}{letter}")?;
+                    if suffix {
+                        write!(self.out, "{priority:05}")?;
+                    }
+                    writeln!(self.out, ",\"dr\"")?;
+                },
+            }
+            let name = Name(self.module.function(init.func).name);
+            writeln!(self.out, "\t.p2align\t3\n\t.quad\t{name}")?;
+        }
+        Ok(())
+    }
+}
+
+/// The priority of a constructor or destructor that names none.
+const DEFAULT_PRIORITY: u16 = 65535;
+
+/// The `.refptr` stub of a COFF weak declaration: a pointer-sized constant
+/// holding its address.
+struct RefPtr<'a>(&'a str);
+
+impl fmt::Display for RefPtr<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if Name(self.0).plain() {
+            write!(f, ".refptr.{}", self.0)
+        } else {
+            write!(f, "\".refptr.{}\"", self.0)
+        }
     }
 }
 
 /// Whether the module defines `symbol`; runtime symbols never are.
 fn defined(module: &Module<'_>, symbol: SymbolRef) -> bool {
     match symbol {
-        | SymbolRef::Ir(Symbol::Function(func)) => module.function(func).body.is_some(),
-        | SymbolRef::Ir(Symbol::Global(global)) => module.global(global).init.is_some(),
+        | SymbolRef::Ir(symbol) => defines(module, symbol),
         | SymbolRef::Runtime(_) => false,
     }
 }
@@ -748,16 +938,22 @@ fn symbol_name<'m>(module: &Module<'m>, symbol: SymbolRef) -> Name<'m> {
 #[derive(Clone, Copy)]
 struct Name<'a>(&'a str);
 
-impl fmt::Display for Name<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let plain = self.0.bytes().enumerate().all(|(index, byte)| {
+impl Name<'_> {
+    /// Whether the assembler takes the name unquoted.
+    fn plain(&self) -> bool {
+        self.0.bytes().enumerate().all(|(index, byte)| {
             byte.is_ascii_alphabetic()
                 || byte == b'_'
                 || byte == b'.'
                 || byte == b'$'
                 || (index > 0 && byte.is_ascii_digit())
-        });
-        if plain {
+        })
+    }
+}
+
+impl fmt::Display for Name<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.plain() {
             f.write_str(self.0)
         } else {
             write!(f, "\"{}\"", self.0)
@@ -823,6 +1019,7 @@ struct Op<'f, 'm, 'ir> {
     frame:   &'f Frame<'f>,
     module:  &'m Module<'ir>,
     func:    FuncId,
+    elf:     bool,
 }
 
 impl fmt::Display for Op<'_, '_, '_> {
@@ -858,8 +1055,14 @@ impl fmt::Display for Op<'_, '_, '_> {
                         }
                         write!(f, "(%rip)")
                     },
-                    | Base::Got(symbol) =>
+                    | Base::Got(symbol) if self.elf =>
                         write!(f, "{}@GOTPCREL(%rip)", symbol_name(module, symbol)),
+                    | Base::Got(symbol) => {
+                        let SymbolRef::Ir(symbol) = symbol else {
+                            unreachable!("COFF reaches only weak declarations indirectly")
+                        };
+                        write!(f, "{}(%rip)", RefPtr(module.symbol_name(symbol)))
+                    },
                     | Base::GotTpoff(symbol) =>
                         write!(f, "{}@GOTTPOFF(%rip)", symbol_name(module, symbol)),
                     | Base::Label(label) => {

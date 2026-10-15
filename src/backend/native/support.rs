@@ -7,7 +7,8 @@
 //! pointer, `i128`, `f32` and `f64` code, variadic definitions and dynamic
 //! stack allocation. It refuses `f80` and `f128` values, `i128` bit counts,
 //! byte swaps, float conversions and `switch`es, `i128` values where Win64
-//! passes them only by reference, and stack objects aligned above 16 bytes.
+//! passes them only by reference, stack objects aligned above 16 bytes, and
+//! thread-local globals in named sections.
 
 use std::fmt;
 
@@ -60,6 +61,11 @@ pub(crate) fn check_module<'m>(
         }
         if let Some(name) = runtime_symbol(global.name) {
             return Err(refuse(Some(global.name), Construct::RuntimeName(name)));
+        }
+        // A thread-local definition belongs in the thread-local data that
+        // the TLS offsets count from, not in a named section.
+        if global.thread_local && global.attributes.section.is_some() {
+            return Err(refuse(Some(global.name), Construct::ThreadLocalSection));
         }
     }
     let checker = Checker {
@@ -273,6 +279,8 @@ pub(crate) enum Construct {
     RuntimeName(&'static str),
     /// The module was not lowered for the ABI.
     NotAbiLowered,
+    /// A thread-local global placed in a named section.
+    ThreadLocalSection,
 }
 
 impl fmt::Display for Unsupported<'_> {
@@ -296,6 +304,8 @@ impl fmt::Display for Unsupported<'_> {
                 "a module-local definition of the runtime symbol `{name}`"
             )?,
             | Construct::NotAbiLowered => write!(f, "a module not lowered for the ABI")?,
+            | Construct::ThreadLocalSection =>
+                write!(f, "a thread-local global in a named section")?,
         }
         if let Some(function) = self.function {
             write!(f, " (in @{function})")?;

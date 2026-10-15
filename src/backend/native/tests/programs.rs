@@ -564,4 +564,45 @@ done:
     return result & 0x7f;
 }"#,
     },
+    Program {
+        // GNU extensions (GCC manual, "Common Function Attributes" and
+        // "Common Variable Attributes"): weak definitions and declarations,
+        // aliases (a thread-local one too), sections, `used`, visibility,
+        // alignment, prioritized constructors and destructors, and the
+        // level-0 return and frame addresses.
+        name:   "symbol_attributes",
+        source: r#"int printf(const char *, ...);
+int counter = 1;
+__attribute__((weak)) int weak_data = 5;
+__attribute__((weak)) int weak_fn(void) { return 3; }
+extern int missing_data __attribute__((weak));
+int missing_fn(void) __attribute__((weak));
+int real(int x) { return x + counter; }
+int alias_fn(int) __attribute__((alias("real")));
+extern int alias_data __attribute__((alias("counter")));
+static __thread int tls_target = 9;
+extern __thread int tls_alias __attribute__((alias("tls_target")));
+__attribute__((section("mysec"))) int in_section = 4;
+__attribute__((section("mytext"))) int sectioned_fn(void) { return 6; }
+__attribute__((section("myro"))) const int ro_section = 8;
+__attribute__((section("mybss"))) int bss_section;
+__attribute__((used)) static int kept = 2;
+__attribute__((visibility("hidden"))) int hidden_data = 1;
+__attribute__((aligned(64))) int aligned_fn(void) { return 1; }
+__attribute__((constructor)) static void ctor(void) { counter += 10; }
+__attribute__((constructor(200))) static void ctor200(void) { counter *= 2; }
+__attribute__((destructor)) static void dtor(void) { printf("dtor\n"); }
+__attribute__((destructor(300))) static void dtor300(void) { printf("dtor300\n"); }
+__attribute__((noinline)) static int frames(void) {
+    return __builtin_frame_address(0) != 0 && __builtin_return_address(0) != 0;
+}
+int main(void) {
+    tls_alias += 1;
+    printf("%d %d %d %d %d %d\n", counter, weak_data, weak_fn(), alias_fn(1), alias_data, tls_target);
+    printf("%d %d %d %d %d %d\n", &missing_data == 0, missing_fn == 0, in_section, sectioned_fn(),
+           ro_section + bss_section, kept + hidden_data + aligned_fn());
+    printf("%d %d\n", frames(), ((unsigned long long)aligned_fn & 63) == 0);
+    return 0;
+}"#,
+    },
 ];
