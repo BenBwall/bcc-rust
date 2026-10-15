@@ -359,3 +359,237 @@ links `libm` on Unix, and lint expectations are not restricted to Windows.
 Every changed/new file ends with exactly one newline. Shared LLVM junctions
 were preserved. No files were staged or committed. The whole-file plan is
 `target/commit-plan.md`.
+
+## 2026-10-14 follow-up: pointer diagnostic defaults (issue #46)
+
+The maintainer decision is to follow the bundled Clang's defaults for each
+pointer diagnostic group. The original R3 description above predates this
+measurement: **Clang 23 makes incompatible object pointer conversions errors**,
+including `float *` passed to `char *`. This change therefore accepts signedness,
+qualifier and comparison warnings while retaining incompatible object/function
+pointer and integer/pointer conversion errors. It does not introduce a general
+permissive mode. [Issue #46](https://github.com/BenBwall/bcc-rust/issues/46) was read
+through the GitHub connector after the local `gh` credential configuration was
+inaccessible.
+
+### Oracle and implementation
+
+Bundled Clang 23.1.1, Rust LLVM revision
+`1b9c0d5ff9bbe7634aead059efe6b11a7eeba145`, was invoked with `-fsyntax-only`
+for 25 probes across Linux GNU, Windows GNU and Windows MSVC and every supported
+ISO/GNU dialect (13 spellings, including C95 and C2y). The 975 default probes
+had identical severities, groups and wording across targets and dialects.
+Another 90 probes checked global and group warning options. The final release
+bcc binary matched Clang's diagnostic severities and groups on all **1,065 probes**.
+Source, commands and complete stderr are retained in
+`target/pointer-diagnostics/{matrix,flags}.json`; the comparison is in
+`target/pointer-diagnostics/bcc-comparison.json`. The exact Clang wording and
+option precedence are recorded in
+[language-standards.md](../../language-standards.md#pointer-diagnostic-defaults-2026-10-14-issue-46).
+
+| Constraint | Clang group | Default |
+| --- | --- | --- |
+| Distinct object/function pointer comparison | `compare-distinct-pointer-types` | warning |
+| Incompatible object pointer assignment, initialization, argument, return | `incompatible-pointer-types` | error |
+| Direct pointer signedness change | `pointer-sign` | warning |
+| Discarded qualifiers, including nested `T **` / `const T **` | `incompatible-pointer-types-discards-qualifiers` | warning |
+| Incompatible function signatures | `incompatible-function-pointer-types` | error |
+| Integer/pointer conversion | `int-conversion` | error |
+| Pointer/integer equality | `pointer-integer-compare` | warning |
+| Function pointer ordering | `ordered-compare-function-pointers` | warning |
+| Pointer/integer ordering | unnamed | warning |
+
+Ordering distinct function pointer types emits both comparison warnings, in
+Clang's order. A regression suppresses each group independently while promoting
+the other to an error; an initial focused test reproduced the missing diagnostic
+before the emitter was corrected.
+
+Function/void pointer conversions and pointer/zero ordering are silent by
+default and retain the existing pedantic extension policy. Clang does not
+recognize GCC's `-Wdiscarded-qualifiers` spelling. Use its qualifier group above.
+
+One semantic conversion classifier selects the group; shared configuration
+policy selects severity. Accepted or suppressed diagnostics retain ordinary
+conversion facts, so IR and lowering are unchanged. `-Werror`, `-Wno-error`,
+the eight named groups' enable/disable and error/no-error options, parent/child
+overrides and `-w` are tested. `-pedantic-errors` retains its existing Deny
+policy. C99 requires a diagnostic rather than rejection: §5.1.1.3p1,
+§6.5.16.1p1, §6.5.9p2, §6.5.8p2, §6.5.2.2p2/p7, §6.8.6.4p3 and §6.7.8p11.
+Semantic tests and five golden fixture families cover every constraint group,
+default errors and promotion/demotion. Execution regressions check actual
+values in both interpreters and A0/A1/A2, including the float-to-char argument
+with explicit `-Wno-error=incompatible-pointer-types`.
+
+### Fresh default Csmith batch
+
+Csmith 2.4.0 (`0cdc710`), default options, seeds **600001–600360**, Windows GNU,
+eight jobs, no time budget. The unchanged compiler at branch base
+`6118c37be1fa6dc6b52424f2e74f26a8b1f3702f` was built before implementation and
+preserved as `target/bcc-pointer-baseline.exe`. The same seed batch was run with
+that binary and the final release compiler. Manifests record these SHA-512s:
+
+```text
+baseline a3f9d9ae9e02af84835ec871ffcee3c5938b120c42ca8068184c0643a11b715690fcdcce2d7395bc5d1ce14e4829b49bc407a71a4966b81500ffba7c4b60ce67
+final    09f9c7959b5121a36578df594f01a01b288f58abaf21e36ec0053bfb9372740fb3f1b465641045371d724ef1b7676b9f28c2f4a7dd42db714b92d11e6e05068c
+```
+
+**Front-end acceptance rose from 68/360 (18.9%) to 360/360 (100%).** The baseline
+refused 292 programs: comparison 257, assignment 22, argument 12, return 1.
+Its 67 reference-tested programs passed every arm; another accepted seed had
+a reference failure. The harness checks the front end before running Clang,
+so its baseline summary's `359 compared` includes 292 refusals and must not
+be interpreted as 359 successful reference comparisons.
+
+With the final compiler, **310 programs reached reference comparison**. Fifty
+were excluded because execution of the Clang O0 reference programs timed out
+(the configured reference-run deadline is 30 seconds, with five seconds of wrapper grace)
+(`clang -O0: exit None timeout True`); they passed bcc's front-end probe but
+provide no execution-conformance evidence. Final outcomes:
+
+| Outcome | interpret | interpret-bcc | A0 | A1 | A2 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Matches Clang | 299 | 299 | 309 | 309 | 309 |
+| Misaligned-access trap | 10 | 10 | 0 | 0 | 0 |
+| Wrong checksum against Clang | 1 | 1 | 1 | 1 | 1 |
+| Front-end/lowering/ABI/link refusal | 0 | 0 | 0 | 0 | 0 |
+| bcc timeout/crash/abnormal exit | 0 | 0 | 0 | 0 | 0 |
+
+There is **no claim of zero disagreements**. Seed **600300**, a 219,974-byte
+program, produces `checksum = 9ADEB394` with Clang O0/O2 and
+`checksum = 2AAC662E` in all five bcc arms. MinGW GCC 13.2.0 O0 exits 0 with
+`checksum = 2AAC662E`, agreeing with bcc. This is an unresolved reference
+disagreement, not a verified attribution to either compiler. The unreduced
+source and all arm evidence are under
+`target/conformance/pointer-warnings-verified/failures/csmith/600300`; source
+SHA-512 is
+`a41ab13a2acf96f60fcb3121ae672e75c5e31faf380c42e72c505917d4683fe011b4ad9f36cc53740238b2c201761e5944c5f5f6db7fcb285a631e67631c0221`.
+
+Both interpreters report `undefined behaviour: misaligned access` for these
+ten seeds; all three native bcc arms match Clang's checksum. This report does
+not classify the sources as undefined solely from the interpreter diagnosis.
+Each seed's original source, commands and stderr are retained under the same
+failure directory, and every row is retained in `results.jsonl`.
+
+| Seed | Clang and native bcc checksum |
+| ---: | --- |
+| 600025 | `CEAC978F` |
+| 600081 | `44369851` |
+| 600146 | `3A323E76` |
+| 600150 | `CB9BE1DA` |
+| 600166 | `20072564` |
+| 600229 | `2015DDB1` |
+| 600305 | `84A1699D` |
+| 600312 | `E585252A` |
+| 600337 | `4881A5DD` |
+| 600343 | `4FE9CF40` |
+
+The final run took 1,177.8 seconds. Preceding candidate runs gave the same counts; the final run uses the frozen
+compiler after removing a duplicate retained value conversion and correcting
+the dual function-pointer comparison diagnostics. Raw baseline and final evidence is in
+`target/conformance/pointer-baseline` and
+`target/conformance/pointer-warnings-verified`. The random-program harness exits
+0 after writing its summary even with defect candidates; the per-arm results,
+not that exit status, establish conformance.
+
+### GCC torture comparison
+
+The requested GCC 15.2.0 execute survey was run on all **1,677 sources**, eight
+jobs, ten-second timeout, with both binaries. Source SHA-512s were compared
+before comparing every arm's status. **No previously passing source/arm pair
+regressed after rechecking four compilation timeouts; 22 pairs gained a pass
+across six sources.** Final pass counts below include those focused rechecks.
+
+| Arm | Baseline passes | Final passes | Wrong results, baseline → final |
+| --- | ---: | ---: | --- |
+| interpret | 1,302 | 1,307 | 12 → 12 |
+| interpret-bcc | 1,308 | 1,313 | 13 → 13 |
+| A0 | 1,365 | 1,371 | 13 → 13 |
+| A1 | 1,355 | 1,361 | 23 → 23 |
+
+`20001017-2.c`, `20041212-1.c`, `920429-1.c`, `980506-3.c` and `980617-1.c`
+changed from front-end error to pass in all four arms. `20121108-1.c` changed
+from front-end error to native pass in A0/A1 and an interpreter poison trap
+in both interpreter arms. Its signed `int` address construction repeatedly
+shifts left by eight to form `0xc0a8bea0`, exceeding signed representability;
+C99 §6.5.7p4 (p. 85; PDF p. 97) makes that signed shift undefined. This is
+newly reached execution, not a passing-test regression. `pr17377.c` changed
+from front-end error to existing lowering rejection (`type was not analyzed`)
+in every arm.
+
+Front-end refusals fell from 137 to 130 per arm. Lowering refusals rose from
+152 to 153; interpreter traps rose from 68/61 to 69/62. ABI refusals stayed
+at six per arm; native link errors stayed at four per native arm. There were
+zero compiler crashes in either survey. The baseline had zero timeouts; the
+final eight-worker run recorded four A1 compilation timeouts and 1,357 A1
+passes. Focused one-worker reruns used the same ten-second deadline and
+identical source/compiler hashes; every affected source passed all four arms.
+The original timeout rows remain unchanged in the full-run evidence:
+
+| Source | Full-run A1 compilation, seconds (timeout) | Recheck compilation | Recheck execution |
+| --- | ---: | ---: | ---: |
+| `20120808-1.c` | 10.3452 | 2.3615 | 0.2339 |
+| `pr82387.c` | 10.1051 | 1.0421 | 0.2163 |
+| `pr82388.c` | 10.0591 | 1.3617 | 0.1777 |
+| `pr82524.c` | 10.0861 | 1.3407 | 0.2328 |
+
+These full-run timeouts occurred alongside Cargo builds; the successful
+rechecks support a transient timing failure rather than a reproducible source
+regression. Recheck evidence is in
+`target/compiler-corpus/execute-pointer-timeout-recheck{,-late}`.
+The raw disagreement count rose from 70 to 75; after the rechecks it is 71,
+with the remaining increase due to `20121108-1.c`. Both full survey commands
+exit 1 for the retained failures; both focused reruns exit 0. Per-source evidence is in
+`target/compiler-corpus/execute-pointer-{baseline,warnings-verified}/results.json`;
+the hash-checked comparison is in
+`target/compiler-corpus/pointer-comparison-verified.json` (28 changed statuses
+after rechecks, plus the four original timeout rows and their recheck evidence).
+
+### Reproducing the follow-up
+
+```powershell
+python scripts/probe_pointer_diagnostics.py
+python scripts/probe_pointer_diagnostics.py --flags-only
+python scripts/random_program_conformance.py run --output target/conformance/pointer-baseline --bcc target/bcc-pointer-baseline.exe --generators csmith --count 360 --seed-start 600001 --jobs 8 --platform windows
+python scripts/random_program_conformance.py run --output target/conformance/pointer-warnings-verified --generators csmith --count 360 --seed-start 600001 --jobs 8 --platform windows
+python scripts/random_program_conformance.py rerun target/conformance/pointer-warnings-verified csmith 600300
+python scripts/run_gcc_torture_execute.py --source C:\Users\benbw\Documents\GitRepo\bcc-rust\target\compiler-corpus\gcc-15.2.0 --bcc target/bcc-pointer-baseline.exe --output target/compiler-corpus/execute-pointer-baseline --jobs 8 --timeout 10
+python scripts/run_gcc_torture_execute.py --source C:\Users\benbw\Documents\GitRepo\bcc-rust\target\compiler-corpus\gcc-15.2.0 --output target/compiler-corpus/execute-pointer-warnings-verified --jobs 8 --timeout 10
+python scripts/run_gcc_torture_execute.py --source C:\Users\benbw\Documents\GitRepo\bcc-rust\target\compiler-corpus\gcc-15.2.0 --output target/compiler-corpus/execute-pointer-timeout-recheck --jobs 1 --timeout 10 --match 20120808-1.c
+python scripts/run_gcc_torture_execute.py --source C:\Users\benbw\Documents\GitRepo\bcc-rust\target\compiler-corpus\gcc-15.2.0 --output target/compiler-corpus/execute-pointer-timeout-recheck-late --jobs 1 --timeout 10 --match pr82524.c --match pr82388.c --match pr82387.c
+```
+
+The original requested output name, `execute-pointer-warnings`, contains a
+preceding candidate survey; `execute-pointer-warnings-verified` verifies the
+final release binary. The harness requires a fresh output directory for each
+run. Its confirmed outcomes match the preceding survey after the focused
+timeout rechecks. LLVM junctions
+were preserved. Concurrent Windows harness changes were preserved separately
+and are excluded from the pointer-warning commit plan.
+
+### Final validation
+
+All requested checks passed on Windows. The formatter ran before the checks.
+The full suite passed 1,695 library tests (three existing ignored tests), and
+the five pointer CLI tests were rerun successfully after a lint-only assertion
+correction. The allocation suite passed all 28 feature-enabled tests. No
+benchmarking-internals build overlapped CLI integration tests. The plain CLI
+was rebuilt after all feature-enabled checks. Linux Clippy was not run on this
+Windows host; the new compiler policy code has no host-specific branches.
+
+| Command | Result |
+| --- | --- |
+| `cargo test --all-targets` | pass |
+| `cargo test --features benchmarking-internals --test allocation_count` | pass |
+| `cargo +nightly fmt --check` | pass |
+| `cargo clippy --all-targets -- -D warnings` | pass |
+| `cargo clippy --release --all-targets -- -D warnings` | pass |
+| `cargo clippy --all-targets --features benchmarking-internals -- -D warnings` | pass |
+| `git diff --check` | pass |
+| `python scripts/test_random_program_conformance.py` | pass, 19 tests |
+| `cargo build --bin bcc-rust` | pass, plain CLI restored |
+
+Check logs are under `target/pointer-{all-targets,allocation}-complete.log`,
+`target/pointer-cli-final.log`, `target/pointer-clippy-{debug,release,feature}-final.log`,
+`target/pointer-fmt-final.log`, `target/pointer-harness-complete.log` and
+`target/pointer-plain-cli-final.log`. The whole-file commit plan is
+`target/commit-plan.md`; no files were staged or committed.

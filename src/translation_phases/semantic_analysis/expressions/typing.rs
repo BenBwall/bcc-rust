@@ -21,6 +21,7 @@ use super::{
     ValueCategory,
 };
 use crate::{
+    configuration::CStandard,
     translation_phases::{
         parsing::{
             declaration_syntax::TypeQualifiers,
@@ -37,6 +38,7 @@ use crate::{
         },
         preprocessing::{
             FloatTokenType,
+            LiteralEncoding,
             LiteralUnit,
             StringTokenType,
         },
@@ -258,7 +260,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             .invalid_expression(e, SemanticErrorKind::InvalidAdditiveOperands);
                     }
                 }
-            } else if !self.assignment_compatible(left.ty, right) {
+            } else if !self.assignment_conversion(left.ty, right) {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidAssignment);
             }
             if compound.is_none() {
@@ -418,7 +420,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     } else {
                         false
                     };
-                    if !valid {
+                    if !valid
+                        && !self.pointer_comparison(
+                            left,
+                            right,
+                            lt,
+                            rt,
+                            equality,
+                            e.operator_source_vectors.unwrap_or(e.source_vectors),
+                        )
+                    {
                         return self
                             .invalid_expression(e, SemanticErrorKind::InvalidComparisonOperands);
                     }
@@ -539,22 +550,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             lt
         } else if self.pointer_target(rt).is_some() && self.null_pointer_constant(left) {
             rt
-        } else if let (Some(lp), Some(rp)) = (self.pointer_target(lt), self.pointer_target(rt)) {
-            if !self.pointer_compatible(lp, rp, true) {
-                return self.invalid_expression(e, SemanticErrorKind::InvalidConditionalOperands);
-            }
-            let target = if matches!(self.types.nodes[lp.index], TypeKind::Scalar(Scalar::Void)) {
-                lp
-            } else if matches!(self.types.nodes[rp.index], TypeKind::Scalar(Scalar::Void)) {
-                rp
-            } else {
-                self.types
-                    .composite(lp.unqualified(), rp.unqualified())
-                    .unwrap_or(lp)
-            };
-            self.types.intern(TypeKind::Pointer(
-                target.qualified(lp.qualifiers | rp.qualifiers),
-            ))
+        } else if let Some(ty) = self.conditional_pointers(
+            lt,
+            rt,
+            e.operator_source_vectors.unwrap_or(e.source_vectors),
+        ) {
+            ty
         } else if matches!(self.types.nodes[lt.index], TypeKind::Tag(_))
             && self
                 .types
@@ -602,6 +603,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     selected.constant
                 };
+                // An integer arm converted to the pointer result is an
+                // address constant, as an integer cast to a pointer is.
+                if self.pointer_target(ty).is_some() && selected.ice && selected.integer.is_some() {
+                    info.constant = ConstantClass::Address;
+                    info.integer = selected.integer.map(|v| v.cast(64, false));
+                }
             }
         }
         info
@@ -654,7 +661,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let info = self.expression_info(argument);
             failed |= self.types.unanalyzed(info.ty);
             if prototype && let Some(&parameter) = parameters.get(index) {
-                if !self.assignment_compatible(parameter, info) {
+                if let Some(member) = self.transparent_union_member(parameter, info) {
+                    _ = self.converted(info);
+                    self.convert(argument, member, ConversionKind::Assignment);
+                    self.convert(argument, parameter, ConversionKind::TransparentUnion);
+                    continue;
+                }
+                if !self.assignment_conversion(parameter, info) {
                     failed = true;
                     self.error(
                         SemanticErrorKind::InvalidArgumentType,
@@ -700,6 +713,58 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return self.invalid_expression(e, SemanticErrorKind::InvalidCall);
         }
         Self::expression_result(e, result.unqualified())
+    }
+
+    /// The member of a transparent union parameter that a prototyped call's
+    /// argument initializes instead of the union, as Clang selects it: the
+    /// first member that is a pointer when the argument is a void pointer or
+    /// a null pointer constant, or to which the argument is assignable
+    /// without a diagnostic. `None` when the parameter is no transparent
+    /// union or the argument already has its type.
+    /// GNU extension: GCC manual, "Common Type Attributes".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    /// C99: §6.5.2.2p7, p. 72; PDF p. 84; §6.5.16.1p1, p. 92; PDF p. 104.
+    fn transparent_union_member(
+        &mut self,
+        parameter: TypeId,
+        argument: ExpressionInfo<'tu>,
+    ) -> Option<TypeId> {
+        let TypeKind::Tag(id) = self.types.nodes[parameter.index] else {
+            return None;
+        };
+        if !self.types.tags[id].transparent.get() || self.types.unanalyzed(argument.ty) {
+            return None;
+        }
+        let (from, _) = self.value_conversion(argument);
+        if self
+            .types
+            .composite(parameter.unqualified(), from.unqualified())
+            .is_some()
+        {
+            return None;
+        }
+        let void_pointer = self.pointer_target(from).is_some_and(|target| {
+            matches!(
+                self.types.nodes[target.index],
+                TypeKind::Scalar(Scalar::Void)
+            )
+        });
+        for member in self.types.tags[id].members.get() {
+            // A bit-field cannot hold the argument's whole value.
+            if member.invalid || member.width.is_some() {
+                continue;
+            }
+            let ty = member.ty.unqualified();
+            if self.pointer_target(ty).is_some()
+                && (void_pointer || self.null_pointer_constant(argument))
+            {
+                return Some(ty);
+            }
+            if self.assignable(ty, argument, from) {
+                return Some(ty);
+            }
+        }
+        None
     }
 
     /// C99: §6.5.2.3p1-4, pp. 72-73; PDF pp. 84-85.
@@ -963,6 +1028,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             info.constant = ConstantClass::Address;
             info.integer = operand.integer.map(|v| v.cast(64, false));
+        }
+        // An address cast to an integer type that holds it unchanged stays
+        // an address constant, as in GCC and Clang; narrower types would
+        // need a truncated relocation. Implementation latitude of C99
+        // §6.6p10, p. 96; PDF p. 108.
+        if self.pointer_width_integer(target)
+            && self.address_value(operand)
+            && Self::pointer_value(operand).is_none()
+        {
+            info.constant = ConstantClass::Address;
         }
         // GNU modes fold an integer-valued address constant converted to an
         // integer type, which C99 does not count as arithmetic (§6.6p8).
@@ -1229,6 +1304,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.complete_object(target) || self.types.unanalyzed(target)
     }
 
+    /// Whether `ty` is an integer type exactly as wide as a pointer, which
+    /// can hold an address constant as a relocation (GCC and Clang accept
+    /// one there in a static initializer).
+    /// C99: §6.3.2.3 paragraph 6, p. 47; PDF p. 59; §6.6 paragraph 10,
+    /// p. 96; PDF p. 108.
+    pub(in crate::translation_phases::semantic_analysis) fn pointer_width_integer(
+        &self,
+        ty: TypeId,
+    ) -> bool {
+        self.integer_type(ty)
+            .is_some_and(|(bits, _)| u64::from(bits) == self.types.target.pointer.size * 8)
+    }
+
     pub(super) fn pointer_target(&self, ty: TypeId) -> Option<TypeId> {
         let ty = self.types.non_atomic(ty);
         if let TypeKind::Pointer(target) = self.types.nodes[ty.index] {
@@ -1466,8 +1554,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         target: TypeId,
         source: ExpressionInfo<'tu>,
     ) -> bool {
-        let target = self.types.non_atomic(target);
         let from = self.converted(source);
+        self.assignable(target, source, from)
+    }
+
+    /// Whether `source`, whose value conversion has type `from`, may be
+    /// assigned to `target` without a diagnostic. Records no conversion.
+    /// C99: §6.5.16.1p1, p. 92; PDF p. 104.
+    fn assignable(&mut self, target: TypeId, source: ExpressionInfo<'tu>, from: TypeId) -> bool {
+        let target = self.types.non_atomic(target);
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
             return true;
         }
@@ -1489,7 +1584,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return true;
             }
             if let Some(from) = self.pointer_target(from) {
-                if !to.qualifiers.contains(from.qualifiers) {
+                if !self
+                    .types
+                    .object_qualifiers(to)
+                    .contains(self.types.object_qualifiers(from))
+                {
                     return false;
                 }
                 return self.pointer_compatible(to, from, true);
@@ -1504,10 +1603,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Checks compatible pointer targets, allowing object/void pairs where
-    /// required.
+    /// required. Qualifiers are ignored, including an array target's element
+    /// qualifiers, which belong to the array as in C23 and as Clang treats
+    /// them in every mode; the conditional operator does not use this.
     /// C99: §6.5.16.1 paragraph 1, p. 92; PDF p. 104.
     /// C99: §6.5.9 paragraph 2, p. 86; PDF p. 98.
-    fn pointer_compatible(&mut self, left: TypeId, right: TypeId, void: bool) -> bool {
+    /// C23: §6.7.4.1 paragraph 10, p. 121; PDF p. 134.
+    pub(super) fn pointer_compatible(&mut self, left: TypeId, right: TypeId, void: bool) -> bool {
         if self.types.unanalyzed(left) || self.types.unanalyzed(right) {
             return true;
         }
@@ -1520,9 +1622,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return true;
             }
         }
-        self.types
-            .composite(left.unqualified(), right.unqualified())
-            .is_some()
+        let (left, right) = (
+            self.types.unqualified_array(left),
+            self.types.unqualified_array(right),
+        );
+        self.types.composite(left, right).is_some()
     }
 
     /// C89 implicit function declarations are retained in GNU modes.
@@ -1667,35 +1771,52 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C99: §6.4.5p5-6, pp. 62-63; PDF pp. 74-75. The count includes the final
     /// zero; narrow source characters contribute their UTF-8 code units.
+    /// C11: §6.4.5 paragraph 6, p. 71; PDF p. 89: `u8`, `u` and `U` literals
+    /// have `char` (C23: `char8_t`), `char16_t` and `char32_t` elements.
     pub(in crate::translation_phases::semantic_analysis) fn string_type(
         &mut self,
         value: StringTokenType,
-    ) -> Option<(TypeId, u64)> {
-        let (id, wide) = match value {
-            | StringTokenType::String(id) => (id, false),
-            | StringTokenType::WideString(id) => (id, true),
-            | _ => return None,
+    ) -> (TypeId, u64) {
+        let (element, units) = match value {
+            | StringTokenType::String(id) => (
+                Scalar::Char,
+                self.context
+                    .literal_units(id)
+                    .iter()
+                    .map(|u| match u {
+                        | LiteralUnit::Character(c) => c.len_utf8() as u64,
+                        | LiteralUnit::Numeric(_) => 1,
+                    })
+                    .sum::<u64>(),
+            ),
+            | StringTokenType::WideString(id) => (
+                self.types.target.wchar_t,
+                self.context.wide_literal_units(id).count() as u64,
+            ),
+            | StringTokenType::EncodedString(id, encoding) => (
+                self.encoded_character_type(encoding),
+                self.context.encoded_literal_units(id, encoding).count() as u64,
+            ),
         };
-        let count = if wide {
-            self.context.wide_literal_units(id).count() as u64
-        } else {
-            self.context
-                .literal_units(id)
-                .iter()
-                .map(|u| match u {
-                    | LiteralUnit::Character(c) => c.len_utf8() as u64,
-                    | LiteralUnit::Numeric(_) => 1,
-                })
-                .sum::<u64>()
-        } + 1;
-        Some((
-            self.types.scalar(if wide {
-                self.types.target.wchar_t
-            } else {
-                Scalar::Char
-            }),
-            count,
-        ))
+        (self.types.scalar(element), units + 1)
+    }
+
+    /// The element type of a `u8`, `u` or `U` literal: `char16_t` and
+    /// `char32_t` are `uint_least16_t` and `uint_least32_t` on every target,
+    /// and `char8_t` (C23) is `unsigned char`; a C11/C17 `u8` string has
+    /// `char` elements.
+    /// C11: §6.4.5 paragraph 6, p. 71; PDF p. 89; §7.28 paragraph 2.
+    pub(in crate::translation_phases::semantic_analysis) fn encoded_character_type(
+        &self,
+        encoding: LiteralEncoding,
+    ) -> Scalar {
+        match encoding {
+            | LiteralEncoding::Utf8 if self.context.configuration.standard() >= CStandard::C23 =>
+                Scalar::UnsignedChar,
+            | LiteralEncoding::Utf8 => Scalar::Char,
+            | LiteralEncoding::Utf16 => Scalar::UnsignedShort,
+            | LiteralEncoding::Utf32 => Scalar::UnsignedInt,
+        }
     }
 
     #[cold]

@@ -28,15 +28,17 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   future draft change.
 - The unified extension policy reports reserved GNU and MSVC constructs that
   GCC or Clang sometimes exempt from pedantic diagnostics. Only `-pedantic`,
-  `-Wpedantic` and `-pedantic-errors` select a policy; other warning options,
-  including `-Wno-pedantic`, are not implemented.
+  `-Wpedantic` and `-pedantic-errors` select a policy. Pointer diagnostic group
+  controls and global `-Werror` are supported as described below;
+  `-Wno-pedantic` and other unrelated warning groups are not implemented.
 - `__extension__` suppresses keyword, grammar and numeric-constant extension
   diagnostics within its owning declaration or expression. Lexical diagnostics
   (dollar identifiers, `//` comments, digraphs), directives and macro
   definitions stay outside its scope.
-- An extension diagnostic raised in a macro expansion may underline the
-  replacement in the macro definition, and a conditional-expression diagnostic
-  may keep only the definition location; no expansion backtrace is rendered.
+- A preprocessing extension diagnostic raised in a macro expansion may
+  underline the replacement in the macro definition. Parser and semantic
+  extension diagnostics and warning-group diagnostics point at the outermost
+  invocation instead, as Clang does; no expansion backtrace is rendered.
   Preprocessing diagnostics precede parser diagnostics by pipeline design.
 - The added syntax costs parser time and retained memory; see
   [Performance](#performance).
@@ -138,7 +140,11 @@ attribute parser. `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`,
 and ABI annotations such as `__ms_abi__` are accepted without backend effects.
 MSVC `align(...)` remains unanalyzed. GNU `aligned(...)` retains the requested
 declaration/type alignment; GNU `packed` and scalar `mode` retain their layouts
-and representation types. Clang itself ignores
+and representation types. GNU `transparent_union` on a union definition or a
+typedef naming a union lets a prototyped call pass an argument of a member's
+type as the union, selecting the member as Clang does; a union with no member,
+a floating or vector first member, or a member of another size or a stricter
+alignment ignores the attribute with Clang's warning. Clang itself ignores
 some of these macro-expanded attributes with warnings; bcc's current attribute
 pass preserves their syntax without applicability warnings.
 
@@ -428,7 +434,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | NamedLoops | - | - | - | - | - | - | Y | extension | parser |
 | GenericTypeOperand | - | - | - | - | - | - | Y | extension | parser |
 | CaseRanges | - | - | - | - | - | - | Y | GNU earlier | parser |
-| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; packed/aligned/scalar mode sema and lowering; vector_size sema |
+| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; packed/aligned/scalar mode/transparent_union sema and lowering; vector_size sema |
 | GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -465,6 +471,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | HasBuiltin | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
 | SignBitShifts | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | FlexibleArrayExtensions | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
+| FlexibleArrayInitializers | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis, lowering |
 | ConstantFolding | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | MsDeclspec | - | - | - | - | - | - | - | MS flag | parser |
 | MsIntTypes | - | - | - | - | - | - | - | MS flag | parser |
@@ -495,6 +502,31 @@ The following vocabulary entries retain the established diagnostic contracts:
   rescanning and preprocessing-expression expansion. C99 §6.10.3p4 (printed
   p. 151; PDF p. 163) requires more arguments than named parameters;
   C23 §6.10.5p4 (printed p. 178; PDF p. 191) requires at least as many.
+- `Func` covers `__func__`, whose predefined declaration is C99
+  (§6.4.2.2p1, printed p. 52; PDF p. 64). `__FUNCTION__` and
+  `__PRETTY_FUNCTION__` are the GNU spellings: they are not a feature row,
+  because Clang 23.1.1 reserves both in every `-std` and says nothing about them
+  even under `-pedantic`, so bcc accepts them silently in every mode, ISO,
+  GNU and every extension policy. Each names a `static const char` array. In C,
+  `__FUNCTION__` is the same object as `__func__` (the function's name), and
+  `__PRETTY_FUNCTION__` holds the signature as Clang prints it (`void f(int)`,
+  `int (*g(void))(char)`; GCC prints only the name in C). A definition
+  without a prototype prints `()`, and a typedef name appears as written for
+  a parameter or result (`size_t`), but not for an adjusted array
+  parameter. Known differences from Clang are an unnamed `struct` parameter
+  (`struct (unnamed)`, where Clang adds a source position) and a variable
+  length array behind a pointer (`[*]`, where Clang prints the bound
+  expression). Outside a function all three are an empty string
+  (`top level` for the pretty form) behind the default warning
+  `predefined identifier is only valid inside function`, Clang's
+  `-Wpredefined-identifier-outside-function`. Clang makes `__FUNCTION__` and
+  `__PRETTY_FUNCTION__` keywords, so declaring them is a syntax error there;
+  bcc uses a visible declaration of the same spelling in preference.
+  The objects are static, so address equality holds as in Clang: all uses of
+  `__func__` and `__FUNCTION__` in one function are one object, and so are all
+  uses of `__PRETTY_FUNCTION__`; the two objects never compare equal, and no
+  object equals a string literal (Clang may merge equal constants, which C
+  leaves unspecified). Source: [GCC function names](https://gcc.gnu.org/onlinedocs/gcc/Function-Names.html).
 - `ArrayParameterSyntax` has C99 origin and accepts array qualifiers, `static`
   bounds and `[*]` in every mode. C89/C95 report the existing C99-origin
   spellings under Warn/Deny, including GNU modes; C99 and later are silent.
@@ -711,7 +743,9 @@ escapes are `\x{...}` and `\o{...}`, with empty, unterminated, invalid-radix,
 and out-of-range forms diagnosed. Phase 6 concatenates ordinary strings with
 encoded strings while keeping the encoding, and diagnoses incompatible
 nonordinary prefixes. Phase 7 adds encoding-bearing literal, bit-precise
-integer, and imaginary constant token variants.
+integer, and imaginary constant token variants. Semantic analysis types the
+encoded literals (see `semantic-analysis.md`, "Type graph and target data
+model") and lowering emits their UTF-8, UTF-16 and UTF-32 units.
 
 C23 `#elifdef`/`#elifndef`, `#warning`, `#embed`, `__has_include`,
 `__has_embed`, `__has_c_attribute`, and `__VA_OPT__` also work as earlier GNU
@@ -740,8 +774,8 @@ token or directive boundary.
 `__has_c_attribute` returns 202311 for the seven standard C23 attributes and
 `_Noreturn`, including double-underscore forms, and 0 for other names. GNU
 `__has_attribute` returns 1 for `unused`, `deprecated`, `aligned`, `packed`,
-`noreturn`, `weak`, `section`, `visibility`, `format`, `always_inline`, and
-`noinline`; `__has_builtin` returns 1 for `__builtin_va_arg`,
+`noreturn`, `weak`, `section`, `visibility`, `format`, `always_inline`,
+`noinline`, `gnu_inline`, and `transparent_union`; `__has_builtin` returns 1 for `__builtin_va_arg`,
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
@@ -834,24 +868,33 @@ adjacent literals concatenated) as a warning or an error, as GCC and Clang do;
 any other operand is an error. glibc's `__glibc_macro_warning`, which bcc
 reaches as Clang does, uses the warning form for deprecated macros.
 
-Inside a system header, warnings and extension diagnostics are withheld, the
-latter at every policy level: under `-pedantic-errors` an extension in a system
-header is not reported, matching Clang, where such diagnostics are warnings
-promoted to errors and are not emitted from system headers. Policy-governed
+Inside a system header, warnings, extension diagnostics and warning-group
+diagnostics are withheld, the latter two at every severity: under
+`-pedantic-errors` an extension in a system header is not reported, and
+neither is an `-Wincompatible-pointer-types`, `-Wint-conversion` or
+`-Wincompatible-function-pointer-types` error, matching Clang, where such
+diagnostics are warnings that default to or are promoted to errors and are
+not emitted from system headers. Policy-governed
 preprocessor diagnostics (macro redefinitions, `__VA_ARGS__` and `__VA_OPT__`
 outside a variadic macro, empty variadic arguments, the `#if` comma operator,
 `defined` produced by a function-like macro, a backslash in a quoted header
 name) count as extensions. Errors, such as syntax errors, constraint violations
 that are errors by default, and `#error`, are always reported.
 
-The diagnostic's location decides: its first source vector, which for a token
-produced by macro expansion is where the token is spelled in the macro's
-replacement list. This matches Clang's rule for its spelling location. A
-diagnostic in user code about something a system header declared or defined,
-such as a redefinition of the header's macro, is reported, while a construct
-that a system header's macro spells, like a `long long` it supplies to C89
-code, is not. Suppression happens when the diagnostic is reported, so withheld
-diagnostics are not counted.
+The diagnostic's expansion location decides, as in Clang: for a token that a
+macro expansion produced, where the outermost invocation begins, and
+otherwise the token itself. The preprocessor records that location for every
+output token it expands from a macro (`Context::record_expansion_start`), and
+the record lasts for the whole translation unit, so semantic analysis reads
+it too. A diagnostic in user code about something a system header declared or
+defined, such as a redefinition of the header's macro, is reported, and so is
+a construct that a system header's macro supplies to user code, like a
+`long long` in C89 code or `SYS_SET(ip)` assigning an `unsigned *`, which is
+reported at the user's invocation; a user macro expanded inside a system
+header is withheld. Tokens of a macro argument take the invocation too, where
+Clang would point at the argument's spelling; that changes only the column.
+Preprocessing diagnostics keep their own locations. Suppression happens when
+the diagnostic is reported, so withheld diagnostics are not counted.
 
 ## Decisions
 
@@ -1203,3 +1246,139 @@ its token reducer. C11 §6.7.5p4,p6 combines multiple `_Alignas` requests before
 checking natural alignment, including runtime-sized arrays and VLA typedefs.
 See [the semantic repair record](semantic-analysis.md#pr-42-round-1-layout-and-alignment-repairs-2026-10-13)
 and [GCC's packed/aligned sections](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html).
+
+## Pointer diagnostic defaults (2026-10-14, issue #46)
+
+The oracle is bundled Clang **23.1.1**, Rust LLVM revision
+`1b9c0d5ff9bbe7634aead059efe6b11a7eeba145`, with `-fsyntax-only` and no warning flags.
+`python scripts/probe_pointer_diagnostics.py` retains source, argv, status and
+complete stderr in `target/pointer-diagnostics/matrix.json`. All 25 probes
+have identical default severity, group and wording on Linux GNU, Windows GNU
+and Windows MSVC, in `c89`, `gnu89`, `iso9899:199409`, `c99`, `gnu99`, `c11`,
+`gnu11`, `c17`, `gnu17`, `c23`, `gnu23`, `c2y`, `gnu2y` (975 invocations).
+
+| Probe | Clang group | Default | Exact Clang wording |
+| --- | --- | --- | --- |
+| distinct-equality | `compare-distinct-pointer-types` | **warning** | `comparison of distinct pointer types ('int *' and 'unsigned int *')` |
+| distinct-order | `compare-distinct-pointer-types` | **warning** | `comparison of distinct pointer types ('int *' and 'float *')` |
+| object-assignment | `incompatible-pointer-types` | **error** | `incompatible pointer types assigning to 'char *' from 'float *'` |
+| object-initialization | `incompatible-pointer-types` | **error** | `incompatible pointer types initializing 'char *' with an expression of type 'float *'` |
+| object-argument | `incompatible-pointer-types` | **error** | `incompatible pointer types passing 'float *' to parameter of type 'char *'` |
+| object-return | `incompatible-pointer-types` | **error** | `incompatible pointer types returning 'float *' from a function with result type 'char *'` |
+| pointer-sign | `pointer-sign` | **warning** | `assigning to 'int *' from 'unsigned int *' converts between pointers to integer types with different sign` |
+| char-sign | `pointer-sign` | **warning** | `assigning to 'char *' from 'signed char *' converts between pointers to integer types where one is of the unique plain 'char' type and the other is not` |
+| nested-sign | `incompatible-pointer-types` | **error** | `incompatible pointer types assigning to 'int **' from 'unsigned int **'` |
+| discard-qualifiers | `incompatible-pointer-types-discards-qualifiers` | **warning** | `assigning to 'int *' from 'const int *' discards qualifiers` |
+| nested-qualifiers | `incompatible-pointer-types-discards-qualifiers` | **warning** | `assigning to 'const int **' from 'int **' discards qualifiers in nested pointer types` |
+| nested-discard-qualifiers | `incompatible-pointer-types-discards-qualifiers` | **warning** | `assigning to 'int **' from 'const int **' discards qualifiers in nested pointer types` |
+| pointer-qualifiers | `incompatible-pointer-types-discards-qualifiers` | **warning** | `assigning to 'int **' from 'int *const *' discards qualifiers` |
+| function-assignment | `incompatible-function-pointer-types` | **error** | `incompatible function pointer types assigning to 'int (*)(int)' from 'int (*)(double)'` |
+| function-object | `incompatible-pointer-types` | **error** | `incompatible pointer types assigning to 'int (*)(int)' from 'int *'` |
+| function-void | `pedantic when requested` | **silent** | `No default diagnostic` |
+| integer-pointer | `int-conversion` | **error** | `incompatible integer to pointer conversion assigning to 'int *' from 'int'; take the address with &` |
+| pointer-integer | `int-conversion` | **error** | `incompatible pointer to integer conversion assigning to 'int' from 'int *'; dereference with *` |
+| pointer-integer-equality | `pointer-integer-compare` | **warning** | `comparison between pointer and integer ('int *' and 'int')` |
+| pointer-integer-order | `no named group` | **warning** | `ordered comparison between pointer and integer ('int *' and 'int')` |
+| pointer-zero-order | `pedantic when requested` | **silent** | `No default diagnostic` |
+| function-order | `ordered-compare-function-pointers` | **warning** | `ordered comparison of function pointers ('int (*)(int)' and 'int (*)(int)')` |
+| function-distinct-order | `ordered-compare-function-pointers`, then `compare-distinct-pointer-types` | **two warnings** | `ordered comparison of function pointers ('int (*)(int)' and 'int (*)(double)')`; `comparison of distinct pointer types ('int (*)(int)' and 'int (*)(double)')` |
+| function-equality | `compare-distinct-pointer-types` | **warning** | `comparison of distinct pointer types ('int (*)(int)' and 'int (*)(double)')` |
+| void-order | `compare-distinct-pointer-types` | **warning** | `comparison of distinct pointer types ('int *' and 'void *')` |
+
+`-Wdiscarded-qualifiers` is a GCC spelling, not a Clang or bcc alias. bcc
+rejects unsupported warning groups at CLI parsing, as other unknown flags.
+Use `-Wincompatible-pointer-types-discards-qualifiers` instead.
+Clang warns about the option itself with
+`unknown warning option '-Wdiscarded-qualifiers'; did you mean '-Wignored-qualifiers'?`
+in `[-Wunknown-warning-option]`; it does not select a pointer diagnostic group.
+
+For the eight named pointer constraint groups above (excluding `pedantic`),
+bcc supports `-WGROUP`, `-Wno-GROUP`,
+`-Werror=GROUP` and `-Wno-error=GROUP`. Global `-Werror` promotes warnings
+from every translation phase; `-Wno-error` restores their defaults. Specific
+group severity overrides win over global `-Werror` regardless of order.
+Repeated options for a group use the last setting. `-Werror=GROUP` enables
+the group; `-Wno-error=GROUP` does not enable a disabled group. The
+`incompatible-pointer-types` parent controls qualifier and function-pointer
+children at its argv position; subsequent child options override it.
+Disabling and re-enabling a default-error group makes it a warning, subject to
+global `-Werror`, matching Clang; it also clears an explicit group error
+promotion while preserving an explicit group demotion.
+`pointer-sign` is independent. `-w` suppresses warning groups even with
+`-Werror`; default errors remain errors unless suppressed or demoted.
+Ordering distinct function pointer types emits both applicable comparison
+groups; each group's options control its diagnostic independently.
+
+`-pedantic-errors` retains Deny for language extensions and promotes the
+pointer constraint warnings, following Clang. Explicit group options can
+suppress or demote those constraint diagnostics. `-pedantic` leaves their
+defaults unchanged. Warnings retain ordinary pointer conversion facts and
+permit lowering; errors block it. Atomic builtin value operands use the
+assignment groups; other intrinsic-specific contracts remain strict.
+The `float *` to `char *` argument execution regression explicitly uses
+`-Wno-error=incompatible-pointer-types`; accepting it by default would
+contradict the observed Clang behavior. Function/void pointer conversions
+and pointer/zero ordering use the existing GNU extension policy adapter.
+
+Existing inspection views keep their historical success status while printing
+diagnostics. Code-generation modes (`--emit=ir`, `--interpret`, `-c`, `-o`)
+return failure for error diagnostics; flag regressions verify that lowering gate.
+
+These defaults satisfy the diagnostic requirement of C99 §5.1.1.3p1
+(printed p. 11; PDF p. 23). The constraints remain §6.5.16.1p1
+(p. 92; PDF p. 104), §6.5.9p2 (p. 86; PDF p. 98), §6.5.8p2
+(p. 85; PDF p. 97), §6.5.2.2p2/p7 (pp. 71-72; PDF pp. 83-84),
+§6.8.6.4p3 (p. 139; PDF p. 151), and §6.7.8p11 (p. 126; PDF p. 138).
+
+### PR #44 review fixes (2026-10-14)
+
+Each rule below was checked against the same bundled Clang on
+`x86_64-unknown-linux-gnu`, `x86_64-w64-windows-gnu` and
+`x86_64-pc-windows-msvc` in `c89`, `c99`, `gnu17` and `c23`, with
+`target/review/cmp.py`; the shared classifier in
+`semantic_analysis/expressions/pointers.rs` and the group table in
+`configuration/diagnostics.rs` own them.
+
+| Construct | Clang group | Default | Result or decision |
+| --- | --- | --- | --- |
+| `c ? ip : up`, `c ? f1 : f2`, `c ? f1 : vp`, `c ? pa : cpa` | `pointer-type-mismatch` | **warning** | Unqualified `void *`. Clang 23 does not merge the targets' qualifiers here (`_Generic(c ? cip : vup, void *: 1)` selects `void *`), so neither does bcc. |
+| `c ? ip : l`, `c ? 1 : f1` | `conditional-type-mismatch` | **warning** | The pointer arm's type; the integer converts to it, and a constant integer arm stays an address constant. |
+| `c ? ip : cip`, `c ? vp : cip` | none | silent | Composite or `void` target with the union of qualifiers (C99 §6.5.15p6). |
+| `cpa = pa`, `f(a)` for `const double m[][3]`, `[n]` and `(*)[]` parameters, `cpa == pa` | none | silent | An array target's element qualifiers count as the array's own when pointer targets are compared for qualifier inclusion and compatibility (C23 §6.7.4.1p10, which Clang applies in every mode). The conditional operator keeps them part of the target, as Clang does. |
+| `pa = cpa` | `incompatible-pointer-types-discards-qualifiers` | **warning** | Only dropping a qualifier warns. |
+| `const int (**)[]` from `int (**)[3]` | `incompatible-pointer-types` | **error** | Below the first pointer level Clang requires identical array derivations, so the nested-qualifier walk keeps exact bounds. |
+| `unsigned *` from `enum N *` (`N` has a negative enumerator) | `pointer-sign` | **warning** | Clang compares targets after a character type becomes `unsigned char` and a signed integer type, or an enumeration with a signed compatible type, becomes its unsigned counterpart. An enumeration with an unsigned compatible type stays itself, so `int *` from `enum E *` is an error on Linux, while MSVC (enums are `int`) makes `unsigned *` from `enum E *` a `pointer-sign` warning. |
+| `__atomic_store_n(&ip, up, 0)`, `__atomic_exchange_n`, `__sync_val_compare_and_swap`, `__c11_atomic_store` | the assignment groups | as assignment | Atomic builtin value operands convert through the assignment adapter; address and buffer contracts stay builtin errors. |
+| `long s = &x;` with int-conversion demoted | `int-conversion` | as configured | An address constant in an integer type exactly as wide as a pointer (also through an explicit cast) is a static initializer and lowers to a relocation; narrower types, including MSVC's 32-bit `long`, report that the initializer is not constant, as Clang does. |
+
+`-Wpointer-type-mismatch` and `-Wconditional-type-mismatch` accept the same
+option forms as the other groups, are promoted by `-Werror` and
+`-pedantic-errors` and are withheld by `-w`. `DiagnosticGroup::ALL`, `COUNT`,
+the names and `parse` come from one `diagnostic_groups!` table, which also
+records each group's default and whether `-pedantic-errors` promotes it.
+
+The system-header rule uses the expansion location, so a system macro
+expanded in user code reports its pointer diagnostics at the user's
+invocation, and every warning group, including the three that default to
+errors, is withheld inside a system header at any severity
+(`sema-pointer-system-header`). Clang 23 also reports a `long long` that a
+system macro supplies to C89 user code at the invocation, which the
+`pp-system-header-diagnostics` snapshot now shows.
+
+Warnings that Clang does not report by default are off by default in bcc as
+well, so `-Werror` rejects nothing that Clang accepts. Each has a group that
+enables it, `-Werror=GROUP` included, and a system header withholds it:
+
+| Diagnostic | Group | Clang |
+| --- | --- | --- |
+| Missing or escaped final newline | `newline-eof` | Off; Clang has no escaped-newline warning. |
+| Identifier evaluated as 0 in `#if` | `undef` | Off. |
+| Unknown `#pragma` | `unknown-pragmas` | Off (an unknown `STDC` pragma keeps its own diagnostic). |
+| Unused undefined `static` function | `unused-function` | Off. |
+| Constant that takes a wider type of its list | `constant-promotion` (bcc only) | Not diagnosed. |
+
+`__VA_ARGS__` outside a variadic replacement list, `#line 0` and a `#line`
+number from 2147483648 to 4294967295 are reported only under `-pedantic`, as
+Clang reports them. The line number applies, as in Clang, and a later line
+past 4294967295 wraps to 0; a larger `#line` number is an error and is
+ignored (C99 §6.10.4p3, p. 158; PDF p. 170, leaves these values undefined).

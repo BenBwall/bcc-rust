@@ -280,8 +280,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 contains_flexible:    Cell::new(false),
                 compatible:           Cell::new(Scalar::Int),
                 packed:               Cell::new(false),
+                transparent:          Cell::new(false),
                 max_member_alignment: Cell::new(0),
                 alignment:            Cell::new(0),
+                required_alignment:   Cell::new(0),
             }));
             id
         };

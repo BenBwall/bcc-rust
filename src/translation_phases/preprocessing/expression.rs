@@ -378,7 +378,12 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             .map(|classification| classification.kind);
                         let boolean = matches!(keyword, Some(KeywordTokenType::True | KeywordTokenType::False));
                         let value = i64::from(keyword == Some(KeywordTokenType::True));
-                        if !boolean {
+                        if !boolean
+                            && self
+                                .context
+                                .group_severity(crate::configuration::DiagnosticGroup::Undef, token.source_vectors)
+                                .is_some()
+                        {
                             self.context.preprocessor_error(PreprocessorError {
                                     error_type: PreprocessorErrorType::UndefinedIdentifierInPreprocessorExpression(self.context.diagnostic_text(self.context.string_cache.at(token.contents))),
                                     source_vectors: token.source_vectors,

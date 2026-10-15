@@ -130,6 +130,11 @@ pub(crate) enum Feature {
     HasBuiltin,
     SignBitShifts,
     FlexibleArrayExtensions,
+    /// Initializing the flexible array member of a static object, which
+    /// grows the object; Clang's `-Wgnu-flexible-array-initializer`.
+    /// GNU extension to C99 §6.7.2.1 paragraph 16, p. 103; PDF p. 115.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Zero-Length.html>
+    FlexibleArrayInitializers,
     ConstantFolding,
     MsDeclspec,
     MsIntTypes,
@@ -268,6 +273,7 @@ impl Feature {
             | Self::HasBuiltin
             | Self::SignBitShifts
             | Self::FlexibleArrayExtensions
+            | Self::FlexibleArrayInitializers
             | Self::ConstantFolding
             | Self::Float128
             | Self::GnuBuiltins
@@ -394,6 +400,7 @@ impl Feature {
         Self::HasBuiltin,
         Self::SignBitShifts,
         Self::FlexibleArrayExtensions,
+        Self::FlexibleArrayInitializers,
         Self::ConstantFolding,
         Self::MsDeclspec,
         Self::MsIntTypes,

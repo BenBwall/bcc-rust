@@ -1,0 +1,25 @@
+error: comparison of distinct pointer types [-Wcompare-distinct-pointer-types]
+ --> sema-pointer-werror.c:1:43
+  |
+1 | int equal(int *p, unsigned *q) { return p == q; }
+  |                                           ^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: conversion between pointers to integer types with different sign [-Wpointer-sign]
+ --> sema-pointer-werror.c:2:38
+  |
+2 | void sign(int *p, unsigned *q) { p = q; }
+  |                                      ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: pointer conversion discards qualifiers, including nested pointer qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+ --> sema-pointer-werror.c:3:43
+  |
+3 | void nested(const int **p, int **q) { p = q; }
+  |                                           ^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+3 errors generated.

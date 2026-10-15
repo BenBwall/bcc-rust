@@ -303,6 +303,7 @@ mod tests {
             let text = stderr(&bcc(&[
                 "-std=c17",
                 "-pedantic-errors",
+                "-Wnewline-eof",
                 "-nostdlibinc",
                 "--input",
                 &source,
@@ -320,7 +321,7 @@ mod tests {
         let source = "#include <mapped.h>\n";
         clean(&clang_check(&root, &flags, source));
         let mut args = flags.to_vec();
-        args.extend(["-nostdlibinc", "--input", source]);
+        args.extend(["-Wnewline-eof", "-nostdlibinc", "--input", source]);
         clean(&bcc(&args));
         // A pragma after a rename still starts suppression at its physical
         // offset, even for earlier tokens carrying the same presumed identity.
@@ -333,7 +334,7 @@ mod tests {
         let expected = stderr(&clang_check(&root, &flags, source));
         assert_eq!(expected.matches("error:").count(), 2, "{expected}");
         let mut args = flags.to_vec();
-        args.extend(["-nostdlibinc", "--input", source]);
+        args.extend(["-Wnewline-eof", "-nostdlibinc", "--input", source]);
         let text = stderr(&bcc(&args));
         assert_eq!(text.matches("error: 'long long'").count(), 2, "{text}");
         assert!(text.contains("mapped.h:1:6"), "{text}");
@@ -441,7 +442,11 @@ mod tests {
             );
             writeln!(source, "#include \"{name}.h\"").unwrap();
         }
-        let mut args = vec!["-std=c89".to_owned(), "-pedantic-errors".to_owned()];
+        let mut args = vec![
+            "-std=c89".to_owned(),
+            "-pedantic-errors".to_owned(),
+            "-Wundef".to_owned(),
+        ];
         for (directory, flag, _) in groups {
             match flag {
                 | "CPATH" | "C_INCLUDE_PATH" => {},

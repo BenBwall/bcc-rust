@@ -181,6 +181,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .checked_sub(1)
                         .map_or(0, |index| self.pack_alignments[index].1);
                     self.types.tags[tag].max_member_alignment.set(pack);
+                    // The union qualifies only once its members are known.
+                    if let Some(source) = self.transparent_union_request(s.attributes) {
+                        if kind == TagKind::Union {
+                            _ = self.transparent_unions.insert(tag, source);
+                        } else {
+                            self.error(
+                                SemanticErrorKind::IgnoredTransparentUnion,
+                                source,
+                                None,
+                                None,
+                            );
+                        }
+                    }
                 }
                 if define && self.unmodeled_extension(s.attributes) {
                     self.types.tags[tag].tainted.set(true);
@@ -518,6 +531,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             );
         }
+        if typedef && let Some(source) = self.typedef_transparent_union(spec, declarator) {
+            self.make_transparent_union(ty, source);
+        }
         let kind = if typedef {
             BindingKind::Typedef
         } else if function {
@@ -725,6 +741,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let (mut bytes, mut alignment, mut bit_end) = (0_u64, 1_u64, 0_u64);
         let ms = self.types.target.ms_bitfields;
         let mut ms_unit: Option<(u64, u64, u64)> = None; // size, byte start, used bits
+        let mut required = u64::from(tag.alignment.get());
         let named = members.iter().filter(|m| m.initializable()).count();
         let mut too_large = false;
         for (index, &member) in members.iter().enumerate() {
@@ -801,6 +818,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // ignore member alignment; MinGW retains it.
             // <https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html>
             let packed = tag.packed.get() || member.packed;
+            let declared_align = layout.align;
             // MinGW's Microsoft bit-field layout ignores typedef alignment,
             // but retains alignment written on the member. GCC Common Type
             // Attributes (aligned); C99 §6.7.2.1p10, p. 102; PDF p. 114.
@@ -846,12 +864,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let pack = tag.max_member_alignment.get();
             if pack != 0 && (ms || member.width != Some(0)) {
                 layout.align = layout.align.min(u64::from(pack));
-                if self.context.configuration.target() == crate::target::Target::WindowsMsvc
-                    && member.width.is_none()
-                {
-                    layout.align = layout.align.max(u64::from(
-                        member.explicit_alignment.max(member.ty.alignment),
-                    ));
+                // Clang's System V layout: `#pragma pack` overrides `packed`
+                // on a bit-field, which keeps its pack-capped declared
+                // alignment (`aligned` included).
+                if !ms && packed && member.width.is_some() {
+                    layout.align = declared_align
+                        .max(u64::from(member.explicit_alignment))
+                        .min(u64::from(pack));
+                }
+            }
+            // MSVC: the alignment a member's `_Alignas`, typedef or nested
+            // record requires survives `#pragma pack`, and raises the
+            // alignment of every record containing it.
+            if self.context.configuration.target() == crate::target::Target::WindowsMsvc
+                && member.width.is_none()
+            {
+                let member_required = self.ms_required_alignment(member);
+                required = required.max(member_required);
+                if pack != 0 {
+                    layout.align = layout.align.max(member_required);
                 }
             }
             // The System V ABI ignores unnamed bit-fields when aligning a
@@ -870,7 +901,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 resolved.ty = resolved.ty.with_alignment(1);
             }
             if tag.kind == TagKind::Union {
+                let follows_bit_field = ms_unit.is_some();
+                ms_unit = match member.width {
+                    | Some(width) if ms && width != 0 => Some((layout.size, 0, u64::from(width))),
+                    | _ => None,
+                };
                 bytes = bytes.max(match member.width {
+                    // MSVC: a zero-width bit-field after a nonzero one still
+                    // reserves its declared type's bytes (`cl.exe`, Clang's
+                    // Microsoft layout); C99 §6.7.2.1p11 is about structures.
+                    | Some(0)
+                        if ms
+                            && follows_bit_field
+                            && self.context.configuration.target()
+                                == crate::target::Target::WindowsMsvc =>
+                        layout.size,
                     | Some(0) if ms => 0,
                     | Some(_) if ms => layout.size,
                     // GCC packed union fields occupy their bits, including
@@ -887,29 +932,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     // same size and the unit has room.
                     let bits = layout.size * 8;
                     if width == 0 {
-                        let unit = ms_unit.take();
-                        let msvc = self.context.configuration.target()
-                            == crate::target::Target::WindowsMsvc;
-                        if unit.is_some() || !msvc && member.explicit_alignment != 0 {
-                            // C99 §6.7.2.1p12, p. 103; PDF p. 115: target
-                            // placement. MSVC needs a preceding value field;
-                            // MinGW also honors an explicit inactive boundary.
-                            let boundary = if !msvc && unit.is_some() {
-                                self.types.natural_alignment(member.ty).unwrap_or(1)
-                            } else {
-                                layout.align
-                            };
-                            let boundary = if pack != 0 && msvc {
-                                boundary
-                            } else {
-                                boundary.max(u64::from(member.explicit_alignment))
-                            };
-                            if !msvc && let Some((_, start, used)) = unit {
-                                bytes = start + used.div_ceil(8);
-                            }
-                            alignment = alignment.max(boundary);
-                            bytes = align_up(bytes, boundary).unwrap_or(bytes);
-                        }
+                        let (record, placement) = self.ms_zero_width_boundary(
+                            member,
+                            layout.align,
+                            ms_unit.take().is_some(),
+                            packed,
+                            pack,
+                        );
+                        // The unit is closed: `bytes` is already its end, so
+                        // the next field starts a new unit at or past it.
+                        alignment = alignment.max(record);
+                        bytes = align_up(bytes, placement).unwrap_or(bytes);
                         resolved.offset = bytes;
                     } else {
                         alignment = alignment.max(layout.align);
@@ -933,22 +966,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let placed = (|| {
                         let bits = layout.size.checked_mul(8)?;
                         let width = u64::from(width);
-                        let start = if width == 0 {
-                            align_up(
-                                bit_end,
-                                bits.max(u64::from(member.explicit_alignment).checked_mul(8)?),
-                            )?
-                        } else if member.explicit_alignment != 0 && pack == 0 {
-                            align_up(bit_end, layout.align.checked_mul(8)?)?
-                        } else if packed || pack != 0 {
-                            bit_end
+                        // Clang's System V layout: without `#pragma pack`,
+                        // a field that would straddle a unit of its
+                        // alignment starts the next one; otherwise an
+                        // `aligned` request the pack does not cap aligns it.
+                        // A packed field's own alignment is one bit.
+                        let explicit = u64::from(member.explicit_alignment);
+                        let field_align = if packed && pack == 0 {
+                            explicit.checked_mul(8)?.max(1)
                         } else {
-                            let remaining = bits - bit_end.checked_rem(bits)?;
-                            if width > remaining {
-                                bit_end.checked_add(remaining)?
-                            } else {
-                                bit_end
-                            }
+                            layout.align.checked_mul(8)?
+                        };
+                        let start = if width == 0 {
+                            align_up(bit_end, bits.max(explicit.checked_mul(8)?))?
+                        } else if pack == 0 && bit_end.checked_rem(field_align)? + width > bits {
+                            align_up(bit_end, field_align)?
+                        } else if explicit != 0 && (pack == 0 || explicit <= u64::from(pack)) {
+                            align_up(bit_end, explicit.checked_mul(8)?)?
+                        } else {
+                            bit_end
                         };
                         Some((start, start.checked_add(width)?))
                     })();
@@ -1046,6 +1082,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             _ = self.member_indices.insert((id, field.name.name), index);
         }
         tag.complete.set(true);
+        tag.required_alignment
+            .set(u32::try_from(required).unwrap_or(u32::MAX));
         alignment = alignment.max(u64::from(tag.alignment.get()));
         if !tag.tainted.get() {
             tag.layout
@@ -1054,6 +1092,91 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     align: alignment,
                 }));
         }
+        if let Some(source) = self.transparent_unions.remove(&id) {
+            let ty = self.types.intern(TypeKind::Tag(id));
+            self.make_transparent_union(ty, source);
+        }
+    }
+
+    /// The alignment a non-bit-field member requires in Microsoft layout:
+    /// its own `_Alignas` or `aligned`, a typedef's alignment, and what a
+    /// record (or array of records) of its type requires.
+    /// C11: §6.7.5 paragraph 6, p. 127; PDF p. 145; MSVC extension.
+    fn ms_required_alignment(&self, member: Member) -> u64 {
+        let mut ty = member.ty;
+        while let TypeKind::Array(element, _) = self.types.nodes[ty.index] {
+            ty = element;
+        }
+        let nested = match self.types.nodes[ty.index] {
+            | TypeKind::Tag(id) => self.types.tags[id].required_alignment.get(),
+            | _ => 0,
+        };
+        u64::from(
+            member
+                .explicit_alignment
+                .max(member.ty.alignment)
+                .max(nested),
+        )
+    }
+
+    /// The record alignment and placement boundary of a Microsoft-layout
+    /// zero-width bit-field in a structure. One that follows a nonzero
+    /// bit-field ends that bit-field's unit; the caller's cursor is already
+    /// at the unit's end, and the next member starts at or past this boundary.
+    /// Otherwise it affects layout only on MinGW, and only when it carries an
+    /// explicit alignment.
+    ///
+    /// MSVC (Clang's Microsoft layout, which `cl.exe` agrees with): the
+    /// declared type's adjusted alignment, already capped by `#pragma pack`.
+    /// MinGW GCC: the declared type's natural alignment, capped by `#pragma
+    /// pack`, aligns the record even when it is packed; packing removes only
+    /// the padding before the next unit. Clang's MinGW layout ignores the
+    /// pack cap here and lays such packed records out with overlapping
+    /// fields, so GCC, the platform's compiler, is followed.
+    /// C99: §6.7.2.1 paragraph 11, p. 102; PDF p. 114 (the unit ends);
+    /// implementation-defined allocation, §6.7.2.1p10.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Variable-Attributes.html>
+    fn ms_zero_width_boundary(
+        &self,
+        member: Member,
+        align: u64,
+        closes_unit: bool,
+        packed: bool,
+        pack: u32,
+    ) -> (u64, u64) {
+        let explicit = u64::from(member.explicit_alignment);
+        let msvc = self.context.configuration.target() == crate::target::Target::WindowsMsvc;
+        if !closes_unit && (msvc || explicit == 0) {
+            return (1, 1);
+        }
+        if msvc {
+            let boundary = if pack == 0 {
+                align.max(explicit)
+            } else {
+                align
+            };
+            return (boundary, boundary);
+        }
+        if !closes_unit {
+            let boundary = align.max(explicit);
+            return (boundary, boundary);
+        }
+        let natural = self
+            .types
+            .natural_alignment(member.ty)
+            .unwrap_or(1)
+            .max(explicit);
+        let record = if pack == 0 {
+            natural
+        } else {
+            natural.min(u64::from(pack))
+        };
+        let placement = if packed {
+            explicit.clamp(1, record)
+        } else {
+            record
+        };
+        (record, placement)
     }
 
     /// Specifier extensions whose meaning this phase does not model:
@@ -1186,8 +1309,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             contains_flexible: Cell::new(false),
             compatible: Cell::new(Scalar::Int),
             packed: Cell::new(false),
+            transparent: Cell::new(false),
             max_member_alignment: Cell::new(0),
             alignment: Cell::new(0),
+            required_alignment: Cell::new(0),
         });
         self.types.tags.push(tag);
         index

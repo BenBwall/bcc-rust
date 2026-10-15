@@ -289,8 +289,8 @@ fn decimal_constants_too_large_for_every_signed_type_warn_and_become_unsigned() 
 }
 
 /// Moving from `int` to `long`, or `unsigned int` to `unsigned long`, is valid
-/// C99 but keeps its existing warning in every radix; reaching an unsigned
-/// type of the same width does not warn.
+/// C99; its portability warning is off by default and, when enabled, applies
+/// in every radix; reaching an unsigned type of the same width does not warn.
 #[test]
 fn integer_constant_widening_warnings_depend_on_the_selected_type() {
     for (spelling, error) in [
@@ -315,7 +315,13 @@ fn integer_constant_widening_warnings_depend_on_the_selected_type() {
         ("2147483648l", None),
     ] {
         let source = format!("{spelling}; after\n");
-        let actual = observe(&source);
+        // Neither GCC nor Clang reports these, so they are off unless the
+        // group is enabled.
+        assert!(observe(&source).errors.is_empty(), "{source:?}");
+        let actual = observe_with_configuration(
+            &source,
+            crate::configuration::CompilerConfiguration::default().with_default_off_groups(),
+        );
         let errors: Vec<_> = actual
             .errors
             .iter()

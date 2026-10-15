@@ -442,12 +442,18 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     MissingNumberInLineDirective(PreprocessorTokenType),
     MissingNewlineAfterLineDirective(PreprocessorTokenType),
     LineDirectiveIsNotASimpleDigitSequence,
-    LineDirectiveNumberTooLarge(&'tu str),
-    /// A `#line` number that specifies zero, which is undefined; the line
-    /// number is ignored.
+    /// A `#line` number above 2147483647. As in Clang, a number up to
+    /// 4294967295 is applied and reported only under -pedantic; a larger one
+    /// is an error and is ignored.
     ///
     /// C99: §6.10.4 paragraph 3, p. 158; PDF p. 170.
-    LineDirectiveNumberZero(&'tu str),
+    LineDirectiveNumberTooLarge(&'tu str, ErrorSeverity),
+    /// A `#line` number that specifies zero, which is undefined. As in
+    /// Clang, it is applied and reported only under -pedantic
+    /// (`-Wgnu-zero-line-directive`).
+    ///
+    /// C99: §6.10.4 paragraph 3, p. 158; PDF p. 170.
+    LineDirectiveNumberZero(&'tu str, ErrorSeverity),
     /// A wide string literal as the `#line` file name; the name is ignored.
     ///
     /// C99: §6.10.4 paragraph 1, p. 158; PDF p. 170.
@@ -1212,11 +1218,11 @@ impl PreprocessorErrorType<'_> {
                 new("`#line` needs a plain decimal line number")
                     .label("not a digit sequence")
                     .note("C99 §6.10.4p3: the line number is a digit sequence, not any constant"),
-            | Self::LineDirectiveNumberTooLarge(number) =>
+            | Self::LineDirectiveNumberTooLarge(number, _) =>
                 new(format_in!(arena, "line number {number} is out of range"))
                     .label("too large")
                     .note("C99 §6.10.4p3: the line number must be at most 2147483647"),
-            | Self::LineDirectiveNumberZero(number) =>
+            | Self::LineDirectiveNumberZero(number, _) =>
                 new(format_in!(arena, "line number {number} is out of range"))
                     .label("zero")
                     .note("C99 §6.10.4p3: the line number must be at least 1"),
@@ -1410,6 +1416,10 @@ impl PreprocessorErrorType<'_> {
                 | Self::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(..)
                 | Self::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(..)
                 | Self::MacroRedefinedWithDifferentDefinition(..)
+                | Self::LineDirectiveNumberZero(..)
+        ) || matches!(
+            self,
+            Self::LineDirectiveNumberTooLarge(_, ErrorSeverity::Warning)
         )
     }
 }
@@ -1601,8 +1611,12 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::DefinedFromFunctionLikeMacroExpansion(severity)
             | PreprocessorErrorType::MissingVariadicArgument(severity)
             | PreprocessorErrorType::BackslashInQuotedHeaderName(severity)
-            | PreprocessorErrorType::DefinedFromObjectLikeMacroExpansion(severity) => severity,
-            | PreprocessorErrorType::VaArgsOutsideVariadicMacro(policy)
+            | PreprocessorErrorType::DefinedFromObjectLikeMacroExpansion(severity)
+            | PreprocessorErrorType::LineDirectiveNumberTooLarge(_, severity)
+            | PreprocessorErrorType::LineDirectiveNumberZero(_, severity) => severity,
+            | PreprocessorErrorType::VaArgsOutsideVariadicMacro(policy) =>
+                crate::translation_phases::policy_severity(policy, crate::translation_phases::DiagnosticPolicy::Extension)
+                    .unwrap_or(ErrorSeverity::Warning),
             | PreprocessorErrorType::VaOptOutsideVariadicMacro(policy)
             | PreprocessorErrorType::RedefinitionOfFunctionLikeMacroAsObjectLikeMacro(_, policy)
             | PreprocessorErrorType::RedefinitionOfObjectLikeMacroAsFunctionLikeMacro(_, policy)
@@ -1621,8 +1635,6 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::UnknownDirective
             | PreprocessorErrorType::HashMustBeFollowedByIdentifier
             | PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence
-            | PreprocessorErrorType::LineDirectiveNumberTooLarge(..)
-            | PreprocessorErrorType::LineDirectiveNumberZero(..)
             | PreprocessorErrorType::UnknownPragmaDirective
             | PreprocessorErrorType::ExtraTokensAfterPragmaOnce(..)
             | PreprocessorErrorType::ExtraTokensAfterPragmaOperator

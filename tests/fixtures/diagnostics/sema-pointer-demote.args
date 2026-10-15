@@ -1,0 +1,1 @@
+-Werror -Wno-error=incompatible-pointer-types -Wno-error=int-conversion

@@ -269,6 +269,24 @@ int first(void) { return __func__[0]; }",
 }
 
 #[test]
+fn pretty_function_names_hold_the_signature() {
+    golden(
+        "pretty_function_name",
+        "const char *signature(int n, const char *s) { return __PRETTY_FUNCTION__; }
+int shared(void) { return __FUNCTION__ == __func__ && __PRETTY_FUNCTION__[0] == 'i'; }",
+    );
+}
+
+#[test]
+fn function_names_outside_functions_are_empty_arrays() {
+    golden(
+        "function_name_outside",
+        "const char *plain = __func__;
+const char *pretty = __PRETTY_FUNCTION__;",
+    );
+}
+
+#[test]
 fn implicit_declarations_use_library_prototypes_and_unknown_open_types() {
     let configuration = crate::configuration::CompilerConfiguration::new(
         crate::configuration::CStandard::C89,

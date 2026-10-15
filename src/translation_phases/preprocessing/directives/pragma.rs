@@ -248,10 +248,19 @@ impl Expander<'_, '_, '_, '_> {
                     }
                 },
                 | _ => {
-                    self.context.preprocessor_error(PreprocessorError {
-                        error_type:     PreprocessorErrorType::UnknownPragmaDirective,
-                        source_vectors: token.source_vectors,
-                    });
+                    if self
+                        .context
+                        .group_severity(
+                            crate::configuration::DiagnosticGroup::UnknownPragmas,
+                            token.source_vectors,
+                        )
+                        .is_some()
+                    {
+                        self.context.preprocessor_error(PreprocessorError {
+                            error_type:     PreprocessorErrorType::UnknownPragmaDirective,
+                            source_vectors: token.source_vectors,
+                        });
+                    }
                     break 'base;
                 },
             }
