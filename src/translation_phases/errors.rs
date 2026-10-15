@@ -50,14 +50,40 @@ pub(crate) enum TranslationError<'tu> {
 }
 
 impl TranslationError<'_> {
-    /// Group diagnostics have already applied their overrides at emission.
-    /// Existing warnings from every phase share the global -Werror control.
+    /// A warning-group diagnostic takes its group's configured severity,
+    /// which already includes global -Werror and the group's own overrides.
+    /// Other warnings from every phase share the global -Werror control.
     pub(crate) fn configured_severity(&self, context: &Context<'_>) -> ErrorSeverity {
-        if matches!(self, Self::Semantic(error) if matches!(error.kind, semantic_analysis::SemanticErrorKind::PointerConstraint(_)))
-        {
-            self.severity()
+        if let Some(group) = self.group() {
+            context
+                .configuration
+                .diagnostic_severity(group)
+                .unwrap_or_else(|| self.severity())
         } else {
             context.configuration.warning_severity(self.severity())
+        }
+    }
+
+    /// The warning group that controls this diagnostic, if any.
+    pub(crate) fn group(&self) -> Option<crate::configuration::DiagnosticGroup> {
+        use super::preprocessing::PreprocessorErrorType as P;
+        use crate::configuration::DiagnosticGroup as G;
+        match self {
+            | Self::InitialProcessing(_) => Some(G::NewlineEof),
+            | Self::Preprocessing(error) => match error.error_type {
+                | P::UndefinedIdentifierInPreprocessorExpression(_) => Some(G::Undef),
+                | P::UnknownPragmaDirective => Some(G::UnknownPragmas),
+                | P::ForcedSignedPromotion { .. } | P::ForcedUnsignedPromotion { .. } =>
+                    Some(G::ConstantPromotion),
+                | _ => None,
+            },
+            | Self::Semantic(error) => match error.kind {
+                | semantic_analysis::SemanticErrorKind::PointerConstraint(group) => Some(group),
+                | semantic_analysis::SemanticErrorKind::UnusedStaticFunction =>
+                    Some(G::UnusedFunction),
+                | _ => None,
+            },
+            | _ => None,
         }
     }
 

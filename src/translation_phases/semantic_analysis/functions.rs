@@ -520,11 +520,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         Some(b.name.source_vectors),
                     );
                 } else if b.kind == BindingKind::Function {
-                    self.error(
+                    self.group_diagnostic(
+                        crate::configuration::DiagnosticGroup::UnusedFunction,
                         SemanticErrorKind::UnusedStaticFunction,
                         b.name.source_vectors,
                         Some(b.name.name),
-                        None,
                     );
                 }
             }

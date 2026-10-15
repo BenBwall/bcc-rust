@@ -54,7 +54,11 @@ fn with_directive_tokens_with_system_directory<R>(
     inspect: impl FnOnce(&[Token], &mut Context<'_>) -> R,
 ) -> R {
     let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    // These tests observe where the missing final newline is reported.
+    let mut context = Context::with_configuration(
+        &tu,
+        crate::configuration::CompilerConfiguration::default().with_default_off_groups(),
+    );
     let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
         &preprocess_arena,

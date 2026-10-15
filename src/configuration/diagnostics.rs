@@ -24,6 +24,18 @@ impl CompilerConfiguration {
         self
     }
 
+    /// Enables every group that is off by default, for tests that observe
+    /// those diagnostics directly.
+    #[cfg(test)]
+    pub(crate) fn with_default_off_groups(mut self) -> Self {
+        for &group in DiagnosticGroup::ALL {
+            if !group.enabled_by_default() {
+                self = self.with_warning_option(group, WarningOption::Enable(true));
+            }
+        }
+        self
+    }
+
     pub(crate) const fn with_warnings_as_errors(mut self, enabled: bool) -> Self {
         self.warnings_as_errors = enabled;
         self
@@ -91,7 +103,8 @@ macro_rules! diagnostic_groups {
             pub(crate) const ALL: &[Self] = &[$(Self::$variant,)*];
             pub(crate) const COUNT: usize = Self::ALL.len();
 
-            /// The Clang `-W` spelling, if the group has one.
+            /// The `-W` spelling, if the group has one: Clang's, except for
+            /// the bcc-only `constant-promotion`.
             pub(crate) const fn name(self) -> Option<&'static str> {
                 match self {
                     $(Self::$variant => $name,)*
@@ -132,6 +145,19 @@ diagnostic_groups! {
     PointerTypeMismatch => Some("pointer-type-mismatch"), Warning, true;
     /// A conditional operand pairing a pointer with an integer.
     ConditionalTypeMismatch => Some("conditional-type-mismatch"), Warning, true;
+    /// A nonempty source file that does not end in a new-line; Clang reports
+    /// it only when requested and never through `-pedantic`.
+    NewlineEof => Some("newline-eof"), Ignored, false;
+    /// An identifier evaluated as 0 in `#if`.
+    Undef => Some("undef"), Ignored, false;
+    /// A `#pragma` that names nothing bcc knows.
+    UnknownPragmas => Some("unknown-pragmas"), Ignored, false;
+    /// A static function declared but neither defined nor used.
+    UnusedFunction => Some("unused-function"), Ignored, false;
+    /// A decimal or unsuffixed constant that takes a wider type of its list.
+    /// Valid C99 that neither GCC nor Clang diagnoses, so it stays off; the
+    /// bcc-only `-Wconstant-promotion` reports it.
+    ConstantPromotion => Some("constant-promotion"), Ignored, false;
 }
 
 /// A group's severity when no option names it.

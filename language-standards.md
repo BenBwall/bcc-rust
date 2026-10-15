@@ -1313,3 +1313,15 @@ errors, is withheld inside a system header at any severity
 (`sema-pointer-system-header`). Clang 23 also reports a `long long` that a
 system macro supplies to C89 user code at the invocation, which the
 `pp-system-header-diagnostics` snapshot now shows.
+
+Warnings that Clang does not report by default are off by default in bcc as
+well, so `-Werror` rejects nothing that Clang accepts. Each has a group that
+enables it, `-Werror=GROUP` included, and a system header withholds it:
+
+| Diagnostic | Group | Clang |
+| --- | --- | --- |
+| Missing or escaped final newline | `newline-eof` | Off; Clang has no escaped-newline warning. |
+| Identifier evaluated as 0 in `#if` | `undef` | Off. |
+| Unknown `#pragma` | `unknown-pragmas` | Off (an unknown `STDC` pragma keeps its own diagnostic). |
+| Unused undefined `static` function | `unused-function` | Off. |
+| Constant that takes a wider type of its list | `constant-promotion` (bcc only) | Not diagnosed. |

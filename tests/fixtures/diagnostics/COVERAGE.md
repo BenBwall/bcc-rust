@@ -37,6 +37,13 @@ own functions commit, including the default errors, and reports the header's
 macros expanded in the main file at the user's invocation. Each of these matches the bundled Clang's group and line on every
 supported target.
 
+Warnings that Clang does not report by default are off in bcc too, so their
+fixtures enable them: `initial-missing-final-newline` (`-Wnewline-eof`),
+`pp-undefined-identifier-in-preprocessor-expression` (`-Wundef`),
+`pp-unknown-pragma-directive` (`-Wunknown-pragmas`), `sema3-static-unused`
+(`-Wunused-function`) and both `pp-forced-*-promotion` fixtures (the bcc-only
+`-Wconstant-promotion`).
+
 Round-6 scalar builtin coverage: `sema-builtin-values.c` distinguishes constant
 and value requirements for object-size mode, probability, alignment, and
 prefetch read/write/locality from three incompatible-type controls.
