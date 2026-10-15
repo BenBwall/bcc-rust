@@ -72,16 +72,7 @@ __STDC_UTF_32__	Encoded literal syntax exists, but its semantic types and storag
 __STDC_VERSION__	Existing language-mode preprocessor builtin; not a target definition.
 __STDC__	Existing language-mode preprocessor builtin; not a target definition.
 __STRICT_ANSI__	Existing language-mode preprocessor builtin; not a target definition.
-__VERSION__	Compiler identity/version or hosted-mode contract owned separately.
-__clang__	Compiler identity/version or hosted-mode contract owned separately.
-__clang_literal_encoding__	Compiler identity/version or hosted-mode contract owned separately.
-__clang_major__	Compiler identity/version or hosted-mode contract owned separately.
-__clang_minor__	Compiler identity/version or hosted-mode contract owned separately.
-__clang_patchlevel__	Compiler identity/version or hosted-mode contract owned separately.
-__clang_version__	Compiler identity/version or hosted-mode contract owned separately.
-__clang_wide_literal_encoding__	Compiler identity/version or hosted-mode contract owned separately.
 __code_model_small__	Code generation, relocation and optimization policy are not implemented.
-__llvm__	Compiler identity/version or hosted-mode contract owned separately.
 __pic__	Code generation, relocation and optimization policy are not implemented.
 __pie__	Code generation, relocation and optimization policy are not implemented.
 __seg_fs	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.

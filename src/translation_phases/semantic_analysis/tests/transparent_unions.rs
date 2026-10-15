@@ -115,3 +115,26 @@ fn a_transparent_union_argument_records_its_member_and_union_conversions() {
         },
     );
 }
+
+/// The attribute catalog identifies `transparent_union`, so the standard
+/// syntax's `gnu::` prefix names it as Clang accepts it, without an unknown-
+/// or ignored-attribute warning.
+#[test]
+fn prefixed_transparent_union_is_the_same_rule() {
+    with_configuration(
+        "union [[gnu::transparent_union]] u { int *ip; long *lp; };
+         int f(union u); int g(int *p) { return f(p); }",
+        CompilerConfiguration::new(CStandard::C23, crate::configuration::ExtensionPolicy::Warn)
+            .with_gnu_extensions(true),
+        |context, s| {
+            assert!(context.take_pending_errors().is_empty());
+            assert_eq!(
+                s.conversions
+                    .iter()
+                    .filter(|c| c.kind == ConversionKind::TransparentUnion)
+                    .count(),
+                1
+            );
+        },
+    );
+}

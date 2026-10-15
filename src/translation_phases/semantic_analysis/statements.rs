@@ -651,6 +651,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Some(jump.source.name),
                     Some(self.bindings[binding].name.source_vectors),
                 );
+            } else if label.definition.is_some() && label.function == jump.function {
+                self.check_cleanup_entry(jump.statement, jump.source.source_vectors);
             }
         }
         self.finish_indirect_jumps();
@@ -658,36 +660,66 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Checks every computed goto against every address-taken label of its
     /// function, as Clang does: a function without any is an error, and so
-    /// is entering a statement expression or the scope of a variably
-    /// modified identifier, reported once per goto for its first such
-    /// target. Each function's labels inside such a region are collected
-    /// once, so the work is O(gotos + labels) plus one check per goto and
-    /// protected label; plain dispatch tables need no pairwise checks.
-    /// GNU extension: GCC "Labels as Values" and "Statement Exprs".
+    /// is entering a statement expression, the scope of a variably modified
+    /// identifier or a GNU cleanup variable's scope, reported once per goto
+    /// for its first such target; leaving a cleanup variable's scope is an
+    /// error too, since an indirect jump runs no cleanup. Each function's
+    /// labels inside such a region, and the preorder span of all of its
+    /// labels, are collected once, so the work is O(gotos + labels) plus one
+    /// check per goto and protected label; plain dispatch tables need no
+    /// pairwise checks.
+    /// GNU extension: GCC "Labels as Values", "Statement Exprs" and "Common
+    /// Variable Attributes", cleanup.
     /// C99: §6.8.6.1p1, p. 137; PDF p. 149.
     fn finish_indirect_jumps(&mut self) {
-        // Each function's protected labels: a run of `protected`, found once.
+        // Each function's protected labels: a run of `protected`, found once,
+        // with its first and last address-taken label in region preorder.
         let mut runs = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut protected = ArenaVec::new_in(self.scratch);
         for i in 0..self.statements.indirect_jumps.len() {
             let jump = self.statements.indirect_jumps[i];
             let function = jump.point.function;
-            let run = runs
+            let (run, span) = runs
                 .entry(function)
                 .or_insert_with(|| {
                     let start = protected.len();
+                    let mut span: Option<(IndirectTarget, IndirectTarget)> = None;
                     for &label in self.control.taken(function) {
                         let facts = self.control.labels[label.0];
                         if let (Some(point), Some(name)) = (facts.point, facts.name) {
                             let region = self.control.regions[point.region.0];
+                            let target = IndirectTarget {
+                                region: point.region,
+                                preorder: region.preorder,
+                                name,
+                                source: facts
+                                    .definition
+                                    .map_or(name.source_vectors, |s| s.source_vectors),
+                            };
+                            span = Some(match span {
+                                | None => (target, target),
+                                | Some((first, last)) => (
+                                    if target.preorder < first.preorder {
+                                        target
+                                    } else {
+                                        first
+                                    },
+                                    if target.preorder > last.preorder {
+                                        target
+                                    } else {
+                                        last
+                                    },
+                                ),
+                            });
                             if region.nearest_vm.is_some()
                                 || region.nearest_statement_expression.is_some()
+                                || region.nearest_cleanup_declaration.is_some()
                             {
-                                protected.push((point.region, name));
+                                protected.push(target);
                             }
                         }
                     }
-                    start..protected.len()
+                    (start..protected.len(), span)
                 })
                 .clone();
             if self.control.taken(function).is_empty() {
@@ -699,8 +731,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
                 continue;
             }
+            if let Some(target) = self.cleanup_left(jump.point.region, span) {
+                self.error(
+                    SemanticErrorKind::IndirectJumpCleanupScope,
+                    jump.source,
+                    None,
+                    Some(target.source),
+                );
+                continue;
+            }
             for index in run {
-                let (target, name) = protected[index];
+                let IndirectTarget {
+                    region: target,
+                    name,
+                    source: target_source,
+                    ..
+                } = protected[index];
                 #[cfg(test)]
                 self.statements
                     .indirect_checks
@@ -728,7 +774,35 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                     break;
                 }
+                if self.cleanup_entered(jump.point.region, target).is_some() {
+                    self.error(
+                        SemanticErrorKind::IndirectJumpCleanupScope,
+                        jump.source,
+                        None,
+                        Some(target_source),
+                    );
+                    break;
+                }
             }
+        }
+    }
+
+    /// The first or last address-taken label of `span` when it lies outside
+    /// the innermost cleanup scope around `from`: an indirect goto there
+    /// would leave the scope without its cleanup. A scope is a contiguous
+    /// run of region preorder, so the span's ends decide.
+    fn cleanup_left(
+        &self,
+        from: RegionId,
+        span: Option<(IndirectTarget, IndirectTarget)>,
+    ) -> Option<IndirectTarget> {
+        let cleanup = self.control.regions[from.0].nearest_cleanup_declaration?;
+        let (first, last) = span?;
+        let scope = self.control.regions[cleanup.0];
+        if first.preorder < scope.preorder {
+            Some(first)
+        } else {
+            (last.preorder >= scope.subtree_end).then_some(last)
         }
     }
 
@@ -800,6 +874,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .deferred_vm_labels
                         .push((diagnostic, from.region, to.region));
                 }
+            }
+            if let Some((from, to)) = points {
+                self.check_cleanup_dispatch(from, to, source);
             }
             if let Some(point) = self.control.point() {
                 let id = LabelId(self.control.labels.len());
@@ -1122,4 +1199,14 @@ pub(super) fn slot_expression(mut slot: ExpressionSlot<'_>) -> Option<&Expressio
             | ExpressionSlot::Missing(_) => return None,
         }
     }
+}
+
+/// An address-taken label as a computed goto may reach it.
+#[derive(Clone, Copy)]
+struct IndirectTarget {
+    region:   RegionId,
+    preorder: usize,
+    name:     Identifier,
+    /// The label's definition, for the diagnostic's second location.
+    source:   SourceVectors,
 }

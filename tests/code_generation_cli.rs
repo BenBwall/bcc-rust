@@ -40,6 +40,140 @@ mod tests {
                        i;\n  return s;\n}\n";
 
     #[test]
+    fn interpreter_step_limit_applies_to_both_main_signatures() {
+        for source in [
+            SUM.to_owned(),
+            SUM.replace("main(void)", "main(int argc, char **argv)"),
+        ] {
+            let limited = bcc(&source, &["--interpret", "--interpret-step-limit=1"]);
+            assert_eq!(limited.status.code(), Some(70), "{}", text(&limited.stderr));
+            assert!(text(&limited.stderr).contains("exceeded its step limit"));
+            for limit in ["10000", "0"] {
+                let result = bcc(
+                    &source,
+                    &["--interpret", &format!("--interpret-step-limit={limit}")],
+                );
+                assert_eq!(result.status.code(), Some(10), "{}", text(&result.stderr));
+            }
+        }
+        for flags in [
+            vec!["--interpret-step-limit=1"],
+            vec!["--interpret", "--interpret-step-limit=-1"],
+            vec!["--interpret", "--interpret-step-limit=none"],
+        ] {
+            assert_eq!(bcc(SUM, &flags).status.code(), Some(2));
+        }
+    }
+
+    #[test]
+    fn c99_host_math_families_match_native_output_in_each_precision() {
+        let Some(target) = host() else {
+            return;
+        };
+        let clang = if cfg!(windows) {
+            "target/llvm/bin/clang.exe"
+        } else {
+            "target/llvm/bin/clang"
+        };
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/programs/host_math.c");
+        for long_double in [false, true] {
+            let executable = temporary("host-math.exe");
+            let mut compiler = Command::new(clang);
+            _ = compiler
+                .arg(&source)
+                .args([
+                    &format!("--target={target}"),
+                    "-std=c99",
+                    "-O0",
+                    "-fno-builtin",
+                    "-o",
+                ])
+                .arg(&executable);
+            if !long_double {
+                _ = compiler.arg("-DNO_LONG_DOUBLE");
+            }
+            if cfg!(unix) {
+                _ = compiler.arg("-lm");
+            }
+            let built = compiler.output().unwrap();
+            assert!(built.status.success(), "{}", text(&built.stderr));
+            let reference = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(
+                reference.status.code(),
+                Some(0),
+                "{}",
+                text(&reference.stdout)
+            );
+            let expected = text(&reference.stdout);
+            assert!(
+                expected.lines().all(|line| line.ends_with(" 1")),
+                "{expected}"
+            );
+            let targets = if long_double {
+                vec!["x86_64-pc-windows-msvc"]
+            } else {
+                vec!["x86_64-w64-windows-gnu", "x86_64-unknown-linux-gnu"]
+            };
+            for target in targets {
+                for optimize in ["--opt=none", "--opt=bcc"] {
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+                    _ = command.arg(&source).args([
+                        "--interpret",
+                        &format!("--target={target}"),
+                        optimize,
+                    ]);
+                    if !long_double {
+                        _ = command.arg("-DNO_LONG_DOUBLE");
+                    }
+                    let result = run_native(&mut command).unwrap();
+                    assert_eq!(
+                        result.status.code(),
+                        Some(0),
+                        "{target} {optimize}: {}\n{}",
+                        text(&result.stderr),
+                        text(&result.stdout)
+                    );
+                    assert_eq!(text(&result.stdout), expected, "{target} {optimize}");
+                }
+            }
+            std::fs::remove_file(executable).unwrap();
+        }
+    }
+
+    #[test]
+    fn host_math_preserves_the_existing_gnu_long_double_execution_limit() {
+        for source in [
+            "long double fabsl(long double); int main(void) { return fabsl(-1.5L)!=1.5L; }",
+            "float nexttowardf(float,long double); int main(void) { return \
+             nexttowardf(1.0f,2.0L)>1.0f; }",
+        ] {
+            let output = bcc(source, &["--interpret", "--target=x86_64-w64-windows-gnu"]);
+            assert_eq!(output.status.code(), Some(70), "{}", text(&output.stderr));
+            assert!(
+                text(&output.stderr).contains("f80"),
+                "{}",
+                text(&output.stderr)
+            );
+        }
+    }
+
+    #[test]
+    fn floating_output_formats_values_beyond_the_integer_digit_buffer() {
+        let output = bcc(
+            "int printf(const char *,...); int main(void) {
+printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
+            &["--interpret"],
+        );
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        let output = text(&output.stdout);
+        assert!(
+            output.len() > 100 && output.ends_with(".000000 -0.000000 INF\n"),
+            "{output}"
+        );
+    }
+
+    #[test]
     fn aggregate_fetch_abi_refusal_has_owner_and_source_location() {
         let source = "struct Huge { char bytes[4294967296ULL]; };\nint fetch(int last, ...) \
                       {\n__builtin_va_list ap; \
@@ -77,6 +211,62 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// glibc's Clang path implements `fpclassify`, `isfinite`, `isnormal`,
+    /// `isnan` and `isinf` with these builtins; MinGW's passes the frame
+    /// address to `_setjmp`. The interpreter has no x87 values, so `long
+    /// double` runs natively only.
+    #[test]
+    fn classification_and_frame_address_builtins_run_in_both_back_ends() {
+        let Some(target) = host() else {
+            return;
+        };
+        let target = format!("--target={target}");
+        let check = |ty: &str, subnormal: &str| {
+            format!(
+                "  {{ volatile {ty} zero = 0, one = 1, tiny = {subnormal};\n    {ty} nan = zero / \
+                 zero, inf = one / zero, values[] = {{ nan, -inf, inf, one, -tiny, zero, -zero \
+                 }};\n    int expected[] = {{ 0, 1, 1, 2, 3, 4, 4 }};\n    for (int i = 0; i < 7; \
+                 i++) {{\n      {ty} v = values[i];\n      int c = __builtin_fpclassify(0, 1, 2, \
+                 3, 4, v);\n      if (c != expected[i] || __builtin_isnan(v) != (c == 0)\n        \
+                 || __builtin_isfinite(v) != (c > 1) || __builtin_isnormal(v) != (c == 2)\n        \
+                 || __builtin_isinf_sign(v) != (c == 1 ? (v < 0 ? -1 : 1) : 0))\n        return \
+                 failures + i + 1;\n    }}\n    failures += 10; }}\n"
+            )
+        };
+        let program = |long_double: bool| {
+            let mut source = String::from(
+                "int main(void) {\n  int failures = -20;\n  void *frame = \
+                 __builtin_frame_address(0);\n  void *ret = \
+                 __builtin_extract_return_addr(__builtin_return_address(0));\n  if (!frame || \
+                 !ret) return 100;\n",
+            );
+            source.push_str(&check("float", "1e-40f"));
+            source.push_str(&check("double", "1e-310"));
+            if long_double {
+                source.push_str(&check("long double", "1e-4940L"));
+                source.push_str("  failures -= 10;\n");
+            }
+            source.push_str("  return failures;\n}\n");
+            source
+        };
+        for opt in ["--opt=none", "--opt=bcc"] {
+            let output = bcc(&program(false), &[&target, opt, "--interpret"]);
+            assert!(output.status.success(), "{opt}: {}", text(&output.stderr));
+        }
+        let executable = temporary("classify.exe");
+        for opt in [&["--llvm-opt=O0"][..], &["--opt=bcc", "--llvm-opt=O2"][..]] {
+            // MSVC's long double is binary64, where the x87 subnormal is 0.
+            let built = bcc(
+                &program(!target.ends_with("msvc")),
+                &[&[&target[..], "-o", executable.to_str().unwrap()][..], opt].concat(),
+            );
+            assert!(built.status.success(), "{opt:?}: {}", text(&built.stderr));
+            let output = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(output.status.code(), Some(0), "{opt:?}");
+        }
+        std::fs::remove_file(executable).unwrap();
     }
 
     #[test]
@@ -1189,6 +1379,80 @@ mod tests {
         assert!(bytes.len() > 20, "object has no COFF header");
         assert_eq!(&bytes[..2], &[0x64, 0x86], "object is x86-64 COFF");
         std::fs::remove_file(object).unwrap();
+    }
+
+    /// The MinGW-w64 installation root and its C library include directory,
+    /// from a `gcc.exe` on `PATH`, as the conformance harness finds them.
+    fn mingw() -> Option<(PathBuf, PathBuf)> {
+        let path = env::var_os("PATH")?;
+        env::split_paths(&path).find_map(|directory| {
+            let root = directory.parent()?;
+            let include = root.join("x86_64-w64-mingw32/include");
+            (directory.join("gcc.exe").is_file() && include.join("_mingw.h").is_file())
+                .then(|| (root.to_path_buf(), include))
+        })
+    }
+
+    /// GitHub issue #57: MinGW-w64's `_mingw.h` declares its `__CRT_INLINE`
+    /// helpers `extern inline __attribute__((__gnu_inline__))` only for GCC
+    /// 4.3 or later or for Clang. bcc claims Clang, so two translation units
+    /// that include `<string.h>` emit no external `strncasecmp` and link.
+    #[test]
+    fn mingw_crt_inline_helpers_link_from_two_translation_units() {
+        if host() != Some("x86_64-w64-windows-gnu") {
+            eprintln!("skipping: the host is not Windows GNU");
+            return;
+        }
+        let Some((root, include)) = mingw() else {
+            eprintln!("skipping: no MinGW-w64 gcc on PATH");
+            return;
+        };
+        let units = [
+            "#include <string.h>\nint one(void) { return strcasecmp(\"a\", \"A\"); }\n",
+            "#include <stdio.h>\n#include <string.h>\nint one(void);\nint main(void) {\n  \
+             printf(\"%d %d\\n\", one(), strncasecmp(\"ab\", \"AB\", 2));\n  return 0;\n}\n",
+        ];
+        let flags = [
+            "--target=x86_64-w64-windows-gnu",
+            "--idirafter",
+            include.to_str().unwrap(),
+        ];
+        let mut objects = Vec::new();
+        for (index, unit) in units.iter().enumerate() {
+            let llvm = bcc(unit, &[&flags[..], &["--emit=llvm"]].concat());
+            assert!(llvm.status.success(), "{}", text(&llvm.stderr));
+            let module = text(&llvm.stdout);
+            assert!(
+                !module.lines().any(|line| line.starts_with("define")
+                    && (line.contains("@strcasecmp(") || line.contains("@strncasecmp("))),
+                "unit {index} defines a CRT inline helper:\n{module}"
+            );
+            let object = temporary(&format!("crt-inline-{index}.o"));
+            let compiled = bcc(
+                unit,
+                &[&flags[..], &["-c", "-o", object.to_str().unwrap()]].concat(),
+            );
+            assert!(compiled.status.success(), "{}", text(&compiled.stderr));
+            objects.push(object);
+        }
+        let executable = temporary("crt-inline.exe");
+        let linked =
+            Command::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("target/llvm/bin/clang.exe"))
+                .arg("--target=x86_64-w64-windows-gnu")
+                .arg(format!("--sysroot={}", root.display()))
+                .arg("-fuse-ld=lld")
+                .args(&objects)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap();
+        assert!(linked.status.success(), "{}", text(&linked.stderr));
+        let run = run_native(&mut Command::new(&executable)).unwrap();
+        assert_eq!(run.status.code(), Some(0));
+        assert_eq!(text(&run.stdout), "0 0\n");
+        for path in objects.into_iter().chain([executable]) {
+            drop(std::fs::remove_file(path));
+        }
     }
 
     #[test]

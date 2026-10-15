@@ -311,6 +311,7 @@
 #define __UINT_LEAST8_MAX__ 255
 #define __UINT_LEAST8_TYPE__ unsigned char
 #define __USER_LABEL_PREFIX__
+#define __VERSION__ "Clang 23.1.1 (https://github.com/rust-lang/llvm-project.git 1b9c0d5ff9bbe7634aead059efe6b11a7eeba145)"
 #define __WCHAR_MAX__ 2147483647
 #define __WCHAR_MIN__ (-__WCHAR_MAX__ - 1)
 #define __WCHAR_TYPE__ int
@@ -322,11 +323,19 @@
 #define __WINT_WIDTH__ 32
 #define __amd64 1
 #define __amd64__ 1
+#define __clang__ 1
+#define __clang_literal_encoding__ "UTF-8"
+#define __clang_major__ 23
+#define __clang_minor__ 1
+#define __clang_patchlevel__ 1
+#define __clang_version__ "23.1.1 (https://github.com/rust-lang/llvm-project.git 1b9c0d5ff9bbe7634aead059efe6b11a7eeba145)"
+#define __clang_wide_literal_encoding__ "UTF-32"
 #define __gnu_linux__ 1
 #define __k8 1
 #define __k8__ 1
 #define __linux 1
 #define __linux__ 1
+#define __llvm__ 1
 #define __unix 1
 #define __unix__ 1
 #define __x86_64 1

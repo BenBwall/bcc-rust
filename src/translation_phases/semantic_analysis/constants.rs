@@ -125,17 +125,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let TypeKind::Scalar(scalar) = self.types.nodes[ty.index] else {
             return None;
         };
-        let precision = match scalar {
-            | Scalar::Float | Scalar::ComplexFloat => 1,
-            | Scalar::Double | Scalar::ComplexDouble => 2,
-            | Scalar::LongDouble | Scalar::ComplexLongDouble =>
-                if self.types.target.long_double_is_double() {
-                    2
-                } else {
-                    3
-                },
-            | _ => return None,
-        };
+        let precision = self.floating_precision(scalar)?;
         let complex = matches!(
             scalar,
             Scalar::ComplexFloat | Scalar::ComplexDouble | Scalar::ComplexLongDouble
@@ -147,6 +137,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 LongDouble::ZERO
             },
+        })
+    }
+
+    /// The carrier's rounding precision for a real or complex floating
+    /// scalar: 1 for binary32, 2 for binary64 and 3 for x87 extended.
+    /// Binary128 has no carrier precision.
+    /// C99: implementation-defined floating representations §6.2.5p10,
+    /// p. 34; PDF p. 46; characteristics §5.2.4.2.2, pp. 23-27; PDF pp. 35-39.
+    pub(super) fn floating_precision(&self, scalar: Scalar) -> Option<i32> {
+        Some(match scalar {
+            | Scalar::Float | Scalar::ComplexFloat => 1,
+            | Scalar::Double | Scalar::ComplexDouble => 2,
+            | Scalar::LongDouble | Scalar::ComplexLongDouble =>
+                if self.types.target.long_double_is_double() {
+                    2
+                } else {
+                    3
+                },
+            | _ => return None,
         })
     }
 

@@ -39,6 +39,7 @@ use crate::{
         GlobalInit,
         Inst,
         InstData,
+        Linkage,
         Module,
         ParamAbi,
         RelocationTarget,
@@ -73,6 +74,9 @@ pub(super) struct Frame {
     /// A number no other activation shares, so a `va_list` cursor can tell
     /// whether its frame is still the one that made it.
     pub(super) activation:      u64,
+    /// Where the frame begins: above every object its callers allocated and
+    /// below its own slots.
+    pub(super) start:           u64,
     /// The value in the caller that receives this call's result.
     pub(super) caller_value:    Option<Value>,
     /// Caller destination and private callee area for a register result.
@@ -160,6 +164,21 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             self.argument_types.push(body.value_type(arg));
         }
         self.check_arguments(signature)?;
+        // An alias runs its target's body; a weak declaration nothing
+        // defines has the null address, and calling it is undefined.
+        // GNU extension: GCC manual, "Common Function Attributes", alias/weak.
+        let func = match self.module.function(func).attributes.alias {
+            | Some(Symbol::Function(target)) => {
+                if self.module.function(func).signature != self.module.function(target).signature {
+                    return Err(UbKind::SignatureMismatch.into());
+                }
+                target
+            },
+            | _ => func,
+        };
+        if self.functions[func.index()].provenance.is_none() {
+            return Err(UbKind::CallThroughNonFunction.into());
+        }
         let callee = self.module.function(func);
         // Fixed parameter contracts also apply to an open call resolved to
         // a prototype. Variadic contracts belong to the call site, whose
@@ -253,6 +272,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
                 }),
         );
         let slots = self.slots.len();
+        let frame_address = self.memory.next_address();
         for (_, data) in body.stack_slots() {
             let slot = self
                 .memory
@@ -303,6 +323,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             varargs_len: self.varargs.len() - varargs,
             va_backing: None,
             activation: self.activations,
+            start: frame_address,
             caller_value,
             register_result,
         });
@@ -385,6 +406,20 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
         Ok(None)
     }
 
+    /// Discards every frame, as `exit` does, freeing their stack objects.
+    /// C99: §7.20.4.3p2-4, pp. 315-316; PDF pp. 327-328.
+    pub(super) fn unwind(&mut self) {
+        for &slot in self.slots.iter().chain(self.dynamic_slots.iter()) {
+            self.memory
+                .free(slot.provenance.expect("slots have provenance"));
+        }
+        self.slots.clear();
+        self.dynamic_slots.clear();
+        self.frames.clear();
+        self.values.clear();
+        self.varargs.clear();
+    }
+
     /// Takes the edge `call`: assigns its arguments to the target block's
     /// parameters, all at once, and continues at the block's start.
     pub(super) fn branch(&mut self, body: &Body<'_>, call: BlockCall) {
@@ -458,21 +493,37 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
     /// Loads `module` into fresh memory in `arena`: an object for each
     /// function and global, with definitions' initializers and relocations
     /// written. Declarations retain only an unresolved address, never storage.
+    /// An alias shares its target's address. A weak declaration that neither
+    /// the module nor `host` defines has the null address.
     /// C99: §6.9 paragraph 5, p. 140; PDF p. 152 (external definitions);
     /// §6.9.2 paragraph 2, p. 143; PDF p. 155 (zero-initialized tentative
-    /// definitions).
+    /// definitions). GNU extension: GCC manual, "Common Function Attributes",
+    /// alias and weak.
     pub(super) fn load(
         module: &'m Module<'ir>,
         arena: &'a Bump,
         limits: Limits,
+        host: &dyn Host,
     ) -> Result<Self, Trap> {
         let mut memory = Memory::new(arena, limits.max_object_size);
         let mut functions = ArenaVec::new_in(arena);
-        for (func, _) in module.functions() {
-            let pointer = memory
-                .allocate(ObjectKind::Function(func), 0, Align::BYTE)
-                .map_err(|_| Trap::BadEntry(EntryError::GlobalTooLarge))?;
+        for (func, function) in module.functions() {
+            let unresolved = function.linkage == Linkage::Weak
+                && function.body.is_none()
+                && !host.provides(function.name);
+            let pointer = if function.attributes.alias.is_some() || unresolved {
+                Pointer::NULL
+            } else {
+                memory
+                    .allocate(ObjectKind::Function(func), 0, function_align(function))
+                    .map_err(|_| Trap::BadEntry(EntryError::GlobalTooLarge))?
+            };
             functions.push(pointer);
+        }
+        for (func, function) in module.functions() {
+            if let Some(Symbol::Function(target)) = function.attributes.alias {
+                functions[func.index()] = functions[target.index()];
+            }
         }
         let mut labels = ArenaVec::new_in(arena);
         for (func, function) in module.functions() {
@@ -489,6 +540,12 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
         }
         let mut globals = ArenaVec::new_in(arena);
         for (id, global) in module.globals() {
+            if global.attributes.alias.is_some()
+                || (global.linkage == Linkage::Weak && global.init.is_none())
+            {
+                globals.push(Pointer::NULL);
+                continue;
+            }
             let kind = if global.init.is_none() {
                 ObjectKind::UnresolvedGlobal(id)
             } else if global.constant {
@@ -500,6 +557,11 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
                 .allocate(kind, global.size, global.align)
                 .map_err(|_| Trap::BadEntry(EntryError::GlobalTooLarge))?;
             globals.push(pointer);
+        }
+        for (id, global) in module.globals() {
+            if let Some(Symbol::Global(target)) = global.attributes.alias {
+                globals[id.index()] = globals[target.index()];
+            }
         }
         for ((_, global), &pointer) in module.globals().zip(&globals) {
             if global.init.is_none() {
@@ -566,4 +628,10 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
             activations: 0,
         })
     }
+}
+
+/// The alignment of a function's address object: its requested code
+/// alignment, else a byte.
+fn function_align(function: &crate::ir::Function<'_>) -> Align {
+    function.align.unwrap_or(Align::BYTE)
 }

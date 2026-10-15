@@ -534,6 +534,20 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                 ..
             } => self.intrinsic("llvm.stacksave", &[], &[api.ty(Type::Ptr)]),
             | InstData::Nullary {
+                opcode: Opcode::FrameAddress,
+                ..
+            } => {
+                let level = api.bits(Type::I32, 0);
+                self.intrinsic("llvm.frameaddress", &[level], &[api.ty(Type::Ptr)])
+            },
+            | InstData::Nullary {
+                opcode: Opcode::ReturnAddress,
+                ..
+            } => {
+                let level = api.bits(Type::I32, 0);
+                self.intrinsic("llvm.returnaddress", &[level], &[api.ty(Type::Ptr)])
+            },
+            | InstData::Nullary {
                 opcode: Opcode::Trap,
                 ..
             } => self.intrinsic("llvm.trap", &[], &[]),

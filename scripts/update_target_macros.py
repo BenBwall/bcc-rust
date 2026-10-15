@@ -13,7 +13,10 @@ TRIPLES = ("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-w64-
 
 
 def exclusion(name):
-    if name.startswith(("__clang", "__GNUC")) or name in {"__VERSION__", "__llvm__", "_MSC_VER", "_MSC_FULL_VER", "_MSC_BUILD", "_MSC_EXTENSIONS", "__STDC_HOSTED__"}:
+    # Clang's own identity (__clang__ and its version, __llvm__, __VERSION__
+    # and the literal encodings) is frozen with the target; the GNU claim
+    # follows the inline mode and the MSVC claim follows -fms-extensions.
+    if name.startswith("__GNUC") or name in {"_MSC_VER", "_MSC_FULL_VER", "_MSC_BUILD", "_MSC_EXTENSIONS", "__STDC_HOSTED__"}:
         return "Compiler identity/version or hosted-mode contract owned separately."
     if name in {"__STDC__", "__STDC_VERSION__", "__STRICT_ANSI__"} or name.startswith("__STDC_EMBED_"):
         return "Existing language-mode preprocessor builtin; not a target definition."

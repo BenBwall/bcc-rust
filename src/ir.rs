@@ -121,6 +121,8 @@ pub(crate) use module::{
     Global,
     GlobalDecl,
     GlobalInit,
+    InitFunction,
+    InitKind,
     Linkage,
     ParamAbi,
     Relocation,
@@ -128,6 +130,8 @@ pub(crate) use module::{
     ResultRegisters,
     Signature,
     Symbol,
+    SymbolAttributes,
+    Visibility,
 };
 pub(crate) use parser::{
     ParseError,
@@ -147,32 +151,40 @@ pub(crate) use verifier::{
 
 use crate::util::bump::{
     ArenaMap,
+    ArenaVec,
     Bump,
 };
 
 /// A translation unit's IR: its functions, globals and interned signatures,
 /// and the target they are for. Everything it holds lives in its `'ir` arena.
 pub(crate) struct Module<'ir> {
-    arena:         &'ir Bump,
-    triple:        &'ir str,
-    data_layout:   &'ir str,
+    arena:          &'ir Bump,
+    triple:         &'ir str,
+    data_layout:    &'ir str,
     /// Whether ABI lowering has run.
-    profile:       Profile,
-    functions:     Table<'ir, FuncId, Function<'ir>>,
-    globals:       Table<'ir, GlobalId, Global<'ir>>,
-    signatures:    Table<'ir, SigId, Signature<'ir>>,
-    signature_ids: ArenaMap<'ir, Signature<'ir>, SigId>,
+    profile:        Profile,
+    functions:      Table<'ir, FuncId, Function<'ir>>,
+    globals:        Table<'ir, GlobalId, Global<'ir>>,
+    signatures:     Table<'ir, SigId, Signature<'ir>>,
+    signature_ids:  ArenaMap<'ir, Signature<'ir>, SigId>,
     /// Functions and globals share one namespace.
-    symbols:       ArenaMap<'ir, &'ir str, Symbol>,
+    symbols:        ArenaMap<'ir, &'ir str, Symbol>,
+    /// Functions run before or after the program's entry, in this order of
+    /// registration; back ends sort them by priority.
+    init_functions: ArenaVec<'ir, InitFunction>,
 }
 
 /// A function of a module. It is defined if it has a body.
 #[derive(Debug)]
 pub(crate) struct Function<'ir> {
-    pub(crate) name:      &'ir str,
-    pub(crate) signature: SigId,
-    pub(crate) linkage:   Linkage,
-    pub(crate) body:      Option<Body<'ir>>,
+    pub(crate) name:       &'ir str,
+    pub(crate) signature:  SigId,
+    pub(crate) linkage:    Linkage,
+    pub(crate) body:       Option<Body<'ir>>,
+    /// Alias target, section and retention requests.
+    pub(crate) attributes: SymbolAttributes<'ir>,
+    /// A requested minimum alignment of the function's code.
+    pub(crate) align:      Option<Align>,
 }
 
 // Tests

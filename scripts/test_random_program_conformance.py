@@ -89,6 +89,7 @@ def fake_config(output, **overrides):
     values = dict(output=output, bcc=Path("bcc"), arms=["interpret", "A0"],
                   deadlines=harness.DEFAULT_DEADLINES, options={"csmith": [], "yarpgen": []},
                   system_includes=[], defines=[])
+    values["interpret_step_limit"] = harness.DEFAULT_INTERPRET_STEP_LIMIT
     values.update(overrides)
     return argparse.Namespace(**values)
 
@@ -136,6 +137,25 @@ class TestProgramTests(unittest.TestCase):
             row = harness.test_program(fake_config(self.output), "csmith", 8)
         self.assertEqual(row["status"], "reference-unstable")
         self.assertTrue((self.output / "failures/csmith/8").is_dir())
+
+    def test_step_limit_reaches_only_interpreter_arms(self):
+        for limit in (0, 123456789, harness.DEFAULT_INTERPRET_STEP_LIMIT):
+            commands = {}
+
+            def arm(bcc, name, source, work, **kwargs):
+                commands[name] = kwargs["command_kwargs"]
+                return {"status": "pass", "detail": None, "constructs": [],
+                        "command": [], "compile_seconds": 0.1, "_compile": process()}
+
+            with patch.object(harness, "generate", self.generate(None)), \
+                    patch.object(harness, "invoke", self.scripted()), \
+                    patch.object(harness, "run_arm", arm):
+                harness.test_program(fake_config(self.output, interpret_step_limit=limit,
+                                                arms=list(common.ARMS)), "csmith", limit + 12)
+            for name, kwargs in commands.items():
+                options = [item for item in kwargs["extra"] if item.startswith("--interpret-step-limit=")]
+                self.assertEqual(options, [] if common.ARMS[name]["native"] else
+                                 [f"--interpret-step-limit={limit}"])
 
     def test_reference_failure_when_clang_cannot_run_the_program(self):
         with patch.object(harness, "generate", self.generate(None)), \
@@ -220,6 +240,7 @@ class ResumeTests(unittest.TestCase):
         return argparse.Namespace(
             output=self.output, generators="csmith,yarpgen", count=count, seed_start=1, jobs=2, time_budget=None,
             bcc=self.bcc, arms=None, platform="windows", define=[], csmith_option=[], yarpgen_option=[],
+            interpret_step_limit=harness.DEFAULT_INTERPRET_STEP_LIMIT,
             compile_timeout=None, execute_timeout=None, interpret_timeout=None, allow_config_change=False)
 
     def run_campaign(self, count):
@@ -253,6 +274,45 @@ class ResumeTests(unittest.TestCase):
         with patch.object(common.Platform, "system_includes", return_value=[]), \
                 self.assertRaises(SystemExit):
             harness.command_run(arguments)
+
+    def test_changed_step_limit_is_refused_and_recorded(self):
+        self.run_campaign(1)
+        config = json.loads((self.output / "manifest.json").read_text())["config"]
+        self.assertEqual(config["interpret_step_limit"], harness.DEFAULT_INTERPRET_STEP_LIMIT)
+        arguments = self.arguments(1)
+        arguments.interpret_step_limit = 0
+        with self.assertRaises(SystemExit):
+            harness.command_run(arguments)
+
+
+class StepLimitOptionTests(unittest.TestCase):
+    def test_cli_default_explicit_unlimited_and_negative(self):
+        for option, expected in (([], harness.DEFAULT_INTERPRET_STEP_LIMIT),
+                                 (["--interpret-step-limit=123"], 123),
+                                 (["--interpret-step-limit=0"], 0)):
+            with patch("sys.argv", ["harness", "run", "--output=target/unit-test", *option]), \
+                    patch.object(harness, "command_run", return_value=0) as run:
+                self.assertEqual(harness.main(), 0)
+            self.assertEqual(run.call_args.args[0].interpret_step_limit, expected)
+        with patch("sys.argv", ["harness", "run", "--output=target/unit-test", "--interpret-step-limit=-1"]), \
+                contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            harness.main()
+
+    def test_rerun_preserves_limit_and_legacy_manifest_default(self):
+        with tempfile.TemporaryDirectory(dir=common.ROOT / "target") as directory:
+            path = Path(directory)
+            args = argparse.Namespace(directory=path, generator="csmith", seed=7)
+            for limit in (None, 0, 321):
+                config = {"arms": [], "deadlines": {}, "options": {}, "defines": []}
+                if limit is not None:
+                    config["interpret_step_limit"] = limit
+                (path / "manifest.json").write_text(json.dumps({"config": config, "bcc": "bcc"}))
+                with patch.object(common.Platform, "system_includes", return_value=[]), \
+                        patch.object(harness, "test_program", return_value={}) as test, \
+                        patch.object(harness.shutil, "rmtree"), contextlib.redirect_stdout(io.StringIO()):
+                    harness.command_rerun(args)
+                self.assertEqual(test.call_args.args[0].interpret_step_limit,
+                                 100_000_000 if limit is None else limit)
 
 
 if __name__ == "__main__":

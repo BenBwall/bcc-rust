@@ -33,7 +33,8 @@
 //! - Execution: `machine.rs` loads a module and moves between frames and
 //!   blocks; `execute.rs` dispatches one instruction; `varargs.rs` implements
 //!   `va_start`, `va_arg`, `va_copy` and `va_end`. `main.rs` supplies writable
-//!   arguments for hosted C entry.
+//!   arguments for hosted C entry; `startup.rs` orders and runs constructors
+//!   and destructors around it.
 //! - Semantics of values: `value.rs` defines runtime values and pointers;
 //!   `arithmetic.rs` the arithmetic, comparisons and conversions; `memory.rs`
 //!   objects, loads, stores, copies and provenance.
@@ -55,6 +56,7 @@
 mod execute;
 mod machine;
 mod main;
+mod startup;
 mod varargs;
 
 // Semantics of values
@@ -142,17 +144,39 @@ pub(crate) fn run(
 /// Runs hosted C main with no command-line arguments: argc is 1, argv[0]
 /// names an unavailable program name (the empty string), and argv[1] is null.
 /// Functions accepting no parameters keep the ordinary zero-argument entry.
-/// C99: §5.1.2.2.1 paragraphs 1-2, p. 12; PDF p. 24.
+/// The module's constructors run first and its destructors after main
+/// returns or the program calls `exit`, in the order `startup` gives.
+/// C99: §5.1.2.2.1 paragraphs 1-2, p. 12; PDF p. 24; §5.1.2.2.3, p. 13;
+/// PDF p. 25.
+#[cfg(test)]
 pub(crate) fn run_main(module: &Module<'_>, host: &mut dyn Host) -> Result<Outcome, Trap> {
-    if let Some(crate::ir::Symbol::Function(func)) = module.symbol("main")
-        && module.function_signature(func).params.is_empty()
-    {
-        return run(module, "main", &[], host);
-    }
+    run_main_with_limits(module, host, Limits::default())
+}
+
+/// [`run_main`] stopping at `limits`.
+pub(crate) fn run_main_with_limits(
+    module: &Module<'_>,
+    host: &mut dyn Host,
+    limits: Limits,
+) -> Result<Outcome, Trap> {
     let arena = Bump::new();
-    let mut machine = Machine::load(module, &arena, Limits::default())?;
+    let mut machine = Machine::load(module, &arena, limits, &*host)?;
+    let (constructors, destructors) = startup::order(module, &arena);
+    for &func in &constructors {
+        machine.enter_function(func)?;
+        let outcome = machine.run(host)?;
+        match outcome.termination {
+            | Termination::Returned(_) => {},
+            | Termination::Exited(_) => return machine.finish(&destructors, outcome, host),
+            | Termination::Aborted => return Ok(outcome),
+        }
+    }
     machine.enter_main()?;
-    machine.run(host)
+    let outcome = machine.run(host)?;
+    if outcome.termination == Termination::Aborted {
+        return Ok(outcome);
+    }
+    machine.finish(&destructors, outcome, host)
 }
 
 /// Runs `entry` of `module` with `args`, stopping at `limits`.
@@ -164,7 +188,7 @@ pub(crate) fn run_with_limits(
     limits: Limits,
 ) -> Result<Outcome, Trap> {
     let arena = Bump::new();
-    let mut machine = Machine::load(module, &arena, limits)?;
+    let mut machine = Machine::load(module, &arena, limits, &*host)?;
     machine.enter(entry, args)?;
     machine.run(host)
 }
@@ -173,10 +197,11 @@ impl Machine<'_, '_, '_> {
     /// Executes an entered program until it terminates or traps.
     fn run(&mut self, host: &mut dyn Host) -> Result<Outcome, Trap> {
         loop {
-            if self.steps == self.limits.steps {
+            if self.limits.steps != 0 && self.steps == self.limits.steps {
                 return Err(Trap::StepLimit);
             }
-            self.steps += 1;
+            // Unlimited execution must not overflow its observation counter.
+            self.steps = self.steps.saturating_add(1);
             let (location, inst) = self.fetch();
             match self.execute(inst, host) {
                 | Ok(None) => {},

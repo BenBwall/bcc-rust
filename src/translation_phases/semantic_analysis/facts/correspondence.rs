@@ -32,6 +32,9 @@ use crate::{
 pub(crate) struct CorrespondenceFacts<'tu> {
     pub(crate) declarations: &'tu [DeclarationFacts<'tu>],
     indices: ArenaMap<'tu, usize, OccurrenceId>,
+    /// Linked names to their entity: every declaration of an identifier
+    /// with linkage denotes one entity. C99: §6.2.2p2, p. 30; PDF p. 42.
+    entities: ArenaMap<'tu, StringCacheId, EntityId>,
     pub(crate) parameter_minimums: ArenaMap<'tu, usize, super::super::ArrayBound>,
     #[cfg(test)]
     pub(crate) work: usize,
@@ -82,6 +85,19 @@ pub(crate) struct ParameterFacts<'tu> {
 }
 
 impl<'tu> CorrespondenceFacts<'tu> {
+    /// The entity a binding denotes: its own occurrence without linkage,
+    /// else the entity its linked name was first declared with.
+    pub(crate) fn entity_of(&self, index: usize, binding: Binding) -> EntityId {
+        if binding.linkage == Linkage::None {
+            EntityId(index)
+        } else {
+            self.entities
+                .get(&binding.name.name)
+                .copied()
+                .unwrap_or(EntityId(index))
+        }
+    }
+
     pub(crate) fn declaration(
         &self,
         declarator: Declarator<'tu>,
@@ -101,7 +117,8 @@ impl<'tu> CorrespondenceFacts<'tu> {
 pub(in crate::translation_phases::semantic_analysis) struct CorrespondenceBuilder<'tu, 's> {
     declarations: ArenaVec<'tu, DeclarationFacts<'tu>>,
     indices: ArenaMap<'tu, usize, OccurrenceId>,
-    entities: ArenaMap<'s, StringCacheId, EntityId>,
+    entities: ArenaMap<'tu, StringCacheId, EntityId>,
+    _scratch: std::marker::PhantomData<&'s ()>,
     pub(in crate::translation_phases::semantic_analysis) parameter_minimums:
         ArenaMap<'tu, usize, super::super::ArrayBound>,
     #[cfg(test)]
@@ -111,12 +128,13 @@ pub(in crate::translation_phases::semantic_analysis) struct CorrespondenceBuilde
 impl<'tu, 's> CorrespondenceBuilder<'tu, 's> {
     pub(in crate::translation_phases::semantic_analysis) fn new(
         tu: &'tu Bump,
-        scratch: &'s Bump,
+        _scratch: &'s Bump,
     ) -> Self {
         Self {
             declarations:       ArenaVec::new_in(tu),
             indices:            ArenaMap::with_hasher_in(FxBuildHasher, tu),
-            entities:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            entities:           ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            _scratch:           std::marker::PhantomData,
             parameter_minimums: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             #[cfg(test)]
             work:               0,
@@ -196,6 +214,7 @@ impl<'tu, 's> CorrespondenceBuilder<'tu, 's> {
         CorrespondenceFacts {
             declarations:       self.declarations.leak(),
             indices:            self.indices,
+            entities:           self.entities,
             parameter_minimums: self.parameter_minimums,
             #[cfg(test)]
             work:               self.work,

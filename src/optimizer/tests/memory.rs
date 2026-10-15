@@ -147,6 +147,33 @@ fn distinct_slots_and_globals_do_not_alias() {
 }
 
 #[test]
+fn an_alias_global_aliases_its_target() {
+    // A store through `@b` writes `@a`'s storage, so the second load of `@a`
+    // stays. GNU extension: GCC manual, "Common Variable Attributes", alias.
+    for (load, store) in [("@a", "@b"), ("@b", "@a")] {
+        let text = format!(
+            "global @a external size 4, align 4 = zero
+global @b external size 4, align 4 alias @a
+
+function @f(i32) -> i32 external {{
+block0(v0: i32):
+    v1 = global_addr {load}
+    v2 = global_addr {store}
+    v3 = load.i32 v1, align 4
+    store.i32 v0, v2, align 4
+    v4 = load.i32 v1, align 4
+    v5 = iadd.i32 v3, v4
+    return v5
+}}
+"
+        );
+        let (actual, report) = optimize_text(&text, &only(&[Pass::Gvn]));
+        assert_eq!(report.transformations(), 0, "{actual}");
+        assert_eq!(actual.matches("load.i32").count(), 2, "{actual}");
+    }
+}
+
+#[test]
 fn constant_offsets_use_the_entire_access_range() {
     for (offset, load_ty, store_ty, rewrites) in [
         (4, "i32", "i32", 1),

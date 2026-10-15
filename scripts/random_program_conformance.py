@@ -75,6 +75,7 @@ YARPGEN_OPTION_REASONS = {
 DEFAULT_DEADLINES = {"generate": 60, "reference_compile": 120, "reference_run": 30,
                      "compile": 120, "execute": 30, "interpret": 120}
 LOG_LIMIT = 40_000
+DEFAULT_INTERPRET_STEP_LIMIT = 10_000_000_000
 
 
 # ----------------------------------------------------------------------------
@@ -188,7 +189,10 @@ def test_program(config, generator, seed):
         sub = work / arm
         sub.mkdir()
         run = run_arm(config.bcc, arm, source, sub, deadlines=deadlines, reference=reference,
-                      command_kwargs=command_kwargs, platform=platform)
+                      command_kwargs={**command_kwargs, "extra": [
+                          *command_kwargs.get("extra", []),
+                          *([f"--interpret-step-limit={config.interpret_step_limit}"]
+                            if not ARMS[arm]["native"] else [])]}, platform=platform)
         evidence[arm] = (run.pop("_compile"), run.pop("_execute", None))
         run["command"] = [part.replace(str(work), "<work>") for part in run["command"]]
         row["arms"][arm] = run
@@ -270,6 +274,7 @@ def configuration(args):
         "arms": args.arms, "target": PLATFORMS[args.platform].target,
         "defines": PLATFORMS[args.platform].defines() + args.define,
         "deadlines": args.deadlines, "seed_start": args.seed_start,
+        "interpret_step_limit": args.interpret_step_limit,
         **({"platform": args.platform} if args.platform != "windows" else {}),
     }
 
@@ -468,6 +473,7 @@ def command_rerun(args):
     namespace = argparse.Namespace(
         output=scratch, bcc=Path(manifest["bcc"]), arms=config["arms"], deadlines=config["deadlines"],
         options=config["options"], defines=config["defines"],
+        interpret_step_limit=config.get("interpret_step_limit", 100_000_000),
         platform=config.get("platform", "windows"))
     namespace.system_includes = PLATFORMS[namespace.platform].system_includes()
     row = test_program(namespace, args.generator, args.seed)
@@ -535,6 +541,8 @@ def main():
     run.add_argument("--compile-timeout", type=float)
     run.add_argument("--execute-timeout", type=float)
     run.add_argument("--interpret-timeout", type=float)
+    run.add_argument("--interpret-step-limit", type=int, default=DEFAULT_INTERPRET_STEP_LIMIT,
+                     help="interpreter instruction limit (default 10000000000; 0 is unlimited)")
     run.add_argument("--allow-config-change", action="store_true")
     run.set_defaults(function=command_run)
     summarize_parser = sub.add_parser("summarize", help="recompute summary.md from results.jsonl")
@@ -548,6 +556,8 @@ def main():
     args = parser.parse_args()
     if args.command == "run" and (args.jobs < 1 or args.count < 1):
         parser.error("jobs and count must be positive")
+    if args.command == "run" and args.interpret_step_limit < 0:
+        parser.error("interpret-step-limit must be nonnegative")
     return args.function(args)
 
 

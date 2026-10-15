@@ -350,7 +350,7 @@ fn version_strict_ansi_and_identity_macros_follow_every_mode() {
                  __GNUC_MINOR__ __GNUC_PATCHLEVEL__\n#endif\n#ifdef \
                  __GNUC_GNU_INLINE__\ngnu_inline\n#endif\n#ifdef \
                  __GNUC_STDC_INLINE__\nstdc_inline\n#endif\n#ifdef _MSC_VER\nbad_ms\n#endif\n#if \
-                 defined(__clang__) || !defined(__bcc__)\nbad_identity\n#endif\n",
+                 !defined(__clang__) || !defined(__bcc__)\nbad_identity\n#endif\n",
                 configuration,
             );
             let mut expected = Vec::new();

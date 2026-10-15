@@ -86,11 +86,40 @@ individual `-fms-NAME` groups do not, and a later `-fno-ms-extensions`
 withdraws it. Both GNU and MSVC identity can therefore be claimed at once,
 whereas Clang drops the GNU identity under `-fms-compatibility`. Every mode
 defines `__bcc__` `1`, `__bcc_major__`, `__bcc_minor__`, `__bcc_patchlevel__`
-and the string `__bcc_version__` from the package version. `__clang__`,
-`__llvm__`, `__VERSION__` and `__GXX_ABI_VERSION` are never defined. Like
-Clang's, these are ordinary macros that `#undef` may remove. OS identity
+and the string `__bcc_version__` from the package version. Every mode also
+claims the pinned Clang exactly as it identifies itself for the selected
+target: `__clang__` `1`, `__clang_major__` `23`, `__clang_minor__` `1`,
+`__clang_patchlevel__` `1`, `__clang_version__`, `__VERSION__`, `__llvm__`
+and the narrow and wide literal encodings (`__clang_wide_literal_encoding__`
+is `"UTF-16"` on the Windows targets). These are frozen with the target
+definitions below, so the macro oracle checks them against the pinned Clang.
+Headers therefore take their Clang paths, such as MinGW-w64's
+`extern inline __attribute__((__gnu_inline__))` `__CRT_INLINE` and glibc's
+`__glibc_clang_prereq` decisions; code that must tell bcc from Clang tests
+`__bcc__`. `__GXX_ABI_VERSION` is never defined. Like Clang's, these are
+ordinary macros that `#undef` may remove. OS identity
 macros such as `__linux__` and `_WIN32` follow the selected target, below. The identity and target definitions are read from the synthetic
 `<built-in>/predefined.h` before user input.
+
+Claiming Clang changes the paths the C libraries take. In glibc,
+`sys/cdefs.h` drops its pre-C11 `_Noreturn` and `_Static_assert` fallbacks
+(bcc accepts both keywords in every mode, as Clang does), marks socket
+address structures `may_alias` (bcc's optimizer makes no type-based alias
+assumptions) and turns `__glibc_macro_warning` into `#pragma GCC warning`;
+`math.h` uses the type-generic classification builtins, `complex.h` defines
+`CMPLX` with `__builtin_complex`, and `bits/floatn.h` enables binary128, as
+described below. With `_FORTIFY_SOURCE` and `__OPTIMIZE__`, which bcc never
+defines itself, glibc selects Clang's fortify wrappers, which need the
+`overloadable`, `pass_object_size` and `diagnose_if` attributes; bcc has none
+of them and rejects those headers. In MinGW-w64, `__CRT_INLINE` becomes
+`extern inline` with `gnu_inline`, `setjmp` passes `__builtin_frame_address (0)`,
+`intrin.h` always includes the x86 intrinsic headers, the printf and strftime
+format archetypes become Clang's, and `intsafe.h` defines its functions as
+`FORCEINLINE` bodies over the overflow builtins. bcc does not inline
+`always_inline` bodies, so a call to one still needs an external definition,
+which MinGW-w64 does not supply for `intsafe.h`. The UCRT's `corecrt.h` uses
+`_Static_assert` for `_STATIC_ASSERT` and wraps itself in `#pragma clang
+diagnostic`, which bcc ignores.
 
 Reserved target-description macros follow the pinned LLVM 23.1.1 Clang for the
 selected `--target` triple. The default remains `x86_64-unknown-linux-gnu`;
@@ -106,18 +135,19 @@ attributes; `__declspec(a)` expands to `__attribute__((a))`. Both ISO and GNU
 target tables retain these eleven definitions exactly. Linux does not define
 them, and the MSVC keyword contract is unchanged. Function declarators,
 function pointers, parameters, members and typedefs use the existing balanced
-attribute parser. `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`,
-`restrict`, `deprecated(...)`, `noinline`, `naked`, `allocate(...)`, `uuid(...)`
-and ABI annotations such as `__ms_abi__` are accepted without backend effects.
-MSVC `align(...)` remains unanalyzed. GNU `aligned(...)` retains the requested
-declaration/type alignment; GNU `packed` and scalar `mode` retain their layouts
-and representation types. GNU `transparent_union` on a union definition or a
-typedef naming a union lets a prototyped call pass an argument of a member's
-type as the union, selecting the member as Clang does; a union with no member,
-a floating or vector first member, or a member of another size or a stricter
-alignment ignores the attribute with Clang's warning. Clang itself ignores
-some of these macro-expanded attributes with warnings; bcc's current attribute
-pass preserves their syntax without applicability warnings.
+attribute parser. Each macro-expanded attribute follows the
+[attribute status](#gnu-entity-attributes-and-attribute-status-2026-10-14)
+table: `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany` and
+`noinline` are accepted, `__ms_abi__` is the target's own convention, `naked`
+is refused, and `restrict`, `allocate(...)` and `uuid(...)` warn as unknown, as
+bundled Clang's MinGW mode does. MSVC `align(...)` remains unanalyzed. GNU
+`aligned(...)` retains the requested declaration/type alignment; GNU `packed`
+and scalar `mode` retain their layouts and representation types. GNU
+`transparent_union` on a union definition or a typedef naming a union lets a
+prototyped call pass an argument of a member's type as the union, selecting
+the member as Clang does; a union with no member, a floating or vector first
+member, or a member of another size or a stricter alignment ignores the
+attribute with Clang's warning.
 
 Startup preprocessing uses `PreprocessingOption::{Define,Undefine,Include}`
 in `src/configuration.rs`, borrowed by `Context.preprocessing_options`; the
@@ -405,7 +435,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | NamedLoops | - | - | - | - | - | - | Y | extension | parser |
 | GenericTypeOperand | - | - | - | - | - | - | Y | extension | parser |
 | CaseRanges | - | - | - | - | - | - | Y | GNU earlier | parser |
-| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; packed/aligned/scalar mode/transparent_union sema and lowering; vector_size sema |
+| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; sema attribute pass; packed/aligned/scalar mode, transparent_union, cleanup, constructor/destructor, alias, weak, section, used, visibility lowering; vector_size sema |
 | GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -769,12 +799,19 @@ token or directive boundary.
 `_Noreturn`, including double-underscore forms, and 0 for other names. GNU
 `__has_attribute` returns 1 for `unused`, `deprecated`, `aligned`, `packed`,
 `noreturn`, `weak`, `section`, `visibility`, `format`, `always_inline`,
-`noinline`, `gnu_inline`, and `transparent_union`; `__has_builtin` returns 1 for `__builtin_va_arg`,
+`noinline`, `gnu_inline`, `transparent_union`, `cleanup`, `constructor`,
+`destructor`, `alias` and `used`; `__has_builtin` returns 1 for `__builtin_va_arg`,
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
 `__atomic_*` and `__sync_*` names, and the [common GCC scalar intrinsic families](#common-gcc-scalar-intrinsics-2026-10-12).
-Unmodeled names return 0. These tables describe the
+Unmodeled names return 0. Clang's `__has_feature` and `__has_extension` share
+`__has_attribute`'s gate: `c_alignas`, `c_alignof`, `c_atomic`,
+`c_generic_selections`, `c_static_assert` and `c_thread_local` are features
+where the C11 feature is native and extensions wherever bcc accepts it, as in
+Clang; `attribute_deprecated_with_message` is a feature in every mode; every
+other name, including Clang features bcc lacks such as `attribute_overloadable`,
+returns 0. These tables describe the
 syntax-front-end subset, not backend effects or a GCC/Clang version. Both GNU
 queries are available through their reserved spellings in strict modes and
 report GNU policy diagnostics.
@@ -850,7 +887,11 @@ absolute path, and the primary source file are not. `#pragma GCC
 system_header` (also through `_Pragma`) makes the rest of the current header
 a system header; in the primary source file it is ignored with a warning, as
 in GCC and Clang. A `#line` directive gives the following lines a new file
-identity that is not a system header.
+identity that is not a system header. `#pragma GCC warning` and `#pragma GCC
+error` report their macro-replaced string operand (optionally parenthesized,
+adjacent literals concatenated) as a warning or an error, as GCC and Clang do;
+any other operand is an error. glibc's `__glibc_macro_warning`, which bcc
+reaches as Clang does, uses the warning form for deprecated macros.
 
 Inside a system header, warnings, extension diagnostics and warning-group
 diagnostics are withheld, the latter two at every severity: under
@@ -996,8 +1037,10 @@ to 72 bytes. Fixes are pending.
 Each name omitted from the pinned Clang target dump is listed individually.
 The first two categories identify separate ownership, rather than unsupported
 C features. `__STDC__`, version/strictness and embed constants remain in the
-existing language-mode builtin mechanism. Target macros do not emulate the
-Clang compiler identity. Feature promises below require further semantic or
+existing language-mode builtin mechanism. Clang's own identity macros
+(`__clang__` and its version, `__llvm__`, `__VERSION__` and the literal
+encodings) are not excluded: bcc claims the pinned Clang, so they are frozen
+with each target. Feature promises below require further semantic or
 backend work before they can be enabled.
 
 | Macro | Reason |
@@ -1076,16 +1119,7 @@ backend work before they can be enabled.
 | `__STDC_VERSION__` | Existing language-mode preprocessor builtin; not a target definition. |
 | `__STDC__` | Existing language-mode preprocessor builtin; not a target definition. |
 | `__STRICT_ANSI__` | Existing language-mode preprocessor builtin; not a target definition. |
-| `__VERSION__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_literal_encoding__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_major__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_minor__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_patchlevel__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_version__` | Compiler identity/version or hosted-mode contract owned separately. |
-| `__clang_wide_literal_encoding__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__code_model_small__` | Code generation, relocation and optimization policy are not implemented. |
-| `__llvm__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__pic__` | Code generation, relocation and optimization policy are not implemented. |
 | `__pie__` | Code generation, relocation and optimization policy are not implemented. |
 | `__seg_fs` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
@@ -1137,17 +1171,19 @@ alignment 16. MSVC rejects the explicit type spelling, matching the pinned Clang
 but still accepts binary128 literals and their internal types through `typeof`.
 Clang's target definitions now retain `__SIZEOF_FLOAT128__` on the three GNU
 triples and `__FLOAT128__` on Linux. Clang defines no `__FLT128_*__` macros;
-none are invented. The macro oracle has 94 documented exclusions.
+none are invented. The macro oracle has 80 documented exclusions.
 
 The pinned Clang rejects native `_Float128`, `_Float32`, `_Float64`,
 `_Float32x`, `_Float64x`, and `f128`/`F128` suffixes in C11, C17, GNU17,
 C23 and GNU23. bcc follows that contract: glibc supplies its `_FloatN`
-typedefs. The private resource `bits/floatn.h` chains to glibc and bridges
-its GCC-4.2 version decision to the actual binary128 capability, enabling
-`__HAVE_FLOAT128` and the distinct type without changing compiler identity
-or editing the sysroot. Its complex typedef avoids the unmodeled GNU `mode`
-attribute. Explicit `-isystem` directories still precede resources and can
-bypass this bridge; normal `--sysroot` and `-idirafter` ordering uses it.
+typedefs. Because bcc claims Clang, glibc's own `bits/floatn.h` enables
+`__HAVE_FLOAT128` through `__glibc_clang_prereq (3, 9)` and declares the
+complex type as `_Complex float __attribute__ ((__mode__ (__TC__)))`. The GNU
+`mode` attribute selects real (`SF`, `DF`, `XF`, `TF`, `KF`) and complex
+(`SC`, `DC`, `XC`, `TC`, `KC`) floating modes as Clang resolves them: `T`
+and `K` name binary128 on the targets that spell `__float128`, and `X` the
+x87 format where `long double` uses it. The earlier private `bits/floatn.h`
+bridge, which compensated for the GCC 4.2.1 claim without Clang's, is gone.
 
 `__typeof__`, compatible-type tests, choose-expression selection, generic
 selection, type classification, and real/imaginary components now have
@@ -1206,6 +1242,16 @@ has C11 constraints and completed-declarator storage alignment. Retained layouts
 also support existing `typeof`, `__builtin_types_compatible_p`, `__builtin_offsetof`
 and expression-alignment queries. `__builtin_signbit[f/l]`, `__builtin_isinf[f/l]`,
 `__builtin_copysign[f/l]` and `__builtin_snprintf` are binding-aware builtins.
+The type-generic `__builtin_isnan`, `__builtin_isfinite`, `__builtin_isnormal`,
+`__builtin_isinf_sign` and `__builtin_fpclassify`, which glibc's `<math.h>`
+selects for Clang, fold constants and lower to ordered comparisons.
+`__builtin_complex`, which glibc's C11 `CMPLX` uses for Clang, takes a real and
+an imaginary part of one real floating type, without promotion, and folds two
+constants into a complex constant; like every complex value, it is not lowered
+yet.
+`__builtin_frame_address` and `__builtin_return_address` take a constant level
+and lower level 0 (MinGW-w64's Clang `setjmp` passes the frame address);
+`__builtin_extract_return_addr` is the identity.
 
 GCC contracts: [common attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html),
 [union casts](https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html),
@@ -1226,6 +1272,87 @@ its token reducer. C11 §6.7.5p4,p6 combines multiple `_Alignas` requests before
 checking natural alignment, including runtime-sized arrays and VLA typedefs.
 See [the semantic repair record](semantic-analysis.md#pr-42-round-1-layout-and-alignment-repairs-2026-10-13)
 and [GCC's packed/aligned sections](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html).
+
+## GNU entity attributes and attribute status (2026-10-14)
+
+Semantic analysis validates every attribute once and retains its meaning as
+facts; lowering consumes the facts and never reads attribute tokens
+([semantic-analysis.md](semantic-analysis.md#gnu-entity-attributes-and-cleanup-regions-2026-10-14)).
+Each name in an attribute list, in any position (declarations, type names,
+pointer levels, members, tags, enumerators and statements), is looked up once
+in `semantic_analysis/attributes/catalog.rs`. Unknown names warn as Clang's
+`-Wunknown-attributes` ("unknown attribute ignored"); a vendor prefix other than
+`gnu::` or `clang::` is unknown, as in Clang. Warnings are withheld inside
+system headers, so library headers stay quiet.
+
+Implemented meanings, with Clang's applicability diagnostics:
+
+- `cleanup(f)` on an automatic variable calls `f(&var)` on every exit from its
+  scope (fallthrough, `break`, `continue`, `return`, `goto`, the end of a
+  statement expression), innermost variable first and interleaved with VLA
+  storage release, after the return or tail value is computed. `f` must be a
+  function taking one parameter that `&var` converts to; discarded qualifiers
+  and `void *` are accepted, as Clang does. Elsewhere it warns as ignored. A
+  goto or switch case that enters the variable's scope, and an indirect goto
+  that enters or leaves it, are errors, as in Clang. `longjmp` does not run
+  cleanups. For a returned structure, GCC's value semantics apply: Clang's
+  named return value optimization lets a cleanup modify the returned copy,
+  bcc's and GCC's results do not see that change.
+- `constructor`/`destructor` with an optional integer constant priority
+  (default 65535) register a function definition: `llvm.global_ctors` and
+  `llvm.global_dtors` in the LLVM back end; the interpreter runs constructors
+  before `main` in increasing priority (ties in definition order) and
+  destructors after `main` returns or `exit`, in decreasing priority (ties in
+  reverse order), not after `abort`. Priorities outside 0-65535 are errors and
+  0-100 warn as reserved, as GCC does (bundled Clang accepts both silently).
+  A constructor or destructor with parameters is refused.
+- `alias("target")` makes a declaration another name for a definition of the
+  same translation unit, resolved through alias chains (an LLVM global alias).
+  Clang's errors apply: the target must be defined (by its C name), an alias
+  cannot be a definition (a non-`static` file-scope object without `extern`
+  is a tentative definition), functions alias functions and objects objects,
+  and cycles are rejected; differing function types warn
+  (`-Wattribute-alias`). A target or alias with an assembler label is refused.
+  A thread-local alias of a thread-local object is a `thread_local` LLVM
+  alias, as Clang emits it; an alias whose storage duration differs from its
+  target's, which Clang accepts and emits as an alias of the wrong storage,
+  is refused.
+- `weak` gives definitions weak linkage and declarations `extern_weak`
+  linkage, so an undefined weak function or object has a null address, on
+  every target: bundled Clang emits the same LLVM linkage for COFF, where LLD
+  resolves it as a weak external (checked by linking with Clang-compiled
+  units on x86_64-w64-windows-gnu and, under WSL, x86_64-unknown-linux-gnu).
+  Internal or no linkage is an error. Thread-local objects keep their thread
+  storage: a weak definition is a weak `thread_local` global and a weak
+  declaration an `extern_weak` one, as in Clang. Natively the address of an
+  undefined weak thread-local object is computed from the thread's TLS
+  block and is not reliably null, with Clang as with bcc; the interpreter
+  gives it the null address of any undefined weak object. The bcc inliner never inlines a weak
+  definition; the interpreter resolves a weak declaration to its default
+  host function when the host provides one, else to null.
+- `section("name")`, `used`, `visibility("default"|"hidden"|"internal"|
+  "protected")` and `aligned(N)` on functions are emitted on the symbol;
+  `section` and `alias` on an automatic variable are errors, `used` warns.
+  Visibility on an entity with internal linkage is accepted silently and has
+  no effect, as in Clang.
+
+| Status | Attributes |
+| --- | --- |
+| Implemented (entity) | `alias`, `cleanup`, `constructor`, `destructor`, `section` (and MSVC `allocate`), `used`, `visibility`, `weak`, `aligned` on functions |
+| Implemented (representation) | `aligned`, `packed`, scalar `mode`, `vector_size`, `transparent_union`; `gnu_inline`; `ms_struct` on Windows targets, `gcc_struct` on Linux targets |
+| Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `interrupt`, `no_caller_saved_registers` and the other non-x86 conventions are refused |
+| Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked`, `returns_twice` (at each direct call; declarations nothing calls, as in MinGW's `<setjmp.h>`, are accepted), `overloadable`, `cpu_dispatch`, `cpu_specific`, `target_version`, `pass_object_size`, `pass_dynamic_object_size`, the foreign record layout (`gcc_struct` on Windows, `ms_struct` on Linux) |
+| Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `weak_import`, `copy` |
+| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `always_inline`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `error`, `warning`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `noinline`, `noipa`, `nonnull`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, `dllimport`, `dllexport`, `selectany`, and the C23 standard attributes; see the catalog for the full list |
+| Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver`, `persistent` and `scalar_storage_order` (ignored in either byte order, as bundled Clang does), and MSVC `restrict`, `uuid`, `allocate` through MinGW's `__declspec` macro |
+
+`__declspec` modifiers use the MSVC catalog: `align` stays an unanalyzed
+representation, `allocate` is `section`, `thread` is thread storage duration
+(also in the GNU spelling MinGW's `__declspec` macro produces; see the
+thread-local storage notes), `naked` is refused, and
+`dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`, `noinline`,
+`deprecated`, `restrict`, `noalias`, `novtable`, `uuid` and similar
+declaration annotations are accepted.
 
 ## GNU labels as values (2026-10-14)
 

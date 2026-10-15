@@ -24,6 +24,7 @@ mod compound_assignments;
 mod computed_goto;
 mod declaration_initializers;
 mod encoded_strings;
+mod entity_attributes;
 mod flexible_initializers;
 mod predefined_identifiers;
 mod record_layout;
@@ -144,7 +145,7 @@ fn with_configured_module<R>(
 fn interpret(module: &Module<'_>, target: Target) -> (i32, String) {
     let arena = Bump::new();
     let mut host = DefaultHost::for_target(&arena, target);
-    let outcome = interpreter::run(module, "main", &[], &mut host)
+    let outcome = interpreter::run_main(module, &mut host)
         .unwrap_or_else(|trap| panic!("{}\n{module}", trap.display_in(module)));
     #[expect(
         clippy::cast_possible_truncation,

@@ -9,6 +9,8 @@
 //! All user symbol names, including GNU assembler labels, are reserved
 //! before generating those internal names.
 
+mod reachability;
+
 use super::{
     Construct,
     LoweringError,
@@ -73,7 +75,6 @@ use crate::{
             StringTokenType,
         },
         semantic_analysis::{
-            Binding,
             ConstantClass,
             DefinitionKind,
             FunctionRecord,
@@ -99,6 +100,8 @@ use crate::{
 
 /// Translation-unit state shared by every function's lowering.
 pub(super) struct Unit<'a, 'tu, 'ir> {
+    /// The module planner's emission closure, including static local objects.
+    pub(super) reachable: ArenaSet<'a, usize>,
     /// Work spent associating retained parameter bindings (scaling regression).
     #[cfg(test)]
     pub(super) parameter_alias_visits: usize,
@@ -142,10 +145,10 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
-    /// Declares every defined function and defines every file-scope object.
-    /// Returns the function definitions in order, each with its function if
-    /// it is to be lowered: inline definitions and unsupported signatures
-    /// have none.
+    /// Declares reachable function definitions and defines reachable objects.
+    /// Returns reachable function definitions in order, each with its function
+    /// if it is to be lowered: inline definitions and unsupported
+    /// signatures have none.
     /// C99: §6.2.7 paragraph 4, p. 40; PDF p. 52; §6.9.2 paragraph 2,
     /// p. 143; PDF p. 155.
     pub(super) fn declare_items(
@@ -153,6 +156,15 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         _syntax: &ParsedTranslationUnit<'tu>,
         errors: &mut ArenaVec<'_, LoweringError>,
     ) -> ArenaVec<'a, (&'tu FunctionRecord<'tu>, Option<FuncId>)> {
+        let alias_errors = self.prepare_symbol_names();
+        self.reachable = self.reachable_items();
+        self.check_extensions(errors);
+        for (index, error) in alias_errors {
+            if self.sema.declarator_functions[index].is_none_or(|owner| self.emits_function(owner))
+            {
+                errors.push(error);
+            }
+        }
         // Reserve every user spelling before any initializer or body creates
         // internal storage (GNU labels extend C99 §6.2.2p2).
         for (index, binding) in self.sema.bindings.iter().enumerate() {
@@ -201,6 +213,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let mut functions = ArenaVec::with_capacity_in(self.sema.functions.len(), self.tables);
         let mut bodies = ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, self.tables);
         for record in self.sema.functions {
+            if record
+                .binding
+                .is_some_and(|binding| !self.reachable.contains(&binding))
+            {
+                continue;
+            }
             let mut func = self.declare_definition(record).unwrap_or_else(|error| {
                 errors.push(error);
                 None
@@ -229,6 +247,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 definition.kind,
                 DefinitionKind::Object | DefinitionKind::Tentative
             ) || binding.linkage == Linkage::None
+                || !self.reachable.contains(&definition.binding)
             {
                 continue;
             }
@@ -256,7 +275,16 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 errors.push(error);
             }
         }
+        self.declare_aliases_and_initializers(errors);
         functions
+    }
+
+    /// Projects the module plan's body decision for declaration modifier gates.
+    /// C99: §6.7.4p6-7, pp. 112-113; PDF pp. 124-125; §6.9p3-5,
+    /// p. 140; PDF p. 152.
+    pub(super) fn emits_function(&self, binding: usize) -> bool {
+        self.reachable.contains(&binding)
+            && self.definitions.get(&binding) != Some(&DefinitionKind::Inline)
     }
 
     /// Declares a function definition's symbol; `None` when its body is
@@ -294,11 +322,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 source,
             ));
         }
-        let func = self.function(binding).map_err(|kind| at(kind, source))?;
-        Ok(match self.definitions.get(&binding) {
-            | Some(DefinitionKind::Inline) => None,
-            | _ => Some(func),
-        })
+        if self.definitions.get(&binding) == Some(&DefinitionKind::Inline) {
+            return Ok(None);
+        }
+        self.function(binding)
+            .map(Some)
+            .map_err(|kind| at(kind, source))
     }
 
     /// The function a function binding names, declaring it on first use
@@ -341,7 +370,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         } else {
             self.signature(data.ty)?
         };
-        Ok(self.module.declare_function(name, signature, linkage(data)))
+        let func = self
+            .module
+            .declare_function(name, signature, self.ir_linkage(binding));
+        self.symbol_attributes(binding, Symbol::Function(func));
+        Ok(func)
     }
 
     /// An external declaration without a prototype or a known definition.
@@ -504,10 +537,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 // C99 §6.2.7p4, §6.9.2p2: an initializer can refer to an
                 // earlier incomplete declaration. Reserve the same symbol
                 // using the definition's completed type from the outset.
+                // The definition's binding names the same entity, so its
+                // linkage and symbol attributes are the entity's.
                 let binding = self.defined_objects.get(name).copied().unwrap_or(binding);
-                let data = self.sema.bindings[binding];
-                let declaration = self.global_declaration(binding, linkage(data))?;
-                Ok(self.module.declare_global(name, declaration))
+                let declaration = self.global_declaration(binding, self.ir_linkage(binding))?;
+                let global = self.module.declare_global(name, declaration);
+                self.symbol_attributes(binding, Symbol::Global(global));
+                Ok(global)
             },
         }
     }
@@ -547,6 +583,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     .global_declaration(binding, IrLinkage::Internal)
                     .map_err(|kind| at(kind, source))?;
                 let global = self.module.declare_global(name, declaration);
+                self.symbol_attributes(binding, Symbol::Global(global));
                 if self.names.local(binding).is_none() {
                     _ = self.generated_globals.insert(global);
                 }
@@ -1333,13 +1370,6 @@ pub(super) fn peel<'tu>(mut expression: &'tu Expression<'tu>) -> &'tu Expression
 
 /// The IR linkage of a function or object with linkage.
 /// C99: §6.2.2, pp. 30-31; PDF pp. 42-43.
-fn linkage(binding: Binding) -> IrLinkage {
-    match binding.linkage {
-        | Linkage::Internal => IrLinkage::Internal,
-        | Linkage::External | Linkage::None => IrLinkage::External,
-    }
-}
-
 /// Whether every byte of an object of this type is const: its type or,
 /// for an array, its element type is const-qualified.
 /// C99: §6.7.3 paragraph 5, p. 109; PDF p. 121.
@@ -1392,6 +1422,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             }
         }
         Ok(Self {
+            reachable: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             #[cfg(test)]
             parameter_alias_visits: 0,
             context,

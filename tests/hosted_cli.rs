@@ -801,14 +801,29 @@ mod tests {
         "__GNUC_STDC_INLINE__",
     ];
 
-    /// `(name, value)` for each defined name of `GNU_IDENTITY`, as bcc
-    /// predefines them in `mode`.
-    fn bcc_gnu_identity(mode: &str) -> Vec<(String, String)> {
+    /// Clang's own identity macros, which bcc claims for every target.
+    const CLANG_IDENTITY: [&str; 9] = [
+        "__clang__",
+        "__clang_major__",
+        "__clang_minor__",
+        "__clang_patchlevel__",
+        "__clang_version__",
+        "__clang_literal_encoding__",
+        "__clang_wide_literal_encoding__",
+        "__llvm__",
+        "__VERSION__",
+    ];
+
+    /// `(name, value)` for each defined name of `names`, as bcc predefines
+    /// them with `args`.
+    fn bcc_identity(args: &[&str], names: &[&str]) -> Vec<(String, String)> {
         let mut source = String::new();
-        for name in GNU_IDENTITY {
+        for name in names {
             writeln!(source, "#ifdef {name}\nfound{name} {name}\n#endif").unwrap();
         }
-        let output = bcc(&[mode, "--tokens", "--input", &source]);
+        let mut args = args.to_vec();
+        args.extend(["--tokens", "--input", &source]);
+        let output = bcc(&args);
         clean(&output);
         let text = stderr(&output);
         let mut lines = text.lines();
@@ -816,7 +831,10 @@ mod tests {
         while let Some(line) = lines.next() {
             if let Some((_, name)) = line.split_once("identifier `found") {
                 let value = lines.next().unwrap();
-                let value = value.split('`').nth(1).unwrap();
+                let value = match value.split_once("string literal ") {
+                    | Some((_, literal)) => literal,
+                    | None => value.split('`').nth(1).unwrap(),
+                };
                 defined.push((name.trim_end_matches('`').to_owned(), value.to_owned()));
             }
         }
@@ -832,7 +850,7 @@ mod tests {
     }
 
     #[test]
-    fn every_mode_claims_the_gnu_identity_clang_claims() {
+    fn every_mode_and_target_claims_the_gnu_and_clang_identity_clang_claims() {
         for mode in [
             "-std=c89",
             "-std=iso9899:199409",
@@ -848,39 +866,117 @@ mod tests {
             "-std=gnu23",
             "-std=gnu2y",
         ] {
-            let dump = Command::new(clang())
-                .args([
-                    "--target=x86_64-unknown-linux-gnu",
-                    mode,
-                    "-dM",
-                    "-E",
-                    "-x",
-                    "c",
-                    if cfg!(windows) { "NUL" } else { "/dev/null" },
-                ])
-                .output()
-                .unwrap();
-            assert!(dump.status.success());
-            let mut expected: Vec<_> = String::from_utf8_lossy(&dump.stdout)
-                .lines()
-                .filter_map(|line| {
-                    let mut words = line.split_whitespace().skip(1);
-                    let name = words.next()?;
-                    let value = words.next()?;
-                    GNU_IDENTITY
-                        .contains(&name)
-                        .then(|| (name.to_owned(), value.to_owned()))
-                })
-                .collect();
-            let mut actual = bcc_gnu_identity(mode);
-            expected.sort();
-            actual.sort();
-            assert_eq!(actual, expected, "{mode}");
+            for target in [
+                "x86_64-unknown-linux-gnu",
+                "x86_64-unknown-linux-musl",
+                "x86_64-w64-windows-gnu",
+                "x86_64-pc-windows-msvc",
+            ] {
+                // Clang's MSVC target drops the GNU claim; bcc keeps it, and
+                // the rest of this file checks that separately.
+                let mut names = CLANG_IDENTITY.to_vec();
+                if !target.ends_with("msvc") {
+                    names.extend(GNU_IDENTITY);
+                }
+                let target = format!("--target={target}");
+                let dump = Command::new(clang())
+                    .args([
+                        target.as_str(),
+                        mode,
+                        "-dM",
+                        "-E",
+                        "-x",
+                        "c",
+                        if cfg!(windows) { "NUL" } else { "/dev/null" },
+                    ])
+                    .output()
+                    .unwrap();
+                assert!(dump.status.success());
+                let mut expected: Vec<_> = String::from_utf8_lossy(&dump.stdout)
+                    .lines()
+                    .filter_map(|line| {
+                        let (name, value) = line.strip_prefix("#define ")?.split_once(' ')?;
+                        names
+                            .contains(&name)
+                            .then(|| (name.to_owned(), value.to_owned()))
+                    })
+                    .collect();
+                let mut actual = bcc_identity(&[&target, mode], &names);
+                expected.sort();
+                actual.sort();
+                assert_eq!(actual, expected, "{mode} {target}");
+            }
         }
     }
 
     #[test]
-    fn msvc_identity_needs_the_umbrella_flag_and_clang_is_never_claimed() {
+    fn clang_feature_queries_match_clang_for_implemented_features() {
+        let names = [
+            "c_alignas",
+            "c_alignof",
+            "c_atomic",
+            "c_generic_selections",
+            "c_static_assert",
+            "c_thread_local",
+            "__c_static_assert__",
+            "attribute_deprecated_with_message",
+            "__attribute_deprecated_with_message__",
+            "address_sanitizer",
+            "blocks",
+            "no_such_feature",
+        ];
+        let mut source = String::new();
+        for (index, name) in names.iter().enumerate() {
+            for query in ["feature", "extension"] {
+                writeln!(source, "#if __has_{query}({name})\n{query}{index}\n#endif").unwrap();
+            }
+        }
+        let path = std::env::temp_dir().join(format!("bcc-has-feature-{}.c", std::process::id()));
+        fs::write(&path, &source).unwrap();
+        for mode in [
+            "-std=c89",
+            "-std=c99",
+            "-std=gnu99",
+            "-std=c11",
+            "-std=gnu17",
+            "-std=c23",
+        ] {
+            let output = bcc(&[mode, "--tokens", "--input", &source]);
+            clean(&output);
+            let actual = identifiers(&output);
+            let reference = Command::new(clang())
+                .args([
+                    "--target=x86_64-unknown-linux-gnu",
+                    mode,
+                    "-E",
+                    "-P",
+                    "-x",
+                    "c",
+                ])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(reference.status.success());
+            let expected: Vec<String> = String::from_utf8_lossy(&reference.stdout)
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect();
+            assert_eq!(actual, expected, "{mode}");
+        }
+        // Clang features bcc does not implement answer 0.
+        let output = bcc(&[
+            "--tokens",
+            "--input",
+            "#if __has_feature(attribute_overloadable) || \
+             __has_extension(nullability)\nyes\n#endif\n",
+        ]);
+        clean(&output);
+        assert_eq!(identifiers(&output), Vec::<String>::new());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn msvc_identity_needs_the_umbrella_flag_and_clang_is_always_claimed() {
         let source = "#ifdef _MSC_VER\nms _MSC_VER _MSC_FULL_VER _MSC_BUILD \
                       _MSC_EXTENSIONS\n#endif\n#ifdef __clang__\nclang\n#endif\n#if __bcc__ == 1 \
                       && defined __bcc_version__\nbcc __bcc_major__ __bcc_minor__ \
@@ -900,7 +996,7 @@ mod tests {
         for mode in ["-std=c99", "-std=gnu17"] {
             let output = bcc(&[mode, "-fms-extensions", "--tokens", "--input", source]);
             clean(&output);
-            let mut expected = vec!["ms", "1933", "193300000", "1", "1", "bcc"];
+            let mut expected = vec!["ms", "1933", "193300000", "1", "1", "clang", "bcc"];
             expected.extend(version);
             assert_eq!(constants(&output), expected, "{mode}");
             for flags in [
@@ -913,7 +1009,7 @@ mod tests {
                 args.extend(["--tokens", "--input", source]);
                 let output = bcc(&args);
                 clean(&output);
-                let mut expected = vec!["bcc"];
+                let mut expected = vec!["clang", "bcc"];
                 expected.extend(version);
                 assert_eq!(constants(&output), expected, "{mode} {flags:?}");
             }

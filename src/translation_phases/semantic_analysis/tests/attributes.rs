@@ -231,6 +231,174 @@ int queries[sizeof(byte)==1 && sizeof(half)==2 && sizeof(wide)==8 && sizeof(real
     );
 }
 
+/// glibc's Clang path spells its complex binary128 type with `mode(TC)`.
+#[test]
+fn floating_modes_select_real_and_complex_formats_as_clang_does() {
+    let source = r"
+typedef _Complex float __attribute__((__mode__(__TC__))) tc;
+typedef _Complex float __attribute__((mode(KC))) kc;
+typedef _Complex float __attribute__((mode(DC))) dc;
+typedef _Complex double __attribute__((mode(SC))) sc;
+typedef float __attribute__((mode(TF))) tf;
+typedef double __attribute__((mode(SF))) sf;
+typedef _Complex double __attribute__((mode(SF))) real_of_complex;
+int checks[__builtin_types_compatible_p(tc, _Complex __float128)
+    && __builtin_types_compatible_p(kc, _Complex __float128)
+    && __builtin_types_compatible_p(dc, _Complex double)
+    && __builtin_types_compatible_p(sc, _Complex float)
+    && __builtin_types_compatible_p(tf, __float128)
+    && __builtin_types_compatible_p(sf, float)
+    && __builtin_types_compatible_p(real_of_complex, float) ? 1 : -1];
+";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default()
+                .with_target(target)
+                .with_gnu_extensions(true),
+            |context, _| {
+                assert_eq!(
+                    context.error_count(),
+                    0,
+                    "{target:?}: {:?}",
+                    context.take_pending_errors()
+                );
+            },
+        );
+    }
+    // A complex mode needs a complex base; MSVC has no binary128 type.
+    for (source, target) in [
+        (
+            "typedef float __attribute__((mode(SC))) bad;",
+            Target::LinuxGnu,
+        ),
+        (
+            "typedef _Complex float __attribute__((mode(TC))) bad;",
+            Target::WindowsMsvc,
+        ),
+        (
+            "typedef float __attribute__((mode(XF))) bad;",
+            Target::WindowsMsvc,
+        ),
+    ] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default()
+                .with_target(target)
+                .with_gnu_extensions(true),
+            |context, _| {
+                let errors = context.take_pending_errors();
+                assert!(
+                    errors.iter().any(|error| matches!(
+                        error,
+                        TranslationError::Semantic(error)
+                            if error.kind == SemanticErrorKind::InvalidModeAttribute
+                    )),
+                    "{source}: {errors:?}"
+                );
+            },
+        );
+    }
+}
+
+/// glibc's Clang path defines C11 `CMPLX` with `__builtin_complex`.
+#[test]
+fn complex_builtin_types_and_folds_like_clang() {
+    with_configuration(
+        r"
+static const double _Complex z = __builtin_complex(1.0, -0.0);
+int checks[__builtin_types_compatible_p(__typeof__(__builtin_complex(1.0f, 2.0f)), float _Complex)
+    && __builtin_types_compatible_p(__typeof__(__builtin_complex(1.0L, 2.0L)),
+        long double _Complex)
+    && __has_builtin(__builtin_complex) ? 1 : -1];
+void f(double a, const double b, float c, int d) {
+    (void)__builtin_complex(a, b);
+    (void)__builtin_complex(c, a);
+    (void)__builtin_complex(d, d);
+    (void)__builtin_complex(a);
+}
+int following;
+",
+        CompilerConfiguration::default().with_gnu_extensions(true),
+        |context, sema| {
+            let kinds: Vec<_> = context
+                .take_pending_errors()
+                .iter()
+                .filter_map(|error| {
+                    if let TranslationError::Semantic(error) = error {
+                        Some(error.kind)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(
+                kinds,
+                [
+                    SemanticErrorKind::InvalidArgumentType,
+                    SemanticErrorKind::InvalidArgumentType,
+                    SemanticErrorKind::InvalidArgumentCount
+                ],
+            );
+            let constant = sema
+                .expressions
+                .iter()
+                .find(|info| {
+                    info.constant == ConstantClass::Arithmetic
+                        && info.operation_type.is_some()
+                        && info.floating.is_some()
+                })
+                .and_then(|info| info.floating)
+                .expect("the static initializer folds");
+            assert!(constant.imag.is_zero() && constant.imag.x87_parts().unwrap().0);
+        },
+    );
+}
+
+/// glibc's Clang path routes the C99 classification macros to these.
+#[test]
+fn floating_classification_builtins_fold_constants_in_each_format() {
+    with_configuration(
+        r"
+int checks[__builtin_isnan(0.0 / 0.0) && !__builtin_isnan(1.0)
+    && __builtin_isfinite(1e308) && !__builtin_isfinite(1.0 / 0.0)
+    && __builtin_isnormal(1.0) && !__builtin_isnormal(0.0)
+    && !__builtin_isnormal(1e-40f) && __builtin_isnormal(1e-40)
+    && !__builtin_isnormal(1e-310) && __builtin_isnormal(1e-310L)
+    && __builtin_isinf_sign(-1.0 / 0.0) == -1 && __builtin_isinf_sign(1.0f / 0.0f) == 1
+    && __builtin_isinf_sign(2.0) == 0
+    && __builtin_fpclassify(0, 1, 2, 3, 4, 0.0 / 0.0) == 0
+    && __builtin_fpclassify(0, 1, 2, 3, 4, -1.0 / 0.0) == 1
+    && __builtin_fpclassify(0, 1, 2, 3, 4, 1.0f) == 2
+    && __builtin_fpclassify(0, 1, 2, 3, 4, 1e-40f) == 3
+    && __builtin_fpclassify(0, 1, 2, 3, 4, -0.0L) == 4 ? 1 : -1];
+int f(int x) { return __builtin_isnan(x) + __builtin_fpclassify(0, 1, 2, 3, 4); }
+int following;
+",
+        CompilerConfiguration::default().with_gnu_extensions(true),
+        |context, _| {
+            let kinds: Vec<_> = context
+                .take_pending_errors()
+                .iter()
+                .filter_map(|error| {
+                    if let TranslationError::Semantic(error) = error {
+                        Some(error.kind)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(
+                kinds,
+                [
+                    SemanticErrorKind::InvalidArgumentType,
+                    SemanticErrorKind::InvalidArgumentCount
+                ],
+            );
+        },
+    );
+}
+
 #[test]
 fn invalid_representation_attributes_report_constraints_and_recover() {
     with_configuration(

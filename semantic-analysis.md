@@ -70,9 +70,9 @@ The semantic working arena (`'s`) owns continuations, value stacks, interning
 lookup, visible-binding lookup, linkage lookup and scope restoration lists. It
 is dropped before returning `SemanticTranslationUnit<'tu>`. Retained values have
 no destruction requirements. Lowering also receives vendor-modified declarators visited by
-type construction and their specifier extension chains. It uses these to honor
-GNU assembler labels and reject unsupported calling conventions on declarations,
-typedefs, parameters and abstract type names before constructing IR symbols.
+type construction; it reads only their GNU assembler labels. Attribute and
+calling-convention meanings are retained as symbol facts and capability
+refusals (see [GNU entity attributes](#gnu-entity-attributes-and-cleanup-regions-2026-10-14)).
 Collections use the repository's arena-backed
 `ArenaMap`/`ArenaVec`; no compiler global allocator collections are introduced.
 
@@ -827,6 +827,20 @@ Internal-linkage expression uses require a definition, except operands of
 constant `sizeof` results (§6.9p3, printed p. 140, PDF p. 152). Persistent
 sizeof contexts are resolved after typing, so runtime VLA-size uses still count.
 Used undefined static functions are errors; unused undefined declarations warn.
+Resolved entity uses are retained in `SemanticTranslationUnit.references` with
+their owning function definition or object initializer. Parameter type-site
+uses belong to the function whose entry executes them, even before its binding
+is installed. The producer excludes constant `sizeof`, `alignof` and
+non-VM `typeof` operands after typing, using retained typeof execution facts;
+linked redeclarations keep their binding identities. The module-item planner
+joins those identities by emitted symbol and computes the closure of external
+definitions with an explicit worklist. Semantic definition constraints still
+apply to every analyzed definition, including bodies omitted from emission.
+Retained assembler-label declarators and attribute capability refusals also
+identify their enclosing function definition. Lowering reports a refusal or
+label error only when that definition is emitted; file declarations remain
+checked. A `cleanup(f)` variable records a use of `f` by its body. Symbol
+aliases are resolved before the planner joins linked entities.
 Inline restrictions are deferred until all file-scope declarations are known:
 a later non-inline or `extern` declaration can make the body an external
 definition (§6.7.4p3,p6, printed p. 112, PDF p. 124). Inline-only external bodies
@@ -1265,7 +1279,8 @@ rejected on MSVC. Clang nevertheless accepts `q` literals and a `typeof`
 type derived from them on MSVC; bcc preserves that distinction. The target
 macros mirror the pinned Clang exactly: `__SIZEOF_FLOAT128__` on the GNU
 triples, `__FLOAT128__` on Linux, no `__FLT128_*__` inventory and no MSVC
-capability advertisement. GCC 4.2.1 identity remains unchanged.
+capability advertisement. GCC 4.2.1 identity remains unchanged (bcc later also
+claimed Clang 23.1.1).
 
 Native `_Float128` and `f128`/`F128` literals are deliberately not added:
 Clang 23.1.1 rejects them in every tested mode (C11/C17/GNU17/C23/GNU23).
@@ -1273,7 +1288,9 @@ The reachable glibc path supplies `_Float32`, `_Float64`, `_Float32x` and
 `_Float64x` as typedefs of the existing standard types. A private embedded
 `bits/floatn.h` uses `include_next` and adjusts glibc's old-GCC binary128
 capability decision, providing its `_Float128` and complex typedefs, suffix
-macro and old-compiler builtin aliases. System headers stay read-only.
+macro and old-compiler builtin aliases. (Since 2026-10-15 bcc claims Clang,
+glibc's own `bits/floatn.h` takes its Clang path and the bridge is gone; see
+[language-standards.md](language-standards.md).) System headers stay read-only.
 GNU-source math and stdlib probes cover quad sqrt/pow/fabs, complex sin,
 `strtof128`, binary128 infinity/NaN initializers, fabs/copy-sign builtins,
 and the standard float/double/long-double selections. Clang accepts the
@@ -1985,6 +2002,63 @@ C99 §6.9.1p10, p. 142 (PDF p. 154), §6.5.3.4p2, p. 80 (PDF p. 92);
 [GCC Typeof](https://gcc.gnu.org/onlinedocs/gcc/Typeof.html) and
 [GCC Integer Overflow Builtins](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).
 
+## GNU entity attributes and cleanup regions (2026-10-14)
+
+This is the attribute part of semantic-facts migration M7: semantic analysis
+validates attributes once and lowering consumes retained facts. The attribute
+pass lives in `attributes.rs` and `attributes/`:
+
+- **Name pass.** `check_attribute_list` visits each attribute specifier once
+  (keyed by its arena identity) from every position the work stack reaches:
+  declaration specifiers, declarators and pointer levels (abstract ones
+  included), record, enum, member and enumerator attributes, and attributed
+  statements. `catalog.rs` gives each name a rule; unknown names and dropped
+  meanings warn, conventions are checked against the target, and meanings
+  code generation cannot honor become `SymbolFacts::refusals`, which lowering
+  reports as unsupported constructs at their provenance. Lowering's former
+  calling-convention token parsing is deleted.
+- **Entity pass.** After a declaration binds (and for a function definition
+  when its binding is installed), `declaration_attributes` applies the entity
+  attributes of its specifier chain, declarator, pointer levels and grouped
+  declarators to a `Subject` (function, object, typedef, parameter or member)
+  with Clang's applicability diagnostics. Weak, section, used, visibility and
+  function alignment merge into `EntityAttributes` keyed by `EntityId`; the
+  correspondence retains the linked-name entity map so lowering can find a
+  binding's entity (`SemanticTranslationUnit::entity_attributes`).
+- **Completion.** `finish_attributes` runs after translation-unit definitions
+  are final: alias requests resolve through chains to a definition by C name
+  (`SymbolFacts::aliases`), with target, kind, cycle and type checks; alias
+  declarations never become tentative definitions. Function definitions with
+  constructor or destructor requests are registered in definition order
+  (`SymbolFacts::init_functions`); parameters are refused.
+- **Cleanup regions.** `cleanup(f)` is validated at the declaration and opened
+  by a `DeclarationEnd` continuation after the declarator's initializer, as a
+  `RegionKind::CleanupDeclaration` region with `CleanupKind::Call { variable,
+  function }`. It joins the M1 region tree additively: `nearest_cleanup` now
+  links both VLA and call cleanups, so every retained transition (normal
+  exits, jumps, returns, switch dispatch) lists the calls to make, innermost
+  first; `nearest_cleanup_declaration` and `Ancestry::first_entered_cleanup`
+  (the VM query, generalized over the link) find entered cleanup scopes in
+  O(log R). `attributes/jumps.rs` reports gotos and switch cases entering a
+  cleanup scope; the computed-goto check below reports indirect gotos that
+  could enter or leave one. Lowering marks cleanup variables address-taken and emits the
+  calls from the same transitions that release VLA storage.
+
+The constructor/destructor priority operand is parsed as an expression, as
+`aligned`'s is, so the ordinary constant evaluator checks it. GNU extension:
+GCC manual, "Common Function Attributes" and "Common Variable Attributes";
+Clang Attributes Reference. C99 §6.2.2p2, p. 30 (PDF p. 42); §6.2.4p5, p. 32
+(PDF p. 44); §6.8.6.1p1, p. 137 (PDF p. 149).
+
+**What remains of M7.** Assembler labels are still decoded and inherited in
+lowering (`extensions.rs::record_label`), and alias targets are resolved by C
+name, so aliases involving assembler labels are refused. The known-definition
+name set for open externals (`Unit::new`/`unprototyped_external`), the
+name-based `main` end policy, readonly/volatile object predicates, and the
+shared external-signature and returns-twice catalog are unchanged. MSVC
+convention keywords other than `__vectorcall` remain accepted as the default
+convention without a retained `CallingConvention` on types.
+
 #### Labels as values (2026-10-14)
 
 GNU `&&label` ([GCC Labels as Values](https://gcc.gnu.org/onlinedocs/gcc/Labels-as-Values.html))
@@ -2007,10 +2081,15 @@ address-taken labels as Clang's jump checker does: none at all is
 scope of a variably modified identifier that the goto is outside of is
 `IndirectJumpIntoStatementExpression` or `IndirectJumpIntoVariableScope`
 (C99 §6.8.6.1p1, p. 137; PDF p. 149), reported once per goto at its first
-such target with the region's start as secondary label. Each function's
-labels inside a protecting region are collected once, so the work is
-O(gotos + labels) plus one check per goto and protected label; plain dispatch
-tables need no pairwise check at all.
+such target with the region's start as secondary label. As in Clang, whose
+jump checker treats a GNU cleanup scope as one an indirect jump may neither
+enter nor leave, a target inside a cleanup variable's scope that the goto is
+outside of, or any address-taken label outside the innermost cleanup scope
+around the goto, is `IndirectJumpCleanupScope`. Each function's labels inside
+a protecting region, and the first and last of its labels in region
+preorder, are collected once, so the work is O(gotos + labels) plus one check
+per goto and protected label; plain dispatch tables need no pairwise check
+at all.
 
 `&&a - &&b` for two labels of one function is `ConstantClass::LabelDifference`:
 a constant with no folded value whose two labels `ControlFacts::label_difference`

@@ -41,8 +41,9 @@ _Static_assert(sizeof(struct Bits)==6 && __builtin_offsetof(struct Bits,tail)==5
 _Static_assert(sizeof(struct Inactive)==2 && sizeof(struct ExplicitBits)==5 && sizeof(union PackedUnion)==4, "Microsoft units");
 /* MinGW GCC and MSVC: the zero-width field ends f's unit at byte 5. Clang's
    MinGW layout ignores the pack cap there and overlaps tail with f's unit;
-   bcc, which does not claim to be Clang, follows MinGW GCC (#55). */
-#if defined(__MINGW32__) && defined(__clang__)
+   bcc follows MinGW GCC (#55) although it claims Clang, so __bcc__ tells
+   the two apart. */
+#if defined(__MINGW32__) && defined(__clang__) && !defined(__bcc__)
 _Static_assert(sizeof(struct Zero)==8 && __builtin_offsetof(struct Zero,tail)==4, "Clang MinGW zero boundary");
 #else
 _Static_assert(sizeof(struct Zero)==6 && __builtin_offsetof(struct Zero,tail)==5, "Microsoft zero boundary");

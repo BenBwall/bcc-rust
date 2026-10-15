@@ -5,6 +5,7 @@
 //! Only final executable linking starts the bundled clang/LLD driver.
 //!
 //! Read `function.rs` for instruction mapping, `global.rs` for relocations,
+//! `symbols.rs` for linkage, aliases and the constructor/destructor arrays,
 //! `api.rs` for scoped LLVM ownership and `driver.rs` for object/link output.
 //! LLVM allocates its own C++ storage; all Rust compilation scratch is arena
 //! allocated. Owners live on the stack and are never placed in an arena.
@@ -13,6 +14,7 @@
 mod api;
 mod function;
 mod global;
+mod symbols;
 mod target;
 
 // Host output/link tooling
@@ -99,42 +101,8 @@ fn build_module<'m>(
     if uses_pre_abi_signature(module) {
         return Err(EmitError::NotAbiLowered);
     }
-    let mut functions = ArenaVec::new_in(arena);
-    for (_, function) in module.functions() {
-        let signature = module.signature(function.signature);
-        let value = api.function(
-            api.name(function.name),
-            function::signature_type(api, signature, arena),
-        );
-        function::attributes(api, value, signature, false);
-        if function.body.is_some() && function.linkage == crate::ir::Linkage::Internal {
-            api.internal(value);
-        }
-        functions.push(value);
-    }
-    let mut globals = ArenaVec::new_in(arena);
-    // Declare every global before constructing any relocated initializer.
-    for (_, global) in module.globals() {
-        let ty = global::global_type(api, global, arena)?;
-        let value = api.global(api.name(global.name), ty);
-        api.alignment(value, global.align.bytes());
-        api.constant_global(value, global.constant);
-        if global.init.is_some() && global.linkage == crate::ir::Linkage::Internal {
-            api.internal(value);
-        }
-        if global.thread_local {
-            // Clang marks a definition `dso_local`, so in a position-
-            // independent ELF executable LLVM gives it the local-exec model
-            // and a declaration initial-exec. LLVM-C cannot mark a global
-            // `dso_local`, so a definition requests local-exec directly.
-            // Windows has one model, through `_tls_index` and the TEB.
-            api.thread_local(
-                value,
-                global.init.is_some() && api::position_independent(target),
-            );
-        }
-        globals.push(value);
-    }
+    let (functions, globals) = symbols::declare(module, api, target, arena)?;
+    symbols::special_arrays(module, api, arena, &functions, &globals);
     let emitter = Emitter {
         module,
         api,

@@ -877,7 +877,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return Ok(());
         }
         if data.duration.is_static_or_thread() {
-            if data.linkage == Linkage::None {
+            // The module planner owns which static initializers are emitted;
+            // an unused local initializer cannot make a function reachable.
+            // C99 §6.9p3-5, p. 140; PDF p. 152.
+            if data.linkage == Linkage::None && self.unit.reachable.contains(&binding) {
                 _ = self
                     .unit
                     .define_object(binding, Some(self.name), initializer)?;
