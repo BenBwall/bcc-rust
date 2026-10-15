@@ -253,6 +253,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     ExpressionType::StringLiteral(StringTokenType::WideString(l)),
                     ExpressionType::StringLiteral(StringTokenType::WideString(r)),
                 ) => self.context.literal_units(l) == self.context.literal_units(r),
+                | (
+                    ExpressionType::StringLiteral(StringTokenType::EncodedString(l, left)),
+                    ExpressionType::StringLiteral(StringTokenType::EncodedString(r, right)),
+                ) =>
+                    left == right && self.context.literal_units(l) == self.context.literal_units(r),
                 | _ => false,
             },
             | _ => false,

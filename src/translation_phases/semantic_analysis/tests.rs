@@ -26,11 +26,13 @@ mod mingw_inline;
 mod pointers;
 mod pragma_pack;
 mod predefined_identifiers;
+mod record_layout;
 mod registry;
 mod resolved;
 mod scalar_builtins;
 mod statement_expressions;
 mod targets;
+mod transparent_unions;
 mod type_generic;
 mod vectors;
 
@@ -713,8 +715,10 @@ fn gnu_void_and_function_size_constants_remain_accepted() {
 
 mod declaration_regressions;
 mod declarations;
+mod encoded_literals;
 mod expression_regressions;
 mod expressions;
+mod flexible_initializers;
 mod function_regressions;
 mod operand_regressions;
 mod statements;

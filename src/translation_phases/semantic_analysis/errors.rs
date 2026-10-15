@@ -243,6 +243,10 @@ pub(crate) enum SemanticErrorKind {
     InvalidInitializer,
     /// C99: §6.7.8p2, p. 125; PDF p. 137.
     ExcessInitializer,
+    /// A flexible array member given elements outside a static object's own
+    /// structure; GNU C allows only that case, and Clang an empty list too.
+    /// C99: §6.7.2.1p16, p. 103; PDF p. 115; §6.7.8p2, p. 125; PDF p. 137.
+    FlexibleArrayInitializer,
     /// C99: §6.7.8p6-7, p. 125; PDF p. 137.
     InvalidDesignator,
     /// C99: §6.7.8p4, p. 125; PDF p. 137.
@@ -360,6 +364,13 @@ pub(crate) enum SemanticErrorKind {
     InvalidAlignmentAttribute,
     InvalidStandardAlignment,
     InvalidModeAttribute,
+    /// A `transparent_union` attribute ignored, as Clang warns: it names no
+    /// union definition, or the union has no member, a floating or vector
+    /// first member, or a member whose size differs from the first's or
+    /// whose alignment exceeds it.
+    /// GNU extension: GCC manual, "Common Type Attributes".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    IgnoredTransparentUnion,
     /// GCC Vector Extensions: compatible lanes and safe scalar splats.
     /// GNU extension: GCC manual, "Vector Extensions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
@@ -389,6 +400,7 @@ impl SemanticErrorKind {
             | Self::InvalidAlignmentAttribute => "alignment must be a power-of-two constant",
             | Self::InvalidStandardAlignment => "invalid alignment specifier",
             | Self::InvalidModeAttribute => "invalid scalar machine mode",
+            | Self::IgnoredTransparentUnion => "this union cannot be made transparent",
             | Self::InvalidVectorOperand => "invalid vector operands",
             | Self::InvalidVectorBuiltin => "invalid vector builtin operands",
             | Self::InvalidImmediate => "expected an integer constant expression in range",
@@ -425,6 +437,7 @@ impl SemanticErrorKind {
             | Self::FailedAssertion => "assertion is false",
             | Self::InvalidInitializer => "invalid initializer",
             | Self::ExcessInitializer => "no subobject is left to initialize",
+            | Self::FlexibleArrayInitializer => "initializes a flexible array member",
             | Self::InvalidDesignator => "no such subobject",
             | Self::NonConstantInitializer => "not a constant expression",
             | Self::InvalidStorage => "external declaration",
@@ -618,6 +631,12 @@ impl SemanticErrorKind {
             | Self::InvalidModeAttribute => (
                 "invalid mode attribute",
                 "GCC mode requires an eligible scalar type and a supported scalar machine mode",
+            ),
+            | Self::IgnoredTransparentUnion => (
+                "transparent_union attribute ignored",
+                "GNU transparent_union applies to a union definition with at least one member, a \
+                 first member of neither floating nor vector type, and every member of the first \
+                 member's size and at most its alignment",
             ),
             | Self::InvalidVectorOperand => (
                 "invalid vector operation",
@@ -944,6 +963,12 @@ impl SemanticErrorKind {
                 "C99 §6.7.8p2: an initializer shall not provide a value for an object outside the \
                  initialized entity",
             ),
+            | Self::FlexibleArrayInitializer => (
+                "initialization of flexible array member is not allowed",
+                "C99 §6.7.2.1p16, §6.7.8p2: a flexible array member has no elements; as a GNU \
+                 extension only an object with static storage duration may give the flexible \
+                 array member of its own structure elements",
+            ),
             | Self::InvalidDesignator => (
                 "designator does not identify an available subobject",
                 "C99 §6.7.8p6-7: array indices are nonnegative integer constants within bounds \
@@ -1235,6 +1260,7 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::InvalidAtomicOrder
                 | SemanticErrorKind::InvalidAtomicFailureOrder
                 | SemanticErrorKind::AtomicBufferQualifiers
+                | SemanticErrorKind::IgnoredTransparentUnion
         ) {
             ErrorSeverity::Warning
         } else {

@@ -77,6 +77,11 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     /// String initializer syntax to its destination element type, independent
     /// of array completion. C99: §6.7.8p14-15, p. 126; PDF p. 138.
     pub(super) string_initializers: ArenaMap<'tu, usize, TypeId>,
+    /// A static object's binding to the completed type of the flexible
+    /// array member its initializer initializes, which extends the object
+    /// past its structure (GNU extension; C99 §6.7.2.1p16, p. 103; PDF
+    /// p. 115). See [`Self::flexible_array`].
+    pub(super) flexible_arrays:     ArenaMap<'tu, usize, TypeId>,
     /// Conversion records grouped by expression ordinal, each run in the
     /// order its conversions were applied; see [`Self::conversions_of`].
     pub(crate) conversions:         &'tu [Conversion<'tu>],
@@ -293,6 +298,30 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         self.size_query_sites
             .get(&std::ptr::from_ref(expression).addr())
             .copied()
+    }
+
+    /// The completed array type of the flexible array member that the
+    /// initializer of static object `binding` initializes. The object's
+    /// storage extends to the end of that array; its type and `sizeof` stay
+    /// the structure's.
+    /// GNU extension: GCC manual, "Arrays of Length Zero".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Zero-Length.html>
+    pub(crate) fn flexible_array(&self, binding: usize) -> Option<TypeId> {
+        self.flexible_arrays.get(&binding).copied()
+    }
+
+    /// The storage size of static object `binding` whose initializer gives
+    /// its flexible array member elements: the end of that member's
+    /// completed array, or the structure's size if that is larger, as GCC
+    /// and Clang allocate it. `None` for every other object, whose storage
+    /// is its type's size.
+    pub(crate) fn flexible_object_size(&self, binding: usize) -> Option<u64> {
+        let array = self.flexible_array(binding)?;
+        let ty = self.bindings.get(binding)?.ty;
+        let size = self.types.layout(ty)?.size;
+        let member = self.types.tag(ty)?.members.get().last()?;
+        let end = member.offset.checked_add(self.types.layout(array)?.size)?;
+        Some(size.max(end))
     }
 
     /// Whether analysis classified this expression as initializing the whole

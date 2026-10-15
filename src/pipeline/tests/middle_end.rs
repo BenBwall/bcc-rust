@@ -23,13 +23,17 @@ mod builtin_bindings;
 mod compound_assignments;
 mod computed_goto;
 mod declaration_initializers;
+mod encoded_strings;
+mod flexible_initializers;
 mod predefined_identifiers;
+mod record_layout;
 mod resolved;
 mod runtime_calls;
 mod scalar_builtins;
 mod statement_expressions;
 mod thread_local;
 mod torture_sema;
+mod transparent_unions;
 mod union_initializers;
 mod vla;
 

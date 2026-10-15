@@ -172,6 +172,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                     | ConversionKind::Arithmetic => "arithmetic",
                     | ConversionKind::Assignment => "assignment",
                     | ConversionKind::DefaultArgument => "default-argument",
+                    | ConversionKind::TransparentUnion => "transparent-union",
                 },
                 self.type_value(conversion.ty, context, arena)
             );

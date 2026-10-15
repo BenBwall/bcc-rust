@@ -509,10 +509,19 @@ pub(crate) struct Tag<'tu> {
     pub(crate) compatible:           Cell<Scalar>,
     /// GNU packed and aligned on the record definition.
     pub(crate) packed:               Cell<bool>,
+    /// GNU `transparent_union` on a union that qualifies for it: a
+    /// prototyped call converts an argument of a member's type to the union.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    pub(crate) transparent:          Cell<bool>,
     /// Pragma maximum member alignment retained by sema; 0 selects default.
     /// C99: §6.10.6p1, p. 159; PDF p. 171; GCC/MSVC extension.
     pub(crate) max_member_alignment: Cell<u32>,
     pub(crate) alignment:            Cell<u32>,
+    /// Microsoft layout: the alignment `_Alignas`, `aligned` or a nested
+    /// record requires of this record, which `#pragma pack` cannot lower in
+    /// a containing record. Set at completion; 0 elsewhere.
+    /// C11: §6.7.5 paragraph 6, p. 127; PDF p. 145; MSVC extension.
+    pub(crate) required_alignment:   Cell<u32>,
 }
 
 /// A record member including ABI byte/bit offset and source bit-field width.

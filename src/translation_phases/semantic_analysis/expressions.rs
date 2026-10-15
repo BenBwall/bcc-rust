@@ -50,6 +50,7 @@ use super::{
         CharacterTokenType,
         FloatTokenType,
         IntegerTokenType,
+        LiteralEncoding,
     },
     Analyzer,
     BindingKind,
@@ -153,10 +154,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.constant = ConstantClass::Arithmetic;
             },
             | E::Constant(Constant::Char(value)) => {
-                let scalar = if matches!(value, CharacterTokenType::WideChar(_)) {
-                    self.types.target.wchar_t
-                } else {
-                    Scalar::Int
+                // C11 §6.4.4.4p11: `u` and `U` constants have `char16_t` and
+                // `char32_t` type; C23 §6.4.4.5p12: `u8` (a C23 construct in
+                // every mode) has `char8_t`.
+                let scalar = match value {
+                    | CharacterTokenType::WideChar(_) => self.types.target.wchar_t,
+                    | CharacterTokenType::EncodedChar(_, LiteralEncoding::Utf8) =>
+                        Scalar::UnsignedChar,
+                    | CharacterTokenType::EncodedChar(_, encoding) =>
+                        self.encoded_character_type(encoding),
+                    | _ => Scalar::Int,
                 };
                 info.ty = self.types.scalar(scalar);
                 let mut value = i128::from(value.target_value(&self.types.target));
@@ -237,14 +244,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
                 info.constant = ConstantClass::Arithmetic;
             },
-            | E::StringLiteral(value) =>
-                if let Some((element, count)) = self.string_type(value) {
-                    info.ty = self
-                        .types
-                        .intern(TypeKind::Array(element, ArrayBound::Constant(count)));
-                    info.category = ValueCategory::Lvalue;
-                    info.static_address = true;
-                },
+            | E::StringLiteral(value) => {
+                let (element, count) = self.string_type(value);
+                info.ty = self
+                    .types
+                    .intern(TypeKind::Array(element, ArrayBound::Constant(count)));
+                info.category = ValueCategory::Lvalue;
+                info.static_address = true;
+            },
             | E::Parenthesized { expression } => {
                 info = ExpressionInfo {
                     expression: e,
@@ -426,7 +433,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 {
                     info = self.invalid_expression(e, SemanticErrorKind::InvalidCompoundLiteral);
                 } else {
-                    info.ty = self.check_initializer(ty, initializer, self.scope == 0);
+                    // A compound literal's flexible array member stays empty.
+                    info.ty = self
+                        .check_initializer(ty, initializer, self.scope == 0, false)
+                        .0;
                 }
                 info.category = self.object_category(info.ty);
                 info.static_address = self.scope == 0;

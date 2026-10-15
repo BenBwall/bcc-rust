@@ -111,7 +111,11 @@ attribute parser. `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`,
 and ABI annotations such as `__ms_abi__` are accepted without backend effects.
 MSVC `align(...)` remains unanalyzed. GNU `aligned(...)` retains the requested
 declaration/type alignment; GNU `packed` and scalar `mode` retain their layouts
-and representation types. Clang itself ignores
+and representation types. GNU `transparent_union` on a union definition or a
+typedef naming a union lets a prototyped call pass an argument of a member's
+type as the union, selecting the member as Clang does; a union with no member,
+a floating or vector first member, or a member of another size or a stricter
+alignment ignores the attribute with Clang's warning. Clang itself ignores
 some of these macro-expanded attributes with warnings; bcc's current attribute
 pass preserves their syntax without applicability warnings.
 
@@ -401,7 +405,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | NamedLoops | - | - | - | - | - | - | Y | extension | parser |
 | GenericTypeOperand | - | - | - | - | - | - | Y | extension | parser |
 | CaseRanges | - | - | - | - | - | - | Y | GNU earlier | parser |
-| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; packed/aligned/scalar mode sema and lowering; vector_size sema |
+| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; packed/aligned/scalar mode/transparent_union sema and lowering; vector_size sema |
 | GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -438,6 +442,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | HasBuiltin | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
 | SignBitShifts | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | FlexibleArrayExtensions | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
+| FlexibleArrayInitializers | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis, lowering |
 | ConstantFolding | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | VoidPointerArithmetic | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis, lowering |
 | MsDeclspec | - | - | - | - | - | - | - | MS flag | parser |
@@ -732,7 +737,9 @@ escapes are `\x{...}` and `\o{...}`, with empty, unterminated, invalid-radix,
 and out-of-range forms diagnosed. Phase 6 concatenates ordinary strings with
 encoded strings while keeping the encoding, and diagnoses incompatible
 nonordinary prefixes. Phase 7 adds encoding-bearing literal, bit-precise
-integer, and imaginary constant token variants.
+integer, and imaginary constant token variants. Semantic analysis types the
+encoded literals (see `semantic-analysis.md`, "Type graph and target data
+model") and lowering emits their UTF-8, UTF-16 and UTF-32 units.
 
 C23 `#elifdef`/`#elifndef`, `#warning`, `#embed`, `__has_include`,
 `__has_embed`, `__has_c_attribute`, and `__VA_OPT__` also work as earlier GNU
@@ -761,8 +768,8 @@ token or directive boundary.
 `__has_c_attribute` returns 202311 for the seven standard C23 attributes and
 `_Noreturn`, including double-underscore forms, and 0 for other names. GNU
 `__has_attribute` returns 1 for `unused`, `deprecated`, `aligned`, `packed`,
-`noreturn`, `weak`, `section`, `visibility`, `format`, `always_inline`, and
-`noinline`; `__has_builtin` returns 1 for `__builtin_va_arg`,
+`noreturn`, `weak`, `section`, `visibility`, `format`, `always_inline`,
+`noinline`, `gnu_inline`, and `transparent_union`; `__has_builtin` returns 1 for `__builtin_va_arg`,
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
