@@ -128,7 +128,7 @@ pub(crate) enum UnsupportedAttribute {
     SectionName,
     /// An alias whose target or alias name carries a GNU assembler label.
     AliasAssemblerLabel,
-    /// An alias of, or naming, a thread-local object.
+    /// An alias whose thread storage duration differs from its target's.
     AliasThreadLocal,
 }
 
@@ -148,7 +148,7 @@ impl UnsupportedAttribute {
             | Self::InitFunctionParameters => "constructors and destructors with parameters",
             | Self::SectionName => "this section name",
             | Self::AliasAssemblerLabel => "aliases involving assembler labels",
-            | Self::AliasThreadLocal => "aliases of thread-local objects",
+            | Self::AliasThreadLocal => "aliases between thread-local and other objects",
         }
     }
 }

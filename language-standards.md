@@ -1213,14 +1213,22 @@ Implemented meanings, with Clang's applicability diagnostics:
   cannot be a definition (a non-`static` file-scope object without `extern`
   is a tentative definition), functions alias functions and objects objects,
   and cycles are rejected; differing function types warn
-  (`-Wattribute-alias`). A target or alias with an assembler label is refused,
-  and so is an alias involving a thread-local object.
+  (`-Wattribute-alias`). A target or alias with an assembler label is refused.
+  A thread-local alias of a thread-local object is a `thread_local` LLVM
+  alias, as Clang emits it; an alias whose storage duration differs from its
+  target's, which Clang accepts and emits as an alias of the wrong storage,
+  is refused.
 - `weak` gives definitions weak linkage and declarations `extern_weak`
   linkage, so an undefined weak function or object has a null address, on
   every target: bundled Clang emits the same LLVM linkage for COFF, where LLD
   resolves it as a weak external (checked by linking with Clang-compiled
   units on x86_64-w64-windows-gnu and, under WSL, x86_64-unknown-linux-gnu).
-  Internal or no linkage is an error. The bcc inliner never inlines a weak
+  Internal or no linkage is an error. Thread-local objects keep their thread
+  storage: a weak definition is a weak `thread_local` global and a weak
+  declaration an `extern_weak` one, as in Clang. Natively the address of an
+  undefined weak thread-local object is computed from the thread's TLS
+  block and is not reliably null, with Clang as with bcc; the interpreter
+  gives it the null address of any undefined weak object. The bcc inliner never inlines a weak
   definition; the interpreter resolves a weak declaration to its default
   host function when the host provides one, else to null.
 - `section("name")`, `used`, `visibility("default"|"hidden"|"internal"|

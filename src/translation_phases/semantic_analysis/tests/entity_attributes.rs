@@ -456,6 +456,24 @@ fn unimplementable_attributes_and_conventions_are_retained_refusals() {
             Target::LinuxGnu,
             Some(UnsupportedAttribute::SectionName),
         ),
+        // A thread-local alias of a thread-local object is Clang's
+        // `thread_local alias`; mixing storage durations names the wrong
+        // storage, which Clang emits silently.
+        (
+            "__thread int x = 1; extern __thread int y __attribute__((alias(\"x\")));",
+            Target::LinuxGnu,
+            None,
+        ),
+        (
+            "__thread int x = 1; extern int y __attribute__((alias(\"x\")));",
+            Target::LinuxGnu,
+            Some(UnsupportedAttribute::AliasThreadLocal),
+        ),
+        (
+            "int x = 1; extern _Thread_local int y __attribute__((alias(\"x\")));",
+            Target::WindowsGnu,
+            Some(UnsupportedAttribute::AliasThreadLocal),
+        ),
     ];
     for &(source, target, expected) in cases {
         with_configuration(source, gnu(target), |context, s| {

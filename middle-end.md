@@ -1238,8 +1238,8 @@ lowering maps them without reading attribute tokens (`lowering/symbols.rs`,
   global headers in `linkage [thread_local] [constant] size N, align N
   [hidden|protected] [section "name"] [used] [alias @target]`. Module lines `constructor @f priority N` and
   `destructor @f priority N` follow the globals. The verifier checks alias
-  targets (existing, same kind, defined, not an alias, neither thread-local),
-  section names
+  targets (existing, same kind, defined, not an alias, thread-local exactly
+  when the alias is), section names
   (nonempty, without quote, newline or NUL), default visibility on internal
   symbols (LLVM rejects any other for local linkage) and
   constructors/destructors (defined, no parameters).
@@ -1261,7 +1261,10 @@ lowering maps them without reading attribute tokens (`lowering/symbols.rs`,
   global has the null address unless the host provides the function, and
   calling it is undefined behavior.
 - **LLVM.** Weak definitions are `weak`, weak declarations `extern_weak`,
-  aliases LLVM global aliases, and `llvm.global_ctors`, `llvm.global_dtors`
+  aliases LLVM global aliases (a thread-local one `thread_local`, which
+  LLVM-C cannot set on an alias, so it is parsed from textual IR in a module
+  of its own, linked in with `LLVMLinkModules2` and pointed at its target),
+  and `llvm.global_ctors`, `llvm.global_dtors`
   and `llvm.used` are appending arrays, as bundled Clang emits them on both
   ELF and COFF targets; sections, visibility and function alignment use the
   LLVM-C setters.

@@ -113,16 +113,32 @@ pub(super) fn declare<'id, 'a, 'm>(
     }
     for (id, global) in module.globals() {
         if let Some(target) = global.attributes.alias {
-            let ty = api.array(api.ty(Type::I8), global.size);
-            let value = alias(
-                api,
-                global.name,
-                ty,
-                target,
-                global.linkage,
-                &functions,
-                &globals,
-            );
+            let value = if global.thread_local {
+                // A verified thread-local alias names a thread-local
+                // definition, whose model it shares, as in Clang.
+                let Symbol::Global(aliasee) = target else {
+                    unreachable!("a thread-local alias names a global")
+                };
+                let value = api.thread_local_alias(
+                    global.name,
+                    global.size,
+                    globals[aliasee.index()],
+                    api::position_independent(platform),
+                );
+                alias_linkage(api, value, global.linkage);
+                value
+            } else {
+                let ty = api.array(api.ty(Type::I8), global.size);
+                alias(
+                    api,
+                    global.name,
+                    ty,
+                    target,
+                    global.linkage,
+                    &functions,
+                    &globals,
+                )
+            };
             visibility(api, value, global.attributes);
             globals[id.index()] = value;
         }
@@ -170,12 +186,17 @@ fn alias<'id>(
         | Symbol::Global(global) => globals[global.index()],
     };
     let value = api.alias(api.name(name), ty, aliasee);
+    alias_linkage(api, value, linkage);
+    value
+}
+
+/// An alias is a definition, so `weak` gives it weak linkage.
+fn alias_linkage<'id>(api: &Session<'id>, value: Val<'id>, linkage: IrLinkage) {
     match linkage {
         | IrLinkage::External => {},
         | IrLinkage::Internal => api.linkage(value, Linkage::Internal),
         | IrLinkage::Weak => api.linkage(value, Linkage::Weak),
     }
-    value
 }
 
 /// Emits `llvm.global_ctors` and `llvm.global_dtors` entries in

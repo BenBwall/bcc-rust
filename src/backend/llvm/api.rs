@@ -36,6 +36,7 @@ use llvm_sys::{
         LLVMAddFunction,
         LLVMAddGlobal,
         LLVMAddIncoming,
+        LLVMAliasSetAliasee,
         LLVMAppendBasicBlockInContext,
         LLVMArrayType2,
         LLVMBlockAddress,
@@ -79,6 +80,7 @@ use llvm_sys::{
         LLVMContextDispose,
         LLVMCreateBuilderInContext,
         LLVMCreateEnumAttribute,
+        LLVMCreateMemoryBufferWithMemoryRange,
         LLVMCreateMessage,
         LLVMCreateTypeAttribute,
         LLVMDisposeBuilder,
@@ -91,10 +93,13 @@ use llvm_sys::{
         LLVMFunctionType,
         LLVMGetBufferSize,
         LLVMGetBufferStart,
+        LLVMGetDataLayoutStr,
         LLVMGetEnumAttributeKindForName,
         LLVMGetIntrinsicDeclaration,
+        LLVMGetNamedGlobalAlias,
         LLVMGetParam,
         LLVMGetPoison,
+        LLVMGetTarget,
         LLVMInstructionEraseFromParent,
         LLVMInt1TypeInContext,
         LLVMInt8TypeInContext,
@@ -134,6 +139,8 @@ use llvm_sys::{
         LLVMDisposeErrorMessage,
         LLVMGetErrorMessage,
     },
+    ir_reader::LLVMParseIRInContext2,
+    linker::LLVMLinkModules2,
     prelude::{
         LLVMBasicBlockRef,
         LLVMBuilderRef,
@@ -513,6 +520,64 @@ impl<'id> Session<'id> {
         // aliasee is a function or global constant in address space 0.
         let raw = unsafe { LLVMAddAlias2(self.module, ty.0, 0, aliasee.0, name.as_ptr()) };
         Val(raw, PhantomData)
+    }
+
+    /// A `thread_local` alias of `size` bytes named `name` for the
+    /// thread-local global `aliasee`, as Clang emits for an alias of a
+    /// thread-local object. LLVM-C can mark only a global variable
+    /// thread-local, so the alias is parsed from textual IR in a module of
+    /// its own (aliasing null), linked into this one, and then pointed at
+    /// its aliasee. `local_exec` requests the local-exec model, as
+    /// `thread_local` does for a global.
+    pub(super) fn thread_local_alias(
+        &self,
+        name: &str,
+        size: u64,
+        aliasee: Val<'id>,
+        local_exec: bool,
+    ) -> Val<'id> {
+        let mode = if local_exec { "(localexec)" } else { "" };
+        // Every byte as `\XX`, which a quoted LLVM name always accepts.
+        let quoted = fmt::from_fn(|f| name.bytes().try_for_each(|byte| write!(f, "\\{byte:02X}")));
+        let text = crate::diagnostics::format_in!(
+            self.arena,
+            "@\"{quoted}\" = thread_local{mode} alias [{size} x i8], ptr null\n\0"
+        );
+        let mut source = ptr::null_mut();
+        let mut message = ptr::null_mut();
+        // SAFETY: The buffer borrows `text` up to its final NUL, which the IR
+        // lexer requires, and is disposed while `text` lives. The session
+        // owns the live context and module; `LLVMLinkModules2` destroys the
+        // parsed source module.
+        unsafe {
+            let buffer = LLVMCreateMemoryBufferWithMemoryRange(
+                text.as_ptr().cast(),
+                text.len() - 1,
+                c"bcc.thread_local_alias".as_ptr(),
+                1,
+            );
+            let failed =
+                LLVMParseIRInContext2(self.context, buffer, &raw mut source, &raw mut message);
+            LLVMDisposeMemoryBuffer(buffer);
+            let message = Message(message);
+            assert!(failed == 0, "thread-local alias IR parses: {message}");
+            // The same layout and triple, so linking has nothing to report.
+            LLVMSetDataLayout(source, LLVMGetDataLayoutStr(self.module));
+            LLVMSetTarget(source, LLVMGetTarget(self.module));
+            assert!(
+                LLVMLinkModules2(self.module, source) == 0,
+                "a fresh thread-local alias links"
+            );
+        }
+        let name = self.name(name);
+        // SAFETY: The alias was linked into this session's module under its
+        // name above, and the aliasee is a global of the same module.
+        unsafe {
+            let raw = LLVMGetNamedGlobalAlias(self.module, name.as_ptr(), name.count_bytes());
+            assert!(!raw.is_null(), "the linked alias keeps its name");
+            LLVMAliasSetAliasee(raw, aliasee.0);
+            Val(raw, PhantomData)
+        }
     }
 
     /// A constant array of `element` values.

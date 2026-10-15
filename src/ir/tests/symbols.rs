@@ -8,6 +8,9 @@ const SYMBOLS: &str = "\
 global @value external size 4, align 4 hidden section \".data.mine\" used = bytes \"05000000\"
 global @other external size 4, align 4 alias @value
 global @maybe weak size 4, align 4
+global @tls external thread_local size 4, align 4 = zero
+global @tls_alias external thread_local size 4, align 4 hidden alias @tls
+global @tls_maybe weak thread_local size 4, align 4
 
 constructor @init priority 101
 destructor @fini priority 65535
@@ -98,6 +101,15 @@ fn verifier_rejects_broken_aliases_sections_and_init_functions() {
                 "g",
                 "a section name is nonempty and has no quote, newline or NUL",
             )],
+        ),
+        (
+            "global @g external thread_local size 4, align 4 = zero\nglobal @a external size 4, \
+             align 4 alias @g\nglobal @h external size 4, align 4 = zero\nglobal @b external \
+             thread_local size 4, align 4 alias @h\n",
+            &[
+                rule("a", "an alias is thread-local exactly when its target is"),
+                rule("b", "an alias is thread-local exactly when its target is"),
+            ],
         ),
         (
             "function @f(i32) external {\nblock0(v0: i32):\n    return\n}\nconstructor @f \

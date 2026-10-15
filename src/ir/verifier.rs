@@ -74,8 +74,8 @@ pub(crate) fn verify_module<'m, 's>(
 /// an alias, and has no body or initializer of its own; a section name is
 /// nonempty and free of quotes, newlines and NUL, so every back end and the
 /// textual form can carry it; an internal symbol has default visibility, as
-/// LLVM requires of local linkage. Aliases involve no thread-local global:
-/// LLVM-C cannot mark an alias `thread_local`.
+/// LLVM requires of local linkage. An alias is thread-local exactly when its
+/// target is: it names the same storage, one copy per thread or one shared.
 /// GNU extension: GCC manual, "Common Function Attributes", alias/section.
 /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
 fn verify_symbol_attributes(
@@ -139,9 +139,9 @@ fn verify_symbol_attributes(
         | Symbol::Function(_) => false,
         | Symbol::Global(global) => module.global(global).thread_local,
     };
-    if thread_local(symbol) || thread_local(target) {
+    if thread_local(symbol) != thread_local(target) {
         error(VerifierErrorKind::SymbolAttribute(
-            "an alias and its target are not thread-local",
+            "an alias is thread-local exactly when its target is",
         ));
     }
 }

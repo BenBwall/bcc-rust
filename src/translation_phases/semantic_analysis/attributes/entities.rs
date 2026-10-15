@@ -690,10 +690,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
                 continue;
             }
-            // Clang emits a `thread_local` alias, which LLVM-C cannot mark;
-            // a non-thread-local alias would address the wrong storage.
+            // An alias of a thread-local object is itself thread-local, as
+            // Clang emits it. Clang also accepts an alias whose storage
+            // duration differs from its target's and emits an alias that
+            // addresses the wrong storage (one copy per thread or one shared
+            // copy), so bcc refuses it.
             // C11: §6.2.4p4, p. 38; PDF p. 56.
-            if alias.duration == Duration::Thread || definition.duration == Duration::Thread {
+            if (alias.duration == Duration::Thread) != (definition.duration == Duration::Thread) {
                 self.refuse(UnsupportedAttribute::AliasThreadLocal, request.source);
                 continue;
             }
