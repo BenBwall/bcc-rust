@@ -52,9 +52,10 @@ pub(crate) struct MFunction<'a> {
     /// Whether the frame holds a System V register save area for
     /// `va_start`.
     pub(crate) register_save: bool,
-    /// Whether the function takes its frame address, so the prologue pushes
-    /// the caller's `%rbp` first, where a frame pointer would save it.
-    pub(crate) frame_address: bool,
+    /// A callee-saved register the prologue pushes first, written or not:
+    /// `%rbp` when the function takes its frame address, so the caller's
+    /// `%rbp` is where a frame pointer would save it.
+    pub(crate) first_push:    Option<PReg>,
     /// The targets of each [`MInst::JmpIndirect`], by its `dests` index.
     pub(crate) indirect:      ArenaVec<'a, ArenaVec<'a, MBlock>>,
     /// Each IR block label with the block its address names: the labeled
@@ -74,7 +75,7 @@ impl<'a> MFunction<'a> {
             calls:         false,
             dynamic:       false,
             register_save: false,
-            frame_address: false,
+            first_push:    None,
             indirect:      ArenaVec::new_in(arena),
             labels:        ArenaVec::new_in(arena),
         }

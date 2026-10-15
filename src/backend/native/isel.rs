@@ -590,7 +590,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 ..
             } => {
                 let dst = self.result_reg(result);
-                self.func.frame_address = true;
+                self.func.first_push = Some(PReg::Rbp);
                 self.emit(MInst::Lea {
                     dst,
                     addr: Mem::new(Base::Frame(FrameObject::FrameAddress), 0),

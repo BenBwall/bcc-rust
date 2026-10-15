@@ -78,12 +78,12 @@ impl<'a> Frame<'a> {
         let mut xmm = ArenaVec::new_in(arena);
         // The frame address is where a frame pointer saves the caller's
         // `%rbp`, so that register is pushed first.
-        if func.frame_address {
-            saved.push(PReg::Rbp);
+        if let Some(register) = func.first_push {
+            saved.push(register);
         }
         for register in PReg::ALL {
             let save = conv.callee_saved.contains(register)
-                && !(func.frame_address && register == PReg::Rbp)
+                && func.first_push != Some(register)
                 && (written.contains(register) || (frame_pointer && register == PReg::Rbp));
             match (save, register.class()) {
                 | (true, RegClass::Gpr) => saved.push(register),
