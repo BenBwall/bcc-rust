@@ -223,6 +223,9 @@ impl CompilerConfiguration {
             hosted: true,
             gnu89_inline: None,
             suppress_warnings: false,
+            warnings_as_errors: false,
+            warning_options: [super::diagnostics::WarningSettings::DEFAULT;
+                super::DiagnosticGroup::COUNT],
         }
         .derive_features()
     }

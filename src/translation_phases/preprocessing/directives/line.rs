@@ -32,11 +32,13 @@ impl Expander<'_, '_, '_, '_> {
     /// first.
     ///
     /// C99: §6.10.4 paragraphs 1 and 3-5, p. 158; PDF p. 170. The line number
-    /// must be a digit sequence from 1 to 2147483647; one outside that range
-    /// is diagnosed and ignored. The string literal is decoded like any
-    /// other; a wide or encoded one is diagnosed and its name ignored.
-    /// C11: §6.10.4 paragraph 1, p. 173; PDF p. 191, retains the character
-    /// string literal requirement for the newly available encoded literals.
+    /// must be a digit sequence from 1 to 2147483647. As in Clang, zero and
+    /// numbers up to 4294967295 are applied and reported only under
+    /// -pedantic; a larger number is an error and is ignored. The string
+    /// literal is decoded like any other; a wide or encoded one is
+    /// diagnosed and its name ignored. C11: §6.10.4 paragraph 1, p. 173;
+    /// PDF p. 191, retains the character string literal requirement for the
+    /// newly available encoded literals.
     pub(super) fn parse_line_directive(&mut self) {
         let Some(token) = self.expect_token_without_rewind::<true>(
             |_, t| t.kind == PreprocessorTokenType::Number,
@@ -66,29 +68,31 @@ impl Expander<'_, '_, '_, '_> {
             self.skip_and_expand_until_newline();
             return;
         }
-        let mut value = digits.bytes().try_fold(0u32, |value, digit| {
-            value
-                .checked_mul(10)?
-                .checked_add(u32::from(digit - b'0'))
-                .filter(|value| i32::try_from(*value).is_ok())
+        // Clang applies zero and numbers up to 4294967295, reporting them as
+        // extensions only under -pedantic, and rejects larger numbers.
+        let value = digits.bytes().try_fold(0u32, |value, digit| {
+            value.checked_mul(10)?.checked_add(u32::from(digit - b'0'))
         });
-        if value.is_none() {
+        let pedantic = crate::translation_phases::policy_severity(
+            self.context.configuration.extension_policy(),
+            crate::translation_phases::DiagnosticPolicy::Extension,
+        );
+        let out_of_range = match value {
+            | None => Some((true, Some(crate::translation_phases::ErrorSeverity::Error))),
+            | Some(0) => Some((false, pedantic)),
+            | Some(value) if i32::try_from(value).is_err() => Some((true, pedantic)),
+            | Some(_) => None,
+        };
+        if let Some((too_large, Some(severity))) = out_of_range {
+            let digits = self.context.diagnostic_text(digits);
             self.context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::LineDirectiveNumberTooLarge(
-                    self.context.diagnostic_text(digits),
-                ),
+                error_type:     if too_large {
+                    PreprocessorErrorType::LineDirectiveNumberTooLarge(digits, severity)
+                } else {
+                    PreprocessorErrorType::LineDirectiveNumberZero(digits, severity)
+                },
                 source_vectors: token.source_vectors,
             });
-        } else if value == Some(0) {
-            // C99 §6.10.4p3: zero is undefined; like a number that is too
-            // large, it is diagnosed and ignored.
-            self.context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::LineDirectiveNumberZero(
-                    self.context.diagnostic_text(digits),
-                ),
-                source_vectors: token.source_vectors,
-            });
-            value = None;
         }
         let name = self.expect_token_without_rewind::<true>(
             |_, t| {

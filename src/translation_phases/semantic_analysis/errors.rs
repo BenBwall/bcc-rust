@@ -41,6 +41,17 @@ pub(crate) struct SemanticError {
 /// C99: §6.7p3-4, p. 97; PDF p. 109; subsidiary constraints are cited below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SemanticErrorKind {
+    /// Pointer constraints diagnosed with Clang's group/default severity.
+    /// C99: §6.5.16.1p1, p. 92; PDF p. 104; §6.5.9p2, p. 86; PDF p. 98;
+    /// §6.5.8p2, p. 85; PDF p. 97; §6.5.2.2p2,p7, pp. 71-72; PDF pp. 83-84;
+    /// §6.8.6.4p3, p. 139; PDF p. 151; §6.7.8p11, p. 126; PDF p. 138.
+    PointerConstraint(crate::configuration::DiagnosticGroup),
+    /// C99: §6.10.6p1, p. 159; PDF p. 171; GCC/MSVC pragma extension.
+    PragmaPackMalformed,
+    PragmaPackPopEmpty,
+    PragmaPackPopNameAlignment,
+    PragmaPackUnterminated,
+    PragmaPackShow(u32),
     /// C99: §7.15p3, p. 249; PDF p. 261.
     InvalidVaList,
     /// C99: §7.15.1.1p2, pp. 249-250; PDF pp. 261-262.
@@ -160,6 +171,9 @@ pub(crate) enum SemanticErrorKind {
     UnknownTypedef,
     /// C99: §6.5.1p2, p. 69; PDF p. 81.
     UndeclaredIdentifier,
+    /// Clang-compatible extension, `-Wpredefined-identifier-outside-function`;
+    /// C99: §6.4.2.2p1, p. 52; PDF p. 64.
+    PredefinedOutsideFunction,
     /// Clang-compatible extension; C99: §6.5.2.2p6,p9, pp. 71-72;
     /// PDF pp. 83-84; §7.1.4p2, p. 167; PDF p. 179.
     ImplicitLibraryFunction(StringCacheId),
@@ -364,6 +378,12 @@ impl SemanticErrorKind {
     /// The primary label names what is wrong at the labeled source.
     const fn label(self) -> &'static str {
         match self {
+            | Self::PointerConstraint(_) => "pointer constraint violation",
+            | Self::PragmaPackMalformed
+            | Self::PragmaPackPopEmpty
+            | Self::PragmaPackPopNameAlignment
+            | Self::PragmaPackUnterminated
+            | Self::PragmaPackShow(_) => "packing directive",
             | Self::UnsupportedFloat128 => "unsupported floating type",
             | Self::InvalidVectorAttribute => "invalid vector size or element type",
             | Self::InvalidAlignmentAttribute => "alignment must be a power-of-two constant",
@@ -374,6 +394,7 @@ impl SemanticErrorKind {
             | Self::InvalidImmediate => "expected an integer constant expression in range",
             | Self::UnknownTypedef => "not a typedef name in this scope",
             | Self::UndeclaredIdentifier => "not declared",
+            | Self::PredefinedOutsideFunction => "used outside a function",
             | Self::ImplicitLibraryFunction(_) => "library prototype used here",
             | Self::InvalidAddressOperand => "cannot take this address",
             | Self::BuiltinRequiresCall => "builtin must be directly called",
@@ -497,6 +518,32 @@ impl SemanticErrorKind {
     )]
     fn explanation(self) -> (&'static str, &'static str) {
         match self {
+            | Self::PointerConstraint(group) => (
+                match group {
+                    | crate::configuration::DiagnosticGroup::CompareDistinctPointerTypes => "comparison of distinct pointer types",
+                    | crate::configuration::DiagnosticGroup::IncompatiblePointerTypes => "incompatible pointer types in conversion",
+                    | crate::configuration::DiagnosticGroup::PointerSign => "conversion between pointers to integer types with different sign",
+                    | crate::configuration::DiagnosticGroup::PointerQualifiers => "pointer conversion discards qualifiers, including nested pointer qualifiers",
+                    | crate::configuration::DiagnosticGroup::IncompatibleFunctionPointerTypes => "incompatible function pointer types in conversion",
+                    | crate::configuration::DiagnosticGroup::IntConversion => "incompatible integer and pointer conversion",
+                    | crate::configuration::DiagnosticGroup::PointerIntegerCompare => "comparison between pointer and integer",
+                    | crate::configuration::DiagnosticGroup::OrderedCompareFunctionPointers => "ordered comparison of function pointers",
+                    | crate::configuration::DiagnosticGroup::OrderedPointerIntegerCompare => "ordered comparison between pointer and integer",
+                    | crate::configuration::DiagnosticGroup::PointerTypeMismatch => "pointer type mismatch in conditional expression",
+                    | crate::configuration::DiagnosticGroup::ConditionalTypeMismatch => "pointer/integer type mismatch in conditional expression",
+                    | crate::configuration::DiagnosticGroup::NewlineEof
+                    | crate::configuration::DiagnosticGroup::Undef
+                    | crate::configuration::DiagnosticGroup::UnknownPragmas
+                    | crate::configuration::DiagnosticGroup::UnusedFunction
+                    | crate::configuration::DiagnosticGroup::ConstantPromotion => "warning-group diagnostic",
+                },
+                "C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1",
+            ),
+            | Self::PragmaPackMalformed => ("malformed #pragma pack ignored", "C99 §6.10.6p1: implementation-defined GCC/MSVC packing pragma"),
+            | Self::PragmaPackPopEmpty => ("#pragma pack(pop, ...) failed: stack empty", "GCC/MSVC pack restores a saved alignment from its stack"),
+            | Self::PragmaPackPopNameAlignment => ("specifying both a name and alignment to 'pop' is undefined", "Clang warns and applies the named pop followed by the alignment"),
+            | Self::PragmaPackUnterminated => ("unterminated '#pragma pack(push, ...)' at end of file", "restore the saved packing state with #pragma pack(pop)"),
+            | Self::PragmaPackShow(_) => ("current #pragma pack alignment value", "GCC/MSVC packing state at this directive"),
             | Self::BuiltinRequiresCall => (
                 "builtin functions must be directly called",
                 "GNU extension: intrinsic-only builtins have no addressable external function; parentheses and compile-time selections preserve callee designation",
@@ -781,6 +828,12 @@ impl SemanticErrorKind {
                 "identifier has no visible declaration",
                 "C99 §6.5.1p2: an identifier expression designates a declared object, function or \
                  enumeration constant",
+            ),
+            | Self::PredefinedOutsideFunction => (
+                "predefined identifier is only valid inside function",
+                "C99 §6.4.2.2p1: __func__ names the enclosing function; GCC and Clang extend this \
+                 to __FUNCTION__ and __PRETTY_FUNCTION__ and use an empty or `top level` string \
+                 outside one",
             ),
             | Self::InvalidAddressOperand => (
                 "address operator requires an addressable object or function",
@@ -1109,12 +1162,21 @@ impl ToDiagnostic for SemanticError {
                 quote_spelling(self.name.map_or("", |name| context.string_cache.at(name))),
                 context.string_cache.at(ty)
             )
+        } else if let SemanticErrorKind::PragmaPackShow(value) = self.kind {
+            format_in!(arena, "value of #pragma pack(show) == {value}")
         } else if let Some(name) = self.name {
             format_in!(
                 arena,
                 "{message}: {}",
                 quote_spelling(context.string_cache.at(name))
             )
+        } else {
+            message
+        };
+        let message = if let SemanticErrorKind::PointerConstraint(group) = self.kind
+            && let Some(group) = group.name()
+        {
+            format_in!(arena, "{message} [-W{group}]")
         } else {
             message
         };
@@ -1162,8 +1224,14 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::MainSignature
                 | SemanticErrorKind::TentativeArrayAssumedOne
                 | SemanticErrorKind::UnusedStaticFunction
+                | SemanticErrorKind::PragmaPackMalformed
+                | SemanticErrorKind::PragmaPackPopEmpty
+                | SemanticErrorKind::PragmaPackPopNameAlignment
+                | SemanticErrorKind::PragmaPackUnterminated
+                | SemanticErrorKind::PragmaPackShow(_)
                 | SemanticErrorKind::EmptyCaseRange
                 | SemanticErrorKind::MissingReturnValueWarning
+                | SemanticErrorKind::PredefinedOutsideFunction
                 | SemanticErrorKind::InvalidAtomicOrder
                 | SemanticErrorKind::InvalidAtomicFailureOrder
                 | SemanticErrorKind::AtomicBufferQualifiers

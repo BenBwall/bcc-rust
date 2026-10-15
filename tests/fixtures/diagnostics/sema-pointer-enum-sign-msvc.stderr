@@ -1,0 +1,17 @@
+warning: conversion between pointers to integer types with different sign [-Wpointer-sign]
+ --> sema-pointer-enum-sign-msvc.c:3:31
+  |
+3 | void signed_enum(void) { pu = pn; }
+  |                               ^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: conversion between pointers to integer types with different sign [-Wpointer-sign]
+ --> sema-pointer-enum-sign-msvc.c:6:36
+  |
+6 | void int_enum_on_msvc(void) { pu = pe; }
+  |                                    ^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+2 warnings generated.

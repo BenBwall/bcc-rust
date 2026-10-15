@@ -472,12 +472,16 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
         let data = self.sema.bindings[binding];
         if data.linkage == Linkage::None {
-            let Some(&DefinitionKind::FunctionName(name)) = self.definitions.get(&binding) else {
-                return Err(LoweringErrorKind::MissingFact(
-                    "a static local is used before its declaration",
-                ));
+            let (stem, function, text) = match self.definitions.get(&binding) {
+                | Some(&DefinitionKind::FunctionName(text)) => ("__func__", Some(text), text),
+                | Some(&DefinitionKind::PrettyFunctionName { function, text }) =>
+                    ("__PRETTY_FUNCTION__", function, text),
+                | _ =>
+                    return Err(LoweringErrorKind::MissingFact(
+                        "a static local is used before its declaration",
+                    )),
             };
-            return Ok(self.function_name(binding, name));
+            return Ok(self.function_name(binding, stem, function, text));
         }
         let name = self.symbol_name(binding);
         if self.conflicting_names.contains(name) {
@@ -597,12 +601,24 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         })
     }
 
-    /// The implicit `__func__` array of a function: its name and a null
-    /// character.
+    /// The array behind `__func__`, `__FUNCTION__` or `__PRETTY_FUNCTION__`:
+    /// the string and a null character, named for `stem` and its function.
     /// C99: §6.4.2.2 paragraph 1, p. 52; PDF p. 64.
-    fn function_name(&mut self, binding: usize, name: StringCacheId) -> GlobalId {
-        let text = self.context.string_cache.at(name);
-        let symbol = format_in!(self.tables, "{text}.__func__");
+    fn function_name(
+        &mut self,
+        binding: usize,
+        stem: &str,
+        function: Option<StringCacheId>,
+        text: StringCacheId,
+    ) -> GlobalId {
+        let function = function
+            .map(|function| self.context.string_cache.at(function))
+            .filter(|function| !function.is_empty());
+        let text = self.context.string_cache.at(text);
+        let symbol = match function {
+            | Some(function) => format_in!(self.tables, "{function}.{stem}"),
+            | None => format_in!(self.tables, "{stem}"),
+        };
         let symbol = self.unique_name(symbol);
         let global = self.module.declare_global(
             symbol,
@@ -1008,7 +1024,13 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             });
             return Ok(());
         }
-        if representation != Repr::Pointer || bit_field.is_some() {
+        // Semantic analysis keeps an address converted to an integer as wide
+        // as a pointer an address constant (§6.6p10), so its relocation
+        // fills that integer.
+        let address = representation == Repr::Pointer
+            || (matches!(representation, Repr::Int { .. })
+                && info.constant == ConstantClass::Address);
+        if !address || bit_field.is_some() {
             return Err(unsupported());
         }
         let (target, addend) = self.address_constant(expression)?;

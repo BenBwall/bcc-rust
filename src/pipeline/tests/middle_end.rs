@@ -23,6 +23,7 @@ mod builtin_bindings;
 mod compound_assignments;
 mod computed_goto;
 mod declaration_initializers;
+mod predefined_identifiers;
 mod resolved;
 mod runtime_calls;
 mod scalar_builtins;

@@ -15,6 +15,7 @@
 //! Files by role:
 //! - Language choices: `language.rs`.
 //! - Feature vocabulary and origin: `features.rs`.
+//! - Warning groups and severity overrides: `diagnostics.rs`.
 //! - Construction, option changes, and accessors: `options.rs`.
 //! - Feature-policy fixtures: `tests.rs`.
 //!
@@ -27,11 +28,16 @@
 mod language;
 
 // Feature policy
+mod diagnostics;
 mod features;
 
 // Construction and accessors
 mod options;
 
+pub(crate) use diagnostics::{
+    DiagnosticGroup,
+    WarningOption,
+};
 pub(crate) use features::{
     Feature,
     FeatureOrigin,
@@ -76,6 +82,8 @@ pub(crate) struct CompilerConfiguration {
     hosted: bool,
     gnu89_inline: Option<bool>,
     suppress_warnings: bool,
+    warnings_as_errors: bool,
+    warning_options: [diagnostics::WarningSettings; DiagnosticGroup::COUNT],
 }
 
 // Tests

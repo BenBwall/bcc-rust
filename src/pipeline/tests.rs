@@ -214,10 +214,7 @@ fn adjacent_string_lookahead_keeps_current_token_before_later_diagnostics() {
             iterator.next().unwrap().unwrap().kind,
             TokenType::String(_)
         ));
-        assert!(matches!(
-            iterator.next().unwrap().unwrap_err(),
-            TranslationError::InitialProcessing(_)
-        ));
+        // The missing final newline is reported only under -Wnewline-eof.
         assert!(matches!(
             iterator.next().unwrap().unwrap_err(),
             TranslationError::Preprocessing(PreprocessorError {

@@ -521,6 +521,23 @@ mod measurements {
     }
 
     #[test]
+    fn frontend_layout_and_promotion_facts_allocate_only_from_arenas() {
+        let source = include_str!("fixtures/targets/pragma-pack.c");
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("pragma pack layout", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+        let source = "struct B {unsigned f:17;} b; int f(void) {return (0,b.f)-400<0 || \
+                      (b.f=308)-400<0 || (b.f+=1)-400<0;}\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_no_allocations("bit-field value promotions", summary, &allocations);
+        assert_eq!(summary.diagnostics, 0);
+        let source = "#pragma pack(show)\n#pragma pack(3)\n#pragma pack(pop)\nint x;\n";
+        let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));
+        assert_eq!(allocations.calls, 0, "packing diagnostics");
+        assert_eq!(summary.diagnostics, 3);
+    }
+
+    #[test]
     fn freestanding_headers_and_intrinsics_allocate_only_from_arenas() {
         let source = include_str!("fixtures/freestanding/conformance.c");
         let (summary, allocations) = count_compile(|| bcc_rust::sema_source(source));

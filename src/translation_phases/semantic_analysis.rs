@@ -65,6 +65,7 @@ mod expressions;
 mod facts;
 mod functions;
 mod initializers;
+mod predefined;
 mod statements;
 mod traversal;
 
@@ -78,6 +79,7 @@ mod attributes;
 mod bound_sites;
 mod builtins;
 mod generic;
+mod packing;
 mod type_generic;
 mod vectors;
 
@@ -1636,6 +1638,7 @@ struct Analyzer<'a, 'tu, 's> {
     context:                 &'a mut Context<'tu>,
     scratch:                 &'s Bump,
     types:                   TypeInterner<'tu, 's>,
+    pack_alignments:         &'s [(usize, u32)],
     bindings:                ArenaVec<'tu, Binding>,
     declarators:             ArenaVec<'tu, Declarator<'tu>>,
     spec_extensions:         ArenaVec<'tu, &'tu SpecifierExtension<'tu>>,

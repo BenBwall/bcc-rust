@@ -225,7 +225,15 @@ pub(crate) enum DefinitionKind {
     Function,
     Inline,
     Tentative,
+    /// The contents of `__func__` and `__FUNCTION__`: the function's name, or
+    /// the empty string outside a function.
     FunctionName(StringCacheId),
+    /// GNU extension: the contents of `__PRETTY_FUNCTION__`, Clang's
+    /// signature spelling, or `top level` outside a function.
+    PrettyFunctionName {
+        function: Option<StringCacheId>,
+        text:     StringCacheId,
+    },
 }
 
 /// A completed object or function definition and its declaration binding.

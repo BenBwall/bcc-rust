@@ -15,6 +15,7 @@
 //! site.
 //!
 //! - Operator typing and conversions: `typing.rs`.
+//! - Pointer constraint classification: `pointers.rs`.
 //! - Retained categories and conversions: `results.rs`.
 //! - Constant addresses and address differences: `address.rs`.
 //!
@@ -24,6 +25,7 @@
 //! subobjects are walked by the initializer analyzer.
 
 // Operator typing and conversions
+mod pointers;
 mod typing;
 
 // Retained categories and conversions
@@ -83,12 +85,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut info = Self::expression_result(e, self.types.unknown());
         match e.kind {
             | E::Identifier(name) => {
-                if let Some(entry) = self.lookup(Namespace::Ordinary, name.name) {
-                    let binding = self.bindings[entry.binding];
+                let found = self
+                    .lookup(Namespace::Ordinary, name.name)
+                    .map(|entry| entry.binding)
+                    .or_else(|| self.predefined_identifier(name));
+                if let Some(index) = found {
+                    let binding = self.bindings[index];
                     info.ty = binding.ty;
-                    info.binding = Some(entry.binding);
-                    self.record_binding_use(entry.binding, name);
-                    info.register = self.register_bindings.contains_key(&entry.binding);
+                    info.binding = Some(index);
+                    self.record_binding_use(index, name);
+                    info.register = self.register_bindings.contains_key(&index);
                     info.static_address = binding.duration == Duration::Static
                         || binding.kind == BindingKind::Function;
                     info.category = match binding.kind {
@@ -557,6 +563,13 @@ pub(crate) struct ExpressionInfo<'tu> {
     pub(crate) category: ValueCategory,
     pub(crate) binding: Option<usize>,
     pub(crate) bit_field: Option<u32>,
+    /// Width used by integer promotions, independent of bit-field designation.
+    /// GCC/Clang preserve it through comma, assignment and prefix updates;
+    /// casts and postfix updates produce ordinary values of the declared type.
+    /// C99: §6.3.1.1p2, pp. 42-43; PDF pp. 54-55.
+    /// Checked integer bit-fields have at most 128 bits; one byte fits the
+    /// retained record's existing padding.
+    pub(in crate::translation_phases::semantic_analysis) promotion_width: Option<NonZeroU8>,
     pub(crate) register: bool,
     /// GNU vector extension: a lane remains assignable but has no address.
     pub(crate) vector_element: bool,

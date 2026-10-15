@@ -181,7 +181,8 @@ fn atomic_constraint_diagnostics_preserve_following_input() {
         (
             include_str!("../../../../tests/fixtures/diagnostics/sema-atomic-builtin.c"),
             SemanticErrorKind::InvalidAtomicOperand,
-            8,
+            // Two value operands report pointer-conversion groups instead.
+            6,
         ),
         (
             include_str!("../../../../tests/fixtures/diagnostics/sema-atomic-order.c"),

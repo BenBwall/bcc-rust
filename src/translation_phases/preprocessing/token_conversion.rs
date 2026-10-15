@@ -1036,7 +1036,15 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 IntegerConstantType::UnsignedLongLong
             },
         };
-        if !did_overflow {
+        if !did_overflow
+            && self
+                .context
+                .group_severity(
+                    crate::configuration::DiagnosticGroup::ConstantPromotion,
+                    token.source_vectors,
+                )
+                .is_some()
+        {
             match (candidates[0], constant_type) {
                 | (IntegerConstantType::Int, IntegerConstantType::Long) =>
                     self.context.preprocessor_error(PreprocessorError {

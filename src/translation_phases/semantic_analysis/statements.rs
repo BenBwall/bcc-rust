@@ -338,7 +338,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else if !self.types.unanalyzed(info.ty) {
                     self.error(SemanticErrorKind::VoidReturnValue, source, None, None);
                 }
-            } else if !self.assignment_compatible(result, info) {
+            } else if !self.assignment_conversion(result, info) {
                 self.error(
                     SemanticErrorKind::InvalidReturnConversion,
                     e.source_vectors,

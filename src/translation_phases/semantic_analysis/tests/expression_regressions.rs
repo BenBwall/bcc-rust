@@ -80,7 +80,7 @@ fn evaluated_commas_are_not_null_pointer_ice() {
                     errors.iter().any(|error| matches!(
                         error,
                         TranslationError::Semantic(error)
-                            if error.kind == SemanticErrorKind::InvalidInitializer
+                            if error.kind == SemanticErrorKind::PointerConstraint(crate::configuration::DiagnosticGroup::IntConversion)
                     )),
                     "{expression}: {errors:?}"
                 );

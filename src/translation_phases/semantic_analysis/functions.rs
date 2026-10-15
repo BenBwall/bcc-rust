@@ -237,6 +237,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             binding,
             result,
             parameters,
+            scope: self.scope,
+            name: None,
+            pretty: None,
         });
         self.function_name = name;
         if old_style {
@@ -519,11 +522,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         Some(b.name.source_vectors),
                     );
                 } else if b.kind == BindingKind::Function {
-                    self.error(
+                    self.group_diagnostic(
+                        crate::configuration::DiagnosticGroup::UnusedFunction,
                         SemanticErrorKind::UnusedStaticFunction,
                         b.name.source_vectors,
                         Some(b.name.name),
-                        None,
                     );
                 }
             }
@@ -866,6 +869,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             binding: self.bindings.len() - 1,
             kind:    DefinitionKind::FunctionName(function.name),
         });
+        if let Some(current) = &mut self.functions.current {
+            current.name = Some(self.bindings.len() - 1);
+        }
     }
 
     /// Hosted `main` signatures are implementation-defined outside the two
@@ -1235,6 +1241,12 @@ pub(super) struct FunctionContext<'tu> {
     pub(super) binding:    Option<usize>,
     pub(super) result:     TypeId,
     pub(super) parameters: &'tu [Parameter<'tu>],
+    /// The function scope, which holds the predefined names.
+    pub(super) scope:      usize,
+    /// The `__func__` object, shared by `__FUNCTION__` as Clang shares them.
+    pub(super) name:       Option<usize>,
+    /// The `__PRETTY_FUNCTION__` object, made at its first use.
+    pub(super) pretty:     Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -1308,6 +1320,8 @@ pub(super) struct State<'tu, 's> {
     sizeof_contexts:      ArenaVec<'s, SizeofContext<'tu>>,
     pub(super) sizeof:    Option<usize>,
     inline_objects:       ArenaVec<'s, InlineObject>,
+    /// The `__func__` and `__PRETTY_FUNCTION__` objects of file scope.
+    pub(super) outside:   [Option<usize>; 2],
 }
 
 impl<'s> State<'_, 's> {
@@ -1323,6 +1337,7 @@ impl<'s> State<'_, 's> {
             sizeof_contexts: ArenaVec::new_in(scratch),
             sizeof:          None,
             inline_objects:  ArenaVec::new_in(scratch),
+            outside:         [None; 2],
         }
     }
 }
