@@ -589,10 +589,11 @@ object agrees. A thread-local object's address is no address constant (C11
 specifiers in a compound literal parse, but lowering refuses a `static` one in
 a function and any `thread_local` one by name, rather than giving it automatic
 or shared storage.
-MSVC `__declspec(thread)` is the same storage duration under an attribute's
-spelling: analysis gives the object thread storage and applies the function,
-parameter, block-scope and agreement constraints to it, so it is never shared
-silently. The parser's combination checks do not see it.
+MSVC `__declspec(thread)` (on MinGW, where `__declspec(a)` expands to
+`__attribute__((a))`, the attribute `thread`) is the same storage duration
+under an attribute's spelling: analysis gives the object thread storage and
+applies the function, parameter, block-scope and agreement constraints to it,
+so it is never shared silently. The parser's combination checks do not see it.
 
 GNU attributes accept declaration, aggregate, enumerator, pointer, parameter,
 nested declarator, array, bit-field, function and label positions from

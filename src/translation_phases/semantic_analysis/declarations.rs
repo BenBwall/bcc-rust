@@ -1097,11 +1097,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Whether the specifiers give thread storage duration: the thread
-    /// storage-class specifier, or MSVC `__declspec(thread)`, which Clang
-    /// and GCC on Windows treat the same way. The declspec is an attribute,
-    /// so it is not subject to the parser's storage-class combination
-    /// checks; the constraints on functions, parameters and block scope
-    /// apply to it here.
+    /// storage-class specifier, or the `thread` attribute that MSVC
+    /// `__declspec(thread)` is. On MinGW `__declspec(a)` is a macro for
+    /// `__attribute__((a))`, so the attribute has GNU syntax there; no GNU
+    /// attribute is called `thread`, so either syntax counts. The attribute
+    /// is not subject to the parser's storage-class combination checks; the
+    /// constraints on functions, parameters and block scope apply to it here.
     /// C11: §6.7.1 paragraph 1, p. 109; PDF p. 127.
     /// MSVC extension: Microsoft Learn, "thread".
     /// <https://learn.microsoft.com/en-us/cpp/cpp/thread>
@@ -1113,7 +1114,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             match item.kind {
                 | SpecifierExtensionKind::ThreadLocal(_) => return true,
                 | SpecifierExtensionKind::Attributes(attribute)
-                    if attribute.syntax == super::AttributeSyntax::Msvc
+                    if attribute.syntax != super::AttributeSyntax::Standard
                         && super::vectors::attribute_names(attribute, self.context)
                             .any(|(_, name)| name == "thread") =>
                     return true,

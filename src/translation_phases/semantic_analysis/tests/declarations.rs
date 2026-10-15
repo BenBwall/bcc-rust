@@ -872,8 +872,8 @@ fn thread_storage_is_a_duration_with_its_constraints() {
 }
 
 /// MSVC `__declspec(thread)` is thread storage under another spelling, so
-/// the object is not silently shared between threads; GNU attributes have no
-/// such name.
+/// the object is not silently shared between threads. On MinGW the declspec
+/// is a macro for a GNU attribute of the same name, which counts too.
 /// MSVC extension: Microsoft Learn, "thread".
 /// <https://learn.microsoft.com/en-us/cpp/cpp/thread>
 #[test]
@@ -891,7 +891,7 @@ fn msvc_declspec_thread_is_thread_storage() {
                     thread.push(context.string_cache.at(binding.name.name));
                 }
             }
-            assert_eq!(thread, ["a", "b", "d"]);
+            assert_eq!(thread, ["a", "b", "c", "d"]);
         },
     );
     assert_eq!(
