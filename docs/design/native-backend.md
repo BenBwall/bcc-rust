@@ -159,7 +159,7 @@ definitions and dynamic stack allocation; **today** the check refuses only
 `f80` and `f128` values, `i128` bit counts, byte swaps, `switch`es and
 conversions to or from floats, `i128` positions Win64 never passes by value,
 structure results in `f80`/`f128` registers, stack objects aligned above 16,
-and frames larger than 1 GiB.
+frames larger than 1 GiB, and thread-local globals in named sections.
 
 ### Legalization
 
@@ -247,6 +247,8 @@ The selector's per-opcode table for stage 1:
 | `global_addr` of a thread-local | ELF: `movq %fs:0, t; leaq sym@TPOFF(t), d`, or `movq %fs:0, d; addq sym@GOTTPOFF(%rip), d` for a declaration; Windows: `movl _tls_index(%rip), i; movq %gs:88, t; mov (t + 8i), b; leaq sym@SECREL32(b), d` |
 | `return` | value to `%rax` (extended per `signext`/`zeroext`), epilogue, `ret` |
 | `trap`, `unreachable` | `ud2` |
+| `return_address` | `movq` from the CFA minus 8 |
+| `frame_address` | `leaq` of the CFA minus 16, where the prologue then pushes `%rbp` first, as a frame pointer would save it |
 
 ### Block parameters become parallel copies
 
@@ -663,6 +665,11 @@ Sections and symbols per format:
 | address constants | `.quad sym+addend` (`R_X86_64_64`) | `.quad sym+addend` (`IMAGE_REL_AMD64_ADDR64`) |
 | block label addresses | `.quad .LBA<f>_<l>+addend`; a label difference is `.byte`/`.short`/`.long`/`.quad .LBA<f>_<a>-.LBA<f>_<b>+addend`, resolved by the assembler | same |
 | thread-local data | `.section .tdata,"awT",@progbits` or `.tbss,"awT",@nobits` | `.section .tls$,"dw"` |
+| weak definition or declaration | `.weak sym`; a declaration is reached through the GOT | `.weak sym`; a declaration is reached through a `.refptr.sym` stub (`movq .refptr.sym(%rip)`, `callq *.refptr.sym(%rip)`) |
+| alias | `.globl a` (or `.weak`), `.type a,@function` for a function, `a = target` | the same, with `.def a` for a function |
+| named section | `.section name,"ax"`/`"aw"`/`"a",@progbits` | `.section name,"xr"`/`"dw"`/`"dr"` |
+| visibility | `.hidden sym`, `.protected sym` | — |
+| constructors, destructors | `.init_array[.prio]`, `.fini_array[.prio]` | MinGW `.ctors[.65535-prio]`, `.dtors[...]`; MSVC `.CRT$XC*`, `.CRT$XT*` |
 | defined data reference | `sym(%rip)` (`R_X86_64_PC32`) | `sym(%rip)` (`IMAGE_REL_AMD64_REL32`) |
 | undefined data reference | `movq sym@GOTPCREL(%rip), %r` (`GOTPCRELX`) | `sym(%rip)`; LLD's MinGW auto-import handles DLL data |
 | direct call | `call f` / `call f@PLT` if undefined (`PLT32`) | `call f` (`REL32`; import thunks for DLL functions) |
@@ -935,3 +942,45 @@ shows where:
 Compile time is comparable: median whole-process build 1.29-1.51 s for B0/B1
 against 1.09-1.25 s for N/A1, the difference being the extra clang run that
 assembles the text.
+
+### IR forms from the optimizer and front-end stack
+
+Rebasing onto #63 brought IR forms the back end had not seen. Each is
+compiled, not refused:
+
+- **Computed `goto`** (`block_addr`, `indirect_br`, label and label-difference
+  relocations): local labels `.LBA<function>_<label>`, `jmpq *reg`, and
+  landing blocks for labeled blocks with parameters (see "Block parameters
+  become parallel copies").
+- **Thread-local globals**: ELF local-exec for definitions and initial-exec
+  for declarations through `%fs:0`; Windows through `_tls_index` and the
+  TEB's `ThreadLocalStoragePointer`; `.tdata`/`.tbss` and `.tls$`.
+- **Symbol attributes** (`weak`, aliases, `section`, `used`, visibility,
+  function alignment, constructors and destructors with priorities) as the
+  directives in "Object emission"; a thread-local global in a named section
+  is the one refusal.
+- **`return_address` and `frame_address`** at level 0, from the CFA.
+
+Measured on 2026-10-15 (release build at #63's head 513a78cb plus this
+branch, same corpus and target as before, `--arms A0,A1,B0,B1`, six jobs):
+
+| Class | A0 | A1 | B0 | B1 |
+| --- | ---: | ---: | ---: | ---: |
+| pass | 1396 | 1385 | 1380 | 1375 |
+| frontend-error | 122 | 122 | 122 | 122 |
+| lowering-unsupported | 139 | 139 | 139 | 139 |
+| abi-unsupported | 6 | 6 | 6 | 6 |
+| native-unsupported | 0 | 0 | 16 | 16 |
+| compiler-crash | 0 | 0 | 0 | 0 |
+| wrong-result | 13 | 24 | 13 | 17 |
+| timeout | 0 | 0 | 0 | 1 |
+| link-error | 1 | 1 | 1 | 1 |
+
+B0 has A0's result on every source except the same 16 `f80` refusals; no new
+refusal appeared. The 10 torture sources with computed `goto` that the front
+end now lowers pass in all four arms (8 more stay `lowering-unsupported` or
+`frontend-error`); no top-level torture source uses thread-local storage.
+B1 differs from B0 on the four undefined-behaviour programs of stage 1
+(`980526-2`, `pr43629`, `pr99079`, and `pr22493-1`, now a timeout) and on
+`frame-address`, which fails in A1 as well, so the bcc pipeline, not the
+native back end, changes it.
