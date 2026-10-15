@@ -199,7 +199,8 @@ expander is easy to make total (every opcode has a case; anything else is
 `Unsupported`). Three peepholes recover most of what tree matching would:
 
 1. **Rematerialized leaves.** `iconst`, `null`, `poison`, `stack_addr`,
-   `global_addr` and `func_addr` define no register. Each use materializes
+   `global_addr` (of a global that is not thread-local) and `func_addr`
+   define no register. Each use materializes
    them on the spot: as an immediate operand where the instruction accepts one
    (32-bit sign-extended immediates), as a memory operand's base (`slot(%rsp)`
    or `sym(%rip)`), or as a fresh vreg defined right before the use (`movl`,
@@ -241,6 +242,9 @@ The selector's per-opcode table for stage 1:
 | `copy`/`fill` | up to 64 constant bytes as loads then stores; else `rep movsb`/`rep stosb`, or `memmove` for `may_overlap` |
 | `call`/`call_indirect` | see "Calls" |
 | `jump`/`brif`/`switch` | `jmp`; `test`/`cmp` + `jcc`; a compare chain (a jump table in stage 4) |
+| `block_addr` | `leaq .LBA<function>_<label>(%rip), d` |
+| `indirect_br` | incoming registers of the listed targets, then `jmpq *addr` (see "Block parameters become parallel copies") |
+| `global_addr` of a thread-local | ELF: `movq %fs:0, t; leaq sym@TPOFF(t), d`, or `movq %fs:0, d; addq sym@GOTTPOFF(%rip), d` for a declaration; Windows: `movl _tls_index(%rip), i; movq %gs:88, t; mov (t + 8i), b; leaq sym@SECREL32(b), d` |
 | `return` | value to `%rax` (extended per `signext`/`zeroext`), epilogue, `ret` |
 | `trap`, `unreachable` | `ud2` |
 
@@ -268,6 +272,15 @@ SSA block parameters are destructed during selection, not by a separate pass:
 4. Copies are `mov` between vregs with an allocation *hint* both ways, so the
    allocator usually gives an argument and its parameter the same register and
    the rewrite deletes the move.
+5. An `indirect_br` edge cannot be split, since the address names its
+   target. A labeled block with parameters therefore gets a *landing block*
+   that copies fresh *incoming* vregs into the parameters and jumps to the
+   block; the label's address is the landing block's. The `indirect_br`
+   assigns every listed target's incoming vregs (the verifier makes the
+   targets distinct) and then jumps. Incoming vregs are read only by their
+   landing block, so the assignments for the edges not taken are dead, not
+   wrong; direct edges into the block still assign the parameters. A labeled
+   block that no path reaches gets a `ud2` block for its address.
 
 ```rust
 /// One pending copy of a parallel copy; `dst` are distinct.
@@ -648,6 +661,8 @@ Sections and symbols per format:
 | initialized data | `.data` | `.data` |
 | constants | `.section .rodata`; `.data.rel.ro` if they hold addresses, which a PIE relocates at load time | `.section .rdata,"dr"` |
 | address constants | `.quad sym+addend` (`R_X86_64_64`) | `.quad sym+addend` (`IMAGE_REL_AMD64_ADDR64`) |
+| block label addresses | `.quad .LBA<f>_<l>+addend`; a label difference is `.byte`/`.short`/`.long`/`.quad .LBA<f>_<a>-.LBA<f>_<b>+addend`, resolved by the assembler | same |
+| thread-local data | `.section .tdata,"awT",@progbits` or `.tbss,"awT",@nobits` | `.section .tls$,"dw"` |
 | defined data reference | `sym(%rip)` (`R_X86_64_PC32`) | `sym(%rip)` (`IMAGE_REL_AMD64_REL32`) |
 | undefined data reference | `movq sym@GOTPCREL(%rip), %r` (`GOTPCRELX`) | `sym(%rip)`; LLD's MinGW auto-import handles DLL data |
 | direct call | `call f` / `call f@PLT` if undefined (`PLT32`) | `call f` (`REL32`; import thunks for DLL functions) |
