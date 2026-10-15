@@ -88,15 +88,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Scalar::Int128
                 }),
             | S::Extended(super::ExtendedType::Float128 { complex }) => {
-                if self.context.configuration.target() == crate::target::Target::WindowsMsvc {
-                    self.error(SemanticErrorKind::UnsupportedFloat128, source, None, None);
-                    None
-                } else {
+                if self.context.configuration.target().float128_type() {
                     Some(if *complex {
                         Scalar::ComplexFloat128
                     } else {
                         Scalar::Float128
                     })
+                } else {
+                    self.error(SemanticErrorKind::UnsupportedFloat128, source, None, None);
+                    None
                 }
             },
             | S::Float => Some(Scalar::Float),

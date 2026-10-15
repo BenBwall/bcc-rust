@@ -231,6 +231,76 @@ int queries[sizeof(byte)==1 && sizeof(half)==2 && sizeof(wide)==8 && sizeof(real
     );
 }
 
+/// glibc's Clang path spells its complex binary128 type with `mode(TC)`.
+#[test]
+fn floating_modes_select_real_and_complex_formats_as_clang_does() {
+    let source = r"
+typedef _Complex float __attribute__((__mode__(__TC__))) tc;
+typedef _Complex float __attribute__((mode(KC))) kc;
+typedef _Complex float __attribute__((mode(DC))) dc;
+typedef _Complex double __attribute__((mode(SC))) sc;
+typedef float __attribute__((mode(TF))) tf;
+typedef double __attribute__((mode(SF))) sf;
+typedef _Complex double __attribute__((mode(SF))) real_of_complex;
+int checks[__builtin_types_compatible_p(tc, _Complex __float128)
+    && __builtin_types_compatible_p(kc, _Complex __float128)
+    && __builtin_types_compatible_p(dc, _Complex double)
+    && __builtin_types_compatible_p(sc, _Complex float)
+    && __builtin_types_compatible_p(tf, __float128)
+    && __builtin_types_compatible_p(sf, float)
+    && __builtin_types_compatible_p(real_of_complex, float) ? 1 : -1];
+";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default()
+                .with_target(target)
+                .with_gnu_extensions(true),
+            |context, _| {
+                assert_eq!(
+                    context.error_count(),
+                    0,
+                    "{target:?}: {:?}",
+                    context.take_pending_errors()
+                );
+            },
+        );
+    }
+    // A complex mode needs a complex base; MSVC has no binary128 type.
+    for (source, target) in [
+        (
+            "typedef float __attribute__((mode(SC))) bad;",
+            Target::LinuxGnu,
+        ),
+        (
+            "typedef _Complex float __attribute__((mode(TC))) bad;",
+            Target::WindowsMsvc,
+        ),
+        (
+            "typedef float __attribute__((mode(XF))) bad;",
+            Target::WindowsMsvc,
+        ),
+    ] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default()
+                .with_target(target)
+                .with_gnu_extensions(true),
+            |context, _| {
+                let errors = context.take_pending_errors();
+                assert!(
+                    errors.iter().any(|error| matches!(
+                        error,
+                        TranslationError::Semantic(error)
+                            if error.kind == SemanticErrorKind::InvalidModeAttribute
+                    )),
+                    "{source}: {errors:?}"
+                );
+            },
+        );
+    }
+}
+
 #[test]
 fn invalid_representation_attributes_report_constraints_and_recover() {
     with_configuration(

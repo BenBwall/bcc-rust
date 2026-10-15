@@ -1073,17 +1073,19 @@ alignment 16. MSVC rejects the explicit type spelling, matching the pinned Clang
 but still accepts binary128 literals and their internal types through `typeof`.
 Clang's target definitions now retain `__SIZEOF_FLOAT128__` on the three GNU
 triples and `__FLOAT128__` on Linux. Clang defines no `__FLT128_*__` macros;
-none are invented. The macro oracle has 94 documented exclusions.
+none are invented. The macro oracle has 80 documented exclusions.
 
 The pinned Clang rejects native `_Float128`, `_Float32`, `_Float64`,
 `_Float32x`, `_Float64x`, and `f128`/`F128` suffixes in C11, C17, GNU17,
 C23 and GNU23. bcc follows that contract: glibc supplies its `_FloatN`
-typedefs. The private resource `bits/floatn.h` chains to glibc and bridges
-its GCC-4.2 version decision to the actual binary128 capability, enabling
-`__HAVE_FLOAT128` and the distinct type without changing compiler identity
-or editing the sysroot. Its complex typedef avoids the unmodeled GNU `mode`
-attribute. Explicit `-isystem` directories still precede resources and can
-bypass this bridge; normal `--sysroot` and `-idirafter` ordering uses it.
+typedefs. Because bcc claims Clang, glibc's own `bits/floatn.h` enables
+`__HAVE_FLOAT128` through `__glibc_clang_prereq (3, 9)` and declares the
+complex type as `_Complex float __attribute__ ((__mode__ (__TC__)))`. The GNU
+`mode` attribute selects real (`SF`, `DF`, `XF`, `TF`, `KF`) and complex
+(`SC`, `DC`, `XC`, `TC`, `KC`) floating modes as Clang resolves them: `T`
+and `K` name binary128 on the targets that spell `__float128`, and `X` the
+x87 format where `long double` uses it. The earlier private `bits/floatn.h`
+bridge, which compensated for the GCC 4.2.1 claim without Clang's, is gone.
 
 `__typeof__`, compatible-type tests, choose-expression selection, generic
 selection, type classification, and real/imaginary components now have

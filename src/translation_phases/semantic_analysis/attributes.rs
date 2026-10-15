@@ -218,8 +218,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         result
     }
 
-    /// GCC mode selects an integer or real scalar representation, preserving
-    /// signedness. Vector/complex modes require their separate subsystems.
+    /// GCC mode selects an integer representation, preserving signedness, or
+    /// a real or complex floating representation. Vector modes
+    /// belong to the vector subsystem.
     /// C99: §6.2.5p4-11, pp. 33-34; PDF pp. 45-46 (extended scalar types).
     pub(super) fn mode_attribute(&mut self, mut ty: TypeId, a: &AttributeSpecifier<'tu>) -> TypeId {
         let mut invalid = false;
@@ -265,16 +266,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | (_, false) => Scalar::UnsignedInt128,
                     })
                 }
-            } else if matches!(
-                scalar,
-                Some(Scalar::Float | Scalar::Double | Scalar::LongDouble)
-            ) {
-                match mode {
-                    | Some("SF") => Some(Scalar::Float),
-                    | Some("DF") => Some(Scalar::Double),
-                    | Some("XF") => Some(Scalar::LongDouble),
-                    | _ => None,
-                }
+            } else if mode_bits.is_none() {
+                scalar.and_then(|scalar| self.floating_mode(scalar, mode?))
             } else {
                 None
             };
@@ -298,6 +291,48 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return self.types.unknown();
         }
         ty
+    }
+
+    /// The floating scalar a GNU real (`SF`, `DF`, `XF`, `TF`, `KF`) or
+    /// complex (`SC`, `DC`, `XC`, `TC`, `KC`) mode selects for `base`, as
+    /// Clang resolves it for the target. A real mode applies to any floating
+    /// base, real or complex, and a complex mode only to a complex base. `X`
+    /// names the x87 extended format, `T` the 128-bit format (binary128 when
+    /// `long double` is not one), and `K` binary128.
+    /// GCC internals, "Machine Modes";
+    /// <https://gcc.gnu.org/onlinedocs/gccint/Machine-Modes.html>.
+    /// C99: complex types §6.2.5p11, p. 34; PDF p. 46.
+    fn floating_mode(&self, base: Scalar, mode: &str) -> Option<Scalar> {
+        use Scalar as S;
+        let complex = match mode.as_bytes() {
+            | [_, b'F'] => false,
+            | [_, b'C'] => true,
+            | _ => return None,
+        };
+        let base_complex = matches!(
+            base,
+            S::ComplexFloat | S::ComplexDouble | S::ComplexLongDouble | S::ComplexFloat128
+        );
+        let base_real = matches!(base, S::Float | S::Double | S::LongDouble | S::Float128);
+        if !(base_complex || (base_real && !complex)) {
+            return None;
+        }
+        let target = self.context.configuration.target();
+        let x87 = !target.layout().long_double_is_double();
+        let real = match &mode[..1] {
+            | "S" => S::Float,
+            | "D" => S::Double,
+            | "X" if x87 => S::LongDouble,
+            | "T" | "K" if target.float128_type() => S::Float128,
+            | _ => return None,
+        };
+        Some(match (complex, real) {
+            | (false, real) => real,
+            | (true, S::Float) => S::ComplexFloat,
+            | (true, S::Double) => S::ComplexDouble,
+            | (true, S::LongDouble) => S::ComplexLongDouble,
+            | (true, _) => S::ComplexFloat128,
+        })
     }
 
     /// Apply storage/type alignment after the complete declarator. Alignment
