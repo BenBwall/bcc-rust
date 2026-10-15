@@ -104,14 +104,14 @@ attributes; `__declspec(a)` expands to `__attribute__((a))`. Both ISO and GNU
 target tables retain these eleven definitions exactly. Linux does not define
 them, and the MSVC keyword contract is unchanged. Function declarators,
 function pointers, parameters, members and typedefs use the existing balanced
-attribute parser. `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`,
-`restrict`, `deprecated(...)`, `noinline`, `naked`, `allocate(...)`, `uuid(...)`
-and ABI annotations such as `__ms_abi__` are accepted without backend effects.
-MSVC `align(...)` remains unanalyzed. GNU `aligned(...)` retains the requested
-declaration/type alignment; GNU `packed` and scalar `mode` retain their layouts
-and representation types. Clang itself ignores
-some of these macro-expanded attributes with warnings; bcc's current attribute
-pass preserves their syntax without applicability warnings.
+attribute parser. Each macro-expanded attribute follows the
+[attribute status](#gnu-entity-attributes-and-attribute-status-2026-10-14)
+table: `dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany` and
+`noinline` are accepted, `__ms_abi__` is the target's own convention, `naked`
+is refused, and `restrict`, `allocate(...)` and `uuid(...)` warn as unknown, as
+bundled Clang's MinGW mode does. MSVC `align(...)` remains unanalyzed. GNU
+`aligned(...)` retains the requested declaration/type alignment; GNU `packed`
+and scalar `mode` retain their layouts and representation types.
 
 Startup preprocessing uses `PreprocessingOption::{Define,Undefine,Include}`
 in `src/configuration.rs`, borrowed by `Context.preprocessing_options`; the
@@ -399,7 +399,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | NamedLoops | - | - | - | - | - | - | Y | extension | parser |
 | GenericTypeOperand | - | - | - | - | - | - | Y | extension | parser |
 | CaseRanges | - | - | - | - | - | - | Y | GNU earlier | parser |
-| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; packed/aligned/scalar mode sema and lowering; vector_size sema |
+| GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; sema attribute pass; packed/aligned/scalar mode, cleanup, constructor/destructor, alias, weak, section, used, visibility lowering; vector_size sema |
 | GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -711,8 +711,9 @@ token or directive boundary.
 `__has_c_attribute` returns 202311 for the seven standard C23 attributes and
 `_Noreturn`, including double-underscore forms, and 0 for other names. GNU
 `__has_attribute` returns 1 for `unused`, `deprecated`, `aligned`, `packed`,
-`noreturn`, `weak`, `section`, `visibility`, `format`, `always_inline`, and
-`noinline`; `__has_builtin` returns 1 for `__builtin_va_arg`,
+`noreturn`, `weak`, `section`, `visibility`, `format`, `always_inline`,
+`noinline`, `gnu_inline`, `cleanup`, `constructor`, `destructor`, `alias` and
+`used`; `__has_builtin` returns 1 for `__builtin_va_arg`,
 `__builtin_va_start`, `__builtin_va_end`, `__builtin_va_copy`,
 `__builtin_offsetof`, `__builtin_types_compatible_p`, and
 `__builtin_choose_expr`, `__builtin_classify_type`, the modeled `__c11_atomic_*`,
@@ -1148,3 +1149,73 @@ its token reducer. C11 §6.7.5p4,p6 combines multiple `_Alignas` requests before
 checking natural alignment, including runtime-sized arrays and VLA typedefs.
 See [the semantic repair record](semantic-analysis.md#pr-42-round-1-layout-and-alignment-repairs-2026-10-13)
 and [GCC's packed/aligned sections](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html).
+
+## GNU entity attributes and attribute status (2026-10-14)
+
+Semantic analysis validates every attribute once and retains its meaning as
+facts; lowering consumes the facts and never reads attribute tokens
+([semantic-analysis.md](semantic-analysis.md#gnu-entity-attributes-and-cleanup-regions-2026-10-14)).
+Each name in an attribute list, in any position (declarations, type names,
+pointer levels, members, tags, enumerators and statements), is looked up once
+in `semantic_analysis/attributes/catalog.rs`. Unknown names warn as Clang's
+`-Wunknown-attributes` ("unknown attribute ignored"); a vendor prefix other than
+`gnu::` or `clang::` is unknown, as in Clang. Warnings are withheld inside
+system headers, so library headers stay quiet.
+
+Implemented meanings, with Clang's applicability diagnostics:
+
+- `cleanup(f)` on an automatic variable calls `f(&var)` on every exit from its
+  scope (fallthrough, `break`, `continue`, `return`, `goto`, the end of a
+  statement expression), innermost variable first and interleaved with VLA
+  storage release, after the return or tail value is computed. `f` must be a
+  function taking one parameter that `&var` converts to; discarded qualifiers
+  and `void *` are accepted, as Clang does. Elsewhere it warns as ignored. A
+  goto or switch case that enters the variable's scope, and an indirect goto
+  that enters or leaves it, are errors, as in Clang. `longjmp` does not run
+  cleanups. For a returned structure, GCC's value semantics apply: Clang's
+  named return value optimization lets a cleanup modify the returned copy,
+  bcc's and GCC's results do not see that change.
+- `constructor`/`destructor` with an optional integer constant priority
+  (default 65535) register a function definition: `llvm.global_ctors` and
+  `llvm.global_dtors` in the LLVM back end; the interpreter runs constructors
+  before `main` in increasing priority (ties in definition order) and
+  destructors after `main` returns or `exit`, in decreasing priority (ties in
+  reverse order), not after `abort`. Priorities outside 0-65535 are errors and
+  0-100 warn as reserved, as GCC does (bundled Clang accepts both silently).
+  A constructor or destructor with parameters is refused.
+- `alias("target")` makes a declaration another name for a definition of the
+  same translation unit, resolved through alias chains (an LLVM global alias).
+  Clang's errors apply: the target must be defined (by its C name), an alias
+  cannot be a definition (a non-`static` file-scope object without `extern`
+  is a tentative definition), functions alias functions and objects objects,
+  and cycles are rejected; differing function types warn
+  (`-Wattribute-alias`). A target or alias with an assembler label is refused.
+- `weak` gives definitions weak linkage and declarations `extern_weak`
+  linkage, so an undefined weak function or object has a null address, on
+  every target: bundled Clang emits the same LLVM linkage for COFF, where LLD
+  resolves it as a weak external (checked by linking with Clang-compiled
+  units on x86_64-w64-windows-gnu and, under WSL, x86_64-unknown-linux-gnu).
+  Internal or no linkage is an error. The bcc inliner never inlines a weak
+  definition; the interpreter resolves a weak declaration to its default
+  host function when the host provides one, else to null.
+- `section("name")`, `used`, `visibility("default"|"hidden"|"internal"|
+  "protected")` and `aligned(N)` on functions are emitted on the symbol;
+  `section` and `alias` on an automatic variable are errors, `used` warns.
+  Visibility on an entity with internal linkage is accepted silently and has
+  no effect, as in Clang.
+
+| Status | Attributes |
+| --- | --- |
+| Implemented (entity) | `alias`, `cleanup`, `constructor`, `destructor`, `section` (and MSVC `allocate`), `used`, `visibility`, `weak`, `aligned` on functions |
+| Implemented (representation) | `aligned`, `packed`, scalar `mode`, `vector_size`; `gnu_inline`; `ms_struct` on Windows targets, `gcc_struct` on Linux targets |
+| Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `interrupt`, `no_caller_saved_registers` and the other non-x86 conventions are refused |
+| Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked`, `returns_twice`, `overloadable`, `cpu_dispatch`, `cpu_specific`, `target_version`, `pass_object_size`, `pass_dynamic_object_size`, MSVC `thread`, the foreign record layout (`gcc_struct` on Windows, `ms_struct` on Linux) |
+| Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `transparent_union` (calls passing a member are rejected), `weak_import`, `copy` |
+| Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `always_inline`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `error`, `warning`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `noinline`, `noipa`, `nonnull`, `nonstring`, `noreturn`, `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, `dllimport`, `dllexport`, `selectany`, and the C23 standard attributes; see the catalog for the full list |
+| Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver`, `persistent` and `scalar_storage_order` (ignored in either byte order, as bundled Clang does), and MSVC `restrict`, `uuid`, `allocate` through MinGW's `__declspec` macro |
+
+`__declspec` modifiers use the MSVC catalog: `align` stays an unanalyzed
+representation, `allocate` is `section`, `thread` and `naked` are refused, and
+`dllimport`, `dllexport`, `noreturn`, `nothrow`, `selectany`, `noinline`,
+`deprecated`, `restrict`, `noalias`, `novtable`, `uuid` and similar
+declaration annotations are accepted.

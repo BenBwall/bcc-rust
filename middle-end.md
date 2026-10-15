@@ -400,11 +400,19 @@ because a load of bytes never written is poison as a whole.
 
 ### Module
 
-A module holds its functions, its globals, its interned signatures and the
-target. A function has a name, a signature, a linkage (`external`, `internal`),
-and, if defined, a body. A global has a name, a linkage, size, alignment, a
-`constant` flag, and an initializer: zero, or bytes plus relocations
-`(offset, symbol, addend)` for address constants.
+A module holds its functions, its globals, its interned signatures, its
+constructor and destructor list and the target. A function has a name, a
+signature, a linkage (`external`, `internal`, `weak`), an optional code
+alignment, symbol attributes and, if defined, a body. A global has a name, a
+linkage, size, alignment, a `constant` flag, symbol attributes and an
+initializer: zero, or bytes plus relocations `(offset, symbol, addend)` for
+address constants. A `weak` definition may be replaced by a strong one at link
+time; a `weak` declaration may stay undefined with a null address. Symbol
+attributes are an alias target (another definition of the same kind, not
+itself an alias; the alias has no body or initializer), a section, `used`
+retention and `hidden`/`protected` visibility. Constructors and destructors
+are parameterless defined functions with a 16-bit priority, kept in
+registration order. See [GNU entity attributes](#gnu-entity-attributes-2026-10-14).
 
 ### Textual form
 
@@ -1175,3 +1183,49 @@ existing f80/f128 limitation. Bounded formatting shares the existing interpreter
 formatter, writes at most `n-1` characters plus a terminator, avoids the destination
 for `n==0`, and returns the untruncated character count. See the dated torture
 survey for corpus and focused execution results.
+
+## GNU entity attributes (2026-10-14)
+
+Semantic analysis retains validated GNU attributes as facts
+([semantic-analysis.md](semantic-analysis.md#gnu-entity-attributes-and-cleanup-regions-2026-10-14));
+lowering maps them without reading attribute tokens (`lowering/symbols.rs`,
+`lowering/cleanup.rs`):
+
+- **Textual form.** Function headers end in
+  `linkage [align N] [hidden|protected] [section "name"] [used] [alias @target]`,
+  global headers in `size N, align N [hidden|protected] [section "name"] [used]
+  [alias @target]`. Module lines `constructor @f priority N` and
+  `destructor @f priority N` follow the globals. The verifier checks alias
+  targets (existing, same kind, defined, not an alias), section names
+  (nonempty, without quote, newline or NUL), default visibility on internal
+  symbols (LLVM rejects any other for local linkage) and
+  constructors/destructors (defined, no parameters).
+- **Lowering.** An external entity with `weak` gets `weak` linkage; every
+  retained alias is declared, even if unused, and points at its target's
+  symbol; section, used, visibility and function alignment go on the symbol
+  when it is declared; constructors and destructors are registered in
+  definition order. A cleanup region's exit calls its function with the
+  variable's address (a stack slot; cleanup variables are address-taken),
+  interleaved with VLA stack restores in the transition's inner-to-outer
+  order, after return values and statement-expression tails are computed.
+- **Optimizer.** `inline` refuses weak callees, whose body a strong definition
+  may replace. GVN's alias check compares alias globals as their targets.
+  Aliases have no body, so they are never inlined either.
+- **Interpreter.** `run_main` (used by the CLI, the difftest oracle and the
+  end-to-end tests) runs constructors before main and destructors after main
+  returns or `exit` (unwinding main's frames first), not after `abort`.
+  Aliases share their target's address and body; an undefined weak function or
+  global has the null address unless the host provides the function, and
+  calling it is undefined behavior.
+- **LLVM.** Weak definitions are `weak`, weak declarations `extern_weak`,
+  aliases LLVM global aliases, and `llvm.global_ctors`, `llvm.global_dtors`
+  and `llvm.used` are appending arrays, as bundled Clang emits them on both
+  ELF and COFF targets; sections, visibility and function alignment use the
+  LLVM-C setters.
+
+Evidence: `src/ir/tests/symbols.rs`, `src/backend/interpreter/tests/startup.rs`,
+`backend::llvm::tests::golden::symbol_attributes_match_clang_spellings`, and
+`src/pipeline/tests/middle_end/entity_attributes.rs`, which runs the issue #56
+reproducers and cleanup/priority programs through the interpreter at every
+stage, all four LLVM arms and bundled Clang on the host, and links weak/alias
+units with Clang-compiled units natively (Windows GNU) and under WSL (System V).
