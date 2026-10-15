@@ -18,11 +18,11 @@
 //!
 //! [`select`] classifies every value first, in reverse post-order so that
 //! operands are classified before their users, then selects the blocks.
-//! Calls, function entry and returns are in `isel/calls.rs`; branches and
-//! the parallel copies that replace block parameters in `isel/edges.rs`;
-//! loads, stores, `copy` and `fill` in `isel/memory.rs`; `f32` and `f64`
-//! operations in `isel/float.rs`; `i128` register pairs in `isel/wide.rs`;
-//! dynamic stack allocation in `isel/stack.rs`.
+//! Calls, function entry and returns are in `isel/calls.rs`; branches,
+//! block labels and the parallel copies that replace block parameters in
+//! `isel/edges.rs`; loads, stores, `copy` and `fill` in `isel/memory.rs`;
+//! `f32` and `f64` operations in `isel/float.rs`; `i128` register pairs in
+//! `isel/wide.rs`; dynamic stack allocation in `isel/stack.rs`.
 //!
 //! Integer values narrower than 64 bits live in registers whose upper bits
 //! are unspecified, except `i1`, which is always 0 or 1 in the whole
@@ -41,11 +41,13 @@ use super::{
     conv::CallConv,
     mir::{
         AluOp,
+        Base,
         Cond,
         FrameSlotData,
         MBlock,
         MFunction,
         MInst,
+        Mem,
         Operand,
         PReg,
         Reg,
@@ -115,6 +117,7 @@ pub(crate) fn select<'a>(
             selector.block_map[block.index()] = Some(selector.func.block(arena));
         }
     }
+    selector.labels();
     let uses = |opcodes: &[Opcode]| {
         body.blocks().any(|block| {
             body.block_insts(block)
@@ -189,6 +192,12 @@ pub(super) struct Selector<'a, 'm, 'ir> {
     pub(super) result:    calls::ResultArea,
     /// What `va_start` stores, prepared by the entry sequence.
     pub(super) va_start:  calls::VaStart,
+    /// For each labeled IR block, the block its address names and where
+    /// its incoming registers start in [`Self::incoming`].
+    pub(super) labeled:   ArenaVec<'a, Option<edges::LabelTarget>>,
+    /// The registers an `indirect_br` assigns a labeled block's parameters
+    /// through, one per parameter, in block order.
+    pub(super) incoming:  ArenaVec<'a, ValueKind>,
 }
 
 impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
@@ -216,6 +225,8 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             current: MBlock::new(0),
             result: calls::ResultArea::None,
             va_start: calls::VaStart::None,
+            labeled: filled(arena, body.block_count(), None),
+            incoming: ArenaVec::new_in(arena),
         }
     }
 
@@ -555,10 +566,18 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 opcode: Opcode::Trap,
                 ..
             } => self.emit(MInst::Ud2),
+            | InstData::BlockAddr { label } => {
+                let dst = self.result_reg(result);
+                self.emit(MInst::Lea {
+                    dst,
+                    addr: Mem::new(Base::Label(label.as_u32()), 0),
+                });
+            },
             | InstData::Jump { .. }
             | InstData::Brif { .. }
             | InstData::Switch { .. }
             | InstData::Return { .. }
+            | InstData::IndirectBr { .. }
             | InstData::Unreachable => self.terminator(data)?,
             | _ => return Err(Construct::Opcode(opcode)),
         }

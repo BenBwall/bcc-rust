@@ -13,6 +13,17 @@
 //! materialized last, since they read no register.
 //!
 //! A `switch` becomes a chain of compares, one block per case.
+//!
+//! An `indirect_br` (GNU extension: GCC "Labels as Values") becomes
+//! `jmpq *reg`. Its edges cannot get blocks of their own, since the
+//! address names the target, so a labeled block with parameters gets a
+//! *landing block* instead: the label's address is the landing block's,
+//! which copies fresh incoming registers into the parameters and jumps to
+//! the block. Before the jump, the `indirect_br` assigns every listed
+//! target's incoming registers, which nothing else reads, so the copies
+//! for the edges not taken are harmless; direct edges still assign the
+//! parameters themselves. A labeled block that no path reaches gets a
+//! `ud2` block for its address.
 
 use super::{
     Selector,
@@ -35,6 +46,7 @@ use crate::{
     },
     ir::{
         BlockCall,
+        BlockList,
         Entity,
         InstData,
         Type,
@@ -70,10 +82,108 @@ impl Selector<'_, '_, '_> {
                 cases,
             } => self.switch(value, default, cases),
             | InstData::Return { value } => self.ret(value),
+            | InstData::IndirectBr { addr, dests } => self.indirect_branch(addr, dests),
             | InstData::Unreachable => self.emit(MInst::Ud2),
             | _ => return Err(Construct::Opcode(data.opcode())),
         }
         Ok(())
+    }
+
+    /// Gives every IR block label the machine block its address names:
+    /// the labeled block itself, a landing block that assigns its
+    /// parameters from incoming registers, or a `ud2` block when the
+    /// labeled block is unreachable.
+    pub(super) fn labels(&mut self) {
+        let body = self.body;
+        let current = self.current;
+        for (label, block) in body.labels() {
+            let params = body.block_params(block);
+            let address = match self.block_map[block.index()] {
+                | Some(target) if params.is_empty() => {
+                    self.labeled[block.index()] = Some(LabelTarget {
+                        block:    target,
+                        incoming: 0,
+                    });
+                    target
+                },
+                | Some(target) => {
+                    let landing = self.func.block(self.arena);
+                    let incoming = u32::try_from(self.incoming.len())
+                        .expect("incoming register indices fit u32");
+                    self.current = landing;
+                    for &param in params {
+                        let from = self.fresh(self.ty(param));
+                        self.incoming.push(from);
+                        match (self.kind(param), from) {
+                            | (ValueKind::Reg(dst), ValueKind::Reg(src)) =>
+                                self.copy(Reg::Virt(dst), Reg::Virt(src)),
+                            | (
+                                ValueKind::Pair(low, high),
+                                ValueKind::Pair(from_low, from_high),
+                            ) => {
+                                self.copy(Reg::Virt(low), Reg::Virt(from_low));
+                                self.copy(Reg::Virt(high), Reg::Virt(from_high));
+                            },
+                            | _ => unreachable!("block parameters are registers"),
+                        }
+                    }
+                    self.emit(MInst::Jmp { target });
+                    self.labeled[block.index()] = Some(LabelTarget {
+                        block: landing,
+                        incoming,
+                    });
+                    landing
+                },
+                | None => {
+                    let trap = self.func.block(self.arena);
+                    self.current = trap;
+                    self.emit(MInst::Ud2);
+                    trap
+                },
+            };
+            self.func.labels.push((label.as_u32(), address));
+        }
+        self.current = current;
+    }
+
+    /// An `indirect_br`: the incoming registers of every listed target
+    /// that takes arguments, then `jmpq *addr`.
+    fn indirect_branch(&mut self, addr: Value, dests: BlockList) {
+        let body = self.body;
+        let target = self.reg(addr);
+        let mut blocks = ArenaVec::with_capacity_in(body.block_list(dests).len(), self.arena);
+        for dest in body.block_list(dests) {
+            let (block, args) = body.block_call(dest);
+            let label = self.labeled[block.index()]
+                .expect("the verifier requires every indirect target to be labeled");
+            blocks.push(label.block);
+            let start = label.incoming as usize;
+            for (index, &arg) in args.iter().enumerate() {
+                match (self.incoming[start + index], self.kind(arg)) {
+                    | (_, ValueKind::Unknown) => {},
+                    | (ValueKind::Reg(dst), ValueKind::Reg(src)) =>
+                        self.copy(Reg::Virt(dst), Reg::Virt(src)),
+                    | (ValueKind::Reg(dst), _) => self.leaf_into(Reg::Virt(dst), arg),
+                    | (ValueKind::Pair(low, high), ValueKind::Pair(from_low, from_high)) => {
+                        self.copy(Reg::Virt(low), Reg::Virt(from_low));
+                        self.copy(Reg::Virt(high), Reg::Virt(from_high));
+                    },
+                    | (ValueKind::Pair(low, high), ValueKind::Wide(bits)) => {
+                        #[expect(
+                            clippy::cast_possible_truncation,
+                            reason = "The halves are split here."
+                        )]
+                        let halves = [bits as u64, (bits >> 64) as u64];
+                        self.constant(Reg::Virt(low), halves[0], Type::I64);
+                        self.constant(Reg::Virt(high), halves[1], Type::I64);
+                    },
+                    | _ => unreachable!("incoming registers match their parameters"),
+                }
+            }
+        }
+        let dests = u32::try_from(self.func.indirect.len()).expect("indirect jumps fit u32");
+        self.func.indirect.push(blocks);
+        self.emit(MInst::JmpIndirect { target, dests });
     }
 
     /// The copies of an edge, then a `jmp` to its block.
@@ -229,6 +339,16 @@ impl Selector<'_, '_, '_> {
         self.emit(MInst::Jmp { target: otherwise });
         self.fill_edges(&pending);
     }
+}
+
+/// Where a labeled block's address leads.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::backend::native) struct LabelTarget {
+    /// The labeled block, or its landing block.
+    pub(super) block:    MBlock,
+    /// The first of the block's incoming registers in
+    /// [`Selector::incoming`].
+    pub(super) incoming: u32,
 }
 
 /// A case constant's bits at the scrutinee's width.

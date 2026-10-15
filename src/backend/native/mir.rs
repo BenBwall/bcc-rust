@@ -52,6 +52,11 @@ pub(crate) struct MFunction<'a> {
     /// Whether the frame holds a System V register save area for
     /// `va_start`.
     pub(crate) register_save: bool,
+    /// The targets of each [`MInst::JmpIndirect`], by its `dests` index.
+    pub(crate) indirect:      ArenaVec<'a, ArenaVec<'a, MBlock>>,
+    /// Each IR block label with the block its address names: the labeled
+    /// block, or a landing block that assigns its parameters first.
+    pub(crate) labels:        ArenaVec<'a, (u32, MBlock)>,
 }
 
 impl<'a> MFunction<'a> {
@@ -66,7 +71,21 @@ impl<'a> MFunction<'a> {
             calls:         false,
             dynamic:       false,
             register_save: false,
+            indirect:      ArenaVec::new_in(arena),
+            labels:        ArenaVec::new_in(arena),
         }
+    }
+
+    /// The blocks the terminator of `block` may transfer control to.
+    pub(crate) fn successors(&self, block: MBlock) -> impl Iterator<Item = MBlock> {
+        let last = self.blocks[block.index()].insts.last();
+        let indirect = match last {
+            | Some(&MInst::JmpIndirect { dests, .. }) => &self.indirect[dests as usize][..],
+            | _ => &[],
+        };
+        last.into_iter()
+            .flat_map(MInst::successors)
+            .chain(indirect.iter().copied())
     }
 
     /// A fresh general-purpose virtual register.
@@ -418,6 +437,9 @@ pub(crate) enum Base {
     Got(SymbolRef),
     /// An entry of [`MFunction::constants`], `.LCPI…(%rip)`.
     Constant(u32),
+    /// The address of the function's IR block label with this index,
+    /// `.LBA…(%rip)`. GNU extension: GCC "Labels as Values".
+    Label(u32),
 }
 
 /// A frame object, before frame layout gives it an offset.
@@ -786,6 +808,12 @@ pub(crate) enum MInst {
         taken:     MBlock,
         not_taken: MBlock,
     },
+    /// `jmpq *target`; the possible targets are [`MFunction::indirect`]
+    /// entry `dests`.
+    JmpIndirect {
+        target: Reg,
+        dests:  u32,
+    },
     /// An SSE move: a register copy (`movaps`, deleted between equal
     /// registers when `width` is `B64`) or a load (`movss`/`movsd`).
     XMov {
@@ -885,6 +913,7 @@ impl MInst {
             },
             | Self::MovImm64 { dst, .. } | Self::Setcc { dst, .. } | Self::XZero { dst } =>
                 visit(dst, Role::Def),
+            | Self::JmpIndirect { target, .. } => visit(target, Role::Use),
             | Self::XStore { dst, src, .. } => {
                 memory(dst, &mut visit);
                 visit(src, Role::Use);
@@ -989,7 +1018,8 @@ impl MInst {
         }
     }
 
-    /// The blocks a terminator may transfer control to.
+    /// The blocks a direct branch may transfer control to; an indirect
+    /// jump's are in [`MFunction::successors`].
     pub(crate) fn successors(&self) -> impl Iterator<Item = MBlock> {
         let (first, second) = match *self {
             | Self::Jmp { target } => (Some(target), None),

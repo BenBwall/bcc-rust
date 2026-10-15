@@ -12,6 +12,7 @@ use super::{
 };
 use crate::{
     backend::native::mir::{
+        MBlock,
         MFunction,
         MInst,
         PReg,
@@ -94,13 +95,7 @@ impl<'a> Liveness<'a> {
             changed = false;
             for block in (0..blocks).rev() {
                 let range = block * words..(block + 1) * words;
-                let successors = func.blocks[block]
-                    .insts
-                    .last()
-                    .map(MInst::successors)
-                    .into_iter()
-                    .flatten();
-                for successor in successors {
+                for successor in func.successors(MBlock::new(block)) {
                     let from = successor.index() * words;
                     for word in 0..words {
                         live_out[range.start + word] |= live_in[from + word];

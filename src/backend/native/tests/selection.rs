@@ -510,3 +510,41 @@ block0(v0: i128, v1: i128):
     assert!(f.contains("sbbq"), "{f}");
     assert!(f.contains("callq\t__udivti3@PLT"), "{f}");
 }
+
+#[test]
+fn block_labels_name_landing_blocks_and_fill_label_tables() {
+    let text = assembly(
+        "abi lowered
+global @table internal constant size 12, align 8 = bytes \"000000000000000000000000\" relocs [0: \
+         blockaddress(@f, label0) + 2, 8: labeldiff.i32(@f, label1, label0)]
+function @f(ptr, i32) -> i32 external {
+    label0 = block_label block1
+    label1 = block_label block2
+    label2 = block_label block3
+block0(v0: ptr, v1: i32):
+    indirect_br v0, [block1(v1), block2]
+block1(v2: i32):
+    return v2
+block2:
+    v3 = block_addr label1
+    v4 = iconst.i32 4
+    indirect_br v3, [block1(v4), block2]
+block3:
+    unreachable
+}
+",
+        Target::LinuxGnu,
+    );
+    let f = function_text(&text, "f");
+    assert_eq!(f.matches("\tjmpq\t*%").count(), 2, "{f}");
+    assert!(f.contains("leaq\t.LBA0_1(%rip), %"), "{f}");
+    for label in [".LBA0_0:", ".LBA0_1:", ".LBA0_2:"] {
+        assert_eq!(f.matches(label).count(), 1, "{label}\n{f}");
+    }
+    // The parameter of block1 arrives through a landing block, so label 0
+    // is not at the block a direct branch would enter.
+    let landing = f.find(".LBA0_0:").unwrap();
+    assert!(f[landing..].contains("\tjmp\t"), "{f}");
+    assert!(text.contains("\t.quad\t.LBA0_0+2\n"), "{text}");
+    assert!(text.contains("\t.long\t.LBA0_1-.LBA0_0\n"), "{text}");
+}

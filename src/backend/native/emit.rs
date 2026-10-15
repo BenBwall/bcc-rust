@@ -19,6 +19,11 @@
 //!
 //! Each function's read-only constants follow it in `.rodata` (`.rdata` on
 //! COFF), 16 bytes each so that `xorps` may read them.
+//!
+//! An IR block label is the local symbol `.LBA<function>_<label>` at the
+//! block its address names; `block_addr` takes it RIP-relative, and global
+//! relocations write it (`.quad`) or a difference of two such labels in one
+//! function (`.long a-b`), as Clang does for GCC's "Labels as Values".
 
 use std::fmt::{
     self,
@@ -116,6 +121,9 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         for (index, block) in func.blocks.iter().enumerate() {
             let block_id = MBlock::new(index);
             writeln!(self.out, "{}:", Label(id, block_id))?;
+            for &(label, _) in func.labels.iter().filter(|&&(_, at)| at == block_id) {
+                writeln!(self.out, "{}:", BlockLabel(id, label))?;
+            }
             let next = (index + 1 < func.blocks.len()).then(|| MBlock::new(index + 1));
             for inst in &block.insts {
                 self.instruction(id, inst, frame, next)?;
@@ -587,6 +595,8 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                     writeln!(out, "\tj{}\t{}", cond.name(), Label(func, taken))?;
                     writeln!(out, "\tjmp\t{}", Label(func, not_taken))
                 },
+            | MInst::JmpIndirect { target, .. } =>
+                writeln!(out, "\tjmpq\t*{}", reg(target, Width::B64)),
             | MInst::Ret { .. } => self.epilogue(frame),
             | MInst::Ud2 => writeln!(out, "\tud2"),
         }
@@ -831,6 +841,13 @@ impl fmt::Display for Op<'_, '_, '_> {
                     },
                     | Base::Got(symbol) =>
                         write!(f, "{}@GOTPCREL(%rip)", symbol_name(module, symbol)),
+                    | Base::Label(label) => {
+                        write!(f, "{}", BlockLabel(self.func, label))?;
+                        if disp != 0 {
+                            write!(f, "{disp:+}")?;
+                        }
+                        write!(f, "(%rip)")
+                    },
                 }
             },
         }

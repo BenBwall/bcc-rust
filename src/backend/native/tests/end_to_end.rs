@@ -546,21 +546,157 @@ block0:
 }
 ";
 
+/// Block labels (GNU extension: GCC "Labels as Values"): `@walk` loops
+/// through `indirect_br` edges whose arguments differ per target, swap
+/// parameters and pass `i128` pairs and constants, so its labeled blocks
+/// get landing blocks; a direct edge still enters a labeled block, and an
+/// unreachable labeled block still has an address. `@pick` adds label
+/// differences of every width, one with an addend, to a label.
+const LABEL_PROGRAM: &str =
+    "abi lowered
+global @format internal constant size 6, align 1 = bytes \"256c6c640a00\"
+global @table internal constant size 24, align 8 = bytes \
+     \"000000000000000000000000000000000000000000000000\" relocs [0: blockaddress(@walk, label0), \
+     8: blockaddress(@walk, label1), 16: blockaddress(@walk, label2)]
+global @offsets internal constant size 16, align 8 = bytes \"00000000000000000000000000000000\" \
+     relocs [0: labeldiff.i64(@pick, label1, label0), 8: labeldiff.i32(@pick, label2, label0) + \
+     5, 12: labeldiff.i16(@pick, label1, label0), 14: labeldiff.i8(@pick, label0, label0)]
+function @printf(ptr, ...) -> i32 external
+function @walk(i64) -> i64 internal {
+    label0 = block_label block1
+    label1 = block_label block2
+    label2 = block_label block3
+    label3 = block_label block5
+block0(v0: i64):
+    v1 = global_addr @table
+    v2 = load.ptr v1, align 8
+    v3 = iconst.i64 0
+    v4 = iconst.i128 5
+    indirect_br v2, [block1(v0, v3, v4), block2(v3, v0), block3(v0)]
+block1(v5: i64, v6: i64, v7: i128):
+    v8 = icmp.i64 eq v5, v3
+    brif v8, block4(v6, v7), block6
+block6:
+    v9 = iconst.i64 3
+    v10 = imul.i64 v6, v9
+    v11 = iadd.i64 v10, v5
+    v12 = iconst.i64 1
+    v13 = isub.i64 v5, v12
+    v14 = sext.i128 v11
+    v15 = iadd.i128 v7, v14
+    v16 = urem.i64 v13, v9
+    v17 = iconst.i64 8
+    v18 = imul.i64 v16, v17
+    v19 = ptr_add v1, v18
+    v20 = load.ptr v19, align 8
+    indirect_br v20, [block1(v13, v11, v15), block2(v11, v13), block3(v13)]
+block2(v21: i64, v22: i64):
+    v23 = iconst.i64 100
+    v24 = iadd.i64 v21, v23
+    v25 = block_addr label0
+    v26 = sext.i128 v24
+    v27 = iconst.i64 2
+    v28 = urem.i64 v22, v27
+    v29 = icmp.i64 eq v28, v3
+    v30 = block_addr label2
+    v31 = select.ptr v29, v25, v30
+    indirect_br v31, [block1(v22, v24, v26), block3(v22)]
+block3(v32: i64):
+    v33 = iconst.i64 7
+    v34 = iadd.i64 v32, v33
+    v35 = iconst.i128 -3
+    jump block1(v32, v34, v35)
+block4(v36: i64, v37: i128):
+    v38 = trunc.i64 v37
+    v39 = iconst.i128 64
+    v40 = lshr.i128 v37, v39
+    v41 = trunc.i64 v40
+    v42 = iadd.i64 v36, v38
+    v43 = iadd.i64 v42, v41
+    v44 = block_addr label3
+    v45 = block_addr label0
+    v46 = icmp.ptr eq v44, v45
+    v47 = zext.i64 v46
+    v48 = iadd.i64 v43, v47
+    return v48
+block5:
+    unreachable
+}
+
+function @pick(i64) -> i64 internal {
+    label0 = block_label block1
+    label1 = block_label block2
+    label2 = block_label block3
+block0(v0: i64):
+    v1 = block_addr label0
+    v2 = ptr_add v1, v0
+    indirect_br v2, [block1, block2, block3]
+block1:
+    v3 = iconst.i64 10
+    return v3
+block2:
+    v4 = iconst.i64 20
+    return v4
+block3:
+    v5 = iconst.i64 30
+    return v5
+}
+
+function @main() -> i32 external {
+block0:
+    v0 = global_addr @format
+    v1 = iconst.i64 9
+    v2 = call @walk(v1)
+    v3 = call @printf(v0, v2)
+    v4 = iconst.i64 0
+    v5 = call @walk(v4)
+    v6 = call @printf(v0, v5)
+    v7 = global_addr @offsets
+    v8 = load.i64 v7, align 8
+    v9 = call @pick(v8)
+    v10 = call @printf(v0, v9)
+    v11 = iconst.i64 8
+    v12 = ptr_add v7, v11
+    v13 = load.i32 v12, align 4
+    v14 = sext.i64 v13
+    v15 = iconst.i64 5
+    v16 = isub.i64 v14, v15
+    v17 = call @pick(v16)
+    v18 = call @printf(v0, v17)
+    v19 = iconst.i64 12
+    v20 = ptr_add v7, v19
+    v21 = load.i16 v20, align 2
+    v22 = sext.i64 v21
+    v23 = call @pick(v22)
+    v24 = call @printf(v0, v23)
+    v25 = iconst.i64 14
+    v26 = ptr_add v7, v25
+    v27 = load.i8 v26, align 1
+    v28 = sext.i64 v27
+    v29 = call @pick(v28)
+    v30 = call @printf(v0, v29)
+    v31 = iconst.i32 0
+    return v31
+}
+";
+
 #[test]
 fn ir_programs_match_the_interpreter() {
     let directory = TempDir::new("native-ir");
     for (target, runner) in targets() {
-        let arena = Bump::new();
-        let module = crate::ir::parse_module(&arena, IR_PROGRAM).unwrap();
-        let expected = interpret(&module, target).unwrap();
-        let mut text = String::new();
-        emit_assembly(&module, target, &mut text).unwrap();
-        let name = format!("ir-{target:?}");
-        let actual = run_assembly(&text, target, runner, directory.path(), &name).unwrap();
-        assert_eq!(
-            actual, expected,
-            "{target:?}
+        for (index, program) in [IR_PROGRAM, LABEL_PROGRAM].into_iter().enumerate() {
+            let arena = Bump::new();
+            let module = crate::ir::parse_module(&arena, program).unwrap();
+            let expected = interpret(&module, target).unwrap();
+            let mut text = String::new();
+            emit_assembly(&module, target, &mut text).unwrap();
+            let name = format!("ir{index}-{target:?}");
+            let actual = run_assembly(&text, target, runner, directory.path(), &name).unwrap();
+            assert_eq!(
+                actual, expected,
+                "{target:?}
 {text}"
-        );
+            );
+        }
     }
 }
