@@ -3,6 +3,34 @@
 use super::*;
 
 #[test]
+fn pragma_packed_struct_abi_exchange_matches_clang() {
+    let decl = "#pragma pack(push, boundary, 1)\nstruct S { char c; int x; };\n#pragma pack(pop, \
+                boundary)\n";
+    let body = "struct S b_echo(struct S s) { s.x++; s.c++; return s; }";
+    let bcc = format!(
+        "{decl}{body} struct S c_echo(struct S); int b_call(void) {{ struct S s={{7,41}}; struct \
+         S r=c_echo(s); return r.c!=8 || r.x!=42; }}"
+    );
+    let clang = format!(
+        "{decl}{} struct S b_echo(struct S); int b_call(void); int main(void) {{ struct S \
+         s={{7,41}}; struct S r=b_echo(s); return b_call() || r.c!=8 || r.x!=42; }}",
+        body.replace("b_echo", "c_echo")
+    );
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        for optimized in [false, true] {
+            let tu = Bump::new();
+            let arena = Bump::new();
+            let mut module = lower_c(&tu, &arena, &bcc, target);
+            if optimized {
+                _ = optimize(&mut module, &OptimizerOptions::default(), &Bump::new());
+            }
+            lower_abi(&mut module, target, &Bump::new()).unwrap();
+            assert_conforms("pragma-pack-exchange", target, &module, &clang);
+        }
+    }
+}
+
+#[test]
 fn reduced_typedef_alignment_uses_memory_for_sysv() {
     let decl = "typedef int I __attribute__((aligned(1))); struct S { char c; I x; };";
     let body = "struct S b_echo(struct S s) { s.x++; return s; }";

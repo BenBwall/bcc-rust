@@ -351,6 +351,9 @@ pub(crate) enum TypeSpecifiers<'tu> {
 /// analysis.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct StructOrUnionSpecifier<'tu> {
+    /// Output-token ordinal at the opening brace; pragma interpretation is
+    /// sema's. C99: §6.10.6p1, p. 159; PDF p. 171.
+    pub(crate) pack_position:           usize,
     pub(crate) attributes:              Option<&'tu super::modern::SpecifierExtension<'tu>>,
     pub(crate) struct_or_union:         StructOrUnion,
     pub(crate) identifier:              Option<Identifier>,

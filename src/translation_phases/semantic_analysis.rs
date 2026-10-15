@@ -67,6 +67,7 @@ mod expressions;
 mod facts;
 mod functions;
 mod initializers;
+mod predefined;
 mod statements;
 mod traversal;
 
@@ -80,6 +81,7 @@ mod attributes;
 mod bound_sites;
 mod builtins;
 mod generic;
+mod packing;
 mod type_generic;
 mod vectors;
 
@@ -270,6 +272,7 @@ pub(crate) fn analyze<'tu>(
         expressions: analyzer.expressions.leak(),
         expression_indices: index.expressions,
         string_initializers: analyzer.string_initializers,
+        flexible_arrays: analyzer.flexible_arrays,
         conversions: index.conversions,
         conversion_starts: index.conversion_starts,
         types: analyzer.types.finish(),
@@ -1668,6 +1671,7 @@ struct Analyzer<'a, 'tu, 's> {
     context:                 &'a mut Context<'tu>,
     scratch:                 &'s Bump,
     types:                   TypeInterner<'tu, 's>,
+    pack_alignments:         &'s [(usize, u32)],
     bindings:                ArenaVec<'tu, Binding>,
     declarators:             ArenaVec<'tu, Declarator<'tu>>,
     definitions:             ArenaVec<'tu, Definition>,
@@ -1717,6 +1721,10 @@ struct Analyzer<'a, 'tu, 's> {
     function_controls:       ArenaMap<'s, usize, (FunctionControl, Option<RegionId>)>,
     expression_indices:      ArenaMap<'s, usize, usize>,
     string_initializers:     ArenaMap<'tu, usize, TypeId>,
+    flexible_arrays:         ArenaMap<'tu, usize, TypeId>,
+    /// Unions whose definition requests `transparent_union`, until their
+    /// completion decides whether they qualify.
+    transparent_unions:      ArenaMap<'s, usize, SourceVectors>,
     /// Conversion records in the order they were applied, grouped by
     /// expression when analysis ends.
     conversions:             ArenaVec<'s, Conversion<'tu>>,

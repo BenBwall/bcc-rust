@@ -196,6 +196,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 } else if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
                     let token = token.expect("opening-curly-brace token exists");
                     self.body_started = true;
+                    self.pack_position = parser.cursor.consumed;
                     self.source_vectors.push(token.source_vectors);
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Consume
@@ -219,6 +220,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
                 if is_operator(token, OperatorTokenType::OpeningCurlyBrace) {
                     let token = token.expect("opening-curly-brace token exists");
                     self.body_started = true;
+                    self.pack_position = parser.cursor.consumed;
                     self.source_vectors.push(token.source_vectors);
                     self.phase = StructOrUnionPhase::MemberStart;
                     ParseAction::Consume
@@ -635,6 +637,7 @@ pub(in crate::translation_phases::parsing) struct StructOrUnionSpecifierFrame<'t
     member_declarator: Option<Declarator<'tu>>,
     /// Whether `{` was consumed, distinguishing a reference from a definition.
     body_started: bool,
+    pack_position: usize,
     /// Whether member synchronization just ran after a reported malformed
     /// struct-declarator terminator, so stopping before `}` or a following
     /// declaration finishes the member without a second diagnostic.
@@ -792,6 +795,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
             .then(|| parser.alloc_syntax_list(&mut self.declarations));
         let source_vectors = parser.context.merge_vector_list(&self.source_vectors);
         let index = parser.alloc_syntax(StructOrUnionSpecifier {
+            pack_position: self.pack_position,
             attributes: self.attributes,
             struct_or_union: self.kind.unwrap_or(StructOrUnion::Struct),
             identifier: self.identifier,
@@ -813,6 +817,7 @@ impl<'tu, 'p> StructOrUnionSpecifierFrame<'tu, 'p> {
             member_specifiers: None,
             member_declarator: None,
             body_started: false,
+            pack_position: 0,
             resuming_after_member_recovery: false,
             width_recovered: false,
             source_vectors: ArenaVec::new_in(arena),

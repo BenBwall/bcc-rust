@@ -6,6 +6,7 @@
 use super::Context;
 use crate::{
     translation_phases::preprocessing::{
+        LiteralEncoding,
         LiteralId,
         LiteralUnit,
     },
@@ -51,21 +52,43 @@ impl Context<'_> {
     /// Original source units remain available for diagnostics and inspection.
     /// C99: implementation-defined encoding §6.4.5p5, pp. 62-63; PDF pp. 74-75.
     pub(crate) fn wide_literal_units(&self, id: LiteralId) -> impl Iterator<Item = u32> + '_ {
-        let utf16 = self.configuration.target().layout().wide_utf16();
+        let encoding = if self.configuration.target().layout().wide_utf16() {
+            LiteralEncoding::Utf16
+        } else {
+            LiteralEncoding::Utf32
+        };
+        self.encoded_literal_units(id, encoding)
+    }
+
+    /// Execution code units of a literal in `encoding`, excluding its
+    /// terminator: UTF-8 bytes for `u8`, UTF-16 units (surrogate pairs
+    /// included) for `u`, code points for `U`. A numeric escape is one unit.
+    /// C11: §6.4.5 paragraph 6, p. 71; PDF p. 89.
+    pub(crate) fn encoded_literal_units(
+        &self,
+        id: LiteralId,
+        encoding: LiteralEncoding,
+    ) -> impl Iterator<Item = u32> + '_ {
         self.literal_units(id).iter().flat_map(move |unit| {
-            let mut units = [0; 2];
-            let count = match *unit {
-                | LiteralUnit::Character(c) if utf16 => {
-                    let mut encoded = [0; 2];
-                    let n = c.encode_utf16(&mut encoded).len();
+            let mut units = [0; 4];
+            let count = match (*unit, encoding) {
+                | (LiteralUnit::Character(c), LiteralEncoding::Utf8) => {
+                    let mut encoded = [0; 4];
+                    let n = c.encode_utf8(&mut encoded).len();
                     units = encoded.map(u32::from);
                     n
                 },
-                | LiteralUnit::Character(c) => {
+                | (LiteralUnit::Character(c), LiteralEncoding::Utf16) => {
+                    let mut encoded = [0; 2];
+                    let n = c.encode_utf16(&mut encoded).len();
+                    units[..2].copy_from_slice(&encoded.map(u32::from));
+                    n
+                },
+                | (LiteralUnit::Character(c), LiteralEncoding::Utf32) => {
                     units[0] = u32::from(c);
                     1
                 },
-                | LiteralUnit::Numeric(code) => {
+                | (LiteralUnit::Numeric(code), _) => {
                     units[0] = code;
                     1
                 },

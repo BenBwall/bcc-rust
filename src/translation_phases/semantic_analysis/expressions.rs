@@ -15,6 +15,7 @@
 //! site.
 //!
 //! - Operator typing and conversions: `typing.rs`.
+//! - Pointer constraint classification: `pointers.rs`.
 //! - Retained categories and conversions: `results.rs`.
 //! - Constant addresses and address differences: `address.rs`.
 //!
@@ -24,6 +25,7 @@
 //! subobjects are walked by the initializer analyzer.
 
 // Operator typing and conversions
+mod pointers;
 mod typing;
 
 // Retained categories and conversions
@@ -48,6 +50,7 @@ use super::{
         CharacterTokenType,
         FloatTokenType,
         IntegerTokenType,
+        LiteralEncoding,
     },
     Analyzer,
     BindingKind,
@@ -83,12 +86,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut info = Self::expression_result(e, self.types.unknown());
         match e.kind {
             | E::Identifier(name) => {
-                if let Some(entry) = self.lookup(Namespace::Ordinary, name.name) {
-                    let binding = self.bindings[entry.binding];
+                let found = self
+                    .lookup(Namespace::Ordinary, name.name)
+                    .map(|entry| entry.binding)
+                    .or_else(|| self.predefined_identifier(name));
+                if let Some(index) = found {
+                    let binding = self.bindings[index];
                     info.ty = binding.ty;
-                    info.binding = Some(entry.binding);
-                    self.record_binding_use(entry.binding, name);
-                    info.register = self.register_bindings.contains_key(&entry.binding);
+                    info.binding = Some(index);
+                    self.record_binding_use(index, name);
+                    info.register = self.register_bindings.contains_key(&index);
                     info.static_address = binding.duration == Duration::Static
                         || binding.kind == BindingKind::Function;
                     info.category = match binding.kind {
@@ -147,10 +154,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.constant = ConstantClass::Arithmetic;
             },
             | E::Constant(Constant::Char(value)) => {
-                let scalar = if matches!(value, CharacterTokenType::WideChar(_)) {
-                    self.types.target.wchar_t
-                } else {
-                    Scalar::Int
+                // C11 §6.4.4.4p11: `u` and `U` constants have `char16_t` and
+                // `char32_t` type; C23 §6.4.4.5p12: `u8` (a C23 construct in
+                // every mode) has `char8_t`.
+                let scalar = match value {
+                    | CharacterTokenType::WideChar(_) => self.types.target.wchar_t,
+                    | CharacterTokenType::EncodedChar(_, LiteralEncoding::Utf8) =>
+                        Scalar::UnsignedChar,
+                    | CharacterTokenType::EncodedChar(_, encoding) =>
+                        self.encoded_character_type(encoding),
+                    | _ => Scalar::Int,
                 };
                 info.ty = self.types.scalar(scalar);
                 let mut value = i128::from(value.target_value(&self.types.target));
@@ -231,14 +244,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
                 info.constant = ConstantClass::Arithmetic;
             },
-            | E::StringLiteral(value) =>
-                if let Some((element, count)) = self.string_type(value) {
-                    info.ty = self
-                        .types
-                        .intern(TypeKind::Array(element, ArrayBound::Constant(count)));
-                    info.category = ValueCategory::Lvalue;
-                    info.static_address = true;
-                },
+            | E::StringLiteral(value) => {
+                let (element, count) = self.string_type(value);
+                info.ty = self
+                    .types
+                    .intern(TypeKind::Array(element, ArrayBound::Constant(count)));
+                info.category = ValueCategory::Lvalue;
+                info.static_address = true;
+            },
             | E::Parenthesized { expression } => {
                 info = ExpressionInfo {
                     expression: e,
@@ -420,7 +433,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 {
                     info = self.invalid_expression(e, SemanticErrorKind::InvalidCompoundLiteral);
                 } else {
-                    info.ty = self.check_initializer(ty, initializer, self.scope == 0);
+                    // A compound literal's flexible array member stays empty.
+                    info.ty = self
+                        .check_initializer(ty, initializer, self.scope == 0, false)
+                        .0;
                 }
                 info.category = self.object_category(info.ty);
                 info.static_address = self.scope == 0;
@@ -557,6 +573,13 @@ pub(crate) struct ExpressionInfo<'tu> {
     pub(crate) category: ValueCategory,
     pub(crate) binding: Option<usize>,
     pub(crate) bit_field: Option<u32>,
+    /// Width used by integer promotions, independent of bit-field designation.
+    /// GCC/Clang preserve it through comma, assignment and prefix updates;
+    /// casts and postfix updates produce ordinary values of the declared type.
+    /// C99: §6.3.1.1p2, pp. 42-43; PDF pp. 54-55.
+    /// Checked integer bit-fields have at most 128 bits; one byte fits the
+    /// retained record's existing padding.
+    pub(in crate::translation_phases::semantic_analysis) promotion_width: Option<NonZeroU8>,
     pub(crate) register: bool,
     /// GNU vector extension: a lane remains assignable but has no address.
     pub(crate) vector_element: bool,

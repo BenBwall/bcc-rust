@@ -1,0 +1,17 @@
+error: operator requires a modifiable lvalue
+ --> sema-predefined-readonly.c:2:26
+  |
+2 |   __PRETTY_FUNCTION__[0] = 1;
+  |                          ^ not a modifiable lvalue
+  |
+  = note: C99 §6.5.16p2: assignment and increment operators require a modifiable lvalue
+
+error: operator requires a modifiable lvalue
+ --> sema-predefined-readonly.c:3:16
+  |
+3 |   __FUNCTION__ = 0;
+  |                ^ not a modifiable lvalue
+  |
+  = note: C99 §6.5.16p2: assignment and increment operators require a modifiable lvalue
+
+2 errors generated.

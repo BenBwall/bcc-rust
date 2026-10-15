@@ -23,6 +23,10 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     /// GNU `aligned`: a representation attribute, and the code alignment of
     /// a function.
     Aligned,
+    /// GNU `transparent_union`: type construction makes a qualifying union
+    /// transparent (`transparent.rs`), or warns that it ignores the
+    /// attribute.
+    TransparentUnion,
     Cleanup,
     Constructor,
     Destructor,
@@ -180,11 +184,10 @@ fn gnu(name: &str) -> Option<Rule> {
         | "cpu_dispatch" | "cpu_specific" | "target_version" =>
             Rule::Unsupported(U::Multiversioning),
         | "pass_object_size" | "pass_dynamic_object_size" => Rule::Unsupported(U::PassObjectSize),
+        | "transparent_union" => Rule::TransparentUnion,
         // Dropped with a warning: link-time or multi-version effects that a
-        // single executable's behavior does not depend on, and union
-        // argument conversions semantic analysis rejects at each call.
-        | "common" | "target" | "target_clones" | "transparent_union" | "weak_import" | "copy" =>
-            Rule::Ignored,
+        // single executable's behavior does not depend on.
+        | "common" | "target" | "target_clones" | "weak_import" | "copy" => Rule::Ignored,
         | "access"
         | "alloc_align"
         | "alloc_size"

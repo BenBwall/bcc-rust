@@ -14,6 +14,7 @@ use crate::translation_phases::TranslationError;
 mod atomics;
 mod attributes;
 mod bit_field_alignment;
+mod bit_field_results;
 mod control_facts;
 mod correspondence;
 mod effects;
@@ -22,11 +23,16 @@ mod int128;
 mod labels_as_values;
 mod library_modes;
 mod mingw_inline;
+mod pointers;
+mod pragma_pack;
+mod predefined_identifiers;
+mod record_layout;
 mod registry;
 mod resolved;
 mod scalar_builtins;
 mod statement_expressions;
 mod targets;
+mod transparent_unions;
 mod type_generic;
 mod vectors;
 
@@ -709,9 +715,11 @@ fn gnu_void_and_function_size_constants_remain_accepted() {
 
 mod declaration_regressions;
 mod declarations;
+mod encoded_literals;
 mod entity_attributes;
 mod expression_regressions;
 mod expressions;
+mod flexible_initializers;
 mod function_regressions;
 mod operand_regressions;
 mod statements;

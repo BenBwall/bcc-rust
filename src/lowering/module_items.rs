@@ -67,12 +67,12 @@ use crate::{
             },
         },
         preprocessing::{
+            LiteralEncoding,
             LiteralId,
             LiteralUnit,
             StringTokenType,
         },
         semantic_analysis::{
-            Binding,
             ConstantClass,
             DefinitionKind,
             FunctionRecord,
@@ -120,11 +120,14 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     pub(super) address_taken: ArenaSet<'a, usize>,
     /// Globals of static locals and `__func__`, which have no linkage.
     statics: ArenaMap<'a, usize, GlobalId>,
-    strings: ArenaMap<'a, (LiteralId, bool), GlobalId>,
+    /// Keyed by literal and [`string_form`]: narrow, `L`, `u8`, `u`, `U`.
+    strings: ArenaMap<'a, (LiteralId, u8), GlobalId>,
     /// One static object per file-scope compound literal syntax node. New
     /// initializers join the explicit queue, never recursively lower syntax.
     compound_literals: ArenaMap<'a, usize, GlobalId>,
-    static_initializers: ArenaVec<'a, (GlobalId, TypeId, &'tu Initializer<'tu>)>,
+    /// Static objects to define: global, type, initializer and the
+    /// completed type of a flexible array member the initializer fills.
+    static_initializers: ArenaVec<'a, (GlobalId, TypeId, &'tu Initializer<'tu>, Option<TypeId>)>,
     /// Next candidate for a string literal's internal symbol.
     next_string_suffix: u64,
     /// User names reserved before generating internal storage.
@@ -477,12 +480,16 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
         let data = self.sema.bindings[binding];
         if data.linkage == Linkage::None {
-            let Some(&DefinitionKind::FunctionName(name)) = self.definitions.get(&binding) else {
-                return Err(LoweringErrorKind::MissingFact(
-                    "a static local is used before its declaration",
-                ));
+            let (stem, function, text) = match self.definitions.get(&binding) {
+                | Some(&DefinitionKind::FunctionName(text)) => ("__func__", Some(text), text),
+                | Some(&DefinitionKind::PrettyFunctionName { function, text }) =>
+                    ("__PRETTY_FUNCTION__", function, text),
+                | _ =>
+                    return Err(LoweringErrorKind::MissingFact(
+                        "a static local is used before its declaration",
+                    )),
             };
-            return Ok(self.function_name(binding, name));
+            return Ok(self.function_name(binding, stem, function, text));
         }
         let name = self.symbol_name(binding);
         if self.conflicting_names.contains(name) {
@@ -501,11 +508,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 // C99 §6.2.7p4, §6.9.2p2: an initializer can refer to an
                 // earlier incomplete declaration. Reserve the same symbol
                 // using the definition's completed type from the outset.
-                let data = self
-                    .defined_objects
-                    .get(name)
-                    .map_or(data, |&binding| self.sema.bindings[binding]);
-                let declaration = self.global_declaration(data, self.ir_linkage(binding))?;
+                // The definition's binding names the same entity, so its
+                // linkage and symbol attributes are the entity's.
+                let binding = self.defined_objects.get(name).copied().unwrap_or(binding);
+                let declaration = self.global_declaration(binding, self.ir_linkage(binding))?;
                 let global = self.module.declare_global(name, declaration);
                 self.symbol_attributes(binding, Symbol::Global(global));
                 Ok(global)
@@ -545,7 +551,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     self.unique_name(base)
                 };
                 let declaration = self
-                    .global_declaration(data, IrLinkage::Internal)
+                    .global_declaration(binding, IrLinkage::Internal)
                     .map_err(|kind| at(kind, source))?;
                 let global = self.module.declare_global(name, declaration);
                 self.symbol_attributes(binding, Symbol::Global(global));
@@ -559,8 +565,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         match initializer {
             | None => self.module.define_global(global, GlobalInit::Zero),
             | Some(initializer) => {
-                self.static_initializers
-                    .push((global, data.ty, initializer));
+                self.static_initializers.push((
+                    global,
+                    data.ty,
+                    initializer,
+                    self.sema.flexible_array(binding),
+                ));
                 self.define_static_initializers()?;
             },
         }
@@ -568,12 +578,15 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     }
 
     /// A global's size, alignment and constancy from the object's type. An
-    /// incomplete array declared but not defined here has size zero.
+    /// incomplete array declared but not defined here has size zero; an
+    /// object whose initializer gives its flexible array member elements
+    /// extends past its structure (GNU; semantic analysis owns the size).
     fn global_declaration(
         &self,
-        data: Binding,
+        binding: usize,
         linkage: IrLinkage,
     ) -> Result<GlobalDecl, LoweringErrorKind> {
+        let data = self.sema.bindings[binding];
         let types = &self.sema.types;
         if types.unanalyzed(data.ty) {
             return Err(LoweringErrorKind::UnanalyzedType);
@@ -597,7 +610,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         };
         Ok(GlobalDecl {
             linkage,
-            size,
+            size: self.sema.flexible_object_size(binding).unwrap_or(size),
             align,
             constant: constant_object(types, data.ty),
             thread_local: data.duration
@@ -605,12 +618,24 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         })
     }
 
-    /// The implicit `__func__` array of a function: its name and a null
-    /// character.
+    /// The array behind `__func__`, `__FUNCTION__` or `__PRETTY_FUNCTION__`:
+    /// the string and a null character, named for `stem` and its function.
     /// C99: §6.4.2.2 paragraph 1, p. 52; PDF p. 64.
-    fn function_name(&mut self, binding: usize, name: StringCacheId) -> GlobalId {
-        let text = self.context.string_cache.at(name);
-        let symbol = format_in!(self.tables, "{text}.__func__");
+    fn function_name(
+        &mut self,
+        binding: usize,
+        stem: &str,
+        function: Option<StringCacheId>,
+        text: StringCacheId,
+    ) -> GlobalId {
+        let function = function
+            .map(|function| self.context.string_cache.at(function))
+            .filter(|function| !function.is_empty());
+        let text = self.context.string_cache.at(text);
+        let symbol = match function {
+            | Some(function) => format_in!(self.tables, "{function}.{stem}"),
+            | None => format_in!(self.tables, "{stem}"),
+        };
         let symbol = self.unique_name(symbol);
         let global = self.module.declare_global(
             symbol,
@@ -650,15 +675,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 expression.source_vectors,
             ));
         };
-        let key = match literal {
-            | StringTokenType::String(id) => (id, false),
-            | StringTokenType::WideString(id) => (id, true),
-            | StringTokenType::EncodedString(..) =>
-                return Err(LoweringError::unsupported(
-                    Construct::EncodedString,
-                    expression.source_vectors,
-                )),
-        };
+        let key = string_form(literal);
         if let Some(&global) = self.strings.get(&key) {
             return Ok(global);
         }
@@ -710,17 +727,38 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     .scalar(layout.wchar_t)
                     .expect("wchar_t has a scalar layout");
                 let width = usize::try_from(character.size).expect("wchar_t fits usize");
-                let mut bytes = ArenaVec::new_in(self.tables);
-                for unit in self.context.wide_literal_units(id).chain([0]) {
-                    bytes.extend_from_slice(&unit.to_le_bytes()[..width]);
-                }
-                Ok((bytes, align))
+                Ok((
+                    self.unit_bytes(self.context.wide_literal_units(id), width),
+                    align,
+                ))
             },
-            | _ => Err(LoweringError::unsupported(
-                Construct::EncodedString,
+            // C11: §6.4.5 paragraph 6, p. 71; PDF p. 89: UTF-8 bytes,
+            // `char16_t` and `char32_t` units.
+            | ExpressionType::StringLiteral(StringTokenType::EncodedString(id, encoding)) => {
+                let width = match encoding {
+                    | LiteralEncoding::Utf8 => 1,
+                    | LiteralEncoding::Utf16 => 2,
+                    | LiteralEncoding::Utf32 => 4,
+                };
+                Ok((
+                    self.unit_bytes(self.context.encoded_literal_units(id, encoding), width),
+                    align,
+                ))
+            },
+            | _ => Err(LoweringError::missing(
+                "a string literal has no literal",
                 expression.source_vectors,
             )),
         }
+    }
+
+    /// Little-endian code units of `width` bytes, then the null unit.
+    fn unit_bytes(&self, units: impl Iterator<Item = u32>, width: usize) -> ArenaVec<'a, u8> {
+        let mut bytes = ArenaVec::new_in(self.tables);
+        for unit in units.chain([0]) {
+            bytes.extend_from_slice(&unit.to_le_bytes()[..width]);
+        }
+        bytes
     }
 
     /// The execution bytes of a narrow string literal and its null
@@ -793,9 +831,9 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
     /// declare nested compound literals while their containing object emits.
     /// C99: §6.5.2.5p5-6, pp. 75-76; PDF pp. 87-88; §6.6p9, p. 96; PDF p. 108.
     fn define_static_initializers(&mut self) -> Result<(), LoweringError> {
-        while let Some((global, ty, initializer)) = self.static_initializers.pop() {
+        while let Some((global, ty, initializer, flexible)) = self.static_initializers.pop() {
             let size = self.module.global(global).size;
-            let (bytes, relocations) = self.static_bytes(ty, size, initializer)?;
+            let (bytes, relocations) = self.static_bytes(ty, size, initializer, flexible)?;
             let init = if relocations.is_empty() && bytes.iter().all(|&byte| byte == 0) {
                 GlobalInit::Zero
             } else {
@@ -837,7 +875,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         );
         _ = self.compound_literals.insert(key, global);
         _ = self.generated_globals.insert(global);
-        self.static_initializers.push((global, ty, initializer));
+        self.static_initializers
+            .push((global, ty, initializer, None));
         Ok(global)
     }
 
@@ -851,9 +890,10 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         ty: TypeId,
         size: u64,
         initializer: &'tu Initializer<'tu>,
+        flexible: Option<TypeId>,
     ) -> Result<(ArenaVec<'a, u8>, ArenaVec<'a, Relocation>), LoweringError> {
         let tables = self.tables;
-        let leaves = initializers::leaves(self.sema, ty, initializer, tables)?;
+        let leaves = initializers::leaves(self.sema, ty, initializer, flexible, tables)?;
         let length = usize::try_from(size).map_err(|_| {
             LoweringError::unsupported(Construct::StaticInitializer, initializer.source_vectors)
         })?;
@@ -1016,7 +1056,13 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             });
             return Ok(());
         }
-        if representation != Repr::Pointer || bit_field.is_some() {
+        // Semantic analysis keeps an address converted to an integer as wide
+        // as a pointer an address constant (§6.6p10), so its relocation
+        // fills that integer.
+        let address = representation == Repr::Pointer
+            || (matches!(representation, Repr::Int { .. })
+                && info.constant == ConstantClass::Address);
+        if !address || bit_field.is_some() {
             return Err(unsupported());
         }
         let (target, addend) = self.address_constant(expression)?;
@@ -1369,5 +1415,16 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             conflicting_names: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             next_name_suffix: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
         })
+    }
+}
+
+/// The string-literal table key's form: narrow, `L`, `u8`, `u` or `U`.
+fn string_form(literal: StringTokenType) -> (LiteralId, u8) {
+    match literal {
+        | StringTokenType::String(id) => (id, 0),
+        | StringTokenType::WideString(id) => (id, 1),
+        | StringTokenType::EncodedString(id, LiteralEncoding::Utf8) => (id, 2),
+        | StringTokenType::EncodedString(id, LiteralEncoding::Utf16) => (id, 3),
+        | StringTokenType::EncodedString(id, LiteralEncoding::Utf32) => (id, 4),
     }
 }

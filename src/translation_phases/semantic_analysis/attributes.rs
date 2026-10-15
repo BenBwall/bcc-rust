@@ -24,7 +24,8 @@
 //! - `entities.rs` applies entity attributes and finalizes them;
 //! - `jumps.rs` forbids jumps into cleanup scopes and indirect jumps across
 //!   them;
-//! - `layout.rs` retains packing, alignment and scalar machine modes.
+//! - `layout.rs` retains packing, alignment and scalar machine modes;
+//! - `transparent.rs` makes qualifying unions transparent.
 //!
 //! C99: §6.7, p. 97; PDF p. 109 (declarations, extended by GNU attributes);
 //! §6.2.2p2, p. 30; PDF p. 42 (linked declarations share one entity).
@@ -36,6 +37,7 @@ mod catalog;
 mod entities;
 mod jumps;
 mod layout;
+mod transparent;
 mod written;
 
 pub(super) use entities::{

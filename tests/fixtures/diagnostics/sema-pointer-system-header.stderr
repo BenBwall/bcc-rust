@@ -1,0 +1,49 @@
+warning: conversion between pointers to integer types with different sign [-Wpointer-sign]
+ --> sema-pointer-system-header.c:4:18
+  |
+4 | void set(void) { SYS_SET(ip); }
+  |                  ^^^^^^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: conversion between pointers to integer types with different sign [-Wpointer-sign]
+ --> sema-pointer-system-header.c:5:21
+  |
+5 | void assign(void) { SYS_ASSIGN(ip, &sys_u); }
+  |                     ^^^^^^^^^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: conversion between pointers to integer types with different sign [-Wpointer-sign]
+ --> sema-pointer-system-header.c:6:19
+  |
+6 | void user(void) { USER_SET(ip); }
+  |                   ^^^^^^^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+warning: comparison of distinct pointer types [-Wcompare-distinct-pointer-types]
+ --> sema-pointer-system-header.c:7:28
+  |
+7 | int compare(void) { return SYS_COMPARE(ip, &sys_u); }
+  |                            ^^^^^^^^^^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: incompatible pointer types in conversion [-Wincompatible-pointer-types]
+ --> sema-pointer-system-header.c:8:38
+  |
+8 | void incompatible(void) { float *fp; SYS_SET(fp); (void)fp; }
+  |                                      ^^^^^^^ pointer constraint violation
+  |
+  = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: incompatible integer and pointer conversion [-Wint-conversion]
+  --> sema-pointer-system-header.c:9:22
+   |
+ 9 | void integer(void) { SYS_ASSIGN(ip, i); }
+   |                      ^^^^^^^^^^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+2 errors and 4 warnings generated.

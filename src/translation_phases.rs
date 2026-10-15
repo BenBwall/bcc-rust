@@ -22,7 +22,9 @@
 //! - Phase 7: `parsing.rs` and its directory build syntax;
 //!   `semantic_analysis.rs` and its directory resolve types and enforce
 //!   semantic constraints.
-//! - Shared storage: `context.rs`, `context/`, `provenance.rs`.
+//! - Shared storage: `context.rs`, `context/`, `provenance.rs`;
+//!   `pragma_pack.rs` retains directive operands and order across the batch
+//!   boundary.
 //! - Shared interfaces and diagnostics: `interface.rs`, `errors.rs`,
 //!   `extension.rs`.
 //!
@@ -43,6 +45,7 @@ pub(crate) mod semantic_analysis;
 
 // Shared state and provenance
 mod context;
+pub(crate) mod pragma_pack;
 mod provenance;
 
 // Interfaces and diagnostics

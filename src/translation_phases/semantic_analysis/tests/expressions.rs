@@ -222,7 +222,7 @@ fn prototype_variadic_and_unprototyped_calls() {
     );
     rejects(
         "int f(int *); void g(void) {f(1);}",
-        SemanticErrorKind::InvalidArgumentType,
+        SemanticErrorKind::PointerConstraint(crate::configuration::DiagnosticGroup::IntConversion),
     );
     rejects(
         "void f(void) {int x=0; x();}",
@@ -238,15 +238,19 @@ fn pointer_assignment_qualifiers_and_null_constants() {
     );
     rejects(
         "void f(void) {const int *q; int *p; p=q;}",
-        SemanticErrorKind::InvalidAssignment,
+        SemanticErrorKind::PointerConstraint(
+            crate::configuration::DiagnosticGroup::PointerQualifiers,
+        ),
     );
     rejects(
         "void f(void) {int **p; const int **q; q=p;}",
-        SemanticErrorKind::InvalidAssignment,
+        SemanticErrorKind::PointerConstraint(
+            crate::configuration::DiagnosticGroup::PointerQualifiers,
+        ),
     );
     rejects(
         "void f(void) {int *p; p=1;}",
-        SemanticErrorKind::InvalidAssignment,
+        SemanticErrorKind::PointerConstraint(crate::configuration::DiagnosticGroup::IntConversion),
     );
     rejects(
         "void f(void) {int *p; p-=p;}",
@@ -298,7 +302,12 @@ fn binary_and_conditional_constraints() {
         ("p+p", SemanticErrorKind::InvalidAdditiveOperands),
         ("x<<1", SemanticErrorKind::InvalidIntegerOperands),
         ("s&&1", SemanticErrorKind::InvalidLogicalOperands),
-        ("p==1", SemanticErrorKind::InvalidComparisonOperands),
+        (
+            "p==1",
+            SemanticErrorKind::PointerConstraint(
+                crate::configuration::DiagnosticGroup::PointerIntegerCompare,
+            ),
+        ),
         ("s?1:2", SemanticErrorKind::InvalidConditionalOperands),
         ("1?p:x", SemanticErrorKind::InvalidConditionalOperands),
         ("p[x]", SemanticErrorKind::InvalidSubscript),
@@ -365,7 +374,10 @@ fn initializer_current_object_designators_and_extent_inference() {
         "struct S {int x;}; struct S s={.y=1};",
         SemanticErrorKind::InvalidDesignator,
     );
-    rejects("int *p=1;", SemanticErrorKind::InvalidInitializer);
+    rejects(
+        "int *p=1;",
+        SemanticErrorKind::PointerConstraint(crate::configuration::DiagnosticGroup::IntConversion),
+    );
     rejects(
         "void f(int n) {int a[n]={1};}",
         SemanticErrorKind::InvalidInitializer,

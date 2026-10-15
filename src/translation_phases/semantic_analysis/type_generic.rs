@@ -261,6 +261,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             result.category = operand.category;
             result.register = operand.register;
             result.bit_field = operand.bit_field;
+            result.promotion_width = operand.promotion_width;
             result.binding = operand.binding;
             // GNU component designations preserve C99 §6.6p9 address
             // eligibility.

@@ -187,10 +187,11 @@ impl<'tu> Context<'tu> {
 
     /// Whether a diagnostic is withheld because it arises in a system
     /// header, as GCC and Clang withhold them: a warning, or an extension
-    /// diagnostic at any severity, whose location is spelled in a system
-    /// header. The location's first source vector is its spelling: for a
-    /// token from a macro expansion, the macro's replacement list. Errors
-    /// are never withheld.
+    /// or warning-group diagnostic at any severity, whose expansion location
+    /// is in a system header. For a token from a macro expansion that is
+    /// where the outermost invocation begins, so a system macro expanded in
+    /// user code is reported and a user macro expanded in a system header is
+    /// not. Other errors are never withheld.
     /// The primary range must be non-empty even if the diagnostic is withheld.
     /// C99: §5.1.1.3 paragraph 1 and footnote 8, p. 11; PDF p. 23.
     pub(crate) fn withholds(
@@ -204,7 +205,7 @@ impl<'tu> Context<'tu> {
         (extension || severity == ErrorSeverity::Warning)
             && !self.system_headers.is_empty()
             && source_vectors.length() != 0
-            && self.in_system_header(self.first_source_vector(source_vectors))
+            && self.in_system_header(self.expansion_location(source_vectors))
     }
 
     /// The configured search entries a lookup visits, with their indices:

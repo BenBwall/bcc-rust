@@ -101,6 +101,7 @@ impl<'tu> Context<'tu> {
         source_vectors: SourceVectors,
     ) {
         let spelling = self.diagnostic_text(spelling);
+        let source_vectors = self.file_location(source_vectors);
         self.pending_errors
             .push_back(TranslationError::Extension(ExtensionDiagnostic {
                 suppressed: self.tu_arena().alloc(Cell::new(false)),

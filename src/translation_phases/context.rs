@@ -82,6 +82,9 @@ pub(crate) struct Context<'tu> {
     tu: &'tu Bump,
     pub(crate) configuration: CompilerConfiguration,
     pub(crate) preprocessing_options: &'tu [crate::configuration::PreprocessingOption<'tu>],
+    /// Output-token ordinals preserve directive order across includes/macros.
+    pub(crate) preprocessed_tokens: usize,
+    pub(crate) pack_pragmas: ArenaVec<'tu, super::pragma_pack::PackPragma<'tu>>,
     pub(crate) source_vectors: SourceVectorStack,
     parser_token_vectors: RegionVec<SourceVector>,
     retained_vectors: RegionVec<SourceVector>,
@@ -90,6 +93,10 @@ pub(crate) struct Context<'tu> {
     literal_values: DedupArena<'tu, &'tu [LiteralUnit], FxBuildHasher>,
     /// Sparse endpoints follow their source arena's lifetime.
     expansion_sites: [ExpansionSites<'tu>; 3],
+    /// Where the outermost macro invocation that produced a token begins,
+    /// keyed by the token's first vector. Unlike the endpoints, these last
+    /// for the whole translation unit, so semantic diagnostics can use them.
+    expansion_starts: [ExpansionSites<'tu>; 3],
     ignore_tokenizer_errors: bool,
     pub(super) pending_errors: ArenaQueue<'tu, TranslationError<'tu>>,
     suppressed_errors: usize,
