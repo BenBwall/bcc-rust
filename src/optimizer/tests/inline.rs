@@ -304,6 +304,16 @@ block0(v0: ptr):
 }
 
 #[test]
+fn weak_definitions_are_not_inlined() {
+    // A strong definition in another unit may replace a weak body at link
+    // time. GNU extension: GCC manual, "Common Function Attributes", weak.
+    let text = LEAF.replace("@twice(i32) -> i32 internal", "@twice(i32) -> i32 weak");
+    let (actual, report) = optimize_text(&text, &only(&[Pass::Inline]));
+    assert_eq!(report.stats(Pass::Inline).changes, 0, "{actual}");
+    assert!(actual.contains("call @twice(v0)"), "{actual}");
+}
+
+#[test]
 fn callee_threshold_and_caller_growth_cap_are_enforced() {
     let mut callee = String::from("function @large(i32) -> i32 internal {\nblock0(v0: i32):\n");
     for n in 1..101 {

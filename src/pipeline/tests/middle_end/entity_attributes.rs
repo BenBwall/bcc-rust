@@ -43,6 +43,17 @@ int main(void) { printf(\"%d %d\\n\", alias_fn(4), weak_fn(4)); return 0; }
         "12 5\n",
     ),
     (
+        // Writes through an alias reach its target's storage at every stage.
+        "alias_store",
+        "int counter = 5;
+extern int counter_alias __attribute__((alias(\"counter\")));
+static int bump(void) { int a = counter; counter_alias = 9; return a + counter; }
+int main(void) { return bump(); }
+",
+        14,
+        "",
+    ),
+    (
         "init_order",
         "int putchar(int);
 void exit(int);
