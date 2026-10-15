@@ -567,3 +567,17 @@ done: return acc;
 }",
     );
 }
+
+#[test]
+fn thread_storage_becomes_thread_local_globals() {
+    golden(
+        "thread_local",
+        "_Thread_local int counter = 3;
+extern __thread long shared;
+static _Thread_local char name[4] = \"tls\";
+int next(void) { static __thread int calls; extern _Thread_local int counter; calls++; return \
+         counter++ + calls; }
+long *address(void) { return &shared; }
+char first(void) { return name[0]; }",
+    );
+}

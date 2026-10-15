@@ -1057,6 +1057,10 @@ fn verify_global<'m>(
         };
         if !exists {
             error(VerifierErrorKind::InvalidReference(kind, index));
+        } else if let RelocationTarget::Symbol(Symbol::Global(target)) = relocation.target
+            && module.global(target).thread_local
+        {
+            error(VerifierErrorKind::ThreadLocalRelocation(relocation.offset));
         }
     }
 }
@@ -1203,6 +1207,10 @@ pub(crate) enum VerifierErrorKind {
     IndirectTarget(Block),
     /// An `indirect_br` lists a block twice.
     DuplicateIndirectTarget(Block),
+    /// A relocation names a thread-local global, whose address differs per
+    /// thread and so is no link-time constant.
+    /// C11: §6.6 paragraph 9, p. 107; PDF p. 125.
+    ThreadLocalRelocation(u64),
 }
 
 /// What is wrong with an aggregate parameter of a signature.
@@ -1399,6 +1407,11 @@ impl fmt::Display for VerifierErrorKind {
                 write!(f, "indirect_br lists {target}, which no label names"),
             | Self::DuplicateIndirectTarget(target) =>
                 write!(f, "indirect_br lists {target} twice"),
+            | Self::ThreadLocalRelocation(offset) => write!(
+                f,
+                "the relocation at offset {offset} names a thread-local global, whose address is \
+                 not a link-time constant"
+            ),
         }
     }
 }

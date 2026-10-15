@@ -304,6 +304,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                 | Duration::None => {},
                 | Duration::Automatic => out.push_str(" duration=automatic"),
                 | Duration::Static => out.push_str(" duration=static"),
+                | Duration::Thread => out.push_str(" duration=thread"),
             }
         }
         if matches!(binding.kind, BindingKind::Object | BindingKind::Parameter)

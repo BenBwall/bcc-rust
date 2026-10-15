@@ -1584,10 +1584,37 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 /// The construct an expression form is, if lowering does not support it.
 fn unsupported(expression: &Expression<'_>) -> Option<Construct> {
     Some(match expression.kind {
+        | ExpressionType::CompoundLiteral { type_name, .. } if literal_storage(type_name, true) =>
+            Construct::CompoundLiteralStorage,
         | ExpressionType::Builtin(b) if !matches!(b.keyword,crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaArg|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaStart|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaEnd|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaCopy|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinTypesCompatible|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinOffsetof) => Construct::Builtin,
         | ExpressionType::Countof(_) | ExpressionType::Nullptr => Construct::Extension,
         | _ => return None,
     })
+}
+
+/// Whether a compound literal's storage-class specifiers give it a storage
+/// duration lowering does not allocate: `thread_local` anywhere, or
+/// `static` in a function, whose object outlives the block. Lowering refuses
+/// these by name rather than allocating them in the frame.
+/// C23 (N3220): §6.5.3.6 paragraph 7, p. 79; PDF p. 92.
+pub(super) fn literal_storage(
+    type_name: &crate::translation_phases::parsing::declaration_syntax::TypeName<'_>,
+    in_function: bool,
+) -> bool {
+    let specifiers = type_name.declaration_specifiers;
+    let mut extension = specifiers.extensions;
+    while let Some(item) = extension {
+        if matches!(
+            item.kind,
+            crate::translation_phases::parsing::SpecifierExtensionKind::ThreadLocal(_)
+        ) {
+            return true;
+        }
+        extension = item.next;
+    }
+    in_function
+        && specifiers.storage_class
+            == Some(crate::translation_phases::parsing::syntax::StorageClass::Static)
 }
 
 /// The IR comparison of a C relational or equality operator, signed form.

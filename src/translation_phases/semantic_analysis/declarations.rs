@@ -436,6 +436,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if spec
                 .storage_class
                 .is_some_and(|s| s != StorageClass::Register)
+                || self.thread_storage(spec.extensions)
             {
                 self.error(
                     SemanticErrorKind::InvalidParameter,
@@ -536,13 +537,42 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             Linkage::None
         };
+        let thread = self.thread_storage(spec.extensions);
+        if thread && function && !typedef {
+            self.error(
+                SemanticErrorKind::ThreadLocalFunction,
+                name.source_vectors,
+                Some(name.name),
+                None,
+            );
+        } else if thread
+            && !file
+            && (spec.storage_class.is_none()
+                || (spec.storage_class == Some(StorageClass::Auto)
+                    && self.context.configuration.standard() >= CStandard::C23))
+        {
+            // The parser reports `register`, `typedef` and, before C23,
+            // `auto` beside the thread specifier.
+            self.error(
+                SemanticErrorKind::ThreadLocalBlockScope,
+                name.source_vectors,
+                Some(name.name),
+                None,
+            );
+        }
         let duration = if typedef || function {
             Duration::None
         } else if file
             || linkage != Linkage::None
             || spec.storage_class == Some(StorageClass::Static)
         {
-            Duration::Static
+            // C11 §6.2.4p3-4: `_Thread_local` selects thread storage
+            // duration instead of static.
+            if thread {
+                Duration::Thread
+            } else {
+                Duration::Static
+            }
         } else {
             Duration::Automatic
         };
@@ -667,6 +697,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else if old.kind != kind {
                 self.error(
                     SemanticErrorKind::IncompatibleDeclaration,
+                    name.source_vectors,
+                    Some(name.name),
+                    Some(old.name.source_vectors),
+                );
+                compatible = false;
+                break;
+            } else if kind == BindingKind::Object
+                && (old.duration == Duration::Thread) != (duration == Duration::Thread)
+            {
+                // C11 §6.7.1p3: every declaration of a thread-local object
+                // says so.
+                self.error(
+                    if duration == Duration::Thread {
+                        SemanticErrorKind::ThreadLocalAfterNonThreadLocal
+                    } else {
+                        SemanticErrorKind::NonThreadLocalAfterThreadLocal
+                    },
                     name.source_vectors,
                     Some(name.name),
                     Some(old.name.source_vectors),
@@ -1025,9 +1072,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Specifier extensions whose meaning this phase does not model:
-    /// thread or constexpr storage, MSVC pointer modifiers and unmodeled
-    /// layout attributes. Other attributes, `__extension__` and x86-64
-    /// calling conventions leave the declared type unchanged.
+    /// constexpr storage, MSVC pointer modifiers and unmodeled layout
+    /// attributes. Other attributes, `__extension__`, thread storage (a
+    /// duration, not a type) and x86-64 calling conventions leave the
+    /// declared type unchanged.
     /// C99: §4 paragraph 6, p. 7; PDF p. 19.
     pub(super) fn unmodeled_extension(
         &self,
@@ -1036,12 +1084,41 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         use super::SpecifierExtensionKind as K;
         while let Some(item) = chain {
             if match item.kind {
-                | K::ExtensionMarker | K::Alignment(_) => false,
+                | K::ExtensionMarker | K::Alignment(_) | K::ThreadLocal(_) => false,
                 | K::Attributes(attribute) => self.layout_attribute(attribute),
                 | K::MsModifier(keyword) => !calling_convention(keyword),
-                | K::ThreadLocal | K::Constexpr => true,
+                | K::Constexpr => true,
             } {
                 return true;
+            }
+            chain = item.next;
+        }
+        false
+    }
+
+    /// Whether the specifiers give thread storage duration: the thread
+    /// storage-class specifier, or the `thread` attribute that MSVC
+    /// `__declspec(thread)` is. On MinGW `__declspec(a)` is a macro for
+    /// `__attribute__((a))`, so the attribute has GNU syntax there; no GNU
+    /// attribute is called `thread`, so either syntax counts. The attribute
+    /// is not subject to the parser's storage-class combination checks; the
+    /// constraints on functions, parameters and block scope apply to it here.
+    /// C11: §6.7.1 paragraph 1, p. 109; PDF p. 127.
+    /// MSVC extension: Microsoft Learn, "thread".
+    /// <https://learn.microsoft.com/en-us/cpp/cpp/thread>
+    pub(super) fn thread_storage(
+        &self,
+        mut chain: Option<&super::SpecifierExtension<'tu>>,
+    ) -> bool {
+        while let Some(item) = chain {
+            match item.kind {
+                | SpecifierExtensionKind::ThreadLocal(_) => return true,
+                | SpecifierExtensionKind::Attributes(attribute)
+                    if attribute.syntax != super::AttributeSyntax::Standard
+                        && super::vectors::attribute_names(attribute, self.context)
+                            .any(|(_, name)| name == "thread") =>
+                    return true,
+                | _ => {},
             }
             chain = item.next;
         }

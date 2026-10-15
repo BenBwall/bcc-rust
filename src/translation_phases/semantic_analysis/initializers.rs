@@ -435,7 +435,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let ty = self.check_initializer(
             binding.ty,
             initializer,
-            binding.duration == Duration::Static,
+            binding.duration.is_static_or_thread(),
         );
         self.bindings[index].ty = ty;
         if !self.types.unanalyzed(ty) && !self.complete_object(ty) {

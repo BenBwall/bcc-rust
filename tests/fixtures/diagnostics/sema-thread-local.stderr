@@ -1,0 +1,61 @@
+error: `__thread` is not allowed here
+  --> sema-thread-local.c:14:12
+   |
+14 | struct S { __thread int member; };
+   |            ^^^^^^^^ only type specifiers and qualifiers may appear here
+   |
+   = note: C99 §6.7.2.1 and §6.7.6: member declarations and type names use a specifier-qualifier list, which excludes storage classes and `inline`
+
+error: thread-local declaration follows a non-thread-local declaration: `plain`
+ --> sema-thread-local.c:3:19
+  |
+2 | int plain;
+  |     ----- previous declaration is here
+3 | _Thread_local int plain;
+  |                   ^^^^^ declared thread-local here
+  |
+  = note: C11 §6.7.1p3: if `_Thread_local` appears in any declaration of an object, it appears in every declaration of that object
+
+error: non-thread-local declaration follows a thread-local declaration: `tls`
+ --> sema-thread-local.c:5:12
+  |
+4 | __thread int tls;
+  |              --- previous declaration is here
+5 | extern int tls;
+  |            ^^^ declared without thread storage here
+  |
+  = note: C11 §6.7.1p3: if `_Thread_local` appears in any declaration of an object, it appears in every declaration of that object
+
+error: thread-local object at block scope must be static or extern: `automatic`
+ --> sema-thread-local.c:7:18
+  |
+7 |     __thread int automatic;
+  |                  ^^^^^^^^^ automatic object at block scope
+  |
+  = note: C11 §6.7.1p3: a block-scope declaration with `_Thread_local` also has `static` or `extern`
+
+error: thread storage duration applies only to objects: `function`
+  --> sema-thread-local.c:11:20
+   |
+11 | _Thread_local void function(void);
+   |                    ^^^^^^^^ declared as a function
+   |
+   = note: C11 §6.7.1p4: `_Thread_local` does not appear in the declaration specifiers of a function declaration
+
+error: invalid function parameter declaration: `p`
+  --> sema-thread-local.c:12:16
+   |
+12 | void parameter(_Thread_local int p);
+   |                ^^^^^^^^^^^^^^^^^^^ invalid parameter declaration
+   |
+   = note: C99 §6.7.5.3p2 and p10: only register storage is allowed; void must be the sole unnamed parameter; §6.7.5.2p1 limits qualifiers/static to the outermost array
+
+error: static-storage initializer requires a constant expression
+  --> sema-thread-local.c:13:23
+   |
+13 | static int *address = &defined;
+   |                       ^^^^^^^^ not a constant expression
+   |
+   = note: C99 §6.7.8p4: every expression in an initializer for an object of static storage duration is constant or a string literal
+
+7 errors generated.

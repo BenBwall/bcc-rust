@@ -21,6 +21,7 @@ use llvm_sys::{
     LLVMLinkage,
     LLVMOpcode,
     LLVMRealPredicate,
+    LLVMThreadLocalMode,
     analysis::{
         LLVMVerifierFailureAction,
         LLVMVerifyModule,
@@ -115,6 +116,7 @@ use llvm_sys::{
         LLVMSetNUW,
         LLVMSetOperand,
         LLVMSetTarget,
+        LLVMSetThreadLocalMode,
         LLVMSetValueName2,
         LLVMSetVolatile,
         LLVMStructTypeInContext,
@@ -434,6 +436,21 @@ impl<'id> Session<'id> {
         // operands have the verified IR types.
         unsafe {
             LLVMSetGlobalConstant(global.0, i32::from(constant));
+        }
+    }
+
+    /// Makes a global thread-local. `local_exec` requests the local-exec
+    /// model, which addresses the executable's own TLS block directly;
+    /// otherwise LLVM chooses from the relocation model and DSO locality.
+    pub(super) fn thread_local(&self, global: Val<'id>, local_exec: bool) {
+        let mode = if local_exec {
+            LLVMThreadLocalMode::LLVMLocalExecTLSModel
+        } else {
+            LLVMThreadLocalMode::LLVMGeneralDynamicTLSModel
+        };
+        // SAFETY: The type system ties the global to this live session.
+        unsafe {
+            LLVMSetThreadLocalMode(global.0, mode);
         }
     }
 
@@ -1241,6 +1258,6 @@ impl fmt::Debug for Session<'_> {
 
 /// Whether the target links position-independent executables by default,
 /// as Clang and GCC do on Linux; code for them must be PIC.
-fn position_independent(target: Target) -> bool {
+pub(super) fn position_independent(target: Target) -> bool {
     matches!(target, Target::LinuxGnu | Target::LinuxMusl)
 }

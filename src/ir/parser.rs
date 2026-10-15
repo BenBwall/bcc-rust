@@ -201,13 +201,15 @@ fn parse_target<'t>(
     Ok(())
 }
 
-/// `global @name linkage [constant] size N, align N`, up to the initializer.
+/// `global @name linkage [thread_local] [constant] size N, align N`, up to
+/// the initializer.
 fn parse_global_header<'t>(
     cursor: &mut Cursor<'_, 't>,
 ) -> Result<(Token<'t>, GlobalDecl), ParseError<'t>> {
     _ = cursor.next();
     let name = cursor.symbol()?;
     let linkage = cursor.linkage()?;
+    let thread_local = cursor.eat(TokenKind::Ident("thread_local"));
     let constant = cursor.eat(TokenKind::Ident("constant"));
     cursor.expect(TokenKind::Ident("size"), "`size`")?;
     let size = cursor.unsigned()?;
@@ -221,6 +223,7 @@ fn parse_global_header<'t>(
                 .map_err(|_| size.0.error(ParseErrorKind::NumberTooLarge))?,
             align,
             constant,
+            thread_local,
         },
     ))
 }

@@ -408,7 +408,10 @@ impl ParsedTranslationUnit<'_> {
                         format_args!(
                             "{}",
                             match kind {
-                                | super::modern::SpecifierExtensionKind::ThreadLocal =>
+                                | super::modern::SpecifierExtensionKind::ThreadLocal(
+                                    super::modern::ThreadSpelling::Gnu,
+                                ) => "__thread",
+                                | super::modern::SpecifierExtensionKind::ThreadLocal(_) =>
                                     "thread_local",
                                 | super::modern::SpecifierExtensionKind::Constexpr => "constexpr",
                                 | super::modern::SpecifierExtensionKind::ExtensionMarker =>

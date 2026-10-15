@@ -27,7 +27,6 @@ use crate::{
         },
         semantic_analysis::{
             BindingKind,
-            Duration,
             Linkage,
         },
     },
@@ -217,7 +216,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         let data = self.sema.bindings[binding];
         if recovered
             || !matches!(data.kind, BindingKind::Object | BindingKind::Function)
-            || (data.linkage == Linkage::None && data.duration != Duration::Static)
+            || (data.linkage == Linkage::None && !data.duration.is_static_or_thread())
         {
             return Err(());
         }

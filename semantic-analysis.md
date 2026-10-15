@@ -265,7 +265,15 @@ functions are external unless inheriting prior function linkage. Internal/extern
 mixes are diagnosed (§6.2.2p7). Typedefs, enumerators, members and automatic objects
 have no linkage. Objects at file scope, with linkage, or block static have static
 duration; parameters/other local objects have automatic duration. Functions and
-non-object bindings have no object duration. Same-scope no-linkage duplicates are
+non-object bindings have no object duration. Such an object declared with
+`_Thread_local`, `thread_local` or GNU `__thread` has `Duration::Thread` instead
+(C11 §6.2.4p4), the retained fact lowering turns into a thread-local global; its
+initializer is constant like a static one (C11 §6.7.9p4), and an inline
+definition rejects a modifiable one (C11 §6.7.4p3). The parser rejects thread
+storage beside a storage class other than `static`/`extern` (§6.7.1p2);
+semantic analysis rejects it on functions (§6.7.1p4) and parameters
+(§6.7.6.3p2), on a block-scope object without `static` or `extern`, and on one
+declaration of an object but not another (§6.7.1p3). Same-scope no-linkage duplicates are
 rejected. A typedef repeated with the same, not variably modified, type is
 accepted (C11 §6.7p3); before C11, GNU modes included, it is a C11 extension
 under the pedantic policy, as in GCC and Clang.
@@ -328,7 +336,7 @@ Stage-1 boundaries, with their current disposition:
   `__int16`, `__int32` and `__int64` are not: as in Clang, they are `char`,
   `short`, `int` and `long long`, and `signed` or `unsigned` selects that
   variant. Only alignment
-  specifiers, thread/constexpr storage, MSVC pointer-size modifiers and
+  specifiers, constexpr storage, MSVC pointer-size modifiers and
   attributes naming `align`, `packed`, `mode` or `ext_vector_type`
   (and non-vector `aligned`) make that one declaration's type unavailable; other
   attributes and the calling conventions that x86-64 ignores leave it intact. A
@@ -456,6 +464,7 @@ Unevaluated sizeof operands and unselected logical/conditional arms follow the
 
 Arithmetic constant expressions and address constants govern static-duration
 initializers (§6.6p7-9, pp. 95-96, PDF pp. 107-108; §6.7.8p4, p. 125, PDF p. 137).
+A thread-local object's address is not an address constant (C11 §6.6p9).
 Addresses track static storage/function/string/compound-literal designations,
 including members, subscripts, casts and integer offsets, without reading stored
 object values. This is constant eligibility, not backend relocation lowering:

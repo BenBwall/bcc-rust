@@ -64,6 +64,8 @@ parser	NoTypeSpecifiersInDeclarationSpecifiers	parser-no-type-specifiers-in-decl
 parser	RestrictSpecifiedTwice	parser-restrict-specified-twice.c	rendered
 parser	StaticSpecifiedTwice	parser-static-specified-twice.c	rendered
 parser	StorageClassRedefinition	parser-storage-class-redefinition.c	rendered
+parser	ThreadStorageConflict	parser-thread-storage-conflict.c	rendered
+parser	ThreadLocalSpecifiedTwice	parser-thread-local-specified-twice.c	rendered
 parser	StructOrUnionSpecifierWithoutNameAndBody	parser-struct-or-union-specifier-without-name-and-body.c	rendered
 parser	TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator	parser-type-qualifiers-before-pointer-in-array-abstract-direct-declarator.c	rendered
 parser	TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator	parser-type-qualifiers-both-before-and-after-static-in-array-direct-declarator.c	rendered

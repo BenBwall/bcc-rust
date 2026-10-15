@@ -35,6 +35,7 @@ use crate::{
         InstData,
         InstFlags,
         IntCC,
+        Module,
         Opcode,
         ParamAbi,
         ResultRegisters,
@@ -137,7 +138,7 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
                     // LLVM may constant-fold builder operations. Constants and
                     // addresses have no SSA name; naming
                     // globals here would rename their symbols.
-                    if !folds(body.inst(inst)) {
+                    if !folds(self.module, body.inst(inst)) {
                         api.set_name(value, &named(result, self.arena));
                     }
                     builder.values[result.index()] = Some(value);
@@ -324,7 +325,7 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
 
     fn inst(&self, inst: Inst) -> Result<Option<Val<'id>>, EmitError<'m>> {
         let data = self.body.inst(inst);
-        if folds(data) {
+        if folds(self.emitter.module, data) {
             return Ok(self.constant(data));
         }
         let api = self.emitter.api;
@@ -548,6 +549,14 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                 branch
             },
             | InstData::Unreachable => api.unreachable(),
+            // The evaluating thread's copy, as Clang computes it; a bare use
+            // of the global would let LLVM reuse one thread's address in
+            // another.
+            | InstData::GlobalAddr { global } => self.intrinsic(
+                "llvm.threadlocal.address",
+                &[self.emitter.globals[global.index()]],
+                &[api.ty(Type::Ptr)],
+            ),
             | _ => return Err(std::fmt::Error.into()),
         };
         Ok(Some(value))
@@ -666,20 +675,24 @@ fn return_name(inst: Inst, arena: &Bump) -> ArenaString<'_> {
     text.push_str(".ret");
     text
 }
-fn folds(data: &InstData) -> bool {
-    matches!(
-        data,
-        InstData::Const { .. }
-            | InstData::WideConst { .. }
-            | InstData::Nullary {
-                opcode: Opcode::Poison | Opcode::Null,
-                ..
-            }
-            | InstData::StackAddr { .. }
-            | InstData::GlobalAddr { .. }
-            | InstData::FuncAddr { .. }
-            | InstData::BlockAddr { .. }
-    )
+/// Whether an instruction becomes an LLVM constant rather than an
+/// instruction. A thread-local global's address is computed per thread.
+fn folds(module: &Module<'_>, data: &InstData) -> bool {
+    match *data {
+        | InstData::GlobalAddr { global } => !module.global(global).thread_local,
+        | _ => matches!(
+            data,
+            InstData::Const { .. }
+                | InstData::WideConst { .. }
+                | InstData::Nullary {
+                    opcode: Opcode::Poison | Opcode::Null,
+                    ..
+                }
+                | InstData::StackAddr { .. }
+                | InstData::FuncAddr { .. }
+                | InstData::BlockAddr { .. }
+        ),
+    }
 }
 
 fn binary_opcode(value: Opcode) -> LLVMOpcode {

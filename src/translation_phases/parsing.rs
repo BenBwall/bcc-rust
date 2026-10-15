@@ -128,6 +128,7 @@ use machine::{
 };
 pub(crate) use modern::{
     AttributeSpecifier,
+    AttributeSyntax,
     ExtendedType,
     GenericSelection,
     SpecifierExtension,

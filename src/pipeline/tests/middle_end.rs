@@ -27,6 +27,7 @@ mod resolved;
 mod runtime_calls;
 mod scalar_builtins;
 mod statement_expressions;
+mod thread_local;
 mod torture_sema;
 mod union_initializers;
 mod vla;

@@ -595,6 +595,21 @@ pub(crate) enum ParserErrorType<'tu> {
     /// Declaration specified more than one storage class.
     /// C99: §6.7.1 paragraph 2, p. 98; PDF p. 110.
     StorageClassRedefinition(StorageClass, TokenType),
+    /// A thread storage-class specifier beside a storage class other than
+    /// `static` or `extern`, beside `constexpr`, or GNU `__thread` beside a
+    /// standard spelling; `conflicting` is the later of the two.
+    /// C11: §6.7.1 paragraph 2, p. 109; PDF p. 127. C23 (N3220): §6.7.2
+    /// paragraph 2, p. 99; PDF p. 112.
+    /// GNU extension: GCC manual, "Thread-Local Storage".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Thread-Local.html>
+    ThreadStorageConflict {
+        previous:    &'static str,
+        conflicting: &'static str,
+    },
+    /// The same thread storage-class specifier occurred twice. C11 allows
+    /// one, but GCC and Clang accept the repetition with a warning.
+    /// C11: §6.7.1 paragraph 2, p. 109; PDF p. 127.
+    ThreadLocalSpecifiedTwice(&'static str),
     /// A declaration-only specifier appeared in a specifier-qualifier list.
     /// C99: struct member specifier-qualifier-list is §6.7.2.1, p. 101;
     /// PDF p. 113, and type-name is §6.7.6, p. 122; PDF p. 134.
@@ -884,9 +899,11 @@ impl ParserErrorType<'_> {
             | Self::VolatileSpecifiedTwice
             | Self::RestrictSpecifiedTwice
             | Self::InlineSpecifiedTwice
+            | Self::ThreadLocalSpecifiedTwice(_)
             | Self::TypedefDeclaresNoName
             | Self::MemberDeclaresNothing => ParserDiagnosticCode::Quality,
             | Self::StorageClassRedefinition(..)
+            | Self::ThreadStorageConflict { .. }
             | Self::StaticSpecifiedTwice
             | Self::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator
             | Self::ConflictingTypeSpecifiers { .. }
@@ -979,6 +996,7 @@ impl ParserErrorType<'_> {
         matches!(
             self,
             Self::StorageClassRedefinition(..)
+                | Self::ThreadStorageConflict { .. }
                 | Self::StaticSpecifiedTwice
                 | Self::ConflictingTypeSpecifiers { .. }
                 | Self::TypeSpecifierSpecifiedTwice(..)
@@ -993,7 +1011,8 @@ impl ParserErrorType<'_> {
             | Self::ConstSpecifiedTwice
             | Self::VolatileSpecifiedTwice
             | Self::RestrictSpecifiedTwice
-            | Self::InlineSpecifiedTwice => Some(ParserWarningGroup::RepeatedSpecifiers),
+            | Self::InlineSpecifiedTwice
+            | Self::ThreadLocalSpecifiedTwice(_) => Some(ParserWarningGroup::RepeatedSpecifiers),
             | _ => None,
         }
     }
@@ -1065,6 +1084,8 @@ impl ParserErrorType<'_> {
             | Self::EnumSpecifierWithoutNameAndBody(..)
             | Self::ExpectedEnumeratorBeforeClosingCurlyBrace
             | Self::StorageClassRedefinition(..)
+            | Self::ThreadStorageConflict { .. }
+            | Self::ThreadLocalSpecifiedTwice(_)
             | Self::DeclarationSpecifierNotAllowedHere(..)
             | Self::ConstSpecifiedTwice
             | Self::VolatileSpecifiedTwice
@@ -1386,10 +1407,15 @@ impl ParserErrorType<'_> {
                 previous.spelling()
             ))
             .note("C99 §6.7.1p2: a declaration has at most one storage-class specifier"),
+            // An alternate keyword spelling, such as `__thread`, is named as
+            // written.
             | Self::DeclarationSpecifierNotAllowedHere(token) => new(format_in!(
                 arena,
                 "`{}` is not allowed here",
-                token_spelling(*token)
+                fmt::from_fn(|f| match spelling {
+                    | Some(spelling) => f.write_str(spelling),
+                    | None => write!(f, "{}", token_spelling(*token)),
+                })
             ))
             .label("only type specifiers and qualifiers may appear here")
             .note(
@@ -1413,6 +1439,22 @@ impl ParserErrorType<'_> {
             | Self::InlineSpecifiedTwice => new("duplicate `inline`")
                 .label("`inline` was already specified")
                 .note("repeating `inline` has no effect"),
+            | Self::ThreadLocalSpecifiedTwice(spelling) =>
+                new(format_in!(arena, "duplicate `{spelling}`"))
+                    .label(format_in!(arena, "`{spelling}` was already specified"))
+                    .note("repeating the thread storage-class specifier has no effect"),
+            | Self::ThreadStorageConflict {
+                previous,
+                conflicting,
+            } => new(format_in!(
+                arena,
+                "cannot combine `{previous}` and `{conflicting}`"
+            ))
+            .label(format_in!(arena, "`{previous}` was already specified"))
+            .note(
+                "C11 §6.7.1p2: thread storage combines only with `static` or `extern`, and GNU \
+                 `__thread` does not combine with `_Thread_local`",
+            ),
             | Self::StaticSpecifiedTwice => new("duplicate `static` in array declarator")
                 .label("`static` was already specified")
                 .note("C99 §6.7.5: an array declarator takes `static` at most once"),
