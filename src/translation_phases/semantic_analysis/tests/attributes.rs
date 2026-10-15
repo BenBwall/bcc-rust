@@ -301,6 +301,50 @@ int checks[__builtin_types_compatible_p(tc, _Complex __float128)
     }
 }
 
+/// glibc's Clang path routes the C99 classification macros to these.
+#[test]
+fn floating_classification_builtins_fold_constants_in_each_format() {
+    with_configuration(
+        r"
+int checks[__builtin_isnan(0.0 / 0.0) && !__builtin_isnan(1.0)
+    && __builtin_isfinite(1e308) && !__builtin_isfinite(1.0 / 0.0)
+    && __builtin_isnormal(1.0) && !__builtin_isnormal(0.0)
+    && !__builtin_isnormal(1e-40f) && __builtin_isnormal(1e-40)
+    && !__builtin_isnormal(1e-310) && __builtin_isnormal(1e-310L)
+    && __builtin_isinf_sign(-1.0 / 0.0) == -1 && __builtin_isinf_sign(1.0f / 0.0f) == 1
+    && __builtin_isinf_sign(2.0) == 0
+    && __builtin_fpclassify(0, 1, 2, 3, 4, 0.0 / 0.0) == 0
+    && __builtin_fpclassify(0, 1, 2, 3, 4, -1.0 / 0.0) == 1
+    && __builtin_fpclassify(0, 1, 2, 3, 4, 1.0f) == 2
+    && __builtin_fpclassify(0, 1, 2, 3, 4, 1e-40f) == 3
+    && __builtin_fpclassify(0, 1, 2, 3, 4, -0.0L) == 4 ? 1 : -1];
+int f(int x) { return __builtin_isnan(x) + __builtin_fpclassify(0, 1, 2, 3, 4); }
+int following;
+",
+        CompilerConfiguration::default().with_gnu_extensions(true),
+        |context, _| {
+            let kinds: Vec<_> = context
+                .take_pending_errors()
+                .iter()
+                .filter_map(|error| {
+                    if let TranslationError::Semantic(error) = error {
+                        Some(error.kind)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(
+                kinds,
+                [
+                    SemanticErrorKind::InvalidArgumentType,
+                    SemanticErrorKind::InvalidArgumentCount
+                ],
+            );
+        },
+    );
+}
+
 #[test]
 fn invalid_representation_attributes_report_constraints_and_recover() {
     with_configuration(

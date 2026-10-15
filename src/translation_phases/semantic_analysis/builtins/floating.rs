@@ -15,6 +15,7 @@ use crate::translation_phases::{
         Integer,
         Scalar,
         SemanticErrorKind,
+        TypeId,
         TypeKind,
         constants::Floating,
     },
@@ -28,6 +29,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         operation: FloatOperation,
         scalar: Option<Scalar>,
     ) -> ExpressionInfo<'tu> {
+        let (classes, args) = args.split_at(operation.operand_index());
+        let int = self.types.scalar(Scalar::Int);
+        for &class in classes {
+            _ = self.common_argument(class, int);
+        }
         let first = self.expression_info(args[0]);
         let operand = if let Some(scalar) = scalar {
             let ty = self.types.scalar(scalar);
@@ -65,8 +71,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let mut result = Self::expression_result(expression, result_type);
         result.operation_type = Some(operand);
-        if args
+        if classes
             .iter()
+            .chain(args)
             .all(|arg| self.expression_info(arg).constant == ConstantClass::Arithmetic)
             && !self.binary128_type(operand)
             && let Some(value) = self
@@ -85,17 +92,69 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     result.floating = Some(Floating::real(value.real.with_sign(sign)));
                     result.constant = ConstantClass::Arithmetic;
                 }
-            } else {
-                let value = if operation == FloatOperation::Signbit {
-                    sign
-                } else {
-                    exponent == 0x7FFF && significand == 1 << 63
-                };
-                result.integer = Some(Integer::int(i128::from(value)));
+            } else if let Some(value) =
+                self.classify_constant(operation, classes, operand, (sign, exponent, significand))
+            {
+                result.integer = Some(Integer::int(value));
                 result.ice = true;
                 result.constant = ConstantClass::Arithmetic;
             }
         }
         result
+    }
+
+    /// Folds a classification of a constant already rounded to `operand`,
+    /// from its exact x87 parts. A value is normal in its own format when its
+    /// exponent reaches that format's minimum: binary32 and binary64
+    /// subnormals are normal x87 values. C99: §7.12.3, pp. 216-217;
+    /// PDF pp. 228-229; normalized numbers §5.2.4.2.2p2, p. 23; PDF p. 35.
+    fn classify_constant(
+        &self,
+        operation: FloatOperation,
+        classes: &[&'tu Expression<'tu>],
+        operand: TypeId,
+        (sign, exponent, significand): (bool, u16, u64),
+    ) -> Option<i128> {
+        let TypeKind::Scalar(scalar) = self.types.nodes[self.types.non_atomic(operand).index]
+        else {
+            return None;
+        };
+        let minimum_exponent = match self.floating_precision(scalar)? {
+            | 1 => 16383 - 126,
+            | 2 => 16383 - 1022,
+            | _ => 1,
+        };
+        let infinite = exponent == 0x7FFF && significand == 1 << 63;
+        let nan = exponent == 0x7FFF && !infinite;
+        let zero = significand == 0;
+        let normal = exponent != 0x7FFF && !zero && exponent >= minimum_exponent;
+        let class = |index: usize| {
+            let info = self.expression_info(classes[index]);
+            info.integer.filter(|_| info.ice).map(|value| value.value)
+        };
+        Some(match operation {
+            | FloatOperation::Signbit => i128::from(sign),
+            | FloatOperation::Isinf => i128::from(infinite),
+            | FloatOperation::Isnan => i128::from(nan),
+            | FloatOperation::Isfinite => i128::from(exponent != 0x7FFF),
+            | FloatOperation::Isnormal => i128::from(normal),
+            | FloatOperation::IsinfSign => match (infinite, sign) {
+                | (false, _) => 0,
+                | (true, false) => 1,
+                | (true, true) => -1,
+            },
+            | FloatOperation::Fpclassify => class(if nan {
+                0
+            } else if infinite {
+                1
+            } else if normal {
+                2
+            } else if zero {
+                4
+            } else {
+                3
+            })?,
+            | FloatOperation::Copysign => return None,
+        })
     }
 }

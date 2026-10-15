@@ -170,6 +170,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Float(FloatOperation::Copysign, _)
             | CommonBuiltin::Expect(false)
             | CommonBuiltin::ObjectSize(_) => (2, 2),
+            | CommonBuiltin::Float(FloatOperation::Fpclassify, _) => (6, 6),
             | CommonBuiltin::Bit(..)
             | CommonBuiltin::Bswap(_)
             | CommonBuiltin::Constant
@@ -421,7 +422,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Reports incompatible types before checking dependent value constraints.
     /// C99: §6.5.2.2p2,p7, pp. 71-72; PDF pp. 83-84.
-    fn common_argument(&mut self, e: &'tu Expression<'tu>, ty: TypeId) -> bool {
+    pub(super) fn common_argument(&mut self, e: &'tu Expression<'tu>, ty: TypeId) -> bool {
         let info = self.expression_info(e);
         let compatible = !self.types.unanalyzed(info.ty) && self.assignment_compatible(ty, info);
         if !self.types.unanalyzed(info.ty) && !compatible {
@@ -472,6 +473,27 @@ pub(crate) enum FloatOperation {
     Signbit,
     Isinf,
     Copysign,
+    /// The type-generic classification macros of C99 §7.12.3, pp. 216-217;
+    /// PDF pp. 228-229, as GCC and Clang builtins.
+    Isnan,
+    Isfinite,
+    Isnormal,
+    /// GNU: -1, 0 or 1 for negative infinity, non-infinity or infinity.
+    IsinfSign,
+    /// GNU: five `int` results (NaN, infinite, normal, subnormal, zero),
+    /// then the classified operand. C99: §7.12.3.1, p. 216; PDF p. 228.
+    Fpclassify,
+}
+
+impl FloatOperation {
+    /// The index of the floating operand among the call's arguments.
+    pub(crate) const fn operand_index(self) -> usize {
+        if matches!(self, Self::Fpclassify) {
+            5
+        } else {
+            0
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -504,6 +526,15 @@ pub(crate) fn common_builtin(name: &str) -> Option<CommonBuiltin> {
         | "va_start" => return Some(B::Varargs(K::BuiltinVaStart)),
         | "va_end" => return Some(B::Varargs(K::BuiltinVaEnd)),
         | "va_copy" => return Some(B::Varargs(K::BuiltinVaCopy)),
+        | _ => {},
+    }
+    // The C99 classification macros exist only in their type-generic form.
+    match name {
+        | "isnan" => return Some(B::Float(FloatOperation::Isnan, None)),
+        | "isfinite" => return Some(B::Float(FloatOperation::Isfinite, None)),
+        | "isnormal" => return Some(B::Float(FloatOperation::Isnormal, None)),
+        | "isinf_sign" => return Some(B::Float(FloatOperation::IsinfSign, None)),
+        | "fpclassify" => return Some(B::Float(FloatOperation::Fpclassify, None)),
         | _ => {},
     }
     for (prefix, operation) in [

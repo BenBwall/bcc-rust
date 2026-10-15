@@ -259,10 +259,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             arguments.len() - usize::from(matches!(builtin, CommonBuiltin::Overflow(_, _, true)))
         };
         let start = self.operands.len() - count;
+        // `__builtin_fpclassify` has the most operands, six.
         let mut items = [Item {
             operand: Operand::Void,
             ty:      info.ty,
-        }; 3];
+        }; 6];
         items[..count].copy_from_slice(&self.operands[start..]);
         self.operands.truncate(start);
         let source = e.source_vectors;
