@@ -862,7 +862,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             return self.wide_compare(cond, [lhs, rhs]);
         }
         let width = width(ty);
-        let cond = int_cond(cond);
+        let cond = int_cond(cond, ty);
         let (lhs, rhs, cond) = if matches!(self.kind(lhs), ValueKind::Const(_)) {
             (rhs, lhs, cond.swapped())
         } else {
@@ -1208,11 +1208,18 @@ pub(super) fn immediate(bits: u64, width: Width) -> Option<i32> {
     }
 }
 
-/// The machine condition of an integer comparison.
-const fn int_cond(cond: IntCC) -> Cond {
+/// The machine condition of an integer comparison of `ty` values. A
+/// canonical `i1` register holds 0 or 1, but true is -1 as a signed value,
+/// so the signed order of two `i1`s is the reverse of their unsigned order.
+const fn int_cond(cond: IntCC, ty: Type) -> Cond {
+    let boolean = matches!(ty, Type::I1);
     match cond {
         | IntCC::Eq => Cond::E,
         | IntCC::Ne => Cond::Ne,
+        | IntCC::Slt if boolean => Cond::A,
+        | IntCC::Sle if boolean => Cond::Ae,
+        | IntCC::Sgt if boolean => Cond::B,
+        | IntCC::Sge if boolean => Cond::Be,
         | IntCC::Slt => Cond::L,
         | IntCC::Sle => Cond::Le,
         | IntCC::Sgt => Cond::G,

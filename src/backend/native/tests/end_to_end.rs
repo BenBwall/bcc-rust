@@ -354,8 +354,9 @@ fn accepted_lowering_programs_match_the_interpreter() {
 }
 
 /// Instructions C lowering rarely produces, at every width: unsigned
-/// overflow predicates, `i1` arithmetic and selects, bit counts of zero,
-/// narrow byte swaps, poison and freeze, and switch edges with arguments.
+/// overflow predicates, `i1` arithmetic, signed compares and selects, bit
+/// counts of zero, narrow byte swaps, poison and freeze, and switch edges
+/// with arguments.
 const IR_PROGRAM: &str = "abi lowered
 global @format internal constant size 4, align 1 = bytes \"25640a00\"
 function @printf(ptr, ...) -> i32 external
@@ -440,7 +441,17 @@ block0(v0: i32, v1: i32):
     v12 = isub.i32 v11, v11
     v13 = iadd.i32 v8, v9
     v14 = iadd.i32 v13, v12
-    return v14
+    v15 = icmp.i1 slt v2, v3
+    v16 = icmp.i1 sge v6, v2
+    v17 = zext.i32 v15
+    v18 = iconst.i32 16
+    v19 = imul.i32 v17, v18
+    v20 = zext.i32 v16
+    v21 = iconst.i32 32
+    v22 = imul.i32 v20, v21
+    v23 = iadd.i32 v14, v19
+    v24 = iadd.i32 v23, v22
+    return v24
 }
 
 function @route(i32) -> i32 internal {
