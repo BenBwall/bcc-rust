@@ -172,7 +172,7 @@ impl Machine<'_, '_, '_> {
                 opcode: Opcode::FrameAddress,
                 ..
             } => RuntimeValue::Ptr(super::value::Pointer {
-                address:    self.frame().frame_address,
+                address:    self.frame().start,
                 provenance: None,
             }),
             | InstData::Nullary {

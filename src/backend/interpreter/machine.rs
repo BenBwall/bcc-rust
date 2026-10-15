@@ -74,7 +74,7 @@ pub(super) struct Frame {
     pub(super) activation:      u64,
     /// Where the frame begins: above every object its callers allocated and
     /// below its own slots.
-    pub(super) frame_address:   u64,
+    pub(super) start:           u64,
     /// The value in the caller that receives this call's result.
     pub(super) caller_value:    Option<Value>,
     /// Caller destination and private callee area for a register result.
@@ -306,7 +306,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             varargs_len: self.varargs.len() - varargs,
             va_backing: None,
             activation: self.activations,
-            frame_address,
+            start: frame_address,
             caller_value,
             register_result,
         });
