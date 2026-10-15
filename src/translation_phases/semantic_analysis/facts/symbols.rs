@@ -113,8 +113,6 @@ pub(crate) enum UnsupportedAttribute {
     ReturnsTwice,
     /// Clang `overloadable`: mangled C function names.
     Overloadable,
-    /// GNU `scalar_storage_order`: reversed byte order of members.
-    ScalarStorageOrder,
     /// MSVC `__declspec(thread)`: thread-local storage.
     ThreadStorage,
     /// Clang `cpu_dispatch`/`cpu_specific`/`target_version` multiversioning.
@@ -141,7 +139,6 @@ impl UnsupportedAttribute {
             | Self::Naked => "naked functions",
             | Self::ReturnsTwice => "the `returns_twice` attribute",
             | Self::Overloadable => "the `overloadable` attribute",
-            | Self::ScalarStorageOrder => "the `scalar_storage_order` attribute",
             | Self::ThreadStorage => "`__declspec(thread)` storage",
             | Self::Multiversioning => "function multiversioning attributes",
             | Self::PassObjectSize => "the `pass_object_size` attribute",

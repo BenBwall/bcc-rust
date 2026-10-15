@@ -174,7 +174,6 @@ fn gnu(name: &str) -> Option<Rule> {
         | "naked" => Rule::Unsupported(U::Naked),
         | "returns_twice" => Rule::Unsupported(U::ReturnsTwice),
         | "overloadable" => Rule::Unsupported(U::Overloadable),
-        | "scalar_storage_order" => Rule::Unsupported(U::ScalarStorageOrder),
         | "cpu_dispatch" | "cpu_specific" | "target_version" =>
             Rule::Unsupported(U::Multiversioning),
         | "pass_object_size" | "pass_dynamic_object_size" => Rule::Unsupported(U::PassObjectSize),

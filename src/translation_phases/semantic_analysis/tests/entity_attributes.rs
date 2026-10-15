@@ -201,6 +201,11 @@ fn attribute_diagnostics_match_clang() {
     let cases: &[(&str, &[SemanticErrorKind])] = &[
         ("__attribute__((frobnicate)) int x;", &[K::UnknownAttribute]),
         ("[[vendor::frobnicate]] int x;", &[K::UnknownAttribute]),
+        // GCC-only, unknown to bundled Clang, which ignores either order.
+        (
+            "struct __attribute__((scalar_storage_order(\"big-endian\"))) S { int a; };",
+            &[K::UnknownAttribute],
+        ),
         ("static int x __attribute__((weak));", &[K::WeakInternal]),
         (
             "void f(void) { int x __attribute__((weak)); }",
