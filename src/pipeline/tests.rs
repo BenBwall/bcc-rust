@@ -728,7 +728,7 @@ fn retained_types_report_unanalyzed_array_elements() {
     use crate::translation_phases::semantic_analysis::TypeKind;
     // GNU `__typeof__` of an unmodeled builtin call has no modeled type.
     with_semantics(
-        "__typeof__(__builtin_return_address(0)) a[2];",
+        "__typeof__(__builtin_apply_args()) a[2];",
         |context, _, sema| {
             let a = sema
                 .bindings
