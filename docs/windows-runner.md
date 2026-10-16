@@ -78,3 +78,35 @@ link to its run. Jobs are serialized on this one host.
 If the runner is offline, check that Windows is awake, its user session is
 running, and the listener log says `Listening for Jobs`. Agent permission
 errors are checked with `gh api repos/BenBwall/bcc-rust --jq .permissions`.
+
+## Verified on 17 October 2026 (Helsinki)
+
+All three workloads were submitted by the installed `bcc-windows` command
+inside the sandbox, testing compiler commit
+`c114b485499bc5bb1ad81837084126a6e5cf7497` on native Windows x64.
+
+| Workload | GitHub Actions run | Result |
+|---|---|---|
+| Focused Windows CRT test | [38975948896](https://github.com/BenBwall/bcc-rust/actions/runs/38975948896) | One executed passing test, no skip; client exit 0 |
+| Timed lexer benchmark | [38976028725](https://github.com/BenBwall/bcc-rust/actions/runs/38976028725) | Actual timing measurements and Criterion artifacts; client exit 0 |
+| Canonical CI | [38975693228](https://github.com/BenBwall/bcc-rust/actions/runs/38975693228) | 2,257 passed, 23 failed, 7 ignored; client exit 1 |
+
+CI also passed all 31 allocation tests, both strict Clippy configurations,
+nightly formatting, and whitespace checks. Its 23 all-target failures match
+the prior manual validation: 22 Windows-to-Linux links cannot find `-lm`,
+and `reachable_functions::tests::emitted_symbols_match_clang_o0` observes
+`llvm.compiler.used` versus Clang's `llvm.used`. These remain failed compiler
+checks. Rust harness counts include tests that can return early on a host;
+those results do not establish runtime coverage.
+
+The sandbox downloaded all three runs' artifacts under
+`/c/Users/benbw/Documents/GitRepo/bcc-rust/.git/windows-results/`. Their
+`windows/test`, `windows/bench`, and `windows/ci` commit statuses were verified
+as success, success, and failure respectively. The earlier benchmark run
+[38975422542](https://github.com/BenBwall/bcc-rust/actions/runs/38975422542)
+also produced three measured lexer cases.
+
+The five submission-client regressions passed on both Linux and Windows;
+PowerShell parsing and actionlint passed. Existing compiler checkouts and
+the default branch were preserved. The source compiler was not changed to
+make these checks pass.
