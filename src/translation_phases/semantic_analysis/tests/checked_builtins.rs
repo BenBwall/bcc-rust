@@ -264,7 +264,7 @@ fn checked_builtins_reject_missing_file_and_mismatched_operands() {
 }
 
 /// Clang forms the stream prototype from file scope, independently of local
-/// typedefs with the same spelling (C99 §6.2.1p4, p. 29; PDF p. 41).
+/// typedefs with the same spelling (C99 §6.2.1p4, pp. 29-30; PDF pp. 41-42).
 #[test]
 fn checked_stream_builtins_use_file_scope_typedef() {
     for target in [

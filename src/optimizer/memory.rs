@@ -187,7 +187,8 @@ enum MemoryWrite {
 /// scanning a join's region log what it returns, so an instruction that
 /// writes cannot be missed by one of them. A volatile access, a call, a range
 /// operation, an atomic (including relaxed loads and fences), or a `va_*`
-/// operation is a full barrier. A new instruction that
+/// operation, breakpoint, or cycle-counter observation is a full barrier.
+/// A new instruction that
 /// may write memory or synchronize must be added here.
 fn memory_write(draft: &Draft<'_, '_>, data: InstData) -> MemoryWrite {
     if data.flags().contains(InstFlags::VOLATILE) {
@@ -199,6 +200,10 @@ fn memory_write(draft: &Draft<'_, '_>, data: InstData) -> MemoryWrite {
             ty,
             ..
         } => MemoryWrite::At(location(draft, draft.resolve(addr), ty)),
+        | InstData::Nullary {
+            opcode: Opcode::DebugTrap | Opcode::ReadTimestamp,
+            ..
+        }
         | InstData::Atomic { .. }
         | InstData::Call { .. }
         | InstData::CallIndirect { .. }

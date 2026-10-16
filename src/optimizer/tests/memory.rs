@@ -86,6 +86,8 @@ fn barriers_keep_both_loads() {
         "v6 = va_arg.i32 v1",
         "va_copy v1, v0",
         "va_end v1",
+        "debug_trap",
+        "v6 = read_timestamp",
     ] {
         let last = if barrier.starts_with("v6 =") { 8 } else { 7 };
         let barrier = barrier.replace("v6 =", "v7 =");
