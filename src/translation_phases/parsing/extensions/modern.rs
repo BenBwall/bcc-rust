@@ -639,8 +639,7 @@ impl<'tu, 'p> ModernFrame<'tu, 'p> {
                     | "pass_dynamic_object_size"
                     | "diagnose_if"
                     | "enable_if"
-            )
-                || (name == "align" && self.attribute_syntax == AttributeSyntax::Msvc)
+            ) || (name == "align" && self.attribute_syntax == AttributeSyntax::Msvc)
         }) && parser.cursor.following().is_some_and(|token| {
             !matches!(
                 token.kind,

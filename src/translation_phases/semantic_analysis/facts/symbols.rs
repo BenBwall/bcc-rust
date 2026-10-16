@@ -76,7 +76,7 @@ pub(crate) struct EntityAttributes<'tu> {
     pub(crate) inlining:           Inlining,
     /// Microsoft `selectany` on an external object: its definitions in
     /// different translation units are one, and the linker keeps any.
-    pub(crate) select_any:     bool,
+    pub(crate) select_any:         bool,
 }
 
 /// A function's inline-control request. `Never` wins over `Always` when

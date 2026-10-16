@@ -999,7 +999,10 @@ fn annotation_takes_wide_string_literals() {
     let msvc = CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
         .with_target(crate::target::Target::WindowsMsvc)
         .with_msvc_extensions(true);
-    for target in [crate::target::Target::WindowsMsvc, crate::target::Target::WindowsGnu] {
+    for target in [
+        crate::target::Target::WindowsMsvc,
+        crate::target::Target::WindowsGnu,
+    ] {
         let configuration = msvc.with_target(target);
         for source in [
             "void f(void) { __annotation(L\"a\", L\"b\"); }",
