@@ -76,7 +76,7 @@ fn msvc_c99_inline_bodies_follow_reachability_and_retention_attributes() {
              __attribute__((alias(\"f\")));",
             true,
         ),
-        ("int f(void); inline int f(void) { return 7; }", true),
+        ("int f(void); inline int f(void) { return 7; }", false),
         ("inline int f(void) { return 7; } int f(void);", true),
         (
             "extern inline int f(void); inline int f(void) { return 7; }",
@@ -113,8 +113,8 @@ fn msvc_c99_inline_bodies_follow_reachability_and_retention_attributes() {
     }
 }
 
-/// Discarding a Microsoft C99-mode body must not change GNU89 or explicit
-/// `gnu_inline` emission, including explicit mode overrides before C99.
+/// Microsoft inline retention applies in either language mode; explicit
+/// `gnu_inline` keeps GNU emission, including mode overrides before C99.
 #[test]
 fn msvc_discardable_inline_keeps_gnu_modes_and_attributes() {
     for target in [
@@ -130,7 +130,10 @@ fn msvc_discardable_inline_keeps_gnu_modes_and_attributes() {
                     .with_gnu_extensions(true)
                     .with_gnu89_inline(gnu89);
                 for (source, defined) in [
-                    ("inline int f(void) { return 7; }", gnu89),
+                    (
+                        "inline int f(void) { return 7; }",
+                        target != Target::WindowsMsvc && gnu89,
+                    ),
                     (
                         "extern inline int f(void) { return 7; }",
                         target == Target::WindowsMsvc || !gnu89,
@@ -143,6 +146,16 @@ fn msvc_discardable_inline_keeps_gnu_modes_and_attributes() {
                         "extern inline __attribute__((gnu_inline)) int f(void) { return 7; }",
                         false,
                     ),
+                    (
+                        "inline __attribute__((gnu_inline)) int f(void); inline int f(void) { \
+                         return 7; }",
+                        true,
+                    ),
+                    (
+                        "extern inline __attribute__((gnu_inline)) int f(void); extern inline int \
+                         f(void) { return 7; }",
+                        false,
+                    ),
                 ] {
                     assert_eq!(
                         has_body(source, config),
@@ -150,6 +163,98 @@ fn msvc_discardable_inline_keeps_gnu_modes_and_attributes() {
                         "{target:?} {standard:?} gnu89={gnu89}: {source}"
                     );
                 }
+            }
+        }
+    }
+}
+
+/// Clang emits Microsoft inline bodies in source order. Ordinary C99
+/// redeclarations can materialize a deferred body only on the first
+/// transition from inline-only file-scope declarations. The first explicit
+/// extern also forces it in Microsoft compatibility mode. Block declarations
+/// update inherited inline/extern facts without materializing a prior body.
+/// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19;
+/// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
+#[test]
+fn msvc_inline_retention_follows_declaration_order_and_scope() {
+    for standard in [CStandard::C89, CStandard::C99, CStandard::C17] {
+        for compatibility in [false, true] {
+            let config = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                .with_target(Target::WindowsMsvc)
+                .with_gnu_extensions(true)
+                .with_msvc_extensions(compatibility);
+            let gnu89 = config.gnu89_inline();
+            for (source, defined) in [
+                ("inline int f(void) { return 7; }", false),
+                ("int f(void); inline int f(void) { return 7; }", false),
+                ("inline int f(void) { return 7; } int f(void);", !gnu89),
+                (
+                    "int f(void); inline int f(void) { return 7; } int f(void);",
+                    false,
+                ),
+                ("extern int f(void); inline int f(void) { return 7; }", true),
+                (
+                    "inline int f(void) { return 7; } extern int f(void);",
+                    compatibility || !gnu89,
+                ),
+                ("extern inline int f(void) { return 7; }", true),
+                ("inline int f(void); int f(void) { return 7; }", false),
+                ("int f(void) { return 7; } inline int f(void);", true),
+                (
+                    "inline int f(void); int f(void); int f(void) { return 7; }",
+                    false,
+                ),
+                (
+                    "inline int f(void); int f(void) { return 7; } int f(void);",
+                    false,
+                ),
+                (
+                    "inline int f(void); int f(void) { return 7; } extern int f(void);",
+                    compatibility,
+                ),
+                (
+                    "static void dead(void) { int f(void); } inline int f(void) { return 7; }",
+                    false,
+                ),
+                (
+                    "static void dead(void) { extern int f(void); } inline int f(void) { return \
+                     7; }",
+                    true,
+                ),
+                (
+                    "static void dead(void) { inline int f(void); } int f(void) { return 7; }",
+                    false,
+                ),
+                (
+                    "inline int f(void) { return 7; } static void dead(void) { int f(void); }",
+                    false,
+                ),
+                (
+                    "inline int f(void) { return 7; } static void dead(void) { extern int \
+                     f(void); }",
+                    false,
+                ),
+                (
+                    "inline int f(void) { return 7; } static void dead(void) { extern int \
+                     f(void); } extern int f(void);",
+                    !gnu89,
+                ),
+                (
+                    "int f(void); inline int f(void) { return 7; } static void dead(void) { \
+                     extern int f(void); } extern int f(void);",
+                    false,
+                ),
+                (
+                    "inline int f(void) { return 7; } static void dead(void) { extern int \
+                     f(void); } int (*p)(void) = f;",
+                    true,
+                ),
+            ] {
+                assert_eq!(
+                    has_body(source, config),
+                    defined,
+                    "{standard:?} compatibility={compatibility}: {source}"
+                );
             }
         }
     }

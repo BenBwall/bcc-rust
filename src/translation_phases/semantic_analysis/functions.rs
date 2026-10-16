@@ -605,19 +605,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let definition = self.definitions[i];
             if definition.kind == DefinitionKind::Function
                 && self.bindings[definition.binding].linkage == Linkage::External
-                && self.inline_only_declarations(definition.binding)
             {
                 // Microsoft inline bodies remain callable external
-                // definitions, but an unused plain inline body is
-                // discardable, as in Clang's basicGVALinkageForFunction.
+                // definitions. Their retention follows source-order
+                // emission, independently of C99 inline-only declarations.
                 // C99 §6.7.4p6, pp. 112-113; PDF pp. 124-125;
                 // Microsoft ABI extension under §4p6, p. 7; PDF p. 19.
-                self.definitions[i].kind =
-                    if self.context.configuration.target().c99_inline_definitions() {
-                        DefinitionKind::Inline
-                    } else {
-                        DefinitionKind::DiscardableFunction
-                    };
+                if self.context.configuration.target().c99_inline_definitions() {
+                    if self.inline_only_declarations(definition.binding) {
+                        self.definitions[i].kind = DefinitionKind::Inline;
+                    }
+                } else if self
+                    .functions
+                    .entities
+                    .get(&self.function_identity(definition.binding))
+                    .is_some_and(|entity| entity.msvc_discardable)
+                {
+                    self.definitions[i].kind = DefinitionKind::DiscardableFunction;
+                }
             }
         }
         self.definitions.sort_unstable_by_key(|d| d.binding);
@@ -1039,6 +1044,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// PDF p. 124. Definition state is separate from declaration occurrences.
     /// GNU inline attribute applicability extends §6.7.4p6, pp. 112-113;
     /// PDF pp. 124-125.
+    /// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19:
+    /// Clang's doesDeclarationForceExternallyVisibleDefinition retains a
+    /// deferred inline body only on a forcing file-scope redeclaration.
     pub(super) fn record_declaration(
         &mut self,
         index: usize,
@@ -1088,6 +1096,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .copied()
             .unwrap_or_default();
         entity.latest = index;
+        if binding.kind == BindingKind::Function {
+            let explicit_extern = spec.storage_class == Some(StorageClass::Extern);
+            if self.scopes[binding.scope].kind == ScopeKind::File
+                && entity.msvc_discardable
+                && ((self.context.configuration.msvc_compatibility()
+                    && explicit_extern
+                    && !entity.explicit_extern)
+                    || (!self.context.configuration.gnu89_inline()
+                        && !entity.non_inline
+                        && (!spec.function_specifiers.is_inline || explicit_extern)))
+            {
+                entity.msvc_discardable = false;
+            }
+            // Inline propagates forward through linked declarations, even
+            // from block scope. A block extern can require a later body,
+            // but does not itself materialize an earlier deferred body.
+            entity.inline_declared |= spec.function_specifiers.is_inline;
+            entity.explicit_extern |= explicit_extern;
+        }
         if self.scopes[binding.scope].kind == ScopeKind::File {
             if binding.kind == BindingKind::Function {
                 // GNU attribute applicability extends C99 §6.7.4p6:
@@ -1201,6 +1228,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125; §6.9p3, p. 140;
     /// PDF p. 152. Internal bodies satisfy the definition requirement even
     /// when GNU inline semantics allow replacing them.
+    /// Microsoft ABI extension under C99: §4p6, p. 7; PDF p. 19:
+    /// Clang's basicGVALinkageForFunction defers an inlined definition
+    /// without an earlier explicit extern, unless gnu_inline applies.
     fn record_function_definition(&mut self, index: usize, f: &'tu FunctionDefinition<'tu>) {
         if self.tainted {
             return;
@@ -1234,6 +1264,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 FunctionBody::Unique(b.name.source_vectors)
             });
         }
+        entity.msvc_discardable = !self.context.configuration.target().c99_inline_definitions()
+            && !entity.gnu_inline
+            && entity.inline_declared
+            && !entity.explicit_extern;
         // C99 §6.7.4p6 and §6.9p3: an internal inline body supplies the
         // required definition even when GNU semantics permit its replacement.
         if (!entity.can_redefine || b.linkage == Linkage::Internal)
@@ -1255,8 +1289,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // GNU extension: GCC manual, "Inline": extern inline supplies no
         // external definition, even after an ordinary declaration. C99
         // §6.7.4p6-7 instead considers all file-scope declarations.
-        // MSVC's existing target rule keeps bodies for mode-selected GNU89
-        // inline too; explicit gnu_inline still requests GNU body omission.
+        // Microsoft retention is finalized separately from the C99/GNU
+        // definition constraints; explicit gnu_inline keeps GNU omission.
         self.definitions.push(Definition {
             binding: index,
             kind:    if entity.can_redefine
@@ -1446,15 +1480,21 @@ pub(super) enum FunctionWork<'tu> {
 /// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Entity {
-    latest:        usize,
-    definition:    Option<SourceVectors>,
-    tentative:     Option<usize>,
-    non_inline:    bool,
-    function_body: Option<FunctionBody>,
+    latest:           usize,
+    definition:       Option<SourceVectors>,
+    tentative:        Option<usize>,
+    non_inline:       bool,
+    function_body:    Option<FunctionBody>,
+    /// Source-order facts for Microsoft's inline emission. Inline inherits
+    /// forward; explicit extern includes linked block-scope declarations.
+    /// Extension under C99: §4p6, p. 7; PDF p. 19.
+    inline_declared:  bool,
+    explicit_extern:  bool,
+    msvc_discardable: bool,
     /// Clang's canRedefineFunction: GNU extern inline declarations permit
     /// a later static declaration and a replacement function body.
-    can_redefine:  bool,
-    gnu_inline:    bool,
+    can_redefine:     bool,
+    gnu_inline:       bool,
 }
 
 /// GNU extern inline bodies may be replaced; ordinary definitions may not.
