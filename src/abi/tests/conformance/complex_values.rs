@@ -61,25 +61,20 @@ fn assert_native_conforms(target: Target, module: &Module<'_>, c: &str) {
     crate::backend::native::assemble(&assembly, &object, target, OutputKind::Object).unwrap();
     for opt in [OptLevel::O0, OptLevel::O2] {
         let executable = directory.join(format!("complex-{opt:?}.exe"));
-        let mut command = toolchain.command(
-            &object,
-            &executable,
-            LlvmOptions {
-                code: crate::target::CodeOptions::default(),
-                opt: Some(opt),
-                disable_llvm_passes: false,
-                target,
-                kind: OutputKind::Executable,
-            },
-        );
+        let options = LlvmOptions {
+            code: crate::target::CodeOptions::default(),
+            opt: Some(opt),
+            disable_llvm_passes: false,
+            target,
+            kind: OutputKind::Executable,
+        };
+        let mut command = match runner {
+            | Runner::Native => toolchain.command(&object, &executable, options),
+            | Runner::Wsl => toolchain.freestanding_command(&object, &executable, options),
+        };
         _ = command.args(["-x", "c"]).arg(&c_path);
         if runner == Runner::Wsl {
-            _ = command.args([
-                "-nostdlib",
-                "-static",
-                "-ffreestanding",
-                "-fno-stack-protector",
-            ]);
+            _ = command.args(["-static", "-ffreestanding", "-fno-stack-protector"]);
         }
         let output = command.output().unwrap();
         assert!(
