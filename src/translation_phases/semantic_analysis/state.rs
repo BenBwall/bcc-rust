@@ -80,7 +80,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             effects: super::facts::effects::EffectBuilder::new(tu, scratch),
             expression_actions: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             binding_bounds: ArenaMap::with_hasher_in(FxBuildHasher, tu),
-            correspondence: super::facts::correspondence::CorrespondenceBuilder::new(tu, scratch),
+            correspondence: super::facts::correspondence::CorrespondenceBuilder::new(tu),
             runtime_bounds: ArenaVec::new_in(tu),
             bound_origins: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             bound_expression_starts: ArenaMap::with_hasher_in(FxBuildHasher, scratch),

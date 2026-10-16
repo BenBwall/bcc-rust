@@ -531,7 +531,11 @@ layouts and member offsets.
 Inline body emission is decided by semantic analysis and consumed by lowering:
 C99 inline-only bodies and GNU89 `extern inline` bodies remain external
 declarations in IR, so uninlined calls and addresses refer to the external
-symbol. Plain GNU89 `inline` and `static inline` bodies are lowered normally.
+symbol. An `always_inline` one (without inline assembly) is also lowered as
+an internal `name.always_inline` function, marked `alwaysinline`, that
+direct calls name; addresses keep the external symbol. Functions carry
+their inline control in IR (`noinline` for GNU `noinline`/`noipa`,
+`alwaysinline`), which the inliner and the LLVM back end honor. Plain GNU89 `inline` and `static inline` bodies are lowered normally.
 The interpreter and LLVM therefore share the same decision. Internal functions
 and objects are planned in `lowering/module_items/reachability.rs`: external
 definitions seed an explicit worklist over retained semantic entity references,
@@ -1318,13 +1322,16 @@ lowering maps them without reading attribute tokens (`lowering/symbols.rs`,
   variable's address (a stack slot; cleanup variables are address-taken),
   interleaved with VLA stack restores in the transition's inner-to-outer
   order, after return values and statement-expression tails are computed.
-- **Optimizer.** `inline` refuses weak callees, whose body a strong definition
-  may replace. GVN's alias check compares alias globals as their targets.
+- **Optimizer.** `inline` refuses weak and `noinline` callees, whose body a
+  strong definition may replace or the program asked to keep. GVN's alias check compares alias globals as their targets.
   Aliases have no body, so they are never inlined either.
 - **Interpreter.** `run_main` (used by the CLI, the difftest oracle and the
   end-to-end tests) runs constructors before main and destructors after main
   returns or `exit` (unwinding main's frames first), not after `abort`.
-  Aliases share their target's address and body; an undefined weak function or
+  Aliases share their target's address and body, and a call through an alias
+whose function type is compatible with its target's but spelled differently
+(`int f()` for `int g(void)`) runs as an indirect call through that type
+would (`Module::function_definition` resolves every alias); an undefined weak function or
   global has the null address unless the host provides the function, and
   calling it is undefined behavior.
 - **LLVM.** Weak definitions are `weak`, weak declarations `extern_weak`,
@@ -1332,8 +1339,8 @@ lowering maps them without reading attribute tokens (`lowering/symbols.rs`,
   LLVM-C cannot set on an alias, so it is parsed from textual IR in a module
   of its own, linked in with `LLVMLinkModules2` and pointed at its target),
   and `llvm.global_ctors`, `llvm.global_dtors`
-  and `llvm.used` are appending arrays, as bundled Clang emits them on both
-  ELF and COFF targets; sections, visibility and function alignment use the
+  and the retained-symbol array (`llvm.compiler.used` on ELF, `llvm.used` on
+  COFF) are appending arrays, as bundled Clang emits them; sections, visibility and function alignment use the
   LLVM-C setters.
 
 Evidence: `src/ir/tests/symbols.rs`, `src/backend/interpreter/tests/startup.rs`,
@@ -1341,7 +1348,8 @@ Evidence: `src/ir/tests/symbols.rs`, `src/backend/interpreter/tests/startup.rs`,
 `src/pipeline/tests/middle_end/entity_attributes.rs`, which runs the issue #56
 reproducers and cleanup/priority programs through the interpreter at every
 stage, all four LLVM arms and bundled Clang on the host, and links weak/alias
-units with Clang-compiled units natively (Windows GNU) and under WSL (System V).
+units with Clang-compiled units natively for the host's target (Linux GNU or
+Windows GNU) and, from Windows, under WSL (System V).
 
 ## Labels as values and computed goto (2026-10-14)
 

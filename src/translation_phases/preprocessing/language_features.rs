@@ -235,13 +235,25 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                             "deprecated" | "fallthrough" | "nodiscard" | "maybe_unused"
                             | "noreturn" | "_Noreturn" | "unsequenced" | "reproducible",
                         ) => 202_311,
-                        | (
-                            "__has_attribute",
-                            "unused" | "deprecated" | "aligned" | "packed" | "noreturn" | "weak"
-                            | "section" | "visibility" | "format" | "always_inline" | "noinline"
-                            | "gnu_inline" | "transparent_union" | "cleanup" | "constructor"
-                            | "destructor" | "alias" | "used",
-                        ) => 1,
+                        // Vendor attributes answer as bundled Clang does, from
+                        // the attribute catalog: GNU spellings for
+                        // `__has_attribute`, `gnu::` and `clang::` scopes for
+                        // `__has_c_attribute`.
+                        | ("__has_c_attribute", scoped) => scoped
+                            .split_once("::")
+                            .map_or(0, |(namespace, attribute)| {
+                                crate::translation_phases::semantic_analysis::clang_attribute_version(
+                                    Some(namespace),
+                                    attribute,
+                                    self.context.configuration.target(),
+                                )
+                            }),
+                        | ("__has_attribute", attribute) if !attribute.contains(':') =>
+                            crate::translation_phases::semantic_analysis::clang_attribute_version(
+                                None,
+                                attribute,
+                                self.context.configuration.target(),
+                            ),
                         | _ => 0,
                     }
                 }

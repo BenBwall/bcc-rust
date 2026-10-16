@@ -21,7 +21,6 @@ use crate::{
         FuncId,
         InitKind,
         Module,
-        Symbol,
     },
     util::bump::{
         ArenaVec,
@@ -42,7 +41,9 @@ pub(super) fn order<'a>(
             | InitKind::Destructor => destructors.push((init.priority, init.func)),
         }
     }
-    // Stable sorts keep registration order among equal priorities.
+    // Stable sorts keep registration order among equal constructor
+    // priorities; reversing first leaves equal destructor priorities in
+    // reverse registration order.
     constructors.sort_by_key(|&(priority, _)| priority);
     destructors.reverse();
     destructors.sort_by_key(|&(priority, _)| std::cmp::Reverse(priority));
@@ -59,11 +60,7 @@ impl Machine<'_, '_, '_> {
     /// an alias names.
     pub(super) fn enter_function(&mut self, func: FuncId) -> Result<(), Trap> {
         let module = self.module;
-        let func = match module.function(func).attributes.alias {
-            | Some(Symbol::Function(target)) => target,
-            | _ => func,
-        };
-        self.enter(module.function(func).name, &[])
+        self.enter(module.function(module.function_definition(func)).name, &[])
     }
 
     /// Runs `destructors` after the program ended with `ended`, keeping its

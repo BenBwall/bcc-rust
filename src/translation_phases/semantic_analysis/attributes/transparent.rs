@@ -80,8 +80,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         written::written(a, self.context)
             .find(|attribute| {
-                catalog::rule(a.syntax, attribute.namespace, attribute.name)
-                    == Some(catalog::Rule::TransparentUnion)
+                catalog::rule(
+                    a.syntax,
+                    attribute.namespace,
+                    attribute.name,
+                    self.context.configuration.target(),
+                ) == Some(catalog::Rule::TransparentUnion)
             })
             .map(|attribute| attribute.source)
     }

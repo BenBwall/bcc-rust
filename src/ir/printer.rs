@@ -89,6 +89,9 @@ impl<'ir> Module<'ir> {
             if let Some(align) = function.align {
                 write!(f, " align {}", align.bytes())?;
             }
+            if let Some(keyword) = function.inlining.keyword() {
+                write!(f, " {keyword}")?;
+            }
             write!(f, "{}", self.display_symbol_attributes(function.attributes))?;
             let Some(body) = &function.body else {
                 return f.write_char('\n');

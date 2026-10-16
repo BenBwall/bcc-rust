@@ -40,10 +40,12 @@ mod layout;
 mod transparent;
 mod written;
 
+pub(crate) use catalog::clang_attribute_version;
 pub(super) use entities::{
     AttributeState,
     Subject,
 };
+pub(super) use written::known_names;
 
 use super::{
     Analyzer,
@@ -86,8 +88,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             Target::WindowsGnu | Target::WindowsMsvc
         );
         for attribute in self.written_attributes(specifier) {
-            let Some(rule) = catalog::rule(specifier.syntax, attribute.namespace, attribute.name)
-            else {
+            let Some(rule) = catalog::rule(
+                specifier.syntax,
+                attribute.namespace,
+                attribute.name,
+                self.context.configuration.target(),
+            ) else {
                 let spelling = match attribute.namespace {
                     | Some(namespace) => crate::diagnostics::format_in!(
                         self.scratch,

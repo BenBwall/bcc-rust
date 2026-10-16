@@ -28,4 +28,12 @@ warning: '__declspec' is an MSVC extension
 4 | [[maybe_unused]] __declspec(dllexport) double _Complex value = VALUE;
   |                  ^^^^^^^^^^
 
-5 warnings generated.
+warning: unknown attribute ignored: `dllexport`
+ --> language-integration-policy.c:4:29
+  |
+4 | [[maybe_unused]] __declspec(dllexport) double _Complex value = VALUE;
+  |                             ^^^^^^^^^ unknown attribute
+  |
+  = note: Clang -Wunknown-attributes: bcc does not know this attribute and ignores it
+
+6 warnings generated.

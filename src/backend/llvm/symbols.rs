@@ -1,8 +1,8 @@
 //! Module symbols as LLVM sees them: functions and globals with their
 //! linkage, alignment and section, aliases created once their targets
 //! exist, and the special `llvm.global_ctors`, `llvm.global_dtors` and
-//! `llvm.used` arrays, which match bundled Clang's output for the GNU
-//! attributes.
+//! `llvm.compiler.used` (ELF) or `llvm.used` (COFF) arrays, which match
+//! bundled Clang's output for the GNU attributes.
 //! GNU extension: GCC manual, "Common Function Attributes" and "Common
 //! Variable Attributes" (alias, constructor, destructor, section, used,
 //! weak). <https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html>
@@ -37,6 +37,9 @@ use crate::{
     },
 };
 
+/// LLVM's attribute index of the function itself.
+const FUNCTION_INDEX: u32 = u32::MAX;
+
 /// Declares every function and global, then every alias, returning their
 /// values indexed by `FuncId` and `GlobalId`.
 pub(super) fn declare<'id, 'a, 'm>(
@@ -56,6 +59,10 @@ pub(super) fn declare<'id, 'a, 'm>(
         }
         let value = api.function(api.name(function.name), ty);
         function::attributes(api, value, signature, false);
+        // GNU `noinline`/`noipa` and `always_inline`, as Clang marks them.
+        if let Some(keyword) = function.inlining.keyword() {
+            api.attribute(value, FUNCTION_INDEX, keyword, 0, None, false);
+        }
         if let Some(linkage) = linkage(function.linkage, function.body.is_some()) {
             api.linkage(value, linkage);
         }
@@ -200,11 +207,14 @@ fn alias_linkage<'id>(api: &Session<'id>, value: Val<'id>, linkage: IrLinkage) {
 }
 
 /// Emits `llvm.global_ctors` and `llvm.global_dtors` entries in
-/// registration order with null associated data, and `llvm.used` for every
-/// symbol requesting retention, as Clang does.
+/// registration order with null associated data, and the retained symbols
+/// of GNU `used`, as Clang does: on ELF in `llvm.compiler.used`, which keeps
+/// them through compilation without asking the linker to keep their
+/// sections (that is GNU `retain`), and on COFF in `llvm.used`.
 pub(super) fn special_arrays<'id>(
     module: &Module<'_>,
     api: &Session<'id>,
+    target: Target,
     arena: &Bump,
     functions: &[Val<'id>],
     globals: &[Val<'id>],
@@ -245,7 +255,11 @@ pub(super) fn special_arrays<'id>(
         }
     }
     if !used.is_empty() {
-        let array = api.global(c"llvm.used", api.array(ptr, used.len() as u64));
+        let name = match target {
+            | Target::LinuxGnu | Target::LinuxMusl => c"llvm.compiler.used",
+            | Target::WindowsGnu | Target::WindowsMsvc => c"llvm.used",
+        };
+        let array = api.global(name, api.array(ptr, used.len() as u64));
         api.linkage(array, Linkage::Appending);
         api.initializer(array, api.const_array(ptr, &used));
         api.section(array, "llvm.metadata");

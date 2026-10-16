@@ -56,6 +56,7 @@ use super::{
         GlobalInit,
         InitFunction,
         InitKind,
+        InlineControl,
         Linkage,
         ParamAbi,
         Relocation,
@@ -129,6 +130,7 @@ fn declare_items<'t>(
                 let func =
                     module.declare_function(name.text_name(scratch)?, signature, header.linkage);
                 module.function_mut(func).align = header.align;
+                module.function_mut(func).inlining = header.inlining;
                 if cursor.eat(TokenKind::LBrace) {
                     while !matches!(cursor.peek().kind, TokenKind::RBrace | TokenKind::End) {
                         _ = cursor.next();
@@ -468,7 +470,8 @@ fn parse_relocation_target<'t>(
     }
 }
 
-/// `function @name(params) [-> ty] linkage [align N]` and its symbol
+/// `function @name(params) [-> ty] linkage [align N] [noinline |
+/// alwaysinline]` and its symbol
 /// attributes, up to the body.
 fn parse_function_header<'t, 's>(
     cursor: &mut Cursor<'_, 't>,
@@ -483,12 +486,21 @@ fn parse_function_header<'t, 's>(
     } else {
         None
     };
+    let inlining = [InlineControl::Never, InlineControl::Always]
+        .into_iter()
+        .find(|control| {
+            control
+                .keyword()
+                .is_some_and(|keyword| cursor.eat(TokenKind::Ident(keyword)))
+        })
+        .unwrap_or_default();
     let attributes = WrittenAttributes::parse(cursor)?;
     Ok(FunctionHeader {
         name,
         signature,
         linkage,
         align,
+        inlining,
         attributes,
     })
 }
@@ -498,6 +510,7 @@ struct FunctionHeader<'t, 's> {
     signature:  Signature<'s>,
     linkage:    Linkage,
     align:      Option<Align>,
+    inlining:   InlineControl,
     attributes: WrittenAttributes<'t>,
 }
 

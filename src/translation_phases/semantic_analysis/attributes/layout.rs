@@ -40,7 +40,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             for direct in declarator.kind {
                 match direct {
                     | DirectDeclarator::Attributes(a)
-                        if super::super::vectors::attribute_names(a, self.context)
+                        if super::known_names(a, self.context)
                             .any(|(_, name)| name == "packed") =>
                         return true,
                     | DirectDeclarator::Parenthesized(p) => work.push(p.declarator),
@@ -109,7 +109,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     fn written_attribute_alignment(&self, a: &AttributeSpecifier<'tu>) -> u32 {
-        super::super::vectors::attribute_names(a, self.context)
+        super::known_names(a, self.context)
             .filter(|(_, name)| *name == "aligned")
             .filter_map(|(index, _)| self.requested_attribute_alignment(a, index))
             .filter_map(|value| u32::try_from(value).ok())
@@ -185,7 +185,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> LayoutAttributes {
         let mut result = LayoutAttributes::default();
         let mut invalid = false;
-        for (index, name) in super::super::vectors::attribute_names(a, self.context) {
+        for (index, name) in super::known_names(a, self.context) {
             if name == "packed" {
                 result.packed = true;
             } else if name == "aligned" {
@@ -238,7 +238,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         a: &AttributeSpecifier<'tu>,
     ) -> TypeId {
         let mut invalid = false;
-        for (index, name) in super::super::vectors::attribute_names(a, self.context) {
+        for (index, name) in super::known_names(a, self.context) {
             if name != "mode" {
                 continue;
             }

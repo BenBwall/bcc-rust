@@ -102,7 +102,7 @@ fn build_module<'m>(
         return Err(EmitError::NotAbiLowered);
     }
     let (functions, globals) = symbols::declare(module, api, target, arena)?;
-    symbols::special_arrays(module, api, arena, &functions, &globals);
+    symbols::special_arrays(module, api, target, arena, &functions, &globals);
     let emitter = Emitter {
         module,
         api,

@@ -94,7 +94,7 @@ fn verify_symbol_attributes(
         ));
     }
     if let Some(section) = attributes.section
-        && (section.is_empty() || section.contains(['"', '\n', '\r', '\0']))
+        && !super::valid_section_name(section)
     {
         error(VerifierErrorKind::SymbolAttribute(
             "a section name is nonempty and has no quote, newline or NUL",

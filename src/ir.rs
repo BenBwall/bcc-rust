@@ -123,6 +123,7 @@ pub(crate) use module::{
     GlobalInit,
     InitFunction,
     InitKind,
+    InlineControl,
     Linkage,
     ParamAbi,
     Relocation,
@@ -132,6 +133,7 @@ pub(crate) use module::{
     Symbol,
     SymbolAttributes,
     Visibility,
+    valid_section_name,
 };
 pub(crate) use parser::{
     ParseError,
@@ -185,6 +187,8 @@ pub(crate) struct Function<'ir> {
     pub(crate) attributes: SymbolAttributes<'ir>,
     /// A requested minimum alignment of the function's code.
     pub(crate) align:      Option<Align>,
+    /// Whether calls may, must or must not be expanded inline.
+    pub(crate) inlining:   InlineControl,
 }
 
 // Tests

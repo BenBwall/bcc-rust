@@ -114,27 +114,22 @@ impl<'tu> CorrespondenceFacts<'tu> {
     }
 }
 
-pub(in crate::translation_phases::semantic_analysis) struct CorrespondenceBuilder<'tu, 's> {
+pub(in crate::translation_phases::semantic_analysis) struct CorrespondenceBuilder<'tu> {
     declarations: ArenaVec<'tu, DeclarationFacts<'tu>>,
     indices: ArenaMap<'tu, usize, OccurrenceId>,
     entities: ArenaMap<'tu, StringCacheId, EntityId>,
-    _scratch: std::marker::PhantomData<&'s ()>,
     pub(in crate::translation_phases::semantic_analysis) parameter_minimums:
         ArenaMap<'tu, usize, super::super::ArrayBound>,
     #[cfg(test)]
     work: usize,
 }
 
-impl<'tu, 's> CorrespondenceBuilder<'tu, 's> {
-    pub(in crate::translation_phases::semantic_analysis) fn new(
-        tu: &'tu Bump,
-        _scratch: &'s Bump,
-    ) -> Self {
+impl<'tu> CorrespondenceBuilder<'tu> {
+    pub(in crate::translation_phases::semantic_analysis) fn new(tu: &'tu Bump) -> Self {
         Self {
             declarations:       ArenaVec::new_in(tu),
             indices:            ArenaMap::with_hasher_in(FxBuildHasher, tu),
             entities:           ArenaMap::with_hasher_in(FxBuildHasher, tu),
-            _scratch:           std::marker::PhantomData,
             parameter_minimums: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             #[cfg(test)]
             work:               0,

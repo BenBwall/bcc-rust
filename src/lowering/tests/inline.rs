@@ -93,6 +93,34 @@ fn gnu_inline_attribute_and_replacement_bodies_reach_lowering() {
     }
 }
 
+/// C23 `[[gnu::gnu_inline]]` is the GNU attribute: an `extern inline` body
+/// supplies no external definition (as bundled Clang emits only a
+/// declaration of `f`), while `[[clang::gnu_inline]]` is unknown.
+#[test]
+fn scoped_gnu_inline_selects_gnu_omission() {
+    let config = CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow);
+    for (source, defined) in [
+        (
+            "[[gnu::gnu_inline]] extern inline int f(void) { return 7; } int (*p)(void) = f;",
+            false,
+        ),
+        (
+            "[[__gnu__::__gnu_inline__]] extern inline int f(void) { return 7; }",
+            false,
+        ),
+        (
+            "extern inline int f(void) { return 7; } int (*p)(void) = f;",
+            true,
+        ),
+        (
+            "[[clang::gnu_inline]] extern inline int f(void) { return 7; }",
+            true,
+        ),
+    ] {
+        assert_eq!(has_body(source, config), defined, "{source}");
+    }
+}
+
 #[test]
 fn pre_c99_defaults_to_gnu89_including_the_c95_amendment() {
     for standard in [
@@ -108,4 +136,32 @@ fn pre_c99_defaults_to_gnu89_including_the_c95_amendment() {
             standard < CStandard::C99
         );
     }
+}
+
+/// A private `always_inline` body is emitted, so a capability refused in
+/// it, here an x86 segment address space, is refused rather than lowered
+/// as an ordinary load; a body with inline assembly is not emitted, so its
+/// refusals do not apply.
+#[test]
+fn private_inline_bodies_keep_their_refusals() {
+    let errors = lower(
+        "extern inline __attribute__((gnu_inline, always_inline)) int readgs(void) { return *(int \
+         __attribute__((address_space(256))) *)0; } int main(void) { return readgs(); }",
+    )
+    .expect_err("the address space is refused");
+    assert!(
+        errors.iter().any(|error| error.contains("address_space")),
+        "{errors:?}"
+    );
+    let assembly = lower(
+        "extern inline __attribute__((gnu_inline, always_inline)) int readgs(void) { \
+         __asm__(\"\"); return *(int __attribute__((address_space(256))) *)0; } int main(void) { \
+         return readgs(); }",
+    );
+    assert!(
+        assembly
+            .as_ref()
+            .is_ok_and(|text| text.contains("call @readgs(")),
+        "{assembly:?}"
+    );
 }

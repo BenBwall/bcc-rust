@@ -22,12 +22,15 @@ use super::{
     value::RuntimeValue,
 };
 use crate::ir::{
+    Body,
     Entity,
+    FuncId,
     Inst,
     InstData,
     InstFlags,
     Opcode,
     Type,
+    Value,
 };
 
 impl Machine<'_, '_, '_> {
@@ -259,43 +262,7 @@ impl Machine<'_, '_, '_> {
                     .expect("call_indirect names its callee");
                 let func = self.memory.function_at(self.value(callee))?;
                 let expected = self.module.signature(sig);
-                let actual = self.module.function_signature(func);
-                // A declared host function with an open external signature
-                // represents a C declaration without a prototype. Its call
-                // site supplies the default-promoted parameter types, also
-                // through function pointers. C99: §6.5.2.2 paragraph 6, pp.
-                // 71-72; PDF pp. 83-84.
-                let open_host = self.module.function(func).body.is_none()
-                    && actual.variadic
-                    && actual.params.is_empty()
-                    && actual.result == expected.result
-                    && actual.result_extension == expected.result_extension;
-                let open_host = open_host && actual.result_noundef == expected.result_noundef;
-                // An open call site can also resolve to a prototype (for
-                // example after a builtin declares the same host symbol).
-                // Lowering already applied default argument promotions;
-                // compare those operand types with the resolved parameters.
-                // A variadic prototype cannot be called without a prototype.
-                // C99: §6.5.2.2 paragraphs 6 and 9, pp. 71-72; PDF pp. 83-84.
-                let compatible_open_call = expected.variadic
-                    && expected.params.is_empty()
-                    && !actual.variadic
-                    && actual.result == expected.result
-                    && actual.result_extension == expected.result_extension
-                    && actual.result_noundef == expected.result_noundef
-                    && actual.aggregates == expected.aggregates
-                    && actual.extensions == expected.extensions
-                    && actual.params.len() == args.len()
-                    && actual
-                        .params
-                        .iter()
-                        .zip(args)
-                        .all(|(&param, &arg)| param == body.value_type(arg));
-                if actual != expected
-                    && !variadic_match(actual, expected)
-                    && !open_host
-                    && !compatible_open_call
-                {
+                if !self.admits(body, func, expected, args) {
                     return Err(UbKind::SignatureMismatch.into());
                 }
                 for (index, &arg) in args.iter().enumerate() {
@@ -353,6 +320,53 @@ impl Machine<'_, '_, '_> {
             self.set(result, value);
         }
         Ok(None)
+    }
+
+    /// Whether a call whose site has the signature `expected` and the
+    /// operands `args` may run `func`, whose own signature may differ: the
+    /// same signature, the same variadic prefix, an open host declaration,
+    /// or an open call site whose promoted operands match a prototype. An
+    /// indirect call and a call through an alias resolve this way.
+    pub(super) fn admits(
+        &self,
+        body: &Body<'_>,
+        func: FuncId,
+        expected: crate::ir::Signature<'_>,
+        args: &[Value],
+    ) -> bool {
+        let actual = self.module.function_signature(func);
+        // A declared host function with an open external signature
+        // represents a C declaration without a prototype. Its call
+        // site supplies the default-promoted parameter types, also
+        // through function pointers. C99: §6.5.2.2 paragraph 6, pp.
+        // 71-72; PDF pp. 83-84.
+        let open_host = self.module.function(func).body.is_none()
+            && actual.variadic
+            && actual.params.is_empty()
+            && actual.result == expected.result
+            && actual.result_extension == expected.result_extension;
+        let open_host = open_host && actual.result_noundef == expected.result_noundef;
+        // An open call site can also resolve to a prototype (for
+        // example after a builtin declares the same host symbol).
+        // Lowering already applied default argument promotions;
+        // compare those operand types with the resolved parameters.
+        // A variadic prototype cannot be called without a prototype.
+        // C99: §6.5.2.2 paragraphs 6 and 9, pp. 71-72; PDF pp. 83-84.
+        let compatible_open_call = expected.variadic
+            && expected.params.is_empty()
+            && !actual.variadic
+            && actual.result == expected.result
+            && actual.result_extension == expected.result_extension
+            && actual.result_noundef == expected.result_noundef
+            && actual.aggregates == expected.aggregates
+            && actual.extensions == expected.extensions
+            && actual.params.len() == args.len()
+            && actual
+                .params
+                .iter()
+                .zip(args)
+                .all(|(&param, &arg)| param == body.value_type(arg));
+        actual == expected || variadic_match(actual, expected) || open_host || compatible_open_call
     }
 }
 

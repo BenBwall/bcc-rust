@@ -1012,7 +1012,8 @@ fn names_and_constants_are_spelled_for_llvm() {
     });
 }
 
-/// Weak linkage, aliases, sections, `llvm.used`, visibility, function
+/// Weak linkage, aliases, sections, `llvm.compiler.used` (ELF) or
+/// `llvm.used` (COFF), visibility, function
 /// alignment and the constructor/destructor arrays print as bundled Clang
 /// prints them for the same C declarations.
 #[test]
@@ -1035,7 +1036,12 @@ fn symbol_attributes_match_clang_spellings() {
              i32 101, ptr @init, ptr null }]",
             "@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { \
              i32 65535, ptr @fini, ptr null }]",
-            "@llvm.used = appending global [1 x ptr] [ptr @value], section \"llvm.metadata\"",
+            if target == Target::LinuxGnu {
+                "@llvm.compiler.used = appending global [1 x ptr] [ptr @value], section \
+                 \"llvm.metadata\""
+            } else {
+                "@llvm.used = appending global [1 x ptr] [ptr @value], section \"llvm.metadata\""
+            },
             "@other = alias [4 x i8], ptr @value",
             "@copy = weak alias void (), ptr @fini",
             "define internal void @init() align 16",

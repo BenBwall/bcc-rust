@@ -152,6 +152,7 @@ impl<'ir> Module<'ir> {
             body: None,
             attributes: SymbolAttributes::default(),
             align: None,
+            inlining: InlineControl::Default,
         });
         self.add_symbol(name, Symbol::Function(id));
         id
@@ -298,6 +299,28 @@ impl<'ir> Module<'ir> {
 
     pub(crate) fn global(&self, global: GlobalId) -> &Global<'ir> {
         &self.globals[global]
+    }
+
+    /// The function a call to or the address of `func` reaches: the
+    /// definition an alias names, else `func` itself. An alias names a
+    /// definition that is not itself an alias (`verify_symbol_attributes`),
+    /// so one step resolves it.
+    /// GNU extension: GCC manual, "Common Function Attributes", alias.
+    pub(crate) fn function_definition(&self, func: FuncId) -> FuncId {
+        match self.function(func).attributes.alias {
+            | Some(Symbol::Function(target)) => target,
+            | _ => func,
+        }
+    }
+
+    /// The global whose storage `global` names: the definition an alias
+    /// names, else `global` itself.
+    /// GNU extension: GCC manual, "Common Variable Attributes", alias.
+    pub(crate) fn global_definition(&self, global: GlobalId) -> GlobalId {
+        match self.global(global).attributes.alias {
+            | Some(Symbol::Global(target)) => target,
+            | _ => global,
+        }
     }
 
     pub(crate) fn get_global(&self, global: GlobalId) -> Option<&Global<'ir>> {
@@ -746,6 +769,38 @@ pub(crate) struct SymbolAttributes<'ir> {
     pub(crate) used:       bool,
     /// ELF symbol visibility; `Default` unless requested.
     pub(crate) visibility: Visibility,
+}
+
+/// What a function's inline-control attributes request of the inliner.
+/// `Never` is GNU `noinline` or `noipa`; `Always` is `always_inline`, which
+/// the inliner honors at every direct call whose callee it can copy.
+/// GNU extension: GCC manual, "Common Function Attributes", noinline, noipa,
+/// `always_inline`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum InlineControl {
+    #[default]
+    Default,
+    Never,
+    Always,
+}
+
+impl InlineControl {
+    /// The textual form's keyword, absent for the default.
+    pub(crate) const fn keyword(self) -> Option<&'static str> {
+        match self {
+            | Self::Default => None,
+            | Self::Never => Some("noinline"),
+            | Self::Always => Some("alwaysinline"),
+        }
+    }
+}
+
+/// Whether every back end and the textual form can carry `name` as an
+/// object-file section: it is nonempty and has no quote, newline or NUL.
+/// Semantic analysis refuses other names; the verifier rejects them.
+/// GNU extension: GCC manual, "Common Function Attributes", section.
+pub(crate) fn valid_section_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains(['"', '\n', '\r', '\0'])
 }
 
 /// ELF symbol visibility. COFF ignores it.

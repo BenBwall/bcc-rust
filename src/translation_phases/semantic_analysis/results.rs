@@ -216,6 +216,10 @@ pub(crate) struct FunctionRecord<'tu> {
     /// bindings, retained when replaying the definition's prototype scope.
     /// C99: §6.9.1p10, p. 142; PDF p. 154.
     pub(crate) parameter_aliases: &'tu [(usize, usize)],
+    /// The body contains GNU or MSVC inline assembly, which lowering cannot
+    /// translate: an `always_inline` GNU inline body then keeps calling the
+    /// external definition rather than a private copy.
+    pub(crate) assembly:          bool,
 }
 
 /// A lexical scope and its enclosing scope.

@@ -1339,7 +1339,8 @@ declaration. The ordinary explicit work stack visits all syntax operands.
 The reachable old-GCC glibc `tgmath.h` path needs these primitives rather than
 `__builtin_tgmath`, which the pinned Clang rejects. No MinGW resource
 `tgmath.h` is supplied: Clang's header requires `overloadable` function
-resolution, which remains unmodeled, and its binary128 calls are ambiguous.
+resolution, which the attribute catalog does not model (the separate fortify
+work owns it), and its binary128 calls are ambiguous.
 The implementation also repairs the glibc macro pattern `cast function ##
 f128`: a multi-token paste operand is pasted at its final token before its
 prefix is rescanned, protected by a reduced preprocessor regression.
