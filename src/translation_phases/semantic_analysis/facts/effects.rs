@@ -23,8 +23,10 @@ use rustc_hash::FxBuildHasher;
 use super::{
     super::{
         Analyzer,
+        ArrayBound,
         ExpressionInfo,
         SemanticTranslationUnit,
+        TypeKind,
     },
     control::ExprId,
     resolved::Callee,
@@ -35,6 +37,7 @@ use crate::{
         BuiltinEffectClass,
     },
     translation_phases::parsing::{
+        SyntaxOperand,
         declaration_syntax::TypeQualifiers,
         syntax::{
             BinaryOperator as B,
@@ -122,7 +125,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let e = info.expression;
         let summary = match e.kind {
-            | E::Identifier(_) | E::Constant(_) | E::StringLiteral(_) => EffectSet::empty(),
+            // GNU extension: GCC "Labels as Values"; `&&label` is an
+            // address constant. C23 `true`, `false` and `nullptr` are
+            // constants. C23: §6.4.4.6p2-4, p. 66; PDF p. 79.
+            | E::Identifier(_)
+            | E::Constant(_)
+            | E::StringLiteral(_)
+            | E::LabelAddress(_)
+            | E::Boolean(_)
+            | E::Nullptr => EffectSet::empty(),
+            | E::Countof(operand) => self.countof_effects(operand),
             | E::SizeofExpr(_) | E::SizeofType(_) | E::AlignofExpr(_) | E::AlignofType(_)
                 if info.ice =>
                 EffectSet::empty(),
@@ -237,25 +249,51 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::StatementExpression(_) => block.unwrap_or(EffectSet::UNKNOWN),
             // The initializer's effects are not summarized separately.
             | E::CompoundLiteral { .. } => EffectSet::WRITE | EffectSet::UNKNOWN,
-            | E::AlignofExpr(_)
-            | E::AlignofType(_)
-            | E::Generic(_)
-            | E::LabelAddress(_)
-            | E::Countof(_)
-            | E::Boolean(_)
-            | E::Nullptr
-            | E::Error => EffectSet::UNKNOWN,
+            | E::AlignofExpr(_) | E::AlignofType(_) | E::Generic(_) | E::Error =>
+                EffectSet::UNKNOWN,
         };
         summary | self.action_effects(e)
     }
 
     /// Cast type-site actions: evaluated typeof operands and new bounds.
-    /// GNU extension: GCC Typeof; C99 §6.7.5.2p5, pp. 116-117; PDF pp. 128-129.
+    /// GNU extension: GCC Typeof; C99 §6.7.5.2p5, p. 117; PDF p. 129.
     fn action_effects(&self, e: &'tu Expression<'tu>) -> EffectSet {
         let Some(site) = self.expression_actions.get(&identity(e)) else {
             return EffectSet::empty();
         };
         self.site_effects(site.operand_evaluations, site.bounds)
+    }
+
+    /// C2y `_Countof` evaluates its operand only when the outermost array
+    /// length is variable; otherwise the result is a constant. A type operand
+    /// evaluates its newly written bounds. An operand that is not a known
+    /// array stays unknown. C2y draft grammar from the GCC primary
+    /// implementation (see `language-standards.md`).
+    fn countof_effects(&self, operand: SyntaxOperand<'tu>) -> EffectSet {
+        let (ty, evaluated) = match operand {
+            | SyntaxOperand::Expression(e) => (
+                self.expression_indices
+                    .get(&identity(e))
+                    .map(|&index| self.expressions[index].ty),
+                self.child_effects(e, EffectContext::Designation),
+            ),
+            | SyntaxOperand::Type(name) => {
+                let key = super::sizes::type_name_identity(name);
+                (
+                    self.resolved_type_names.get(&key).copied(),
+                    self.type_name_sites
+                        .get(&key)
+                        .map_or(EffectSet::UNKNOWN, |site| {
+                            self.site_effects(site.operand_evaluations, site.bounds)
+                        }),
+                )
+            },
+        };
+        match ty.map(|ty| self.types.nodes[ty.index]) {
+            | Some(TypeKind::Array(_, ArrayBound::Constant(_))) => EffectSet::empty(),
+            | Some(TypeKind::Array(_, ArrayBound::Variable(_))) => evaluated,
+            | _ => EffectSet::UNKNOWN,
+        }
     }
 
     fn size_query_effects(&self, e: &'tu Expression<'tu>) -> EffectSet {
@@ -414,7 +452,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if self.effects_pure(right_expression, V) {
                     self.sequence(e, index, context, &[(left_expression, V)])
                 } else {
-                    let right = self.effect_use(right_expression, V);
+                    let Ok(right) = self.effect_use(right_expression, V) else {
+                        return RecipeKind::Unavailable;
+                    };
                     let (then, otherwise) = if operator == B::LogicalAnd {
                         (right, None)
                     } else {
@@ -440,11 +480,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.sequence(e, index, context, &[(c.condition_expression, V)])
                 } else {
                     let then = if omitted {
-                        None
+                        Ok(None)
                     } else {
                         self.effect_use(c.then_expression, V)
                     };
-                    let otherwise = self.effect_use(c.else_expression, V);
+                    let (Ok(then), Ok(otherwise)) = (then, self.effect_use(c.else_expression, V))
+                    else {
+                        return RecipeKind::Unavailable;
+                    };
                     self.conditional(e, index, context, c.condition_expression, then, otherwise)
                 }
             },
@@ -459,23 +502,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | Some(selected) => self.sequence(e, index, context, &[(selected, context)]),
                 | None => RecipeKind::EvaluateValue,
             },
-            | E::Identifier(_) | E::Constant(_) | E::StringLiteral(_) => RecipeKind::None,
+            | E::Countof(operand) if self.countof_effects(operand).is_empty() => RecipeKind::None,
+            | E::Identifier(_)
+            | E::Constant(_)
+            | E::StringLiteral(_)
+            | E::LabelAddress(_)
+            | E::Boolean(_)
+            | E::Nullptr => RecipeKind::None,
             | _ => RecipeKind::EvaluateValue,
         }
     }
 
-    /// A child use, absent when the child has nothing to execute.
-    fn effect_use(&self, e: &'tu Expression<'tu>, context: EffectContext) -> Option<EffectUse> {
-        let index = *self.expression_indices.get(&identity(e))?;
+    /// A child use, absent when the child has nothing to execute. A child
+    /// without a retained record makes every recipe naming it unavailable.
+    fn effect_use(
+        &self,
+        e: &'tu Expression<'tu>,
+        context: EffectContext,
+    ) -> Result<Option<EffectUse>, MissingRecord> {
+        let &index = self
+            .expression_indices
+            .get(&identity(e))
+            .ok_or(MissingRecord)?;
         let kind = self
             .effects
             .summaries
             .get(index)
-            .map(|effects| effects.context(context).recipe);
-        (kind != Some(RecipeKind::None)).then_some(EffectUse {
+            .ok_or(MissingRecord)?
+            .context(context)
+            .recipe;
+        Ok((kind != RecipeKind::None).then_some(EffectUse {
             expression: ExprId(index),
             context,
-        })
+        }))
     }
 
     /// The node's own type-site actions run first, then each child use. An
@@ -487,15 +546,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         context: EffectContext,
         children: &[(&'tu Expression<'tu>, EffectContext)],
     ) -> RecipeKind {
-        if children
-            .iter()
-            .any(|&(child, _)| !self.expression_indices.contains_key(&identity(child)))
-        {
-            return RecipeKind::Unavailable;
-        }
         let mut uses = [None; 2];
         for (slot, &(child, context)) in uses.iter_mut().zip(children) {
-            *slot = self.effect_use(child, context);
+            let Ok(child) = self.effect_use(child, context) else {
+                return RecipeKind::Unavailable;
+            };
+            *slot = child;
         }
         let actions = self
             .expression_actions
@@ -740,7 +796,8 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         not(test),
         expect(
             dead_code,
-            reason = "Retained summary interface inspected by semantic tests; lowering consumes                       recipes."
+            reason = "Retained summary interface inspected by semantic tests; lowering consumes \
+                      recipes."
         )
     )]
     pub(crate) fn effect_summary(
@@ -806,6 +863,9 @@ impl<'tu, 's> EffectBuilder<'tu, 's> {
         }
     }
 }
+
+/// A child that has no retained record; only erroneous input has one.
+struct MissingRecord;
 
 const fn key(index: usize, context: EffectContext) -> usize {
     index * 2 + matches!(context, EffectContext::Designation) as usize
