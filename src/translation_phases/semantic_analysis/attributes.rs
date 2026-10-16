@@ -243,6 +243,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         specifiers: Option<&'tu SpecifierExtension<'tu>>,
         declarator: Option<Declarator<'tu>>,
     ) {
+        let mut chain = specifiers;
+        while let Some(item) = chain {
+            // C11 §6.7.5p6: `_Alignas` gives the object its alignment.
+            if matches!(item.kind, SpecifierExtensionKind::Alignment(_))
+                && let Subject::Object { binding, .. } = subject
+            {
+                self.declares_alignment(binding);
+            }
+            chain = item.next;
+        }
         let lists = self.declaration_attribute_lists(specifiers, declarator);
         for &specifier in &lists {
             if !specifier.recovered {
@@ -261,14 +271,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let mut lists = ArenaVec::new_in(self.scratch);
         let mut chain = specifiers;
         while let Some(item) = chain {
-            match item.kind {
-                | SpecifierExtensionKind::Attributes(specifier) => lists.push(specifier),
-                // C11 §6.7.5p6: `_Alignas` gives the object its alignment.
-                | SpecifierExtensionKind::Alignment(_) =>
-                    if let Subject::Object { binding, .. } = subject {
-                        self.declares_alignment(binding);
-                    },
-                | _ => {},
+            if let SpecifierExtensionKind::Attributes(specifier) = item.kind {
+                lists.push(specifier);
             }
             chain = item.next;
         }
