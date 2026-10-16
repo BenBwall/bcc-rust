@@ -73,12 +73,15 @@ impl TranslationError<'_> {
             | Self::Preprocessing(error) => match error.error_type {
                 | P::UndefinedIdentifierInPreprocessorExpression(_) => Some(G::Undef),
                 | P::UnknownPragmaDirective => Some(G::UnknownPragmas),
+                | P::UnknownPragmaSTDCArgument(_) => Some(G::UnknownStdcPragma),
                 | P::ForcedSignedPromotion { .. } | P::ForcedUnsignedPromotion { .. } =>
                     Some(G::ConstantPromotion),
                 | _ => None,
             },
             | Self::Semantic(error) => match error.kind {
                 | semantic_analysis::SemanticErrorKind::PointerConstraint(group) => Some(group),
+                | semantic_analysis::SemanticErrorKind::PredefinedOutsideFunction =>
+                    Some(G::PredefinedOutsideFunction),
                 | semantic_analysis::SemanticErrorKind::UnusedStaticFunction =>
                     Some(G::UnusedFunction),
                 | _ => None,

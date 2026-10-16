@@ -79,6 +79,7 @@ impl Analyzer<'_, '_, '_> {
     ) {
         if !self.tainted {
             self.semantic_errors += 1;
+            let source_vectors = self.context.file_location(source_vectors);
             let error = SemanticError {
                 extension_severity: None,
                 kind,

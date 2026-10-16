@@ -2128,3 +2128,26 @@ the native x86-64 backend retains its binary32/64 support boundary.
 C99 §7.12p3-5, pp. 212-213 (PDF pp. 224-225), §7.12.4-§7.12.13,
 pp. 218-239 (PDF pp. 230-251), §7.12.11.2p2, p. 237 (PDF p. 249);
 GCC Library Builtins and Clang Language Extensions (rotate builtins).
+
+## Diagnostic parity follow-up (#49 and #54)
+
+`TypeKind::Nullptr` retains the C23 null pointer type independently of ordinary
+pointers. Its layout and lowering representation match pointers; constraints
+admit pointer and Boolean conversions and reject integer/arithmetic misuse.
+Nullptr literals have a constant null address and no effects. GNU function
+pointer arithmetic uses byte stride, including subtraction.
+
+The assignment conversion classifier accepts a separate diagnostic site while
+retaining the conversion at the operand. Root declaration initializers use the
+identifier, assignments use the operator, and diagnostics from expanded syntax
+report at the invocation; tokens written as macro arguments keep their own
+locations. Parser diagnostic folding still uses spelling provenance. New
+null/pointer warning groups retain ordinary
+conversion facts. K&R calls check the parameter types retained by a visible
+definition without replacing the default argument promotions. `nonnull`
+attributes retain pointer parameter positions in entity facts and merge them
+over redeclarations; later direct calls check constant null arguments.
+
+Predefined signature typedef sugar is looked up at the function declaration's
+scope rather than the first use's active body scope. C89 `__func__` follows
+Clang's reserved-identifier behavior without a C99 extension diagnostic.

@@ -17,6 +17,7 @@ mod bit_field_alignment;
 mod bit_field_results;
 mod control_facts;
 mod correspondence;
+mod diagnostic_parity;
 mod effects;
 mod float128;
 mod int128;

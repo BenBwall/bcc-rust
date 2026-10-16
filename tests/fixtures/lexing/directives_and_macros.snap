@@ -87,6 +87,7 @@ error: #error message here
 
 <test>:2:1: identifier `after` [SourceVector { index: 20, column: 1, line: 2, source_file_index: 0, length: 5 }]
 === <test> "#define F(x) x\nF(\n#define Y 1\nY)\n"
+<test>:3:11: integer constant `1` = 1 (int) [SourceVector { index: 28, column: 11, line: 3, source_file_index: 0, length: 1 }]
 === <test> "#define FUNC(x) x\nFUNC\n(1) FUNC + 2\n"
 <test>:3:2: integer constant `1` = 1 (int) [SourceVector { index: 24, column: 2, line: 3, source_file_index: 0, length: 1 }]
 <test>:3:5: identifier `FUNC` [SourceVector { index: 27, column: 5, line: 3, source_file_index: 0, length: 4 }]

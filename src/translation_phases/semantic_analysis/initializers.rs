@@ -68,6 +68,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         initializer: &'tu Initializer<'tu>,
         static_storage: bool,
         static_object: bool,
+        declaration_site: Option<crate::translation_phases::SourceVectors>,
     ) -> (TypeId, Option<TypeId>) {
         if initializer.recovered || self.types.unanalyzed(ty) {
             return (ty, None);
@@ -119,13 +120,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 }
                                 continue;
                             }
+                            let diagnostic_site = if std::ptr::eq(init, initializer) {
+                                declaration_site.unwrap_or(e.source_vectors)
+                            } else {
+                                e.source_vectors
+                            };
                             let errors_before_conversion = self.semantic_errors;
                             if matches!(self.types.nodes[target.index], TypeKind::Array(..))
-                                || !self.assignment_conversion(target, info)
+                                || !self.assignment_conversion_at(target, info, diagnostic_site)
                             {
                                 self.error(
                                     SemanticErrorKind::InvalidInitializer,
-                                    e.source_vectors,
+                                    diagnostic_site,
                                     None,
                                     None,
                                 );
@@ -615,6 +621,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             initializer,
             binding.duration.is_static_or_thread(),
             binding.duration.is_static_or_thread(),
+            Some(binding.name.source_vectors),
         );
         self.bindings[index].ty = ty;
         if let Some(flexible) = flexible {

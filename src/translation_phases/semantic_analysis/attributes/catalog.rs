@@ -39,6 +39,7 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     /// direct call, so declarations that are never called (as in
     /// `<setjmp.h>`) stay valid.
     ReturnsTwice,
+    Nonnull,
     /// A calling convention, checked against the target's default.
     Convention(Convention),
     /// Implemented elsewhere or without a code-generation meaning that bcc
@@ -180,6 +181,7 @@ fn gnu(name: &str) -> Option<Rule> {
         | "weakref" => Rule::Unsupported(U::Weakref),
         | "naked" => Rule::Unsupported(U::Naked),
         | "returns_twice" => Rule::ReturnsTwice,
+        | "nonnull" => Rule::Nonnull,
         | "overloadable" => Rule::Unsupported(U::Overloadable),
         | "cpu_dispatch" | "cpu_specific" | "target_version" =>
             Rule::Unsupported(U::Multiversioning),
@@ -296,7 +298,6 @@ fn gnu(name: &str) -> Option<Rule> {
         | "noinline"
         | "noipa"
         | "nomerge"
-        | "nonnull"
         | "nonstring"
         | "noplt"
         | "noreturn"

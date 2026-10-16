@@ -62,10 +62,7 @@ mod token_conversion;
 // Diagnostics.
 mod errors;
 
-use std::{
-    cell::OnceCell,
-    ops::ControlFlow,
-};
+use std::ops::ControlFlow;
 
 pub(crate) use errors::{
     PreprocessorError,
@@ -73,11 +70,7 @@ pub(crate) use errors::{
 };
 use expression::PreprocessorExpressionParser;
 pub(crate) use macro_expansion::HashHash;
-use macro_expansion::{
-    FunctionLikeMacroArgument,
-    MacroArguments,
-    MacroDefinition,
-};
+use macro_expansion::MacroDefinition;
 use runtime::{
     OutputPurpose,
     PreprocessorState,
@@ -105,11 +98,8 @@ use crate::{
     translation_phases::{
         Context,
         GetSourceFileIndex,
-        SetPosition,
         SourcePosition,
-        SourceVector,
         TranslationError,
-        TranslationPhase,
         preprocessor_tokenizer::{
             PreprocessorToken,
             PreprocessorTokenType,
@@ -265,11 +255,7 @@ impl Expander<'_, '_, '_, '_> {
     }
 }
 
-#[expect(
-    clippy::needless_continue,
-    reason = "Explicit continues make this tokenizer's nested control flow easier to audit."
-)]
-impl<'x> Expander<'_, '_, '_, 'x> {
+impl Expander<'_, '_, '_, '_> {
     /// Returns the next completely macro-replaced preprocessing token.
     ///
     /// Placemarkers left by `##` are dropped here (C99: §6.10.3.4 paragraph
@@ -427,309 +413,20 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                             variadic_alias
                                 .unwrap_or_else(|| self.context.string_cache.intern("__VA_ARGS__"))
                         });
-                        if !matches!(
-                            self.tokenizer_stack.last().map(|f| &f.frame_type),
-                            Some(TokenizerFrameType::SourceFile { .. })
-                        ) {
-                            let Some((arguments, invocation_end)) =
-                                self.capture_cross_frame_call(token, argument_names, variadic_name)
-                            else {
-                                break 'base Some(token);
-                            };
-                            self.warn_deprecated_macro(token);
-                            let (tokenizer, arguments) = if is_variadic {
-                                self.prepare_variadic_body(token, tokenizer, arguments)
-                            } else {
-                                (tokenizer, arguments)
-                            };
-                            self.push_tokenizer_frame(TokenizerFrame {
-                                frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
-                                    invocation_end,
-                                    invocation: self.invocation_location(token),
-                                    spelling: self.spelling_location(token),
-                                    name: token.identifier_id(self.context),
-                                    arguments,
-                                    is_variadic,
-                                },
-                                tokenizer,
-                            });
-                            continue;
-                        }
-                        let position = self.position();
-                        // The name was read from a source file, where a
-                        // newline is whitespace between a function macro's
-                        // name and `(` (C99 §6.10.3p10). Calls read from
-                        // other frames were captured above.
-                        loop {
-                            match self.tokenizer.next_item(self.context) {
-                                | Some(brace)
-                                    if matches!(
-                                        brace.kind,
-                                        PreprocessorTokenType::Whitespace
-                                            | PreprocessorTokenType::Newline
-                                    ) =>
-                                    continue,
-                                | Some(brace)
-                                    if brace.kind == PreprocessorTokenType::OpeningParenthesis =>
-                                    break,
-                                // C99 §6.10.3p10: without a following `(` the
-                                // name is not an invocation and stays as is.
-                                | Some(_) | None => {
-                                    self.set_position(position);
-                                    break 'base Some(token);
-                                },
-                            }
-                        }
-                        let mut i = 0;
-                        self.warn_deprecated_macro(token);
-                        let enclosing_arguments = self.get_arguments();
-                        let disabled_macros = self.disabled_macros();
-                        let mut arguments = ArenaVec::with_capacity_in(
-                            argument_names.len() + usize::from(is_variadic),
-                            self.scratch,
-                        );
-                        // Excess arguments share a recovery map key, so map
-                        // length cannot give the invocation's argument count.
-                        let mut argument_count = 0;
-                        let mut paren_depth = 1isize;
-                        // Where the named arguments of a variadic macro met
-                        // the closing parenthesis, leaving `...` without one.
-                        let mut closed_at = None;
-                        macro_rules! at {
-                            () => {
-                                argument_names.get(i).copied().unwrap_or_else(|| {
-                                    self.context.string_cache.intern("<undefined>")
-                                })
-                            };
-                        }
-                        'outer: loop {
-                            if is_variadic && i >= argument_names.len() {
-                                break;
-                            }
-                            let tokenizer = self.tokenizer.clone();
-                            let mut has_argument_token = false;
-                            loop {
-                                let before = is_variadic.then(|| self.position());
-                                match self.tokenizer.next_item(self.context) {
-                                    | Some(token)
-                                        if token.kind
-                                            == PreprocessorTokenType::ClosingParenthesis =>
-                                    {
-                                        if paren_depth == 1 {
-                                            closed_at = before;
-                                            // F() supplies no arguments when
-                                            // F has no parameters, but one
-                                            // empty argument when it has one
-                                            // (C99 §6.10.3p4).
-                                            argument_count = if i == 0
-                                                && argument_names.is_empty()
-                                                && !has_argument_token
-                                            {
-                                                0
-                                            } else {
-                                                i + 1
-                                            };
-                                            if argument_count != 0 {
-                                                if !has_argument_token {
-                                                    self.context.report_extension(crate::configuration::Feature::EmptyMacroArguments, "empty macro argument", token.source_vectors);
-                                                }
-                                                arguments.push(FunctionLikeMacroArgument {
-                                                    variadic: false,
-                                                    substituted: false,
-                                                    expanded: self.scratch.alloc(OnceCell::new()),
-                                                    omitted: false,
-                                                    name: at!(),
-                                                    tokenizer,
-                                                    enclosing_arguments,
-                                                    disabled_macros,
-                                                });
-                                            }
-                                            break 'outer;
-                                        }
-                                        paren_depth -= 1;
-                                    },
-                                    // C99 §6.10.3p11: commas inside inner
-                                    // parentheses do not separate arguments.
-                                    | Some(token)
-                                        if token.kind == PreprocessorTokenType::Comma
-                                            && paren_depth == 1 =>
-                                    {
-                                        if !has_argument_token {
-                                            self.report_empty_macro_argument(token.source_vectors);
-                                        }
-                                        arguments.push(FunctionLikeMacroArgument {
-                                            variadic: false,
-                                            substituted: false,
-                                            expanded: self.scratch.alloc(OnceCell::new()),
-                                            omitted: false,
-                                            name: at!(),
-                                            tokenizer,
-                                            enclosing_arguments,
-                                            disabled_macros,
-                                        });
-                                        i += 1;
-                                        continue 'outer;
-                                    },
-                                    | Some(token)
-                                        if token.kind
-                                            == PreprocessorTokenType::OpeningParenthesis =>
-                                    {
-                                        paren_depth += 1;
-                                        has_argument_token = true;
-                                        continue;
-                                    },
-                                    | Some(token) => {
-                                        has_argument_token |= !matches!(
-                                            token.kind,
-                                            PreprocessorTokenType::Whitespace
-                                                | PreprocessorTokenType::Newline
-                                        );
-                                        continue;
-                                    },
-                                    | None => {
-                                        self.context.preprocessor_error(PreprocessorError {
-                                            error_type:
-                                                PreprocessorErrorType::UnexpectedEndOfInput(
-                                                    "parsing function-like macro invocation",
-                                                ),
-                                            source_vectors: token.source_vectors,
-                                        });
-                                        self.set_position(position);
-                                        break 'base Some(token);
-                                    },
-                                }
-                            }
-                        }
-
-                        // C99 §6.10.3p4: one argument per parameter, and more
-                        // than the named parameters of a macro with `...`.
-                        let missing_named_arguments = if is_variadic {
-                            closed_at.is_some() && argument_count < argument_names.len()
-                        } else {
-                            argument_count != argument_names.len()
+                        let Some((arguments, invocation_end)) =
+                            self.capture_cross_frame_call(token, argument_names, variadic_name)
+                        else {
+                            break 'base Some(token);
                         };
-                        if missing_named_arguments {
-                            self.context.preprocessor_error(PreprocessorError {
-                                    error_type:     PreprocessorErrorType::WrongNumberOfArgumentsInFunctionLikeMacroInvocation {
-                                        expected:   argument_names.len(),
-                                        found:      argument_count,
-                                    },
-                                    source_vectors: token.source_vectors,
-                                },
-                            );
-                        } else if closed_at.is_some() {
-                            // C99 §6.10.3p4 requires an argument for `...`;
-                            // omitting it is a common extension (§4p6), which
-                            // the extension policy governs.
-                            if !self
-                                .context
-                                .configuration
-                                .accepts(crate::configuration::Feature::MsVaArgs)
-                            {
-                                self.context.preprocessor_extension(
-                                    crate::configuration::Feature::OmittedVariadicArguments,
-                                    crate::translation_phases::DiagnosticPolicy::Extension,
-                                    token.source_vectors,
-                                    PreprocessorErrorType::MissingVariadicArgument,
-                                );
-                            }
-                        }
-                        if is_variadic {
-                            // The trailing arguments, commas included, form
-                            // the one argument `__VA_ARGS__` stands for (C99
-                            // §6.10.3p12, §6.10.3.1p2). Without an argument,
-                            // `__VA_ARGS__` is empty: it reads only the
-                            // closing parenthesis.
-                            let va_args_tokenizer = match closed_at {
-                                | Some(position) => {
-                                    let mut closing = self.tokenizer.clone();
-                                    closing.set_position(position);
-                                    closing
-                                },
-                                | None => self.tokenizer.clone(),
-                            };
-                            arguments.push(FunctionLikeMacroArgument {
-                                variadic: true,
-                                substituted: false,
-                                expanded: self.scratch.alloc(OnceCell::new()),
-                                name: variadic_name.expect("variadic parameter name"),
-                                omitted: closed_at.is_some(),
-                                tokenizer: va_args_tokenizer,
-                                enclosing_arguments,
-                                disabled_macros,
-                            });
-                            let mut paren_depth = 1isize;
-                            let mut has_va_argument = false;
-
-                            if closed_at.is_none() {
-                                loop {
-                                    match self.tokenizer.next_item(self.context) {
-                                        | Some(token)
-                                            if token.kind
-                                                == PreprocessorTokenType::ClosingParenthesis =>
-                                        {
-                                            if paren_depth == 1 {
-                                                if !has_va_argument
-                                                    && argument_names.is_empty()
-                                                    && self.context.configuration.gnu_extensions()
-                                                {
-                                                    arguments
-                                                        .last_mut()
-                                                        .expect("variadic argument")
-                                                        .omitted = true;
-                                                } else if !has_va_argument {
-                                                    self.report_empty_macro_argument(
-                                                        token.source_vectors,
-                                                    );
-                                                }
-                                                break;
-                                            }
-                                            paren_depth -= 1;
-                                        },
-                                        | Some(token)
-                                            if token.kind
-                                                == PreprocessorTokenType::OpeningParenthesis =>
-                                        {
-                                            paren_depth += 1;
-                                            has_va_argument = true;
-                                            continue;
-                                        },
-                                        | Some(token) => {
-                                            has_va_argument |= !matches!(
-                                                token.kind,
-                                                PreprocessorTokenType::Whitespace
-                                                    | PreprocessorTokenType::Newline
-                                            );
-                                            continue;
-                                        },
-                                        | None => {
-                                            self.context.preprocessor_error(PreprocessorError {
-                                                error_type:
-                                                    PreprocessorErrorType::UnexpectedEndOfInput(
-                                                        "parsing function-like macro invocation",
-                                                    ),
-                                                source_vectors: token.source_vectors,
-                                            });
-                                            self.set_position(position);
-                                            break 'base Some(token);
-                                        },
-                                    }
-                                }
-                            }
-                        }
-                        let arguments: MacroArguments<'x> = arguments.leak();
+                        self.warn_deprecated_macro(token);
                         let (tokenizer, arguments) = if is_variadic {
                             self.prepare_variadic_body(token, tokenizer, arguments)
                         } else {
                             (tokenizer, arguments)
                         };
-                        let frame = TokenizerFrame {
+                        self.push_tokenizer_frame(TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
-                                invocation_end: SourceVector::new(
-                                    self.position(),
-                                    self.source_file_index(),
-                                    0,
-                                ),
+                                invocation_end,
                                 invocation: self.invocation_location(token),
                                 spelling: self.spelling_location(token),
                                 name: token.identifier_id(self.context),
@@ -737,8 +434,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                                 is_variadic,
                             },
                             tokenizer,
-                        };
-                        self.push_tokenizer_frame(frame);
+                        });
                         continue;
                     },
                     | MacroDefinition::BuiltIn => {

@@ -1,10 +1,10 @@
-error: '__label__' is a GNU extension
+error: '__label__' is a GNU extension [-Wpedantic]
  --> sema3-local-labels-deny.c:1:24
   |
 1 | void duplicate(void) { __label__ L, L; L:; }
   |                        ^^^^^^^^^
 
-error: '__label__' is a GNU extension
+error: '__label__' is a GNU extension [-Wpedantic]
  --> sema3-local-labels-deny.c:2:24
   |
 2 | void undefined(void) { __label__ L; }

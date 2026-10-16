@@ -15,26 +15,26 @@ warning: comparison of distinct pointer types [-Wcompare-distinct-pointer-types]
   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
 warning: conversion between pointers to integer types with different sign [-Wpointer-sign]
- --> sema-pointer-warnings.c:3:38
+ --> sema-pointer-warnings.c:3:36
   |
 3 | void sign(int *p, unsigned *q) { p = q; }
-  |                                      ^ pointer constraint violation
+  |                                    ^ pointer constraint violation
   |
   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
 warning: pointer conversion discards qualifiers, including nested pointer qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
- --> sema-pointer-warnings.c:4:42
+ --> sema-pointer-warnings.c:4:40
   |
 4 | void discard(int *p, const int *q) { p = q; }
-  |                                          ^ pointer constraint violation
+  |                                        ^ pointer constraint violation
   |
   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
 warning: pointer conversion discards qualifiers, including nested pointer qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
- --> sema-pointer-warnings.c:5:43
+ --> sema-pointer-warnings.c:5:41
   |
 5 | void nested(const int **p, int **q) { p = q; }
-  |                                           ^ pointer constraint violation
+  |                                         ^ pointer constraint violation
   |
   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 

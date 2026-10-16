@@ -1,4 +1,4 @@
-warning: predefined identifier is only valid inside function: `__func__`
+warning: predefined identifier is only valid inside function: `__func__` [-Wpredefined-identifier-outside-function]
  --> sema-predefined-outside-function.c:1:20
   |
 1 | const char *name = __func__;
@@ -6,7 +6,7 @@ warning: predefined identifier is only valid inside function: `__func__`
   |
   = note: C99 §6.4.2.2p1: __func__ names the enclosing function; GCC and Clang extend this to __FUNCTION__ and __PRETTY_FUNCTION__ and use an empty or `top level` string outside one
 
-warning: predefined identifier is only valid inside function: `__FUNCTION__`
+warning: predefined identifier is only valid inside function: `__FUNCTION__` [-Wpredefined-identifier-outside-function]
  --> sema-predefined-outside-function.c:2:19
   |
 2 | const char *gnu = __FUNCTION__;
@@ -14,7 +14,7 @@ warning: predefined identifier is only valid inside function: `__FUNCTION__`
   |
   = note: C99 §6.4.2.2p1: __func__ names the enclosing function; GCC and Clang extend this to __FUNCTION__ and __PRETTY_FUNCTION__ and use an empty or `top level` string outside one
 
-warning: predefined identifier is only valid inside function: `__PRETTY_FUNCTION__`
+warning: predefined identifier is only valid inside function: `__PRETTY_FUNCTION__` [-Wpredefined-identifier-outside-function]
  --> sema-predefined-outside-function.c:3:22
   |
 3 | const char *pretty = __PRETTY_FUNCTION__;
@@ -22,7 +22,7 @@ warning: predefined identifier is only valid inside function: `__PRETTY_FUNCTION
   |
   = note: C99 §6.4.2.2p1: __func__ names the enclosing function; GCC and Clang extend this to __FUNCTION__ and __PRETTY_FUNCTION__ and use an empty or `top level` string outside one
 
-warning: predefined identifier is only valid inside function: `__PRETTY_FUNCTION__`
+warning: predefined identifier is only valid inside function: `__PRETTY_FUNCTION__` [-Wpredefined-identifier-outside-function]
  --> sema-predefined-outside-function.c:4:20
   |
 4 | char buffer[sizeof __PRETTY_FUNCTION__];

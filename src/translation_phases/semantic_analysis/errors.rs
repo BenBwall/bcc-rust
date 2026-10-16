@@ -647,6 +647,13 @@ impl SemanticErrorKind {
                 match group {
                     | crate::configuration::DiagnosticGroup::CompareDistinctPointerTypes => "comparison of distinct pointer types",
                     | crate::configuration::DiagnosticGroup::IncompatiblePointerTypes => "incompatible pointer types in conversion",
+                    | crate::configuration::DiagnosticGroup::NonLiteralNullConversion => "expression which evaluates to zero treated as a null pointer constant",
+                    | crate::configuration::DiagnosticGroup::PointerCompare => "comparison between pointer and zero character constant",
+                    | crate::configuration::DiagnosticGroup::NullConversion => "implicit conversion of nullptr constant to bool",
+                    | crate::configuration::DiagnosticGroup::PointerBoolConversion => "address always evaluates to true in a boolean context",
+                    | crate::configuration::DiagnosticGroup::PointerToIntCast => "cast to smaller integer type from pointer",
+                    | crate::configuration::DiagnosticGroup::VoidPtrDereference => "dereferencing void pointer",
+                    | crate::configuration::DiagnosticGroup::Nonnull => "null passed to a callee that requires a non-null argument",
                     | crate::configuration::DiagnosticGroup::PointerSign => "conversion between pointers to integer types with different sign",
                     | crate::configuration::DiagnosticGroup::PointerQualifiers => "pointer conversion discards qualifiers, including nested pointer qualifiers",
                     | crate::configuration::DiagnosticGroup::IncompatibleFunctionPointerTypes => "incompatible function pointer types in conversion",
@@ -658,6 +665,9 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::ConditionalTypeMismatch => "pointer/integer type mismatch in conditional expression",
                     | crate::configuration::DiagnosticGroup::NewlineEof
                     | crate::configuration::DiagnosticGroup::Undef
+                    | crate::configuration::DiagnosticGroup::PredefinedOutsideFunction
+                    | crate::configuration::DiagnosticGroup::UnknownWarningOption
+                    | crate::configuration::DiagnosticGroup::UnknownStdcPragma
                     | crate::configuration::DiagnosticGroup::UnknownPragmas
                     | crate::configuration::DiagnosticGroup::UnusedFunction
                     | crate::configuration::DiagnosticGroup::ConstantPromotion => "warning-group diagnostic",
@@ -1418,6 +1428,14 @@ impl ToDiagnostic for SemanticError {
                 arena,
                 "{message}: {}",
                 quote_spelling(context.string_cache.at(name))
+            )
+        } else {
+            message
+        };
+        let message = if self.kind == SemanticErrorKind::PredefinedOutsideFunction {
+            format_in!(
+                arena,
+                "{message} [-Wpredefined-identifier-outside-function]"
             )
         } else {
             message

@@ -15,6 +15,18 @@ fn accepts(source: &str) {
     });
 }
 
+fn accepts_with_warning(source: &str, group: crate::configuration::DiagnosticGroup) {
+    with_source(source, |context, unit| {
+        let diagnostics = context.take_pending_errors();
+        assert!(
+            matches!(diagnostics.as_slice(), [TranslationError::Semantic(error)]
+            if error.kind == SemanticErrorKind::PointerConstraint(group)),
+            "{source}: {diagnostics:?}"
+        );
+        assert_eq!(unit.errors, 0);
+    });
+}
+
 fn rejects(source: &str, expected: SemanticErrorKind) {
     with_source(source, |context, _| {
         let errors = context.take_pending_errors();
@@ -232,9 +244,10 @@ fn prototype_variadic_and_unprototyped_calls() {
 
 #[test]
 fn pointer_assignment_qualifiers_and_null_constants() {
-    accepts(
+    accepts_with_warning(
         "void f(void) {int x; int *p=&x; const int *q=p; void *v=p; p=v; p=0; q=(void *)0; p=2-2; \
          _Bool b=p; const void *c=q; p=1?p:0; }",
+        crate::configuration::DiagnosticGroup::NonLiteralNullConversion,
     );
     rejects(
         "void f(void) {const int *q; int *p; p=q;}",
@@ -404,7 +417,18 @@ fn static_storage_arithmetic_and_address_constants() {
         "int a[3]; int n; int *p=&a[n];",
         SemanticErrorKind::NonConstantInitializer,
     );
-    accepts("int x; _Bool b=&x; int *a[1]; void f(void *p, void *q) {p<q;}");
+    with_source(
+        "int x; _Bool b=&x; int *a[1]; void f(void *p, void *q) {p<q;}",
+        |context, unit| {
+            let diagnostics = context.take_pending_errors();
+            assert!(
+                matches!(diagnostics.as_slice(), [TranslationError::Semantic(error)]
+            if error.kind == SemanticErrorKind::PointerConstraint(crate::configuration::DiagnosticGroup::PointerBoolConversion)),
+                "{diagnostics:?}"
+            );
+            assert_eq!(unit.errors, 0);
+        },
+    );
     rejects("int n=1/0;", SemanticErrorKind::ConstantOverflow);
     // Annex F: a floating division by zero is an infinite constant.
     accepts("double n=1.0/0.0;");

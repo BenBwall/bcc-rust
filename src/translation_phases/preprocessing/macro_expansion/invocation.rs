@@ -70,9 +70,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         // Argument tokens in order, and where each argument's tokens end.
         let mut grouped = ArenaVec::new_in(self.scratch);
         let mut group_ends = ArenaVec::new_in(self.scratch);
+        let mut group_sites = ArenaVec::new_in(self.scratch);
         let mut depth = 1usize;
         let closing = loop {
-            let Some(mut token) = cursor.next(self) else {
+            let Some(mut token) = cursor.next_argument(self) else {
                 self.context.preprocessor_error(PreprocessorError {
                     error_type:     PreprocessorErrorType::UnexpectedEndOfInput(
                         "parsing function-like macro invocation",
@@ -93,6 +94,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     if depth == 1 && (!variadic || group_ends.len() < names.len()) =>
                 {
                     group_ends.push(grouped.len());
+                    group_sites.push(token.source_vectors);
                     continue;
                 },
                 | _ => (),
@@ -115,6 +117,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             grouped.push(token);
         };
         group_ends.push(grouped.len());
+        group_sites.push(closing.source_vectors);
         let empty = group_ends.len() == 1
             && grouped.iter().all(|token: &PreprocessorToken| {
                 matches!(
@@ -134,14 +137,14 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 && self.context.configuration.gnu_extensions())
         {
             let mut start = 0;
-            for &end in &group_ends {
+            for (&end, &site) in group_ends.iter().zip(&group_sites) {
                 if grouped[start..end].iter().all(|t| {
                     matches!(
                         t.kind,
                         PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline
                     )
                 }) {
-                    self.report_empty_macro_argument(invocation.source_vectors);
+                    self.report_empty_macro_argument(site);
                 }
                 start = end;
             }
@@ -246,16 +249,6 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         false
     }
 
-    /// The macros being replaced where an argument is collected; nested
-    /// replacements within the argument do not replace them either.
-    ///
-    /// C99: §6.10.3.4 paragraph 2, p. 155; PDF p. 167.
-    pub(in crate::translation_phases::preprocessing) fn disabled_macros(
-        &self,
-    ) -> &'x [StringCacheId] {
-        self.disabled_macros_in(&self.tokenizer_stack)
-    }
-
     /// The disabled set of the frames supplying an invocation's arguments.
     ///
     /// C99: §6.10.3.4 paragraph 2, p. 155; PDF p. 167.
@@ -298,9 +291,77 @@ struct MacroCallCursor<'x> {
     /// Consumed prefix stays in place until the queue empties.
     pending:      ArenaVec<'x, PreprocessorToken>,
     pending_head: usize,
+    line_start:   bool,
 }
 
 impl<'x> MacroCallCursor<'x> {
+    /// Execute written directives while collecting an invocation's arguments,
+    /// as GCC and Clang do. Generated hashes remain ordinary argument tokens.
+    /// C99: §6.10.3p11, p. 152; PDF p. 164 makes this undefined behavior;
+    /// accepting it is a GNU extension.
+    fn next_argument(
+        &mut self,
+        preprocessor: &mut Expander<'_, '_, '_, 'x>,
+    ) -> Option<PreprocessorToken> {
+        loop {
+            let token = self.next(preprocessor)?;
+            let source = self.index.is_some_and(|index| {
+                matches!(
+                    self.frames[index].frame_type,
+                    TokenizerFrameType::SourceFile { .. }
+                )
+            });
+            if source && self.line_start && token.kind == PreprocessorTokenType::Hash {
+                preprocessor.context.report_extension_since(
+                    "directive inside macro arguments",
+                    crate::configuration::FeatureOrigin::Gnu,
+                    token.source_vectors,
+                );
+                let index = self.index.expect("source frame exists");
+                let saved_tokenizer = std::mem::replace(
+                    &mut preprocessor.tokenizer,
+                    self.frames[index].tokenizer.clone(),
+                );
+                let saved_frames = std::mem::replace(
+                    &mut preprocessor.tokenizer_stack,
+                    ArenaVec::new_in(preprocessor.scratch),
+                );
+                preprocessor
+                    .tokenizer_stack
+                    .extend(self.frames[..=index].iter().cloned());
+                let saved_lines = (
+                    preprocessor.last_was_newline,
+                    preprocessor.current_is_newline,
+                );
+                preprocessor.resume_at_line_start();
+                preprocessor.parse_directive(token);
+                self.frames.clear();
+                self.frames
+                    .extend(preprocessor.tokenizer_stack.iter().cloned());
+                if let Some(last) = self.frames.last_mut() {
+                    last.tokenizer = preprocessor.tokenizer.clone();
+                }
+                self.index = self.frames.len().checked_sub(1);
+                preprocessor.tokenizer = saved_tokenizer;
+                preprocessor.tokenizer_stack = saved_frames;
+                (
+                    preprocessor.last_was_newline,
+                    preprocessor.current_is_newline,
+                ) = saved_lines;
+                self.line_start = true;
+                continue;
+            }
+            if source {
+                match token.kind {
+                    | PreprocessorTokenType::Newline => self.line_start = true,
+                    | PreprocessorTokenType::Whitespace => {},
+                    | _ => self.line_start = false,
+                }
+            }
+            return Some(token);
+        }
+    }
+
     fn next(&mut self, preprocessor: &mut Expander<'_, '_, '_, 'x>) -> Option<PreprocessorToken> {
         loop {
             if let Some(token) = self.pending.get(self.pending_head).copied() {
@@ -467,6 +528,7 @@ impl<'x> MacroCallCursor<'x> {
                 .saturating_sub(1),
             pending: ArenaVec::new_in(preprocessor.scratch),
             pending_head: 0,
+            line_start: false,
         }
     }
 

@@ -265,7 +265,7 @@ impl ToDiagnostic for ExtensionDiagnostic<'_> {
         source: SourceVectors,
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
-        Explanation::new(arena, format_in!(arena, "{self}")).at(self.severity, source)
+        Explanation::new(arena, format_in!(arena, "{self} [-Wpedantic]")).at(self.severity, source)
     }
 }
 

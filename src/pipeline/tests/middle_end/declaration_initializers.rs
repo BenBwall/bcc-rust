@@ -100,3 +100,110 @@ fn declarator_initializers_match_clang_and_native_execution() {
         }
     }
 }
+
+const FUNCTION_TABLE: &str = include_str!(
+    "../../../../docs/research/conformance-reproducers-2026-10-13/\
+     function_to_void_pointer_initializer.c"
+);
+const CALL_FUNCTION_TABLE: &str = "struct entry {int n; void *p;}; static double twice(double \
+                                   x){return 2*x;} static const struct entry \
+                                   table[]={{1,twice},{2,0}}; int main(void){return ((double \
+                                   (*)(double))table[0].p)(21)!=42 || table[1].p!=0;}";
+
+#[test]
+fn function_designator_static_void_pointer_keeps_its_relocation() {
+    use crate::ir::{
+        GlobalInit,
+        RelocationTarget,
+        Symbol,
+    };
+    for source in [FUNCTION_TABLE, CALL_FUNCTION_TABLE] {
+        for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+            for (optimize, profile) in STAGES {
+                with_module(source, target, optimize, profile, |module, target| {
+                    assert!(module.globals().any(|(_, global)| matches!(global.init, Some(GlobalInit::Bytes {relocations, ..}) if relocations.iter().any(|relocation| matches!(relocation.target, RelocationTarget::Symbol(Symbol::Function(_)))))), "{module}");
+                    assert_eq!(interpret(module, target), (0, String::new()));
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn sqlite_function_table_initializer_matches_clang_native_execution() {
+    let Some(target) = host() else {
+        return;
+    };
+    let toolchain = Toolchain::bundled(target).unwrap();
+    let directory = TempDir::new("static-function-void-pointer");
+    for (index, source) in [FUNCTION_TABLE, CALL_FUNCTION_TABLE]
+        .into_iter()
+        .enumerate()
+    {
+        let input = directory.join(format!("table-{index}.c"));
+        std::fs::write(&input, source).unwrap();
+        for opt in [OptLevel::O0, OptLevel::O2] {
+            let options = LlvmOptions {
+                target,
+                opt: Some(opt),
+                disable_llvm_passes: false,
+                kind: OutputKind::Executable,
+            };
+            let executable = directory.join(format!("clang-{index}-{opt:?}.exe"));
+            let output = toolchain
+                .command(&input, &executable, options)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(run_native(&executable), (0, String::new()));
+        }
+        for arm in ARMS {
+            let executable = directory.join(format!("bcc-{index}-{}.exe", arm.name));
+            with_module(source, target, arm.bcc, Profile::PostAbi, |module, _| {
+                compile_module(
+                    module,
+                    &executable,
+                    LlvmOptions {
+                        target,
+                        opt: Some(arm.opt),
+                        disable_llvm_passes: arm.disable_llvm_passes,
+                        kind: OutputKind::Executable,
+                    },
+                )
+                .unwrap();
+            });
+            assert_eq!(
+                run_native(&executable),
+                (0, String::new()),
+                "{index} {}",
+                arm.name
+            );
+        }
+    }
+}
+
+#[test]
+fn nullptr_objects_and_pointer_conversions_execute_in_every_stage() {
+    let source = "typeof(nullptr) global=nullptr; int main(void){typeof(nullptr) n=global; int \
+                  *p=n; bool b=n; return b || p!=nullptr || n!=nullptr || sizeof(n)!=sizeof(p);}";
+    for target in [Target::LinuxGnu, Target::WindowsGnu, Target::WindowsMsvc] {
+        for (optimize, profile) in STAGES {
+            with_configured_module(
+                source,
+                target,
+                optimize,
+                profile,
+                CompilerConfiguration::new(
+                    crate::configuration::CStandard::C23,
+                    crate::configuration::ExtensionPolicy::Allow,
+                )
+                .with_target(target),
+                |module, target| assert_eq!(interpret(module, target), (0, String::new())),
+            );
+        }
+    }
+}

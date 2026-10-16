@@ -65,6 +65,8 @@ pub(super) struct DiagnosticReporter<'r, 'tu> {
 impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
     pub(super) fn report(&mut self, error: &TranslationError<'_>, context: &mut Context<'_>) {
         let source = error.source_vectors(context);
+        // Folded parser recovery keeps spelling provenance so its secondary
+        // ranges remain relative to the preprocessing error it joins.
         let diagnostic = error.diagnostic_in(context, source, self.diagnostics);
         let location = context.get_source_vectors(source);
         let ordering_location = match error {
@@ -93,6 +95,16 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         } else {
             let location: &'r [SourceVector] =
                 self.arena.alloc_slice_fill_iter(location.iter().cloned());
+            let diagnostic = if parser {
+                let primary = context.file_location(source);
+                if primary == source {
+                    diagnostic
+                } else {
+                    error.diagnostic_in(context, primary, self.diagnostics)
+                }
+            } else {
+                diagnostic
+            };
             if !parser && diagnostic.severity == ErrorSeverity::Error && !location.is_empty() {
                 _ = self.other_errors.insert(location, self.pending.len());
             }

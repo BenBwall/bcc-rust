@@ -410,7 +410,6 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | LongLong | - | - | Y | Y | Y | Y | Y | extension | parser |
 | TrailingEnumComma | - | - | Y | Y | Y | Y | Y | extension | parser |
 | OldStyleFunctionDeclarators | Y | Y | Y | Y | Y | - | - | native through C17 | parser |
-| Func | - | - | Y | Y | Y | Y | Y | extension | parser |
 | StaticAssert | - | - | - | Y | Y | Y | Y | extension | parser |
 | Generic | - | - | - | Y | Y | Y | Y | extension | parser and sema |
 | Alignas | - | - | - | Y | Y | Y | Y | extension | parser, sema, lowering |
@@ -504,8 +503,10 @@ The following vocabulary entries retain the established diagnostic contracts:
   rescanning and preprocessing-expression expansion. C99 §6.10.3p4 (printed
   p. 151; PDF p. 163) requires more arguments than named parameters;
   C23 §6.10.5p4 (printed p. 178; PDF p. 191) requires at least as many.
-- `Func` covers `__func__`, whose predefined declaration is C99
-  (§6.4.2.2p1, printed p. 52; PDF p. 64). `__FUNCTION__` and
+- `__func__` has its predefined declaration in C99
+  (§6.4.2.2p1, printed p. 52; PDF p. 64). Like Clang 23.1.1, bcc also
+  accepts this reserved identifier silently in C89, including `-pedantic-errors`.
+  `__FUNCTION__` and
   `__PRETTY_FUNCTION__` are the GNU spellings: they are not a feature row,
   because Clang 23.1.1 reserves both in every `-std` and says nothing about them
   even under `-pedantic`, so bcc accepts them silently in every mode, ISO,
@@ -1423,7 +1424,7 @@ and Windows MSVC, in `c89`, `gnu89`, `iso9899:199409`, `c99`, `gnu99`, `c11`,
 | void-order | `compare-distinct-pointer-types` | **warning** | `comparison of distinct pointer types ('int *' and 'void *')` |
 
 `-Wdiscarded-qualifiers` is a GCC spelling, not a Clang or bcc alias. bcc
-rejects unsupported warning groups at CLI parsing, as other unknown flags.
+warns about unsupported warning groups and continues, as Clang does.
 Use `-Wincompatible-pointer-types-discards-qualifiers` instead.
 Clang warns about the option itself with
 `unknown warning option '-Wdiscarded-qualifiers'; did you mean '-Wignored-qualifiers'?`
@@ -1519,3 +1520,39 @@ number from 2147483648 to 4294967295 are reported only under `-pedantic`, as
 Clang reports them. The line number applies, as in Clang, and a later line
 past 4294967295 wraps to 0; a larger `#line` number is an error and is
 ignored (C99 §6.10.4p3, p. 158; PDF p. 170, leaves these values undefined).
+
+
+### Diagnostic parity follow-up (issues #49 and #54)
+
+C23 `nullptr` has its own retained scalar type, with pointer size and alignment.
+It converts to pointers and Boolean values; arithmetic conversions and ordered
+comparisons reject it. `typeof(nullptr)` preserves the type. Implicit Boolean
+conversion warns in `-Wnull-conversion`. GNU subtraction and arithmetic of
+function pointers use a byte stride, as GNU `void *` arithmetic already does.
+
+Default warning groups now include `non-literal-null-conversion`,
+`pointer-compare`, `pointer-bool-conversion`, `pointer-to-int-cast`,
+`void-ptr-dereference`, and `nonnull`. Visible K&R definitions diagnose argument
+pointer signedness while calls keep default argument promotions. GNU `nonnull`
+annotations retain their checked parameter positions over redeclarations.
+All these groups support the existing enable, suppress and error controls.
+`-Wall`, `-Wextra`, and `-Wconversion` are accepted; unsupported `-W` spellings
+warn through `unknown-warning-option`, which can be suppressed or promoted.
+These umbrella options select supported warning groups, not a claim to implement
+every Clang warning under each umbrella.
+
+Unknown STDC pragmas warn in `unknown-pragmas`; directives written inside macro
+arguments execute before prescan, as in Clang and GCC. Pedantic diagnostics
+render `[-Wpedantic]`, predefined identifier warnings render their Clang group,
+and assignment/initializer diagnostics identify the operator/declarator.
+Semantic and parser primary locations use macro invocation locations while
+preserving physical locations for tokens written as macro arguments.
+`__PRETTY_FUNCTION__` resolves typedef spellings at the declaration scope, so
+an intervening body declaration cannot change a function's result spelling.
+
+The #49 static function-designator-to-`void *` initializer remains accepted as
+a GNU extension and is diagnosed only under pedantic policy. Regression tests
+replay its original reproducer, retain a function relocation in the static table,
+and call through the stored address in interpreter and native execution.
+`tests/diagnostic_parity.rs` compares constraints, warnings, modes and locations
+with the pinned Clang; semantic and pipeline tests cover the retained facts.

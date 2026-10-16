@@ -459,6 +459,8 @@ pub(crate) struct TypeId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum TypeKind<'tu> {
     Unknown,
+    /// C23: §7.21.2p2, p. 316; PDF p. 329: the distinct null pointer type.
+    Nullptr,
     Scalar(Scalar),
     Pointer(TypeId),
     Array(TypeId, ArrayBound),
@@ -651,7 +653,7 @@ fn layout(
                     align,
                 };
             },
-            | TypeKind::Pointer(_) => break target.pointer,
+            | TypeKind::Pointer(_) | TypeKind::Nullptr => break target.pointer,
             | TypeKind::Tag(id) => break tags[id].layout.get()?,
             | TypeKind::Array(element, ArrayBound::Constant(n)) => {
                 count = count.checked_mul(n)?;

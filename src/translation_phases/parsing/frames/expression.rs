@@ -1241,11 +1241,6 @@ impl<'tu, 'p> ExpressionFrame<'tu, 'p> {
                 self.phase = ExpressionPhase::PushGrouped(token.source_vectors);
                 return ParseAction::Consume;
             }
-            if matches!(token.kind, TokenType::Identifier)
-                && parser.func_name == Some(token.contents)
-            {
-                parser.extension(crate::configuration::Feature::Func, "__func__", token);
-            }
             let kind = match token.kind {
                 | TokenType::Keyword(KeywordTokenType::True) => ExpressionType::Boolean(true),
                 | TokenType::Keyword(KeywordTokenType::False) => ExpressionType::Boolean(false),

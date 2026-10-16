@@ -59,7 +59,6 @@ pub(crate) enum Feature {
     /// C99: §6.7.5 paragraph 1, p. 114; PDF p. 126. C23: §6.7.7.1
     /// paragraph 1, pp. 126-127; PDF pp. 139-140.
     OldStyleFunctionDeclarators,
-    Func,
     StaticAssert,
     Generic,
     Alignas,
@@ -186,8 +185,7 @@ impl Feature {
             | Self::CompoundLiterals
             | Self::FlexibleArrayMembers
             | Self::LongLong
-            | Self::TrailingEnumComma
-            | Self::Func => FeatureOrigin::Standard(CStandard::C99),
+            | Self::TrailingEnumComma => FeatureOrigin::Standard(CStandard::C99),
             | Self::Trigraphs => FeatureOrigin::Standard(CStandard::C89),
             | Self::UnicodeLiteralPrefixes
             | Self::StaticAssert
@@ -346,7 +344,6 @@ impl Feature {
         Self::LongLong,
         Self::TrailingEnumComma,
         Self::OldStyleFunctionDeclarators,
-        Self::Func,
         Self::StaticAssert,
         Self::Generic,
         Self::Alignas,
