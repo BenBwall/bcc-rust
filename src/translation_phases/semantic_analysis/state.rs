@@ -34,12 +34,17 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
     pub(super) fn new(context: &'c mut Context<'tu>, scratch: &'s Bump) -> Self {
         let tu = context.tu_arena();
         let target = context.configuration.target().layout();
+        let pack_alignments = super::packing::states(context, scratch);
         let mut analyzer = Self {
+            declarator_functions: ArenaVec::new_in(tu),
+            specifier_functions: ArenaVec::new_in(tu),
+            references: ArenaVec::new_in(tu),
             #[cfg(test)]
             review_steps: Cell::new([0; 3]),
             context,
             scratch,
             types: TypeInterner::new(tu, scratch, &target),
+            pack_alignments,
             bindings: ArenaVec::new_in(tu),
             declarators: ArenaVec::new_in(tu),
             spec_extensions: ArenaVec::new_in(tu),
@@ -80,6 +85,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             function_controls: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             expression_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             string_initializers: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            flexible_arrays: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            transparent_unions: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             conversions: ArenaVec::new_in(scratch),
             const_members: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             register_bindings: ArenaMap::with_hasher_in(FxBuildHasher, scratch),

@@ -150,7 +150,13 @@ target widths while keeping fundamental ranks distinct. Packed literal storage
 can hold 64-bit values even for a 32-bit target long. Phase-4 intmax arithmetic
 is 64-bit on every supported target. L-prefixed strings have int elements and
 UTF-32 execution units on Linux, unsigned-short elements and UTF-16 execution
-units on Windows. Source literal units remain intact for inspection;
+units on Windows. `u8`, `u` and `U` strings have `char` (C23: `unsigned char`,
+`char8_t`), `unsigned short` (`char16_t`) and `unsigned int` (`char32_t`)
+elements with UTF-8, UTF-16 and UTF-32 units on every target
+(`Context::encoded_literal_units`), complete arrays of unknown size, and
+initialize only arrays of their own element type (C11 §6.4.5p6, §6.7.9p15);
+`u` and `U` character constants have `char16_t` and `char32_t` type, and a
+`u8` constant `char8_t`. Source literal units remain intact for inspection;
 `Context::wide_literal_units` supplies execution units, including surrogate
 pairs, and semantic string bounds count those units. Linux numeric wide
 character escapes are sign-extended from wchar_t before intmax preprocessing
@@ -178,14 +184,21 @@ C99-required int/unsigned-int/bool set are accepted as an implementation-defined
 choice following the target ABI. GCC's flexible-array forms (in a union, as a
 structure's only member, a flexible structure nested in a structure, and arrays
 of flexible structures) keep their layout and are reported through the
-`FlexibleArrayExtensions` policy. Packed/aligned/vendor attribute meaning is not
-modeled; affected record layouts become unavailable instead of fabricated.
+`FlexibleArrayExtensions` policy. Supported GNU packed/aligned attributes retain
+their layouts; unmodeled vendor attributes make affected layouts unavailable.
+A union that qualifies for GNU `transparent_union` records `Tag::transparent`;
+a prototyped call whose argument does not have the union type converts it to
+the first member it fits, as Clang selects one, and records an assignment
+conversion to that member followed by a `TransparentUnion` conversion, which
+lowering turns into a union temporary holding the value.
 Windows records use Microsoft's bit-field layout on both MinGW and MSVC,
 matching Clang's MinGW default `-mms-bitfields`. Consecutive nonzero fields share
 an entire reserved storage unit only when their base-type sizes match and they
-fit. A zero-width field affects alignment only immediately after a nonzero
-bit-field. Union bit-fields occupy a full unit without increasing alignment;
-zero-width union fields occupy no bytes. The C11 probe in
+fit. A zero-width field affects layout only immediately after a nonzero
+bit-field, where it ends that field's whole unit (see "Record layout
+references" below). Union bit-fields occupy a full unit without increasing
+alignment; zero-width union fields occupy no bytes, except that on MSVC one
+after a nonzero bit-field reserves its type's size. The C11 probe in
 `tests/fixtures/targets/conformance.c` covers every scalar, ABI aliases, offsets,
 mixed-type fields, exhausted units, zero-width fields, compact byte-field
 records, and unions against all four Clang targets. Rust tests additionally
@@ -193,7 +206,8 @@ verify bit offsets, typedef identities, literal types and UTF-16 surrogate
 values directly. `_Generic` now resolves associations in sema (see the atomic section below).
 The original target probe also includes **direct Rust type assertions** supplying
 bcc's type evidence rather than claiming unmodeled generic assertions passed.
-No packed/aligned attribute or pragma-pack semantics are added.
+Packed/aligned attributes and translation-ordered pragma packing are retained
+layout facts (see the storage and member-place alignment contract below).
 
 Compatibility handles qualifiers, pointer targets, constant vs incomplete array
 extents and prototype parameter types/ellipsis, and constructs composite derived
@@ -212,6 +226,37 @@ reported through the extension policy. A set of members that no 64-bit type
 holds is diagnosed.
 
 ### Storage, natural and member-place alignment
+
+`packing::states` interprets `#pragma pack` once from macro-replaced operands and
+output-token ordinals retained by preprocessing. The parser retains the opening
+brace ordinal on each record definition; semantic analysis queries that state
+and stores `Tag::max_member_alignment`. Record completion owns the resulting
+member offsets, allocation units, alignment and size, and ABI projection consumes
+those facts. This avoids source-location joins and downstream pragma walks.
+The opening state follows bundled Clang even if a directive occurs inside the
+body; the changed state still applies to subsequent definitions.
+
+The stack supports reset, numeric caps (0, 1, 2, 4, 8, 16), unnamed/named pushes
+and pops, optional pop caps, and `show`. Setting/resetting the cap does not
+change saved entries; a named pop removes its matching entry and every entry
+above it, and a missing name leaves the stack intact. Malformed forms are
+warnings and leave the state unchanged. Empty pops, named pops with an alignment,
+unterminated pushes, and `show` use Clang-compatible warnings, independently of
+language-extension policy. Includes, `_Pragma` and `__pragma` use the same state.
+State construction uses arenas and an explicit stack; each definition performs
+a binary search over directive boundaries, rather than replaying the directives.
+
+GNU layout caps explicit member alignment; MSVC ordinary members retain an
+explicit higher alignment. Record alignment attributes can still raise the final
+alignment. System V value bit-fields under a nonzero cap may cross their natural
+allocation boundary and packed union fields occupy their written bits. Zero-width
+fields retain the System V natural boundary. Microsoft fields retain complete
+declared storage units; active zero-width fields follow the distinct MinGW/MSVC
+rules. These are implementation-defined choices under C99 §6.7.2.1p10-12
+(printed pp. 102-103; PDF pp. 114-115), checked against all three Clang targets.
+See [GCC Structure-Layout Pragmas](https://gcc.gnu.org/onlinedocs/gcc/Structure-Layout-Pragmas.html),
+[MSVC pack](https://learn.microsoft.com/en-us/cpp/preprocessor/pack), and
+[Clang pragma semantics](https://clang.llvm.org/doxygen/SemaAttr_8cpp_source.html).
 
 `Member::explicit_alignment` alone requests a new System V value-bit-field
 boundary. Typedef-inherited alignment affects record alignment without splitting
@@ -245,6 +290,49 @@ place. See [Memory facts](middle-end.md#memory-facts) for the one alignment owne
 C99 6.7.2.1p12, p. 103 (PDF p. 115); C11 6.7.5p6, p. 127 (PDF p. 145);
 GNU [aligned/packed attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html)
 and System V AMD64 ABI 3.2.3.
+
+### Record layout references
+
+Record layout is checked against the platform compilers, not only bundled
+Clang: MinGW-w64 GCC and Clang for `x86_64-w64-windows-gnu`, Microsoft's
+`cl.exe` and Clang for `x86_64-pc-windows-msvc`, and GCC and Clang (WSL) for
+Linux. `scripts/layout_fuzz.py` generates random records (scalars, arrays,
+bit-fields of every integer type including zero-width and unnamed ones, nested
+records, `aligned`/`_Alignas` members, `#pragma pack` and `packed`) and compares
+each record's size, alignment, member byte images and bit-field read-back. Its
+deterministic programs in `tests/fixtures/layout/` run in the interpreter and
+natively (`pipeline::tests::middle_end::record_layout`), and
+`semantic_analysis::tests::record_layout` pins the cases below.
+
+- **Zero-width bit-fields (#55).** In Microsoft layout a zero-width field after
+  a nonzero one ends that field's allocation unit (C99 §6.7.2.1p11): the next
+  member starts after the whole unit, aligned for the zero-width field's type.
+  MSVC caps that alignment with `#pragma pack`. MinGW GCC caps it too, and in a
+  `packed` record still raises the record's alignment while placing the next
+  member without padding. Clang's MinGW layout ignores the pack cap on
+  zero-width fields and then lays such packed records out with overlapping
+  fields (conformance finding D1), so the MinGW target follows GCC there.
+- **MSVC required alignment.** `_Alignas` (or `aligned`) on a member, a typedef's
+  alignment, or such a member inside a nested record or array of records is a
+  requirement `#pragma pack` cannot lower: the containing record is aligned to
+  it and so is every record containing that one (`Tag::required_alignment`).
+  MinGW does not propagate it.
+- **System V aligned bit-fields.** Without a pack, a bit-field that would
+  straddle a unit of its alignment starts the next unit; otherwise an `aligned`
+  request no larger than the pack aligns its start. `#pragma pack` overrides
+  `packed` on a bit-field, which keeps its pack-capped declared alignment.
+
+Where the references disagree on MinGW outside zero-width fields, bcc keeps
+Clang's layout: GCC aligns unions to their bit-fields' types and does not let
+an `aligned` bit-field in a packed record raise the record's alignment, and on
+Linux GCC honors `aligned` bit-fields above the pack. The 2026-10-14 run
+(seeds 2000-2109, 5,500 records per target) found no record on which bcc
+differs from agreeing references. MSVC: all 5,500 match `cl.exe` and Clang.
+Linux: 5,435 match both; on 65 GCC and Clang disagree and bcc follows Clang.
+MinGW: 4,848 match both; on 238 bcc follows GCC (zero-width fields), on 343
+Clang, and 3 mix the two policies; 68 records came after a Clang-built
+program crashed on an overlapping layout, and the 3 of those that differ
+from GCC were checked by hand to follow Clang's (non-crashing) layout.
 
 ## Binding, scope, linkage and recovery
 
@@ -372,7 +460,8 @@ designators and rvalues (§6.3.2.1p1, printed p. 46, PDF p. 58). Const aggregate
 members, including array elements, prevent modification; bit-fields retain enough
 information for promotion and address/sizeof constraints. Parentheses preserve
 the underlying category. Ordinary identifiers resolve through the declaration
-binding model. A function's `__func__` is modeled as a static const character array.
+binding model. A function's `__func__` is modeled as a static const character array;
+`__FUNCTION__` names the same object and `__PRETTY_FUNCTION__` a second one holding the signature.
 Calls to undeclared names are accepted only in C89/C95 and GNU modes, using
 shared removed-feature policy. Known standard library names receive the complete
 prototype from the existing 24-entry library-alias table, with target `size_t`,
@@ -417,6 +506,19 @@ the final conversion to the left operand's type. The backend must evaluate that
 left operand once (§6.5.16.2p3, p. 93, PDF p. 105).
 
 Integer promotions preserve enum and bit-field rules. Usual arithmetic conversions
+use `ExpressionInfo::promotion_width`, separately from the `bit_field` designation
+used by address/size constraints. Comma forwards the right operand's width;
+simple/compound assignment and prefix updates forward the left/updated operand's
+width. Parentheses and designation-preserving selections retain it. Conditional
+arithmetic results use the already-promoted common type. Casts and postfix updates
+have ordinary declared-type results, matching Clang. `sizeof` and `_Generic`
+therefore observe their standard unpromoted types and designation constraints.
+Narrow extended integer bit-fields also follow Clang's width-based promotion.
+This compatibility choice implements C99 §6.3.1.1p2 (printed pp. 42-43; PDF
+pp. 54-55) for value-producing wrappers, where GCC and Clang preserve the field's
+promotion behavior. All arithmetic/comparison/default-argument consumers use the
+same promotion helper; constant folding and lowering consume its retained operand
+conversions. No downstream expression walk re-infers the width. Arithmetic types
 preserve integer rank even where LP64 long and long long have equal widths, and
 preserve real/complex component precision. Assignment conversion checks immediate
 pointed-to qualifier inclusion and exact compatibility at deeper pointer levels;
@@ -425,6 +527,21 @@ Function prototypes enforce argument count and assignment-compatible arguments;
 unprototyped and variadic arguments receive default promotions. Core unary,
 postfix, binary, conditional, assignment, comma, cast and compound-literal
 constraints use the same helpers (§6.5, pp. 69-94, PDF pp. 81-106).
+
+Issue #46 (2026-10-14) adds Clang 23 pointer constraint classification in
+`expressions/pointers.rs`. `assignment_conversion` first checks the standard
+constraint and then classifies its violation once; assignment, initialization,
+ordinary prototype arguments and return share that adapter. Intrinsic-specific
+contracts retain strict `assignment_compatible`. Configuration diagnostic policy
+selects warning/error/suppression with Clang group names, defaults and parent
+group controls. Warnings retain ordinary conversion records and do not increment
+semantic error counters or taint initializer recovery. Errors block lowering.
+The qualifier classifier walks pointer/array derivations iteratively and does
+not weaken unrelated terminal types, function signatures or array bounds.
+The default/severity table and flag semantics are in `language-standards.md`.
+Global `-Werror` is also applied to existing diagnostics from every phase at the
+shared rendering/counting seam, so error counting blocks lowering before output.
+This changes no call/designation/tail/member facts or downstream lowering.
 
 Expression completion runs on the existing explicit work stack after children
 and type names. Failed operands yield `Unknown` and suppress dependent diagnostics.
@@ -483,8 +600,18 @@ explicit list/value continuations and immutable arena cursor paths. Each cursor
 identifies an array element or named record member and its containing cursor;
 brace elision descends and subsequent elements advance or unwind that path.
 Designators reset the current path relative to the containing brace pair.
-Unions initialize one selected member; unnamed bit-fields and flexible-array
-members do not consume ordinary initializer positions. Excess elements,
+Unions initialize one selected member; unnamed bit-fields do not consume
+ordinary initializer positions. As a GNU extension (`FlexibleArrayInitializers`),
+a static object's own list may give its flexible array member elements: the
+binding records the member's completed array type
+(`SemanticTranslationUnit::flexible_array`) and its storage size
+(`flexible_object_size`), the larger of the structure's size and the member's
+end, while its type and `sizeof` stay the structure's. A later list for the
+member overrides an earlier one (§6.7.8p19) but keeps the larger extent, where
+Clang allocates only the last. An empty list may initialize any flexible array
+member, as in Clang; any other initializer of one, in an automatic object, a
+compound literal, a nested structure or through a designator into its
+elements, is an error. Excess elements,
 incompatible scalar values and invalid designators have structured diagnostics.
 Narrow/wide strings initialize their matching character arrays, with optional
 braces and the permitted omitted terminator in an exactly sized array.
@@ -569,7 +696,14 @@ policy in GNU modes. This prevents accidental lookup of a same-named global.
 `__func__` is a function-entry binding for a static const character array,
 including before its first use (§6.4.2.2p1, printed p. 52, PDF p. 64). Its
 retained synthesized definition records the function-name string. Inner blocks
-may shadow it; the function's outer block may not redefine it. Hosted `main`
+may shadow it; the function's outer block may not redefine it. GCC's
+`__FUNCTION__` and `__PRETTY_FUNCTION__` are not declared at entry: lookup that
+finds no declaration resolves them (`predefined.rs`), `__FUNCTION__` to the
+`__func__` object and `__PRETTY_FUNCTION__` to an object made at its first use
+in the function, holding the signature as Clang prints it in C, with typedef
+names as written. The object is installed in the function scope, so later uses
+find it without another build. Outside any function all three warn at each use
+and share one file-scope object (an empty string, or `top level`). Hosted `main`
 signatures outside the portable `int (void)` and `int (int, char **)` forms,
 including internal linkage, receive an implementation warning. With
 `-ffreestanding` the startup function is implementation-defined (§5.1.2.1p1),
@@ -671,7 +805,8 @@ uncompleted tentative object types are rejected at translation-unit end.
 `SemanticTranslationUnit.definitions` retains deterministic binding-index order
 for explicit objects/functions, inline-only bodies, completed tentative objects
 and implicit function-name arrays. The existing inspection schema is retained;
-implicit `__func__` bindings appear through its ordinary binding output. No
+implicit `__func__` and `__PRETTY_FUNCTION__` bindings appear through its ordinary
+binding output. No
 statement inspection format was added. Earlier source occurrences and expression
 types retain their point-of-use types; synthesized tentative definitions identify
 the final composite binding needed by lowering.
@@ -680,6 +815,19 @@ Internal-linkage expression uses require a definition, except operands of
 constant `sizeof` results (§6.9p3, printed p. 140, PDF p. 152). Persistent
 sizeof contexts are resolved after typing, so runtime VLA-size uses still count.
 Used undefined static functions are errors; unused undefined declarations warn.
+Resolved entity uses are retained in `SemanticTranslationUnit.references` with
+their owning function definition or object initializer. Parameter type-site
+uses belong to the function whose entry executes them, even before its binding
+is installed. The producer excludes constant `sizeof`, `alignof` and
+non-VM `typeof` operands after typing, using retained typeof execution facts;
+linked redeclarations keep their binding identities. The module-item planner
+joins those identities by emitted symbol and computes the closure of external
+definitions with an explicit worklist. Semantic definition constraints still
+apply to every analyzed definition, including bodies omitted from emission.
+Retained declarator and specifier occurrences also identify their enclosing
+function definition. Lowering checks unsupported vendor modifiers only when
+that definition is emitted; file declarations remain checked. Symbol aliases
+are resolved before the planner joins linked entities.
 Inline restrictions are deferred until all file-scope declarations are known:
 a later non-inline or `extern` declaration can make the body an external
 definition (§6.7.4p3,p6, printed p. 112, PDF p. 124). Inline-only external bodies
@@ -1118,7 +1266,8 @@ rejected on MSVC. Clang nevertheless accepts `q` literals and a `typeof`
 type derived from them on MSVC; bcc preserves that distinction. The target
 macros mirror the pinned Clang exactly: `__SIZEOF_FLOAT128__` on the GNU
 triples, `__FLOAT128__` on Linux, no `__FLT128_*__` inventory and no MSVC
-capability advertisement. GCC 4.2.1 identity remains unchanged.
+capability advertisement. GCC 4.2.1 identity remains unchanged (bcc later also
+claimed Clang 23.1.1).
 
 Native `_Float128` and `f128`/`F128` literals are deliberately not added:
 Clang 23.1.1 rejects them in every tested mode (C11/C17/GNU17/C23/GNU23).
@@ -1126,7 +1275,9 @@ The reachable glibc path supplies `_Float32`, `_Float64`, `_Float32x` and
 `_Float64x` as typedefs of the existing standard types. A private embedded
 `bits/floatn.h` uses `include_next` and adjusts glibc's old-GCC binary128
 capability decision, providing its `_Float128` and complex typedefs, suffix
-macro and old-compiler builtin aliases. System headers stay read-only.
+macro and old-compiler builtin aliases. (Since 2026-10-15 bcc claims Clang,
+glibc's own `bits/floatn.h` takes its Clang path and the bridge is gone; see
+[language-standards.md](language-standards.md).) System headers stay read-only.
 GNU-source math and stdlib probes cover quad sqrt/pow/fabs, complex sin,
 `strtof128`, binary128 infinity/NaN initializers, fabs/copy-sign builtins,
 and the standard float/double/long-double selections. Clang accepts the

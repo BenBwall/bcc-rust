@@ -15,8 +15,16 @@ use super::{
     SpecifierExtensionKind,
     types::{
         Scalar,
+        TagKind,
         TypeId,
         TypeKind,
+    },
+};
+use crate::translation_phases::{
+    SourceVectors,
+    parsing::declaration_syntax::{
+        DeclarationSpecifiers,
+        TypeSpecifiers,
     },
 };
 
@@ -170,6 +178,119 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .and_then(super::Integer::to_u64)
     }
 
+    /// The first GNU `transparent_union` attribute in a specifier chain.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    pub(super) fn transparent_union_request(
+        &self,
+        mut chain: Option<&'tu SpecifierExtension<'tu>>,
+    ) -> Option<SourceVectors> {
+        while let Some(item) = chain {
+            if let SpecifierExtensionKind::Attributes(a) = item.kind
+                && let Some(source) = self.transparent_union_name(a)
+            {
+                return Some(source);
+            }
+            chain = item.next;
+        }
+        None
+    }
+
+    /// A `transparent_union` attribute a typedef declaration writes outside
+    /// a union definition: among its specifiers, after a union specifier
+    /// that only names the union, or after its declarator. Clang applies it
+    /// to the union the typedef names.
+    pub(super) fn typedef_transparent_union(
+        &self,
+        spec: DeclarationSpecifiers<'tu>,
+        declarator: Declarator<'tu>,
+    ) -> Option<SourceVectors> {
+        let named = match spec.type_specifiers {
+            | TypeSpecifiers::StructOrUnion(s) if s.struct_declaration_list.is_none() =>
+                self.transparent_union_request(s.attributes),
+            | _ => None,
+        };
+        self.transparent_union_request(spec.extensions)
+            .or(named)
+            .or_else(|| {
+                declarator.kind.iter().find_map(|direct| match direct {
+                    | DirectDeclarator::Attributes(a) => self.transparent_union_name(a),
+                    | _ => None,
+                })
+            })
+    }
+
+    /// Where `a` names `transparent_union`, the position Clang reports.
+    fn transparent_union_name(&self, a: &AttributeSpecifier<'tu>) -> Option<SourceVectors> {
+        super::vectors::attribute_names(a, self.context)
+            .find(|(_, name)| *name == "transparent_union")
+            .map(|(index, _)| a.tokens[index].source_vectors)
+    }
+
+    /// Applies `transparent_union`, written at `source`, to the type `ty`.
+    /// As in Clang, the attribute is ignored with a warning unless `ty` is a
+    /// complete union with at least one member, a first member of neither
+    /// floating nor vector type, and every member of the first member's
+    /// size and at most its alignment; a member of incomplete type ignores
+    /// it silently.
+    /// GNU extension: GCC manual, "Common Type Attributes".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    pub(super) fn make_transparent_union(&mut self, ty: TypeId, source: SourceVectors) {
+        let id = match self.types.nodes[ty.index] {
+            | TypeKind::Tag(id)
+                if self.types.tags[id].kind == TagKind::Union
+                    && self.types.tags[id].complete.get() =>
+                id,
+            | _ if self.types.unanalyzed(ty) => return,
+            | _ => {
+                self.error(
+                    SemanticErrorKind::IgnoredTransparentUnion,
+                    source,
+                    None,
+                    None,
+                );
+                return;
+            },
+        };
+        let tag = self.types.tags[id];
+        if tag.tainted.get() {
+            return;
+        }
+        let members = tag.members.get();
+        let at = |member: &super::types::Member| {
+            member
+                .name
+                .map_or(member.source_vectors, |name| name.source_vectors)
+        };
+        let violation = if let Some(first) = members.first() {
+            let floating = self.arithmetic(first.ty) && self.integer_type(first.ty).is_none();
+            if floating || self.vector(first.ty).is_some() {
+                Some(at(first))
+            } else {
+                let Some(expected) = self.types.layout(first.ty) else {
+                    return;
+                };
+                let mut violation = None;
+                for member in members {
+                    let Some(layout) = self.types.layout(member.ty) else {
+                        return;
+                    };
+                    if layout.size != expected.size || layout.align > expected.align {
+                        violation = Some(at(member));
+                        break;
+                    }
+                }
+                violation
+            }
+        } else {
+            Some(source)
+        };
+        if let Some(at) = violation {
+            self.error(SemanticErrorKind::IgnoredTransparentUnion, at, None, None);
+        } else {
+            tag.transparent.set(true);
+        }
+    }
+
     /// GCC packed is member/record layout; aligned is a power-of-two byte
     /// alignment, defaulting to the x86-64 ABI's maximum scalar alignment.
     pub(super) fn layout_attributes(&mut self, a: &AttributeSpecifier<'tu>) -> LayoutAttributes {
@@ -218,8 +339,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         result
     }
 
-    /// GCC mode selects an integer or real scalar representation, preserving
-    /// signedness. Vector/complex modes require their separate subsystems.
+    /// GCC mode selects an integer representation, preserving signedness, or
+    /// a real or complex floating representation. Vector modes
+    /// belong to the vector subsystem.
     /// C99: §6.2.5p4-11, pp. 33-34; PDF pp. 45-46 (extended scalar types).
     pub(super) fn mode_attribute(&mut self, mut ty: TypeId, a: &AttributeSpecifier<'tu>) -> TypeId {
         let mut invalid = false;
@@ -265,16 +387,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | (_, false) => Scalar::UnsignedInt128,
                     })
                 }
-            } else if matches!(
-                scalar,
-                Some(Scalar::Float | Scalar::Double | Scalar::LongDouble)
-            ) {
-                match mode {
-                    | Some("SF") => Some(Scalar::Float),
-                    | Some("DF") => Some(Scalar::Double),
-                    | Some("XF") => Some(Scalar::LongDouble),
-                    | _ => None,
-                }
+            } else if mode_bits.is_none() {
+                scalar.and_then(|scalar| self.floating_mode(scalar, mode?))
             } else {
                 None
             };
@@ -298,6 +412,48 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return self.types.unknown();
         }
         ty
+    }
+
+    /// The floating scalar a GNU real (`SF`, `DF`, `XF`, `TF`, `KF`) or
+    /// complex (`SC`, `DC`, `XC`, `TC`, `KC`) mode selects for `base`, as
+    /// Clang resolves it for the target. A real mode applies to any floating
+    /// base, real or complex, and a complex mode only to a complex base. `X`
+    /// names the x87 extended format, `T` the 128-bit format (binary128 when
+    /// `long double` is not one), and `K` binary128.
+    /// GCC internals, "Machine Modes";
+    /// <https://gcc.gnu.org/onlinedocs/gccint/Machine-Modes.html>.
+    /// C99: complex types §6.2.5p11, p. 34; PDF p. 46.
+    fn floating_mode(&self, base: Scalar, mode: &str) -> Option<Scalar> {
+        use Scalar as S;
+        let complex = match mode.as_bytes() {
+            | [_, b'F'] => false,
+            | [_, b'C'] => true,
+            | _ => return None,
+        };
+        let base_complex = matches!(
+            base,
+            S::ComplexFloat | S::ComplexDouble | S::ComplexLongDouble | S::ComplexFloat128
+        );
+        let base_real = matches!(base, S::Float | S::Double | S::LongDouble | S::Float128);
+        if !(base_complex || (base_real && !complex)) {
+            return None;
+        }
+        let target = self.context.configuration.target();
+        let x87 = !target.layout().long_double_is_double();
+        let real = match &mode[..1] {
+            | "S" => S::Float,
+            | "D" => S::Double,
+            | "X" if x87 => S::LongDouble,
+            | "T" | "K" if target.float128_type() => S::Float128,
+            | _ => return None,
+        };
+        Some(match (complex, real) {
+            | (false, real) => real,
+            | (true, S::Float) => S::ComplexFloat,
+            | (true, S::Double) => S::ComplexDouble,
+            | (true, S::LongDouble) => S::ComplexLongDouble,
+            | (true, _) => S::ComplexFloat128,
+        })
     }
 
     /// Apply storage/type alignment after the complete declarator. Alignment

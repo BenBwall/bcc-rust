@@ -1,0 +1,25 @@
+warning: from a macro
+ --> pp-pragma-message.c:2:13
+  |
+2 | #pragma GCC warning MESSAGE
+  |             ^^^^^^^ `#pragma GCC warning`
+
+warning: joined message
+ --> pp-pragma-message.c:3:13
+  |
+3 | #pragma GCC warning ("joined" " message")
+  |             ^^^^^^^ `#pragma GCC warning`
+
+error: `#pragma GCC warning` requires a string literal
+ --> pp-pragma-message.c:4:13
+  |
+4 | #pragma GCC warning 42
+  |             ^^^^^^^
+
+error: stop here
+ --> pp-pragma-message.c:5:13
+  |
+5 | #pragma GCC error "stop here"
+  |             ^^^^^ `#pragma GCC error`
+
+2 errors and 2 warnings generated.

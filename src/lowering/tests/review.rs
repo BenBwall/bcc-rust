@@ -193,7 +193,7 @@ fn assert_union_switch_resources(source: &str, name: &str) {
 fn ten_thousand_static_locals_use_linear_name_storage() {
     let source = format!(
         "int reserved __asm__(\"main.x.1\"); int main(void){{{}return 0;}}",
-        "{static int x;}".repeat(10_000)
+        "{static int x; (void)x;}".repeat(10_000)
     );
     let tu = Bump::new();
     let mut context = Context::new(&tu);
@@ -210,7 +210,6 @@ fn ten_thousand_static_locals_use_linear_name_storage() {
     let scratch = Bump::new();
     let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables);
     let mut errors = ArenaVec::new_in(&arena);
-    unit.prepare_extensions(&mut errors);
     let functions = unit.declare_items(&syntax, &mut errors);
     let start = std::time::Instant::now();
     for (record, function) in functions {
@@ -559,7 +558,6 @@ fn ten_thousand_functions_lower_with_linear_parameter_work() {
     let tables = Bump::new();
     let mut unit = Unit::new(&context, &sema, Target::LinuxGnu, &arena, &tables);
     let mut errors = ArenaVec::new_in(&arena);
-    unit.prepare_extensions(&mut errors);
     let functions = unit.declare_items(&syntax, &mut errors);
     assert!(errors.is_empty());
     assert_eq!(functions.len(), 10_000);

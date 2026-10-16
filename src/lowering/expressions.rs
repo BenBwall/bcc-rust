@@ -505,10 +505,37 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 | ConversionKind::Assignment
                 | ConversionKind::DefaultArgument =>
                     self.convert_value(item, conversion.ty, source)?,
+                | ConversionKind::TransparentUnion =>
+                    self.transparent_union(item, conversion.ty, source)?,
             };
         }
         self.operands.push(item);
         Ok(())
+    }
+
+    /// A union of type `union` whose member at offset zero, of the type of
+    /// `item`, holds the value of `item`: a GNU transparent union argument.
+    /// Every member of a union starts at its beginning (§6.7.2.1p14, p. 103;
+    /// PDF p. 115), and semantic analysis selected the member.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    fn transparent_union(
+        &mut self,
+        item: Item,
+        union: TypeId,
+        source: SourceVectors,
+    ) -> Result<Item, LoweringError> {
+        let layout =
+            types::layout(&self.unit.sema.types, union).map_err(|kind| at(kind, source))?;
+        let address = self.fresh_object(layout.size, types::align(layout), source)?;
+        let member = Item {
+            operand: Operand::Place(Place::Memory(address)),
+            ty:      item.ty,
+        };
+        _ = self.write(member, item, source)?;
+        Ok(Item {
+            operand: Operand::Aggregate(address),
+            ty:      union,
+        })
     }
 
     /// Converts a value to type `to` as by assignment (§6.3.1.2-§6.3.1.4,

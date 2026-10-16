@@ -97,6 +97,11 @@ pub(crate) enum ConversionKind {
     Arithmetic,
     Assignment,
     DefaultArgument,
+    /// A prototyped call's argument, already converted to a member of a
+    /// GNU transparent union parameter, becomes that union with the member
+    /// holding the value.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    TransparentUnion,
 }
 
 /// The category before contextual lvalue conversion or decay.

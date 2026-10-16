@@ -55,7 +55,9 @@ fn implicit_library_prototypes_require_hosted_mode() {
                     errors.iter().any(|e| matches!(
                         e,
                         TranslationError::Semantic(SemanticError {
-                            kind: SemanticErrorKind::InvalidArgumentType,
+                            kind: SemanticErrorKind::PointerConstraint(
+                                crate::configuration::DiagnosticGroup::IntConversion
+                            ),
                             ..
                         })
                     )),

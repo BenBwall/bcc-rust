@@ -47,6 +47,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if matches!(e.kind, E::SizeofExpr(_) | E::SizeofType(_)) {
             self.enter_sizeof(e);
         }
+        if matches!(e.kind, E::AlignofExpr(_) | E::AlignofType(_)) {
+            self.enter_reference_context(None);
+        }
         self.taint(
             e.recovered
                 || matches!(e.kind, E::Builtin(b) if !super::builtins::modeled(b.keyword))

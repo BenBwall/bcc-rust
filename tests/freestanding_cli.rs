@@ -150,8 +150,8 @@ mod tests {
             );
         }
         source.push_str(
-            "#if defined(__clang__) || defined(_MSC_VER)
-#error compiler identity macros must              be absent
+            "#if !defined(__clang__) || __clang_major__ != 23 || defined(_MSC_VER)
+#error Clang identity must match the pinned Clang
 #endif
 #if !defined(__GNUC__) || __GNUC__ != 4 || __GNUC_MINOR__ != 2 || __GNUC_PATCHLEVEL__ != 1
 #error              GNU identity must match Clang in every mode
@@ -333,7 +333,7 @@ mod tests {
             ),
             (
                 "#include <stdarg.h>\nvoid f(int n, ...) { va_list ap; int *p=va_arg(ap,int); }\n",
-                "initializer",
+                "incompatible integer and pointer conversion [-Wint-conversion]",
             ),
             (
                 "#include <stddef.h>\nstruct S {int bit:3;}; int x=offsetof(struct S,bit);\n",

@@ -1,0 +1,19 @@
+error: 'conversion between function and void pointers' is a GNU extension
+ --> sema-pointer-pedantic.c:1:44
+  |
+1 | void convert(int (*p)(int), void *q) { p = q; }
+  |                                            ^
+
+error: 'equality comparison between function pointer and void pointer' is a GNU extension
+ --> sema-pointer-pedantic.c:2:48
+  |
+2 | int compare(int (*p)(int), void *q) { return p == q; }
+  |                                                ^^
+
+error: 'ordered comparison between pointer and zero' is a GNU extension
+ --> sema-pointer-pedantic.c:3:35
+  |
+3 | int zero_order(int *p) { return p < 0; }
+  |                                   ^
+
+3 errors generated.

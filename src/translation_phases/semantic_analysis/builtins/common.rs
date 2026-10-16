@@ -53,10 +53,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Expect(_) => Scalar::Long,
             | CommonBuiltin::ObjectSize(_) => self.types.target.size_t,
             | CommonBuiltin::Overflow(..) => Scalar::Bool,
+            | CommonBuiltin::Complex => Scalar::ComplexDouble,
             | _ => Scalar::Void,
         };
         let mut result = self.types.scalar(scalar);
-        if matches!(builtin, CommonBuiltin::Aligned | CommonBuiltin::Alloca) {
+        if matches!(
+            builtin,
+            CommonBuiltin::Aligned
+                | CommonBuiltin::Alloca
+                | CommonBuiltin::Address(_)
+                | CommonBuiltin::ExtractReturnAddress
+        ) {
             result = self.types.intern(TypeKind::Pointer(result));
         }
         let void = self
@@ -82,7 +89,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     prototype = false;
                 },
             | CommonBuiltin::Bit(_, scalar) => parameters.push(self.types.scalar(scalar)),
-            | CommonBuiltin::Bswap(_) => parameters.push(result),
+            | CommonBuiltin::Bswap(_) | CommonBuiltin::ExtractReturnAddress =>
+                parameters.push(result),
             | CommonBuiltin::Expect(probability) => {
                 parameters.extend_from_slice(&[long, long]);
                 if probability {
@@ -99,13 +107,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | CommonBuiltin::ObjectSize(_) => parameters.extend_from_slice(&[const_pointer, int]),
             | CommonBuiltin::Alloca => parameters.push(size),
+            | CommonBuiltin::Address(_) => parameters.push(self.types.scalar(Scalar::UnsignedInt)),
             | CommonBuiltin::Overflow(_, Some(scalar), false) => {
                 let integer = self.types.scalar(scalar);
                 let pointer = self.types.intern(TypeKind::Pointer(integer));
                 parameters.extend_from_slice(&[integer, integer, pointer]);
             },
-            | CommonBuiltin::Constant | CommonBuiltin::Overflow(..) | CommonBuiltin::Varargs(_) =>
-                prototype = false,
+            | CommonBuiltin::Constant
+            | CommonBuiltin::Overflow(..)
+            | CommonBuiltin::Varargs(_)
+            | CommonBuiltin::Complex => prototype = false,
             | CommonBuiltin::Unreachable | CommonBuiltin::Trap => {},
         }
         Some(self.types.intern(TypeKind::Function {
@@ -169,11 +180,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let (min, max) = match builtin {
             | CommonBuiltin::Float(FloatOperation::Copysign, _)
             | CommonBuiltin::Expect(false)
-            | CommonBuiltin::ObjectSize(_) => (2, 2),
+            | CommonBuiltin::ObjectSize(_)
+            | CommonBuiltin::Complex => (2, 2),
+            | CommonBuiltin::Float(FloatOperation::Fpclassify, _) => (6, 6),
             | CommonBuiltin::Bit(..)
             | CommonBuiltin::Bswap(_)
             | CommonBuiltin::Constant
             | CommonBuiltin::Alloca
+            | CommonBuiltin::Address(_)
+            | CommonBuiltin::ExtractReturnAddress
             | CommonBuiltin::Float(..) => (1, 1),
             | CommonBuiltin::Expect(true) | CommonBuiltin::Overflow(..) => (3, 3),
             | CommonBuiltin::Aligned => (2, 3),
@@ -203,6 +218,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Float(operation, scalar) => {
                 return Some(self.floating_builtin(e, args, operation, scalar));
             },
+            | CommonBuiltin::Complex => return Some(self.complex_builtin(e, args)),
             | CommonBuiltin::Bit(_, scalar) => {
                 let ty = self.types.scalar(scalar);
                 _ = self.common_argument(args[0], ty);
@@ -339,6 +355,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let ty = self.types.scalar(self.types.target.size_t);
                 _ = self.common_argument(args[0], ty);
             },
+            | CommonBuiltin::Address(_) => {
+                let ty = self.types.scalar(Scalar::UnsignedInt);
+                if self.common_argument(args[0], ty)
+                    && self.common_integer_constant(args[0], ty).is_none()
+                {
+                    self.error(
+                        SemanticErrorKind::InvalidFrameLevel,
+                        args[0].source_vectors,
+                        Some(name.name),
+                        None,
+                    );
+                }
+            },
+            | CommonBuiltin::ExtractReturnAddress => {
+                _ = self.common_argument(args[0], result);
+            },
             | CommonBuiltin::Overflow(operation, scalar, predicate) => {
                 for &arg in &args[..2] {
                     if let Some(scalar) = scalar {
@@ -421,7 +453,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Reports incompatible types before checking dependent value constraints.
     /// C99: §6.5.2.2p2,p7, pp. 71-72; PDF pp. 83-84.
-    fn common_argument(&mut self, e: &'tu Expression<'tu>, ty: TypeId) -> bool {
+    pub(super) fn common_argument(&mut self, e: &'tu Expression<'tu>, ty: TypeId) -> bool {
         let info = self.expression_info(e);
         let compatible = !self.types.unanalyzed(info.ty) && self.assignment_compatible(ty, info);
         if !self.types.unanalyzed(info.ty) && !compatible {
@@ -464,7 +496,15 @@ pub(crate) enum CommonBuiltin {
     Constant,
     ObjectSize(bool),
     Alloca,
+    /// GNU frame (`false`) or return (`true`) address of a constant frame
+    /// level. <https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html>
+    Address(bool),
+    /// GNU: the return address as an address; the identity on x86-64.
+    ExtractReturnAddress,
     Overflow(OverflowOperation, Option<Scalar>, bool),
+    /// GNU: the complex value of a real and an imaginary part of one real
+    /// floating type. <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+    Complex,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -472,6 +512,27 @@ pub(crate) enum FloatOperation {
     Signbit,
     Isinf,
     Copysign,
+    /// The type-generic classification macros of C99 §7.12.3, pp. 216-217;
+    /// PDF pp. 228-229, as GCC and Clang builtins.
+    Isnan,
+    Isfinite,
+    Isnormal,
+    /// GNU: -1, 0 or 1 for negative infinity, non-infinity or infinity.
+    IsinfSign,
+    /// GNU: five `int` results (NaN, infinite, normal, subnormal, zero),
+    /// then the classified operand. C99: §7.12.3.1, p. 216; PDF p. 228.
+    Fpclassify,
+}
+
+impl FloatOperation {
+    /// The index of the floating operand among the call's arguments.
+    pub(crate) const fn operand_index(self) -> usize {
+        if matches!(self, Self::Fpclassify) {
+            5
+        } else {
+            0
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -504,6 +565,15 @@ pub(crate) fn common_builtin(name: &str) -> Option<CommonBuiltin> {
         | "va_start" => return Some(B::Varargs(K::BuiltinVaStart)),
         | "va_end" => return Some(B::Varargs(K::BuiltinVaEnd)),
         | "va_copy" => return Some(B::Varargs(K::BuiltinVaCopy)),
+        | _ => {},
+    }
+    // The C99 classification macros exist only in their type-generic form.
+    match name {
+        | "isnan" => return Some(B::Float(FloatOperation::Isnan, None)),
+        | "isfinite" => return Some(B::Float(FloatOperation::Isfinite, None)),
+        | "isnormal" => return Some(B::Float(FloatOperation::Isnormal, None)),
+        | "isinf_sign" => return Some(B::Float(FloatOperation::IsinfSign, None)),
+        | "fpclassify" => return Some(B::Float(FloatOperation::Fpclassify, None)),
         | _ => {},
     }
     for (prefix, operation) in [
@@ -588,6 +658,10 @@ pub(crate) fn common_builtin(name: &str) -> Option<CommonBuiltin> {
         | "object_size" => B::ObjectSize(false),
         | "dynamic_object_size" => B::ObjectSize(true),
         | "alloca" => B::Alloca,
+        | "frame_address" => B::Address(false),
+        | "return_address" => B::Address(true),
+        | "extract_return_addr" => B::ExtractReturnAddress,
+        | "complex" => B::Complex,
         | _ => return None,
     })
 }

@@ -10,7 +10,7 @@
 #define CHECK(n, e) _Static_assert((e), #n)
 CHECK(char_bit, CHAR_BIT == 8);
 /* Clang's freestanding fallback is 1; bcc's is 4, enough for UTF-8. */
-#ifdef __clang__
+#if defined(__clang__) && !defined(__bcc__)
 CHECK(mb_len, MB_LEN_MAX == 1);
 #else
 CHECK(mb_len, MB_LEN_MAX == 4);

@@ -142,14 +142,25 @@ pub(crate) fn run(
 /// names an unavailable program name (the empty string), and argv[1] is null.
 /// Functions accepting no parameters keep the ordinary zero-argument entry.
 /// C99: §5.1.2.2.1 paragraphs 1-2, p. 12; PDF p. 24.
+#[cfg(test)]
 pub(crate) fn run_main(module: &Module<'_>, host: &mut dyn Host) -> Result<Outcome, Trap> {
+    run_main_with_limits(module, host, Limits::default())
+}
+
+/// Runs hosted main under the caller's instruction, stack and object limits.
+/// C99: §5.1.2.2.1 paragraphs 1-2, p. 12; PDF p. 24.
+pub(crate) fn run_main_with_limits(
+    module: &Module<'_>,
+    host: &mut dyn Host,
+    limits: Limits,
+) -> Result<Outcome, Trap> {
     if let Some(crate::ir::Symbol::Function(func)) = module.symbol("main")
         && module.function_signature(func).params.is_empty()
     {
-        return run(module, "main", &[], host);
+        return run_with_limits(module, "main", &[], host, limits);
     }
     let arena = Bump::new();
-    let mut machine = Machine::load(module, &arena, Limits::default())?;
+    let mut machine = Machine::load(module, &arena, limits)?;
     machine.enter_main()?;
     machine.run(host)
 }
@@ -172,10 +183,11 @@ impl Machine<'_, '_, '_> {
     /// Executes an entered program until it terminates or traps.
     fn run(&mut self, host: &mut dyn Host) -> Result<Outcome, Trap> {
         loop {
-            if self.steps == self.limits.steps {
+            if self.limits.steps != 0 && self.steps == self.limits.steps {
                 return Err(Trap::StepLimit);
             }
-            self.steps += 1;
+            // Unlimited execution must not overflow its observation counter.
+            self.steps = self.steps.saturating_add(1);
             let (location, inst) = self.fetch();
             match self.execute(inst, host) {
                 | Ok(None) => {},

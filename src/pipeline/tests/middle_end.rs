@@ -22,10 +22,15 @@ mod braced_strings;
 mod builtin_bindings;
 mod compound_assignments;
 mod declaration_initializers;
+mod encoded_strings;
+mod flexible_initializers;
+mod predefined_identifiers;
+mod record_layout;
 mod runtime_calls;
 mod scalar_builtins;
 mod statement_expressions;
 mod torture_sema;
+mod transparent_unions;
 mod union_initializers;
 mod vla;
 

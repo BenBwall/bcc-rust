@@ -58,6 +58,10 @@ use crate::{
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn prepare_function(&mut self, f: &'tu FunctionDefinition<'tu>) {
+        self.work.push(Work::RestoreReferenceFunction(
+            self.functions.reference_function,
+        ));
+        self.functions.reference_function = Some(std::ptr::from_ref(f).addr());
         // Definition parameter expressions execute on entry. Index them while
         // resolving the signature, using the same root as the later body.
         let previous = self.control.current;
@@ -234,6 +238,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             binding,
             result,
             parameters,
+            scope: self.scope,
+            name: None,
+            pretty: None,
         });
         self.function_name = name;
         if old_style {
@@ -397,6 +404,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.control.targets.truncate(targets);
             },
             | FunctionWork::RestoreSizeof(previous) => self.functions.sizeof = previous,
+            | FunctionWork::RestoreReferenceContext(previous) =>
+                self.functions.reference_context = previous,
         }
     }
 
@@ -470,9 +479,50 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ignored.push(constant || context.parent.is_some_and(|p| ignored[p]));
         }
         let mut used = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        let mut ignored_references = ArenaVec::new_in(self.scratch);
+        for context in &self.functions.reference_contexts {
+            let unevaluated = match context.kind {
+                | ReferenceContextKind::Unevaluated => true,
+                | ReferenceContextKind::Typeof(syntax) => self
+                    .typeof_sites
+                    .get(&std::ptr::from_ref(syntax).addr())
+                    .is_none_or(|site| !self.types.variably_modified(site.ty)),
+            };
+            ignored_references
+                .push(unevaluated || context.parent.is_some_and(|p| ignored_references[p]));
+        }
+        let mut owners = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
+        for function in &self.function_records {
+            if let Some(binding) = function.binding {
+                _ = owners.insert(std::ptr::from_ref(function.syntax).addr(), binding);
+            }
+        }
+        for owner in self
+            .declarator_functions
+            .iter_mut()
+            .chain(self.specifier_functions.iter_mut())
+        {
+            *owner = owner.and_then(|syntax| owners.get(&syntax).copied());
+        }
         for i in 0..self.functions.uses.len() {
             let usage = self.functions.uses[i];
             let b = self.bindings[usage.binding];
+            let owner = match usage.owner {
+                | Some(ReferenceOwner::Function(syntax)) => owners.get(&syntax).copied(),
+                | Some(ReferenceOwner::Object(binding)) => Some(binding),
+                | None => None,
+            };
+            if let Some(owner) = owner
+                && !usage.sizeof.is_some_and(|s| ignored[s])
+                && !usage
+                    .reference_context
+                    .is_some_and(|s| ignored_references[s])
+            {
+                self.references.push(super::EntityReference {
+                    owner,
+                    binding: usage.binding,
+                });
+            }
             if let Some(function) = usage.inline_function
                 && b.linkage == Linkage::Internal
                 && self.is_inline_definition(function)
@@ -517,11 +567,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         Some(b.name.source_vectors),
                     );
                 } else if b.kind == BindingKind::Function {
-                    self.error(
+                    self.group_diagnostic(
+                        crate::configuration::DiagnosticGroup::UnusedFunction,
                         SemanticErrorKind::UnusedStaticFunction,
                         b.name.source_vectors,
                         Some(b.name.name),
-                        None,
                     );
                 }
             }
@@ -842,6 +892,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             binding: self.bindings.len() - 1,
             kind:    DefinitionKind::FunctionName(function.name),
         });
+        if let Some(current) = &mut self.functions.current {
+            current.name = Some(self.bindings.len() - 1);
+        }
     }
 
     /// Hosted `main` signatures are implementation-defined outside the two
@@ -1105,6 +1158,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .and_then(|f| f.binding)
             .filter(|&i| self.bindings[i].linkage == Linkage::External);
         self.functions.uses.push(Use {
+            reference_context: self.functions.reference_context,
+            owner: self
+                .functions
+                .initializer
+                .filter(|&binding| self.bindings[binding].duration == Duration::Static)
+                .map(ReferenceOwner::Object)
+                .or(self
+                    .functions
+                    .reference_function
+                    .map(ReferenceOwner::Function)),
             binding,
             name,
             sizeof: self.functions.sizeof,
@@ -1125,6 +1188,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             parent: self.functions.sizeof,
         });
         self.functions.sizeof = Some(index);
+    }
+
+    /// Retains evaluation contexts for emission separately from definition
+    /// constraints. GNU typeof executes an expression only for VM types;
+    /// alignof never evaluates its operand. C99: §6.7.5.2p5, pp. 116-117;
+    /// PDF pp. 128-129 (VM types); GCC manual, "Typeof".
+    pub(super) fn enter_reference_context(
+        &mut self,
+        syntax: Option<&'tu super::ExtendedType<'tu>>,
+    ) {
+        self.work
+            .push(Work::FunctionWork(FunctionWork::RestoreReferenceContext(
+                self.functions.reference_context,
+            )));
+        let index = self.functions.reference_contexts.len();
+        self.functions.reference_contexts.push(ReferenceContext {
+            kind:   syntax.map_or(
+                ReferenceContextKind::Unevaluated,
+                ReferenceContextKind::Typeof,
+            ),
+            parent: self.functions.reference_context,
+        });
+        self.functions.reference_context = Some(index);
     }
 
     /// C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125, unless the target's ABI
@@ -1210,6 +1296,12 @@ pub(super) struct FunctionContext<'tu> {
     pub(super) binding:    Option<usize>,
     pub(super) result:     TypeId,
     pub(super) parameters: &'tu [Parameter],
+    /// The function scope, which holds the predefined names.
+    pub(super) scope:      usize,
+    /// The `__func__` object, shared by `__FUNCTION__` as Clang shares them.
+    pub(super) name:       Option<usize>,
+    /// The `__PRETTY_FUNCTION__` object, made at its first use.
+    pub(super) pretty:     Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -1222,6 +1314,7 @@ pub(super) enum FunctionWork<'tu> {
         usize,
     ),
     RestoreSizeof(Option<usize>),
+    RestoreReferenceContext(Option<usize>),
 }
 
 /// Definition and tentative-definition state for an identifier with linkage.
@@ -1252,16 +1345,39 @@ enum FunctionBody {
 
 #[derive(Clone, Copy)]
 struct Use {
-    binding:         usize,
-    name:            Identifier,
-    sizeof:          Option<usize>,
-    inline_function: Option<usize>,
+    reference_context: Option<usize>,
+    owner:             Option<ReferenceOwner>,
+    binding:           usize,
+    name:              Identifier,
+    sizeof:            Option<usize>,
+    inline_function:   Option<usize>,
 }
 
 #[derive(Clone, Copy)]
 struct SizeofContext<'tu> {
     expression: &'tu Expression<'tu>,
     parent:     Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct ReferenceContext<'tu> {
+    kind:   ReferenceContextKind<'tu>,
+    parent: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+enum ReferenceContextKind<'tu> {
+    Typeof(&'tu super::ExtendedType<'tu>),
+    Unevaluated,
+}
+
+/// Parameter type sites execute as part of the definition, before its binding
+/// is installed. Resolve their syntactic owner to that binding at completion.
+/// C99: §6.9.1p10, p. 142; PDF p. 154.
+#[derive(Clone, Copy)]
+enum ReferenceOwner {
+    Function(usize),
+    Object(usize),
 }
 
 /// A static object whose declaration is checked against inline restrictions.
@@ -1273,31 +1389,42 @@ struct InlineObject {
 }
 
 pub(super) struct State<'tu, 's> {
-    pub(super) current:   Option<FunctionContext<'tu>>,
-    next_function:        usize,
-    old_names:            ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
+    reference_context: Option<usize>,
+    reference_contexts: ArenaVec<'s, ReferenceContext<'tu>>,
+    pub(super) reference_function: Option<usize>,
+    pub(super) initializer: Option<usize>,
+    pub(super) current: Option<FunctionContext<'tu>>,
+    next_function: usize,
+    old_names: ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
     pub(super) old_types: ArenaMap<'s, (usize, StringCacheId), TypeId>,
-    entities:             ArenaMap<'s, StringCacheId, Entity>,
-    previous:             ArenaMap<'s, usize, SourceVectors>,
-    uses:                 ArenaVec<'s, Use>,
-    sizeof_contexts:      ArenaVec<'s, SizeofContext<'tu>>,
-    pub(super) sizeof:    Option<usize>,
-    inline_objects:       ArenaVec<'s, InlineObject>,
+    entities: ArenaMap<'s, StringCacheId, Entity>,
+    previous: ArenaMap<'s, usize, SourceVectors>,
+    uses: ArenaVec<'s, Use>,
+    sizeof_contexts: ArenaVec<'s, SizeofContext<'tu>>,
+    pub(super) sizeof: Option<usize>,
+    inline_objects: ArenaVec<'s, InlineObject>,
+    /// The `__func__` and `__PRETTY_FUNCTION__` objects of file scope.
+    pub(super) outside: [Option<usize>; 2],
 }
 
 impl<'s> State<'_, 's> {
     pub(super) fn new(scratch: &'s Bump) -> Self {
         Self {
-            current:         None,
-            next_function:   0,
-            old_names:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            old_types:       ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            entities:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            previous:        ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            uses:            ArenaVec::new_in(scratch),
-            sizeof_contexts: ArenaVec::new_in(scratch),
-            sizeof:          None,
-            inline_objects:  ArenaVec::new_in(scratch),
+            reference_context:  None,
+            reference_contexts: ArenaVec::new_in(scratch),
+            reference_function: None,
+            initializer:        None,
+            current:            None,
+            next_function:      0,
+            old_names:          ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            old_types:          ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            entities:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            previous:           ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            uses:               ArenaVec::new_in(scratch),
+            sizeof_contexts:    ArenaVec::new_in(scratch),
+            sizeof:             None,
+            inline_objects:     ArenaVec::new_in(scratch),
+            outside:            [None; 2],
         }
     }
 }

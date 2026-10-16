@@ -486,7 +486,11 @@ fn with_tokens_of<R>(
     inspect: impl FnOnce(&[Token], &mut Context<'_>) -> R,
 ) -> R {
     let tu = crate::util::bump::Bump::new();
-    let mut context = Context::new(&tu);
+    // Preprocessor tests observe the diagnostics that are off by default.
+    let mut context = Context::with_configuration(
+        &tu,
+        CompilerConfiguration::default().with_default_off_groups(),
+    );
     let preprocess_arena = crate::util::bump::Bump::new();
     let mut preprocessor = Preprocessor::new(
         &preprocess_arena,

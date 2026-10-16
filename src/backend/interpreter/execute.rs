@@ -164,6 +164,24 @@ impl Machine<'_, '_, '_> {
                 address:    (self.frame().activation << 32) | self.dynamic_slots.len() as u64,
                 provenance: None,
             }),
+            // Addresses without provenance. The frame address lies between
+            // the callers' objects and this frame's own, as a machine frame
+            // does; the interpreter has no code addresses, so the return
+            // address is an opaque nonnull value.
+            | InstData::Nullary {
+                opcode: Opcode::FrameAddress,
+                ..
+            } => RuntimeValue::Ptr(super::value::Pointer {
+                address:    self.frame().start,
+                provenance: None,
+            }),
+            | InstData::Nullary {
+                opcode: Opcode::ReturnAddress,
+                ..
+            } => RuntimeValue::Ptr(super::value::Pointer {
+                address:    (self.frame().activation << 32) | 1 << 31,
+                provenance: None,
+            }),
             | InstData::Nullary {
                 opcode: Opcode::Trap,
                 ..

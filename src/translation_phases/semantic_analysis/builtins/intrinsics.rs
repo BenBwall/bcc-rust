@@ -270,17 +270,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let id = {
             let id = self.types.tags.len();
             self.types.tags.push(self.types.tu.alloc(Tag {
-                name:              Some(name),
-                kind:              TagKind::Struct,
-                members:           Cell::new(&[]),
-                fields:            Cell::new(&[]),
-                layout:            Cell::new(Some(self.types.target.va_list)),
-                complete:          Cell::new(true),
-                tainted:           Cell::new(false),
-                contains_flexible: Cell::new(false),
-                compatible:        Cell::new(Scalar::Int),
-                packed:            Cell::new(false),
-                alignment:         Cell::new(0),
+                name:                 Some(name),
+                kind:                 TagKind::Struct,
+                members:              Cell::new(&[]),
+                fields:               Cell::new(&[]),
+                layout:               Cell::new(Some(self.types.target.va_list)),
+                complete:             Cell::new(true),
+                tainted:              Cell::new(false),
+                contains_flexible:    Cell::new(false),
+                compatible:           Cell::new(Scalar::Int),
+                packed:               Cell::new(false),
+                transparent:          Cell::new(false),
+                max_member_alignment: Cell::new(0),
+                alignment:            Cell::new(0),
+                required_alignment:   Cell::new(0),
             }));
             id
         };
