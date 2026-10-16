@@ -123,8 +123,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             {
                 let size = self.runtime_size(ty, source)?;
                 self.enter_vla(binding, source)?;
-                let align = super::alignment::storage_alignment(&self.unit.sema.types, ty)
-                    .map_err(|kind| at(kind, source))?;
+                let align = super::alignment::variable_alignment(
+                    self.unit.sema,
+                    self.unit.target,
+                    binding,
+                    ty,
+                )
+                .map_err(|kind| at(kind, source))?;
                 Local::Address(self.dynamic_object(size, Some(align)))
             },
             | _ => {
@@ -136,8 +141,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 Local::Slot(
                     self.object_slot(
                         size,
-                        super::alignment::storage_alignment(&self.unit.sema.types, ty)
-                            .map_err(|kind| at(kind, source))?,
+                        super::alignment::variable_alignment(
+                            self.unit.sema,
+                            self.unit.target,
+                            binding,
+                            ty,
+                        )
+                        .map_err(|kind| at(kind, source))?,
                     ),
                 )
             },

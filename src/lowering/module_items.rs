@@ -633,16 +633,14 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         if types.unanalyzed(data.ty) {
             return Err(LoweringErrorKind::UnanalyzedType);
         }
+        let align = super::alignment::variable_alignment(self.sema, self.target, binding, data.ty);
         let (size, align) = match types.layout(data.ty) {
-            | Some(layout) => (
-                layout.size,
-                super::alignment::storage_alignment(types, data.ty)?,
-            ),
+            | Some(layout) => (layout.size, align?),
             | None => {
                 let element =
                     types::target_type(types, data.ty).and_then(|element| types.layout(element));
                 match element {
-                    | Some(_) => (0, super::alignment::storage_alignment(types, data.ty)?),
+                    | Some(_) => (0, align?),
                     | None =>
                         return Err(types::layout(types, data.ty).err().unwrap_or(
                             LoweringErrorKind::MissingFact("an object type has no layout"),

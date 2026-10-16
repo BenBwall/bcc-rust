@@ -96,16 +96,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 continue;
             };
             match rule {
-                | Rule::Aligned =>
-                    if let Subject::Function { binding, .. } = subject
-                        && let Some(alignment) = self
+                | Rule::Aligned => match subject {
+                    | Subject::Function { binding, .. } => {
+                        if let Some(alignment) = self
                             .function_alignment(specifier, attribute.index)
                             .and_then(|alignment| u32::try_from(alignment).ok())
-                    {
-                        let entity = self.entity_of(binding);
-                        let attributes = self.attributes.entity(entity);
-                        attributes.code_alignment = attributes.code_alignment.max(alignment);
+                        {
+                            let entity = self.entity_of(binding);
+                            let attributes = self.attributes.entity(entity);
+                            attributes.code_alignment = attributes.code_alignment.max(alignment);
+                        }
                     },
+                    | Subject::Object { binding, .. } => self.declares_alignment(binding),
+                    | _ => {},
+                },
                 | Rule::Weak => self.weak_attribute(subject, attribute),
                 | Rule::Alias => self.alias_attribute(subject, attribute),
                 | Rule::Section => self.section_attribute(subject, attribute),
@@ -795,6 +799,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         binding: usize,
     ) -> EntityId {
         self.correspondence.entity(binding, self.bindings[binding])
+    }
+
+    /// A declaration of object `binding` specifies its alignment.
+    pub(super) fn declares_alignment(&mut self, binding: usize) {
+        let entity = self.entity_of(binding);
+        self.attributes.entity(entity).declared_alignment = true;
     }
 
     /// Resolves aliases to final definitions and registers constructor and

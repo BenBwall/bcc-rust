@@ -236,8 +236,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let mut lists = ArenaVec::new_in(self.scratch);
         let mut chain = specifiers;
         while let Some(item) = chain {
-            if let SpecifierExtensionKind::Attributes(specifier) = item.kind {
-                lists.push(specifier);
+            match item.kind {
+                | SpecifierExtensionKind::Attributes(specifier) => lists.push(specifier),
+                // C11 §6.7.5p6: `_Alignas` gives the object its alignment.
+                | SpecifierExtensionKind::Alignment(_) =>
+                    if let Subject::Object { binding, .. } = subject {
+                        self.declares_alignment(binding);
+                    },
+                | _ => {},
             }
             chain = item.next;
         }
