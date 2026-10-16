@@ -149,6 +149,7 @@ fn sqlite_function_table_initializer_matches_clang_native_execution() {
                 opt: Some(opt),
                 disable_llvm_passes: false,
                 kind: OutputKind::Executable,
+                code: crate::target::CodeOptions::default(),
             };
             let executable = directory.join(format!("clang-{index}-{opt:?}.exe"));
             let output = toolchain
@@ -173,6 +174,7 @@ fn sqlite_function_table_initializer_matches_clang_native_execution() {
                         opt: Some(arm.opt),
                         disable_llvm_passes: arm.disable_llvm_passes,
                         kind: OutputKind::Executable,
+                        code: crate::target::CodeOptions::default(),
                     },
                 )
                 .unwrap();
