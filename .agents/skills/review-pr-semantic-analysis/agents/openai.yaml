@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review PR Semantic Analysis"
+  short_description: "Review C type rules, retained facts, and semantic diagnostics"
+  default_prompt: "Use $review-pr-semantic-analysis to review the current PR's semantic analysis changes."
