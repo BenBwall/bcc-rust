@@ -573,8 +573,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::DeclaredAlignment(chain, base, can_weaken) => {
                 let ty = self.take_type();
                 let attributes = self.layout_attribute_chain(chain);
-                let ty = self.align_declared_type(ty, attributes.alignment);
-                let can_weaken = can_weaken || self.microsoft_alignment(chain);
+                let microsoft = self.microsoft_alignment(chain);
+                // Microsoft's `align(N)` on a declaration replaces the
+                // alignment its typedef carries, as Clang does.
+                let inherited = if microsoft && attributes.alignment != 0 {
+                    ty.with_alignment(0)
+                } else {
+                    ty
+                };
+                let ty = self.align_declared_type(inherited, attributes.alignment);
+                let can_weaken = can_weaken || microsoft;
                 let ty = self.minimum_declared_alignment(ty, base, can_weaken);
                 let ty = self.standard_alignment(ty, chain);
                 self.values.push(ty);
