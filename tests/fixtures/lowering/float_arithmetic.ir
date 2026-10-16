@@ -1,0 +1,51 @@
+; double mix(double a, float b, int i) { return a * b + i - a / 2.0; }
+; float narrow(double d) { return (float)d + 1.5f; }
+; double negate(double d) { return -d + +d; }
+; double constants(void) { return 1.0 / 3.0 + 2 * 0.5; }
+; long double wide(long double x, double y) { return x * y - 1; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @mix(f64 noundef, f32 noundef, i32 noundef) -> f64 external {
+block0(v0: f64, v1: f32, v2: i32):
+    v3 = fpext.f64 v1
+    v4 = fmul.f64 v0, v3
+    v5 = sitofp.f64 v2
+    v6 = fadd.f64 v4, v5
+    v7 = fconst.f64 0x4000000000000000
+    v8 = fdiv.f64 v0, v7
+    v9 = fsub.f64 v6, v8
+    return v9
+}
+
+function @narrow(f64 noundef) -> f32 external {
+block0(v0: f64):
+    v1 = fptrunc.f32 v0
+    v2 = fconst.f32 0x3FC00000
+    v3 = fadd.f32 v1, v2
+    return v3
+}
+
+function @negate(f64 noundef) -> f64 external {
+block0(v0: f64):
+    v1 = fneg.f64 v0
+    v2 = fadd.f64 v1, v0
+    return v2
+}
+
+function @constants() -> f64 external {
+block0:
+    v0 = fconst.f64 0x3FF5555555555555
+    return v0
+}
+
+function @wide(f80 noundef, f64 noundef) -> f80 external {
+block0(v0: f80, v1: f64):
+    v2 = fpext.f80 v1
+    v3 = fmul.f80 v0, v2
+    v4 = iconst.i32 1
+    v5 = fconst.f80 0x3FFF8000000000000000
+    v6 = fsub.f80 v3, v5
+    return v6
+}

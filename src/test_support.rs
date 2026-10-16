@@ -1,6 +1,10 @@
 //! Fixtures shared by the crate's unit tests: temporary directories for
 //! include and resource searches, and snapshot files under `tests/fixtures/`.
 
+// Shared process runner; integration tests include the same implementation.
+#[path = "../tests/support/native.rs"]
+pub(crate) mod native;
+
 use std::{
     path::{
         Path,

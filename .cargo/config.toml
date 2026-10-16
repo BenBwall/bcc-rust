@@ -11,7 +11,12 @@ target = "host-tuple"
 # 128-bit division, 128-bit float arithmetic and `lgamma`. Recheck it when the
 # toolchain changes: run `llvm-nm -u` over the rlib's members.
 # tests/late_builtins.rs fails to link if the list stops covering division.
+#
+# Tests run C programs bcc compiled; one that crashes would make Windows open an
+# error dialog. The runner suppresses those dialogs for every binary Cargo runs
+# and for the processes it starts (scripts/crash_dialogs.py).
 [target.'cfg(all(target_os = "windows", target_env = "gnu"))']
+runner = ["python", "scripts/cargo_runner.py"]
 rustflags = [
     "-C", "target-cpu=native",
     "-C", "linker=target/llvm/bin/ld.lld.exe",
@@ -34,6 +39,7 @@ rustflags = [
 ]
 
 [target.'cfg(all(target_os = "windows", target_env = "msvc"))']
+runner = ["python", "scripts/cargo_runner.py"]
 rustflags = [
     "-C", "target-cpu=native",
     "-C", "linker=target/llvm/bin/lld-link.exe",

@@ -39,7 +39,7 @@ fn find_tool(directory: &Path, name: &str, version: &str) -> PathBuf {
     path
 }
 
-fn mingw_root() -> PathBuf {
+pub(super) fn mingw_root() -> PathBuf {
     if let Some(root) = var_os("MINGW_ROOT") {
         return PathBuf::from(root);
     }
@@ -84,6 +84,7 @@ pub(super) fn compile(out_dir: &str) {
         .find_map(|line| line.strip_prefix("LLVM version: "))
         .unwrap();
     let prefix = super::llvm::build(version);
+    super::llvm::link_libraries(version, &prefix);
     let directory = prefix.join("bin");
     let clang = find_tool(
         &directory,

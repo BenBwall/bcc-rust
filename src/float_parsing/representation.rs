@@ -27,6 +27,44 @@ pub(super) const LONG_DOUBLE_BYTES: usize = ffi::LONG_DOUBLE_BYTES as _;
 const LONG_DOUBLE_HEX_CAPACITY: usize = ffi::LONG_DOUBLE_HEX_CAPACITY as _;
 
 impl LongDouble {
+    /// Decodes the host carrier into exact x87 parts for target conversion.
+    /// C99: §6.3.1.5, p. 44; PDF p. 56 (real floating conversions).
+    pub(crate) fn x87_parts(self) -> Option<(bool, u16, u64)> {
+        Self::decode_x87(&self.value[..ffi::LONG_DOUBLE_VALUE_BYTES as usize])
+    }
+
+    /// Decodes either supported host object representation, without padding.
+    pub(crate) fn decode_x87(bytes: &[u8]) -> Option<(bool, u16, u64)> {
+        if let Ok(bytes) = <[u8; 8]>::try_from(bytes) {
+            let bits = u64::from_le_bytes(bytes);
+            let sign = bits >> 63 != 0;
+            let exponent = (bits >> 52) & 0x7FF;
+            let fraction = bits & ((1 << 52) - 1);
+            let (exponent, significand) = if exponent == 0x7FF {
+                // Preserve the payload and quiet NaNs, as the native widening
+                // conversion does. Infinity has only the explicit integer bit.
+                (
+                    0x7FFF,
+                    (1 << 63) | (fraction << 11) | if fraction == 0 { 0 } else { 1 << 62 },
+                )
+            } else if exponent == 0 && fraction == 0 {
+                (0, 0)
+            } else {
+                let significand = fraction | if exponent == 0 { 0 } else { 1 << 52 };
+                let shift = significand.leading_zeros();
+                let biased = i64::try_from(exponent.max(1)).ok()? - 1023 - 52 + 63
+                    - i64::from(shift)
+                    + 16383;
+                (u16::try_from(biased).ok()?, significand << shift)
+            };
+            return Some((sign, exponent, significand));
+        }
+        let bytes = <[u8; 10]>::try_from(bytes).ok()?;
+        let significand = u64::from_le_bytes(bytes[..8].try_into().ok()?);
+        let top = u16::from_le_bytes(bytes[8..10].try_into().ok()?);
+        Some((top >> 15 == 1, top & 0x7FFF, significand))
+    }
+
     /// C99: §6.6p4, p. 95; PDF p. 107; §6.3.1.8, pp. 44-45;
     /// PDF pp. 56-57. Native arithmetic shares the literal carrier, and
     /// infinite or NaN results are the IEC 60559 values of Annex F.

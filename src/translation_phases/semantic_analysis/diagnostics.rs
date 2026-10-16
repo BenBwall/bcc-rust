@@ -37,11 +37,10 @@ impl Analyzer<'_, '_, '_> {
                 name,
                 previous,
             };
-            if !self.context.withholds(
-                crate::translation_phases::GetSeverity::severity(&error),
-                false,
-                source_vectors,
-            ) {
+            let severity = crate::translation_phases::GetSeverity::severity(&error);
+            self.error_diagnostics +=
+                usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
+            if !self.context.withholds(severity, false, source_vectors) {
                 self.context
                     .append_pending_errors([TranslationError::Semantic(error)]);
             }
@@ -60,12 +59,16 @@ impl Analyzer<'_, '_, '_> {
     ) {
         if !self.tainted {
             let semantic_errors = &mut self.semantic_errors;
+            let error_diagnostics = &mut self.error_diagnostics;
             self.context.report_extension_diagnostic(
                 feature,
                 baseline,
                 source_vectors,
                 |severity| {
-                    *semantic_errors += usize::from(severity == super::ErrorSeverity::Error);
+                    *semantic_errors +=
+                        usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
+                    *error_diagnostics +=
+                        usize::from(severity == crate::translation_phases::ErrorSeverity::Error);
                     TranslationError::Semantic(SemanticError {
                         extension_severity: Some(severity),
                         kind,

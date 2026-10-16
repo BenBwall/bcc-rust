@@ -1,0 +1,158 @@
+; struct pack { unsigned a : 4, b : 4; int c : 7; char d; unsigned e : 1; };
+; struct pack global = { 3, 15, -2, 'x', 1 };
+; struct pack named = { .c = 5, .a = 9 };
+; int f(int x) {
+;   struct pack local = { x, 2, -1, 'y', 1 };
+;   struct pack other = { .e = x, .a = 1 };
+;   return local.a + other.e;
+; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+global @global external size 4, align 4 = bytes "f37e7801"
+global @named external size 4, align 4 = bytes "09050000"
+
+function @f(i32 noundef) -> i32 external {
+    slot0 = stack_slot 4, align 4
+    slot1 = stack_slot 4, align 4
+block0(v0: i32):
+    v1 = stack_addr slot0
+    v2 = iconst.i64 1
+    v3 = ptr_add inbounds v1, v2
+    v4 = load.i8 v3, align 1
+    v5 = freeze.i8 v4
+    v6 = iconst.i8 127
+    v7 = and.i8 v5, v6
+    store.i8 v7, v3, align 1
+    v8 = stack_addr slot0
+    v9 = iconst.i64 3
+    v10 = ptr_add inbounds v8, v9
+    v11 = load.i8 v10, align 1
+    v12 = freeze.i8 v11
+    v13 = iconst.i8 1
+    v14 = and.i8 v12, v13
+    store.i8 v14, v10, align 1
+    v15 = stack_addr slot0
+    v16 = trunc.i8 v0
+    v17 = iconst.i8 15
+    v18 = and.i8 v16, v17
+    v19 = load.i8 v15, align 1
+    v20 = freeze.i8 v19
+    v21 = iconst.i8 -16
+    v22 = and.i8 v20, v21
+    v23 = or.i8 v22, v18
+    store.i8 v23, v15, align 1
+    v24 = zext.i32 v18
+    v25 = iconst.i32 2
+    v26 = stack_addr slot0
+    v27 = iconst.i8 2
+    v28 = iconst.i8 15
+    v29 = and.i8 v27, v28
+    v30 = iconst.i8 4
+    v31 = shl.i8 v29, v30
+    v32 = load.i8 v26, align 1
+    v33 = freeze.i8 v32
+    v34 = iconst.i8 15
+    v35 = and.i8 v33, v34
+    v36 = or.i8 v35, v31
+    store.i8 v36, v26, align 1
+    v37 = zext.i32 v29
+    v38 = iconst.i32 -1
+    v39 = stack_addr slot0
+    v40 = iconst.i64 1
+    v41 = ptr_add inbounds v39, v40
+    v42 = iconst.i8 -1
+    v43 = iconst.i8 127
+    v44 = and.i8 v42, v43
+    v45 = load.i8 v41, align 1
+    v46 = freeze.i8 v45
+    v47 = iconst.i8 -128
+    v48 = and.i8 v46, v47
+    v49 = or.i8 v48, v44
+    store.i8 v49, v41, align 1
+    v50 = iconst.i8 1
+    v51 = shl.i8 v44, v50
+    v52 = iconst.i8 1
+    v53 = ashr.i8 v51, v52
+    v54 = sext.i32 v53
+    v55 = iconst.i32 121
+    v56 = iconst.i8 121
+    v57 = stack_addr slot0
+    v58 = iconst.i64 2
+    v59 = ptr_add inbounds v57, v58
+    store.i8 v56, v59, align 1
+    v60 = iconst.i32 1
+    v61 = stack_addr slot0
+    v62 = iconst.i64 3
+    v63 = ptr_add inbounds v61, v62
+    v64 = iconst.i8 1
+    v65 = iconst.i8 1
+    v66 = and.i8 v64, v65
+    v67 = load.i8 v63, align 1
+    v68 = freeze.i8 v67
+    v69 = iconst.i8 -2
+    v70 = and.i8 v68, v69
+    v71 = or.i8 v70, v66
+    store.i8 v71, v63, align 1
+    v72 = zext.i32 v66
+    v73 = stack_addr slot1
+    v74 = load.i8 v73, align 1
+    v75 = freeze.i8 v74
+    v76 = iconst.i8 15
+    v77 = and.i8 v75, v76
+    store.i8 v77, v73, align 1
+    v78 = stack_addr slot1
+    v79 = iconst.i64 1
+    v80 = ptr_add inbounds v78, v79
+    v81 = iconst.i8 0
+    v82 = iconst.i64 2
+    fill v80, v81, v82, align 1
+    v83 = stack_addr slot1
+    v84 = iconst.i64 3
+    v85 = ptr_add inbounds v83, v84
+    v86 = load.i8 v85, align 1
+    v87 = freeze.i8 v86
+    v88 = iconst.i8 1
+    v89 = and.i8 v87, v88
+    store.i8 v89, v85, align 1
+    v90 = stack_addr slot1
+    v91 = iconst.i64 3
+    v92 = ptr_add inbounds v90, v91
+    v93 = trunc.i8 v0
+    v94 = iconst.i8 1
+    v95 = and.i8 v93, v94
+    v96 = load.i8 v92, align 1
+    v97 = freeze.i8 v96
+    v98 = iconst.i8 -2
+    v99 = and.i8 v97, v98
+    v100 = or.i8 v99, v95
+    store.i8 v100, v92, align 1
+    v101 = zext.i32 v95
+    v102 = iconst.i32 1
+    v103 = stack_addr slot1
+    v104 = iconst.i8 1
+    v105 = iconst.i8 15
+    v106 = and.i8 v104, v105
+    v107 = load.i8 v103, align 1
+    v108 = freeze.i8 v107
+    v109 = iconst.i8 -16
+    v110 = and.i8 v108, v109
+    v111 = or.i8 v110, v106
+    store.i8 v111, v103, align 1
+    v112 = zext.i32 v106
+    v113 = stack_addr slot0
+    v114 = load.i8 v113, align 1
+    v115 = iconst.i8 15
+    v116 = and.i8 v114, v115
+    v117 = zext.i32 v116
+    v118 = stack_addr slot1
+    v119 = iconst.i64 3
+    v120 = ptr_add inbounds v118, v119
+    v121 = load.i8 v120, align 1
+    v122 = iconst.i8 1
+    v123 = and.i8 v121, v122
+    v124 = zext.i32 v123
+    v125 = iadd.i32 nsw v117, v124
+    return v125
+}

@@ -198,10 +198,7 @@ fn nested_subscript_type_classification_scales_linearly() {
             analyzer.types.nodes[last.ty.index],
             TypeKind::Scalar(Scalar::Int)
         );
-        assert_eq!(
-            last.category,
-            super::super::expressions::ValueCategory::ModifiableLvalue
-        );
+        assert_eq!(last.category, ValueCategory::ModifiableLvalue);
         let steps = analyzer.types.steps.get();
         assert!(
             steps <= 16 * n,

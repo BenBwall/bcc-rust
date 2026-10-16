@@ -13,6 +13,7 @@
 //!
 //! - Header intrinsics: `intrinsics.rs` handles varargs, type operands and
 //!   member offsets; `names.rs` joins the named-call recognition queries.
+//!   `library.rs` provides prototypes and runtime names for library aliases.
 //! - Atomic calls: `atomics.rs` classifies and checks atomic operands.
 //! - Target calls: `x86_builtins.rs` decodes signatures and checks operands;
 //!   `x86_builtin_table.rs` holds the generated signature and immediate table.
@@ -25,6 +26,7 @@
 
 // Header intrinsics and recognition
 mod intrinsics;
+mod library;
 mod names;
 
 // Atomic calls
@@ -34,6 +36,7 @@ pub(super) mod atomics;
 mod x86_builtin_table;
 mod x86_builtins;
 
+pub(crate) use library::library_builtin_name;
 pub(crate) use modeled as implemented_builtin;
 pub(crate) use names::named_builtin;
 

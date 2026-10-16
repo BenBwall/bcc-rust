@@ -482,7 +482,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.7.8 paragraphs 13-15, p. 126; PDF p. 138.
     fn whole_object_expression(&mut self, target: TypeId, e: &'tu Expression<'tu>) -> bool {
         if let ExpressionType::StringLiteral(_) = unparenthesized(e).kind {
-            return matches!(self.types.nodes[target.index], TypeKind::Array(element, _) if matches!(self.types.nodes[element.index], TypeKind::Scalar(Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar | Scalar::Int)));
+            // C99 §6.7.8p15: wchar_t is target-specific (unsigned short
+            // on Windows), including when braces are elided in aggregates.
+            let wchar = self.types.scalar(self.types.target.wchar_t);
+            return matches!(self.types.nodes[target.index], TypeKind::Array(element, _) if
+                matches!(self.types.nodes[element.index], TypeKind::Scalar(Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar))
+                || element.unqualified() == wchar);
         }
         if self.vector_assignment(target, self.expression_info(e).ty) {
             return true;
@@ -542,6 +547,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             );
         }
+        _ = self
+            .string_initializers
+            .insert(std::ptr::from_ref(e).addr(), element.unqualified());
         Some(count)
     }
 

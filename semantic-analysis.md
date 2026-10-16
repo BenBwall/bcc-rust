@@ -23,7 +23,9 @@ widths, and the names anonymous members contribute, at the tag's last
 declaration; enums show their compatible type), then ordinary binding
 occurrences in lexical order with C-like abstract type spelling, linkage,
 object duration, parameter `static` minimums and available size/alignment.
-Resolved type names, typed expressions and contextual conversions follow.
+Resolved type names, typed expressions and contextual conversions follow;
+conversions are listed by expression ordinal, each expression's in the order
+they were applied.
 Expression ordinals follow deterministic child-before-parent traversal; no host
 address is printed, and source locations are not yet shown. `--tokens`,
 `--syntax-tree` and `--raw-syntax` stop
@@ -38,6 +40,15 @@ spellings, and redeclaration errors include a previous-declaration label. They
 use `SemanticErrorKind` and `ToDiagnostic`, with C99 notes, rather than strings
 as error identities. No new rendering/normalization path exists.
 
+`SemanticTranslationUnit.errors` counts the error-severity diagnostics semantic
+analysis reported; warnings do not count. `Context::error_count()` counts
+error-severity diagnostics from every phase, pending or already drained by a
+reporter, and excludes withdrawn or suppressed ones. Lowering calls
+`SemanticTranslationUnit::lowerable(&Context)`, which holds only when both are
+zero. Because an unmodeled extension can still yield an unanalyzed type without
+a diagnostic, lowering also rejects any type for which `Types::unanalyzed`
+holds.
+
 ## Storage and traversal
 
 The translation-unit arena (`'tu`) retains canonical type nodes, nominal tag
@@ -46,17 +57,33 @@ occurrences, semantic scope identities, resolved type names, and parameter
 metadata (including array `static` minimums), tag declaration occurrences, typed
 expression results and conversion records. A backend can retain this graph
 without retaining a semantic analyzer. The syntax tree remains separately available.
+`semantic_analysis` re-exports the retained vocabulary to the crate: the type
+graph (`Types`, `TypeId`, `TypeKind`, `Tag`, `TagKind`, `Member`, `Field`,
+`FieldPath`, `Parameter`, `ArrayBound`, `Layout`, `Scalar`), expression records
+(`ExpressionInfo`, `ValueCategory`, `Conversion`, `ConversionKind`,
+`ConstantClass`, `Integer`, `Floating`) and declarations (`Binding`,
+`BindingKind`, `Linkage`, `Duration`, `Scope`, `ScopeKind`, `Definition`,
+`DefinitionKind`). The retained `Types` answers `kind`, `tag`, `layout`,
+`non_atomic` and `unanalyzed` without the working interner.
 
 The semantic working arena (`'s`) owns continuations, value stacks, interning
 lookup, visible-binding lookup, linkage lookup and scope restoration lists. It
 is dropped before returning `SemanticTranslationUnit<'tu>`. Retained values have
-no destruction requirements. Collections use the repository's arena-backed
+no destruction requirements. Lowering also receives vendor-modified declarators visited by
+type construction and their specifier extension chains. It uses these to honor
+GNU assembler labels and reject unsupported calling conventions on declarations,
+typedefs, parameters and abstract type names before constructing IR symbols.
+Collections use the repository's arena-backed
 `ArenaMap`/`ArenaVec`; no compiler global allocator collections are introduced.
 
 One explicit `Work` stack composes specifier resolution, declarator construction,
 parameter lists, nested record/enum definitions, integer evaluation, initializers
 and statement discovery. Parenthesized declarators never recurse in Rust.
 Expression discovery/evaluation and scope traversal are also iterative.
+String initialization retains the destination element type by expression syntax
+identity, so lowering shares the whole-array classification for narrow and wide
+literals, including optional braces and arrays completed from the string
+(C99 §6.7.8p14-15, printed p. 126, PDF p. 138).
 Compatibility/composite construction and type inspection have their own explicit
 postorder stacks. Parameter/member lists accumulate in scratch cons cells, then
 copy once into retained storage. Ordinary/tag lookup is expected O(1) per lookup;
@@ -299,10 +326,11 @@ records. Each record borrows its immutable syntax expression and retains its typ
 value category, resolved binding where applicable, bit-field width, address
 eligibility, integer/floating constant value and constant-expression class.
 The analyzer's scratch map from syntax identity to vector index gives expected
-O(1) operand lookup. The retained vector is preferable to a retained hash map:
-it gives deterministic inspection and a compact backend iteration surface without
-preserving host-address hashing or scratch capacity. A backend needing random
-lookup can build an arena index from the retained expression references.
+O(1) operand lookup. When analysis ends, the map is copied at its final size
+into the translation-unit arena, so lowering looks a node up with
+`SemanticTranslationUnit::expression_index` or `expression_info` in expected
+O(1). The vector keeps deterministic order for inspection and iteration; the
+map is used only for lookup, so host addresses never reach output.
 
 Value categories distinguish lvalues, their modifiable subset, function
 designators and rvalues (§6.3.2.1p1, printed p. 46, PDF p. 58). Const aggregate
@@ -331,6 +359,14 @@ variable length.
 `conversions` retains the syntax expression, destination type and conversion
 kind: lvalue conversion, array/function decay, arithmetic conversion, assignment
 conversion or default argument promotion (§6.3, pp. 42-49, PDF pp. 54-61).
+A stable counting sort at the end of analysis groups the records by expression
+ordinal, so `conversions_of(index)` and `expression_conversions(node)` return
+one contiguous run in application order. Records whose operand has no retained
+result, which only recovered syntax produces, follow the last run.
+Truth-value contexts record no conversion beyond lvalue conversion or decay:
+the operands of `!`, `&&` and `||` and controlling expressions keep their own
+type, and lowering compares them with zero (§6.5.3.3p5, printed p. 79, PDF
+p. 91).
 These are contextual operations, separate from the expression's original category;
 sizeof and unary address operands therefore keep their unconverted identities.
 Compound assignments also retain their arithmetic/pointer operation type before
@@ -357,6 +393,11 @@ to the member path, the qualifiers of the anonymous members on that path and the
 byte/bit offset from the record's start. Member access and designators use it
 through a scratch index with expected O(1) lookup; const-member queries cache
 explicit postorder results rather than rescanning aggregate trees for every use.
+A `.` or `->` record retains the index of the field it selected
+(`ExpressionInfo::field_index`, in four bytes the record's padding already
+had), and `SemanticTranslationUnit::selected_field` returns that `Field`
+without a name search, through parentheses, `__extension__` and generic
+selections.
 
 #### Constant expressions
 
@@ -452,6 +493,16 @@ Thus `int (*fp(int a))(int b)` binds `a` in its body, and a grouped
 `int (g(int a))` retains the same binding and redeclaration rules as `g`.
 K&R signature comparison uses that identical suffix and labels the previous
 declaration on a mismatch.
+
+`SemanticTranslationUnit.functions` retains one `FunctionRecord` per function
+definition in traversal order, nested GNU definitions and recovered ones
+included: the `FunctionDefinition` syntax, its binding, its result type, its
+function scope and the body bindings of its parameters in declarator order (the
+identifier list for an old-style definition). Unnamed parameters and repeated
+names have no binding; a lone `void` has no entry. An old-style parameter's
+binding keeps its declared type while the binding of the function holds the
+composite type with promoted parameter types, so lowering converts each
+argument on entry (§6.9.1p10, printed p. 142, PDF p. 154).
 
 Prototype definitions require named, complete adjusted parameters, with the sole
 unnamed `void` exception (§6.9.1p5 and §6.7.5.3p4, printed pp. 141 and 118,
@@ -567,8 +618,9 @@ known calls. Opaque results suppress dependent return-conversion errors.
   effects remain conservative. The five requested GNU statement forms retain
   parser-owned extension policy; accepted opaque constructs are not certified.
 - The existing parameter-inspection metadata still uses source provenance;
-  definition binding and K&R comparisons use suffix identity. A backend requiring
-  arbitrary parameter-site lookup should index the immutable suffixes itself.
+  definition binding and K&R comparisons use suffix identity. Lowering reaches
+  a definition's parameter bindings through its `FunctionRecord`; other
+  parameter sites, such as nested prototypes, have no retained index.
 - Initializer materialization, implicit object bytes, relocations and backend
   emitted-symbol selection remain lowering work. Definition records distinguish
   inline-only bodies from externally provided definitions.

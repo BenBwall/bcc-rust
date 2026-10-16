@@ -14,7 +14,8 @@
 //! Read [`analyze`], [`Analyzer::step`], [`Work`] and [`Analyzer`] first. Then
 //! follow the dispatched method into the file for that concern.
 //! [`SemanticTranslationUnit`] describes what callers retain;
-//! [`SemanticTranslationUnit::inspect`] shows it.
+//! [`SemanticTranslationUnit::inspect`] shows it. The `pub(crate)` re-exports
+//! below name the retained vocabulary that lowering matches on.
 //!
 //! - Driver storage and names: `state.rs` initializes the analyzer and checks
 //!   stack balance; `collection.rs` builds scratch lists; `scopes.rs` installs,
@@ -80,24 +81,43 @@ use std::cell::Cell;
 
 pub(crate) use builtins::{
     implemented_builtin,
+    library_builtin_name,
     named_builtin,
 };
 use collection::Collection;
+#[expect(
+    unused_imports,
+    reason = "The retained semantic vocabulary is the crate interface for lowering and inspection."
+)]
+pub(crate) use constants::Floating;
 use declarations::compatible_enum_type;
 pub(crate) use errors::{
     SemanticError,
     SemanticErrorKind,
 };
-use expressions::{
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "The retained semantic vocabulary is the crate interface for lowering and \
+                  inspection."
+    )
+)]
+pub(crate) use expressions::{
     ConstantClass,
     Conversion,
+    ConversionKind,
     ExpressionInfo,
+    ValueCategory,
 };
-use integer::Integer;
+pub(crate) use integer::Integer;
 pub(crate) use results::{
     Binding,
     BindingKind,
+    Definition,
+    DefinitionKind,
     Duration,
+    FunctionRecord,
     Linkage,
     Scope,
     ScopeKind,
@@ -108,20 +128,29 @@ use scopes::{
     Entry,
     Namespace,
 };
-use types::{
+use types::TypeInterner;
+#[expect(
+    unused_imports,
+    reason = "The retained semantic vocabulary is the crate interface for lowering and inspection."
+)]
+pub(crate) use types::{
     ArrayBound,
+    Field,
+    FieldPath,
+    Layout,
     Member,
     Parameter,
     Scalar,
+    Tag,
+    TagKind,
     TypeId,
-    TypeInterner,
     TypeKind,
+    Types,
 };
 
 use super::{
     Context,
     DiagnosticPolicy,
-    ErrorSeverity,
     SourceVectors,
     parsing::{
         AttributeSpecifier,
@@ -193,16 +222,24 @@ pub(crate) fn analyze<'tu>(
     }
     analyzer.assert_balanced();
     analyzer.finish_translation_unit();
+    let index = analyzer.retain_expression_index();
     SemanticTranslationUnit {
-        expressions:      analyzer.expressions.leak(),
-        conversions:      analyzer.conversions.leak(),
-        types:            analyzer.types.finish(),
-        bindings:         analyzer.bindings.leak(),
-        definitions:      analyzer.definitions.leak(),
-        scopes:           analyzer.scopes.leak(),
-        type_names:       analyzer.type_names.leak(),
-        parameters:       analyzer.parameter_lists.leak(),
-        tag_declarations: analyzer.tag_declarations.leak(),
+        declarators:         analyzer.declarators.leak(),
+        spec_extensions:     analyzer.spec_extensions.leak(),
+        expressions:         analyzer.expressions.leak(),
+        expression_indices:  index.expressions,
+        string_initializers: analyzer.string_initializers,
+        conversions:         index.conversions,
+        conversion_starts:   index.conversion_starts,
+        types:               analyzer.types.finish(),
+        bindings:            analyzer.bindings.leak(),
+        definitions:         analyzer.definitions.leak(),
+        functions:           analyzer.function_records.leak(),
+        scopes:              analyzer.scopes.leak(),
+        type_names:          analyzer.type_names.leak(),
+        parameters:          analyzer.parameter_lists.leak(),
+        tag_declarations:    analyzer.tag_declarations.leak(),
+        errors:              analyzer.error_diagnostics,
     }
 }
 
@@ -474,6 +511,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     _ = self.resolved_type_names.insert(source, ty);
                 },
             | Work::Declarator(d, mut base, parameter) => {
+                if d.pointer
+                    .levels
+                    .iter()
+                    .any(|level| level.attributes.is_some())
+                    || d.kind.iter().any(|direct| {
+                        matches!(
+                            direct,
+                            DirectDeclarator::Attributes(_)
+                                | DirectDeclarator::MsModifier(..)
+                                | DirectDeclarator::AsmLabel(_)
+                        )
+                    })
+                {
+                    self.declarators.push(d);
+                }
                 for level in d.pointer.levels {
                     if !(level.qualifiers
                         - (TypeQualifiers::CONST
@@ -1260,7 +1312,11 @@ struct Analyzer<'a, 'tu, 's> {
     scratch:             &'s Bump,
     types:               TypeInterner<'tu, 's>,
     bindings:            ArenaVec<'tu, Binding>,
-    definitions:         ArenaVec<'tu, functions::Definition>,
+    declarators:         ArenaVec<'tu, Declarator<'tu>>,
+    spec_extensions:     ArenaVec<'tu, &'tu SpecifierExtension<'tu>>,
+    definitions:         ArenaVec<'tu, Definition>,
+    /// Indexed by the function definition's traversal id.
+    function_records:    ArenaVec<'tu, FunctionRecord<'tu>>,
     scopes:              ArenaVec<'tu, Scope>,
     type_names:          ArenaVec<'tu, (SourceVectors, TypeId)>,
     parameter_lists:     ArenaVec<'tu, (SourceVectors, &'tu [Parameter])>,
@@ -1278,7 +1334,11 @@ struct Analyzer<'a, 'tu, 's> {
     old_parameter_mode:  bool,
     /// Exceptional evaluation yields a variable array bound, not an error.
     runtime_bound:       bool,
+    /// Reported constraint diagnostics, warnings included: local checks
+    /// compare it with an earlier value to learn whether a check failed.
     semantic_errors:     usize,
+    /// Reported diagnostics of error severity only, retained for lowering.
+    error_diagnostics:   usize,
     member_indices:      ArenaMap<'s, (usize, StringCacheId), usize>,
     member_names:        ArenaMap<'s, (usize, StringCacheId), SourceVectors>,
     tag_declarations:    ArenaVec<'tu, (usize, usize)>,
@@ -1286,7 +1346,10 @@ struct Analyzer<'a, 'tu, 's> {
     integer_models:      ArenaMap<'s, usize, Option<(u32, bool)>>,
     expressions:         ArenaVec<'tu, ExpressionInfo<'tu>>,
     expression_indices:  ArenaMap<'s, usize, usize>,
-    conversions:         ArenaVec<'tu, Conversion<'tu>>,
+    string_initializers: ArenaMap<'tu, usize, TypeId>,
+    /// Conversion records in the order they were applied, grouped by
+    /// expression when analysis ends.
+    conversions:         ArenaVec<'s, Conversion<'tu>>,
     const_members:       ArenaMap<'s, usize, bool>,
     register_bindings:   ArenaMap<'s, usize, bool>,
     ice_operands:        ArenaMap<'s, (usize, bool), bool>,

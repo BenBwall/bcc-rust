@@ -21,6 +21,7 @@ use crate::{
         ErrorSeverity,
         GetSourceVectors,
         SourceVector,
+        SourceVectors,
         TranslationError,
         preprocessing::PreprocessorErrorType,
     },
@@ -114,6 +115,26 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         } else {
             self.last_other = Some(index);
         }
+    }
+
+    /// Reports an error found after semantic analysis, such as a construct
+    /// lowering does not handle, at `source` (or at no place, for the whole
+    /// unit). Such errors never fold into another diagnostic.
+    pub(super) fn report_late(
+        &mut self,
+        error: &dyn ToDiagnostic,
+        source: Option<SourceVectors>,
+        context: &Context<'_>,
+    ) {
+        let diagnostic = error.diagnostic_in(context, source.unwrap_or_default(), self.diagnostics);
+        self.pending.push(PendingDiagnostic {
+            diagnostic,
+            location: &[],
+            ordering_location: None,
+            sequence: self.pending.len(),
+            foldable: false,
+            preserve_empty_translation_unit: false,
+        });
     }
 
     /// Renders and counts every pending diagnostic. Later errors can no

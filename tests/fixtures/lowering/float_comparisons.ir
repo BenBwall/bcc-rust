@@ -1,0 +1,103 @@
+; int compare(double a, double b) {
+;   return (a < b) + (a <= b) + (a > b) + (a >= b) + (a == b) + (a != b);
+; }
+; int mixed(int i, float f) { return i < f; }
+; int not(double d) { return !d; }
+; int condition(double d) { if (d) return 1; while (d > 1.5) d /= 2; return d ? 2 : 3; }
+; int logical(double a, int b) { return a && b || !a; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @compare(f64 noundef, f64 noundef) -> i32 external {
+block0(v0: f64, v1: f64):
+    v2 = fcmp.f64 olt v0, v1
+    v3 = zext.i32 v2
+    v4 = fcmp.f64 ole v0, v1
+    v5 = zext.i32 v4
+    v6 = iadd.i32 nsw v3, v5
+    v7 = fcmp.f64 ogt v0, v1
+    v8 = zext.i32 v7
+    v9 = iadd.i32 nsw v6, v8
+    v10 = fcmp.f64 oge v0, v1
+    v11 = zext.i32 v10
+    v12 = iadd.i32 nsw v9, v11
+    v13 = fcmp.f64 oeq v0, v1
+    v14 = zext.i32 v13
+    v15 = iadd.i32 nsw v12, v14
+    v16 = fcmp.f64 une v0, v1
+    v17 = zext.i32 v16
+    v18 = iadd.i32 nsw v15, v17
+    return v18
+}
+
+function @mixed(i32 noundef, f32 noundef) -> i32 external {
+block0(v0: i32, v1: f32):
+    v2 = sitofp.f32 v0
+    v3 = fcmp.f32 olt v2, v1
+    v4 = zext.i32 v3
+    return v4
+}
+
+function @not(f64 noundef) -> i32 external {
+block0(v0: f64):
+    v1 = fconst.f64 0x0000000000000000
+    v2 = fcmp.f64 oeq v0, v1
+    v3 = zext.i32 v2
+    return v3
+}
+
+function @condition(f64 noundef) -> i32 external {
+block0(v0: f64):
+    v1 = fconst.f64 0x0000000000000000
+    v2 = fcmp.f64 une v0, v1
+    brif v2, block1, block2
+block1:
+    v3 = iconst.i32 1
+    return v3
+block2:
+    jump block3(v0)
+block3(v4: f64):
+    v5 = fconst.f64 0x3FF8000000000000
+    v6 = fcmp.f64 ogt v4, v5
+    brif v6, block4, block5
+block4:
+    v7 = iconst.i32 2
+    v8 = fconst.f64 0x4000000000000000
+    v9 = fdiv.f64 v4, v8
+    jump block3(v9)
+block5:
+    v10 = fconst.f64 0x0000000000000000
+    v11 = fcmp.f64 une v4, v10
+    brif v11, block6, block7
+block6:
+    v12 = iconst.i32 2
+    jump block8(v12)
+block7:
+    v13 = iconst.i32 3
+    jump block8(v13)
+block8(v14: i32):
+    return v14
+}
+
+function @logical(f64 noundef, i32 noundef) -> i32 external {
+block0(v0: f64, v1: i32):
+    v2 = fconst.f64 0x0000000000000000
+    v3 = fcmp.f64 une v0, v2
+    v4 = iconst.i1 0
+    brif v3, block1, block2(v4)
+block1:
+    v5 = iconst.i32 0
+    v6 = icmp.i32 ne v1, v5
+    jump block2(v6)
+block2(v7: i1):
+    v8 = iconst.i1 1
+    brif v7, block4(v8), block3
+block3:
+    v9 = fconst.f64 0x0000000000000000
+    v10 = fcmp.f64 oeq v0, v9
+    jump block4(v10)
+block4(v11: i1):
+    v12 = zext.i32 v11
+    return v12
+}

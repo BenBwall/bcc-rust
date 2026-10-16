@@ -19,6 +19,12 @@ use thiserror::Error;
 pub enum MainError {
     #[error("error: cannot read `{}`: {source}", path.display())]
     OpenInputFileError { path: PathBuf, source: io::Error },
+    /// File output must not truncate or replace the source, including aliases.
+    #[error("error: output file '{}' is the same as input file '{}'", output.display(), input.display())]
+    OutputIsInput { input: PathBuf, output: PathBuf },
+    /// An output whose identity cannot be checked is rejected before writing.
+    #[error("error: cannot inspect output file '{}': {source}", path.display())]
+    InspectOutputFileError { path: PathBuf, source: io::Error },
     #[error(transparent)]
     ParseArgumentsError(#[from] clap::Error),
 }

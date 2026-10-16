@@ -1,0 +1,59 @@
+; sysv
+abi lowered
+
+function @twice(ptr sret(size 24, align 8), ptr byval(size 24, align 8)) internal {
+block0(v0: ptr, v1: ptr):
+    v2 = iconst.i64 24
+    copy v0, v1, v2, align 4
+    v3 = load.i32 v1, align 4
+    v4 = iadd.i32 v3, v3
+    store.i32 v4, v0, align 8
+    return
+}
+
+function @main() -> i32 external {
+    slot0 = stack_slot 24, align 8
+    slot1 = stack_slot 48, align 4
+    slot2 = stack_slot 24, align 8
+block0:
+    v0 = stack_addr slot1
+    v1 = iconst.i64 24
+    v2 = ptr_add inbounds v0, v1
+    v3 = iconst.i32 21
+    store.i32 v3, v2, align 4
+    v4 = stack_addr slot0
+    v6 = stack_addr slot2
+    v7 = iconst.i64 24
+    copy v6, v2, v7, align 4
+    call @twice(v4, v6)
+    v5 = load.i32 v4, align 8
+    return v5
+}
+
+; win64
+abi lowered
+
+function @twice(ptr sret(size 24, align 8), ptr) internal {
+block0(v0: ptr, v1: ptr):
+    v2 = iconst.i64 24
+    copy v0, v1, v2, align 4
+    v3 = load.i32 v1, align 4
+    v4 = iadd.i32 v3, v3
+    store.i32 v4, v0, align 8
+    return
+}
+
+function @main() -> i32 external {
+    slot0 = stack_slot 24, align 8
+    slot1 = stack_slot 48, align 4
+block0:
+    v0 = stack_addr slot1
+    v1 = iconst.i64 24
+    v2 = ptr_add inbounds v0, v1
+    v3 = iconst.i32 21
+    store.i32 v3, v2, align 4
+    v4 = stack_addr slot0
+    call @twice(v4, v2)
+    v5 = load.i32 v4, align 8
+    return v5
+}

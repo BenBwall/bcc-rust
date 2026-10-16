@@ -358,7 +358,7 @@ fn msvc_inline_functions_are_discardable_external_definitions() {
                 let inline = unit
                     .definitions
                     .iter()
-                    .filter(|d| d.kind == functions::DefinitionKind::Inline)
+                    .filter(|d| d.kind == DefinitionKind::Inline)
                     .count();
                 assert_eq!(inline, if msvc { 0 } else { 2 }, "{}", target.triple());
             },

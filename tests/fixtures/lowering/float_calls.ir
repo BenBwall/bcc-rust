@@ -1,0 +1,43 @@
+; int printf(const char *, ...);
+; double sqrt(double);
+; float scale(float, double);
+; int old();
+; double f(float x, long double ld, char c) {
+;   printf("%f %f %d\n", x, 2.5f, c);
+;   old(x, 1.0f);
+;   return scale(x, sqrt(x)) + ld;
+; }
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+global @.str internal constant size 10, align 1 = bytes "25662025662025640a00"
+
+function @f(f32 noundef, f80 noundef, i8 signed noundef) -> f64 external {
+block0(v0: f32, v1: f80, v2: i8):
+    v3 = global_addr @.str
+    v4 = fpext.f64 v0
+    v5 = fconst.f32 0x40200000
+    v6 = fpext.f64 v5
+    v7 = sext.i32 v2
+    v8 = call @printf(v3, v4, v6, v7)
+    v9 = fpext.f64 v0
+    v10 = fconst.f32 0x3F800000
+    v11 = fpext.f64 v10
+    v12 = call @old(v9, v11)
+    v13 = fpext.f64 v0
+    v14 = call @sqrt(v13)
+    v15 = call @scale(v0, v14)
+    v16 = fpext.f80 v15
+    v17 = fadd.f80 v16, v1
+    v18 = fptrunc.f64 v17
+    return v18
+}
+
+function @printf(ptr noundef, ... noundef) -> i32 external
+
+function @old(... noundef) -> i32 external
+
+function @sqrt(f64 noundef) -> f64 external
+
+function @scale(f32 noundef, f64 noundef) -> f32 external

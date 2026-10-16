@@ -5,6 +5,10 @@
 //! C99: §6.3, pp. 42-48; PDF pp. 54-60;
 //! §6.5, pp. 67-94; PDF pp. 79-106.
 
+use std::num::NonZeroU32;
+
+use rustc_hash::FxBuildHasher;
+
 use super::{
     ConstantClass,
     ConstantFolding,
@@ -51,13 +55,18 @@ use crate::{
     },
     util::{
         arena_list::ArenaList,
-        bump::ArenaVec,
+        bump::{
+            ArenaMap,
+            ArenaVec,
+        },
     },
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.5.3.1-§6.5.3.3, pp. 78-80; PDF pp. 90-92;
     /// postfix increments §6.5.2.4, p. 75; PDF p. 87.
+    /// C99: §6.5.3.3 paragraph 5, p. 79; PDF p. 91 (`!` records only the
+    /// operand's lvalue conversion or decay).
     pub(super) fn type_unary(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -160,11 +169,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return self.real_imag(e, op, operand);
         }
         let ty = if op == U::LogicalNot {
+            // C99 §6.5.3.3p5: `!E` compares E with 0, like `&&` and `||`,
+            // and converts nothing; an `int` conversion would read `!0.5`
+            // as `!0`.
             self.types.scalar(Scalar::Int)
         } else {
-            self.promote(operand, ty)
+            let promoted = self.promote(operand, ty);
+            self.convert(operand.expression, promoted, ConversionKind::Arithmetic);
+            promoted
         };
-        self.convert(operand.expression, ty, ConversionKind::Arithmetic);
         let mut info = Self::expression_result(e, ty);
         info.unfolded_binary128 = operand.unfolded_binary128;
         info.integer = operand.integer.and_then(|v| v.unary(op));
@@ -734,6 +747,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.category = self.object_category(field_ty);
         }
         info.bit_field = field.width;
+        info.field = u32::try_from(index + 1).ok().and_then(NonZeroU32::new);
         info.register = !indirect && base.register;
         info.static_address = if indirect {
             self.address_value(base)
@@ -935,6 +949,53 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             )
     }
 
+    /// Copies the identity map into the translation-unit arena at its final
+    /// size and groups the conversion records by expression with a stable
+    /// counting sort, so each expression owns one contiguous run in the
+    /// order its conversions were applied. Records whose operand has no
+    /// retained result, which only recovered syntax produces, follow every
+    /// run.
+    /// C99: §6.3, pp. 42-48; PDF pp. 54-60 (conversions applied in order).
+    pub(in crate::translation_phases::semantic_analysis) fn retain_expression_index(
+        &self,
+    ) -> ExpressionIndex<'tu> {
+        let tu = self.context.tu_arena();
+        let count = self.expressions.len();
+        let mut expressions =
+            ArenaMap::with_capacity_and_hasher_in(self.expression_indices.len(), FxBuildHasher, tu);
+        expressions.extend(self.expression_indices.iter().map(|(&k, &v)| (k, v)));
+        let owner = |conversion: &Conversion<'tu>| {
+            self.expression_indices
+                .get(&std::ptr::from_ref(conversion.expression).addr())
+                .copied()
+                .unwrap_or(count)
+        };
+        // Bucket `count` holds the records without a retained owner.
+        let mut next = ArenaVec::new_in(self.scratch);
+        next.resize(count + 2, 0_usize);
+        for conversion in &self.conversions {
+            next[owner(conversion) + 1] += 1;
+        }
+        for bucket in 1..next.len() {
+            next[bucket] += next[bucket - 1];
+        }
+        let conversion_starts = tu.alloc_slice_copy(&next[..=count]);
+        let mut order = ArenaVec::new_in(self.scratch);
+        order.resize(self.conversions.len(), 0_usize);
+        for (record, conversion) in self.conversions.iter().enumerate() {
+            let slot = &mut next[owner(conversion)];
+            order[*slot] = record;
+            *slot += 1;
+        }
+        let conversions =
+            tu.alloc_slice_fill_iter(order.iter().map(|&record| self.conversions[record]));
+        ExpressionIndex {
+            expressions,
+            conversions,
+            conversion_starts,
+        }
+    }
+
     pub(in crate::translation_phases::semantic_analysis) fn expression_result(
         e: &'tu Expression<'tu>,
         ty: TypeId,
@@ -947,6 +1008,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             category: ValueCategory::Rvalue,
             binding: None,
             bit_field: None,
+            field: None,
             register: false,
             vector_element: false,
             static_address: false,
@@ -1368,7 +1430,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // Unmodeled GNU compiler intrinsics do not have the C89 implicit
             // int signature. Preserve an opaque result rather than rejecting
             // valid pointer/aggregate returns based on an invented int type.
-            let ty = if let Some(ty) = self.x86_builtin_type(name) {
+            let ty = if let Some(ty) = self
+                .library_builtin_type(name)
+                .or_else(|| self.x86_builtin_type(name))
+            {
                 ty
             } else {
                 let result = self.types.unknown();
@@ -1571,4 +1636,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         Self::expression_result(e, self.types.unknown())
     }
+}
+
+/// The retained lookup from expression syntax to its record and its run of
+/// conversion records.
+pub(in crate::translation_phases::semantic_analysis) struct ExpressionIndex<'tu> {
+    pub(in crate::translation_phases::semantic_analysis) expressions: ArenaMap<'tu, usize, usize>,
+    pub(in crate::translation_phases::semantic_analysis) conversions: &'tu [Conversion<'tu>],
+    pub(in crate::translation_phases::semantic_analysis) conversion_starts: &'tu [usize],
 }

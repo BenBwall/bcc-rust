@@ -43,11 +43,7 @@ pub(super) fn print_parser_output<'tu>(
     input_string: &'tu str,
     search: HeaderSearch<'_>,
     output: &ParserOutput,
-    repeated_specifier_warnings: bool,
 ) {
-    context.configuration = context
-        .configuration
-        .with_repeated_specifier_warnings(repeated_specifier_warnings);
     let unit = parse_translation_unit(context, source_filename, input_string, search);
     let semantic = (output.semantic_types || (!output.syntax_tree && !output.raw_syntax))
         .then(|| crate::pipeline::analyze_translation_unit(context, &unit));
@@ -231,7 +227,7 @@ pub(super) struct CliOutput {
 }
 
 /// Fails like `eprint!` when stderr cannot be written.
-fn expect_stderr(result: io::Result<()>) {
+pub(super) fn expect_stderr(result: io::Result<()>) {
     if let Err(error) = result {
         panic!("failed printing to stderr: {error}");
     }

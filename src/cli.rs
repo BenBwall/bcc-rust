@@ -1,7 +1,8 @@
 //! The command-line interface parses options, loads the input, and builds a
 //! translation context with the selected language mode and target. [`run`]
-//! chooses token output or parsing and semantic analysis, then prints the
-//! requested view and diagnostics.
+//! chooses token output, parsing and semantic analysis, or code generation,
+//! then prints the requested view and diagnostics and returns the exit
+//! status.
 //!
 //! For `bcc-rust --input "int x;" --syntax-tree`, arguments select an inline
 //! source and syntax output. The driver preprocesses and parses that source,
@@ -9,11 +10,14 @@
 //!
 //! Read [`run`], then [`Cli`], [`Cli::configuration`], and
 //! [`output::print_parser_output`]. Token output starts at
-//! [`output::print_preprocessor_output`].
+//! [`output::print_preprocessor_output`], and code generation (`--emit`,
+//! `--interpret`, `-o`) at [`code_generation::generate_code`].
 //!
 //! Files by role:
 //! - Invocation: `arguments.rs`, `search.rs`, `errors.rs`.
-//! - Output: `output.rs`, `token.rs`, `diagnostic_reporter.rs`.
+//! - Output: `output.rs`, `token.rs`, `diagnostic_reporter.rs`,
+//!   `output_file.rs`.
+//! - Code generation: `code_generation.rs`.
 //! - Measurement entry points: `measured.rs`.
 //! - CLI fixtures: `tests.rs`.
 //!
@@ -27,8 +31,10 @@ mod errors;
 mod search;
 
 // Output and diagnostic reporting
+mod code_generation;
 mod diagnostic_reporter;
 mod output;
+mod output_file;
 mod token;
 
 // Measurements
@@ -48,6 +54,11 @@ use arguments::{
 use clap::{
     ColorChoice,
     Parser,
+};
+use code_generation::{
+    CodeGeneration,
+    generate_code,
+    print_default_passes,
 };
 pub use errors::MainError;
 pub use measured::{
@@ -70,9 +81,19 @@ use crate::{
     util::bump::Bump,
 };
 
+/// Runs the compiler on the command line's arguments and returns the
+/// process's exit status. The inspection views exit with zero after
+/// printing their diagnostics; code generation exits nonzero after errors,
+/// and `--interpret` with the program's status.
 #[doc(hidden)]
-pub fn run() -> Result<(), MainError> {
-    let args = Cli::try_parse_from(normalize_language_arguments(std::env::args_os()))?;
+pub fn run() -> Result<i32, MainError> {
+    let arguments = normalize_language_arguments(std::env::args_os());
+    // Clap would demand an input for this flag, so it is answered before
+    // parsing; the declaration below only documents it in `--help`.
+    if arguments.len() == 2 && arguments[1] == "--print-default-passes" {
+        return Ok(print_default_passes());
+    }
+    let args = Cli::try_parse_from(arguments)?;
     let tu = Bump::new();
     let (input_string, source_filename): (&str, &Path) =
         match (&args.input.input, &args.input.input_file) {
@@ -87,6 +108,21 @@ pub fn run() -> Result<(), MainError> {
             },
             | _ => unreachable!("clap requires exactly one input source"),
         };
+    if let (Some(input), Some(output)) = (&args.input.input_file, &args.code_generation.output_path)
+    {
+        let same_file = output_file::is_input(input, output).map_err(|source| {
+            MainError::InspectOutputFileError {
+                path: output.clone(),
+                source,
+            }
+        })?;
+        if same_file {
+            return Err(MainError::OutputIsInput {
+                input:  input.clone(),
+                output: output.clone(),
+            });
+        }
+    }
     let directories = args.search.directories();
     let search = HeaderSearch {
         quote:    tu.alloc_slice_fill_iter(directories.quote.iter().map(AsRef::as_ref)),
@@ -99,8 +135,20 @@ pub fn run() -> Result<(), MainError> {
     let mut context = Context::with_configuration(&tu, configuration);
     args.configure_preprocessing(&mut context);
 
+    context.configuration = context
+        .configuration
+        .with_repeated_specifier_warnings(!args.no_repeated_specifier_warnings);
+
     if args.output.tokens {
         print_preprocessor_output(&mut context, source_filename, input_string, search);
+    } else if args.code_generation.requested() {
+        return Ok(generate_code(
+            &mut context,
+            source_filename,
+            input_string,
+            search,
+            &args.code_generation,
+        ));
     } else {
         print_parser_output(
             &mut context,
@@ -108,10 +156,9 @@ pub fn run() -> Result<(), MainError> {
             input_string,
             search,
             &args.output.parser,
-            !args.no_repeated_specifier_warnings,
         );
     }
-    Ok(())
+    Ok(0)
 }
 
 #[derive(Parser)]
@@ -125,6 +172,10 @@ struct Cli {
     /// Select the C target ABI (independent of the compiler host).
     #[arg(long, default_value = "x86_64-unknown-linux-gnu", value_parser = TargetParser)]
     target: crate::target::Target,
+    /// Print the default bcc pass list, such as `inline,promote,fold,...`, for
+    /// `--passes` ablation scripts, and exit.
+    #[arg(long = "print-default-passes", exclusive = true)]
+    _print_default_passes: bool,
     #[command(flatten)]
     input: CliInput,
     /// Select ISO C or a GNU dialect (also accepts GCC -std=VALUE).
@@ -144,6 +195,8 @@ struct Cli {
     search: CliHeaderSearch,
     #[command(flatten)]
     output: CliOutput,
+    #[command(flatten)]
+    code_generation: CodeGeneration,
     /// Suppress the `repeated-specifiers` quality warning group.
     #[clap(long)]
     no_repeated_specifier_warnings: bool,

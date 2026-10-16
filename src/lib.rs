@@ -1,15 +1,21 @@
 //! BCC translates C source into a syntax tree and semantic information. Each
 //! source file is lexed once, preprocessing finishes before parsing starts, and
-//! semantic analysis consumes the finished tree. The command-line program
-//! selects the input, language mode, target, and output view.
+//! semantic analysis consumes the finished tree. On request, the middle end
+//! lowers the analyzed unit to the bcc IR, optimizes it and lowers its calls
+//! for the target's ABI, and a back end prints it, interprets it, or builds it
+//! through the bundled clang. The
+//! command-line program selects the input, language mode, target, and output.
 //!
 //! Start with `translation_phases` (`translation_phases.rs`) for the phase map,
-//! then `pipeline::parse_translation_unit` for the batch driver and
-//! `pipeline::analyze_translation_unit` for semantic analysis. Read [`run`]
-//! to follow a command-line compilation.
+//! then `pipeline::parse_translation_unit` for the batch driver,
+//! `pipeline::analyze_translation_unit` for semantic analysis and
+//! `pipeline::lower_translation_unit` for the middle end. Read [`run`] to
+//! follow a command-line compilation.
 //!
 //! Files by role, each with any directory of the same name:
 //! - Compiler phases and driver: `pipeline.rs`, `translation_phases.rs`.
+//! - Middle end and back ends: `lowering.rs`, `ir.rs`, `optimizer.rs`,
+//!   `abi.rs`, `backend.rs`.
 //! - Invocation and language choices: `main.rs`, `cli.rs`, `configuration.rs`,
 //!   `headers.rs`, `target.rs`.
 //! - Values, storage, and reporting: `binary128.rs`, `diagnostics.rs`,
@@ -17,13 +23,48 @@
 //! - Measurements and test support: `benchmarking.rs`, `test_support.rs`.
 //!
 //! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
-//! PDF pp. 21-22. Code generation and linking are outside this front end.
+//! PDF pp. 21-22. Translation phase 8 (linking) is left to the bundled
+//! clang.
 
 #![cfg_attr(feature = "portable-simd", feature(portable_simd))]
 
 // Compiler phases and driver
 mod pipeline;
 pub(crate) mod translation_phases;
+
+// Middle end
+mod abi;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        unused_imports,
+        reason = "The driver uses the interpreter's entry point and the LLVM printer and driver; \
+                  the re-exports for hosts, traps and tools serve their tests."
+    )
+)]
+mod backend;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        unused_imports,
+        reason = "Only tests parse the textual IR or verify whole modules; the driver builds, \
+                  prints and optimizes modules."
+    )
+)]
+pub(crate) mod ir;
+mod lowering;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        unused_imports,
+        reason = "The driver runs the pipeline; the per-pass counts and times and some re-exports \
+                  serve the optimizer's tests."
+    )
+)]
+mod optimizer;
 
 // Invocation and language choices
 mod cli;
@@ -46,7 +87,7 @@ mod benchmarking;
     clippy::disallowed_macros,
     clippy::disallowed_methods,
     reason = "Test fixtures name files with std paths and strings; the arena rule covers the \
-              compiler, not its tests."
+ \n                  compiler, not its tests."
 )]
 mod test_support;
 

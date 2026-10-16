@@ -1,0 +1,19 @@
+; int main(void) { int x = 1; x++; }
+; void nothing(void) {}
+
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @main() -> i32 external {
+block0:
+    v0 = iconst.i32 1
+    v1 = iconst.i32 1
+    v2 = iadd.i32 nsw v0, v1
+    v3 = iconst.i32 0
+    return v3
+}
+
+function @nothing() external {
+block0:
+    return
+}

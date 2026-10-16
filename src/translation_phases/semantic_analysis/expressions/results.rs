@@ -65,6 +65,13 @@ pub(crate) enum ConstantFolding {
 }
 
 impl ExpressionInfo<'_> {
+    /// For `.` and `->` (and records copied from one, such as parentheses),
+    /// the index of the selected member in the record's `Tag::fields`.
+    /// C99: §6.5.2.3 paragraphs 3-4, p. 73; PDF p. 85.
+    pub(crate) fn field_index(&self) -> Option<usize> {
+        self.field.map(|field| field.get() as usize - 1)
+    }
+
     pub(in crate::translation_phases::semantic_analysis) fn atomic_cast(self) -> bool {
         self.folding == ConstantFolding::AtomicCast
     }

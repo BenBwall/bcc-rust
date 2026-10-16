@@ -185,7 +185,7 @@ fn vector_operand_conversions_use_input_elements() {
             let mut conversions = sema
                 .conversions
                 .iter()
-                .filter(|c| c.kind == super::super::expressions::ConversionKind::Arithmetic);
+                .filter(|c| c.kind == ConversionKind::Arithmetic);
             assert_eq!(conversions.next().unwrap().ty, int);
             assert_eq!(conversions.next().unwrap().ty, int);
             assert_eq!(conversions.next().unwrap().ty, float);

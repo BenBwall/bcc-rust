@@ -118,9 +118,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                 self.type_value(ty, context, arena)
             );
         }
-        let mut identities = super::ArenaMap::with_hasher_in(super::FxBuildHasher, arena);
         for (index, info) in self.expressions.iter().enumerate() {
-            _ = identities.insert(std::ptr::from_ref(info.expression).addr(), index);
             let _ = write!(
                 out,
                 "expression {index} type={} category={}",
@@ -164,11 +162,14 @@ impl<'tu> SemanticTranslationUnit<'tu> {
             }
             out.push('\n');
         }
-        for conversion in self.conversions {
-            let index = identities
-                .get(&std::ptr::from_ref(conversion.expression).addr())
-                .copied()
-                .unwrap_or(usize::MAX);
+        // Each expression's run, in application order, then the records whose
+        // operand has no retained result.
+        let runs = (0..self.expressions.len())
+            .flat_map(|index| self.conversions_of(index).iter().map(move |c| (index, c)));
+        let unowned = self.conversions[self.conversion_starts[self.expressions.len()]..]
+            .iter()
+            .map(|c| (self.expression_index(c.expression).unwrap_or(usize::MAX), c));
+        for (index, conversion) in runs.chain(unowned) {
             let _ = writeln!(
                 out,
                 "convert expression {index} kind={} type={}",
@@ -289,7 +290,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         );
         if let TypeKind::Function {
             prototype: true, ..
-        } = self.types.nodes[binding.ty.index]
+        } = self.types.kind(binding.ty)
             && binding.kind == BindingKind::Function
         {
             out.push_str(" prototype");
@@ -367,7 +368,7 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                     let mut right = ArenaVec::new_in(arena);
                     let mut pointer = false;
                     let base = loop {
-                        match self.types.nodes[ty.index] {
+                        match self.types.kind(ty) {
                             | TypeKind::Pointer(next) => {
                                 let words = qualifiers(ty.qualifiers);
                                 if !words.is_empty() {

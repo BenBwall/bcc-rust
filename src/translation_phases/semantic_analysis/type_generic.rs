@@ -180,19 +180,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             if operation {
                 constant &= info.constant == ConstantClass::Arithmetic;
-                self.convert(
-                    argument,
-                    result_type,
-                    super::expressions::ConversionKind::Assignment,
-                );
+                self.convert(argument, result_type, super::ConversionKind::Assignment);
             }
             if let Some(target) = tag_type {
                 constant &= matches!(literal.kind, E::StringLiteral(_));
-                self.convert(
-                    argument,
-                    target,
-                    super::expressions::ConversionKind::Assignment,
-                );
+                self.convert(argument, target, super::ConversionKind::Assignment);
             }
         }
         let mut result = Self::expression_result(e, result_type);
