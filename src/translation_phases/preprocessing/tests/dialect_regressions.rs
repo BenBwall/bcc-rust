@@ -737,6 +737,8 @@ fn leading_byte_order_mark_is_skipped() {
 /// names.
 #[test]
 fn attribute_queries_answer_as_clang() {
+    use std::fmt::Write as _;
+
     let queries = [
         "__has_attribute(may_alias)",
         "__has_attribute(__artificial__)",
