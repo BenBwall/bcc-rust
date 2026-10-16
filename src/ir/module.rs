@@ -585,6 +585,7 @@ impl<'ir> ParamAbi<'ir> {
             size:    layout.size,
             align:   layout.align,
             flags:   layout.flags,
+            first:   layout.first,
         };
         match self {
             | Self::Aggregate(layout) => ParamAbi::Aggregate(copy(layout)),
@@ -608,8 +609,26 @@ pub(crate) struct AggregateLayout<'ir> {
     pub(crate) flags:   AggregateFlags,
     /// Every scalar member and array element, through nested aggregates, by
     /// byte offset; the members of a union overlap. Empty for an aggregate
-    /// larger than [`AggregateLayout::MAX_SCALAR_BYTES`].
+    /// larger than [`AggregateLayout::MAX_SCALAR_BYTES`]. With `first`, the
+    /// first member's.
     pub(crate) scalars: &'ir [AggregateScalar],
+    /// For a GNU transparent union argument on System V, the first member,
+    /// whose facts decide its registers; `size` and `align` stay the
+    /// union's, which travels on the stack when the registers are taken.
+    pub(crate) first:   Option<FirstMember>,
+}
+
+/// The first member of a System V transparent union argument, which GCC and
+/// Clang classify in the union's place (Clang's
+/// `useFirstFieldIfTransparentUnion`): its size, the flags and scalars of
+/// its [`AggregateLayout`], and, for an integer narrower than `int` or
+/// `_Bool`, its pre-ABI extension, which its register keeps as a scalar
+/// argument's does.
+/// GNU extension: GCC manual, "Common Type Attributes", `transparent_union`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct FirstMember {
+    pub(crate) size:      u64,
+    pub(crate) extension: Option<Extension>,
 }
 
 impl AggregateLayout<'_> {

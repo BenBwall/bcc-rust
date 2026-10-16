@@ -33,6 +33,7 @@ fn layout(
         align: Align::from_bytes(align).unwrap(),
         flags,
         scalars: Vec::leak(scalars),
+        first: None,
     }
 }
 

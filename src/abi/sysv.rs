@@ -244,7 +244,9 @@ pub(crate) enum Classification {
 /// runs.
 /// psABI §3.2.3, "Classification", rules 1-5.
 pub(crate) fn classify(layout: AggregateLayout<'_>) -> Classification {
-    if layout.size > AggregateLayout::MAX_SCALAR_BYTES
+    // A transparent union's first member is classified in its place.
+    let size = layout.first.map_or(layout.size, |first| first.size);
+    if size > AggregateLayout::MAX_SCALAR_BYTES
         || layout
             .flags
             .intersects(AggregateFlags::UNALIGNED | AggregateFlags::FLEXIBLE)

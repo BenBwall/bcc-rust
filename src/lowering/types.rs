@@ -13,6 +13,7 @@ use crate::{
         AggregateScalar,
         Align,
         Extension,
+        FirstMember,
         Type,
     },
     target::{
@@ -237,6 +238,62 @@ pub(super) fn aggregate_layout<'s>(
         .ok_or(LoweringErrorKind::MissingFact(
             "an aggregate value has no nominal layout",
         ))?;
+    flattened_layout(types, ty, whole, scratch)
+}
+
+/// The facts an argument of type `ty` is passed by: those of
+/// [`aggregate_layout`], except that on System V a GNU transparent union
+/// takes its first member's registers, as GCC and Clang pass it (Clang's
+/// `X86_64ABIInfo::classifyArgumentType` calls
+/// `useFirstFieldIfTransparentUnion`): `union { struct { float x, y; } s;
+/// struct { int a, b; } t; }` arrives in `%xmm0` rather than a general
+/// register, and a `signed char` first member is sign-extended. The layout
+/// keeps the union's size and alignment, since without free registers the
+/// whole union goes on the stack (`byval` of the union), and records the
+/// first member's size, extension, flags and scalars ([`FirstMember`]). The
+/// Microsoft x64 convention classifies the whole union, as Clang's
+/// `WinX86_64ABIInfo` does. A result is always the whole union.
+/// GNU extension: GCC manual, "Common Type Attributes", `transparent_union`.
+/// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+pub(super) fn argument_layout<'s>(
+    types: &Types<'_>,
+    target: Target,
+    ty: TypeId,
+    scratch: &'s Bump,
+) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
+    let union = aggregate_layout(types, ty, scratch)?;
+    let first = types
+        .tag(ty)
+        .filter(|tag| {
+            tag.kind == TagKind::Union
+                && tag.transparent.get()
+                && matches!(target, Target::LinuxGnu | Target::LinuxMusl)
+        })
+        .and_then(|tag| tag.members.get().first());
+    let Some(first) = first else {
+        return Ok(union);
+    };
+    let member = layout(types, first.ty)?;
+    let classified = flattened_layout(types, first.ty, member, scratch)?;
+    Ok(AggregateLayout {
+        size: union.size,
+        align: union.align,
+        first: Some(FirstMember {
+            size:      member.size,
+            extension: repr(types, first.ty)?.extension(),
+        }),
+        ..classified
+    })
+}
+
+/// [`aggregate_layout`] of a value of type `ty` whose size and alignment are
+/// `whole`.
+fn flattened_layout<'s>(
+    types: &Types<'_>,
+    ty: TypeId,
+    whole: Layout,
+    scratch: &'s Bump,
+) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
     let mut flags = AggregateFlags::empty();
     if types.tag(ty).is_some_and(|tag| tag.contains_flexible.get()) {
         flags |= AggregateFlags::FLEXIBLE;
@@ -331,6 +388,7 @@ pub(super) fn aggregate_layout<'s>(
         align: align(whole),
         flags,
         scalars: scratch.alloc_slice_copy(&scalars),
+        first: None,
     })
 }
 
