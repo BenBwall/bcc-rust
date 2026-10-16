@@ -109,7 +109,9 @@ pub(super) enum Op<'s> {
     Iconst(Type, i128),
     /// A floating constant given by its bits (see `floats.rs`).
     Fconst(Type, u128),
-    Atomic(InstData, &'s [Value]),
+    /// Keep the record beside its operands in scratch: storing both inline
+    /// would enlarge every operation, including functions without atomics.
+    Atomic(&'s InstData, &'s [Value]),
     Call(FuncId, &'s [Value]),
     CallIndirect(SigId, Value, &'s [Value]),
 }

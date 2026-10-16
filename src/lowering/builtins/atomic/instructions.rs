@@ -53,6 +53,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             failure,
             args: ValueList::EMPTY,
         };
+        let data = self.scratch.alloc(data);
         let args = self.scratch.alloc_slice_copy(args);
         self.draft
             .push(Op::Atomic(data, args), op.has_result().then_some(ty))

@@ -113,7 +113,7 @@ pub(super) fn emit<'s>(
                 | Op::Fconst(ty, bits) => Some(builder.fconst(ty, bits)),
                 | Op::Atomic(data, args) => {
                     let args = map_list(args, &values, &map, scratch)?;
-                    let inst = builder.atomic(data, &args);
+                    let inst = builder.atomic(*data, &args);
                     builder.inst_result(inst)
                 },
                 | Op::Call(callee, args) => {
