@@ -22,6 +22,7 @@ use super::{
         Duration,
         Linkage,
         Namespace,
+        ObjectSize,
         SemanticErrorKind,
         facts::{
             AliasFacts,
@@ -723,6 +724,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             );
             return;
+        }
+        if let Some(contract) = self.function_extensions.function(entry.binding)
+            && let Some(size) = contract.sizes.first()
+        {
+            // The synthetic actual is &variable, so every mode bounds its
+            // entire object. VLA bounds use the retained runtime size DAG.
+            // C99: §6.5.3.4p2, p. 80; PDF p. 92.
+            let value = if let Some(layout) = self.types.layout(variable.ty) {
+                ObjectSize::Constant(layout.size)
+            } else if size.dynamic && self.variably_modified(variable.ty) {
+                ObjectSize::Dynamic {
+                    ty:     variable.ty,
+                    offset: 0,
+                }
+            } else {
+                ObjectSize::Constant(if size.mode >= 2 { 0 } else { u64::MAX })
+            };
+            _ = self
+                .function_extensions
+                .cleanup_sizes
+                .insert(binding, value);
         }
         // The variable's scope calls the function, so the enclosing body
         // uses it: it needs a definition and keeps it reachable.
