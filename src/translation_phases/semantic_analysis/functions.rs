@@ -586,6 +586,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         SemanticErrorKind::UnusedStaticFunction,
                         b.name.source_vectors,
                         Some(b.name.name),
+                        None,
                     );
                 }
             }

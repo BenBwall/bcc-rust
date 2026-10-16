@@ -115,6 +115,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.init_attribute(subject, specifier, attribute, rule == Rule::Constructor),
                 | Rule::Cleanup => self.cleanup_attribute(subject, attribute),
                 | Rule::ReturnsTwice => self.returns_twice_attribute(subject, attribute),
+                // On a typedef it names the type, which type construction
+                // checks; anything else declared is not a union type.
+                | Rule::TransparentUnion if !matches!(subject, Subject::Typedef) => self.error(
+                    SemanticErrorKind::TransparentUnionNotUnion,
+                    attribute.source,
+                    None,
+                    None,
+                ),
                 | _ => {},
             }
         }

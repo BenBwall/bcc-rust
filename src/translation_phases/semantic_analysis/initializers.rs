@@ -1,8 +1,16 @@
 //! Phase-7 current-object initializer traversal.
 //! C99: §6.7.8, pp. 125-130; PDF pp. 137-142. Cursors and brace frames
 //! live in arenas; brace elision and designators never recurse on the host
-//! stack.
+//! stack. `overrides.rs` records which subobjects an initializer has
+//! written, for Clang's `-Winitializer-overrides`.
 
+mod overrides;
+
+use overrides::{
+    Step,
+    Write,
+    Writes,
+};
 use rustc_hash::FxBuildHasher;
 
 use super::{
@@ -10,6 +18,7 @@ use super::{
     Analyzer,
     BindingKind,
     Duration,
+    FlexibleArray,
     Linkage,
     ScopeKind,
     SemanticErrorKind,
@@ -31,8 +40,10 @@ use crate::{
     translation_phases::{
         parsing::{
             declaration_syntax::{
+                Designator,
                 DesignatorType,
                 Initializer,
+                InitializerElement,
                 InitializerType,
                 TypeQualifiers,
             },
@@ -57,18 +68,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// The returned type completes an array of unknown size from its highest
     /// initialized index. C99: §6.7.8p11-22, pp. 126-127; PDF pp. 138-139.
     ///
-    /// The second result is the completed type of the flexible array member
-    /// the initializer gives elements to; only a static object
+    /// The second result describes the flexible array member the
+    /// initializer gives elements to; only a static object
     /// (`static_object`) may initialize its own structure's member, a GNU
     /// extension. Elsewhere only an empty list may, as in Clang.
     /// C99: §6.7.2.1 paragraph 16, p. 103; PDF p. 115.
+    ///
+    /// An initializer that replaces an earlier one for the same subobject
+    /// is reported as Clang's `-Winitializer-overrides` reports it.
+    /// C99: §6.7.8 paragraph 19, p. 127; PDF p. 139.
     pub(super) fn check_initializer(
         &mut self,
         ty: TypeId,
         initializer: &'tu Initializer<'tu>,
         static_storage: bool,
         static_object: bool,
-    ) -> (TypeId, Option<TypeId>) {
+    ) -> (TypeId, Option<FlexibleArray>) {
         if initializer.recovered || self.types.unanalyzed(ty) {
             return (ty, None);
         }
@@ -89,17 +104,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return (ty, None);
         }
         let mut work = ArenaVec::new_in(self.scratch);
-        // The flexible array member's element type once an element of the
-        // object's own member is reached, and its highest initialized index.
-        let mut flexible: Option<(TypeId, u64)> = None;
+        // The extents of the object's own flexible array member once an
+        // element of it is reached.
+        let mut flexible: Option<FlexibleExtent> = None;
+        let mut writes = Writes::new_in(self.scratch, initializer.source_vectors);
         let mut leaves = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         let mut count = 0;
         let before = self.semantic_errors;
         let mut unmodeled = false;
-        work.push(InitWork::Value(ty, initializer, false));
+        work.push(InitWork::Value(ty, initializer, false, Writes::ROOT));
         while let Some(task) = work.pop() {
             match task {
-                | InitWork::Value(target, init, bit_field) => {
+                | InitWork::Value(target, init, bit_field, node) => {
                     if init.recovered || self.initializer_unanalyzed(target, &mut leaves) {
                         continue;
                     }
@@ -112,10 +128,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             if let Some(extent) = self.initialize_string(target, e) {
                                 if std::ptr::eq(init, initializer) {
                                     count = count.max(extent);
-                                } else if let Some((_, elements)) = &mut flexible
+                                } else if let Some(flexible) = &mut flexible
                                     && self.flexible_array_type(target, ty)
                                 {
-                                    *elements = (*elements).max(extent);
+                                    flexible.extend(extent);
                                 }
                                 continue;
                             }
@@ -200,7 +216,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                     self.types.non_atomic(self.expression_info(e).ty),
                                 )
                             {
-                                work.push(InitWork::Value(target, element.initializer, false));
+                                work.push(InitWork::Value(
+                                    target,
+                                    element.initializer,
+                                    false,
+                                    node,
+                                ));
                                 continue;
                             }
                             // A character array may have its string enclosed in
@@ -213,10 +234,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             {
                                 if std::ptr::eq(init, initializer) {
                                     count = count.max(extent);
-                                } else if let Some((_, elements)) = &mut flexible
+                                } else if let Some(flexible) = &mut flexible
                                     && self.flexible_array_type(target, ty)
                                 {
-                                    *elements = (*elements).max(extent);
+                                    flexible.extend(extent);
                                 }
                                 continue;
                             }
@@ -232,24 +253,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 0,
                                 current,
                                 std::ptr::eq(init, initializer),
+                                node,
                             ));
                         },
                     }
                 },
-                | InitWork::List(root, list, position, cursor, infer) => {
+                | InitWork::List(root, list, position, cursor, infer, base) => {
                     let Some(element) = list.elements.as_slice().get(position) else {
                         continue;
                     };
                     let mut cursor = *cursor;
+                    // The step of the designation's last range designator
+                    // and its lower bound: the element writes every element
+                    // of that range (an earlier range, its last).
+                    let mut range = None;
+                    // Where writes inside each designated subobject begin.
+                    let mut starts = ArenaVec::new_in(self.scratch);
                     if let Some(designation) = element.designation {
                         let mut selected = root;
                         let mut parent = None;
                         let mut valid = true;
                         let mut unknown_designator = false;
-                        for designator in designation.designators {
+                        // The designator that names a flexible array member,
+                        // the member, and the cursor at it.
+                        let mut flexible_designator = None;
+                        let mut depth = 0_usize;
+                        let designators = designation.designators.as_slice();
+                        for (ordinal, designator) in designators.iter().enumerate() {
                             // A member of an anonymous member is reached
                             // through that member (C11 §6.7.2.1p13).
                             let mut path = ArenaVec::new_in(self.scratch);
+                            let mut lower = None;
                             let index = match designator.kind {
                                 | DesignatorType::Array(expression) => {
                                     let info = self.expression_info(expression.expression());
@@ -283,23 +317,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 // last also validates the bound and continuation.
                                 // <https://gcc.gnu.org/onlinedocs/gcc/Designated-Inits.html>
                                 | DesignatorType::Range(range) => {
-                                    let lower = self.expression_info(range.lower.expression());
+                                    let lower_info = self.expression_info(range.lower.expression());
                                     let upper = self.expression_info(range.upper.expression());
-                                    unknown_designator |= self.types.unanalyzed(lower.ty)
+                                    unknown_designator |= self.types.unanalyzed(lower_info.ty)
                                         || self.types.unanalyzed(upper.ty);
                                     match (
-                                        lower.integer.and_then(Integer::to_u64),
+                                        lower_info.integer.and_then(Integer::to_u64),
                                         upper.integer.and_then(Integer::to_u64),
                                     ) {
                                         | (Some(lower_index), Some(upper_index))
-                                            if lower.ice
+                                            if lower_info.ice
                                                 && upper.ice
                                                 && lower_index <= upper_index
                                                 && matches!(
                                                     self.types.nodes[selected.index],
                                                     TypeKind::Array(..)
                                                 ) =>
-                                            Some(upper_index),
+                                        {
+                                            lower = Some(lower_index);
+                                            Some(upper_index)
+                                        },
                                         | _ => None,
                                     }
                                 },
@@ -313,27 +350,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 break;
                             };
                             path.push(index);
-                            for &index in &path {
+                            let steps = path.len();
+                            for (step, &index) in path.iter().enumerate() {
                                 let Some(child) = self.subobject(selected, index) else {
                                     valid = false;
                                     break;
                                 };
-                                // Clang: a designator may name the flexible
-                                // array member but not an element inside it.
-                                if self.flexible_member(selected, index)
-                                    && designation
-                                        .designators
-                                        .as_slice()
-                                        .last()
-                                        .is_some_and(|last| !std::ptr::eq(designator, last))
-                                {
-                                    self.error(
-                                        SemanticErrorKind::FlexibleArrayInitializer,
-                                        designator.source_vectors,
-                                        None,
-                                        None,
-                                    );
-                                }
                                 cursor = Current {
                                     container: selected,
                                     index,
@@ -341,11 +363,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                     root_index: parent
                                         .map_or(index, |p: &Current<'_>| p.root_index),
                                 };
+                                if flexible_designator.is_none()
+                                    && let Some(member) = self.flexible_member(selected, index)
+                                {
+                                    flexible_designator = Some((ordinal, member, cursor));
+                                }
                                 parent = Some(&*self.scratch.alloc(cursor));
                                 selected = child;
+                                depth += 1;
+                                starts.push(if step + 1 < steps {
+                                    designator.source_vectors
+                                } else {
+                                    designators
+                                        .get(ordinal + 1)
+                                        .map_or(element.initializer.source_vectors, |next| {
+                                            next.source_vectors
+                                        })
+                                });
                             }
                             if !valid {
                                 break;
+                            }
+                            if let Some(lower) = lower {
+                                range = Some((depth - 1, lower));
                             }
                         }
                         if !valid {
@@ -370,6 +410,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 position + 1,
                                 self.scratch.alloc(cursor),
                                 infer,
+                                base,
+                            ));
+                            continue;
+                        }
+                        // As in GCC and Clang, a designator may name a
+                        // flexible array member, but not an element inside
+                        // it, and only a brace-enclosed list or a string
+                        // literal initializes it there.
+                        if let Some((at, member, at_member)) = flexible_designator
+                            && self.flexible_designation(designators, at, member, element)
+                        {
+                            work.push(InitWork::List(
+                                root,
+                                list,
+                                position + 1,
+                                self.scratch.alloc(self.advance_current(at_member)),
+                                infer,
+                                base,
                             ));
                             continue;
                         }
@@ -387,25 +445,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             position + 1,
                             self.scratch.alloc(cursor),
                             infer,
+                            base,
                         ));
                         continue;
                     };
                     if infer {
                         count = count.max(cursor.root_index.saturating_add(1));
                     }
-                    if self.flexible_member(cursor.container, cursor.index) {
+                    if self
+                        .flexible_member(cursor.container, cursor.index)
+                        .is_some()
+                    {
                         // Only the object's own list reaches its structure's
                         // member at the outermost level.
                         let own =
                             infer && cursor.parent.is_none() && cursor.container.index == ty.index;
-                        let empty = matches!(
-                            element.initializer.kind,
-                            InitializerType::InitializerList(list) if list.elements.as_slice().is_empty()
-                        );
+                        let (empty, whole) = match element.initializer.kind {
+                            | InitializerType::InitializerList(list) =>
+                                (list.elements.as_slice().is_empty(), true),
+                            | InitializerType::AssignmentExpression(e) =>
+                                (false, self.whole_object_expression(target, e)),
+                        };
                         self.enter_flexible_array(
                             target,
                             own && static_object,
                             empty,
+                            whole,
                             element.source_vectors,
                             &mut flexible,
                         );
@@ -419,9 +484,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             let Some(child) = self.subobject(target, next_index) else {
                                 break;
                             };
-                            if self.flexible_member(target, next_index) {
+                            if self.flexible_member(target, next_index).is_some() {
                                 self.enter_flexible_array(
                                     child,
+                                    false,
                                     false,
                                     false,
                                     element.source_vectors,
@@ -439,16 +505,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     }
                     // Brace elision may have descended into an element, so
                     // the member's own position is on the cursor's path.
-                    if let Some((_, elements)) = &mut flexible {
+                    if let Some(flexible) = &mut flexible {
                         let mut path = Some(&cursor);
                         while let Some(current) = path {
                             if self.flexible_array_type(current.container, ty) {
-                                *elements = (*elements).max(current.index.saturating_add(1));
+                                flexible.extend(current.index.saturating_add(1));
                                 break;
                             }
                             path = current.parent;
                         }
                     }
+                    let node =
+                        self.record_write(&mut writes, base, &cursor, &starts, range, element);
                     let next = self.advance_current(cursor);
                     work.push(InitWork::List(
                         root,
@@ -456,9 +524,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         position + 1,
                         self.scratch.alloc(next),
                         infer,
+                        base,
                     ));
                     let bit_field = self.bit_field_member(cursor.container, cursor.index);
-                    work.push(InitWork::Value(target, element.initializer, bit_field));
+                    work.push(InitWork::Value(
+                        target,
+                        element.initializer,
+                        bit_field,
+                        node,
+                    ));
                 },
             }
         }
@@ -466,20 +540,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return (self.types.unknown(), None);
         }
         let flexible = match flexible {
-            | Some((element, elements)) if self.semantic_errors == before => {
-                if elements > 0
+            | Some(extent) if self.semantic_errors == before => {
+                if extent.written > 0
                     && !self.validate_array_size(
-                        element,
-                        i128::from(elements),
+                        extent.element,
+                        i128::from(extent.written),
                         initializer.source_vectors,
                     )
                 {
                     return (self.types.unknown(), None);
                 }
-                Some(
-                    self.types
-                        .intern(TypeKind::Array(element, ArrayBound::Constant(elements))),
-                )
+                let mut array = |elements| {
+                    self.types.intern(TypeKind::Array(
+                        extent.element,
+                        ArrayBound::Constant(elements),
+                    ))
+                };
+                Some(FlexibleArray {
+                    completed: array(extent.current),
+                    written:   array(extent.written),
+                })
             },
             | _ => None,
         };
@@ -506,32 +586,156 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Whether member `index` of `container` is a flexible array member.
+    /// Member `index` of `container`, if it is a flexible array member.
     /// C99: §6.7.2.1 paragraph 16, p. 103; PDF p. 115.
-    fn flexible_member(&self, container: TypeId, index: u64) -> bool {
+    fn flexible_member(&self, container: TypeId, index: u64) -> Option<Member> {
         let TypeKind::Tag(id) = self.types.nodes[container.index] else {
-            return false;
+            return None;
         };
-        self.types.tags[id].kind != TagKind::Enum
-            && usize::try_from(index)
-                .ok()
-                .and_then(|index| self.types.tags[id].members.get().get(index))
-                .is_some_and(|member| {
-                    matches!(
-                        self.types.nodes[member.ty.index],
-                        TypeKind::Array(_, ArrayBound::Incomplete)
-                    )
-                })
+        if self.types.tags[id].kind == TagKind::Enum {
+            return None;
+        }
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| self.types.tags[id].members.get().get(index))
+            .copied()
+            .filter(|member| {
+                matches!(
+                    self.types.nodes[member.ty.index],
+                    TypeKind::Array(_, ArrayBound::Incomplete)
+                )
+            })
+    }
+
+    /// Checks an element whose designator `designators[at]` names the
+    /// flexible array member `member`: as GCC and Clang require, no further
+    /// designator may lead inside it, and its initializer is a
+    /// brace-enclosed list or a string literal. Reports each violation as
+    /// Clang does and returns whether there was one, so that the element
+    /// initializes nothing.
+    /// GNU extension: GCC manual, "Arrays of Length Zero".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Zero-Length.html>
+    /// C99: §6.7.2.1 paragraph 16, p. 103; PDF p. 115; §6.7.8 paragraph 16,
+    /// p. 126; PDF p. 138.
+    fn flexible_designation(
+        &mut self,
+        designators: &[Designator<'tu>],
+        at: usize,
+        member: Member,
+        element: &InitializerElement<'tu>,
+    ) -> bool {
+        let declared = member
+            .name
+            .map_or(member.source_vectors, |name| name.source_vectors);
+        let mut invalid = false;
+        if let Some(inner) = designators.get(at + 1) {
+            self.error(
+                SemanticErrorKind::FlexibleArrayDesignator,
+                inner.source_vectors,
+                None,
+                Some(declared),
+            );
+            invalid = true;
+        }
+        if let InitializerType::AssignmentExpression(e) = element.initializer.kind
+            && !matches!(unparenthesized(e).kind, ExpressionType::StringLiteral(_))
+        {
+            self.error(
+                SemanticErrorKind::FlexibleArrayBraces,
+                e.source_vectors,
+                None,
+                Some(declared),
+            );
+            invalid = true;
+        }
+        invalid
+    }
+
+    /// Records that `element` writes the subobject at `cursor`, through
+    /// every element of a range designator's range when `range` gives its
+    /// step and lower bound, inside the list whose object has the node
+    /// `base`; `inner` holds where writes inside each subobject the
+    /// element's designation names begin. Reports what the write overrides
+    /// as Clang's `-Winitializer-overrides` does, and returns the
+    /// subobject's node. A range of more than [`RANGE_WRITES`] elements
+    /// records only its last.
+    /// C99: §6.7.8 paragraph 19, p. 127; PDF p. 139.
+    fn record_write(
+        &mut self,
+        writes: &mut Writes<'_>,
+        base: u32,
+        cursor: &Current<'_>,
+        inner: &[super::SourceVectors],
+        range: Option<(usize, u64)>,
+        element: &InitializerElement<'tu>,
+    ) -> u32 {
+        let mut steps = ArenaVec::new_in(self.scratch);
+        let mut path = Some(cursor);
+        while let Some(current) = path {
+            steps.push(Step {
+                index: current.index,
+                union: matches!(
+                    self.types.nodes[current.container.index],
+                    TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Union
+                ),
+                inner: element.initializer.source_vectors,
+            });
+            path = current.parent;
+        }
+        steps.reverse();
+        for (step, &source) in steps.iter_mut().zip(inner) {
+            step.inner = source;
+        }
+        let kind = match element.initializer.kind {
+            | InitializerType::InitializerList(_) => Write::List,
+            | InitializerType::AssignmentExpression(_) => Write::Expression,
+        };
+        let source = element.initializer.source_vectors;
+        let range = range.filter(|&(step, lower)| {
+            steps
+                .get(step)
+                .is_some_and(|upper| upper.index - lower < RANGE_WRITES)
+        });
+        let (node, found) = writes.write(base, &steps, range, kind, source);
+        // Clang reports a replaced union member at the element's
+        // designation, a partly replaced expression where the element
+        // enters it, and a replaced subobject at the new initializer.
+        let reports = [
+            found.member.map(|previous| {
+                (
+                    SemanticErrorKind::InitializerOverride,
+                    element.source_vectors,
+                    previous,
+                )
+            }),
+            found.partial.map(|(at, previous)| {
+                (SemanticErrorKind::PartialInitializerOverride, at, previous)
+            }),
+            found
+                .whole
+                .map(|previous| (SemanticErrorKind::InitializerOverride, source, previous)),
+        ];
+        for (kind, at, previous) in reports.into_iter().flatten() {
+            self.group_diagnostic(
+                crate::configuration::DiagnosticGroup::InitializerOverrides,
+                kind,
+                at,
+                None,
+                Some(previous),
+            );
+        }
+        node
     }
 
     /// An initializer reached the flexible array member of type `member`.
     /// A static object may initialize its own structure's member (`own`),
     /// and an empty list may initialize any, which Clang accepts as an
     /// extension (`-Wgnu-flexible-array-initializer`); anything else is an
-    /// error. Starts counting the own member's elements in `flexible`; a
-    /// later initializer of the member overrides an earlier one (§6.7.8p19,
-    /// p. 127; PDF p. 139) but keeps the larger extent so that every listed
-    /// element has storage.
+    /// error. Starts counting the own member's elements in `flexible`. A
+    /// list or string that initializes the whole member (`whole`) overrides
+    /// every earlier initializer of it (§6.7.8p19, p. 127; PDF p. 139), so
+    /// the member's extent restarts, as in GCC and Clang; an element that
+    /// brace elision reaches overrides only that element.
     /// GNU extension: GCC manual, "Arrays of Length Zero".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Zero-Length.html>
     fn enter_flexible_array(
@@ -539,8 +743,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         member: TypeId,
         own: bool,
         empty: bool,
+        whole: bool,
         source: super::SourceVectors,
-        flexible: &mut Option<(TypeId, u64)>,
+        flexible: &mut Option<FlexibleExtent>,
     ) {
         if !own && !empty {
             self.error(
@@ -557,7 +762,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             source,
         );
         if own && let TypeKind::Array(element, _) = self.types.nodes[member.index] {
-            *flexible = Some((element, flexible.map_or(0, |(_, elements)| elements)));
+            let written = flexible.map_or(0, |extent| extent.written);
+            let current = match flexible {
+                | Some(extent) if !whole => extent.current,
+                | _ => 0,
+            };
+            *flexible = Some(FlexibleExtent {
+                element,
+                current,
+                written,
+            });
         }
     }
 
@@ -909,18 +1123,46 @@ struct Current<'s> {
     root_index: u64,
 }
 
-/// Resumable brace-list and current-object initialization tasks.
+/// Resumable brace-list and current-object initialization tasks. Each
+/// carries the [`Writes`] node of the subobject it initializes.
 /// C99: §6.7.8 paragraphs 17-20, pp. 126-127; PDF pp. 138-139.
 #[derive(Clone, Copy)]
 enum InitWork<'tu, 's> {
     /// A target type, its initializer, and whether the target is a
     /// bit-field member.
-    Value(TypeId, &'tu Initializer<'tu>, bool),
+    Value(TypeId, &'tu Initializer<'tu>, bool, u32),
     List(
         TypeId,
         &'tu BracedInitializerList<'tu>,
         usize,
         &'s Current<'s>,
         bool,
+        u32,
     ),
 }
+
+/// The extents of the flexible array member a static object's own
+/// initializer gives elements: its element type, the extent the latest
+/// initializer of the whole member gives it, and the largest extent any
+/// initializer of it writes.
+/// GNU extension: GCC manual, "Arrays of Length Zero".
+#[derive(Clone, Copy)]
+struct FlexibleExtent {
+    element: TypeId,
+    current: u64,
+    written: u64,
+}
+
+impl FlexibleExtent {
+    /// An element of the member up to `extent` is initialized.
+    fn extend(&mut self, extent: u64) {
+        self.current = self.current.max(extent);
+        self.written = self.written.max(self.current);
+    }
+}
+
+/// The most elements of a GNU range designator whose writes are recorded
+/// for `-Winitializer-overrides`; a longer range records only its last
+/// element, so it may miss a warning but never invents one.
+/// GNU extension: GCC manual, "Designated Initializers".
+const RANGE_WRITES: u64 = 1 << 16;

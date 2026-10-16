@@ -1,0 +1,33 @@
+warning: attribute 'transparent_union' is ignored, place it after "union" to apply attribute to type declaration
+ --> sema-transparent-union-applicability.c:2:24
+  |
+2 | union U __attribute__((transparent_union));
+  |                        ^^^^^^^^^^^^^^^^^ applies to no type here
+  |
+  = note: GNU attribute syntax: in a declaration that declares only a tag, an attribute among its declaration specifiers applies to no declarator; write it after the keyword or after the closing brace of the definition
+
+warning: 'transparent_union' attribute only applies to unions
+ --> sema-transparent-union-applicability.c:3:27
+  |
+3 | int object __attribute__((transparent_union));
+  |                           ^^^^^^^^^^^^^^^^^ not a union type
+  |
+  = note: GNU transparent_union is a type attribute of a union; it is ignored on objects, functions, parameters, members, structures and other types
+
+warning: transparent_union attribute can only be applied to a union definition; attribute ignored
+ --> sema-transparent-union-applicability.c:4:22
+  |
+4 | union __attribute__((transparent_union)) U *pointer;
+  |                      ^^^^^^^^^^^^^^^^^ not a union definition
+  |
+  = note: GNU transparent_union applies to a union where its members are defined
+
+warning: 'transparent_union' attribute only applies to unions
+ --> sema-transparent-union-applicability.c:5:36
+  |
+5 | struct S { int a; } __attribute__((transparent_union));
+  |                                    ^^^^^^^^^^^^^^^^^ not a union type
+  |
+  = note: GNU transparent_union is a type attribute of a union; it is ignored on objects, functions, parameters, members, structures and other types
+
+4 warnings generated.

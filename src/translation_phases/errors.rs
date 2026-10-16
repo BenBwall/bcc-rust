@@ -81,6 +81,9 @@ impl TranslationError<'_> {
                 | semantic_analysis::SemanticErrorKind::PointerConstraint(group) => Some(group),
                 | semantic_analysis::SemanticErrorKind::UnusedStaticFunction =>
                     Some(G::UnusedFunction),
+                | semantic_analysis::SemanticErrorKind::InitializerOverride
+                | semantic_analysis::SemanticErrorKind::PartialInitializerOverride =>
+                    Some(G::InitializerOverrides),
                 | _ => None,
             },
             | _ => None,

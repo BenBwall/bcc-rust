@@ -251,6 +251,23 @@ pub(crate) enum SemanticErrorKind {
     /// structure; GNU C allows only that case, and Clang an empty list too.
     /// C99: §6.7.2.1p16, p. 103; PDF p. 115; §6.7.8p2, p. 125; PDF p. 137.
     FlexibleArrayInitializer,
+    /// A designator naming a flexible array member with an initializer that
+    /// is neither a brace-enclosed list nor a string literal, an error in
+    /// GCC and Clang. GNU extension: GCC manual, "Arrays of Length Zero".
+    /// C99: §6.7.2.1p16, p. 103; PDF p. 115; §6.7.8p16, p. 126; PDF p. 138.
+    FlexibleArrayBraces,
+    /// A designator into an element of a flexible array member, which GCC
+    /// and Clang reject. GNU extension: GCC manual, "Arrays of Length Zero".
+    /// C99: §6.7.2.1p16, p. 103; PDF p. 115; §6.7.8p6-7, p. 125; PDF p. 137.
+    FlexibleArrayDesignator,
+    /// Clang's `-Winitializer-overrides`: a later initializer replaces all
+    /// of a subobject an earlier one initialized.
+    /// C99: §6.7.8p19, p. 127; PDF p. 139.
+    InitializerOverride,
+    /// Clang's `-Winitializer-overrides`: a later initializer replaces part
+    /// of a subobject an earlier expression initialized as a whole.
+    /// C99: §6.7.8p19, p. 127; PDF p. 139.
+    PartialInitializerOverride,
     /// C99: §6.7.8p6-7, p. 125; PDF p. 137.
     InvalidDesignator,
     /// C99: §6.7.8p4, p. 125; PDF p. 137.
@@ -375,6 +392,22 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "Common Type Attributes".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
     IgnoredTransparentUnion,
+    /// `transparent_union` written on a declaration of something other than
+    /// a union type: an object, function, parameter, member, structure or
+    /// non-union typedef, which Clang ignores with a warning.
+    /// GNU extension: GCC manual, "Common Type Attributes".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    TransparentUnionNotUnion,
+    /// `transparent_union` on a union specifier that does not define the
+    /// union, which Clang ignores with a warning.
+    /// GNU extension: GCC manual, "Common Type Attributes".
+    TransparentUnionNotDefinition,
+    /// `transparent_union` in the specifiers of a declaration that declares
+    /// only a tag of this kind, outside the tag's specifier, which Clang
+    /// ignores with a warning that the attribute belongs after the keyword.
+    /// GNU extension: GCC manual, "Attribute Syntax".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Attribute-Syntax.html>
+    TransparentUnionPlacement(super::types::TagKind),
     /// GCC Vector Extensions: compatible lanes and safe scalar splats.
     /// GNU extension: GCC manual, "Vector Extensions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
@@ -467,6 +500,9 @@ impl SemanticErrorKind {
             | Self::InvalidStandardAlignment => "invalid alignment specifier",
             | Self::InvalidModeAttribute => "invalid scalar machine mode",
             | Self::IgnoredTransparentUnion => "this union cannot be made transparent",
+            | Self::TransparentUnionNotUnion => "not a union type",
+            | Self::TransparentUnionNotDefinition => "not a union definition",
+            | Self::TransparentUnionPlacement(_) => "applies to no type here",
             | Self::InvalidVectorOperand => "invalid vector operands",
             | Self::InvalidVectorBuiltin => "invalid vector builtin operands",
             | Self::InvalidImmediate => "expected an integer constant expression in range",
@@ -527,6 +563,10 @@ impl SemanticErrorKind {
             | Self::InvalidInitializer => "invalid initializer",
             | Self::ExcessInitializer => "no subobject is left to initialize",
             | Self::FlexibleArrayInitializer => "initializes a flexible array member",
+            | Self::FlexibleArrayBraces => "not a brace-enclosed list",
+            | Self::FlexibleArrayDesignator => "designates inside a flexible array member",
+            | Self::InitializerOverride | Self::PartialInitializerOverride =>
+                "overrides an earlier initializer",
             | Self::InvalidDesignator => "no such subobject",
             | Self::NonConstantInitializer => "not a constant expression",
             | Self::InvalidStorage => "external declaration",
@@ -660,6 +700,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::Undef
                     | crate::configuration::DiagnosticGroup::UnknownPragmas
                     | crate::configuration::DiagnosticGroup::UnusedFunction
+                    | crate::configuration::DiagnosticGroup::InitializerOverrides
                     | crate::configuration::DiagnosticGroup::ConstantPromotion => "warning-group diagnostic",
                 },
                 "C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1",
@@ -753,6 +794,32 @@ impl SemanticErrorKind {
                 "GNU transparent_union applies to a union definition with at least one member, a \
                  first member of neither floating nor vector type, and every member of the first \
                  member's size and at most its alignment",
+            ),
+            | Self::TransparentUnionNotUnion => (
+                "'transparent_union' attribute only applies to unions",
+                "GNU transparent_union is a type attribute of a union; it is ignored on objects, \
+                 functions, parameters, members, structures and other types",
+            ),
+            | Self::TransparentUnionNotDefinition => (
+                "transparent_union attribute can only be applied to a union definition; \
+                 attribute ignored",
+                "GNU transparent_union applies to a union where its members are defined",
+            ),
+            | Self::TransparentUnionPlacement(kind) => (
+                match kind {
+                    | super::types::TagKind::Struct =>
+                        "attribute 'transparent_union' is ignored, place it after \"struct\" to \
+                         apply attribute to type declaration",
+                    | super::types::TagKind::Union =>
+                        "attribute 'transparent_union' is ignored, place it after \"union\" to \
+                         apply attribute to type declaration",
+                    | super::types::TagKind::Enum =>
+                        "attribute 'transparent_union' is ignored, place it after \"enum\" to \
+                         apply attribute to type declaration",
+                },
+                "GNU attribute syntax: in a declaration that declares only a tag, an attribute \
+                 among its declaration specifiers applies to no declarator; write it after the \
+                 keyword or after the closing brace of the definition",
             ),
             | Self::InvalidVectorOperand => (
                 "invalid vector operation",
@@ -1084,6 +1151,27 @@ impl SemanticErrorKind {
                 "C99 §6.7.2.1p16, §6.7.8p2: a flexible array member has no elements; as a GNU \
                  extension only an object with static storage duration may give the flexible \
                  array member of its own structure elements",
+            ),
+            | Self::FlexibleArrayBraces => (
+                "flexible array requires brace-enclosed initializer",
+                "C99 §6.7.8p16: an array is initialized by a brace-enclosed list; as in GCC and \
+                 Clang, a designated flexible array member takes a list or a string literal, \
+                 never a brace-elided element",
+            ),
+            | Self::FlexibleArrayDesignator => (
+                "designator into flexible array member subobject",
+                "GNU flexible array member initialization: as in GCC and Clang, a designator may \
+                 name the flexible array member but not an element or member inside it",
+            ),
+            | Self::InitializerOverride => (
+                "initializer overrides prior initialization of this subobject",
+                "C99 §6.7.8p19: each initializer for a subobject overrides any previously listed \
+                 initializer for the same subobject",
+            ),
+            | Self::PartialInitializerOverride => (
+                "initializer partially overrides prior initialization of this subobject",
+                "C99 §6.7.8p19: each initializer for a subobject overrides any previously listed \
+                 initializer for the same subobject, here part of one an expression initialized",
             ),
             | Self::InvalidDesignator => (
                 "designator does not identify an available subobject",
@@ -1451,6 +1539,12 @@ impl ToDiagnostic for SemanticError {
                 | SemanticErrorKind::AliasKind | SemanticErrorKind::AliasTypeMismatch =>
                     "aliasee is declared here",
                 | SemanticErrorKind::SectionMismatch => "previous attribute is here",
+                | SemanticErrorKind::InitializerOverride
+                | SemanticErrorKind::PartialInitializerOverride =>
+                    "previous initialization is here",
+                | SemanticErrorKind::FlexibleArrayBraces
+                | SemanticErrorKind::FlexibleArrayDesignator =>
+                    "initialized flexible array member is here",
                 | _ => "previous declaration is here",
             };
             diagnostic = diagnostic.secondary(previous, label);
@@ -1498,6 +1592,11 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::SectionMismatch
                 | SemanticErrorKind::InvalidVisibility
                 | SemanticErrorKind::IgnoredTransparentUnion
+                | SemanticErrorKind::TransparentUnionNotUnion
+                | SemanticErrorKind::TransparentUnionNotDefinition
+                | SemanticErrorKind::TransparentUnionPlacement(_)
+                | SemanticErrorKind::InitializerOverride
+                | SemanticErrorKind::PartialInitializerOverride
         ) {
             ErrorSeverity::Warning
         } else {
