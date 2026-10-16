@@ -252,6 +252,14 @@ pub(super) fn attributes<'id>(
     }
 }
 
+/// Marks a function or call `returns_twice`, which keeps LLVM from
+/// reusing stack slots or keeping state where the second return of a
+/// `setjmp` cannot find it. LLVM's function attribute index is `~0`.
+/// C99: §7.13.2.1 paragraphs 3-4, p. 244; PDF p. 256.
+pub(super) fn returns_twice<'id>(api: &Session<'id>, value: Val<'id>, call: bool) {
+    api.attribute(value, u32::MAX, "returns_twice", 0, None, call);
+}
+
 /// Maps the register extension only; poison remains legal at calls and returns.
 /// C99: §6.2.5 paragraphs 2-6, p. 33; PDF p. 45 (integer types);
 /// the extension convention and poison semantics are additional IR contracts.
@@ -465,12 +473,18 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                 }
                 call
             },
-            | InstData::Call { func, args } => self.call(
-                inst,
-                self.emitter.functions[func.index()],
-                self.emitter.module.function_signature(func),
-                self.body.value_list(args),
-            )?,
+            | InstData::Call { func, args } => {
+                let call = self.call(
+                    inst,
+                    self.emitter.functions[func.index()],
+                    self.emitter.module.function_signature(func),
+                    self.body.value_list(args),
+                )?;
+                if self.emitter.module.function(func).returns_twice {
+                    returns_twice(api, call, true);
+                }
+                call
+            },
             | InstData::CallIndirect { sig, args } => {
                 let (&callee, args) = self
                     .body

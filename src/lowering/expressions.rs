@@ -66,7 +66,6 @@ use crate::{
             ExpressionInfo,
             TypeId,
             TypeKind,
-            UnsupportedAttribute,
         },
     },
     util::bump::ArenaVec,
@@ -1446,8 +1445,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     }
 
     /// Backend capability checks use the retained callee classification.
-    /// Returns-twice and builtin spelling contracts move to M4/M7.
-    /// C99: §7.13.1.1p2, p. 243; PDF p. 255.
+    /// A returns-twice callee needs nothing here: declaring it marks
+    /// its IR declaration from the retained fact. The builtin spelling
+    /// contract moves to M4/M7.
     fn resolved_direct_callee(
         &self,
         call: CallFacts<'tu>,
@@ -1467,24 +1467,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             data.name.name, self.unit.sema.bindings[entity.0].name.name,
             "direct calls retain their binding entity"
         );
-        let text = self.unit.context.string_cache.at(data.name.name);
-        if matches!(
-            text,
-            "setjmp" | "_setjmp" | "sigsetjmp" | "__sigsetjmp" | "vfork"
-        ) {
-            return Err(LoweringError::unsupported(Construct::Setjmp, source));
-        }
-        if self
-            .unit
-            .sema
-            .entity_attributes(binding)
-            .is_some_and(|attributes| attributes.returns_twice)
-        {
-            return Err(LoweringError::unsupported(
-                Construct::Attribute(UnsupportedAttribute::ReturnsTwice),
-                source,
-            ));
-        }
         if data.origin.is_intrinsic() && data.origin.library().is_none() {
             return Err(LoweringError::unsupported(Construct::Builtin, source));
         }

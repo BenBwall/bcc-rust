@@ -171,10 +171,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// GCC `returns_twice` on a function. Lowering cannot preserve a
-    /// caller's state across a second return, so it refuses direct calls;
-    /// an uncalled declaration has no effect to drop. Elsewhere it is
-    /// ignored with a warning, as in Clang.
+    /// GCC `returns_twice` on a function: the entity's retained
+    /// returns-twice fact, which lowering projects onto the IR function so
+    /// the optimizer and back ends keep the caller's frame valid for a
+    /// second return. Elsewhere it is ignored with a warning, as in Clang.
     /// GNU extension: GCC manual, "Common Function Attributes",
     /// `returns_twice`.
     fn returns_twice_attribute(&mut self, subject: Subject, attribute: WrittenAttribute<'_>) {
@@ -186,6 +186,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.attributes.entity(entity).returns_twice = true;
         } else {
             self.ignored(attribute);
+        }
+    }
+
+    /// Gives every linked function that the external-symbol contract says
+    /// may return twice the same retained fact as GNU `returns_twice`:
+    /// glibc declares `_setjmp` and `__sigsetjmp` without the attribute, and
+    /// GCC and Clang recognize these names alone. Only the external
+    /// spelling counts; an internal or local function of that name is
+    /// another entity. C99: §7.13 paragraph 3, p. 243; PDF p. 255 (a program
+    /// may not define `setjmp` itself); §6.2.2 paragraph 4, pp. 30-31; PDF
+    /// pp. 42-43.
+    fn external_returns_twice(&mut self) {
+        for binding in 0..self.bindings.len() {
+            let data = self.bindings[binding];
+            if data.kind == BindingKind::Function
+                && data.linkage == Linkage::External
+                && crate::builtins::returns_twice(self.context.string_cache.at(data.name.name))
+            {
+                let entity = self.entity_of(binding);
+                self.attributes.entity(entity).returns_twice = true;
+            }
         }
     }
 
@@ -644,6 +665,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         &mut self,
     ) -> SymbolFacts<'tu> {
         let tu = self.types.tu;
+        self.external_returns_twice();
         let mut aliases = ArenaVec::new_in(tu);
         let mut by_name = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
         for request in &self.attributes.aliases {

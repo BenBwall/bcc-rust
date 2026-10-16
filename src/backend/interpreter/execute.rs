@@ -99,11 +99,7 @@ impl Machine<'_, '_, '_> {
                         {
                             return Err(UbKind::PoisonAddress.into());
                         }
-                        for &pointer in &self.dynamic_slots[position..] {
-                            self.memory
-                                .free(pointer.provenance.expect("stack allocation"));
-                        }
-                        self.dynamic_slots.truncate(position);
+                        self.release_dynamic(position);
                         return Ok(None);
                     },
                     | Opcode::Fneg => float_negate(ty, value)?,

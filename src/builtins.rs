@@ -4,7 +4,10 @@
 //! contract shards. `contract.rs` defines closed rules, operations and effects.
 //! Semantic handlers check these contracts and retain instances; lowering owns
 //! executable implementations. Atomic, x86, vector and type-generic shards are
-//! migration M6 work. No syntax, semantic type IDs or IR types belong here.
+//! migration M6 work. `external.rs` is the external-symbol contract: the
+//! library functions that return twice or restore an environment, which
+//! every phase reads from there instead of matching spellings itself. No
+//! syntax, semantic type IDs or IR types belong here.
 //!
 //! C99: §6.5.2.2p2,p7, pp. 71-72; PDF pp. 83-84 (call contracts);
 //! §7.1.4, pp. 166-167; PDF pp. 178-179 (library equivalence).
@@ -14,11 +17,17 @@
 mod contract;
 
 // Static index and contract shards
+mod external;
 mod index;
 mod library;
 mod scalar;
 
 pub(crate) use contract::*;
+pub(crate) use external::{
+    ExternalContract,
+    external_contract,
+    returns_twice,
+};
 #[cfg(test)]
 pub(crate) use index::descriptors as test_descriptors;
 pub(crate) use index::{

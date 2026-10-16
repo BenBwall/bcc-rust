@@ -22,6 +22,7 @@ use super::{
         Location,
         Trap,
         UbKind,
+        Unsupported,
     },
     value::{
         Pointer,
@@ -192,6 +193,15 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
         if callee.body.is_some() {
             self.push_frame(func, result)?;
             return Ok(None);
+        }
+        if let Some(contract) = crate::builtins::external_contract(callee.name) {
+            let call_result = self.module.function_signature(func).result;
+            return self
+                .environment_call(contract, call_result, result)
+                .map(|()| None);
+        }
+        if callee.returns_twice {
+            return Err(Fault::Unsupported(Unsupported::ReturnsTwice));
         }
         let call = HostCall {
             name:      callee.name,
@@ -384,19 +394,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
                 )?;
             }
         }
-        let frame = self.frames.pop().expect("a frame is executing");
-        for &slot in &self.slots[frame.slots..] {
-            self.memory
-                .free(slot.provenance.expect("slots have provenance"));
-        }
-        self.slots.truncate(frame.slots);
-        for &pointer in &self.dynamic_slots[frame.dynamic_slots..] {
-            self.memory
-                .free(pointer.provenance.expect("stack allocation"));
-        }
-        self.dynamic_slots.truncate(frame.dynamic_slots);
-        self.values.truncate(frame.values);
-        self.varargs.truncate(frame.varargs);
+        let frame = self.pop_frame();
         if self.frames.is_empty() {
             return Ok(Some(Termination::Returned(value)));
         }
@@ -404,6 +402,30 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             self.set(result, value);
         }
         Ok(None)
+    }
+
+    /// Pops the executing frame, freeing its stack objects and dropping its
+    /// values and variadic arguments, and returns it.
+    pub(super) fn pop_frame(&mut self) -> Frame {
+        let frame = self.frames.pop().expect("a frame is executing");
+        for &slot in &self.slots[frame.slots..] {
+            self.memory
+                .free(slot.provenance.expect("slots have provenance"));
+        }
+        self.slots.truncate(frame.slots);
+        self.release_dynamic(frame.dynamic_slots);
+        self.values.truncate(frame.values);
+        self.varargs.truncate(frame.varargs);
+        frame
+    }
+
+    /// Frees the dynamic stack objects from position `position` on.
+    pub(super) fn release_dynamic(&mut self, position: usize) {
+        for &pointer in &self.dynamic_slots[position..] {
+            self.memory
+                .free(pointer.provenance.expect("stack allocation"));
+        }
+        self.dynamic_slots.truncate(position);
     }
 
     /// Discards every frame, as `exit` does, freeing their stack objects.

@@ -52,7 +52,11 @@ pub(crate) struct EntityAttributes<'tu> {
     pub(crate) code_alignment: u32,
     /// GNU `visibility`, from the declaration that wrote it.
     pub(crate) visibility:     Option<Visibility>,
-    /// GNU `returns_twice`: lowering refuses direct calls to the entity.
+    /// Calls may return a second time, after a `longjmp`: GNU
+    /// `returns_twice`, or a linked function that the external-symbol
+    /// contract (`builtins::external_contract`) lists, as `_setjmp` is.
+    /// Lowering marks the IR function, which the optimizer and back ends
+    /// read. C99: §7.13.2.1 paragraph 4, p. 244; PDF p. 256.
     pub(crate) returns_twice:  bool,
 }
 
@@ -115,9 +119,6 @@ pub(crate) enum UnsupportedAttribute {
     Weakref,
     /// GNU/MSVC `naked`: a body without prologue or epilogue.
     Naked,
-    /// A direct call to a function declared GNU `returns_twice`, as
-    /// `setjmp` is.
-    ReturnsTwice,
     /// Clang `overloadable`: mangled C function names.
     Overloadable,
     /// Clang `cpu_dispatch`/`cpu_specific`/`target_version` multiversioning.
@@ -144,7 +145,6 @@ impl UnsupportedAttribute {
             | Self::Ifunc => "the `ifunc` attribute",
             | Self::Weakref => "the `weakref` attribute",
             | Self::Naked => "naked functions",
-            | Self::ReturnsTwice => "the `returns_twice` attribute",
             | Self::Overloadable => "the `overloadable` attribute",
             | Self::Multiversioning => "function multiversioning attributes",
             | Self::PassObjectSize => "the `pass_object_size` attribute",

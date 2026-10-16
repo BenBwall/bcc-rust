@@ -378,6 +378,27 @@ function @missing() -> i32 weak
 }
 
 #[test]
+fn returns_twice_calls_and_addresses_are_refused() {
+    for body in [
+        "v1 = call @setjmp(v0)",
+        "v2 = func_addr @setjmp\n    v1 = iconst.i32 0",
+    ] {
+        let message = refusal(
+            &format!(
+                "abi lowered\nfunction @setjmp(ptr) -> i32 external\nfunction @f(ptr) -> i32 \
+                 external {{\nblock0(v0: ptr):\n    {body}\n    return v1\n}}\n"
+            ),
+            Target::LinuxGnu,
+        );
+        assert_eq!(
+            message,
+            "not yet supported by the native back end: a call to a function that may return \
+             twice, such as `setjmp` (in @f)"
+        );
+    }
+}
+
+#[test]
 fn unsupported_constructs_are_refused_with_their_function() {
     let message = refusal(
         "abi lowered

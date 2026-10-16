@@ -269,6 +269,93 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         std::fs::remove_file(executable).unwrap();
     }
 
+    /// `setjmp` and `longjmp` (#50) from `tests/fixtures/programs/setjmp.c`:
+    /// MinGW-w64's declarations, whose `setjmp` passes `mingw_getsp()`, in
+    /// the interpreter for the Windows target; the host's `<setjmp.h>` in the
+    /// interpreter and in native executables built through LLVM. The native
+    /// back end refuses returns-twice calls rather than miscompile them.
+    #[test]
+    fn setjmp_and_longjmp_run_in_the_interpreter_and_natively() {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/programs/setjmp.c");
+        let compile = |flags: &[&str]| {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command.arg(&source).args(flags).env("NO_COLOR", "1");
+            run_native(&mut command).unwrap()
+        };
+        for opt in ["--opt=none", "--opt=bcc"] {
+            let output = compile(&[
+                "--interpret",
+                "--target=x86_64-w64-windows-gnu",
+                "-DMINGW_DECLARATIONS",
+                opt,
+            ]);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{opt}: {}",
+                text(&output.stderr)
+            );
+        }
+        // bcc has no default C library directories; take the host's.
+        let (target, include) = match host() {
+            | Some(target @ "x86_64-unknown-linux-gnu")
+                if Path::new("/usr/include/setjmp.h").is_file() =>
+                (
+                    target,
+                    vec![
+                        "/usr/include/x86_64-linux-gnu".to_owned(),
+                        "/usr/include".to_owned(),
+                    ],
+                ),
+            | Some(target @ "x86_64-w64-windows-gnu") => {
+                let Some((_, include)) = mingw() else {
+                    eprintln!("skipping native runs: no MinGW-w64 gcc on PATH");
+                    return;
+                };
+                (target, vec![include.to_str().unwrap().to_owned()])
+            },
+            | _ => {
+                eprintln!("skipping native runs: no supported host C library");
+                return;
+            },
+        };
+        let mut flags = vec![format!("--target={target}")];
+        for directory in include {
+            flags.extend(["--idirafter".to_owned(), directory]);
+        }
+        let flags: Vec<&str> = flags.iter().map(String::as_str).collect();
+        let target = &flags[..];
+        for opt in ["--opt=none", "--opt=bcc"] {
+            let output = compile(&[&["--interpret", opt][..], target].concat());
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{opt}: {}",
+                text(&output.stderr)
+            );
+        }
+        let executable = temporary("setjmp.exe");
+        let path = executable.to_str().unwrap();
+        for opt in [&["--llvm-opt=O0"][..], &["--opt=bcc", "--llvm-opt=O2"][..]] {
+            let built = compile(&[target, &["-o", path][..], opt].concat());
+            assert!(built.status.success(), "{opt:?}: {}", text(&built.stderr));
+            let output = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(output.status.code(), Some(0), "{opt:?}");
+        }
+        std::fs::remove_file(&executable).unwrap();
+        let refused = compile(&[target, &["--backend=native", "-o", path][..]].concat());
+        assert!(!refused.status.success());
+        assert!(
+            text(&refused.stderr).contains(
+                "not yet supported by the native back end: a call to a function that may return \
+                 twice"
+            ),
+            "{}",
+            text(&refused.stderr)
+        );
+        assert!(!executable.exists());
+    }
+
     #[test]
     fn inline_modes_emit_bodies_and_run_in_both_back_ends() {
         let Some(target) = host() else {

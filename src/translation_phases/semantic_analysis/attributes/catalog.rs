@@ -35,9 +35,8 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     Section,
     Used,
     Visibility,
-    /// GNU `returns_twice`: an entity fact that lowering refuses at each
-    /// direct call, so declarations that are never called (as in
-    /// `<setjmp.h>`) stay valid.
+    /// GNU `returns_twice`: an entity fact that lowering projects onto the
+    /// IR function, as the external-symbol contract does for `setjmp`.
     ReturnsTwice,
     /// A calling convention, checked against the target's default.
     Convention(Convention),

@@ -28,27 +28,56 @@ fn generated_globals_skip_all_user_symbol_names() {
     }
 }
 
+/// The header line of `@name` in the module text, or "" if it has none.
+fn header<'t>(text: &'t str, name: &str) -> &'t str {
+    let prefix = format!("function @{name}(");
+    text.lines()
+        .find(|line| line.starts_with(&prefix))
+        .unwrap_or_default()
+}
+
 #[test]
-fn returns_twice_refuses_calls_but_not_declarations() {
-    // MinGW's <setjmp.h> declares `_setjmp` and friends this way.
-    let declared = "int __attribute__((__nothrow__, __returns_twice__)) save(void *, void *);";
+fn returns_twice_marks_declarations_from_the_retained_fact() {
+    // MinGW's <setjmp.h> declares `_setjmp` and friends with the attribute;
+    // glibc declares `_setjmp` without it, and the external catalog
+    // supplies the same fact. C99 §7.13.2.1p4.
+    let attributed = "int __attribute__((__nothrow__, __returns_twice__)) save(void *, void *);";
+    let glibc = "typedef struct { long b[25]; } jmp_buf[1]; extern int _setjmp(jmp_buf); extern \
+                 void longjmp(jmp_buf, int) __attribute__((__noreturn__));";
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
-        let source = format!("{declared} int main(void) {{ return 42; }}");
+        let source = format!("{attributed} int main(void) {{ return save(0, 0); }}");
         let text = lower_for(&source, target).unwrap_or_else(|e| panic!("{source}: {e:?}"));
-        assert_eq!(
-            run_text(&text, "main").result.unwrap().termination,
-            Termination::Returned(Some(RuntimeValue::Int(42))),
+        assert!(
+            header(&text, "save").ends_with(" external returns_twice"),
             "{text}"
         );
-        let source = format!("{declared} int main(void) {{ return save(0, 0); }}");
-        let errors = lower_for(&source, target).expect_err(&source);
+        let source = format!(
+            "{glibc} int main(void) {{ jmp_buf b; volatile int n = 0;\n if (_setjmp(b) == 0) {{ n \
+             = 5; longjmp(b, 3); }}\n return n; }}"
+        );
+        let text = lower_for(&source, target).unwrap_or_else(|e| panic!("{source}: {e:?}"));
         assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("not yet supported by lowering: the `returns_twice` attribute")),
-            "{target:?}: {errors:?}"
+            header(&text, "_setjmp").ends_with(" external returns_twice"),
+            "{text}"
+        );
+        assert!(header(&text, "longjmp").ends_with(" external"), "{text}");
+        assert_eq!(
+            run_text(&text, "main").result.unwrap().termination,
+            Termination::Returned(Some(RuntimeValue::Int(5))),
+            "{text}"
         );
     }
+    // A local function of a cataloged spelling is another entity, but an
+    // assembler label naming the symbol is the symbol.
+    let source = "static int vfork(void) { return 1; } int main(void) { return vfork(); }";
+    let text = lower_for(source, Target::LinuxGnu).unwrap();
+    assert!(!text.contains("returns_twice"), "{text}");
+    let source = "int save(void *) __asm__(\"_setjmp\"); int main(void) { return save(0); }";
+    let text = lower_for(source, Target::LinuxGnu).unwrap();
+    assert!(
+        header(&text, "_setjmp").ends_with(" external returns_twice"),
+        "{text}"
+    );
 }
 
 #[test]

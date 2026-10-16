@@ -177,14 +177,21 @@ pub(crate) struct Module<'ir> {
 /// A function of a module. It is defined if it has a body.
 #[derive(Debug)]
 pub(crate) struct Function<'ir> {
-    pub(crate) name:       &'ir str,
-    pub(crate) signature:  SigId,
-    pub(crate) linkage:    Linkage,
-    pub(crate) body:       Option<Body<'ir>>,
+    pub(crate) name:          &'ir str,
+    pub(crate) signature:     SigId,
+    pub(crate) linkage:       Linkage,
+    pub(crate) body:          Option<Body<'ir>>,
     /// Alias target, section and retention requests.
-    pub(crate) attributes: SymbolAttributes<'ir>,
+    pub(crate) attributes:    SymbolAttributes<'ir>,
     /// A requested minimum alignment of the function's code.
-    pub(crate) align:      Option<Align>,
+    pub(crate) align:         Option<Align>,
+    /// A call may return a second time, after a `longjmp` restores the
+    /// environment it saved (`setjmp`, `vfork`, GNU `returns_twice`). The
+    /// optimizer does not inline across such frames, the LLVM back end
+    /// marks the declaration and its calls `returns_twice`, and the native
+    /// back end refuses them. C99: §7.13.2.1 paragraph 4, p. 244; PDF p.
+    /// 256.
+    pub(crate) returns_twice: bool,
 }
 
 // Tests

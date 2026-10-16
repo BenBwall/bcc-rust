@@ -32,9 +32,9 @@
 //!
 //! - Execution: `machine.rs` loads a module and moves between frames and
 //!   blocks; `execute.rs` dispatches one instruction; `varargs.rs` implements
-//!   `va_start`, `va_arg`, `va_copy` and `va_end`. `main.rs` supplies writable
-//!   arguments for hosted C entry; `startup.rs` orders and runs constructors
-//!   and destructors around it.
+//!   `va_start`, `va_arg`, `va_copy` and `va_end`; `nonlocal.rs` `setjmp` and
+//!   `longjmp`. `main.rs` supplies writable arguments for hosted C entry;
+//!   `startup.rs` orders and runs constructors and destructors around it.
 //! - Semantics of values: `value.rs` defines runtime values and pointers;
 //!   `arithmetic.rs` the arithmetic, comparisons and conversions; `memory.rs`
 //!   objects, loads, stores, copies and provenance.
@@ -56,6 +56,7 @@
 mod execute;
 mod machine;
 mod main;
+mod nonlocal;
 mod startup;
 mod varargs;
 

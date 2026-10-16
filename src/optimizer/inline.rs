@@ -315,14 +315,14 @@ impl<'s> CallGraph<'s> {
         let mut unsafe_frame = ArenaVec::new_in(scratch);
         for (_, function) in module.functions() {
             let mut calls = ArenaVec::new_in(scratch);
-            let mut unsafe_body = returns_twice(function.name);
+            let mut unsafe_body = function.returns_twice;
             if let Some(body) = &function.body {
                 for block in body.blocks() {
                     for &inst in body.block_insts(block) {
                         match *body.inst(inst) {
                             | InstData::Call { func, .. } => calls.push(func),
                             | InstData::FuncAddr { func } =>
-                                unsafe_body |= returns_twice(module.function(func).name),
+                                unsafe_body |= module.function(func).returns_twice,
                             | _ => {},
                         }
                         unsafe_body |= matches!(
@@ -440,13 +440,4 @@ fn enter<'s>(
     *next_index += 1;
     component.push(func);
     dfs.push(Frame { func, next_edge: 0 });
-}
-
-/// The IR currently has no returns-twice attribute; lowering rejects these
-/// builtins. Guard textual IR too, including wrappers and address constants.
-fn returns_twice(name: &str) -> bool {
-    matches!(
-        name,
-        "setjmp" | "_setjmp" | "sigsetjmp" | "__sigsetjmp" | "vfork"
-    )
 }
