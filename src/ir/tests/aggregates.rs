@@ -218,6 +218,16 @@ fn first_members_must_describe_their_union() {
             "abi lowered\nfunction @f(ptr sret(size 8, align 8, first(size 8))) external\n",
             misplaced,
         ),
+        (
+            "abi lowered\nfunction @f(ptr indirect(size 8, align 8, first(size 8))) external\n",
+            misplaced,
+        ),
+        // A valid first member must not bypass another layout invariant.
+        (
+            "function @f(ptr aggregate(size 8, align 8, complex, first(size 8), [0: f64])) \
+             external\n",
+            "@f: parameter 0 has an invalid complex scalar layout",
+        ),
         // The member fits the union and holds its scalars.
         (
             "function @f(ptr aggregate(size 8, align 8, first(size 16), [0: f64])) external\n",
